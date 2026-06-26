@@ -515,17 +515,28 @@ describe('Context', () => {
       expect(request.scheduledFireAt).toBe(now + 5000);
     });
 
-    it('uses a deterministic operationId derived from workflowId and step, not a random UUID', () => {
-      // The sleep operationId keys the durable timer. It MUST be stable across
-      // replay so a crash-during-sleep re-arms the same timer instead of
-      // orphaning it. Two contexts for the same workflow at the same step
-      // (a replay) must produce the identical operationId.
-      const first = expectRequest(createContext().sleep(5000).next(), 'sleep');
-      const replay = expectRequest(createContext().sleep(5000).next(), 'sleep');
+    it('mints a per-run sleep operationId, persisted for replay stability and unique across runs', () => {
+      // The sleep operationId keys the durable timer. It is minted once per run
+      // and recorded in checkpointLocals so replay reuses the SAME id (and thus
+      // the same durable timer key) instead of orphaning the original timer.
+      const firstContext = createContext();
+      const firstRequest = expectRequest(firstContext.sleep(5000).next(), 'sleep');
+      const persistedKey = '__weftSleepOperationId:0';
+      expect(firstContext.checkpointLocals[persistedKey]).toBe(firstRequest.operationId);
 
-      expect(first.operationId).toBe('wf-test-123:0');
-      expect(replay.operationId).toBe(first.operationId);
-      expect(first.operationId).not.toMatch(UUID_PATTERN);
+      // Replay: a fresh context seeded with the persisted locals reads the SAME
+      // operationId back — it does NOT mint a new one.
+      const replayContext = createContext({
+        locals: { [persistedKey]: firstRequest.operationId },
+      });
+      const replayRequest = expectRequest(replayContext.sleep(5000).next(), 'sleep');
+      expect(replayRequest.operationId).toBe(firstRequest.operationId);
+
+      // A distinct run (no persisted id) mints a DIFFERENT operationId, so a
+      // start-new restart at the same workflow id and step cannot inherit a
+      // stale durable timer and resolve the fresh run's sleep early.
+      const otherRunRequest = expectRequest(createContext().sleep(5000).next(), 'sleep');
+      expect(otherRunRequest.operationId).not.toBe(firstRequest.operationId);
     });
   });
 

@@ -12,6 +12,46 @@ export type PreparedSleepOperation =
   | { cached: true }
   | { cached: false; milliseconds: number; request: ContextOperationRequest; step: number };
 
+const SLEEP_OPERATION_ID_LOCAL_PREFIX = '__weftSleepOperationId:';
+
+/**
+ * Read the sleep operationId for a step, minting and persisting one on the first
+ * evaluation. Read-first so it is stable across replay: the id keys the durable
+ * sleep timer (`sleep:${operationId}`), and a crash while parked replays this
+ * step (the sleep never landed in `accumulatedResults`). A freshly-generated id
+ * on replay would arm a *second* timer while orphaning the original — the engine
+ * fires the orphaned timer, the replayed generator waits on the new one, and the
+ * workflow hangs.
+ *
+ * The id is minted once per run (a random UUID), not derived from `(workflowId,
+ * step)`: a `${workflowId}:${step}` id would collide with a *different* run of
+ * the same id+step. If a run is cancelled/timed-out while sleeping (its durable
+ * timer outlives the run — terminal cleanup only drops the in-memory resolver)
+ * and the id is restarted via `onTerminalConflict: 'start-new'`, the fresh run's
+ * same-step sleep would inherit the stale timer and resolve early. A per-run
+ * nonce avoids that. The id lands in `checkpointLocals`, committed atomically at
+ * this step's checkpoint — and the inline park path commits that checkpoint
+ * BEFORE arming the timer (see `inline-parking.ts`), so there is no crash window
+ * where the timer exists without its persisted id. Mirrors {@link readOrInitConditionDeadline}.
+ */
+function readOrInitSleepOperationId(internals: ContextInternals, step: number): string {
+  const localKey = `${SLEEP_OPERATION_ID_LOCAL_PREFIX}${step}`;
+  const existing = internals.checkpointLocals[localKey];
+  if (typeof existing === 'string') return existing;
+  // A present-but-non-string anchor is corrupt persisted data. Fail loudly rather
+  // than minting a fresh id, which would orphan the durable timer this id keys.
+  if (existing !== undefined) {
+    throw new Error(
+      `Invalid checkpointed sleep operationId ${JSON.stringify(existing)} for step ${step}`,
+    );
+  }
+  const operationId = crypto.randomUUID();
+  // Reassign rather than mutate in place: `checkpointLocals` is frozen between
+  // operations (the activity-retry-state precedent), so an in-place write throws.
+  internals.checkpointLocals = { ...internals.checkpointLocals, [localKey]: operationId };
+  return operationId;
+}
+
 export function prepareSleepOperation(
   internals: ContextInternals,
   duration: Duration,
@@ -28,22 +68,7 @@ export function prepareSleepOperation(
     console.log(`  → Scheduling timer for ${milliseconds}ms`);
   }
 
-  // The sleep operationId MUST be deterministic across replay, not a random
-  // UUID. A sleep parks on a durable timer keyed `sleep:${operationId}`; if a
-  // crash happens while parked, the step never lands in accumulatedResults, so
-  // replay re-enters this branch. A random id would arm a *second* timer under a
-  // fresh key while the original durable timer (old id) is orphaned — the engine
-  // fires the old timer but the replayed generator waits on the new one, and the
-  // workflow hangs. Deriving the id from `(workflowId, step)` makes the re-armed
-  // timer reuse the original key so recovery resolves the same sleep.
-  //
-  // `workflowId` (not `executionStateOwnerId`) is the unique scope: child
-  // workflows inherit the parent's `executionStateOwnerId` but have their own
-  // step space, so `${owner}:${step}` would collide across parent and child.
-  // The `timer-idx:` reverse index is not workflow-scoped, so the id itself must
-  // carry workflow identity. Sub-operation sleeps inside race/all/speculate are
-  // re-stamped deterministically by their parent coordinator, overriding this.
-  const operationId = `${internals.context.workflowId}:${step}`;
+  const operationId = readOrInitSleepOperationId(internals, step);
   const callerStack = captureCallerStack();
   const referenceTime = internals.sleepReferenceTime ?? internals.getNow();
   internals.sleepReferenceTime = undefined;

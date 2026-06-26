@@ -616,13 +616,14 @@ describe('crash recovery', () => {
   });
 
   it('re-arms the same durable sleep timer on recovery instead of orphaning a second one', async () => {
-    // Regression: the sleep operationId must be deterministic across replay. When
-    // a workflow crashes while parked on ctx.sleep, the step never lands in
-    // accumulatedResults, so recovery re-enters the sleep branch. A random
-    // operationId would arm a SECOND durable timer under a fresh key while the
-    // original (old-id) timer is orphaned — the engine fires the orphaned timer,
-    // the replayed generator waits on the new one, and the workflow hangs. The
-    // re-armed timer must reuse the original key so exactly one timer survives.
+    // Regression: the sleep operationId is minted once and persisted in
+    // checkpointLocals so it is stable across replay. When a workflow crashes
+    // while parked on ctx.sleep, the step never lands in accumulatedResults, so
+    // recovery re-enters the sleep branch. If recovery minted a fresh id, it
+    // would arm a SECOND durable timer under a new key while the original timer
+    // is orphaned — the engine fires the orphaned timer, the replayed generator
+    // waits on the new one, and the workflow hangs. Reading the persisted id back
+    // re-arms the original key so exactly one timer survives.
     const storage = new MemoryStorage();
     let currentTime = 1000;
 
@@ -666,6 +667,63 @@ describe('crash recovery', () => {
     expect(await handles[0]!.result()).toBe('awake');
 
     engine2[Symbol.dispose]();
+  });
+
+  it('does not let a stale sleep timer from a terminated run resolve a start-new replacement early', async () => {
+    // Regression (per-run nonce): a run cancelled while parked on ctx.sleep
+    // leaves its durable timer behind (terminal cleanup only drops the in-memory
+    // resolver; purge does not collect sleep timers). If the id is restarted with
+    // onTerminalConflict: 'start-new' and the fresh run sleeps at the same step,
+    // a `${workflowId}:${step}` operationId would give the new run the SAME timer
+    // key — the stale timer firing would resolve the new run's sleep early. A
+    // per-run nonce makes the ids differ so the stale timer cannot match.
+    const storage = new MemoryStorage();
+    let currentTime = 1000;
+
+    const sleeper = workflow({ name: 'sleeper' }).execute(async function* (ctx) {
+      yield* ctx.sleep(5000);
+      return 'awake';
+    });
+
+    const engine = new Engine({ storage, getNow: () => currentTime });
+    engine.register(sleeper);
+
+    // First run parks on a durable sleep timer (deadline 1000 + 5000 = 6000).
+    await engine.start('sleeper', null, { id: 'wf-restart' });
+    await flush();
+
+    // Cancel while parked. The durable timer must survive (otherwise the scenario
+    // this guards is not reachable) — confirm it is still in storage.
+    await engine.cancel('wf-restart');
+    await flush();
+    const staleTimers: string[] = [];
+    for await (const [key] of storage.scan('timer-idx:sleep:')) staleTimers.push(key);
+    expect(staleTimers).toHaveLength(1);
+
+    // Restart the same id; the fresh run parks at the same step (deadline
+    // 2000 + 5000 = 7000), distinct from the stale timer's 6000 deadline.
+    currentTime = 2000;
+    const replacement = await engine.start('sleeper', null, {
+      id: 'wf-restart',
+      onTerminalConflict: 'start-new',
+    });
+    await flush();
+
+    // Fire the STALE timer (deadline 6000) — it must NOT resolve the fresh run,
+    // whose own deadline (7000) has not elapsed.
+    currentTime = 6500;
+    await engine.scheduler.tick(currentTime);
+    await flush();
+    const stateAfterStaleTimer = await engine.get('wf-restart');
+    expect(stateAfterStaleTimer?.status).toBe('running');
+
+    // The fresh run's own timer fires at its deadline and completes it.
+    currentTime = 7500;
+    await engine.scheduler.tick(currentTime);
+    await flush();
+    expect(await replacement.result()).toBe('awake');
+
+    engine[Symbol.dispose]();
   });
 
   it('resolves expired sleep immediately on resume via fast path', async () => {
