@@ -28,6 +28,7 @@ description: >-
 - Restoring runtime coverage around worker socket lifecycle and result-resolution diagnostics, including stale same-`workerId` socket closes and post-`taskResult` storage failures.
 - Covering inline parking regressions where a workflow waiting on `waitForSignal()` replays, resumes, or serves `ctx.onQuery()` from a retained context.
 - Covering `ctx.race()` / `ctx.all()` sleep, wait-signal, and activity branches, including nested deferred-consume envelopes, losing `ctx.run()` activity aborts, `ctx.speculate` finalization, duplicate signal-name rejection, and long sleep disposal.
+- Covering durable operation helpers such as `getVersion()`, `sleep()`, and `review()`, including cached replay mismatch guards and explain-mode logging paths that normal workflow drives may not hit.
 - Editing coverage orchestration itself, especially when a failing child coverage process could be accidentally masked.
 - Deciding whether a coverage allowance is justified.
 - Building a structural test double to reach a branch hidden by normal constructors or registries.
@@ -70,6 +71,7 @@ description: >-
 28. For coverage artifact filters, require both a generalized temporary-root prefix and the known generated-fixture filename pattern; add negative tests proving unrelated files under `tmp/` still count as uncovered.
 29. For coverage allowance edits, test duplicate allowance keys and cross-layer-shadowed keys explicitly so one broad production allowance cannot hide a narrower source/test allowance; delete duplicate current-branch refresh entries when fresh LCOV proves the branch-level allowance is stale.
 30. For coverage ignore-pattern integration, read `coveragePathIgnorePatterns` from `bunfig.toml` as the source of truth and reject allowances for files the coverage runner never instruments.
+31. For `resolveDefaultStorage()` coverage, inject runtime globals instead of mutating `globalThis`, and assert the selected adapter receives the same WebExtension namespace or IndexedDB globals used during detection.
 
 ## Verification
 
@@ -80,6 +82,7 @@ description: >-
 - For parallel-cache, reconciliation, and callback checkpoint persistence coverage, run `bun test src/core/context.test.ts src/core/engine/activity-reconciliation.test.ts src/core/engine/callback-checkpoint-persistence.test.ts src/core/engine/checkpoint-io.test.ts` before the coverage gate.
 - For inline parking coverage, run `bun test src/core/engine/inline-parking.test.ts src/core/engine.test.ts src/core/engine/suspend-resume.test.ts` before the coverage gate.
 - For race/all branch coverage, run `bun test src/core/engine/race-branches.test.ts src/core/engine/operations-coordination.test.ts src/core/crash-recovery.test.ts` before the coverage gate.
+- For durable operation helper coverage, run `bun test src/core/context/durable-operations.test.ts` before the coverage gate.
 - For session-state, schedule, and `startOrSignal` coverage, run `bun test src/core/session-state-helpers.test.ts src/core/schedule.test.ts src/core/engine/start-or-signal.test.ts src/core/engine/callback-creators.test.ts src/core/parity/real-timer-wait.test-support.test.ts` before the coverage gate.
 - When editing the test-sleep verifier or load-sensitive list, run `bun test scripts/verify-no-test-sleeps.test.ts scripts/husky/run-tests.test.ts` and `bun run scripts/verify-no-test-sleeps.ts`.
 - Run broader validation only when the coverage fix also changes production code, public APIs, or documentation.

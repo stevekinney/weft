@@ -26,7 +26,7 @@ description: >-
 - Changing workflow suspend/resume, recovered-handle observation, idempotent start reservation, `startOrSignal`, inline launch deferral, or engine disposal while queued inline launches can still flush.
 - Changing scheduled occurrence launch flow or `schedule:fired` event dispatch, including overlap-policy gating, queued-drain launches, unavailable-services ordering, and process-local notification behavior.
 - Changing RemoteWorker or long-poll task completion authorization, including per-dispatch `attemptToken` generation, echoing, registry restore, malformed-token rejection, and missing-token compatibility.
-- Changing durable timer cleanup under lease ownership, especially fired timer deletion, deadline timers, terminal cleanup, delayed starts, schedules, teardown, or successor re-drive after deposition.
+- Changing durable timer cleanup or sleep operation identity, especially fired timer deletion, deadline timers, terminal cleanup, delayed starts, schedules, teardown, crash recovery, `start-new` replacement runs, or successor re-drive after deposition.
 - Changing lease-owned engine write paths for schedules, purges, bulk retry reactivation, activity reconciliation, completed reviews, async-activity registration, or checkpoint side effects.
 
 ## Do not use
@@ -56,6 +56,7 @@ description: >-
 17. For fired timers under `ownership: 'lease'`, route cleanup through the same lease-fenced commit path as the timer callback's durable writes. A deposed engine must not delete a fired timer whose fenced follow-up write was rejected; the successor needs the durable marker to re-drive.
 18. For async completion and review-timeout cleanup, stage token or pending-key deletion with the workflow checkpoint commit that records the result or failure. Do not restore standalone `storage.delete()` paths that can consume the key without the workflow adopting the outcome.
 19. For inline cancellation, preserve the prompt ordering contract: `engine.cancel()` aborts `ctx.signal` for already-running inline work before `ctx.onCancel()` handlers run, and `ctx.onCancel()` runs after the cancelled state commits but before `cancel()` resolves.
+20. For `ctx.sleep()`, keep the operation id deterministic as `${workflowId}:${step}` across replay, and keep resolver settlement deadline-aware. Do not use missing `timer-idx:sleep:` storage as an early-fire signal because stale timers from a replaced run can delete the shared index before the current run's deadline.
 
 ### Client event-streaming work
 
@@ -82,6 +83,7 @@ description: >-
 - For client event streaming, cover connect catch-up, reconnect during catch-up, duplicate-looking live frames, callback-only no-leak behavior, `whenConnected()` after close, and missing or inadequate WebSocket factories.
 - For SSE event streaming, cover replay-complete readiness, `Last-Event-ID` reconnect cursors, parked iterator close, terminal-event auto-close, and abort cleanup before iteration begins so feed listeners and connection leases cannot leak.
 - For long-poll task queues, cover disconnect during wait, already-aborted signals, pending-task retention for dead callers, idempotent disposal, and timer cleanup.
+- For sleep timer identity or resolver changes, cover crash-during-sleep recovery with exactly one surviving timer key, schedule-to-register early fire, stale earlier-run timers under `start-new`, and Service Worker periodic-sync recovery.
 - For lease-fenced timer cleanup, cover a deposed engine whose timer callback write is rejected and prove the fired timer remains for a successor scheduler to clear.
 - For lease-fenced engine writes, cover each touched path with a deposed-engine or fenced-write conflict case so schedules, purge, bulk retry, activity reconciliation, async-activity registration, completed reviews, and staged side effects cannot fall back to bare `storage.batch()`.
 - For pending-update drains, cover resume and inline advancement paths where the update is durable before the handler is visible.

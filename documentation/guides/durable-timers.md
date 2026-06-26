@@ -17,7 +17,9 @@ engine.register(
 );
 ```
 
-That `yield*` is a checkpoint boundary. The timer's fire time is persisted to [storage](storage.md), so if the process restarts tomorrow—or 29 days from now—the workflow picks up where it left off and fires the timer at the right moment.
+That `yield*` is a checkpoint boundary. The timer's fire time is persisted to [storage](storage.md), so if the process restarts tomorrow, or 29 days from now, the workflow picks up where it left off and fires the timer at the right moment.
+
+Sleep timers are keyed from the workflow identifier and checkpoint step, not from a random identifier. That replay-stable identity matters when the process crashes while the workflow is already parked on a sleep: recovery re-arms the same durable timer key instead of creating a second timer and leaving the original behind. If you restart a terminal workflow with `onTerminalConflict: 'start-new'`, Weft also checks the timer deadline before settling the new run, so a stale timer from the prior run cannot complete the replacement sleep early.
 
 ## Duration formats
 
