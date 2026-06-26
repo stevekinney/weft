@@ -49,6 +49,59 @@ async function readEpoch(storage: Storage): Promise<number | null> {
   return Number(new DataView(raw.buffer, raw.byteOffset, raw.byteLength).getBigUint64(0, false));
 }
 
+type CapturedWarning = { name: string; message: string };
+
+function createLeasedPingEngine(storage: MemoryStorage, getNow: () => number) {
+  return Engine.create({
+    storage,
+    workflows: { ping: pingWorkflow },
+    ownership: 'lease',
+    getNow,
+    leaseRenewInterval: '1s',
+    leaseTtl: '2s',
+  });
+}
+
+type LeasedPingEngine = Awaited<ReturnType<typeof createLeasedPingEngine>>;
+
+async function withUnconfirmableLeaseRenewal(
+  renewalTime: number,
+  runAssertions: (fixture: {
+    engine: LeasedPingEngine;
+    storage: MemoryStorage;
+    warnings: CapturedWarning[];
+  }) => Promise<void> | void,
+): Promise<void> {
+  let now = 0;
+  const storage = new MemoryStorage();
+  const engine = await createLeasedPingEngine(storage, () => now);
+
+  const warnings: CapturedWarning[] = [];
+  const listener = (warning: Error): void => {
+    warnings.push({ name: warning.name, message: warning.message });
+  };
+
+  const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+  storage.conditionalBatch = async () => {
+    throw new Error('storage offline');
+  };
+
+  process.on('warning', listener);
+  try {
+    now = renewalTime;
+    const manager = getInternals(engine).leaseManager;
+    expect(manager).not.toBeNull();
+    await manager!.renewOnce();
+    await new Promise((resolve) => setImmediate(resolve));
+    await runAssertions({ engine, storage, warnings });
+  } finally {
+    storage.conditionalBatch = originalConditionalBatch;
+    process.off('warning', listener);
+    await engine[Symbol.asyncDispose]();
+    storage[Symbol.dispose]?.();
+  }
+}
+
 describe("Engine.create({ ownership: 'lease' })", () => {
   it('acquires the lease before recovery and renews it while running', async () => {
     const storage = new BunSQLiteStorage(':memory:');
@@ -428,87 +481,21 @@ describe("Engine.create({ ownership: 'lease' })", () => {
   });
 
   it('tolerates an unconfirmed lease renewal before expiry without warning or halt', async () => {
-    let now = 0;
-    const storage = new MemoryStorage();
-    const engine = await Engine.create({
-      storage,
-      workflows: { ping: pingWorkflow },
-      ownership: 'lease',
-      getNow: () => now,
-      leaseRenewInterval: '1s',
-      leaseTtl: '2s',
+    await withUnconfirmableLeaseRenewal(1_001, ({ engine, warnings }) => {
+      expect(warnings).toEqual([]);
+      expect(getInternals(engine).deposed).toBe(false);
+      expect(getInternals(engine).leaseManager).not.toBeNull();
     });
-
-    const warnings: { name: string; message: string }[] = [];
-    const listener = (warning: Error): void => {
-      warnings.push({ name: warning.name, message: warning.message });
-    };
-
-    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
-    storage.conditionalBatch = async () => {
-      throw new Error('storage offline');
-    };
-
-    process.on('warning', listener);
-    try {
-      now = 1_001;
-      const manager = getInternals(engine).leaseManager;
-      expect(manager).not.toBeNull();
-      await manager!.renewOnce();
-      await new Promise((resolve) => setImmediate(resolve));
-    } finally {
-      storage.conditionalBatch = originalConditionalBatch;
-      process.off('warning', listener);
-    }
-
-    expect(warnings).toEqual([]);
-    expect(getInternals(engine).deposed).toBe(false);
-    expect(getInternals(engine).leaseManager).not.toBeNull();
-
-    await engine[Symbol.asyncDispose]();
-    storage[Symbol.dispose]?.();
   });
 
   it('warns without deposing the engine when renewal becomes unconfirmable after expiry', async () => {
-    let now = 0;
-    const storage = new MemoryStorage();
-    const engine = await Engine.create({
-      storage,
-      workflows: { ping: pingWorkflow },
-      ownership: 'lease',
-      getNow: () => now,
-      leaseRenewInterval: '1s',
-      leaseTtl: '2s',
+    await withUnconfirmableLeaseRenewal(2_001, ({ engine, warnings }) => {
+      expect(warnings.some((warning) => warning.name === ENGINE_LEASE_LOST_WARNING_NAME)).toBe(
+        true,
+      );
+      expect(getInternals(engine).deposed).toBe(false);
+      expect(getInternals(engine).leaseManager).not.toBeNull();
     });
-
-    const warnings: { name: string; message: string }[] = [];
-    const listener = (warning: Error): void => {
-      warnings.push({ name: warning.name, message: warning.message });
-    };
-
-    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
-    storage.conditionalBatch = async () => {
-      throw new Error('storage offline');
-    };
-
-    process.on('warning', listener);
-    try {
-      now = 2_001;
-      const manager = getInternals(engine).leaseManager;
-      expect(manager).not.toBeNull();
-      await manager!.renewOnce();
-      await new Promise((resolve) => setImmediate(resolve));
-    } finally {
-      storage.conditionalBatch = originalConditionalBatch;
-      process.off('warning', listener);
-    }
-
-    expect(warnings.some((warning) => warning.name === ENGINE_LEASE_LOST_WARNING_NAME)).toBe(true);
-    expect(getInternals(engine).deposed).toBe(false);
-    expect(getInternals(engine).leaseManager).not.toBeNull();
-
-    await engine[Symbol.asyncDispose]();
-    storage[Symbol.dispose]?.();
   });
 
   it('synchronous dispose clears the lease manager and stops renewals', async () => {

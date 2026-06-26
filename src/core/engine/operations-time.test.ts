@@ -508,6 +508,12 @@ describe('engine time operation helpers', () => {
 });
 
 describe('processSleepOperation', () => {
+  type SleepResolver = { resolve: () => void; fireAt: number };
+  type SleepResolverMaps = {
+    sleepResolvers: Map<string, SleepResolver>;
+    sleepResolversByWorkflow: Map<string, Set<string>>;
+  };
+
   // Shared fixture for both race-condition tests.
   function createSleepInternals(
     storage: MemoryStorage,
@@ -517,7 +523,7 @@ describe('processSleepOperation', () => {
     return {
       options: { getNow: () => 0 },
       scheduler,
-      sleepResolvers: new Map<string, { resolve: () => void; fireAt: number }>(),
+      sleepResolvers: new Map<string, SleepResolver>(),
       sleepResolversByWorkflow: new Map<string, Set<string>>(),
       sleepTimersFiredWithoutResolver,
       storage,
@@ -536,6 +542,60 @@ describe('processSleepOperation', () => {
       versionTuple: { workflowVersion: '1' },
     }));
     return { completeOperation, loadWorkflowState };
+  }
+
+  function createSleepResolverMaps(): SleepResolverMaps {
+    return {
+      sleepResolvers: new Map<string, SleepResolver>(),
+      sleepResolversByWorkflow: new Map<string, Set<string>>(),
+    };
+  }
+
+  async function deleteTimerIndex(storage: MemoryStorage, entry: TimerEntry): Promise<void> {
+    const indexKey = `timer-idx:${entry.id}`;
+    const indexValue = await storage.get(indexKey);
+    if (indexValue === null) return;
+
+    const deadlineKey = decode(indexValue) as string;
+    await storage.batch([
+      { type: 'delete', key: deadlineKey },
+      { type: 'delete', key: indexKey },
+    ]);
+  }
+
+  function createTimerIndexDeletingResolverScheduler({
+    beforeResolve,
+    operationId,
+    sleepResolvers,
+    sleepResolversByWorkflow,
+    storage,
+    workflowId,
+  }: SleepResolverMaps & {
+    beforeResolve?: () => void;
+    operationId: string;
+    storage: MemoryStorage;
+    workflowId: string;
+  }): { schedule(entry: TimerEntry): Promise<void> } {
+    return {
+      schedule: async (entry: TimerEntry) => {
+        await storage.batch(buildTimerBatchOperations(entry));
+        await deleteTimerIndex(storage, entry);
+        setTimeout(() => {
+          const resolverKey = `${workflowId}:${operationId}`;
+          const resolver = sleepResolvers.get(resolverKey);
+          if (!resolver) return;
+
+          sleepResolvers.delete(resolverKey);
+          const operations = sleepResolversByWorkflow.get(workflowId);
+          if (operations) {
+            operations.delete(operationId);
+            if (operations.size === 0) sleepResolversByWorkflow.delete(workflowId);
+          }
+          beforeResolve?.();
+          resolver.resolve();
+        }, 0);
+      },
+    };
   }
 
   it('resolves via the in-memory marker even after the tick deletes the timer index (Window B)', async () => {
@@ -603,41 +663,21 @@ describe('processSleepOperation', () => {
     const firedWithoutResolver = new Map<string, Map<string, number>>([
       [workflowId, new Map([[operationId, staleFireAt]])],
     ]);
-    const sleepResolvers = new Map<string, { resolve: () => void; fireAt: number }>();
-    const sleepResolversByWorkflow = new Map<string, Set<string>>();
+    const { sleepResolvers, sleepResolversByWorkflow } = createSleepResolverMaps();
 
     let realTimerFired = false;
     const internals = {
       options: { getNow: () => 0 },
-      scheduler: {
-        schedule: async (entry: TimerEntry) => {
-          await storage.batch(buildTimerBatchOperations(entry));
-          // The stale run's tick already removed the shared index before this
-          // replacement armed its timer.
-          const indexKey = `timer-idx:${entry.id}`;
-          const indexValue = await storage.get(indexKey);
-          if (indexValue !== null) {
-            const deadlineKey = decode(indexValue) as string;
-            await storage.batch([
-              { type: 'delete', key: deadlineKey },
-              { type: 'delete', key: indexKey },
-            ]);
-          }
-          // Fire this run's OWN timer via the normal path on a macrotask, which
-          // is guaranteed to run after processSleepOperation parks on its
-          // resolver. If the stale marker had instead been honored,
-          // completeOperation would run before this timer fires
-          // (realTimerFired === false at call time, failing the assertion).
-          setTimeout(() => {
-            const resolver = sleepResolvers.get(`${workflowId}:${operationId}`);
-            if (resolver) {
-              realTimerFired = true;
-              sleepResolvers.delete(`${workflowId}:${operationId}`);
-              resolver.resolve();
-            }
-          }, 0);
+      scheduler: createTimerIndexDeletingResolverScheduler({
+        beforeResolve: () => {
+          realTimerFired = true;
         },
-      },
+        operationId,
+        sleepResolvers,
+        sleepResolversByWorkflow,
+        storage,
+        workflowId,
+      }),
       sleepResolvers,
       sleepResolversByWorkflow,
       sleepTimersFiredWithoutResolver: firedWithoutResolver,
@@ -715,49 +755,22 @@ describe('processSleepOperation', () => {
     const workflowId = 'sleep-race-spurious-marker';
     const operationId = 'op-spurious';
     const firedWithoutResolver = new Map<string, Map<string, number>>();
-    const sleepResolvers = new Map<string, { resolve: () => void; fireAt: number }>();
-    const sleepResolversByWorkflow = new Map<string, Set<string>>();
+    const { sleepResolvers, sleepResolversByWorkflow } = createSleepResolverMaps();
 
     // Scheduler that deletes the timer index as a real tick would after firing
-    // via the normal (post-registration) path, then uses queueMicrotask to call
+    // via the normal (post-registration) path, then uses a macrotask to call
     // the resolver that processSleepOperation registered after schedule(). No
     // marker is recorded, so the early-fire guard returns false and must NOT
     // synthesize a spurious resolveSleepTimer call for the already-settled run.
     const internals = {
       options: { getNow: () => 0 },
-      scheduler: {
-        schedule: async (entry: TimerEntry) => {
-          await storage.batch(buildTimerBatchOperations(entry));
-          // Simulate tick that fires AFTER registration: delete the index from
-          // storage as the tick would, but do NOT add a marker — the resolver
-          // will be called via resolveSleepTimer in the afterSchedule hook below.
-          const indexKey = `timer-idx:${entry.id}`;
-          const indexValue = await storage.get(indexKey);
-          if (indexValue !== null) {
-            const deadlineKey = decode(indexValue) as string;
-            await storage.batch([
-              { type: 'delete', key: deadlineKey },
-              { type: 'delete', key: indexKey },
-            ]);
-          }
-          // After schedule() completes, processSleepOperation calls
-          // registerSleepResolver synchronously. A macrotask then fires the
-          // resolver after the run parks, simulating a tick settling it via the
-          // normal post-registration path.
-          setTimeout(() => {
-            const resolver = sleepResolvers.get(`${workflowId}:${operationId}`);
-            if (resolver) {
-              sleepResolvers.delete(`${workflowId}:${operationId}`);
-              const ops = sleepResolversByWorkflow.get(workflowId);
-              if (ops) {
-                ops.delete(operationId);
-                if (ops.size === 0) sleepResolversByWorkflow.delete(workflowId);
-              }
-              resolver.resolve();
-            }
-          }, 0);
-        },
-      },
+      scheduler: createTimerIndexDeletingResolverScheduler({
+        operationId,
+        sleepResolvers,
+        sleepResolversByWorkflow,
+        storage,
+        workflowId,
+      }),
       sleepResolvers,
       sleepResolversByWorkflow,
       sleepTimersFiredWithoutResolver: firedWithoutResolver,
