@@ -107,19 +107,27 @@ export interface EngineInternals {
   conditionWaiters: Map<string, () => void>;
   updateWaiters: Map<string, (payload: unknown) => void>;
   updateWaitersByWorkflow: Map<string, TrackedWaiterKeys>;
-  sleepResolvers: Map<string, () => void>;
+  /**
+   * In-process sleep resolvers keyed by `${workflowId}:${operationId}`. Each
+   * carries the run's expected `fireAt` so a fired timer only settles the sleep
+   * whose deadline it represents — a stale timer from a terminated run that
+   * reused the same deterministic operationId (its durable timer outlives
+   * terminal cleanup) is ignored rather than resolving a replacement run early.
+   */
+  sleepResolvers: Map<string, { resolve: () => void; fireAt: number }>;
   sleepResolversByWorkflow: Map<string, Set<string>>;
   /**
-   * Per-workflow sets of `operationId`s for which the scheduler tick fired the
-   * sleep timer before the resolver was registered. Keyed by `workflowId` so
-   * that per-workflow cleanup (`cleanupSleepResolvers`,
+   * Per-workflow maps of `operationId` → fired timer `fireAt` for sleep timers
+   * the scheduler tick fired before the resolver was registered. Keyed by
+   * `workflowId` so per-workflow cleanup (`cleanupSleepResolvers`,
    * `evictSleepResolversWithoutResolving`) can call `.delete(workflowId)` and
    * sweep all markers in O(1) — including orphaned ones where the timer fired
    * while the workflow was suspended (no `sleepResolversByWorkflow` entry) or
    * during recovery of an already-elapsed sleep that takes the early-return
-   * path. Cleared entirely at engine disposal.
+   * path. The `fireAt` lets `processSleepOperation` ignore a marker left by a
+   * stale earlier-run timer. Cleared entirely at engine disposal.
    */
-  sleepTimersFiredWithoutResolver: Map<string, Set<string>>;
+  sleepTimersFiredWithoutResolver: Map<string, Map<string, number>>;
   interceptors: Interceptor[];
   // `undefined` means "not yet computed". `null` means "computed and empty —
   // no interceptor implements hooks for this side". Distinguishing the two

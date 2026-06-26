@@ -616,14 +616,13 @@ describe('crash recovery', () => {
   });
 
   it('re-arms the same durable sleep timer on recovery instead of orphaning a second one', async () => {
-    // Regression: the sleep operationId is minted once and persisted in
-    // checkpointLocals so it is stable across replay. When a workflow crashes
-    // while parked on ctx.sleep, the step never lands in accumulatedResults, so
-    // recovery re-enters the sleep branch. If recovery minted a fresh id, it
-    // would arm a SECOND durable timer under a new key while the original timer
-    // is orphaned — the engine fires the orphaned timer, the replayed generator
-    // waits on the new one, and the workflow hangs. Reading the persisted id back
-    // re-arms the original key so exactly one timer survives.
+    // Regression: the sleep operationId is deterministic (`${workflowId}:${step}`)
+    // so it is stable across replay. When a workflow crashes while parked on
+    // ctx.sleep, the step never lands in accumulatedResults, so recovery re-enters
+    // the sleep branch. A random id would arm a SECOND durable timer under a new
+    // key while the original timer is orphaned — the engine fires the orphaned
+    // timer, the replayed generator waits on the new one, and the workflow hangs.
+    // Reproducing the same id re-arms the original key so exactly one timer survives.
     const storage = new MemoryStorage();
     let currentTime = 1000;
 
@@ -670,13 +669,14 @@ describe('crash recovery', () => {
   });
 
   it('does not let a stale sleep timer from a terminated run resolve a start-new replacement early', async () => {
-    // Regression (per-run nonce): a run cancelled while parked on ctx.sleep
-    // leaves its durable timer behind (terminal cleanup only drops the in-memory
-    // resolver; purge does not collect sleep timers). If the id is restarted with
-    // onTerminalConflict: 'start-new' and the fresh run sleeps at the same step,
-    // a `${workflowId}:${step}` operationId would give the new run the SAME timer
-    // key — the stale timer firing would resolve the new run's sleep early. A
-    // per-run nonce makes the ids differ so the stale timer cannot match.
+    // Regression (resolver deadline guard): a run cancelled while parked on
+    // ctx.sleep leaves its durable timer behind (terminal cleanup only drops the
+    // in-memory resolver; purge does not collect sleep timers). If the id is
+    // restarted with onTerminalConflict: 'start-new' and the fresh run sleeps at
+    // the same step, it reuses the SAME deterministic `${workflowId}:${step}`
+    // timer key as the stale timer. The engine guards against this: a sleep
+    // resolver only settles for a fired timer whose `fireAt` reaches its run's
+    // deadline, so the stale (earlier-deadline) timer is ignored.
     const storage = new MemoryStorage();
     let currentTime = 1000;
 

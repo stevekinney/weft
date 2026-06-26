@@ -107,7 +107,7 @@ function cleanupSleepResolvers(internals: EngineInternals, workflowId: string): 
     for (const operationId of sleepOps) {
       const key = `${workflowId}:${operationId}`;
       const resolver = internals.sleepResolvers.get(key);
-      if (resolver) resolver();
+      if (resolver) resolver.resolve();
       internals.sleepResolvers.delete(key);
     }
     internals.sleepResolversByWorkflow.delete(workflowId);

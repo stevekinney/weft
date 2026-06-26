@@ -258,7 +258,13 @@ class MemoDurableActivityScope implements DurableActivityScope {
       finishTimerWrite();
     }
     this.#throwIfClosed();
-    registerSleepResolver(this.#internals, this.#workflowId, operation.operationId, resolve);
+    registerSleepResolver(
+      this.#internals,
+      this.#workflowId,
+      operation.operationId,
+      resolve,
+      operation.scheduledFireAt,
+    );
     await promise;
   }
 

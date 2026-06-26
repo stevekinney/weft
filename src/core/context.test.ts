@@ -515,28 +515,20 @@ describe('Context', () => {
       expect(request.scheduledFireAt).toBe(now + 5000);
     });
 
-    it('mints a per-run sleep operationId, persisted for replay stability and unique across runs', () => {
-      // The sleep operationId keys the durable timer. It is minted once per run
-      // and recorded in checkpointLocals so replay reuses the SAME id (and thus
-      // the same durable timer key) instead of orphaning the original timer.
-      const firstContext = createContext();
-      const firstRequest = expectRequest(firstContext.sleep(5000).next(), 'sleep');
-      const persistedKey = '__weftSleepOperationId:0';
-      expect(firstContext.checkpointLocals[persistedKey]).toBe(firstRequest.operationId);
+    it('uses a deterministic operationId derived from workflowId and step, stable across replay', () => {
+      // The sleep operationId keys the durable timer and must be reproduced
+      // identically on replay so recovery re-arms the SAME timer instead of
+      // orphaning it. It is derived from `${workflowId}:${step}` — not a random
+      // UUID — and writes nothing to checkpointLocals. Cross-run safety (a
+      // start-new restart at the same id+step) is handled at the engine by the
+      // resolver deadline guard, not by id uniqueness.
+      const first = expectRequest(createContext().sleep(5000).next(), 'sleep');
+      const replay = expectRequest(createContext().sleep(5000).next(), 'sleep');
 
-      // Replay: a fresh context seeded with the persisted locals reads the SAME
-      // operationId back — it does NOT mint a new one.
-      const replayContext = createContext({
-        locals: { [persistedKey]: firstRequest.operationId },
-      });
-      const replayRequest = expectRequest(replayContext.sleep(5000).next(), 'sleep');
-      expect(replayRequest.operationId).toBe(firstRequest.operationId);
-
-      // A distinct run (no persisted id) mints a DIFFERENT operationId, so a
-      // start-new restart at the same workflow id and step cannot inherit a
-      // stale durable timer and resolve the fresh run's sleep early.
-      const otherRunRequest = expectRequest(createContext().sleep(5000).next(), 'sleep');
-      expect(otherRunRequest.operationId).not.toBe(firstRequest.operationId);
+      expect(first.operationId).toBe('wf-test-123:0');
+      expect(replay.operationId).toBe(first.operationId);
+      expect(first.operationId).not.toMatch(UUID_PATTERN);
+      expect(createContext().checkpointLocals).toEqual({});
     });
   });
 

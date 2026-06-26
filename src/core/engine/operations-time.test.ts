@@ -512,12 +512,12 @@ describe('processSleepOperation', () => {
   function createSleepInternals(
     storage: MemoryStorage,
     scheduler: { schedule(entry: TimerEntry): Promise<void> },
-    sleepTimersFiredWithoutResolver = new Map<string, Set<string>>(),
+    sleepTimersFiredWithoutResolver = new Map<string, Map<string, number>>(),
   ) {
     return {
       options: { getNow: () => 0 },
       scheduler,
-      sleepResolvers: new Map<string, () => void>(),
+      sleepResolvers: new Map<string, { resolve: () => void; fireAt: number }>(),
       sleepResolversByWorkflow: new Map<string, Set<string>>(),
       sleepTimersFiredWithoutResolver,
       storage,
@@ -581,20 +581,21 @@ describe('processSleepOperation', () => {
     const storage = new MemoryStorage();
     const workflowId = 'sleep-race-window-a';
     const operationId = 'op-a';
-    const firedWithoutResolver = new Map<string, Set<string>>();
+    const firedWithoutResolver = new Map<string, Map<string, number>>();
 
     const scheduler = {
       schedule: async (entry: TimerEntry) => {
         await storage.batch(buildTimerBatchOperations(entry));
         // Simulate tick calling resolveSleepTimer with no resolver registered yet:
-        // the marker is added to the per-workflowId set but the storage index is
-        // deliberately left in place to reproduce the pre-deletion window.
+        // the marker records the fired timer's fireAt (the run's own deadline) but
+        // the storage index is deliberately left in place to reproduce the
+        // pre-deletion window.
         let markers = firedWithoutResolver.get(workflowId);
         if (!markers) {
-          markers = new Set();
+          markers = new Map();
           firedWithoutResolver.set(workflowId, markers);
         }
-        markers.add(operationId);
+        markers.set(operationId, entry.fireAt);
       },
     };
 
@@ -623,8 +624,8 @@ describe('processSleepOperation', () => {
     const storage = new MemoryStorage();
     const workflowId = 'sleep-race-spurious-marker';
     const operationId = 'op-spurious';
-    const firedWithoutResolver = new Map<string, Set<string>>();
-    const sleepResolvers = new Map<string, () => void>();
+    const firedWithoutResolver = new Map<string, Map<string, number>>();
+    const sleepResolvers = new Map<string, { resolve: () => void; fireAt: number }>();
     const sleepResolversByWorkflow = new Map<string, Set<string>>();
 
     // Scheduler that deletes the timer index as a real tick would after firing
@@ -662,7 +663,7 @@ describe('processSleepOperation', () => {
                 ops.delete(operationId);
                 if (ops.size === 0) sleepResolversByWorkflow.delete(workflowId);
               }
-              resolver();
+              resolver.resolve();
             }
           });
         },
