@@ -1,7 +1,7 @@
 import { describe, expect, it, spyOn } from 'bun:test';
 
 import { Context } from '../context.ts';
-import { review, sleep } from './durable-operations.ts';
+import { getVersion, review, sleep } from './durable-operations.ts';
 import { getInternals } from './internals.ts';
 
 function createContext(overrides: Partial<ConstructorParameters<typeof Context>[0]> = {}) {
@@ -77,5 +77,40 @@ describe('durable operation helpers', () => {
     expect(log).toHaveBeenCalledWith('[weft] ctx.review("approval")');
     expect(log).toHaveBeenCalledWith('  → Creating checkpoint at step 0');
     expect(log).toHaveBeenCalledWith('  → Pausing for human review');
+  });
+
+  it('fails loudly when a cached getVersion replay result disagrees with the pinned version', () => {
+    const context = createContext({
+      accumulatedResults: new Map([[0, 1]]),
+    });
+    const internals = getInternals(context);
+
+    const generator = getVersion(context, internals, 'shipping-v2', 1, 2);
+
+    expect(() => generator.next()).toThrow(
+      'ctx.getVersion("shipping-v2") replay result 1 does not match pinned version 2',
+    );
+  });
+
+  it('logs explain-mode getVersion details before yielding the pinned version request', () => {
+    using log = spyOn(console, 'log').mockImplementation(() => {});
+    const context = createContext();
+    const internals = getInternals(context);
+    internals.explainMode = true;
+
+    const generator = getVersion(context, internals, 'shipping-v2', 1, 2);
+    const first = generator.next();
+
+    expect(first.done).toBe(false);
+    expect(first.value).toMatchObject({
+      type: 'get-version',
+      changeId: 'shipping-v2',
+      minSupported: 1,
+      maxSupported: 2,
+      version: 2,
+    });
+    expect(log).toHaveBeenCalledWith('[weft] ctx.getVersion("shipping-v2", 1, 2)');
+    expect(log).toHaveBeenCalledWith('  → Creating checkpoint at step 0');
+    expect(log).toHaveBeenCalledWith('  → Pinning workflow patch "shipping-v2" to version 2');
   });
 });
