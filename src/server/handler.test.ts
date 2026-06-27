@@ -12,6 +12,7 @@ import { MemoryStorage } from '../storage/memory.ts';
 import { getRequiredRouteParameter, handleRequest } from './handler.ts';
 import { principalFromApiKey } from './principal.ts';
 import type { UnknownRestBinding } from './rest-bindings.ts';
+import { storeHistoricalReviewDecisionWithoutRequestMetadata } from './review-test-support.test-support.ts';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -2888,19 +2889,7 @@ describe('handleRequest', () => {
       const storage = new MemoryStorage();
       engine = new Engine({ storage });
 
-      // Fixture for a review record persisted by an older runtime; the
-      // "legacy" ids name the historical-data scenario this test exercises
-      // (read path skips records missing canonical request metadata).
-      await storage.put(
-        'review-decision:legacy-review',
-        encode({
-          reviewId: 'legacy-review',
-          decision: 'approved',
-          reviewer: 'legacy-bot',
-          feedback: 'stored by an older runtime',
-          timestamp: 9_000,
-        }),
-      );
+      await storeHistoricalReviewDecisionWithoutRequestMetadata(storage);
 
       const response = await handleRequest(
         request('GET', '/v1/reviews?status=completed'),

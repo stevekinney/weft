@@ -9,6 +9,7 @@ import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { principalFromApiKey } from '../principal.ts';
+import { storeHistoricalReviewDecisionWithoutRequestMetadata } from '../review-test-support.test-support.ts';
 import { listReviewsOperation, listReviewsRestBinding } from './list-reviews.ts';
 
 function createEngineWithStorage(): { engine: Engine; storage: MemoryStorage } {
@@ -137,19 +138,7 @@ describe('weft.reviews.list', () => {
     const setup = createEngineWithStorage();
     engine = setup.engine;
 
-    // Fixture for a review record persisted by an older runtime; the
-    // "legacy" ids name the historical-data scenario this test exercises
-    // (read path skips records missing canonical request metadata).
-    await setup.storage.put(
-      'review-decision:legacy-review',
-      encode({
-        reviewId: 'legacy-review',
-        decision: 'approved',
-        reviewer: 'legacy-bot',
-        feedback: 'stored by an older runtime',
-        timestamp: 9_000,
-      }),
-    );
+    await storeHistoricalReviewDecisionWithoutRequestMetadata(setup.storage);
 
     const response = await handleRequest(
       new Request('http://localhost/v1/reviews?status=completed', { method: 'GET' }),
