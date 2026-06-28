@@ -51,6 +51,7 @@
     "versionTuple": {
       "workflowVersion": "1"
     },
+    "workflowExecutionToken": "00000000-0000-4000-8000-000000000001",
     "executionStateOwnerId": "wf-signal-and-wait",
     "createdAt": 0,
     "startedAt": 0,
@@ -58,7 +59,7 @@
     "result": {
       "received": "proceed"
     },
-    "terminalCleanupToken": "00000000-0000-4000-8000-000000000004"
+    "terminalCleanupToken": "00000000-0000-4000-8000-000000000005"
   },
   "storage": {
     "ev:wf-signal-and-wait:0000000000": "h6R0eXBls3dvcmtmbG93OmNoZWNrcG9pbnSqd29ya2Zsb3dJZLJ3Zi1zaWduYWwtYW5kLXdhaXSoc2VxdWVuY2UAqHByZXZIYXNosDAwMDAwMDAwMDAwMDAwMDCncGF5bG9hZIGkc3RlcAGpdGltZXN0YW1wAKx2ZXJzaW9uVHVwbGWBr3dvcmtmbG93VmVyc2lvbqEx",
@@ -66,14 +67,14 @@
     "ev:wf-signal-and-wait:head": "gqhzZXF1ZW5jZQGobGFzdEhhc2iwNzJmNDg2OTA2OTFjY2QyMw==",
     "sigseq:v1:wf-signal-and-wait": "AQ==",
     "wf-cleanup-needed:wf-signal-and-wait": "",
-    "wf-cleanup:0000000000060000:terminal-cleanup%3Apreserve-output%3A00000000-0000-4000-8000-000000000004": "sndmLXNpZ25hbC1hbmQtd2FpdA==",
+    "wf-cleanup:0000000000060000:terminal-cleanup%3Apreserve-output%3A00000000-0000-4000-8000-000000000005": "sndmLXNpZ25hbC1hbmQtd2FpdA==",
     "wf-idx-created:0000000000000000:wf-signal-and-wait": "",
     "wf-idx-manifest:wf-signal-and-wait": "gqd2ZXJzaW9uAaRrZXlzlNkyd2YtaWR4LWNyZWF0ZWQ6MDAwMDAwMDAwMDAwMDAwMDp3Zi1zaWduYWwtYW5kLXdhaXTZKndmLWlkeC1zdGF0dXM6Y29tcGxldGVkOndmLXNpZ25hbC1hbmQtd2FpdNkud2YtaWR4LXR5cGU6c2lnbmFsLWFuZC13YWl0OndmLXNpZ25hbC1hbmQtd2FpdNkyd2YtaWR4LXVwZGF0ZWQ6MDAwMDAwMDAwMDAwMDAwMDp3Zi1zaWduYWwtYW5kLXdhaXQ=",
     "wf-idx-status:completed:wf-signal-and-wait": "",
     "wf-idx-type:signal-and-wait:wf-signal-and-wait": "",
     "wf-idx-updated:0000000000000000:wf-signal-and-wait": "",
     "wf-terminal:0000000000000000:wf-signal-and-wait": "",
-    "wf:wf-signal-and-wait": "i6JpZLJ3Zi1zaWduYWwtYW5kLXdhaXSkdHlwZa9zaWduYWwtYW5kLXdhaXSmc3RhdHVzqWNvbXBsZXRlZKVpbnB1dMCsdmVyc2lvblR1cGxlga93b3JrZmxvd1ZlcnNpb26hMbVleGVjdXRpb25TdGF0ZU93bmVySWSyd2Ytc2lnbmFsLWFuZC13YWl0qWNyZWF0ZWRBdACpc3RhcnRlZEF0AKl1cGRhdGVkQXQApnJlc3VsdIGocmVjZWl2ZWSncHJvY2VlZLR0ZXJtaW5hbENsZWFudXBUb2tlbtkkMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA0",
+    "wf:wf-signal-and-wait": "jKJpZLJ3Zi1zaWduYWwtYW5kLXdhaXSkdHlwZa9zaWduYWwtYW5kLXdhaXSmc3RhdHVzqWNvbXBsZXRlZKVpbnB1dMCsdmVyc2lvblR1cGxlga93b3JrZmxvd1ZlcnNpb26hMbZ3b3JrZmxvd0V4ZWN1dGlvblRva2Vu2SQwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDG1ZXhlY3V0aW9uU3RhdGVPd25lcklksndmLXNpZ25hbC1hbmQtd2FpdKljcmVhdGVkQXQAqXN0YXJ0ZWRBdACpdXBkYXRlZEF0AKZyZXN1bHSBqHJlY2VpdmVkp3Byb2NlZWS0dGVybWluYWxDbGVhbnVwVG9rZW7ZJDAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwNQ==",
     "wf:wf-signal-and-wait:ckpt": "iKp3b3JrZmxvd0lksndmLXNpZ25hbC1hbmQtd2FpdKRzdGVwAqZsb2NhbHOAsmFjY3VtdWxhdGVkUmVzdWx0c5Cwc2VhcmNoQXR0cmlidXRlc4CndmVyc2lvbqExrXNjaGVtYVZlcnNpb24CqWNyZWF0ZWRBdAA=",
     "wf:wf-signal-and-wait:ckpt:0000000001": "iKp3b3JrZmxvd0lksndmLXNpZ25hbC1hbmQtd2FpdKRzdGVwAaZsb2NhbHOAsmFjY3VtdWxhdGVkUmVzdWx0c5Cwc2VhcmNoQXR0cmlidXRlc4CndmVyc2lvbqExrXNjaGVtYVZlcnNpb24CqWNyZWF0ZWRBdAA=",
     "wf:wf-signal-and-wait:ckpt:0000000002": "iKp3b3JrZmxvd0lksndmLXNpZ25hbC1hbmQtd2FpdKRzdGVwAqZsb2NhbHOAsmFjY3VtdWxhdGVkUmVzdWx0c5Cwc2VhcmNoQXR0cmlidXRlc4CndmVyc2lvbqExrXNjaGVtYVZlcnNpb24CqWNyZWF0ZWRBdAA=",

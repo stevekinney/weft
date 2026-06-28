@@ -367,6 +367,7 @@ function buildInitialIdentitySlice(
     status: delayedStartTimer ? 'pending' : 'running',
     input,
     versionTuple,
+    workflowExecutionToken: crypto.randomUUID(),
     ...(executionStateOwnerId !== undefined && { executionStateOwnerId }),
     createdAt: now,
     ...(!delayedStartTimer && { startedAt: now }),

@@ -113,6 +113,13 @@ export interface WorkflowContext<
 > {
   readonly workflowId: WorkflowId;
   /**
+   * Durable token for this concrete run. A stable workflow id reused with
+   * `onTerminalConflict: 'start-new'` receives a new token, while recovery of the
+   * same run keeps the token. Store this with external side effects so late
+   * activity writes or finalizer cleanup can prove they still belong to this run.
+   */
+  readonly workflowExecutionToken: string | undefined;
+  /**
    * The registered workflow type name for this run (the `name` field from
    * `workflow({ name: '...' })`). Useful for logging and self-inspection
    * without capturing the name at the workflow definition site.

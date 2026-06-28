@@ -39,6 +39,7 @@ describe('worker inbound message builders (#529)', () => {
         {
           ...base,
           executionStateOwnerId: 'owner-9',
+          workflowExecutionToken: 'workflow-token-worker-run',
           deadline: 1234,
           headers: [['x-trace', 'abc']],
         },
@@ -46,6 +47,7 @@ describe('worker inbound message builders (#529)', () => {
       );
       expect(message).toMatchObject({
         executionStateOwnerId: 'owner-9',
+        workflowExecutionToken: 'workflow-token-worker-run',
         maxProtocolMessageBytes: 4_096,
         deadline: 1234,
         headers: [['x-trace', 'abc']],

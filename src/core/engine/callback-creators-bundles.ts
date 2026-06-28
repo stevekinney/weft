@@ -196,6 +196,7 @@ export function createTimeOperationCallbacks<TWorkflows extends object, TActivit
       runSerializedWorkflowStateWrite(getInternals(engine), workflowId, writeOperation),
     beginWorkflowExecution: (
       workflowId,
+      workflowExecutionToken,
       workflowType,
       input,
       checkpoint,
@@ -206,6 +207,7 @@ export function createTimeOperationCallbacks<TWorkflows extends object, TActivit
       beginWorkflowExecution(
         getInternals(engine),
         workflowId,
+        workflowExecutionToken,
         workflowType,
         input,
         checkpoint,

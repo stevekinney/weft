@@ -798,6 +798,7 @@ describe('engine lifecycle coverage helpers', () => {
     beginWorkflowExecution(
       internals as never,
       'workflow-begin-worker',
+      undefined,
       'workflow',
       { value: 1 },
       checkpoint,
@@ -831,6 +832,7 @@ describe('engine lifecycle coverage helpers', () => {
     startWorkflowExecution(
       internals as never,
       'workflow-start-execution',
+      undefined,
       'workflow',
       null,
       checkpoint,
@@ -843,6 +845,7 @@ describe('engine lifecycle coverage helpers', () => {
     startWorkflowExecution(
       internals as never,
       'workflow-start-execution-nested',
+      undefined,
       'workflow',
       null,
       checkpoint,
@@ -906,6 +909,7 @@ describe('engine lifecycle coverage helpers', () => {
     expect(forkedState).toEqual(
       expect.objectContaining({
         forkedFrom: lineage,
+        workflowExecutionToken: expect.any(String),
         versionTuple: {
           agentVersion: 'agent-1',
           toolVersions: ['tool@1'],

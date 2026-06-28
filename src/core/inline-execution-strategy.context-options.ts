@@ -53,6 +53,7 @@ export type InlineWorkflowRegistration = NonNullable<
 /** Parameters for starting a workflow run on the inline strategy. */
 export type InlineStartWorkflowParameters = {
   workflowId: string;
+  workflowExecutionToken?: string;
   workflowType: string;
   input: unknown;
   checkpoint: ArrayBuffer | Uint8Array;
@@ -73,6 +74,9 @@ export function createInlineContextOptions(
 ): ContextOptions {
   return {
     workflowId: parameters.workflowId,
+    ...(parameters.workflowExecutionToken !== undefined && {
+      workflowExecutionToken: parameters.workflowExecutionToken,
+    }),
     workflowType: parameters.workflowType,
     startedAt: parameters.startedAt ?? dependencies.getNow(),
     abortController: workflowAbort,

@@ -132,7 +132,7 @@ export type RestBinding<Input, Output> = {
    * detail (for example, `get-workflow-result` returns the custom message
    * `"Timeout waiting for workflow result"` on a `Timeout`, and `get-stream-chunks`
    * handles `InvalidParams` inline). This per-operation hook is the current
-   * contract, not a transitional shim.
+   * contract.
    */
   readonly shapeFault?: (fault: OperationFault) => Response;
 };

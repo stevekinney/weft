@@ -44,6 +44,7 @@ export function runWorkflowStartInterceptor(
 export function startWorkflowExecution(
   internals: EngineInternals,
   workflowId: string,
+  workflowExecutionToken: string | undefined,
   workflowType: string,
   input: unknown,
   checkpoint: Checkpoint,
@@ -62,6 +63,7 @@ export function startWorkflowExecution(
   internals.workflowTypeByWorkflowId.set(workflowId, workflowType);
   internals.strategy.startWorkflow({
     workflowId,
+    ...(workflowExecutionToken !== undefined && { workflowExecutionToken }),
     workflowType,
     input,
     checkpoint: serializeCheckpoint(checkpoint),
@@ -79,6 +81,7 @@ export function startWorkflowExecution(
 export function beginWorkflowExecution(
   internals: EngineInternals,
   workflowId: string,
+  workflowExecutionToken: string | undefined,
   workflowType: string,
   input: unknown,
   checkpoint: Checkpoint,
@@ -94,6 +97,7 @@ export function beginWorkflowExecution(
   if (internals.inlineStrategy !== null) {
     callbacks.queueInlineWorkflowExecutionStart({
       workflowId,
+      ...(workflowExecutionToken !== undefined && { workflowExecutionToken }),
       workflowType,
       input,
       checkpoint,
@@ -112,6 +116,7 @@ export function beginWorkflowExecution(
   startWorkflowExecution(
     internals,
     workflowId,
+    workflowExecutionToken,
     workflowType,
     input,
     checkpoint,
@@ -197,6 +202,7 @@ export async function beginExecutionAwaitingLiveness(
   beginWorkflowExecution(
     internals,
     workflowId,
+    params.state.workflowExecutionToken,
     params.type,
     params.input,
     params.checkpoint,

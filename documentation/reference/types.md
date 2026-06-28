@@ -91,6 +91,7 @@ The context object passed as the first argument to every workflow function.
 ```ts partial
 interface WorkflowContext {
   readonly workflowId: WorkflowId;
+  readonly workflowExecutionToken: string | undefined;
   readonly signal: AbortSignal;
   readonly executionTimeRemaining: number;
   readonly startedAt: number;
@@ -153,7 +154,7 @@ interface WorkflowContext {
 }
 ```
 
-`WorkflowContext` is the normal workflow authoring surface. You do not need to cast it to `Context` to call durable operations. `services` is optional host-supplied per-run data from `engine.start(..., { services })`; it is available only in inline execution, is never checkpointed, and is re-provided on fresh-process recovery through `EngineOptions.resolveWorkflowServices`.
+`WorkflowContext` is the normal workflow authoring surface. You do not need to cast it to `Context` to call durable operations. `workflowExecutionToken` is a durable per-run identifier for fencing external writes: it is stable across recovery for the same run and rotates when `onTerminalConflict: 'start-new'` replaces a terminal run under the same workflow ID. `services` is optional host-supplied per-run data from `engine.start(..., { services })`; it is available only in inline execution, is never checkpointed, and is re-provided on fresh-process recovery through `EngineOptions.resolveWorkflowServices`.
 
 ### Composition Types
 
@@ -501,9 +502,24 @@ type ActivityFunction<TInput = unknown, TOutput = unknown> = (
 ```ts partial
 interface ActivityContext {
   signal: AbortSignal;
+  workflowExecutionToken?: string;
+  activityAttemptToken?: string;
   heartbeat(details?: unknown): void;
 }
 ```
+
+`workflowExecutionToken` matches the workflow run that dispatched the activity. `activityAttemptToken` changes for each activity retry attempt, so external systems can reject stale writes from a superseded attempt while still accepting retries from the current one.
+
+For application-database side effects, store the token with the row that represents in-progress work and require it on every completion or cleanup write:
+
+```sql
+UPDATE installation_syncs
+SET status = 'idle'
+WHERE installation_id = $1
+  AND owner_token = $2;
+```
+
+Use `context.workflowExecutionToken` when a workflow or finalizer owns the row for the whole run, and use `context.activityAttemptToken` when each activity retry attempt needs its own fence. Cancellation, timeout, and `ctx.race()` only abort work cooperatively; a late external client call can still return, so the conditional write is the durable guard.
 
 ### `ActivityDefinition`
 

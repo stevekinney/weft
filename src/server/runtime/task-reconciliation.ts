@@ -118,6 +118,7 @@ function createRequeuedTaskDispatch(record: InflightRecord, nextAttempt: number)
     attempt: nextAttempt,
     visibilityTimeout: record.visibilityTimeout,
     workflowId: record.workflowId,
+    workflowExecutionToken: record.workflowExecutionToken,
   };
   if (record.retryPolicy !== undefined) {
     taskDispatch.retryPolicy = record.retryPolicy;

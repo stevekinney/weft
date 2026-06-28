@@ -73,6 +73,7 @@
     "versionTuple": {
       "workflowVersion": "1"
     },
+    "workflowExecutionToken": "00000000-0000-4000-8000-000000000001",
     "executionStateOwnerId": "wf-saga-with-compensation",
     "createdAt": 0,
     "startedAt": 0,
@@ -90,7 +91,7 @@
     "wf-idx-type:saga-with-compensation:wf-saga-with-compensation": "",
     "wf-idx-updated:0000000000000000:wf-saga-with-compensation": "",
     "wf-terminal:0000000000000000:wf-saga-with-compensation": "",
-    "wf:wf-saga-with-compensation": "iqJpZLl3Zi1zYWdhLXdpdGgtY29tcGVuc2F0aW9upHR5cGW2c2FnYS13aXRoLWNvbXBlbnNhdGlvbqZzdGF0dXOpY29tcGxldGVkpWlucHV0wKx2ZXJzaW9uVHVwbGWBr3dvcmtmbG93VmVyc2lvbqExtWV4ZWN1dGlvblN0YXRlT3duZXJJZLl3Zi1zYWdhLXdpdGgtY29tcGVuc2F0aW9uqWNyZWF0ZWRBdACpc3RhcnRlZEF0AKl1cGRhdGVkQXQApnJlc3VsdLZjb21wZW5zYXRlZDpvdXRwdXQtb25l",
+    "wf:wf-saga-with-compensation": "i6JpZLl3Zi1zYWdhLXdpdGgtY29tcGVuc2F0aW9upHR5cGW2c2FnYS13aXRoLWNvbXBlbnNhdGlvbqZzdGF0dXOpY29tcGxldGVkpWlucHV0wKx2ZXJzaW9uVHVwbGWBr3dvcmtmbG93VmVyc2lvbqExtndvcmtmbG93RXhlY3V0aW9uVG9rZW7ZJDAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMbVleGVjdXRpb25TdGF0ZU93bmVySWS5d2Ytc2FnYS13aXRoLWNvbXBlbnNhdGlvbqljcmVhdGVkQXQAqXN0YXJ0ZWRBdACpdXBkYXRlZEF0AKZyZXN1bHS2Y29tcGVuc2F0ZWQ6b3V0cHV0LW9uZQ==",
     "wf:wf-saga-with-compensation:ckpt": "iap3b3JrZmxvd0lkuXdmLXNhZ2Etd2l0aC1jb21wZW5zYXRpb26kc3RlcAOmbG9jYWxzgLJhY2N1bXVsYXRlZFJlc3VsdHOQ2SBhY2N1bXVsYXRlZFJlc3VsdFJlcGxheVdhdGVybWFyawCwc2VhcmNoQXR0cmlidXRlc4CndmVyc2lvbqExrXNjaGVtYVZlcnNpb24CqWNyZWF0ZWRBdAA=",
     "wf:wf-saga-with-compensation:ckpt:0000000001": "iKp3b3JrZmxvd0lkuXdmLXNhZ2Etd2l0aC1jb21wZW5zYXRpb26kc3RlcAGmbG9jYWxzgLJhY2N1bXVsYXRlZFJlc3VsdHOQsHNlYXJjaEF0dHJpYnV0ZXOAp3ZlcnNpb26hMa1zY2hlbWFWZXJzaW9uAqljcmVhdGVkQXQA",
     "wf:wf-saga-with-compensation:ckpt:0000000002": "iqp3b3JrZmxvd0lkuXdmLXNhZ2Etd2l0aC1jb21wZW5zYXRpb26kc3RlcAKmbG9jYWxzgLJhY2N1bXVsYXRlZFJlc3VsdHOQsHNlYXJjaEF0dHJpYnV0ZXOAp3ZlcnNpb26hMa1zY2hlbWFWZXJzaW9uAqljcmVhdGVkQXQA2SBhY2N1bXVsYXRlZFJlc3VsdFJlcGxheVdhdGVybWFyawC2X193ZWZ0Q2hlY2twb2ludFJlcGxheYGyYWNjdW11bGF0ZWRSZXN1bHRzkZIAqm91dHB1dC1vbmU=",

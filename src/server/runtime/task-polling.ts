@@ -201,6 +201,7 @@ export function createLongPollInflightRecord(
     visibilityTimeout,
     retryPolicy: task.retryPolicy,
     workflowId: task.workflowId,
+    workflowExecutionToken: task.workflowExecutionToken,
     // Fresh per-claim token. The long-poll completion handler validates the
     // echoed token against the durable record, rejecting a stale earlier claim
     // whose visibility timed out and was reclaimed. Re-claim writes a new record
@@ -290,7 +291,14 @@ export async function handleTaskPollRequest(
   const task = await context.taskQueue.poll(queue, activities, timeout, request.signal);
   if (task !== null) {
     const claim = await markTaskClaimedByLongPollWorker(context, options, queue, task);
-    return Response.json({ ...task, workerId: claim.workerId, attemptToken: claim.attemptToken });
+    return Response.json({
+      ...task,
+      workerId: claim.workerId,
+      attemptToken: claim.attemptToken,
+      ...(task.workflowExecutionToken !== undefined && {
+        workflowExecutionToken: task.workflowExecutionToken,
+      }),
+    });
   }
 
   return new Response(null, { status: 204 });

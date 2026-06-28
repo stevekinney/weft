@@ -1398,11 +1398,11 @@ describe('classifyEngineError — producibleFaults enforcement', () => {
       data: { resource: 'workflow' },
     };
     const result = classifyEngineError(fault, {
-      name: 'weft.test.legacydirectthrow',
+      name: 'weft.test.directthrow',
       // no producibleFaults declaration
     });
     expect(result.code).toBe('EngineFailure');
-    expect(result.message).toContain('weft.test.legacydirectthrow');
+    expect(result.message).toContain('weft.test.directthrow');
     expect(result.message).toContain('NotFound');
   });
 
@@ -1448,10 +1448,10 @@ describe('classifyEngineError — producibleFaults enforcement', () => {
       const fault: OperationFault = {
         code: 'Timeout',
         message: 'too slow',
-        data: { operationName: 'weft.test.prodlegacy' },
+        data: { operationName: 'weft.test.production' },
       };
       const result = classifyEngineError(fault, {
-        name: 'weft.test.prodlegacy',
+        name: 'weft.test.production',
       });
       // Production preserves the original fault on the wire so clients
       // keep their actionable semantics.
@@ -1459,7 +1459,7 @@ describe('classifyEngineError — producibleFaults enforcement', () => {
       expect(result.message).toBe('too slow');
       // ...AND the warning fires for monitoring.
       const matching = warnings.filter(
-        (w) => w.includes('weft.test.prodlegacy') && w.includes('Timeout'),
+        (w) => w.includes('weft.test.production') && w.includes('Timeout'),
       );
       expect(matching).toHaveLength(1);
     } finally {

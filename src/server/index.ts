@@ -334,6 +334,8 @@ export interface TaskDispatch {
   queue?: string;
   /** Workflow ID. Required for sticky routing to track worker affinity. */
   workflowId?: string | undefined;
+  /** Durable token for the workflow run that launched this task, when known. */
+  workflowExecutionToken?: string | undefined;
   /** When true, prefer the worker that last handled a task for this workflow. Requires `workflowId`. */
   sticky?: boolean;
   /** Visibility timeout in milliseconds. Defaults to `DEFAULT_VISIBILITY_TIMEOUT` (30 000). */

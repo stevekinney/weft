@@ -227,6 +227,7 @@ describe('WorkerExecutionStrategy', () => {
       const checkpoint = new ArrayBuffer(8);
       strategy.startWorkflow({
         workflowId: 'wf-1',
+        workflowExecutionToken: 'workflow-token-strategy',
         workflowType: 'test',
         input: { value: 42 },
         checkpoint,
@@ -242,6 +243,7 @@ describe('WorkerExecutionStrategy', () => {
       const sentMessage = worker.postMessage.mock.calls[0]![0];
       expect(sentMessage.type).toBe('run');
       expect(sentMessage.workflowId).toBe('wf-1');
+      expect(sentMessage.workflowExecutionToken).toBe('workflow-token-strategy');
       expect(sentMessage.workflowType).toBe('test');
       expect(sentMessage.input).toEqual({ value: 42 });
     });

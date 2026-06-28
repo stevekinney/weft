@@ -59,6 +59,12 @@ export interface WorkflowState {
    */
   versionTuple: WorkflowVersionTuple;
   /**
+   * Durable token identifying this concrete workflow run. It changes when a
+   * stable workflow id is reused with `onTerminalConflict: 'start-new'`, and
+   * stays stable for the same run across recovery.
+   */
+  workflowExecutionToken?: string;
+  /**
    * Owner identifier for execution-scoped durable state. Top-level workflows
    * own their own execution state; durable child workflows inherit the
    * parent's owner so `ctx.state.execution()` is shared across the execution

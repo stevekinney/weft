@@ -659,6 +659,9 @@
           "cronExpression": {
             "description": "Cron expression. Supply exactly one of cronExpression or every; runtime validation requires a non-empty string."
           },
+          "description": {
+            "description": "Operator-facing schedule description. Runtime validation requires a string."
+          },
           "every": {
             "description": "Interval period (duration string or milliseconds). Supply exactly one of cronExpression or every."
           },

@@ -265,6 +265,8 @@ export type TaskMessage = {
   readonly input: RemoteWorkerJsonValue;
   readonly attempt?: number;
   readonly headers?: Readonly<Record<string, string>>;
+  /** Durable token for the workflow run that launched this activity, when known. */
+  readonly workflowExecutionToken?: string;
   /**
    * Unique, unguessable token identifying this specific dispatch attempt. The
    * current server always stamps one, and the worker must echo it back on the

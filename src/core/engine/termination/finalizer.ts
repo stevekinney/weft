@@ -365,6 +365,7 @@ async function driveResolvedTeardown(
     finalizerInput,
     attempt,
     internals.abortController.signal,
+    state.workflowExecutionToken,
   );
 
   if (result.ok) {

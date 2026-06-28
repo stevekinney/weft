@@ -140,6 +140,9 @@ describe('engine validation helpers', () => {
     expect(() => normalizeScheduleOptions({ backfill: 'yes' } as never)).toThrow(
       'options.backfill must be a boolean when provided',
     );
+    expect(() => normalizeScheduleOptions({ description: 42 } as never)).toThrow(
+      'options.description must be a string when provided',
+    );
     expect(() => normalizeScheduleOptions({ jitter: false } as never)).toThrow(
       'options.jitter must be a duration string or a number of milliseconds',
     );
@@ -149,12 +152,14 @@ describe('engine validation helpers', () => {
     expect(
       normalizeScheduleOptions({
         id: 'schedule-id',
+        description: 'Nightly maintenance',
         overlap: 'queue',
         backfill: true,
         jitter: '30s',
       }),
     ).toEqual({
       id: 'schedule-id',
+      description: 'Nightly maintenance',
       overlap: 'queue',
       backfill: true,
       jitterMs: 30_000,

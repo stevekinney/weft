@@ -169,7 +169,7 @@ import {
   resumeParkedInlineWorkflow as resumeParkedInlineWorkflowFromInternals,
   type InlineParkingCallbacks,
 } from './inline-parking.ts';
-import { getInternals, initializeInternals } from './internals.ts';
+import { getInternals, initializeInternals, type EngineInternals } from './internals.ts';
 import { ENGINE_LEASE_LOST_WARNING_NAME, handleDeposition } from './lease-deposition.ts';
 import { createLeaseManager, type LeaseLostReason } from './lease-manager.ts';
 import {
@@ -351,6 +351,23 @@ export const ENGINE_LEASE_SYNCHRONOUS_DISPOSE_WARNING_NAME =
   'WeftEngineLeaseSynchronousDisposeWarning';
 
 export { ENGINE_LEASE_LOST_WARNING_NAME };
+
+function scheduleDefinitionFromInternals(
+  internals: EngineInternals,
+  definition: ScheduleDefinition,
+): Promise<ScheduleHandle> {
+  const workflowType =
+    typeof definition.workflow === 'string' ? definition.workflow : definition.workflow.name;
+  const definitionSpec: ScheduleSpec =
+    definition.every !== undefined ? { every: definition.every } : { cron: definition.cron ?? '' };
+  return scheduleFromInternals(internals, workflowType, definition.input, definitionSpec, {
+    ...(definition.id !== undefined && { id: definition.id }),
+    ...(definition.description !== undefined && { description: definition.description }),
+    ...(definition.overlapPolicy !== undefined && { overlap: definition.overlapPolicy }),
+    ...(definition.backfill !== undefined && { backfill: definition.backfill }),
+    ...(definition.jitter !== undefined && { jitter: definition.jitter }),
+  });
+}
 
 /**
  * Durable execution engine.
@@ -1401,25 +1418,7 @@ export class Engine<
     options?: ScheduleOptions,
   ): Promise<ScheduleHandle> {
     if (typeof typeOrDefinition === 'object') {
-      const definition = typeOrDefinition;
-      const workflowType =
-        typeof definition.workflow === 'string' ? definition.workflow : definition.workflow.name;
-      const definitionSpec: ScheduleSpec =
-        definition.every !== undefined
-          ? { every: definition.every }
-          : { cron: definition.cron ?? '' };
-      return scheduleFromInternals(
-        getInternals(this),
-        workflowType,
-        definition.input,
-        definitionSpec,
-        {
-          ...(definition.id !== undefined && { id: definition.id }),
-          ...(definition.overlapPolicy !== undefined && { overlap: definition.overlapPolicy }),
-          ...(definition.backfill !== undefined && { backfill: definition.backfill }),
-          ...(definition.jitter !== undefined && { jitter: definition.jitter }),
-        },
-      );
+      return scheduleDefinitionFromInternals(getInternals(this), typeOrDefinition);
     }
     if (spec === undefined) {
       throw new Error(

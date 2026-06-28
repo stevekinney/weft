@@ -127,12 +127,12 @@ describe('formatWorkflowVersionDiff', () => {
   it('formats removed and changed tools', () => {
     const output = formatWorkflowVersionDiff({
       toolVersions: [
-        { tool: 'legacy-tool', change: 'removed', from: '1.0.0' },
+        { tool: 'removed-tool', change: 'removed', from: '1.0.0' },
         { tool: 'active-tool', change: 'changed', from: '1.0.0', to: '2.0.0' },
       ],
     });
 
-    expect(output).toContain('legacy-tool');
+    expect(output).toContain('removed-tool');
     expect(output).toContain('removed (was: 1.0.0)');
     expect(output).toContain('active-tool');
     expect(output).toContain('version: 1.0.0 → 2.0.0');

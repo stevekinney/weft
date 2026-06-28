@@ -178,8 +178,8 @@ describe('AtomicState', () => {
 // Acceptance-critical invariant: workflow-owned durable state is written under
 // a constant default scope prefix, never at the storage root. weft is
 // single-tenant, but the scope component is kept so a future re-partition is a
-// key rename, not a data migration. If this changes, it must be a deliberate,
-// versioned storage migration — not an accident.
+// key rename, not an implicit storage rewrite. If this changes, it must be a
+// deliberate, versioned storage format change — not an accident.
 describe('workflow-scoped state default-scope invariant', () => {
   it('keys workflow-shared state under state:workflow-scope:<DEFAULT_SCOPE>:, never at root', () => {
     const dataKey = atomicStateDataKey({ type: 'workflow', workflowType: 'invoice' }, 'cursor');

@@ -73,6 +73,8 @@ export interface QueuedRecord extends TaskLifecycleFields {
   queuedAt: number;
   /** Workflow that dispatched this activity. Present when the dispatch included a workflowId. */
   workflowId?: string | undefined;
+  /** Durable token for the workflow run that dispatched this activity, when known. */
+  workflowExecutionToken?: string | undefined;
 }
 
 /** Persisted record for a task in the inflight state. */
@@ -88,6 +90,8 @@ export interface InflightRecord extends TaskLifecycleFields {
   retryPolicy?: RetryPolicy | undefined;
   /** Workflow that dispatched this activity. Present when the dispatch included a workflowId. */
   workflowId?: string | undefined;
+  /** Durable token for the workflow run that dispatched this activity, when known. */
+  workflowExecutionToken?: string | undefined;
   /**
    * Unique, unguessable token identifying this dispatch attempt. Rotated on every
    * (re-)dispatch because each dispatch writes a fresh InflightRecord. The

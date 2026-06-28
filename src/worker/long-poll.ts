@@ -9,10 +9,11 @@ import {
   executeWithInterceptors,
   type ComposedInterceptor,
 } from './execute-with-interceptors.ts';
+import type { RemoteWorkerActivityFunction } from './workflow-activity-binding.ts';
 
 export interface LongPollWorkerOptions {
   serverUrl: string;
-  activities: Record<string, (input: unknown) => Promise<unknown>>;
+  activities: Record<string, RemoteWorkerActivityFunction>;
   concurrency?: number;
   queue?: string;
   pollTimeout?: number; // ms, default: 30000
@@ -175,6 +176,7 @@ export class LongPollWorker implements Disposable {
           attempt?: number;
           headers?: Record<string, string>;
           workerId?: string;
+          workflowExecutionToken?: string;
           attemptToken?: string;
         };
 
@@ -196,6 +198,7 @@ export class LongPollWorker implements Disposable {
       attempt?: number;
       headers?: Record<string, string>;
       workerId?: string;
+      workflowExecutionToken?: string;
       attemptToken?: string;
     },
     resultUrl: string,
@@ -229,6 +232,7 @@ export class LongPollWorker implements Disposable {
         activityFunction,
         task,
         this.#composedInterceptor,
+        this.#abortController.signal,
       );
 
       await fetch(resultUrl, {

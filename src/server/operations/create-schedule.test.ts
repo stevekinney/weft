@@ -42,6 +42,7 @@ describe('weft.schedules.create', () => {
         input: { payload: 'nightly' },
         cronExpression: '0 * * * *',
         id: 'nightly-maintenance',
+        description: 'Run nightly maintenance',
         overlap: 'queue',
         backfill: true,
         jitter: '30s',
@@ -56,12 +57,30 @@ describe('weft.schedules.create', () => {
       expect.objectContaining({
         id: 'nightly-maintenance',
         workflowType: 'echo',
+        description: 'Run nightly maintenance',
         cronExpression: '0 * * * *',
         overlap: 'queue',
         backfill: true,
         jitterMs: 30_000,
       }),
     );
+  });
+
+  it('returns 400 when description is not a string', async () => {
+    engine = createEngine();
+
+    const response = await handleRequest(
+      jsonRequest('POST', '/v1/schedules', {
+        type: 'echo',
+        cronExpression: '0 * * * *',
+        description: 42,
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'Field "description" must be a string' });
   });
 
   it('returns 400 when the request body is invalid JSON', async () => {

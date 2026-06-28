@@ -52,6 +52,7 @@ const WORKFLOW_STATE_FIELD_NAMES = new Set<string>(
     'failureCategory',
     'terminationReason',
     'versionTuple',
+    'workflowExecutionToken',
     'executionStateOwnerId',
     'createdAt',
     'startedAt',

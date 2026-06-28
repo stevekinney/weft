@@ -85,6 +85,7 @@ export function setContextWorkflowInterceptor(
  */
 export class Context implements WorkflowContext {
   readonly workflowId: string;
+  readonly workflowExecutionToken: string | undefined;
   readonly workflowType: string;
   readonly startedAt: number;
   readonly signal: AbortSignal;
@@ -94,6 +95,7 @@ export class Context implements WorkflowContext {
   #log: WorkflowLogger | undefined;
   constructor(options: ContextOptions) {
     this.workflowId = options.workflowId;
+    this.workflowExecutionToken = options.workflowExecutionToken;
     this.workflowType = options.workflowType;
     this.startedAt = options.startedAt;
     this.signal = options.abortController.signal;

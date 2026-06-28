@@ -137,12 +137,18 @@ export function warnIfRetryMissingHeartbeat(
 export function buildActivityContext(
   internals: EngineInternals,
   workflowId: string,
+  workflowExecutionToken: string | undefined,
   step: ActivityHeartbeatKey,
+  attempt: number,
   signal: AbortSignal,
   completeAsync: () => never,
 ): ActivityContext {
   return {
     signal,
+    ...(workflowExecutionToken !== undefined && {
+      workflowExecutionToken,
+      activityAttemptToken: `${workflowExecutionToken}:activity:${String(step)}:${String(attempt)}`,
+    }),
     // The heartbeat the prior attempt of THIS step recorded (resumable-batch
     // pattern); keyed per-step so concurrent `ctx.all` activities don't collide.
     lastHeartbeatDetails: readLastHeartbeatForStep(internals, workflowId, step),

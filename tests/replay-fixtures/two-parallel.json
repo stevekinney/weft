@@ -33,6 +33,7 @@
     "versionTuple": {
       "workflowVersion": "1"
     },
+    "workflowExecutionToken": "00000000-0000-4000-8000-000000000001",
     "executionStateOwnerId": "wf-two-parallel",
     "createdAt": 0,
     "startedAt": 0,
@@ -51,7 +52,7 @@
     "wf-idx-type:two-parallel:wf-two-parallel": "",
     "wf-idx-updated:0000000000000000:wf-two-parallel": "",
     "wf-terminal:0000000000000000:wf-two-parallel": "",
-    "wf:wf-two-parallel": "iqJpZK93Zi10d28tcGFyYWxsZWykdHlwZax0d28tcGFyYWxsZWymc3RhdHVzqWNvbXBsZXRlZKVpbnB1dKRkYXRhrHZlcnNpb25UdXBsZYGvd29ya2Zsb3dWZXJzaW9uoTG1ZXhlY3V0aW9uU3RhdGVPd25lcklkr3dmLXR3by1wYXJhbGxlbKljcmVhdGVkQXQAqXN0YXJ0ZWRBdACpdXBkYXRlZEF0AKZyZXN1bHSCoWGpbGVmdDpkYXRhoWKqcmlnaHQ6ZGF0YQ==",
+    "wf:wf-two-parallel": "i6JpZK93Zi10d28tcGFyYWxsZWykdHlwZax0d28tcGFyYWxsZWymc3RhdHVzqWNvbXBsZXRlZKVpbnB1dKRkYXRhrHZlcnNpb25UdXBsZYGvd29ya2Zsb3dWZXJzaW9uoTG2d29ya2Zsb3dFeGVjdXRpb25Ub2tlbtkkMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxtWV4ZWN1dGlvblN0YXRlT3duZXJJZK93Zi10d28tcGFyYWxsZWypY3JlYXRlZEF0AKlzdGFydGVkQXQAqXVwZGF0ZWRBdACmcmVzdWx0gqFhqWxlZnQ6ZGF0YaFiqnJpZ2h0OmRhdGE=",
     "wf:wf-two-parallel:ckpt": "iKp3b3JrZmxvd0lkr3dmLXR3by1wYXJhbGxlbKRzdGVwAaZsb2NhbHOAsmFjY3VtdWxhdGVkUmVzdWx0c5Cwc2VhcmNoQXR0cmlidXRlc4CndmVyc2lvbqExrXNjaGVtYVZlcnNpb24CqWNyZWF0ZWRBdAA=",
     "wf:wf-two-parallel:ckpt:0000000001": "iKp3b3JrZmxvd0lkr3dmLXR3by1wYXJhbGxlbKRzdGVwAaZsb2NhbHOAsmFjY3VtdWxhdGVkUmVzdWx0c5Cwc2VhcmNoQXR0cmlidXRlc4CndmVyc2lvbqExrXNjaGVtYVZlcnNpb24CqWNyZWF0ZWRBdAA=",
     "wf:wf-two-parallel:timeline:0000000001": "iaRzdGVwAa1vcGVyYXRpb25UeXBlqHBhcmFsbGVsrm9wZXJhdGlvbkxhYmVsqHBhcmFsbGVsrGlucHV0U3VtbWFyebR7Im9wZXJhdGlvbkNvdW50Ijoyfal0aW1lc3RhbXAApnN0YXR1c6ljb21wbGV0ZWSsdmVyc2lvblR1cGxlga93b3JrZmxvd1ZlcnNpb26hMa1vdXRwdXRTdW1tYXJ5ulsibGVmdDpkYXRhIiwicmlnaHQ6ZGF0YSJdqGR1cmF0aW9uAA=="

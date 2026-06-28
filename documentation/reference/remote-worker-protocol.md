@@ -250,20 +250,22 @@ Dispatched when the server has work for this worker.
   "activityName": "<string>",
   "input": null,
   "attempt": 1,
+  "workflowExecutionToken": "<string>",
   "attemptToken": "<string>",
   "headers": { "<key>": "<value>" }
 }
 ```
 
-| Field          | Type                     | Required | Description                                                                            |
-| -------------- | ------------------------ | -------- | -------------------------------------------------------------------------------------- |
-| `type`         | `"task"`                 | Yes      | Message discriminator.                                                                 |
-| `operationId`  | string                   | Yes      | Unique task identifier the worker echoes back in `taskResult`.                         |
-| `activityName` | string                   | Yes      | Name of the activity to execute. Must be in the worker's `activities` list.            |
-| `input`        | any JSON value           | Yes      | Activity input. `null` is used when the dispatch input is undefined.                   |
-| `attempt`      | number                   | No       | Retry counter. Present on retries.                                                     |
-| `attemptToken` | non-empty string         | No       | Per-dispatch token the worker should echo on `taskResult` for stale-attempt rejection. |
-| `headers`      | `Record<string, string>` | No       | Interceptor-propagated headers from the dispatch path.                                 |
+| Field                    | Type                     | Required | Description                                                                            |
+| ------------------------ | ------------------------ | -------- | -------------------------------------------------------------------------------------- |
+| `type`                   | `"task"`                 | Yes      | Message discriminator.                                                                 |
+| `operationId`            | string                   | Yes      | Unique task identifier the worker echoes back in `taskResult`.                         |
+| `activityName`           | string                   | Yes      | Name of the activity to execute. Must be in the worker's `activities` list.            |
+| `input`                  | any JSON value           | Yes      | Activity input. `null` is used when the dispatch input is undefined.                   |
+| `attempt`                | number                   | No       | Retry counter. Present on retries.                                                     |
+| `workflowExecutionToken` | non-empty string         | No       | Durable per-run token exposed to the activity context for external write fencing.      |
+| `attemptToken`           | non-empty string         | No       | Per-dispatch token the worker should echo on `taskResult` for stale-attempt rejection. |
+| `headers`                | `Record<string, string>` | No       | Interceptor-propagated headers from the dispatch path.                                 |
 
 If the worker does not recognize `activityName`, it should send `taskResult` with `status: "failed"` and an explanatory `error`.
 
@@ -420,19 +422,21 @@ Task response body:
   "attempt": 1,
   "headers": { "traceparent": "00-..." },
   "workerId": "longpoll-a1b2c3d4",
+  "workflowExecutionToken": "workflow-run-token",
   "attemptToken": "per-claim-token"
 }
 ```
 
-| Field          | Type                     | Description                                                                 |
-| -------------- | ------------------------ | --------------------------------------------------------------------------- |
-| `operationId`  | string                   | Opaque task identifier to echo in the result request.                       |
-| `activityName` | string                   | Activity name selected from the advertised `activity` values.               |
-| `input`        | JSON value               | Activity input.                                                             |
-| `attempt`      | number                   | Retry attempt number. Present on retried dispatches.                        |
-| `headers`      | `Record<string, string>` | Interceptor-propagated headers when present.                                |
-| `workerId`     | string                   | Synthetic worker id for this HTTP claim. Echo it in the result request.     |
-| `attemptToken` | string                   | Per-claim token for stale-attempt rejection. Echo it in the result request. |
+| Field                    | Type                     | Description                                                                 |
+| ------------------------ | ------------------------ | --------------------------------------------------------------------------- |
+| `operationId`            | string                   | Opaque task identifier to echo in the result request.                       |
+| `activityName`           | string                   | Activity name selected from the advertised `activity` values.               |
+| `input`                  | JSON value               | Activity input.                                                             |
+| `attempt`                | number                   | Retry attempt number. Present on retried dispatches.                        |
+| `headers`                | `Record<string, string>` | Interceptor-propagated headers when present.                                |
+| `workerId`               | string                   | Synthetic worker id for this HTTP claim. Echo it in the result request.     |
+| `workflowExecutionToken` | string                   | Durable per-run token exposed to the activity context for external writes.  |
+| `attemptToken`           | string                   | Per-claim token for stale-attempt rejection. Echo it in the result request. |
 
 ### Result request
 

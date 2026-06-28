@@ -24,6 +24,7 @@ export interface WorkerInboundMessageContext {
 export function buildRunMessage(
   parameters: {
     workflowId: string;
+    workflowExecutionToken?: string;
     workflowType: string;
     input: unknown;
     checkpoint: ArrayBuffer;
@@ -38,6 +39,9 @@ export function buildRunMessage(
     protocolVersion: WORKER_PROTOCOL_VERSION,
     turnId: context.turnId,
     workflowId: parameters.workflowId,
+    ...(parameters.workflowExecutionToken !== undefined && {
+      workflowExecutionToken: parameters.workflowExecutionToken,
+    }),
     workflowType: parameters.workflowType,
     checkpoint: parameters.checkpoint,
     input: parameters.input,

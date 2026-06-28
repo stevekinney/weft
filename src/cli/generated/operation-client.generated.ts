@@ -170,6 +170,7 @@ export type CatalogOperationTypes = {
     readonly input: {
       readonly backfill?: unknown;
       readonly cronExpression?: unknown;
+      readonly description?: unknown;
       readonly every?: unknown;
       readonly id?: unknown;
       readonly input?: unknown;

@@ -13,4 +13,6 @@
 /** Context passed to activity functions executed by a remote worker. */
 export type RemoteActivityContext = {
   signal: AbortSignal;
+  workflowExecutionToken?: string;
+  activityAttemptToken?: string;
 };

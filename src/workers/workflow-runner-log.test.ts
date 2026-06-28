@@ -158,10 +158,17 @@ describe('worker ctx.log', () => {
     // closure so the FIRST synchronous log call observes the live state.
     let liveReplayState: WorkerLoggerReplayState | undefined;
     const ctx = createWorkerWorkflowContext(
-      { workflowId: 'wf-closure', workflowType: 'closure', input: null },
+      {
+        workflowId: 'wf-closure',
+        workflowExecutionToken: 'workflow-token-worker-context',
+        workflowType: 'closure',
+        input: null,
+      },
       new AbortController(),
       () => liveReplayState,
     );
+
+    expect(ctx.workflowExecutionToken).toBe('workflow-token-worker-context');
 
     // Before the replay state is registered, the logger treats it as live.
     ctx.log.info('pre-register');

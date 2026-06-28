@@ -5,20 +5,16 @@ import { parseDuration } from '../../scheduler.ts';
 import { coerceStartWorkflowId } from '../../start-workflow-validation.ts';
 import type {
   ScheduleFilter,
-  ScheduleOptions,
   ScheduleOverlapPolicy,
   ScheduleSpec,
   ScheduleState,
   ScheduleStatus,
 } from '../../types.ts';
+import { SCHEDULE_OVERLAP_POLICIES } from './schedule-options.ts';
+
+export { normalizeScheduleOptions, SCHEDULE_OVERLAP_POLICIES } from './schedule-options.ts';
 
 export const SCHEDULE_STATUSES = new Set<ScheduleStatus>(['active', 'paused', 'cancelled']);
-export const SCHEDULE_OVERLAP_POLICIES = new Set<ScheduleOverlapPolicy>([
-  'skip',
-  'queue',
-  'cancel-running',
-  'allow',
-]);
 
 export function isValidScheduleTimestamp(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
@@ -47,76 +43,6 @@ export function isValidScheduleIdentifier(value: unknown): value is string {
 
 export function coerceScheduleId(scheduleId: string, fieldName: string): string {
   return coerceStartWorkflowId(scheduleId, fieldName);
-}
-
-export function normalizeScheduleOptions(options: ScheduleOptions | undefined): Required<
-  Pick<ScheduleOptions, 'overlap' | 'backfill'>
-> & {
-  id?: string;
-  jitterMs?: number;
-} {
-  if (options === undefined) {
-    return { overlap: 'skip', backfill: false };
-  }
-
-  if (typeof options !== 'object' || options === null) {
-    throw new Error('options must be an object when provided');
-  }
-
-  const { id, overlap, backfill, jitter } = options;
-  const normalizedOptions: Required<Pick<ScheduleOptions, 'overlap' | 'backfill'>> & {
-    id?: string;
-    jitterMs?: number;
-  } = {
-    overlap: 'skip',
-    backfill: false,
-  };
-
-  if (id !== undefined) {
-    normalizedOptions.id = coerceScheduleId(id, 'options.id');
-  }
-
-  if (overlap !== undefined) {
-    if (!SCHEDULE_OVERLAP_POLICIES.has(overlap)) {
-      throw new Error(
-        `options.overlap must be one of ${[...SCHEDULE_OVERLAP_POLICIES].join(', ')}`,
-      );
-    }
-    normalizedOptions.overlap = overlap;
-  }
-
-  if (backfill !== undefined) {
-    if (typeof backfill !== 'boolean') {
-      throw new Error('options.backfill must be a boolean when provided');
-    }
-    normalizedOptions.backfill = backfill;
-  }
-
-  if (jitter !== undefined) {
-    normalizedOptions.jitterMs = normalizeScheduleJitter(jitter, 'options.jitter');
-  }
-
-  return normalizedOptions;
-}
-
-function normalizeScheduleJitter(value: unknown, fieldName: string): number {
-  if (typeof value !== 'string' && typeof value !== 'number') {
-    throw new Error(`${fieldName} must be a duration string or a number of milliseconds`);
-  }
-
-  let milliseconds: number;
-  try {
-    milliseconds = parseDuration(value);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Invalid ${fieldName}: ${message}`, { cause: error });
-  }
-
-  const jitterMs = Math.ceil(milliseconds);
-  if (!Number.isSafeInteger(jitterMs) || jitterMs <= 0) {
-    throw new Error(`${fieldName} must resolve to a positive number of milliseconds`);
-  }
-  return jitterMs;
 }
 
 /**
@@ -308,6 +234,7 @@ export function decodeScheduleIdentityFields(decoded: Record<string, unknown>):
 
 type ScheduleRuntimeFields = Pick<
   ScheduleState,
+  | 'description'
   | 'backfill'
   | 'jitterMs'
   | 'createdAt'
@@ -330,6 +257,21 @@ function decodeScheduleBackfill(
     return null;
   }
   return backfill;
+}
+
+function decodeScheduleDescription(
+  decoded: Record<string, unknown>,
+  scheduleId: string,
+): string | undefined | null {
+  const description = decoded['description'];
+  if (description === undefined) {
+    return undefined;
+  }
+  if (typeof description !== 'string') {
+    rejectInvalidScheduleRecord(scheduleId, 'with invalid description');
+    return null;
+  }
+  return description;
 }
 
 function decodeScheduleJitterMs(
@@ -437,15 +379,45 @@ function decodeScheduleMissedFireCount(
   return missedFireCount;
 }
 
-export function decodeScheduleRuntimeFields(
+function decodeScheduleQueueFields(
   decoded: Record<string, unknown>,
   scheduleId: string,
-): ScheduleRuntimeFields | null {
+): Pick<ScheduleRuntimeFields, 'missedFireCount' | 'queuedRuns'> | null {
+  const queuedRuns = decodeScheduleQueuedRuns(decoded, scheduleId);
+  if (queuedRuns === null) return null;
+
+  const missedFireCount = decodeScheduleMissedFireCount(decoded, scheduleId);
+  if (missedFireCount === null) return null;
+
+  return { missedFireCount, queuedRuns };
+}
+
+function decodeScheduleOptionFields(
+  decoded: Record<string, unknown>,
+  scheduleId: string,
+): Pick<ScheduleRuntimeFields, 'backfill' | 'description' | 'jitterMs'> | null {
+  const description = decodeScheduleDescription(decoded, scheduleId);
+  if (description === null) return null;
+
   const backfill = decodeScheduleBackfill(decoded, scheduleId);
   if (backfill === null) return null;
 
   const jitterMs = decodeScheduleJitterMs(decoded, scheduleId);
   if (jitterMs === null) return null;
+
+  return {
+    ...(description !== undefined && { description }),
+    backfill,
+    ...(jitterMs !== undefined && { jitterMs }),
+  };
+}
+
+export function decodeScheduleRuntimeFields(
+  decoded: Record<string, unknown>,
+  scheduleId: string,
+): ScheduleRuntimeFields | null {
+  const optionFields = decodeScheduleOptionFields(decoded, scheduleId);
+  if (optionFields === null) return null;
 
   const timestamps = decodeScheduleTimestamps(decoded, scheduleId);
   if (timestamps === null) return null;
@@ -456,20 +428,15 @@ export function decodeScheduleRuntimeFields(
   const currentWorkflow = decodeScheduleCurrentWorkflowId(decoded, scheduleId);
   if (!currentWorkflow.ok) return null;
 
-  const queuedRuns = decodeScheduleQueuedRuns(decoded, scheduleId);
-  if (queuedRuns === null) return null;
-
-  const missedFireCount = decodeScheduleMissedFireCount(decoded, scheduleId);
-  if (missedFireCount === null) return null;
+  const queueFields = decodeScheduleQueueFields(decoded, scheduleId);
+  if (queueFields === null) return null;
 
   return {
-    backfill,
-    ...(jitterMs !== undefined && { jitterMs }),
+    ...optionFields,
     ...timestamps,
     nextFireAt: nextFireAt.value,
     ...(currentWorkflow.value !== undefined && { currentWorkflowId: currentWorkflow.value }),
-    missedFireCount,
-    queuedRuns,
+    ...queueFields,
   };
 }
 

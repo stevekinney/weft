@@ -257,6 +257,7 @@ export type WorkerInboundMessage =
       turnId?: number;
       maxProtocolMessageBytes?: number;
       workflowId: WorkflowId;
+      workflowExecutionToken?: string;
       workflowType: string;
       checkpoint: ArrayBuffer;
       input: unknown;

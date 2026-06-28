@@ -35,6 +35,10 @@ const createScheduleInput = z.object({
     ),
   input: z.unknown().optional(),
   id: z.unknown().optional(),
+  description: z
+    .unknown()
+    .optional()
+    .describe('Operator-facing schedule description. Runtime validation requires a string.'),
   overlap: z.unknown().optional(),
   backfill: z.unknown().optional(),
   jitter: z.unknown().optional(),
@@ -51,6 +55,7 @@ type ValidatedCreateScheduleInput = {
   type: string;
   spec: ScheduleSpec;
   id: string | undefined;
+  description: string | undefined;
   overlap: NonNullable<ScheduleOptions['overlap']> | undefined;
   backfill: boolean | undefined;
   jitter: ScheduleOptions['jitter'] | undefined;
@@ -70,6 +75,7 @@ function validateRequiredScheduleFields(input: CreateScheduleInput): {
 /** Validate optional schedule fields id, overlap, backfill, and jitter. */
 function validateOptionalScheduleFields(input: CreateScheduleInput): {
   id: string | undefined;
+  description: string | undefined;
   overlap: NonNullable<ScheduleOptions['overlap']> | undefined;
   backfill: boolean | undefined;
   jitter: ScheduleOptions['jitter'] | undefined;
@@ -80,6 +86,14 @@ function validateOptionalScheduleFields(input: CreateScheduleInput): {
       throw invalidParamsFault('Field "id" must be a non-empty string');
     }
     validatedId = input.id;
+  }
+
+  let validatedDescription: string | undefined;
+  if (input.description !== undefined) {
+    if (typeof input.description !== 'string') {
+      throw invalidParamsFault('Field "description" must be a string');
+    }
+    validatedDescription = input.description;
   }
 
   let validatedOverlap: NonNullable<ScheduleOptions['overlap']> | undefined;
@@ -110,6 +124,7 @@ function validateOptionalScheduleFields(input: CreateScheduleInput): {
 
   return {
     id: validatedId,
+    description: validatedDescription,
     overlap: validatedOverlap,
     backfill: validatedBackfill,
     jitter: validatedJitter,
@@ -125,8 +140,8 @@ function validateOptionalScheduleFields(input: CreateScheduleInput): {
  */
 function validateCreateScheduleInput(input: CreateScheduleInput): ValidatedCreateScheduleInput {
   const { type, spec } = validateRequiredScheduleFields(input);
-  const { id, overlap, backfill, jitter } = validateOptionalScheduleFields(input);
-  return { type, spec, id, overlap, backfill, jitter };
+  const { id, description, overlap, backfill, jitter } = validateOptionalScheduleFields(input);
+  return { type, spec, id, description, overlap, backfill, jitter };
 }
 
 export const createScheduleOperation = defineOperation<CreateScheduleInput, CreateScheduleOutput>({
@@ -157,6 +172,7 @@ export const createScheduleOperation = defineOperation<CreateScheduleInput, Crea
 
     const options: ScheduleOptions = {
       ...(validated.id !== undefined ? { id: validated.id } : {}),
+      ...(validated.description !== undefined ? { description: validated.description } : {}),
       ...(validated.overlap !== undefined ? { overlap: validated.overlap } : {}),
       ...(validated.backfill !== undefined ? { backfill: validated.backfill } : {}),
       ...(validated.jitter !== undefined ? { jitter: validated.jitter } : {}),
@@ -193,6 +209,7 @@ export const createScheduleRestBinding: UnknownRestBinding = {
     every: { kind: 'body-field', bodyField: 'every' },
     input: { kind: 'body-field', bodyField: 'input' },
     id: { kind: 'body-field', bodyField: 'id' },
+    description: { kind: 'body-field', bodyField: 'description' },
     overlap: { kind: 'body-field', bodyField: 'overlap' },
     backfill: { kind: 'body-field', bodyField: 'backfill' },
     jitter: { kind: 'body-field', bodyField: 'jitter' },
@@ -224,6 +241,7 @@ export const createScheduleRestBinding: UnknownRestBinding = {
       every: Object.hasOwn(record, 'every') ? record['every'] : undefined,
       input: record['input'],
       id: record['id'],
+      description: record['description'],
       overlap: record['overlap'],
       backfill: record['backfill'],
       jitter: record['jitter'],

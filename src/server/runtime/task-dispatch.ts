@@ -162,6 +162,7 @@ async function selectAndReserveWorker(
     visibilityTimeout,
     retryPolicy: task.retryPolicy,
     workflowId: task.workflowId,
+    workflowExecutionToken: task.workflowExecutionToken,
     attemptToken,
   };
   const normalizedInflightRecord = await transitionQueuedToInflight(
@@ -182,6 +183,9 @@ async function selectAndReserveWorker(
       input: task.input === undefined ? null : task.input,
       attempt: task.attempt ?? 1,
       attemptToken,
+      ...(task.workflowExecutionToken !== undefined && {
+        workflowExecutionToken: task.workflowExecutionToken,
+      }),
       ...(task.headers ? { headers: task.headers } : {}),
     }),
   );
@@ -240,6 +244,7 @@ async function enqueueTaskForLongPoll(
     retryPolicy: task.retryPolicy,
     queuedAt: Date.now(),
     workflowId: task.workflowId,
+    workflowExecutionToken: task.workflowExecutionToken,
     retryCount: Math.max(0, attempt - 1),
     requeueCount: 0,
   };
@@ -257,6 +262,7 @@ async function enqueueTaskForLongPoll(
     retryPolicy: task.retryPolicy,
     visibilityTimeout,
     workflowId: task.workflowId,
+    workflowExecutionToken: task.workflowExecutionToken,
     firstQueuedAt: normalizedQueuedRecord.firstQueuedAt,
     lastQueuedAt: normalizedQueuedRecord.lastQueuedAt,
     lastDispatchedAt: normalizedQueuedRecord.lastDispatchedAt,

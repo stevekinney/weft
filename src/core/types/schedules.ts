@@ -55,6 +55,7 @@ export type ScheduleSpec = { cron: string; every?: never } | { every: Duration; 
  * schedule identifier; `overlap` controls what happens when a tick fires while a
  * previous run is still active; `backfill` controls missed ticks after downtime;
  * `jitter` deterministically spreads each occurrence's effective dispatch time.
+ * `description` stores a human-readable operator label with the schedule.
  *
  * @example
  * ```ts
@@ -67,6 +68,7 @@ export type ScheduleSpec = { cron: string; every?: never } | { every: Duration; 
  *   overlap: 'skip',
  *   backfill: false,
  *   jitter: '30s',
+ *   description: 'Generate the daily report',
  * };
  * const handle = await engine.schedule('report', null, '0 9 * * *', options);
  * void handle;
@@ -74,6 +76,8 @@ export type ScheduleSpec = { cron: string; every?: never } | { every: Duration; 
  */
 export interface ScheduleOptions {
   id?: string;
+  /** Human-readable operator description stored with this schedule. */
+  description?: string;
   overlap?: ScheduleOverlapPolicy;
   /**
    * When `false` (the default), a tick that is more than one second late is
@@ -121,6 +125,8 @@ export type ScheduleDefinition<TInput = unknown> = ScheduleSpec & {
   workflow: string | WorkflowDefinition<TInput>;
   input: TInput;
   id?: string;
+  /** Human-readable operator description stored with this schedule. */
+  description?: string;
   overlapPolicy?: ScheduleOverlapPolicy;
   backfill?: boolean;
   jitter?: Duration;
@@ -151,6 +157,8 @@ export interface ScheduleState {
   id: string;
   workflowType: string;
   input: unknown;
+  /** Human-readable operator description stored with this schedule. */
+  description?: string;
   /**
    * Cron expression driving the cadence for cron-based schedules. Present when
    * `intervalMs` is absent; the two are mutually exclusive.
@@ -189,6 +197,8 @@ export interface ScheduleState {
 export interface ScheduleSummary {
   id: string;
   workflowType: string;
+  /** Human-readable operator description stored with this schedule. */
+  description?: string;
   /** Cron expression for cron-based schedules; absent for interval schedules. */
   cronExpression?: string;
   /** Interval period in milliseconds for interval-based schedules; absent for cron schedules. */

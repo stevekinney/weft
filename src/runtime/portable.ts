@@ -62,8 +62,8 @@ function isBrowserRuntime(): boolean {
 
 type RuntimeDetector = { readonly kind: RuntimeKind; readonly matches: () => boolean };
 
-// Precedence: bun → node → browser → edge. A Bun process running under a Node
-// shim still reports 'bun' because `isBunRuntime` runs first.
+// Precedence: bun → node → browser → edge. A Bun process running through Node
+// compatibility still reports 'bun' because `isBunRuntime` runs first.
 const RUNTIME_DETECTORS: readonly RuntimeDetector[] = [
   { kind: 'bun', matches: isBunRuntime },
   { kind: 'node', matches: isNodeRuntime },
@@ -73,7 +73,7 @@ const RUNTIME_DETECTORS: readonly RuntimeDetector[] = [
 /**
  * Detect the current JavaScript runtime.
  * Detection precedence is bun → node → browser → edge: a Bun process running
- * under a Node shim still reports 'bun'; the function never falls through if
+ * through Node compatibility still reports 'bun'; the function never falls through if
  * `globalThis.Bun` is defined.
  *
  * @example

@@ -31,6 +31,8 @@ export interface ActivityExecutionRequest {
   activityName: string;
   input: unknown;
   attempt: number;
+  workflowExecutionToken?: string;
+  activityAttemptToken?: string;
 }
 
 /**
@@ -109,7 +111,16 @@ export async function executeActivity(
   }
 
   try {
-    const result = await activityFunction(request.input);
+    const activitySignal = signal ?? new AbortController().signal;
+    const result = await activityFunction(request.input, {
+      signal: activitySignal,
+      ...(request.workflowExecutionToken !== undefined && {
+        workflowExecutionToken: request.workflowExecutionToken,
+      }),
+      ...(request.activityAttemptToken !== undefined && {
+        activityAttemptToken: request.activityAttemptToken,
+      }),
+    });
 
     return {
       operationId: request.operationId,

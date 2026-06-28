@@ -389,7 +389,7 @@ export class TestEngine extends Engine {
 // ---------------------------------------------------------------------------
 
 /**
- * Wrap every mock in `registry` with a chaos-injecting shim for a single run.
+ * Wrap every mock in `registry` with a chaos-injecting function for a single run.
  *
  * Returns a save-map of the original base implementations keyed by activity
  * function reference. The caller must pass this map to {@link restoreMocks}

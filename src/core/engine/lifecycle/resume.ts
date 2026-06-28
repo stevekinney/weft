@@ -114,6 +114,9 @@ async function relaunchInlineWorkflowAfterResume(
   await rehydrateChildCancellationHandlers(internals, workflowId, callbacks);
   const context = new Context({
     workflowId,
+    ...(latestState.workflowExecutionToken !== undefined && {
+      workflowExecutionToken: latestState.workflowExecutionToken,
+    }),
     workflowType: latestState.type,
     startedAt: getWorkflowExecutionStartedAt(latestState),
     abortController: workflowAbort,
@@ -169,6 +172,9 @@ async function relaunchWorkerWorkflowAfterResume(
   const serialized = serializeCheckpoint(resumeCheckpoint);
   internals.strategy.startWorkflow({
     workflowId,
+    ...(latestState.workflowExecutionToken !== undefined && {
+      workflowExecutionToken: latestState.workflowExecutionToken,
+    }),
     workflowType: latestState.type,
     input: latestState.input,
     checkpoint: serialized,

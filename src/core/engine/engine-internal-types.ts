@@ -105,6 +105,7 @@ export type PendingTimelineEntry = {
 
 export type QueuedInlineWorkflowExecutionStart = {
   workflowId: string;
+  workflowExecutionToken?: string;
   workflowType: string;
   input: unknown;
   checkpoint: Checkpoint;

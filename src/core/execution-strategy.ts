@@ -78,6 +78,7 @@ export interface ExecutionStrategy extends Disposable, AsyncDisposable {
    */
   startWorkflow(parameters: {
     workflowId: string;
+    workflowExecutionToken?: string;
     workflowType: string;
     input: unknown;
     checkpoint: ArrayBuffer | Uint8Array;

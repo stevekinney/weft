@@ -27,6 +27,7 @@ export type TimeOperationCallbacks = {
   ) => Promise<Result>;
   beginWorkflowExecution: (
     workflowId: string,
+    workflowExecutionToken: string | undefined,
     workflowType: string,
     input: unknown,
     checkpoint: Checkpoint,
@@ -69,20 +70,7 @@ export function createDelayedStartTimerEntry(
   };
 }
 
-/**
- * Returns true when the scheduler tick fired this run's sleep timer in the
- * window between `schedule()` completing and `registerSleepResolver()` running.
- * The signal is the in-memory marker `resolveSleepTimer` records whenever it
- * fires a timer with no resolver yet registered, carrying the fired `fireAt`. A
- * timer index lookup is NOT a safe fallback: the deterministic
- * `sleep:${operationId}` key is shared across a `start-new` restart, so a
- * terminated run's stale timer can delete the shared `timer-idx:sleep:` entry
- * and make a storage-absence check self-resolve this run's sleep early. Rely
- * solely on the fireAt-aware marker, and only self-resolve for a marker whose
- * `fireAt` reaches this run's deadline — a marker left by an earlier run's
- * stale timer must not cut this run's sleep short. Consume it either way so it
- * cannot leak into a later replay.
- */
+/** Returns true when the scheduler fired this run's sleep before resolver registration. */
 function sleepTimerFiredEarly(
   internals: EngineInternals,
   workflowId: string,
@@ -304,6 +292,7 @@ export async function startDelayedWorkflow(
   );
   callbacks.beginWorkflowExecution(
     entry.workflowId,
+    runningState.workflowExecutionToken,
     runningState.type,
     runningState.input,
     checkpoint,

@@ -53,6 +53,7 @@
     "versionTuple": {
       "workflowVersion": "1"
     },
+    "workflowExecutionToken": "00000000-0000-4000-8000-000000000001",
     "executionStateOwnerId": "wf-recovery-after-crash",
     "createdAt": 0,
     "startedAt": 0,
@@ -69,7 +70,7 @@
     "wf-idx-type:recovery-after-crash:wf-recovery-after-crash": "",
     "wf-idx-updated:0000000000000000:wf-recovery-after-crash": "",
     "wf-terminal:0000000000000000:wf-recovery-after-crash": "",
-    "wf:wf-recovery-after-crash": "iqJpZLd3Zi1yZWNvdmVyeS1hZnRlci1jcmFzaKR0eXBltHJlY292ZXJ5LWFmdGVyLWNyYXNopnN0YXR1c6ljb21wbGV0ZWSlaW5wdXTArHZlcnNpb25UdXBsZYGvd29ya2Zsb3dWZXJzaW9uoTG1ZXhlY3V0aW9uU3RhdGVPd25lcklkt3dmLXJlY292ZXJ5LWFmdGVyLWNyYXNoqWNyZWF0ZWRBdACpc3RhcnRlZEF0AKl1cGRhdGVkQXQApnJlc3VsdLVyZXN1bWVkOmNoZWNrcG9pbnQtbWU=",
+    "wf:wf-recovery-after-crash": "i6JpZLd3Zi1yZWNvdmVyeS1hZnRlci1jcmFzaKR0eXBltHJlY292ZXJ5LWFmdGVyLWNyYXNopnN0YXR1c6ljb21wbGV0ZWSlaW5wdXTArHZlcnNpb25UdXBsZYGvd29ya2Zsb3dWZXJzaW9uoTG2d29ya2Zsb3dFeGVjdXRpb25Ub2tlbtkkMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxtWV4ZWN1dGlvblN0YXRlT3duZXJJZLd3Zi1yZWNvdmVyeS1hZnRlci1jcmFzaKljcmVhdGVkQXQAqXN0YXJ0ZWRBdACpdXBkYXRlZEF0AKZyZXN1bHS1cmVzdW1lZDpjaGVja3BvaW50LW1l",
     "wf:wf-recovery-after-crash:ckpt": "iqp3b3JrZmxvd0lkt3dmLXJlY292ZXJ5LWFmdGVyLWNyYXNopHN0ZXACpmxvY2Fsc4CyYWNjdW11bGF0ZWRSZXN1bHRzkLBzZWFyY2hBdHRyaWJ1dGVzgKd2ZXJzaW9uoTGtc2NoZW1hVmVyc2lvbgKpY3JlYXRlZEF0ANkgYWNjdW11bGF0ZWRSZXN1bHRSZXBsYXlXYXRlcm1hcmsAtl9fd2VmdENoZWNrcG9pbnRSZXBsYXmBsmFjY3VtdWxhdGVkUmVzdWx0c5GSAK1jaGVja3BvaW50LW1l",
     "wf:wf-recovery-after-crash:ckpt:0000000001": "iKp3b3JrZmxvd0lkt3dmLXJlY292ZXJ5LWFmdGVyLWNyYXNopHN0ZXABpmxvY2Fsc4CyYWNjdW11bGF0ZWRSZXN1bHRzkLBzZWFyY2hBdHRyaWJ1dGVzgKd2ZXJzaW9uoTGtc2NoZW1hVmVyc2lvbgKpY3JlYXRlZEF0AA==",
     "wf:wf-recovery-after-crash:ckpt:0000000002": "iqp3b3JrZmxvd0lkt3dmLXJlY292ZXJ5LWFmdGVyLWNyYXNopHN0ZXACpmxvY2Fsc4CyYWNjdW11bGF0ZWRSZXN1bHRzkLBzZWFyY2hBdHRyaWJ1dGVzgKd2ZXJzaW9uoTGtc2NoZW1hVmVyc2lvbgKpY3JlYXRlZEF0ANkgYWNjdW11bGF0ZWRSZXN1bHRSZXBsYXlXYXRlcm1hcmsAtl9fd2VmdENoZWNrcG9pbnRSZXBsYXmBsmFjY3VtdWxhdGVkUmVzdWx0c5GSAK1jaGVja3BvaW50LW1l",

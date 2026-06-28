@@ -32,6 +32,8 @@ export type ContextOperationRequest =
       activityName: string;
       fn?: (input: unknown, context?: unknown) => unknown;
       input: unknown;
+      /** Immutable owner token for this workflow run, used to fence external side effects. */
+      workflowExecutionToken?: string;
       callerStack?: string;
       options?: Record<string, unknown>;
       /** Dispatch attempt used for worker payloads, interceptors, and reconciliation verifiers. */

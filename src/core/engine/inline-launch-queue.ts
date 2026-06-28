@@ -155,6 +155,7 @@ async function startQueuedInlineWorkflowExecution(
     startWorkflowExecution(
       internals,
       start.workflowId,
+      state.workflowExecutionToken,
       start.workflowType,
       start.input,
       start.checkpoint,

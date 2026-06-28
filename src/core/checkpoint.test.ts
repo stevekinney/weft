@@ -197,7 +197,7 @@ describe('serializeCheckpoint / deserializeCheckpoint', () => {
       step: 2,
       locals: { waiting: true },
       accumulatedResults: [[1, 'done']],
-      pendingSignals: ['legacy-signal'],
+      pendingSignals: ['old-checkpoint-signal'],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,

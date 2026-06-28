@@ -247,7 +247,15 @@ describe('activity operation helpers', () => {
 
   it('throws when worker activity execution is requested without a dispatcher', async () => {
     await expect(
-      invokeWorkerActivity(createInternals() as never, 'op-1', 'missing-dispatcher', 'payload', 1),
+      invokeWorkerActivity(
+        createInternals() as never,
+        'op-1',
+        'missing-dispatcher',
+        'payload',
+        1,
+        undefined,
+        undefined,
+      ),
     ).rejects.toThrow('No activity worker dispatcher available for "missing-dispatcher"');
   });
 
@@ -264,7 +272,15 @@ describe('activity operation helpers', () => {
     });
 
     await expect(
-      invokeWorkerActivity(internals as never, 'op-validation', 'validate', 'payload', 1),
+      invokeWorkerActivity(
+        internals as never,
+        'op-validation',
+        'validate',
+        'payload',
+        1,
+        undefined,
+        undefined,
+      ),
     ).rejects.toMatchObject({ name: 'ValidationError', message: 'validation failed' });
   });
 
@@ -289,6 +305,31 @@ describe('activity operation helpers', () => {
 
     expect(result).toBe('activity-result');
     expect(operation.headers).toEqual([['x-trace-id', 'activity']]);
+  });
+
+  it('uses the operation workflow execution token without loading workflow state', async () => {
+    const storage = new MemoryStorage();
+    const get = mock(() => {
+      throw new Error('unexpected workflow state read');
+    });
+    storage.get = get;
+    const operation = createActivityOperation({
+      workflowExecutionToken: 'workflow-token-hot-path',
+      fn: (_input, context) => context,
+    });
+
+    const result = await executeActivity(
+      createInternals({ storage }) as never,
+      'workflow-id',
+      operation,
+      createCallbacks(),
+    );
+
+    expect(get).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      workflowExecutionToken: 'workflow-token-hot-path',
+      activityAttemptToken: 'workflow-token-hot-path:activity:0:1',
+    });
   });
 
   it('copies workflow-interceptor headers onto the operation before returning', async () => {

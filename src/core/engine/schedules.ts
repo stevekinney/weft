@@ -88,6 +88,9 @@ export async function schedule(
       id: scheduleId,
       workflowType: type,
       input,
+      ...(normalizedOptions.description !== undefined && {
+        description: normalizedOptions.description,
+      }),
       ...cadenceFields,
       status: 'active',
       overlap: normalizedOptions.overlap,

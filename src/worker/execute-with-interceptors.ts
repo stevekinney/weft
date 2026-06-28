@@ -12,11 +12,19 @@ export interface TaskInfo {
   attempt?: number;
   input: unknown;
   headers?: Record<string, string>;
+  workflowExecutionToken?: string;
+  attemptToken?: string;
 }
 
 export interface ComposedInterceptor {
   execute: ReturnType<typeof composeActivityInterceptors>['execute'];
 }
+
+type ActivityExecutionContext = {
+  signal: AbortSignal;
+  workflowExecutionToken?: string;
+  activityAttemptToken?: string;
+};
 
 /**
  * Pre-compose interceptors once (at construction time) so the chain
@@ -34,13 +42,14 @@ export function buildComposedInterceptor(
  * Provides a consistent AbortSignal and headers Map to the interception context.
  */
 export async function executeWithInterceptors(
-  activityFunction: (input: unknown, context?: { signal: AbortSignal }) => Promise<unknown>,
+  activityFunction: (input: unknown, context?: ActivityExecutionContext) => Promise<unknown>,
   task: TaskInfo,
   composed: ComposedInterceptor | null,
   signal?: AbortSignal,
 ): Promise<unknown> {
+  const activityContext = createActivityExecutionContext(task, signal);
   if (!composed) {
-    return activityFunction(task.input, signal ? { signal } : undefined);
+    return activityFunction(task.input, activityContext);
   }
 
   const headers = new Map<string, string>(Object.entries(task.headers ?? {}));
@@ -54,7 +63,28 @@ export async function executeWithInterceptors(
       ...(signal && { signal }),
     },
     async (interception) => {
-      return activityFunction(interception.input, signal ? { signal } : undefined);
+      return activityFunction(interception.input, activityContext);
     },
   );
+}
+
+function createActivityExecutionContext(
+  task: TaskInfo,
+  signal: AbortSignal | undefined,
+): ActivityExecutionContext | undefined {
+  if (
+    signal === undefined &&
+    task.workflowExecutionToken === undefined &&
+    task.attemptToken === undefined
+  ) {
+    return undefined;
+  }
+
+  return {
+    signal: signal ?? new AbortController().signal,
+    ...(task.workflowExecutionToken !== undefined && {
+      workflowExecutionToken: task.workflowExecutionToken,
+    }),
+    ...(task.attemptToken !== undefined && { activityAttemptToken: task.attemptToken }),
+  };
 }

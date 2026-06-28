@@ -61,6 +61,7 @@ export async function runFinalizerActivity(
   input: unknown,
   attempt: number,
   shutdownSignal: AbortSignal,
+  workflowExecutionToken?: string,
 ): Promise<FinalizerAttemptResult> {
   const perAttemptTimeoutMs =
     finalizer.timeout === undefined ? undefined : parseDuration(finalizer.timeout);
@@ -85,6 +86,10 @@ export async function runFinalizerActivity(
   // terminal), so it throws rather than silently stranding the teardown.
   const activityContext: ActivityContext = {
     signal: attemptController.signal,
+    ...(workflowExecutionToken !== undefined && {
+      workflowExecutionToken,
+      activityAttemptToken: `${workflowExecutionToken}:finalizer:${String(attempt)}`,
+    }),
     heartbeat: () => {},
     completeAsync: (): never => {
       throw new Error(

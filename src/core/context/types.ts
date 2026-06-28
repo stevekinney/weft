@@ -161,6 +161,7 @@ export interface StreamSink {
  */
 export interface ContextOptions {
   workflowId: string;
+  workflowExecutionToken?: string;
   workflowType: string;
   startedAt: number;
   abortController: AbortController;

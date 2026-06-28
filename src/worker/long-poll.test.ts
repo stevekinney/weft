@@ -125,6 +125,65 @@ describe('LongPollWorker', () => {
     expect(worker.running).toBe(false);
   });
 
+  it('stop() aborts the activity context signal for in-flight tasks', async () => {
+    const activityStarted = createDeferred();
+    const activityAborted = createDeferred();
+    let pollCount = 0;
+
+    server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+
+        if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
+          pollCount++;
+          if (pollCount === 1) {
+            return Response.json({
+              operationId: 'op-abort-1',
+              workerId: 'longpoll-abort-worker',
+              activityName: 'abortableActivity',
+              input: null,
+              workflowExecutionToken: 'workflow-token-abort',
+              attemptToken: 'attempt-token-abort',
+            });
+          }
+          return new Response(null, { status: 204 });
+        }
+
+        return Response.json({ ok: true });
+      },
+    });
+
+    const worker = new LongPollWorker({
+      serverUrl: `http://localhost:${server.port}`,
+      activities: {
+        abortableActivity: async (_input, context) => {
+          activityStarted.resolve();
+          context?.signal.addEventListener('abort', () => activityAborted.resolve(), {
+            once: true,
+          });
+          await activityAborted.promise;
+          return 'aborted';
+        },
+      },
+    });
+
+    worker.start();
+    await withTimeout(
+      activityStarted.promise,
+      LONG_POLL_TEST_TIMEOUT_MS,
+      'long-poll activity start',
+    );
+    await worker.stop();
+
+    await withTimeout(
+      activityAborted.promise,
+      LONG_POLL_TEST_TIMEOUT_MS,
+      'long-poll activity abort',
+    );
+    expect(worker.inFlight).toBe(0);
+  });
+
   it('polls GET /api/v1/tasks/:queue for tasks and executes them', async () => {
     const completedTasks: any[] = [];
     const taskCompleted = createDeferred();
@@ -150,6 +209,8 @@ describe('LongPollWorker', () => {
               workerId: 'longpoll-worker-1',
               activityName: 'processOrder',
               input: { orderId: 42 },
+              workflowExecutionToken: 'workflow-token-long-poll',
+              attemptToken: 'attempt-token-long-poll',
             });
           }
           return new Response(null, { status: 204 });
@@ -170,7 +231,12 @@ describe('LongPollWorker', () => {
       serverUrl: `http://localhost:${server.port}`,
       headers: { Authorization: 'Bearer worker-key' },
       activities: {
-        processOrder: async (input: any) => ({ processed: true, orderId: input.orderId }),
+        processOrder: async (input: any, context) => ({
+          processed: true,
+          orderId: input.orderId,
+          workflowExecutionToken: context?.workflowExecutionToken,
+          activityAttemptToken: context?.activityAttemptToken,
+        }),
       },
     });
 
@@ -187,7 +253,12 @@ describe('LongPollWorker', () => {
     expect(taskCompletion).toBeDefined();
     expect(taskCompletion.workerId).toBe('longpoll-worker-1');
     expect(taskCompletion.status).toBe('completed');
-    expect(taskCompletion.value).toEqual({ processed: true, orderId: 42 });
+    expect(taskCompletion.value).toEqual({
+      processed: true,
+      orderId: 42,
+      workflowExecutionToken: 'workflow-token-long-poll',
+      activityAttemptToken: 'attempt-token-long-poll',
+    });
     expect(observedAuthorizationHeaders).toContain('Bearer worker-key');
   });
 

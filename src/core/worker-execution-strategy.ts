@@ -123,6 +123,7 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
 
   startWorkflow(parameters: {
     workflowId: string;
+    workflowExecutionToken?: string;
     workflowType: string;
     input: unknown;
     checkpoint: ArrayBuffer;
@@ -135,7 +136,6 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
   }): void {
     this.#ownership.resetWorkflow(parameters.workflowId);
     this.#checkpointResumeState.resetWorkflow(parameters.workflowId);
-
     const message = buildRunMessage(parameters, this.#inboundMessageContext());
     if (!this.#assertHostToWorkerMessageWithinLimit(parameters.workflowId, message)) {
       return;

@@ -334,6 +334,9 @@ function launchInlineWorkflowFromCheckpoint(
   resetCancelHandlers(internals, workflowId);
   const context = new Context({
     workflowId,
+    ...(state.workflowExecutionToken !== undefined && {
+      workflowExecutionToken: state.workflowExecutionToken,
+    }),
     workflowType: state.type,
     startedAt: getWorkflowExecutionStartedAt(state),
     abortController: workflowAbort,
@@ -380,6 +383,9 @@ function launchWorkerWorkflowFromCheckpoint(
   const serialized = serializeCheckpoint(checkpoint);
   internals.strategy.startWorkflow({
     workflowId,
+    ...(state.workflowExecutionToken !== undefined && {
+      workflowExecutionToken: state.workflowExecutionToken,
+    }),
     workflowType: state.type,
     input: state.input,
     checkpoint: serialized,

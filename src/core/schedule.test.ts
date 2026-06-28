@@ -555,6 +555,7 @@ describe('recurring schedules', () => {
         input: { value: 'from-definition' },
         cron: '* * * * *',
         id: 'definition-schedule',
+        description: 'Definition schedule',
         overlapPolicy: 'allow',
         backfill: true,
       }),
@@ -564,6 +565,7 @@ describe('recurring schedules', () => {
     expect(description).toMatchObject({
       id: 'definition-schedule',
       workflowType: 'scheduled-definition-echo',
+      description: 'Definition schedule',
       cronExpression: '* * * * *',
       overlap: 'allow',
       backfill: true,
@@ -574,6 +576,47 @@ describe('recurring schedules', () => {
 
     expect(executions).toEqual([{ value: 'from-definition' }]);
     engine[Symbol.dispose]();
+  });
+
+  it('engine.schedule(type, input, spec, options) persists schedule descriptions', async () => {
+    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+    const storage = new MemoryStorage();
+    const engine = createEngine(clock, storage);
+
+    registerWorkflow(engine, 'described-schedule-workflow', async function* () {
+      return 'done';
+    });
+
+    const schedule = await engine.schedule(
+      'described-schedule-workflow',
+      null,
+      { every: '1m' },
+      {
+        id: 'described-schedule',
+        description: 'Run the described workflow',
+      },
+    );
+
+    await expect(schedule.describe()).resolves.toMatchObject({
+      id: 'described-schedule',
+      description: 'Run the described workflow',
+      intervalMs: 60_000,
+    });
+
+    engine[Symbol.dispose]();
+
+    const recoveredEngine = createEngine(clock, storage);
+    registerWorkflow(recoveredEngine, 'described-schedule-workflow', async function* () {
+      return 'done';
+    });
+
+    await expect(recoveredEngine.getSchedule('described-schedule')).resolves.toMatchObject({
+      id: 'described-schedule',
+      description: 'Run the described workflow',
+      intervalMs: 60_000,
+    });
+
+    recoveredEngine[Symbol.dispose]();
   });
 
   it('engine.schedule(definition) accepts declarative schedule definitions that reference a registered workflow by string', async () => {
@@ -1818,6 +1861,26 @@ describe('recurring schedules', () => {
     expect(await engine.getSchedule('missing-next-fire-at')).toBeNull();
     const listedSchedules = await engine.listSchedules();
     expect(listedSchedules.items).toEqual([]);
+    await storage.put(
+      KEYS.schedule('old-descriptionless-schedule'),
+      encode({
+        id: 'old-descriptionless-schedule',
+        workflowType: 'validated-schedule-workflow',
+        input: null,
+        cronExpression: '* * * * *',
+        status: 'active',
+        overlap: 'skip',
+        backfill: false,
+        createdAt: clock.now,
+        updatedAt: clock.now,
+        nextFireAt: clock.now + 60_000,
+        missedFireCount: 0,
+        queuedRuns: 0,
+      }),
+    );
+    await expect(engine.getSchedule('old-descriptionless-schedule')).resolves.toMatchObject({
+      id: 'old-descriptionless-schedule',
+    });
     await expect(
       engine.schedule('validated-schedule-workflow', null, '* * * * *', {
         overlap: 'bogus' as unknown as never,

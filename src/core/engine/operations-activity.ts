@@ -108,6 +108,8 @@ export async function invokeWorkerActivity(
   activityName: string,
   input: unknown,
   attempt: number,
+  workflowExecutionToken: string | undefined,
+  activityAttemptToken: string | undefined,
 ): Promise<unknown> {
   const dispatcher = internals.activityWorkerDispatcher;
   if (!dispatcher) {
@@ -119,6 +121,8 @@ export async function invokeWorkerActivity(
     activityName,
     input,
     attempt,
+    ...(workflowExecutionToken !== undefined && { workflowExecutionToken }),
+    ...(activityAttemptToken !== undefined && { activityAttemptToken }),
   });
   if (result.status === 'failed') {
     const error = new Error(result.error);
@@ -181,6 +185,7 @@ export async function executeActivity(
   // is stable across crash/replay. Plain ctx.run uses the workflow step; helper
   // activities owned by ctx.memo carry their own sub-operation key.
   const activityStateKey = getActivityStateKey(operation);
+  const workflowExecutionToken = operation.workflowExecutionToken;
   // #493: surface the resumable-batch footgun in development — a retry that
   // starts with no in-memory heartbeat (e.g. after a process restart).
   warnIfRetryMissingHeartbeat(internals, workflowId, activityStateKey, attempt);
@@ -195,18 +200,29 @@ export async function executeActivity(
   const activityContext = buildActivityContext(
     internals,
     workflowId,
+    workflowExecutionToken,
     activityStateKey,
+    attempt,
     activitySignal,
     () => {
       throw new AsyncActivityDeferral(asyncToken);
     },
   );
+  const activityAttemptToken = activityContext.activityAttemptToken;
 
   // Build the leaf executor: either dispatch to a worker or call inline.
   const invokeActivity: (activityName: string, input: unknown) => unknown =
     internals.activityWorkerDispatcher
       ? (activityName, input) =>
-          invokeWorkerActivity(internals, operation.operationId, activityName, input, attempt)
+          invokeWorkerActivity(
+            internals,
+            operation.operationId,
+            activityName,
+            input,
+            attempt,
+            workflowExecutionToken,
+            activityAttemptToken,
+          )
       : (activityName, input) =>
           withPerAttemptTimeout(
             invokeInlineActivity(

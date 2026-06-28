@@ -49,7 +49,7 @@ import { createWorkerStateNamespace } from './worker-state-namespace.ts';
  */
 export type WorkerWorkflowContext = Pick<
   WorkflowContext,
-  'workflowId' | 'workflowType' | 'signal' | 'startedAt'
+  'workflowId' | 'workflowExecutionToken' | 'workflowType' | 'signal' | 'startedAt'
 > & {
   readonly state: WorkflowStateNamespace;
   // Non-optional here (always populated at runtime) even though the public
@@ -64,6 +64,7 @@ export type WorkerWorkflowContext = Pick<
 
 interface RunMessageShape {
   workflowId: string;
+  workflowExecutionToken?: string;
   workflowType: string;
   input: unknown;
   executionStateOwnerId?: string;
@@ -89,6 +90,7 @@ export function createWorkerWorkflowContext(
 ): WorkerWorkflowContext {
   return {
     workflowId: message.workflowId,
+    workflowExecutionToken: message.workflowExecutionToken,
     workflowType: message.workflowType,
     signal: controller.signal,
     startedAt: Date.now(),

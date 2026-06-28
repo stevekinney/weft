@@ -183,6 +183,7 @@ function createFreshRunActivityRequest(
   input: unknown,
   options: ActivityCallOptions | undefined,
   activityStateKey: string | undefined,
+  workflowExecutionToken: string | undefined,
 ): ActivityOperationRequest {
   const queue = options?.queue ?? 'default';
   if (internals.explainMode) {
@@ -196,6 +197,7 @@ function createFreshRunActivityRequest(
     activityName,
     step,
     ...(activityStateKey === undefined ? {} : { activityStateKey }),
+    ...(workflowExecutionToken === undefined ? {} : { workflowExecutionToken }),
     ...(activityFunction !== undefined ? { fn: activityFunction } : {}),
     input,
     callerStack: captureCallerStack(),
@@ -310,6 +312,7 @@ export function createRunActivityRequestAtStep<TResult>(
       input,
       resolveDispatchedActivityOptions(activity, options),
       configuration.activityStateKey,
+      context.workflowExecutionToken,
     ),
     step,
     retryStateKey,

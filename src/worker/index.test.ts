@@ -1579,6 +1579,8 @@ describe('RemoteWorker', () => {
 
   it('activity function receives AbortSignal via context', async () => {
     let receivedSignal: AbortSignal | undefined;
+    let receivedWorkflowExecutionToken: string | undefined;
+    let receivedActivityAttemptToken: string | undefined;
     const messages: any[] = [];
 
     server = createTestServer({
@@ -1593,6 +1595,8 @@ describe('RemoteWorker', () => {
               operationId: 'op-signal-check',
               activityName: 'orders.signalInspector',
               input: null,
+              workflowExecutionToken: 'workflow-token-remote',
+              attemptToken: 'attempt-token-remote',
             }),
           );
         }
@@ -1605,6 +1609,8 @@ describe('RemoteWorker', () => {
       workflows: workflowsOf({
         signalInspector: async (_input: unknown, context) => {
           receivedSignal = context?.signal;
+          receivedWorkflowExecutionToken = context?.workflowExecutionToken;
+          receivedActivityAttemptToken = context?.activityAttemptToken;
           return 'done';
         },
       }),
@@ -1616,6 +1622,8 @@ describe('RemoteWorker', () => {
     expect(receivedSignal).toBeDefined();
     expect(receivedSignal).toBeInstanceOf(AbortSignal);
     expect(receivedSignal!.aborted).toBe(false);
+    expect(receivedWorkflowExecutionToken).toBe('workflow-token-remote');
+    expect(receivedActivityAttemptToken).toBe('attempt-token-remote');
 
     expect(taskResult.status).toBe('completed');
 

@@ -18,6 +18,8 @@ export interface PendingTask extends TaskLifecycleFields {
   headers?: Record<string, string> | undefined;
   /** Workflow that dispatched this activity. Present when the dispatch included a workflowId. */
   workflowId?: string | undefined;
+  /** Durable token for the workflow run that dispatched this activity, when known. */
+  workflowExecutionToken?: string | undefined;
   /**
    * Task priority. Higher values are dequeued first. Tasks with equal priority
    * maintain FIFO order. Default: 0. Agent workflow tasks use priority 10.

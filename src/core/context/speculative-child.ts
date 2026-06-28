@@ -47,6 +47,9 @@ function createSpeculativeChildOptions(
 ): ContextOptions {
   const options: ContextOptions = {
     workflowId: parent.workflowId,
+    ...(parent.workflowExecutionToken === undefined
+      ? {}
+      : { workflowExecutionToken: parent.workflowExecutionToken }),
     workflowType: parent.workflowType,
     startedAt: parent.startedAt,
     abortController: internals.abortController,

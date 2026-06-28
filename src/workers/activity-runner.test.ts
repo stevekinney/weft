@@ -161,4 +161,25 @@ describe('executeActivity', () => {
     expect(result.status).toBe('completed');
     expect(result.value).toBeUndefined();
   });
+
+  it('provides a fallback signal when a tokenized request has no caller signal', async () => {
+    const request: ActivityExecutionRequest = {
+      operationId: 'op-token-signal',
+      activityName: 'tokenized',
+      input: null,
+      attempt: 1,
+      workflowExecutionToken: 'workflow-token-activity-runner',
+      activityAttemptToken: 'attempt-token-activity-runner',
+    };
+    let receivedSignal: AbortSignal | undefined;
+
+    const result = await executeActivity(request, (_input, context) => {
+      receivedSignal = (context as { signal?: AbortSignal }).signal;
+      return 'ok';
+    });
+
+    expect(result.status).toBe('completed');
+    expect(receivedSignal).toBeInstanceOf(AbortSignal);
+    expect(receivedSignal?.aborted).toBe(false);
+  });
 });

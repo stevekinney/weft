@@ -259,6 +259,7 @@ describe('engine time operation helpers', () => {
 
     expect(beginWorkflowExecution).toHaveBeenCalledWith(
       workflowId,
+      state.workflowExecutionToken,
       state.type,
       state.input,
       checkpoint,

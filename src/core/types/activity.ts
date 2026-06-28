@@ -61,6 +61,17 @@ export type ActivityFunction<TInput = unknown, TOutput = unknown> = (
  */
 export interface ActivityContext {
   signal: AbortSignal;
+  /**
+   * Durable token for the workflow run that launched this activity. It changes
+   * when a stable workflow id is replaced with `onTerminalConflict: 'start-new'`
+   * and stays stable for recovery of the same run.
+   */
+  workflowExecutionToken?: string;
+  /**
+   * Token for this specific activity dispatch attempt. It changes on retry and
+   * can be copied into external writes to reject stale late completions.
+   */
+  activityAttemptToken?: string;
   heartbeat(details?: unknown): void;
   /**
    * The heartbeat payload recorded by the PREVIOUS attempt of this activity, or

@@ -137,6 +137,7 @@ export const REMOTE_WORKER_MESSAGE_SCHEMAS = {
       // earlier attempt. Optional in the wire SHAPE (not in `required`) so a frame
       // from an older server still validates — adding it never bumps the protocol
       // version; the completion handler is what enforces the token.
+      workflowExecutionToken: { type: 'string', minLength: 1 },
       attemptToken: { type: 'string', minLength: 1 },
     },
   },

@@ -20,16 +20,17 @@ Typically constructed by the engine -- you will not create `Context` instances d
 
 ### Read-only Properties
 
-| Property                 | Type             | Description                                                                             |
-| ------------------------ | ---------------- | --------------------------------------------------------------------------------------- |
-| `workflowId`             | `string`         | The workflow's unique identifier                                                        |
-| `workflowType`           | `string`         | The registered workflow type name                                                       |
-| `startedAt`              | `number`         | Epoch timestamp when the workflow started                                               |
-| `signal`                 | `AbortSignal`    | Abort signal -- fires when the workflow is cancelled                                    |
-| `executionTimeRemaining` | `number`         | Milliseconds until execution deadline. `Infinity` if no deadline is set.                |
-| `log`                    | `WorkflowLogger` | Checkpoint-aware structured logger scoped to this run. See [`log`](#log).               |
-| `stepIndex`              | `number`         | Current step counter (incremented by each durable operation)                            |
-| `nestingDepth`           | `number`         | How many levels deep this workflow is as a child workflow. `0` for top-level workflows. |
+| Property                 | Type                  | Description                                                                                                                  |
+| ------------------------ | --------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `workflowId`             | `string`              | The workflow's unique identifier                                                                                             |
+| `workflowExecutionToken` | `string \| undefined` | Durable per-run token for fencing external writes. Stable across recovery; rotates when `start-new` replaces a terminal run. |
+| `workflowType`           | `string`              | The registered workflow type name                                                                                            |
+| `startedAt`              | `number`              | Epoch timestamp when the workflow started                                                                                    |
+| `signal`                 | `AbortSignal`         | Abort signal -- fires when the workflow is cancelled                                                                         |
+| `executionTimeRemaining` | `number`              | Milliseconds until execution deadline. `Infinity` if no deadline is set.                                                     |
+| `log`                    | `WorkflowLogger`      | Checkpoint-aware structured logger scoped to this run. See [`log`](#log).                                                    |
+| `stepIndex`              | `number`              | Current step counter (incremented by each durable operation)                                                                 |
+| `nestingDepth`           | `number`              | How many levels deep this workflow is as a child workflow. `0` for top-level workflows.                                      |
 
 > [!NOTE]
 > `workflowType` is part of the public `WorkflowContext` interface. `stepIndex` and `nestingDepth` are available on the concrete `Context` class for debugging purposes; they are not part of the public interface.
