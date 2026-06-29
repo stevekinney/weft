@@ -74,6 +74,20 @@ class FailingTaskResultResolutionStorage extends MemoryStorage {
   }
 }
 
+class FailingResolvedAndDeadLetterStorage extends MemoryStorage {
+  override async batch(operations: BatchOperation[]): Promise<void> {
+    if (
+      operations.some(
+        (operation) =>
+          operation.key.startsWith('op:resolved:') || operation.key.startsWith('op:dead-letter:'),
+      )
+    ) {
+      throw new Error('resolved or dead-letter write failed');
+    }
+    await super.batch(operations);
+  }
+}
+
 async function readResolvedRecord(
   storage: MemoryStorage,
   operationId: string,
@@ -285,11 +299,10 @@ describe('handleTaskResultRequest', () => {
   });
 
   it('logs and still returns 200 when resolved-result persistence fails', async () => {
+    const storage = new FailingResolvedAndDeadLetterStorage();
     const context = createMinimalContext();
-    const options = createMinimalOptions();
-    context.taskQueue.complete = () => {
-      throw new Error('task queue completion failed');
-    };
+    const options = createMinimalOptions(storage);
+    await markInflight(storage, makeInflightRecord('op-resolved-write-fails'));
     using consoleErrorSpy = spyOn(console, 'error').mockImplementation(() => {});
 
     const response = await handleTaskResultRequest(
@@ -314,12 +327,11 @@ describe('handleTaskResultRequest', () => {
   });
 
   it('logs when persisting an oversized-result rejection fails', async () => {
+    const storage = new FailingResolvedAndDeadLetterStorage();
     const context = createMinimalContext();
     setPayloadSizeLimit(context, 64);
-    const options = createMinimalOptions();
-    context.taskQueue.complete = () => {
-      throw new Error('task queue completion failed');
-    };
+    const options = createMinimalOptions(storage);
+    await markInflight(storage, makeInflightRecord('op-oversize-rejection-write-fails'));
     using consoleErrorSpy = spyOn(console, 'error').mockImplementation(() => {});
 
     const response = await handleTaskResultRequest(
