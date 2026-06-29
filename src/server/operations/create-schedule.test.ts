@@ -83,6 +83,25 @@ describe('weft.schedules.create', () => {
     expect(await response.json()).toEqual({ error: 'Field "description" must be a string' });
   });
 
+  it('returns 400 when jitter is neither a duration string nor a number', async () => {
+    engine = createEngine();
+
+    const response = await handleRequest(
+      jsonRequest('POST', '/v1/schedules', {
+        type: 'echo',
+        cronExpression: '0 * * * *',
+        jitter: false,
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: 'Field "jitter" must be a duration string or a number of milliseconds',
+    });
+  });
+
   it('returns 400 when the request body is invalid JSON', async () => {
     engine = createEngine();
 

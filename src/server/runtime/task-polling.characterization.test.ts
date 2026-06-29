@@ -6,7 +6,7 @@
  * those contract shapes.
  */
 
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, spyOn } from 'bun:test';
 
 import { decode } from '../../core/codec.ts';
 import { KEYS, type BatchOperation } from '../../storage/interface.ts';
@@ -282,6 +282,65 @@ describe('handleTaskResultRequest', () => {
     const resolved = await readResolvedRecord(storage, 'op-failure-size-boundary');
     expect(resolved.status).toBe('failed');
     expect(resolved.error).toBe('12345678');
+  });
+
+  it('logs and still returns 200 when resolved-result persistence fails', async () => {
+    const context = createMinimalContext();
+    const options = createMinimalOptions();
+    context.taskQueue.complete = () => {
+      throw new Error('task queue completion failed');
+    };
+    using consoleErrorSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+    const response = await handleTaskResultRequest(
+      context,
+      options,
+      makePostRequest({
+        operationId: 'op-resolved-write-fails',
+        workerId: 'longpoll-worker',
+        attemptToken: 'attempt-token',
+        status: 'completed',
+        value: { ok: true },
+      }),
+      makeUrl('/v1/tasks/op-resolved-write-fails/result'),
+      WORKER_PRINCIPAL,
+    );
+
+    expect(response?.status).toBe(200);
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      '[weft] Failed to transition task "op-resolved-write-fails" to resolved — inflight record may leak:',
+      expect.any(Error),
+    );
+  });
+
+  it('logs when persisting an oversized-result rejection fails', async () => {
+    const context = createMinimalContext();
+    setPayloadSizeLimit(context, 64);
+    const options = createMinimalOptions();
+    context.taskQueue.complete = () => {
+      throw new Error('task queue completion failed');
+    };
+    using consoleErrorSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+    const response = await handleTaskResultRequest(
+      context,
+      options,
+      makePostRequest({
+        operationId: 'op-oversize-rejection-write-fails',
+        workerId: 'longpoll-worker',
+        attemptToken: 'attempt-token',
+        status: 'completed',
+        value: { blob: 'x'.repeat(200) },
+      }),
+      makeUrl('/v1/tasks/op-oversize-rejection-write-fails/result'),
+      WORKER_PRINCIPAL,
+    );
+
+    expect(response?.status).toBe(413);
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      '[weft] Failed to persist oversized task result rejection for task "op-oversize-rejection-write-fails":',
+      expect.any(Error),
+    );
   });
 
   it('persists the dead-letter guard when primitive dead-letter put fails after result-resolution retries', async () => {

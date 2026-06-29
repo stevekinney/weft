@@ -19,6 +19,12 @@ import {
   resolveEffectiveScheduleFireAt,
 } from './engine/schedule-jitter.ts';
 import {
+  decodeScheduleIdentityFields,
+  decodeScheduleState,
+  normalizeScheduleOptions,
+  normalizeScheduleSpec,
+} from './engine/validation/schedule.ts';
+import {
   CleanupWarningEvent,
   ScheduleMissedFireEvent,
   WorkflowCancelledEvent,
@@ -228,6 +234,98 @@ function createScheduleState(overrides: Partial<ScheduleState> = {}): ScheduleSt
     ...overrides,
   };
 }
+
+describe('schedule validation helpers', () => {
+  it('rejects a non-object schedule spec before checking cadence fields', () => {
+    expect(() => normalizeScheduleSpec(null as never)).toThrow(
+      'Schedule spec must be a cron string or an object with "cron" or "every"',
+    );
+  });
+
+  it('rejects interval schedules whose every field is not a duration string or number', () => {
+    expect(() => normalizeScheduleSpec({ every: false as never })).toThrow(
+      'Schedule interval "every" must be a duration string or a number of milliseconds',
+    );
+  });
+
+  it('reports invalid jitter durations through normalizeScheduleOptions', () => {
+    expect(() => normalizeScheduleOptions({ jitter: 'not-a-duration' })).toThrow(
+      'Invalid options.jitter:',
+    );
+  });
+
+  it('reports invalid interval durations through normalizeScheduleSpec', () => {
+    expect(() => normalizeScheduleSpec({ every: 'not-a-duration' })).toThrow(
+      'Invalid schedule interval "every":',
+    );
+  });
+
+  it('rejects a schedule spec that supplies both cron and every', () => {
+    expect(() => normalizeScheduleSpec({ cron: '0 * * * *', every: '30s' } as never)).toThrow(
+      'Schedule spec must specify exactly one of "cron" or "every"',
+    );
+  });
+
+  it('rejects cron schedules whose cron field is not a string', () => {
+    expect(() => normalizeScheduleSpec({ cron: 42 as never })).toThrow(
+      'Schedule "cron" must be a string',
+    );
+  });
+});
+
+describe('schedule record decoding', () => {
+  it('rejects identity records whose cadence stores both cronExpression and intervalMs', () => {
+    using warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+
+    const decoded = decodeScheduleIdentityFields({
+      id: 'duplicate-cadence',
+      workflowType: 'echo',
+      cronExpression: '0 * * * *',
+      intervalMs: 60_000,
+      status: 'active',
+      overlap: 'skip',
+    });
+
+    expect(decoded).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[weft] Ignoring malformed schedule "duplicate-cadence" with conflicting or missing cadence (expected exactly one of cronExpression or intervalMs).',
+    );
+  });
+
+  it('rejects identity records whose interval cadence is not a positive safe integer', () => {
+    using warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+
+    const decoded = decodeScheduleIdentityFields({
+      id: 'invalid-interval',
+      workflowType: 'echo',
+      intervalMs: 0,
+      status: 'active',
+      overlap: 'skip',
+    });
+
+    expect(decoded).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[weft] Ignoring malformed schedule "invalid-interval" with invalid intervalMs.',
+    );
+  });
+
+  it('rejects schedule records whose description is not a string', () => {
+    using warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+
+    const state = createScheduleState({ description: 'nightly maintenance' });
+    const decoded = decodeScheduleState(
+      encode({
+        ...state,
+        description: 42,
+      }),
+    );
+
+    expect(decoded).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[weft] Ignoring malformed schedule "schedule-state" with invalid description.',
+    );
+  });
+});
 
 describe('recurring schedules', () => {
   it('cron parsing rejects invalid tokens, ranges, steps, and field counts', () => {

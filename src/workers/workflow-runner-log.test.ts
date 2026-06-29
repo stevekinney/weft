@@ -382,6 +382,42 @@ describe('worker ctx.log', () => {
 });
 
 describe('worker ctx.getVersion', () => {
+  it('throws when getVersion is called without an active replay state', () => {
+    const ctx = createWorkerWorkflowContext(
+      { workflowId: 'wf-version-missing', workflowType: 'versioning', input: null },
+      new AbortController(),
+      () => undefined,
+    );
+
+    const generator = ctx.getVersion('shipping-v2', 1, 2);
+    expect(() => generator.next()).toThrow(
+      'No active replay state for workflow: wf-version-missing',
+    );
+  });
+
+  it('returns the pinned version immediately when replay already knows the step outcome', () => {
+    const replayState = createReplayState({ workflowId: 'wf-version-cached' });
+    replayState.checkpoint = {
+      ...replayState.checkpoint,
+      locals: {
+        ...replayState.checkpoint.locals,
+        'version:shipping-v2': 2,
+      },
+    };
+    const ctx = createWorkerWorkflowContext(
+      { workflowId: 'wf-version-cached', workflowType: 'versioning', input: null },
+      new AbortController(),
+      () => undefined,
+      undefined,
+      () => replayState,
+    );
+
+    const completion = ctx.getVersion('shipping-v2', 1, 2).next();
+
+    expect(completion).toEqual({ done: true, value: 2 });
+    expect(replayState.nextStepIndex).toBe(1);
+  });
+
   it('yields a get-version request and pins the version in checkpoint locals', () => {
     const replayState = createReplayState({ workflowId: 'wf-version' });
     const ctx = createWorkerWorkflowContext(

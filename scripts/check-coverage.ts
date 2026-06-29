@@ -1133,7 +1133,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
         // Fresh retry-state tests now drive the real corruption and budget edges.
         // Bun still leaves the generator loop's closing line cold after the final
         // retry/catch path settles, so allow the single residual mapping miss.
-        lines: new Set([448]),
+        lines: new Set([451]),
       },
     ],
     ['src/core/engine/aggregate.ts', { functions: 1, lines: new Set([47, 48, 49, 50, 51, 52]) }],
@@ -1682,11 +1682,12 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
         // Was line 386; shifted to 409 when `ctx.log` wiring was added above it, to 424
         // when the #529 worker-log forwarding removed the dead turnId plumbing, and to
         // 428 when `buildLogForwarder` captured the size cap at construction (dropping a
-        // live `context.replayStates.get` read), and to 498 after the worker replay
-        // helpers moved below `processGeneratorStep`. Same unchanged line — the closing
+        // live `context.replayStates.get` read), to 498 after the worker replay helpers
+        // moved below `processGeneratorStep`, and to 500 after the getVersion replay
+        // coverage landed above the loop body. Same unchanged line — the closing
         // brace of `processGeneratorStep`'s `while (true)` loop, which Bun's lcov marks
         // uncovered for an infinite loop with no fall-through — only its number moved.
-        lines: new Set([498]),
+        lines: new Set([500]),
       },
     ],
   ],
@@ -2208,7 +2209,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
         lines: createMergedLineSet(
           createLineSet(101, 106),
           createLineSet(112, 151),
-          new Set([498]),
+          new Set([500]),
         ),
       },
     ],

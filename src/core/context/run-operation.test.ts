@@ -165,6 +165,42 @@ describe('run-operation retry state', () => {
     expect(completed).toEqual({ done: true, value: 'final-result' });
   });
 
+  it('retries once when the activity throws a retryable string failure', () => {
+    const context = createContext();
+    const activity = Object.assign((_input: unknown) => 'unused', {
+      retry: {
+        maxAttempts: 3,
+        initialBackoff: '1s',
+        backoffMultiplier: 2,
+        maxBackoff: '30s',
+        nonRetryableErrors: ['ValidationFailure'],
+      },
+    });
+
+    const generator = runActivityWithRetry<string>(context, activity, ['payload']);
+    const firstYield = generator.next();
+    expect(firstYield.done).toBe(false);
+    expect(firstYield.value).toMatchObject({
+      type: 'activity',
+      activityName: activity.name || 'anonymous',
+    });
+
+    const retrySleep = generator.throw('TransientFailure');
+    expect(retrySleep.done).toBe(false);
+    expect(retrySleep.value).toMatchObject({ type: 'sleep' });
+
+    const secondYield = generator.next();
+    expect(secondYield.done).toBe(false);
+    expect(secondYield.value).toMatchObject({
+      type: 'activity',
+      activityName: activity.name || 'anonymous',
+      attempt: 2,
+    });
+
+    const completed = generator.next('final-result');
+    expect(completed).toEqual({ done: true, value: 'final-result' });
+  });
+
   it('rejects an invalid persisted retry sleep deadline local', () => {
     const context = createContext();
     getInternals(context).checkpointLocals = {
