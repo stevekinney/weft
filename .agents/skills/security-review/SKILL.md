@@ -93,6 +93,7 @@ User-defined workflow functions run inside the engine. They should not be able t
 - [ ] Failed activities do not leak internal engine state in their error messages
 - [ ] Worker pool exhaustion is handled gracefully (backpressure, not crash)
 - [ ] Remote worker registration rejects a duplicate live `workerId` while preserving same-socket refresh and grace-period reconnect; a new same-id socket must not silently take over task dispatch
+- [ ] Activity and finalizer write-fencing tokens are treated as durable identifiers, not credentials: `workflowExecutionToken` and `activityAttemptToken` may be stored with external rows for conditional writes, but they must not replace route authentication or payload validation
 
 ### 6. Input Validation at API Boundaries
 

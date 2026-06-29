@@ -63,7 +63,7 @@ Weft's durability promise is checkpoint-level and explicit:
 - Every `yield*` boundary is persisted before the workflow advances to the next durable step.
 - `Engine.create()` recovers by default after registering workflow definitions, so fresh processes resume persisted running workflows without a separate boot hook.
 - Recovery resumes from the last checkpoint position instead of replaying the workflow from the beginning.
-- External activity side effects still need idempotency keys, provider lookup, or verifier logic. Without that, a crash after the external side effect but before Weft commits the activity result can dispatch the activity again.
+- External activity side effects still need idempotency keys, provider lookup, verifier logic, or external write fencing. Without that, a crash after the external side effect but before Weft commits the activity result can dispatch the activity again. Weft exposes `workflowExecutionToken` and per-attempt `activityAttemptToken` values so databases you control can reject stale writes from older attempts or replaced runs.
 
 The full [Durability Guarantee](documentation/architecture/durability-guarantee.md) separates what is guaranteed today from the Tier-0 activity-reconciliation work that narrows the remaining crash window.
 

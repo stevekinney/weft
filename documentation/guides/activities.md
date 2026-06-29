@@ -65,6 +65,10 @@ Every activity function can optionally receive an `ActivityContext` as its secon
 ```typescript
 interface ActivityContext {
   signal: AbortSignal;
+  // Stable for the same workflow run, rotated when start-new replaces a run.
+  workflowExecutionToken?: string;
+  // Unique to this activity dispatch attempt; changes on retry.
+  activityAttemptToken?: string;
   heartbeat(details?: unknown): void;
   // The heartbeat the PREVIOUS attempt recorded, or `undefined` on the first
   // attempt / after a restart / for worker-executed activities — let a retry
@@ -129,6 +133,45 @@ const streamReport = async (url: string, context?: ActivityContext) => {
 > It is tempting to read `ctx.race([ctx.run('longJob'), ctx.sleep('5s')])` as "run the job, but cancel it after 5 seconds." It is not. `ctx.race` is a _result-selection_ primitive: when the sleep wins, the race stops _awaiting_ `longJob`, but `longJob` keeps running to completion—its `ActivityContext.signal` never fires. The losing activity's result is discarded; its work, and its side effects, are not.
 >
 > So `ctx.race` is **not** a `CancellationScope` replacement for activities. It is the right tool when the losing work is cheap enough to let finish (a sub-second call, an idempotent fetch). To genuinely stop a long-running activity, you need one of: workflow-level cancellation (`engine.cancel`), an inline per-attempt `timeout` (both fire the activity's signal; in worker-pool mode `visibilityTimeout` bounds the attempt but does not fire the signal), an activity that imposes its own internal deadline, or a cancellation token you pass through the activity's _input_ and check cooperatively. Losing a `ctx.race` is none of those, so it does not fire the signal—the loser keeps running. Choose race-with-sleep only when running the loser to completion is acceptable.
+
+### Fencing external writes
+
+Idempotency keys protect against duplicate external calls when the provider supports lookup or replay. When the external system is a database or service you control, use Weft's execution tokens as a write fence instead: store `context.workflowExecutionToken` with rows owned by the whole workflow run, and store `context.activityAttemptToken` with rows that belong to one activity attempt.
+
+`workflowExecutionToken` stays stable across recovery for the same run, but rotates when `onTerminalConflict: 'start-new'` replaces a terminal run under the same workflow ID. `activityAttemptToken` changes on each retry attempt. A conditional update that matches both the domain key and the current token rejects late writes from an older retry, a losing `ctx.race` branch, or a replaced run that reused the workflow ID.
+
+```typescript
+import type { ActivityContext } from '@lostgradient/weft';
+
+declare const inventory: {
+  updateReservation(input: {
+    orderId: string;
+    sku: string;
+    workflowExecutionToken: string;
+    activityAttemptToken: string;
+  }): Promise<void>;
+};
+
+const reserveInventory = async (
+  input: { orderId: string; sku: string },
+  context?: ActivityContext,
+) => {
+  if (!context?.workflowExecutionToken || !context.activityAttemptToken) {
+    throw new Error('Activity fencing tokens are required');
+  }
+
+  await inventory.updateReservation({
+    orderId: input.orderId,
+    sku: input.sku,
+    workflowExecutionToken: context.workflowExecutionToken,
+    activityAttemptToken: context.activityAttemptToken,
+  });
+};
+
+void reserveInventory;
+```
+
+The tokens are not secrets. They are durable identity values for conditional writes, audit records, and stale-completion rejection. Continue to validate external inputs and keep auth on any route that accepts callbacks or operator mutations.
 
 ### Out-of-band completion
 

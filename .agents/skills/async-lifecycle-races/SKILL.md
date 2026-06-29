@@ -26,6 +26,7 @@ description: >-
 - Changing workflow suspend/resume, recovered-handle observation, idempotent start reservation, `startOrSignal`, inline launch deferral, or engine disposal while queued inline launches can still flush.
 - Changing scheduled occurrence launch flow or `schedule:fired` event dispatch, including overlap-policy gating, queued-drain launches, unavailable-services ordering, and process-local notification behavior.
 - Changing RemoteWorker or long-poll task completion authorization, including per-dispatch `attemptToken` generation, echoing, registry restore, malformed-token rejection, and missing-token compatibility.
+- Changing durable execution tokens, including per-run `workflowExecutionToken` minting, recovery stability, `start-new` rotation, activity/finalizer attempt-token derivation, worker dispatch, WebSocket task frames, or long-poll claim payloads.
 - Changing durable timer cleanup or sleep operation identity, especially fired timer deletion, deadline timers, terminal cleanup, delayed starts, schedules, teardown, crash recovery, `start-new` replacement runs, or successor re-drive after deposition.
 - Changing lease-owned engine write paths for schedules, purges, bulk retry reactivation, activity reconciliation, completed reviews, async-activity registration, or checkpoint side effects.
 
@@ -98,6 +99,7 @@ description: >-
 - For inline launch scheduling, cover queued launch draining on disposal, `defer: false` synchronous launch, and the timeout flush path when `MessageChannel` is unavailable.
 - For schedule firing events, cover interval and cron cadence, each overlap policy, recovery backfill without double-fire, queued drain with `occurrence: undefined`, and `schedule:fired` before `workflow:failed` when service resolution fails.
 - For attempt-token work, cover same-worker stale completion rejection over WebSocket, long-poll stale-token rejection, malformed echoed tokens, token-less records, absent echoes from older workers, and server-restart restoration of token-bearing in-flight records.
+- For workflow execution-token work, cover token stability across recovery, rotation on `start-new` replacement, propagation into inline and worker activity contexts, finalizer token exposure, and stale external-write rejection scenarios that use both the run token and the attempt token.
 - For fleet event subscriptions, cover replay caps, workflow and event-kind filters, worker connect/disconnect events, purge cleanup, and request/response dispatch rejection for subscription-only operations.
 - Prove no test depends on unbounded waits or real-time sleeps.
 - Run the focused lifecycle or worker tests plus `bun run verify:no-test-sleeps` when relevant.

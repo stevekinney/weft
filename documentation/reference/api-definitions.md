@@ -154,6 +154,7 @@ const checkout = workflow({ name: 'checkout' }).execute(async function* (
 const dailyCheckoutSweep = schedule({
   workflow: checkout,
   cron: '0 9 * * *',
+  description: 'Start the daily checkout reconciliation sweep',
   input: { orderId: 'sweep' },
   overlapPolicy: 'skip',
 });
