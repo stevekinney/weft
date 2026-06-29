@@ -2,10 +2,10 @@
  * Runtime JSON-RPC stdio session.
  *
  * `runStdioSession({ input, output, admission, registry, engine, feed, ... })`
- * drives the `weft rpc-stdio` CLI subcommand (Track 8 design decision
- * 19). It reads newline-delimited JSON frames from `input`, runs each
- * through the same `createJsonRpcWebSocketSession` session the WS
- * adapter uses, and writes responses to `output`.
+ * drives the `weft rpc-stdio` CLI subcommand. It implements the stable
+ * JSON-RPC stdio transport: reading newline-delimited JSON frames from
+ * `input`, running each through the JSON-RPC dispatcher, and writing
+ * responses to `output`.
  *
  * Admission is mandatory:
  *   - `{ kind: 'startup-token', token }` — the first frame must be a

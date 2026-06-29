@@ -64,7 +64,7 @@ describe('parseOptionalSequenceCursor', () => {
 // surfaces deliver envelopes in identical sequence order for the same
 // workflow events.  This proves the criterion text: "All live views share
 // the same sequence and cursor semantics."
-it('All live views share the same sequence and cursor semantics. Replay, resume, and ordering rules are identical across HTTP, WebSocket, and the Track 8 runtime stdio JSON-RPC transport.', async () => {
+it('All live views share the same sequence and cursor semantics. Replay, resume, and ordering rules are identical across HTTP, WebSocket, and the stable stdio JSON-RPC transport.', async () => {
   // Set up a workflow that emits several events.
   const storage = new MemoryStorage();
   const engine = new Engine({ storage });

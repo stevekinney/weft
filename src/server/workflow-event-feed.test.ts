@@ -17,7 +17,7 @@ import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
  * emitted concurrently with `subscribe`, the subscriber sees every
  * sequence exactly once, in sequence order, with no gaps.
  *
- * Per Track 8 design decision 6, the cursor is opaque. The feed owns
+ * Per stable operation-catalog contract, the cursor is opaque. The feed owns
  * `encodeCursor(sequence)` / `decodeCursor(cursor)`. This test imports
  * those helpers and asserts round-trip identity without assuming a
  * specific encoding.

@@ -5,8 +5,8 @@
  * body, resolves each request via `executeOperation`, and produces the
  * wire-level response shape.
  *
- * Track 8 design decision 13: batches dispatch SEQUENTIALLY in request
- * order. Response order matches request order by construction —
+ * The stable JSON-RPC operation-catalog contract mandates sequential dispatch
+ * in request order. Response order matches request order by construction —
  * notifications are dropped from the response array, so the returned
  * indices are the non-notification request indices.
  *
@@ -115,7 +115,7 @@ async function dispatchBatch(
   // an `invalid-request` result BEFORE dispatch. Any batch that reaches
   // this function is already within the cap.
   const responses: JsonRpcResponse[] = [];
-  // Sequential dispatch in request order — Track 8 decision 13.
+  // Sequential dispatch in request order — stable operation-catalog contract.
   for (const item of parsed.items) {
     const response = await dispatchBatchItem(item, context);
     if (response !== undefined) responses.push(response);

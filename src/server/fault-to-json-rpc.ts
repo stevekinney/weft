@@ -5,7 +5,8 @@
  * Wire shape: `{ code, message, data }`. The numeric `code` follows the
  * JSON-RPC spec for reserved errors (`InvalidParams: -32602`,
  * `MethodNotFound: -32601`) and the Weft domain band -32010..-32099 for
- * everything else (per Track 8 design decision 4).
+ * everything else. This stable error-code allocation ensures cross-transport
+ * parity.
  *
  * Every `data` object carries `{ weftCode, httpStatus }` plus the typed
  * fault-specific payload. The pair is a uniform machine-readable handle:

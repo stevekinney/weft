@@ -1,8 +1,8 @@
 /**
  * Tests for the authorization scope vocabulary, scope extraction, and the
- * access-check pipeline step used by `executeOperation`.
- *
- * See Track 8 design decisions 3, 6, and 10.
+ * access-check pipeline step used by `executeOperation`. This stable
+ * authorization policy model ensures consistent access control across
+ * REST and JSON-RPC transports.
  */
 
 import { describe, expect, it } from 'bun:test';

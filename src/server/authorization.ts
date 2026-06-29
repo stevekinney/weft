@@ -5,9 +5,9 @@
  * `evaluateAccess`, the function `executeOperation` calls between the
  * authentication step and the operation invocation. The scope vocabulary
  * and JWT claim extraction live in `authorization-scope.ts` — separated to
- * keep `principal.ts` and this file cycle-free.
- *
- * See Track 8 design decisions 3, 6, and 10.
+ * keep `principal.ts` and this file cycle-free. This stable authorization
+ * policy model ensures consistent access control across REST and JSON-RPC
+ * transports.
  */
 
 import { type AuthorizationScope } from './authorization-scope.ts';

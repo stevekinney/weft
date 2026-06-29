@@ -39,7 +39,7 @@ function createFilteredRegistry(): OperationRegistry {
   };
 }
 
-describe('Track 8 discovery registry drift', () => {
+describe('Discovery registry drift', () => {
   let server: ReturnType<typeof Bun.serve> | undefined;
   let engine: Engine | undefined;
 

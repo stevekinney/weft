@@ -300,7 +300,7 @@ export const REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = [
   fleetEventsSseRestBinding,
   getTaskDiagnosticsRestBinding,
   clearTaskDeadLetterRestBinding,
-  // Track 8 operation-backed routes
+  // Operation-catalog-backed routes
   listSchedulesRestBinding,
   getScheduleRestBinding,
   replayWorkflowRestBinding,
@@ -477,7 +477,7 @@ export function createLiveOperationRegistry(
     fleetEventsSubscriptionOperation,
     buildTaskDiagnosticsOperationForRegistry(resolved),
     clearTaskDeadLetterOperation,
-    // Track 8 operation-backed routes
+    // Operation-catalog-backed routes
     listSchedulesOperation,
     getScheduleOperation,
     replayWorkflowOperation,

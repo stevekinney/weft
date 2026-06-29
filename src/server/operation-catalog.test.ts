@@ -2,8 +2,8 @@
  * Tests for `OperationDefinition`, `executeOperation` pipeline, and
  * `classifyEngineError`. The pipeline is the single dispatch point that
  * REST, JSON-RPC HTTP, JSON-RPC WebSocket, and stdio transports all call —
- * the structural enforcement that prevents drift between transports per
- * Track 8 design decision 2.
+ * the structural enforcement that prevents drift between transports in the
+ * stable operation-catalog contract.
  *
  * Pipeline order under test (each step has at least one passing and one
  * failing case):

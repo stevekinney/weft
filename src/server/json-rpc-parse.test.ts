@@ -3,12 +3,12 @@
  * or already-parsed JSON) and returns a discriminated-union `ParseResult`
  * describing what the transport should dispatch.
  *
- * Design decision (Track 8): `params` must be absent or an object
- * (named params). Array-form positional params are rejected per-item
- * with `InvalidRequest` (-32600). This is stricter than JSON-RPC 2.0
- * (which allows array params) but matches OpenRPC's `paramStructure:
- * "by-name"` discoverability contract and eliminates an entire class
- * of drift between transports.
+ * The stable JSON-RPC operation-catalog contract requires `params` to be
+ * absent or an object (named params). Array-form positional params are
+ * rejected per-item with `InvalidRequest` (-32600). This is stricter than
+ * JSON-RPC 2.0 (which allows array params) but matches OpenRPC's
+ * `paramStructure: "by-name"` discoverability contract and eliminates an
+ * entire class of drift between transports.
  */
 
 import { describe, expect, it } from 'bun:test';

@@ -58,7 +58,7 @@ Browser background execution has limits, so truly long-running workflows still n
 
 ## HTTP + WebSocket—No gRPC, No Protobuf
 
-The API uses Bun's route-based `Bun.serve()` for JSON-over-HTTP plus native WebSocket pub/sub for real-time streaming. As of Track 8 (PRs #144–#157), the server also exposes a unified operation catalog over JSON-RPC transports: JSON-RPC over HTTP, JSON-RPC over WebSocket, and JSON-RPC over stdio (see `src/server/operation-catalog.ts`, `json-rpc-http.ts`, `json-rpc-websocket-runtime.ts`, `stdio-session.ts`). Bun's built-in WebSocket pub/sub (`ws.subscribe()`/`ws.publish()`) eliminates the need for Redis or any external message broker. gRPC was rejected because it adds a code generation step, a protobuf dependency, and doesn't work in browsers. Every HTTP client and every WebSocket client already exists.
+The API uses Bun's route-based `Bun.serve()` for JSON-over-HTTP plus native WebSocket pub/sub for real-time streaming. The server exposes a unified operation catalog over JSON-RPC transports: JSON-RPC over HTTP, JSON-RPC over WebSocket, and JSON-RPC over stdio (see `src/server/operation-catalog.ts`, `json-rpc-http.ts`, `json-rpc-websocket-runtime.ts`, `stdio-session.ts`). Bun's built-in WebSocket pub/sub (`ws.subscribe()`/`ws.publish()`) eliminates the need for Redis or any external message broker. gRPC was rejected because it adds a code generation step, a protobuf dependency, and doesn't work in browsers. Every HTTP client and every WebSocket client already exists.
 
 See [Server guide](../guides/server.md).
 

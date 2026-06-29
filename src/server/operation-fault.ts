@@ -30,7 +30,9 @@
  * adapters never branch on `data === undefined`. This uniformity is what
  * lets the exhaustive switch in `extractFaultDataPayload` stay small.
  *
- * See Track 8 design decision 4.
+ * The stable fault model with transport-neutral code, message, and typed
+ * `data` payload forms the basis of cross-transport parity: every fault is
+ * serialized consistently across REST and JSON-RPC transports.
  */
 
 // `FaultCode` is defined in `core` so the client can consume it off the wire

@@ -74,16 +74,16 @@ async function postJsonRpc(
 describe('operation catalog — live operation registry matches REST_BINDINGS', () => {
   it('The runtime API has one transport-neutral operation catalog', async () => {
     const engine = createHoldEngine();
-    const getHandle = await engine.start('hold', { track: 'get' }, { id: 'track8-get' });
+    const getHandle = await engine.start('hold', { track: 'get' }, { id: 'parity-get' });
     const restSignalHandle = await engine.start(
       'hold',
       { track: 'signal-rest' },
-      { id: 'track8-signal-rest' },
+      { id: 'parity-signal-rest' },
     );
     const jsonRpcSignalHandle = await engine.start(
       'hold',
       { track: 'signal-jsonrpc' },
-      { id: 'track8-signal-jsonrpc' },
+      { id: 'parity-signal-jsonrpc' },
     );
 
     await waitForStatus(engine, getHandle.id, 'running');

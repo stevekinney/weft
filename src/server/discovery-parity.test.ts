@@ -58,7 +58,7 @@ function normalizeOpenRpcDocument(document: OpenRpcDocument): OpenRpcDocument {
   return { ...document, methods };
 }
 
-describe('Track 8 discovery parity', () => {
+describe('Discovery parity', () => {
   const servers: WeftServer[] = [];
   const engines: Engine[] = [];
 

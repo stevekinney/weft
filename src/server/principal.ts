@@ -9,12 +9,12 @@
  * Credential *validation* (signature verification, expiry, revocation, format
  * checks) is the transport edge's responsibility — these factories assume the
  * inputs they receive describe a credential that has already been accepted.
+ * This stable principal model ensures consistent authentication across all
+ * transport layers.
  *
  * The discriminator string for API keys is `'api-key'` (kebab-case) to match
  * the existing `AuthMethod` literal in `authentication.ts`. Keep them aligned;
  * the bridge from `AuthResult` to `Principal` relies on byte-identical strings.
- *
- * See Track 8 design decisions 3 and 10.
  */
 
 import {

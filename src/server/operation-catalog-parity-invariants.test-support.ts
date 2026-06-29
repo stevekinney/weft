@@ -1,11 +1,11 @@
 /**
- * Track 8 parity invariant definitions and assertion helpers.
+ * Operation-catalog parity invariant definitions and assertion helpers.
  *
  * These types and functions let tests express that an operation behaves
  * identically across REST, JSON-RPC HTTP, JSON-RPC WebSocket, and JSON-RPC
  * stdio transports. The invariants are checked per operation class.
  *
- * @module server/track8-parity-invariants
+ * @module server/operation-catalog-parity-invariants
  */
 
 import { expect } from 'bun:test';

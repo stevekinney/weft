@@ -10,8 +10,8 @@
  *   - Runtime stdio session (`stdio-session.ts`, Phase 13)
  *
  * Reserved-spec error codes (-32700..-32603) keep their JSON-RPC 2.0
- * meanings. Weft domain codes live in the -32010..-32099 band per
- * Track 8 design decision 4.
+ * meanings. Weft domain codes live in the -32010..-32099 band; this stable
+ * error-code allocation preserves compatibility across JSON-RPC transports.
  */
 
 /** Literal `"2.0"` — the only `jsonrpc` version this runtime accepts. */

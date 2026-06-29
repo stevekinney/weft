@@ -79,7 +79,7 @@ async function collectReplayEvents(engine: Engine, workflowId: string): Promise<
 // `weft.workflows.events` requires `events:read`. Tests below that drive
 // subscriptions configure `serve({ auth: { apiKeys: [...] } })` and present
 // the matching key on the WebSocket Authorization header.
-const SUBSCRIBE_TEST_API_KEY = 'weft_test_track8_events_read_key_xxxxxxxxxxxxxxxxxxx';
+const SUBSCRIBE_TEST_API_KEY = 'weft_test_parity_events_read_key_xxxxxxxxxxxxxxxxxxx';
 const subscribeServeOptions = {
   port: 0,
   auth: {
@@ -195,7 +195,7 @@ async function resolveTraceabilityTestFile(fileName: string): Promise<Bun.BunFil
   return directFile;
 }
 
-describe('Track 8 acceptance coverage', () => {
+describe('Operation-catalog acceptance coverage', () => {
   let server: WeftServer | undefined;
   const feeds: Array<{ dispose(): void }> = [];
   // MF6: track all engines created so they are disposed after each test.
@@ -535,28 +535,28 @@ describe('Track 8 acceptance coverage', () => {
         'Weft domain failures use a separate stable application error range',
       ],
       ['sequence-cursor.test.ts', 'All live views share the same sequence and cursor semantics'],
-      ['track8-acceptance.test.ts', 'JSON-RPC 2.0 is supported over three runtime transports'],
+      ['parity-acceptance.test.ts', 'JSON-RPC 2.0 is supported over three runtime transports'],
       [
-        'track8-acceptance.test.ts',
+        'parity-acceptance.test.ts',
         'External subscriptions project from existing typed EventTarget events',
       ],
       [
-        'track8-acceptance.test.ts',
+        'parity-acceptance.test.ts',
         'One server-side event projection layer feeds every live transport',
       ],
-      ['track8-acceptance.test.ts', 'Runtime JSON-RPC methods use stable namespaced names'],
-      ['track8-acceptance.test.ts', 'Notifications are opt-in per call'],
+      ['parity-acceptance.test.ts', 'Runtime JSON-RPC methods use stable namespaced names'],
+      ['parity-acceptance.test.ts', 'Notifications are opt-in per call'],
       [
-        'track8-acceptance.test.ts',
+        'parity-acceptance.test.ts',
         'Subscription notifications reuse the shared event projection layer',
       ],
-      ['track8-acceptance.test.ts', 'REST and JSON-RPC share one engine-error mapping layer'],
+      ['parity-acceptance.test.ts', 'REST and JSON-RPC share one engine-error mapping layer'],
       [
-        'track8-acceptance.test.ts',
+        'parity-acceptance.test.ts',
         'stdio is a separate opt-in local entrypoint, disabled by default',
       ],
       [
-        'track8-acceptance.test.ts',
+        'parity-acceptance.test.ts',
         'Every new primitive from this document has a dedicated test file',
       ],
     ] as const;

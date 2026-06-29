@@ -3,7 +3,7 @@
  * parsed JSON) and returns a discriminated-union `ParseResult` that
  * describes what the transport should dispatch.
  *
- * Track 8 design decisions this parser enforces:
+ * The stable JSON-RPC operation-catalog contract enforces:
  *   - `params` MUST be absent or a JSON object. Array-form positional
  *     params are rejected with `InvalidRequest` (-32600). This matches
  *     OpenRPC's `paramStructure: "by-name"` contract and eliminates a

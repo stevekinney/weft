@@ -1,8 +1,6 @@
 /**
  * Tests for AuthenticatedPrincipal construction, scope derivation, and the
- * Principal discriminated union.
- *
- * See reference Track 8 plan (design decisions 3 and 10).
+ * stable Principal discriminated union used across all transports.
  */
 
 import { describe, expect, it } from 'bun:test';

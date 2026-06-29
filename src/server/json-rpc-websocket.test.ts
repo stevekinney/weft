@@ -271,7 +271,7 @@ describe('createJsonRpcWebSocketSession — frame dispatch', () => {
   });
 
   it('rejects batch frames with InvalidRequest (-32600)', async () => {
-    // Track 8 design decision 13: batches over WS are out of spec for
+    // Stable contract: batches over WS are out of spec for
     // subscribe correlation; reject and require per-frame calls.
     const emitter = makeEmitter();
     const feed = createWorkflowEventFeed(createInMemoryEventBackend());

@@ -7,8 +7,8 @@ import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
  * and produces JSON-RPC response objects (or an empty batch when every
  * item is a notification).
  *
- * Batches dispatch SEQUENTIALLY in request order (Track 8 design
- * decision 13). Response order matches request order by construction.
+ * The stable operation-catalog contract mandates sequential dispatch in
+ * request order. Response order matches request order by construction.
  */
 
 import { describe, expect, it } from 'bun:test';
@@ -236,7 +236,7 @@ describe('dispatchJsonRpc — batch', () => {
   });
 
   it('dispatches batch items SEQUENTIALLY (side-effect order matches request order)', async () => {
-    // Track 8 decision 13 — batches are not concurrent. Use staggered
+    // Stable contract — batches dispatch sequentially, not concurrently. Use staggered
     // delays (first-slowest) so that a parallel `Promise.all`-style
     // implementation would produce the reversed order ['third',
     // 'second', 'first']. Only a sequential `for await` loop blocks

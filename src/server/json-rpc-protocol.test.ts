@@ -32,9 +32,9 @@ describe('JSON_RPC_ERROR_CODES', () => {
     expect(JSON_RPC_ERROR_CODES.INTERNAL_ERROR).toBe(-32603);
   });
 
-  it('defines the Weft domain-error band at the plan-documented values', () => {
-    // Values are pinned in the plan (Track 8 design decision 4 JSON-RPC
-    // specifics section). Changing them is a wire-compat break.
+  it('defines the Weft domain-error band at the stable contract values', () => {
+    // Values are pinned in the operation-catalog contract (-32010..-32099).
+    // Changing them is a wire-compat break.
     expect(JSON_RPC_ERROR_CODES.UNAUTHORIZED).toBe(-32010);
     expect(JSON_RPC_ERROR_CODES.FORBIDDEN).toBe(-32011);
     expect(JSON_RPC_ERROR_CODES.NOT_FOUND).toBe(-32020);

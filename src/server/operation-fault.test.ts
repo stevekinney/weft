@@ -2,9 +2,8 @@
  * Tests for the OperationFault discriminated union — the transport-neutral
  * fault model used by the operation pipeline. Each fault variant carries a
  * stable `code` (used both as the JSON-RPC mapping key and the OpenAPI
- * documentation handle) and a typed `data` payload.
- *
- * See Track 8 design decision 4 and the FaultCode mapping table.
+ * documentation handle) and a typed `data` payload, ensuring cross-transport
+ * parity and consistent error handling.
  */
 
 import { describe, expect, it } from 'bun:test';
@@ -38,7 +37,7 @@ describe('FaultCode mapping tables', () => {
     }
   });
 
-  it('HTTP statuses match the plan (Track 8 design decision 4)', () => {
+  it('HTTP statuses match the stable operation-catalog contract', () => {
     expect(FAULT_CODE_TO_HTTP_STATUS.Unauthorized).toBe(401);
     expect(FAULT_CODE_TO_HTTP_STATUS.Forbidden).toBe(403);
     expect(FAULT_CODE_TO_HTTP_STATUS.NotFound).toBe(404);

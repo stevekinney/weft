@@ -26,7 +26,7 @@ import {
   assertIdenticalJson,
   assertShapeEquivalent,
   type ParityInvariants,
-} from './track8-parity-invariants.test-support.ts';
+} from './operation-catalog-parity-invariants.test-support.ts';
 import { createWorkflowEventFeed } from './workflow-event-feed.ts';
 
 const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (
@@ -401,12 +401,12 @@ async function invokeGetAcrossTransports(
       (parsed) =>
         typeof parsed === 'object' &&
         parsed !== null &&
-        (parsed as { id?: string }).id === 'track8-get',
+        (parsed as { id?: string }).id === 'parity-get',
     );
     webSocket.send(
       JSON.stringify({
         jsonrpc: '2.0',
-        id: 'track8-get',
+        id: 'parity-get',
         method: 'weft.workflows.get',
         params: { workflowId },
       }),
@@ -450,7 +450,7 @@ async function invokeSignalTransport(
     return originalSignal(workflowId, name, payload);
   }) as Engine['signal'];
 
-  const handle = await engine.start('hold', null, { id: `track8-signal-${transport}` });
+  const handle = await engine.start('hold', null, { id: `parity-signal-${transport}` });
   await waitForStatus(engine, handle.id, 'running');
 
   const server = serve({ engine, port: 0 });
@@ -483,12 +483,12 @@ async function invokeSignalTransport(
           (parsed) =>
             typeof parsed === 'object' &&
             parsed !== null &&
-            (parsed as { id?: string }).id === 'track8-signal',
+            (parsed as { id?: string }).id === 'parity-signal',
         );
         webSocket.send(
           JSON.stringify({
             jsonrpc: '2.0',
-            id: 'track8-signal',
+            id: 'parity-signal',
             method: 'weft.workflows.signal',
             params: {
               workflowId: handle.id,
@@ -559,12 +559,12 @@ async function invokeStartTransport(
           (parsed) =>
             typeof parsed === 'object' &&
             parsed !== null &&
-            (parsed as { id?: string }).id === 'track8-start',
+            (parsed as { id?: string }).id === 'parity-start',
         );
         webSocket.send(
           JSON.stringify({
             jsonrpc: '2.0',
-            id: 'track8-start',
+            id: 'parity-start',
             method: 'weft.workflows.start',
             params: { type: 'hold' },
           }),
@@ -621,28 +621,28 @@ async function invokeBulkCancelTransport(
   engine.cancelAll = trackedCancelAll;
 
   await engine.start('hold', null, {
-    id: `track8-bulk-selected-a-${transport}`,
+    id: `parity-bulk-selected-a-${transport}`,
     tags: ['selected'],
   });
   await engine.start('hold', null, {
-    id: `track8-bulk-selected-b-${transport}`,
+    id: `parity-bulk-selected-b-${transport}`,
     tags: ['selected'],
   });
   await engine.start('hold', null, {
-    id: `track8-bulk-other-${transport}`,
+    id: `parity-bulk-other-${transport}`,
     tags: ['other'],
   });
 
   await Promise.all([
-    waitForStatus(engine, `track8-bulk-selected-a-${transport}`, 'running'),
-    waitForStatus(engine, `track8-bulk-selected-b-${transport}`, 'running'),
-    waitForStatus(engine, `track8-bulk-other-${transport}`, 'running'),
+    waitForStatus(engine, `parity-bulk-selected-a-${transport}`, 'running'),
+    waitForStatus(engine, `parity-bulk-selected-b-${transport}`, 'running'),
+    waitForStatus(engine, `parity-bulk-other-${transport}`, 'running'),
   ]);
 
   const server = serve({ engine, ...bulkServeOptions });
   servers.push(server);
 
-  const requestId = `track8-bulk-cancel-${transport}`;
+  const requestId = `parity-bulk-cancel-${transport}`;
   const previewParameters = { tags: ['selected'], dryRun: true, requestId };
   const staleParameters = (confirmationToken: string) => ({
     tags: ['other'],
@@ -686,7 +686,7 @@ async function invokeBulkCancelTransport(
         previewParameters,
         staleParameters,
         commitParameters,
-        `track8-bulk-cancel-${transport}`,
+        `parity-bulk-cancel-${transport}`,
       );
       break;
     case 'json-rpc-stdio':
@@ -706,7 +706,7 @@ async function invokeBulkCancelTransport(
 function createRetryFailedEngine(): Engine {
   const engine = new Engine({ storage: new MemoryStorage() });
   const attemptsByInput = new Map<string, number>();
-  const retryOnceWorkflow = workflow({ name: 'retry-once-track8' }).execute(async function* (
+  const retryOnceWorkflow = workflow({ name: 'parity-retry-once' }).execute(async function* (
     _ctx: WorkflowContext,
     input: { value: string },
   ) {
@@ -755,40 +755,40 @@ async function invokeBulkRetryFailedTransport(
   engine.retryFailedAll = trackedRetryFailedAll;
 
   await engine.start(
-    'retry-once-track8',
+    'parity-retry-once',
     { value: 'selected-a' },
     {
-      id: `track8-bulk-retry-selected-a-${transport}`,
+      id: `parity-bulk-retry-selected-a-${transport}`,
       tags: ['selected'],
     },
   );
   await engine.start(
-    'retry-once-track8',
+    'parity-retry-once',
     { value: 'selected-b' },
     {
-      id: `track8-bulk-retry-selected-b-${transport}`,
+      id: `parity-bulk-retry-selected-b-${transport}`,
       tags: ['selected'],
     },
   );
   await engine.start(
-    'retry-once-track8',
+    'parity-retry-once',
     { value: 'other' },
     {
-      id: `track8-bulk-retry-other-${transport}`,
+      id: `parity-bulk-retry-other-${transport}`,
       tags: ['other'],
     },
   );
 
   await Promise.all([
-    waitForStatus(engine, `track8-bulk-retry-selected-a-${transport}`, 'failed'),
-    waitForStatus(engine, `track8-bulk-retry-selected-b-${transport}`, 'failed'),
-    waitForStatus(engine, `track8-bulk-retry-other-${transport}`, 'failed'),
+    waitForStatus(engine, `parity-bulk-retry-selected-a-${transport}`, 'failed'),
+    waitForStatus(engine, `parity-bulk-retry-selected-b-${transport}`, 'failed'),
+    waitForStatus(engine, `parity-bulk-retry-other-${transport}`, 'failed'),
   ]);
 
   const server = serve({ engine, ...bulkServeOptions });
   servers.push(server);
 
-  const requestId = `track8-bulk-retry-failed-${transport}`;
+  const requestId = `parity-bulk-retry-failed-${transport}`;
   const previewParameters = { tags: ['selected'], dryRun: true, requestId };
   const staleParameters = (confirmationToken: string) => ({
     tags: ['other'],
@@ -832,7 +832,7 @@ async function invokeBulkRetryFailedTransport(
         previewParameters,
         staleParameters,
         commitParameters,
-        `track8-bulk-retry-failed-${transport}`,
+        `parity-bulk-retry-failed-${transport}`,
       );
       break;
     case 'json-rpc-stdio':
@@ -847,10 +847,10 @@ async function invokeBulkRetryFailedTransport(
   }
 
   await Promise.all([
-    waitForStatus(engine, `track8-bulk-retry-selected-a-${transport}`, 'completed'),
-    waitForStatus(engine, `track8-bulk-retry-selected-b-${transport}`, 'completed'),
+    waitForStatus(engine, `parity-bulk-retry-selected-a-${transport}`, 'completed'),
+    waitForStatus(engine, `parity-bulk-retry-selected-b-${transport}`, 'completed'),
   ]);
-  const otherState = await engine.get(`track8-bulk-retry-other-${transport}`);
+  const otherState = await engine.get(`parity-bulk-retry-other-${transport}`);
   expect(otherState?.status).toBe('failed');
   return { callCount, ...outcome };
 }
@@ -1064,15 +1064,15 @@ async function invokeBulkSignalTransport(
   }) as Engine['signalAll'];
 
   const firstHandle = await engine.start('hold', null, {
-    id: `track8-bulk-signal-selected-a-${transport}`,
+    id: `parity-bulk-signal-selected-a-${transport}`,
     tags: ['selected'],
   });
   const secondHandle = await engine.start('hold', null, {
-    id: `track8-bulk-signal-selected-b-${transport}`,
+    id: `parity-bulk-signal-selected-b-${transport}`,
     tags: ['selected'],
   });
   const otherHandle = await engine.start('hold', null, {
-    id: `track8-bulk-signal-other-${transport}`,
+    id: `parity-bulk-signal-other-${transport}`,
     tags: ['other'],
   });
 
@@ -1085,7 +1085,7 @@ async function invokeBulkSignalTransport(
   const server = serve({ engine, ...bulkServeOptions });
   servers.push(server);
 
-  const requestId = `track8-bulk-signal-${transport}`;
+  const requestId = `parity-bulk-signal-${transport}`;
   const previewParameters = {
     tags: ['selected'],
     name: 'release',
@@ -1153,7 +1153,7 @@ async function invokeBulkSignalTransport(
         previewParameters,
         staleParameters,
         commitParameters,
-        `track8-bulk-signal-${transport}`,
+        `parity-bulk-signal-${transport}`,
       );
       break;
     case 'json-rpc-stdio':
@@ -1207,11 +1207,11 @@ async function invokeBulkDeleteTransport(
   engine.deleteAll = trackedDeleteAll;
 
   const firstHandle = await engine.start('echo', 'first', {
-    id: `track8-bulk-delete-selected-a-${transport}`,
+    id: `parity-bulk-delete-selected-a-${transport}`,
     tags: ['selected'],
   });
   const secondHandle = await engine.start('echo', 'second', {
-    id: `track8-bulk-delete-selected-b-${transport}`,
+    id: `parity-bulk-delete-selected-b-${transport}`,
     tags: ['selected'],
   });
   await firstHandle.result();
@@ -1220,7 +1220,7 @@ async function invokeBulkDeleteTransport(
   const server = serve({ engine, ...bulkServeOptions });
   servers.push(server);
 
-  const requestId = `track8-bulk-delete-${transport}`;
+  const requestId = `parity-bulk-delete-${transport}`;
   const previewParameters = { tags: ['selected'], dryRun: true, requestId };
   const staleParameters = (confirmationToken: string) => ({
     tags: ['other'],
@@ -1260,7 +1260,7 @@ async function invokeBulkDeleteTransport(
         previewParameters,
         staleParameters,
         commitParameters,
-        `track8-bulk-delete-${transport}`,
+        `parity-bulk-delete-${transport}`,
       );
       break;
     case 'json-rpc-stdio':
@@ -1315,11 +1315,11 @@ async function invokeBulkTagsTransport(
   engine.tagAll = trackedTagAll;
 
   const firstHandle = await engine.start('echo', 'first', {
-    id: `track8-bulk-tags-selected-a-${transport}`,
+    id: `parity-bulk-tags-selected-a-${transport}`,
     tags: ['selected'],
   });
   const secondHandle = await engine.start('echo', 'second', {
-    id: `track8-bulk-tags-selected-b-${transport}`,
+    id: `parity-bulk-tags-selected-b-${transport}`,
     tags: ['selected'],
   });
   await firstHandle.result();
@@ -1328,7 +1328,7 @@ async function invokeBulkTagsTransport(
   const server = serve({ engine, ...bulkServeOptions });
   servers.push(server);
 
-  const requestId = `track8-bulk-tags-${transport}`;
+  const requestId = `parity-bulk-tags-${transport}`;
   const previewParameters = {
     filter: { tags: ['selected'] },
     tags: ['bulk'],
@@ -1378,7 +1378,7 @@ async function invokeBulkTagsTransport(
         previewParameters,
         staleParameters,
         commitParameters,
-        `track8-bulk-tags-${transport}`,
+        `parity-bulk-tags-${transport}`,
       );
       break;
     case 'json-rpc-stdio':
@@ -1422,7 +1422,7 @@ describe('cross-transport parity', () => {
 
     const engine = createHoldEngine();
     engines.push(engine);
-    const handle = await engine.start('hold', null, { id: 'track8-parity-get' });
+    const handle = await engine.start('hold', null, { id: 'parity-parity-get' });
     await waitForStatus(engine, handle.id, 'running');
 
     const server = serve({ engine, port: 0 });
@@ -1450,7 +1450,7 @@ describe('cross-transport parity', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         jsonrpc: '2.0',
-        id: 'track8-not-found-http',
+        id: 'parity-not-found-http',
         method: 'weft.workflows.get',
         params: { workflowId },
       }),
@@ -1469,12 +1469,12 @@ describe('cross-transport parity', () => {
         (parsed) =>
           typeof parsed === 'object' &&
           parsed !== null &&
-          (parsed as { id?: string }).id === 'track8-not-found-websocket',
+          (parsed as { id?: string }).id === 'parity-not-found-websocket',
       );
       webSocket.send(
         JSON.stringify({
           jsonrpc: '2.0',
-          id: 'track8-not-found-websocket',
+          id: 'parity-not-found-websocket',
           method: 'weft.workflows.get',
           params: { workflowId },
         }),

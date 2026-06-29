@@ -5,7 +5,7 @@
  * that binds the authenticated principal at upgrade time and reuses it
  * for every frame. The session:
  *   - Parses incoming frames as single JSON-RPC requests (batches over
- *     WS are rejected per Track 8 design decision 13).
+ *     WS are rejected per stable operation-catalog contract).
  *   - Dispatches `weft.workflows.subscribe` / `weft.workflows.unsubscribe`
  *     as first-class session primitives against the `WorkflowEventFeed`.
  *   - Delegates all other methods to the standard `dispatchJsonRpc`.

@@ -221,7 +221,7 @@ GET /.well-known/mcp.json
 → MCP discovery document pointing clients at /api/mcp
 ```
 
-The `rpc.discover` JSON-RPC method returns the OpenRPC document exposed at `GET /openrpc.json` over the JSON-RPC transport. MCP discovery is separate. These discovery endpoints were introduced in the Track 8 operation catalogue consolidation.
+The `rpc.discover` JSON-RPC method returns the OpenRPC document exposed at `GET /openrpc.json` over the JSON-RPC transport. MCP discovery is separate. These discovery endpoints are part of the stable operation-catalog contract.
 
 Engine-local definition introspection is separate from these transport documents. Use `engine.listWorkflowDefinitions()` and `engine.listActivityDefinitions()` when you need in-process metadata for registered user definitions; use `/openrpc.json`, `/openapi.json`, and `/asyncapi.json` when you need the server's network contract.
 
