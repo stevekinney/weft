@@ -43,6 +43,7 @@ description: >-
 17. For timeout docs, distinguish deadline timeouts from history circuit-breaker termination: `WorkflowTimeoutError.terminationReason` is `'history-circuit-breaker'` only for breaker trips and `undefined` for execution or run deadline timeouts.
 18. For cleanup wording in tests and comments, describe the current contract directly. Use "retired" or "persisted-state fields" when code tolerates old shapes; avoid "legacy", "migration", or "compatibility" framing unless the file is an actual migration guide or compatibility policy.
 19. For Tier-0 or persisted-format prose, use rolling-upgrade contract language when that is the actual guarantee. Do not describe pre-release current behavior as "legacy" behavior, and do not call shape tests "migration tests" unless they test an implemented migration path.
+20. For fixture names, reserve `historical-*` for old persisted records or protocol shapes. When a test only compares current behavior, use direct names such as `retiredField`, `old`, or `current` instead of `legacy`.
 
 ## Verification
 
