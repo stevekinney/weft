@@ -100,7 +100,7 @@ describe('VersionMismatchError schema diff', () => {
   });
 
   it('reports removed fields', () => {
-    const oldShape = { name: 'string', legacy: 'boolean' };
+    const oldShape = { name: 'string', retiredField: 'boolean' };
     const newShape = { name: 'string' };
 
     const error = new VersionMismatchError('wf-schema-3', 'user-workflow', '1.0.0', '2.0.0', {
@@ -108,7 +108,7 @@ describe('VersionMismatchError schema diff', () => {
       newShape,
     });
 
-    const removedDiff = error.fieldDiffs!.find((d) => d.field === 'legacy');
+    const removedDiff = error.fieldDiffs!.find((d) => d.field === 'retiredField');
     expect(removedDiff).toBeDefined();
     expect(removedDiff!.change).toBe('removed');
   });

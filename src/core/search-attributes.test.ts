@@ -181,11 +181,11 @@ describe('search-attributes', () => {
     });
 
     it('replaces a scalar index value with array element index values', () => {
-      const operations = buildIndexOperations('wf-1', { tags: 'legacy' }, { tags: ['new'] });
+      const operations = buildIndexOperations('wf-1', { tags: 'old' }, { tags: ['current'] });
 
       expect(operations).toEqual([
-        { type: 'delete', key: 'idx:tags:s:legacy:wf-1' },
-        { type: 'put', key: 'idx:tags:s:new:wf-1', value: new Uint8Array(0) },
+        { type: 'delete', key: 'idx:tags:s:old:wf-1' },
+        { type: 'put', key: 'idx:tags:s:current:wf-1', value: new Uint8Array(0) },
       ]);
     });
 
