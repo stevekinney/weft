@@ -19,14 +19,14 @@ import { workflow } from '../core/types.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { createEngineEventFeedBackend } from './engine-event-feed-backend.ts';
 import { serve, type WeftServer } from './index.ts';
-import { createLiveOperationRegistry } from './rest-bindings.ts';
-import { runStdioSession } from './stdio-session.ts';
 import {
   assertIdenticalFaultCode,
   assertIdenticalJson,
   assertShapeEquivalent,
   type ParityInvariants,
 } from './operation-catalog-parity-invariants.test-support.ts';
+import { createLiveOperationRegistry } from './rest-bindings.ts';
+import { runStdioSession } from './stdio-session.ts';
 import { createWorkflowEventFeed } from './workflow-event-feed.ts';
 
 const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (

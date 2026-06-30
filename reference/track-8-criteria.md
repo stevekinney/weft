@@ -27,7 +27,7 @@ When wave PRs cite a criterion, they cite the `id` here, not a line number in `a
 - **`8a-3`**: `BroadcastChannel` remains the internal cross-worker coordination primitive. Transport-specific publish-subscribe machinery does not replace the current internal coordination model.
 - **`8a-4`**: Worker `postMessage` remains the internal worker execution protocol. `WorkerInboundMessage` and `WorkerOutboundMessage` stay internal runtime messages; external JSON-RPC does not become a second worker protocol.
 - **`8a-5`**: One server-side event projection layer feeds every live transport. WebSocket watch and token messages, SSE responses, JSON-RPC subscription notifications, and cursor-based replay all project from the same event stream model.
-- **`8a-6`**: All live views share the same sequence and cursor semantics. Replay, resume, and ordering rules are identical across HTTP, WebSocket, and the Track 8 runtime stdio JSON-RPC transport.
+- **`8a-6`**: All live views share the same sequence and cursor semantics. Replay, resume, and ordering rules are identical across HTTP, WebSocket, and the stable stdio JSON-RPC transport.
 
 ### 8b. JSON-RPC transport surface
 

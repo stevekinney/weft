@@ -535,28 +535,37 @@ describe('Operation-catalog acceptance coverage', () => {
         'Weft domain failures use a separate stable application error range',
       ],
       ['sequence-cursor.test.ts', 'All live views share the same sequence and cursor semantics'],
-      ['parity-acceptance.test.ts', 'JSON-RPC 2.0 is supported over three runtime transports'],
       [
-        'parity-acceptance.test.ts',
+        'operation-catalog-acceptance.test.ts',
+        'JSON-RPC 2.0 is supported over three runtime transports',
+      ],
+      [
+        'operation-catalog-acceptance.test.ts',
         'External subscriptions project from existing typed EventTarget events',
       ],
       [
-        'parity-acceptance.test.ts',
+        'operation-catalog-acceptance.test.ts',
         'One server-side event projection layer feeds every live transport',
       ],
-      ['parity-acceptance.test.ts', 'Runtime JSON-RPC methods use stable namespaced names'],
-      ['parity-acceptance.test.ts', 'Notifications are opt-in per call'],
       [
-        'parity-acceptance.test.ts',
+        'operation-catalog-acceptance.test.ts',
+        'Runtime JSON-RPC methods use stable namespaced names',
+      ],
+      ['operation-catalog-acceptance.test.ts', 'Notifications are opt-in per call'],
+      [
+        'operation-catalog-acceptance.test.ts',
         'Subscription notifications reuse the shared event projection layer',
       ],
-      ['parity-acceptance.test.ts', 'REST and JSON-RPC share one engine-error mapping layer'],
       [
-        'parity-acceptance.test.ts',
+        'operation-catalog-acceptance.test.ts',
+        'REST and JSON-RPC share one engine-error mapping layer',
+      ],
+      [
+        'operation-catalog-acceptance.test.ts',
         'stdio is a separate opt-in local entrypoint, disabled by default',
       ],
       [
-        'parity-acceptance.test.ts',
+        'operation-catalog-acceptance.test.ts',
         'Every new primitive from this document has a dedicated test file',
       ],
     ] as const;
