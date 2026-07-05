@@ -7,6 +7,7 @@ import type {
 } from '../../types.ts';
 import type { EngineInternals } from '../internals.ts';
 import { decodeScheduleRunMetadata } from '../schedule-run-metadata.ts';
+import { loadScheduleState } from '../storage-io.ts';
 
 const RESOLVE_WORKFLOW_SERVICES_OPTION_PATH = 'EngineOptions.resolveWorkflowServices';
 
@@ -148,5 +149,23 @@ async function scheduleFromWorkflowState(
   state: WorkflowState,
 ): Promise<WorkflowServicesResolverScheduleInfo | null> {
   const bytes = await internals.storage.get(KEYS.scheduleRun(state.id));
-  return bytes === null ? null : decodeScheduleRunMetadata(bytes);
+  if (bytes === null) {
+    return null;
+  }
+
+  const metadata = decodeScheduleRunMetadata(bytes);
+  if (metadata === null) {
+    return null;
+  }
+
+  const scheduleState = await loadScheduleState(internals, metadata.id);
+  if (scheduleState === null) {
+    return null;
+  }
+
+  if (scheduleState.overlap === 'allow') {
+    return metadata.occurrence !== undefined ? metadata : null;
+  }
+
+  return scheduleState.currentWorkflowId === state.id ? metadata : null;
 }

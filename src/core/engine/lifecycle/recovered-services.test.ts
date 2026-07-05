@@ -12,7 +12,7 @@ import { KEYS } from '../../../storage/interface.ts';
 import { MemoryStorage } from '../../../storage/memory.ts';
 import { encode } from '../../codec.ts';
 import { DevelopmentWarningEvent } from '../../events.ts';
-import type { WorkflowServicesResolverInfo, WorkflowState } from '../../types.ts';
+import type { ScheduleState, WorkflowServicesResolverInfo, WorkflowState } from '../../types.ts';
 import { reprovideRecoveredServices } from './recovered-services.ts';
 
 type ServicesMap = Map<string, unknown>;
@@ -28,6 +28,29 @@ function makeState(id = 'run-1', type = 'wf'): WorkflowState {
     versionTuple: { workflowVersion: '1' },
     createdAt: 1,
     updatedAt: 1,
+  };
+}
+
+function makeScheduleState(
+  id: string,
+  options: { currentWorkflowId?: string; overlap?: ScheduleState['overlap'] } = {},
+): ScheduleState {
+  return {
+    id,
+    workflowType: 'wf',
+    input: { tenant: 'acme' },
+    intervalMs: 60_000,
+    status: 'active',
+    overlap: options.overlap ?? 'skip',
+    backfill: false,
+    createdAt: 1,
+    updatedAt: 1,
+    nextFireAt: 60_001,
+    missedFireCount: 0,
+    queuedRuns: 0,
+    ...(options.currentWorkflowId !== undefined
+      ? { currentWorkflowId: options.currentWorkflowId }
+      : {}),
   };
 }
 
@@ -110,6 +133,10 @@ describe('reprovideRecoveredServices', () => {
       KEYS.scheduleRun('run-1'),
       encode({ id: 'nightly-schedule', occurrence: 1_767_225_600_000 }),
     );
+    await storage.put(
+      KEYS.schedule('nightly-schedule'),
+      encode(makeScheduleState('nightly-schedule', { currentWorkflowId: 'run-1' })),
+    );
 
     await reprovideRecoveredServices(internals, makeState(), async () => {}, noopCommitError);
 
@@ -128,10 +155,61 @@ describe('reprovideRecoveredServices', () => {
       },
     });
     await storage.put(KEYS.scheduleRun('run-1'), encode('historical-schedule'));
+    await storage.put(
+      KEYS.schedule('historical-schedule'),
+      encode(makeScheduleState('historical-schedule', { currentWorkflowId: 'run-1' })),
+    );
 
     await reprovideRecoveredServices(internals, makeState(), async () => {}, noopCommitError);
 
     expect(seenSchedule).toEqual({ id: 'historical-schedule' });
+  });
+
+  it('ignores stale schedule-run metadata when the schedule points at another workflow', async () => {
+    let seenSchedule: unknown = 'not-called';
+    const { internals, storage } = makeInternals({
+      resolver: (info) => {
+        seenSchedule = info.schedule;
+        return { status: 'available', services: {} };
+      },
+    });
+    await storage.put(
+      KEYS.scheduleRun('run-1'),
+      encode({ id: 'stale-schedule', occurrence: 1_767_225_600_000 }),
+    );
+    await storage.put(
+      KEYS.schedule('stale-schedule'),
+      encode(makeScheduleState('stale-schedule', { currentWorkflowId: 'other-run' })),
+    );
+
+    await reprovideRecoveredServices(internals, makeState(), async () => {}, noopCommitError);
+
+    expect(seenSchedule).toBeUndefined();
+  });
+
+  it('accepts allow-overlap schedule-run metadata without currentWorkflowId', async () => {
+    let seenSchedule: unknown;
+    const { internals, storage } = makeInternals({
+      resolver: (info) => {
+        seenSchedule = info.schedule;
+        return { status: 'available', services: {} };
+      },
+    });
+    await storage.put(
+      KEYS.scheduleRun('run-1'),
+      encode({ id: 'allow-schedule', occurrence: 1_767_225_600_000 }),
+    );
+    await storage.put(
+      KEYS.schedule('allow-schedule'),
+      encode(makeScheduleState('allow-schedule', { overlap: 'allow' })),
+    );
+
+    await reprovideRecoveredServices(internals, makeState(), async () => {}, noopCommitError);
+
+    expect(seenSchedule).toEqual({
+      id: 'allow-schedule',
+      occurrence: 1_767_225_600_000,
+    });
   });
 
   it('stops, fails the run, and emits an actionable warning when the marker exists but no resolver is configured', async () => {
