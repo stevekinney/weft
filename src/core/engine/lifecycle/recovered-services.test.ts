@@ -164,6 +164,29 @@ describe('reprovideRecoveredServices', () => {
     expect(warnings[0]!.fieldPaths).toContain('EngineOptions.resolveWorkflowServices');
   });
 
+  it('still stops and records a commit error when missing-resolver failure cannot commit', async () => {
+    const { internals } = makeInternals({});
+    const failRun = mock(async () => {
+      throw new Error('terminal write failed');
+    });
+    const commitErrors: Array<[string, unknown, string]> = [];
+
+    const stop = await reprovideRecoveredServices(
+      internals,
+      makeState(),
+      failRun,
+      (source, error, workflowId) => {
+        commitErrors.push([source, error, workflowId]);
+      },
+    );
+
+    expect(stop).toBe(true);
+    expect(failRun).toHaveBeenCalled();
+    expect(commitErrors).toHaveLength(1);
+    expect(commitErrors[0]![0]).toBe('reprovideRecoveredServices');
+    expect(commitErrors[0]![2]).toBe('run-1');
+  });
+
   it('proceeds with no resolver configured when the run never expected services', async () => {
     const { internals } = makeInternals({ expectsServices: false });
     const failRun = mock(async () => {});
