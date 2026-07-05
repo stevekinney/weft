@@ -335,6 +335,7 @@ function buildBaseWorkflowDeleteKeys(state: WorkflowState): Set<string> {
     KEYS.workflowHeaders(state.id),
     KEYS.terminalCleanupNeeded(state.id),
     KEYS.workflowConcurrencyHolder(state.id),
+    KEYS.scheduleRun(state.id),
     // The "expects services" marker lives under its own `wf-has-services:`
     // prefix (not `wf:{id}:`), so the prefix sweep below misses it. Delete it
     // explicitly, else a purge + id reuse leaves a stale marker that would make

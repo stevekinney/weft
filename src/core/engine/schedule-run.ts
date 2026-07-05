@@ -1,11 +1,11 @@
 import type { BatchOperation } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
-import { encode } from '../codec.ts';
 import { ScheduleFiredEvent } from '../events.ts';
 import type { ScheduleState } from '../types.ts';
 import type { EngineInternals } from './internals.ts';
 import { unavailableServicesError } from './lifecycle/recovered-services.ts';
 import { EMPTY_STORAGE_VALUE } from './lifecycle/shared.ts';
+import { encodeScheduleRunMetadata } from './schedule-run-metadata.ts';
 import type { ScheduleCallbacks } from './schedules.ts';
 
 /**
@@ -28,10 +28,13 @@ export async function startScheduledRun(
   occurrence?: number,
 ): Promise<string> {
   const workflowId = crypto.randomUUID();
-  const scheduleRunOperations: BatchOperation[] =
-    state.overlap === 'allow'
-      ? []
-      : [{ type: 'put', key: KEYS.scheduleRun(workflowId), value: encode(state.id) }];
+  const scheduleRunOperations: BatchOperation[] = [
+    {
+      type: 'put',
+      key: KEYS.scheduleRun(workflowId),
+      value: encodeScheduleRunMetadata(state.id, occurrence),
+    },
+  ];
 
   const resolution = await resolveScheduledRunServices(internals, workflowId, state, occurrence);
 

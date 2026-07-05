@@ -10,8 +10,9 @@ import { describe, expect, it, mock } from 'bun:test';
 
 import { KEYS } from '../../../storage/interface.ts';
 import { MemoryStorage } from '../../../storage/memory.ts';
+import { encode } from '../../codec.ts';
 import { DevelopmentWarningEvent } from '../../events.ts';
-import type { WorkflowState } from '../../types.ts';
+import type { WorkflowServicesResolverInfo, WorkflowState } from '../../types.ts';
 import { reprovideRecoveredServices } from './recovered-services.ts';
 
 type ServicesMap = Map<string, unknown>;
@@ -39,11 +40,13 @@ function makeState(id = 'run-1', type = 'wf'): WorkflowState {
  */
 function makeInternals(options: {
   inline?: boolean;
-  resolver?: (info: {
-    workflowId: string;
-    workflowType: string;
-    input: unknown;
-  }) =>
+  resolver?: (
+    info: {
+      workflowId: string;
+      workflowType: string;
+      input: unknown;
+    } & Pick<WorkflowServicesResolverInfo, 'launchOptions' | 'schedule'>,
+  ) =>
     | { status: 'available'; services: unknown }
     | { status: 'unavailable'; reason: string }
     | Promise<
@@ -93,6 +96,42 @@ describe('reprovideRecoveredServices', () => {
     });
     await reprovideRecoveredServices(internals, makeState(), async () => {}, noopCommitError);
     expect(seenInput).toEqual({ tenant: 'acme' });
+  });
+
+  it('passes recovered schedule context from schedule-run metadata to the resolver', async () => {
+    let seenSchedule: unknown;
+    const { internals, storage } = makeInternals({
+      resolver: (info) => {
+        seenSchedule = info.schedule;
+        return { status: 'available', services: {} };
+      },
+    });
+    await storage.put(
+      KEYS.scheduleRun('run-1'),
+      encode({ id: 'nightly-schedule', occurrence: 1_767_225_600_000 }),
+    );
+
+    await reprovideRecoveredServices(internals, makeState(), async () => {}, noopCommitError);
+
+    expect(seenSchedule).toEqual({
+      id: 'nightly-schedule',
+      occurrence: 1_767_225_600_000,
+    });
+  });
+
+  it('tolerates historical string schedule-run metadata during recovery', async () => {
+    let seenSchedule: unknown;
+    const { internals, storage } = makeInternals({
+      resolver: (info) => {
+        seenSchedule = info.schedule;
+        return { status: 'available', services: {} };
+      },
+    });
+    await storage.put(KEYS.scheduleRun('run-1'), encode('historical-schedule'));
+
+    await reprovideRecoveredServices(internals, makeState(), async () => {}, noopCommitError);
+
+    expect(seenSchedule).toEqual({ id: 'historical-schedule' });
   });
 
   it('stops, fails the run, and emits an actionable warning when the marker exists but no resolver is configured', async () => {

@@ -15,6 +15,7 @@ import type { EngineInternals } from './internals.ts';
 import { ScheduleHandle } from './schedule-handle.ts';
 import { resolveEffectiveScheduleFireAt } from './schedule-jitter.ts';
 import { getNextScheduleOccurrence } from './schedule-occurrence.ts';
+import { decodeScheduleRunMetadata } from './schedule-run-metadata.ts';
 import {
   clearScheduleCurrentWorkflow,
   createScheduleTimerId,
@@ -396,11 +397,11 @@ export async function handleScheduledWorkflowTerminal(
     return;
   }
   await internals.storage.delete(KEYS.scheduleRun(workflowId));
-  const decodedScheduleId = decode(scheduleRunBytes);
-  if (!isValidScheduleIdentifier(decodedScheduleId)) {
+  const metadata = decodeScheduleRunMetadata(scheduleRunBytes);
+  if (metadata === null || !isValidScheduleIdentifier(metadata.id)) {
     return;
   }
-  const scheduleId = decodedScheduleId;
+  const scheduleId = metadata.id;
   const state = await loadScheduleState(internals, scheduleId);
   if (!state || state.currentWorkflowId !== workflowId) {
     return;

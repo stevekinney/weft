@@ -19,11 +19,13 @@ import {
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { encode } from '../codec.ts';
 import { DevelopmentWarningEvent } from '../events.ts';
-import type { WorkflowContext } from '../types.ts';
+import type { ScheduleOverlapPolicy, WorkflowContext } from '../types.ts';
 import { workflow } from '../types.ts';
 import { Engine } from './index.ts';
 import { getInternals } from './internals.ts';
+import { runRetentionSweep } from './retention.ts';
 import { cleanupWorkflowStorage } from './termination/cleanup.ts';
 
 /** Drain microtasks so fire-and-forget inline work completes. */
@@ -617,6 +619,58 @@ describe('ctx.services — terminal cleanup', () => {
     expect(await storage.get(KEYS.workflowHasServices('purge-run'))).toBeNull();
     await engine[Symbol.asyncDispose]();
   });
+
+  it('deletes durable schedule-run metadata on purge', async () => {
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+    const wf = workflow({ name: 'purge-schedule-metadata-wf' }).execute(async function* () {
+      return 'done';
+    });
+    engine.register(wf);
+
+    const handle = await engine.start('purge-schedule-metadata-wf', null, {
+      id: 'purge-schedule-metadata-run',
+    });
+    await handle.result();
+    await flush();
+    await storage.put(
+      KEYS.scheduleRun('purge-schedule-metadata-run'),
+      encode({ id: 'purge-schedule-metadata', occurrence: 1_767_225_600_000 }),
+    );
+
+    const purged = await engine.purge();
+    expect(purged.deleted).toBeGreaterThanOrEqual(1);
+    expect(await storage.get(KEYS.scheduleRun('purge-schedule-metadata-run'))).toBeNull();
+    await engine[Symbol.asyncDispose]();
+  });
+
+  it('deletes durable schedule-run metadata during retention sweep', async () => {
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage, retention: { completed: 0 } });
+    const wf = workflow({ name: 'retention-schedule-metadata-wf' }).execute(async function* () {
+      return 'done';
+    });
+    engine.register(wf);
+
+    const handle = await engine.start('retention-schedule-metadata-wf', null, {
+      id: 'retention-schedule-metadata-run',
+    });
+    await handle.result();
+    await flush();
+    await storage.put(
+      KEYS.scheduleRun('retention-schedule-metadata-run'),
+      encode({ id: 'retention-schedule-metadata', occurrence: 1_767_225_600_000 }),
+    );
+
+    await runRetentionSweep(
+      getInternals(engine),
+      () => {},
+      () => {},
+    );
+
+    expect(await storage.get(KEYS.scheduleRun('retention-schedule-metadata-run'))).toBeNull();
+    await engine[Symbol.asyncDispose]();
+  });
 });
 
 describe('ctx.services — scheduled workflow (engine.schedule)', () => {
@@ -668,6 +722,172 @@ describe('ctx.services — scheduled workflow (engine.schedule)', () => {
     });
     expect(results).toEqual(['from-resolver']);
     await engine[Symbol.asyncDispose]();
+  });
+
+  for (const overlap of ['skip', 'cancel-running', 'allow'] as const satisfies readonly Exclude<
+    ScheduleOverlapPolicy,
+    'queue'
+  >[]) {
+    it(`re-provides schedule resolver context across recovery for ${overlap} overlap`, async () => {
+      const storage = new MemoryStorage();
+      const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+      const liveScheduleContexts: unknown[] = [];
+
+      const workflowType = `scheduled-recovery-${overlap}`;
+      const scheduleId = `${workflowType}-schedule`;
+      const wf = workflow({ name: workflowType }).execute(async function* (ctx: WorkflowContext) {
+        const services = ctx.services as { source: string };
+        yield* ctx.waitForSignal('release');
+        return services.source;
+      });
+
+      const firstEngine = await Engine.create({
+        storage,
+        recover: false,
+        getNow: () => clock.now,
+        workflows: { [workflowType]: wf },
+        resolveWorkflowServices: (info) => {
+          liveScheduleContexts.push(info.schedule);
+          return { status: 'available', services: { source: 'first-engine' } };
+        },
+      });
+
+      const schedule = await firstEngine.schedule(
+        workflowType,
+        null,
+        { every: '1m' },
+        { id: scheduleId, overlap },
+      );
+      const description = await schedule.describe();
+      const occurrence = description.nextFireAt!;
+
+      await tickEngine(firstEngine, clock, occurrence);
+      await flush();
+      expect(liveScheduleContexts).toEqual([{ id: scheduleId, occurrence }]);
+      await firstEngine[Symbol.asyncDispose]();
+
+      const recoveredScheduleContexts: unknown[] = [];
+      const secondEngine = await Engine.create({
+        storage,
+        recover: false,
+        getNow: () => clock.now,
+        workflows: { [workflowType]: wf },
+        resolveWorkflowServices: (info) => {
+          recoveredScheduleContexts.push(info.schedule);
+          return { status: 'available', services: { source: 'second-engine' } };
+        },
+      });
+
+      const handles = await secondEngine.recoverAll();
+      expect(handles).toHaveLength(1);
+      expect(recoveredScheduleContexts).toEqual([{ id: scheduleId, occurrence }]);
+      await handles[0]!.signal('release');
+      expect(await handles[0]!.result()).toBe('second-engine');
+      await secondEngine[Symbol.asyncDispose]();
+    });
+  }
+
+  it('re-provides queued-drain schedule context with no occurrence across recovery', async () => {
+    const storage = new MemoryStorage();
+    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+    const liveScheduleContexts: unknown[] = [];
+
+    const wf = workflow({ name: 'scheduled-queue-drain-recovery' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      const services = ctx.services as { source: string };
+      yield* ctx.waitForSignal('release');
+      return services.source;
+    });
+
+    const firstEngine = await Engine.create({
+      storage,
+      recover: false,
+      getNow: () => clock.now,
+      workflows: { 'scheduled-queue-drain-recovery': wf },
+      resolveWorkflowServices: (info) => {
+        liveScheduleContexts.push(info.schedule);
+        return { status: 'available', services: { source: 'first-engine' } };
+      },
+    });
+
+    const schedule = await firstEngine.schedule(
+      'scheduled-queue-drain-recovery',
+      null,
+      { every: '1m' },
+      { id: 'scheduled-queue-drain-recovery-schedule', overlap: 'queue' },
+    );
+    const firstDescription = await schedule.describe();
+    await tickEngine(firstEngine, clock, firstDescription.nextFireAt!);
+    const secondDescription = await schedule.describe();
+    await tickEngine(firstEngine, clock, secondDescription.nextFireAt!);
+
+    const runningRuns = await firstEngine.list({ status: 'running' });
+    const firstRun = runningRuns.items[0]!;
+    await firstEngine.signal(firstRun.id, 'release');
+    await waitForCondition(() => liveScheduleContexts.length === 2, {
+      label: 'queued scheduled run drains',
+    });
+    expect(liveScheduleContexts[1]).toEqual({ id: 'scheduled-queue-drain-recovery-schedule' });
+    await firstEngine[Symbol.asyncDispose]();
+
+    const recoveredScheduleContexts: unknown[] = [];
+    const secondEngine = await Engine.create({
+      storage,
+      recover: false,
+      getNow: () => clock.now,
+      workflows: { 'scheduled-queue-drain-recovery': wf },
+      resolveWorkflowServices: (info) => {
+        recoveredScheduleContexts.push(info.schedule);
+        return { status: 'available', services: { source: 'second-engine' } };
+      },
+    });
+
+    const handles = await secondEngine.recoverAll();
+    expect(handles).toHaveLength(1);
+    expect(recoveredScheduleContexts).toEqual([{ id: 'scheduled-queue-drain-recovery-schedule' }]);
+    await handles[0]!.signal('release');
+    expect(await handles[0]!.result()).toBe('second-engine');
+    await secondEngine[Symbol.asyncDispose]();
+  });
+
+  it('recovers historical scheduled runs without schedule context when no metadata exists', async () => {
+    const storage = new MemoryStorage();
+    const wf = workflow({ name: 'historical-scheduled-services' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      yield* ctx.waitForSignal('release');
+      return (ctx.services as { source: string }).source;
+    });
+    const firstEngine = await Engine.create({
+      storage,
+      recover: false,
+      workflows: { 'historical-scheduled-services': wf },
+    });
+    await firstEngine.start('historical-scheduled-services', null, {
+      id: 'historical-scheduled-services-run',
+      services: { source: 'first-engine' },
+    });
+    await flush();
+    await firstEngine[Symbol.asyncDispose]();
+
+    const recoveredScheduleContexts: unknown[] = [];
+    const secondEngine = await Engine.create({
+      storage,
+      recover: false,
+      workflows: { 'historical-scheduled-services': wf },
+      resolveWorkflowServices: (info) => {
+        recoveredScheduleContexts.push(info.schedule);
+        return { status: 'available', services: { source: 'second-engine' } };
+      },
+    });
+
+    const handles = await secondEngine.recoverAll();
+    expect(handles).toHaveLength(1);
+    expect(recoveredScheduleContexts).toEqual([undefined]);
+    await handles[0]!.signal('release');
+    expect(await handles[0]!.result()).toBe('second-engine');
+    await secondEngine[Symbol.asyncDispose]();
   });
 
   it('fails only the occurrence when the resolver returns unavailable — schedule stays active', async () => {
@@ -848,6 +1068,7 @@ describe('ctx.services — scheduled workflow (engine.schedule)', () => {
     expect(recoveredState?.status).toBe('failed');
     expect(recoveredState?.error).toContain('resolveWorkflowServices');
     expect(recoveredState?.failureCategory).toBe('system');
+    expect(await storage.get(KEYS.scheduleRun(runningOccurrenceId))).toBeNull();
     expect(warnings).toHaveLength(1);
     expect(warnings[0]!.workflowId).toBe(runningOccurrenceId);
     expect(warnings[0]!.message).toContain('resolveWorkflowServices');

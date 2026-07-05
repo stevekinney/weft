@@ -346,7 +346,7 @@ By default, `ScheduleOptions.backfill` is `false`: when a schedule timer is more
 
 Set `ScheduleOptions.jitter` to a duration string or millisecond count when many schedules share the same cadence and should spread their effective dispatch times. Weft keeps `ScheduleState.nextFireAt` as the nominal pre-jitter occurrence timestamp, then derives a deterministic offset in `[0, jitter)` from the schedule ID and that nominal timestamp when writing the timer. The same schedule occurrence gets the same offset after recovery or replay without storing extra per-occurrence state.
 
-When inline `resolveWorkflowServices` is configured, each scheduled occurrence resolves services before its workflow body can run. An available result is installed as `ctx.services`; an unavailable result or resolver throw fails only that occurrence and does not pause the schedule.
+When inline `resolveWorkflowServices` is configured, each scheduled occurrence resolves services before its workflow body can run. An available result is installed as `ctx.services`; an unavailable result or resolver throw fails only that occurrence and does not pause the schedule. New scheduled runs persist `info.schedule`, so recovery receives the same schedule id and known occurrence timestamp as the live launch path. Queue-drained runs expose `schedule.id` with `schedule.occurrence === undefined` because the original grid timestamp is not retained, and older persisted runs that predate this metadata may omit `info.schedule`.
 
 ### `scheduler` (getter)
 
@@ -540,7 +540,7 @@ interface EngineOptions {
 }
 ```
 
-See [Configuration](./configuration.md) for defaults and Worker execution hardening options. `interceptors` is equivalent to registering each entry with `addInterceptor()` during construction. Explicit `workflowExecutionMode: 'worker'` is the untrusted workflow posture; inline execution remains available for trusted deployments. `resolveWorkflowServices` rebuilds services for recovered inline runs that were launched with `StartOptions.services`; its `info.launchOptions` includes the workflow id and current tags when present. When configured, it is also consulted for scheduled inline occurrences before their workflow bodies run, with `info.schedule` carrying the schedule id and occurrence timestamp when available.
+See [Configuration](./configuration.md) for defaults and Worker execution hardening options. `interceptors` is equivalent to registering each entry with `addInterceptor()` during construction. Explicit `workflowExecutionMode: 'worker'` is the untrusted workflow posture; inline execution remains available for trusted deployments. `resolveWorkflowServices` rebuilds services for recovered inline runs that were launched with `StartOptions.services`; its `info.launchOptions` includes the workflow id and current tags when present. When configured, it is also consulted for scheduled inline occurrences before their workflow bodies run, with `info.schedule` carrying the schedule id and occurrence timestamp when available. Newly launched scheduled runs preserve that schedule context across recovery; queue-drained runs and older persisted runs may omit `schedule.occurrence` or `info.schedule` as described under [`schedule()`](#schedule).
 
 ### `StartOptions`
 
