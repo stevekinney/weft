@@ -209,7 +209,7 @@
     "dev": "bun --watch run src/index.ts",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md}\"",
-    "lint": "oxlint --type-aware --tsconfig ./tsconfig.json --report-unused-disable-directives-severity=error && bun run scripts/check-lint-disables.ts && bun run scripts/check-import-cycles.ts && bun run scripts/check-internal-imports.ts && bun run scripts/check-engine-internals-field-access.ts && bun run scripts/check-definition-vocabulary.ts && bun run scripts/check-catalog-completeness.ts && bun run scripts/check-catalog-drift.ts && bun run scripts/check-type-ergonomics.ts",
+    "lint": "oxlint --type-aware --tsconfig ./tsconfig.json --report-unused-disable-directives-severity=error && bun run scripts/check-lint-disables.ts && bun run scripts/check-implementation-file-sizes.ts && bun run scripts/check-import-cycles.ts && bun run scripts/check-internal-imports.ts && bun run scripts/check-engine-internals-field-access.ts && bun run scripts/check-definition-vocabulary.ts && bun run scripts/check-catalog-completeness.ts && bun run scripts/check-catalog-drift.ts && bun run scripts/check-type-ergonomics.ts",
     "lint:fix": "oxlint --fix --type-aware --tsconfig ./tsconfig.json",
     "markdown-doctests:inventory": "bun run scripts/extract-markdown-doctests.ts inventory",
     "prepack": "bun run scripts/run-gates.ts prepack",

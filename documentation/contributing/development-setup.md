@@ -123,6 +123,52 @@ not add a file to that override without adding a per-file rationale here:
 | `src/server/runtime/task-reconciliation.ts`       | Reconciliation classifies queued and inflight task records against worker liveness and retry state in one bounded diagnostic pass.                             |
 | `src/server/runtime/task-result-resolution.ts`    | Result resolution coordinates payload-size checks, in-flight ownership, dead letters, retries, and resolved markers under one authorization boundary.          |
 
+The repository prefers implementation files at or below 500 physical lines, but not every larger file should be split. Run the file-size audit before opening a pull request:
+
+```bash
+bun run scripts/check-implementation-file-sizes.ts
+```
+
+The audit scans `src/`, `scripts/`, and `tests/` TypeScript/Svelte implementation files, excluding generated files plus `.test.*` and `.spec.*` files. Any file above 500 lines must be either split along an existing responsibility boundary or classified here with a durable rationale. Do not split public type surfaces, root export manifests, or operation-boundary modules into compatibility barrels or shallow old-path re-export layers.
+
+| File                                            | Classification      | Rationale                                                                                                                                        |
+| ----------------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `scripts/check-coverage.ts`                     | Justified exception | Coverage allowances, LCOV parsing, and adjusted-total reporting stay together so the coverage gate has one auditable policy owner.               |
+| `src/core/engine/index.ts`                      | Tracked separately  | The Engine declaration surface is covered by local task `3765ffa6-1430-4be5-970c-c0f984ff34df`; issue #671 intentionally excludes that refactor. |
+| `src/core/engine/bulk-operations.ts`            | Justified exception | Bulk cancel, delete, retry, signal, tag, and purge operations share one confirmation, filtering, outcome, and audit contract.                    |
+| `src/storage/interface.ts`                      | Justified exception | The storage interface is a public type and helper surface where splitting would scatter one import contract across multiple subpaths.            |
+| `src/client/client-contract.test-support.ts`    | Justified exception | The shared client contract harness keeps cross-transport behavior assertions in one reusable test-support module.                                |
+| `src/core/engine/state-utilities.ts`            | Justified exception | Workflow state decoding, summaries, filters, and debug sanitization are coupled around the persisted workflow-state boundary.                    |
+| `src/core/type-ergonomics.test-d.ts`            | Justified exception | The source-entry type oracle keeps related compile-time assertions in one file so declarations are checked through one import surface.           |
+| `scripts/snapshot-public-api.ts`                | Justified exception | Public API snapshotting keeps export traversal, declaration capture, and snapshot comparison together as one release-surface audit.              |
+| `src/client/interface.ts`                       | Justified exception | The public client interface keeps transport-uniform overloads, handles, schedules, reviews, and stream contracts in one type surface.            |
+| `src/core/engine/termination/complete.ts`       | Justified exception | Terminal completion coordinates status transitions, timers, indexes, waiters, events, and cleanup from one status gate.                          |
+| `src/worker/index.ts`                           | Justified exception | The worker entrypoint keeps registration, protocol negotiation, dispatch, completion, heartbeat, and shutdown behavior together.                 |
+| `src/server/operations/get-task-diagnostics.ts` | Justified exception | Task diagnostics classify queued, inflight, resolved, and dead-letter records into one bounded operator response.                                |
+| `scripts/verify-tree-shaking.ts`                | Justified exception | Tree-shaking verification keeps build setup, bundle inspection, source-map checks, and package export assertions in one audit.                   |
+| `src/index.ts`                                  | Justified exception | The package root is the intentional public export manifest; splitting it would add indirection without reducing implementation complexity.       |
+| `src/core/types/workflow-builder.ts`            | Justified exception | Workflow-builder types form one fluent type-state contract where splitting would obscure the compile-time state transitions.                     |
+| `src/server/task-state.ts`                      | Justified exception | Task-state storage owns queued, inflight, resolved, dead-letter, and worker-index records under one persistence contract.                        |
+| `src/client/http-client.ts`                     | Justified exception | The HTTP client class centralizes the transport implementation behind the public client interface without adding old-path shims.                 |
+| `src/workers/workflow-runner.ts`                | Justified exception | Worker-runner message handling, replay, context wiring, and result reporting stay together as the worker isolate boundary.                       |
+| `src/core/engine/checkpoint-io.ts`              | Justified exception | Checkpoint I/O owns decode, encode, chunk, archive, and retention behavior around one durable checkpoint boundary.                               |
+| `scripts/husky/run-tests.ts`                    | Justified exception | The hook test runner keeps staged-file routing, load-sensitive exclusions, and diagnosable output in one local hook command.                     |
+| `src/core/context/index.ts`                     | Justified exception | Workflow context exposes the generator-facing API surface; splitting it would make one context contract harder to inspect.                       |
+| `scripts/regenerate-trace-fixtures.ts`          | Justified exception | Trace-fixture regeneration keeps scenario discovery, execution, serialization, and drift output in one fixture owner.                            |
+| `src/core/types/workflow-context.ts`            | Justified exception | Workflow-context types define one public generator API contract whose overloads and helper result types need local adjacency.                    |
+| `src/server/operations/bulk-filter-helpers.ts`  | Justified exception | Bulk filter helpers keep REST, JSON-RPC, preview, and commit parsing aligned for the shared bulk-operation contract.                             |
+| `src/server/index.ts`                           | Justified exception | The server entrypoint owns the public serve surface and exported server types; further splitting would create shallow re-export files.           |
+| `src/storage/indexeddb.ts`                      | Justified exception | IndexedDB storage keeps browser schema setup, transactions, scans, batching, and capability reporting in one adapter boundary.                   |
+| `src/core/worker-protocol.ts`                   | Justified exception | Worker protocol types and validators stay together so wire messages, limits, and validation errors remain one auditable contract.                |
+| `src/mcp/tools.ts`                              | Justified exception | MCP tool schemas and handlers are intentionally adjacent so tool metadata and operation dispatch cannot drift.                                   |
+| `src/storage/web-extension.ts`                  | Justified exception | WebExtension storage keeps namespace detection, callback/promise bridging, quota handling, and scans in one adapter boundary.                    |
+| `src/core/engine/operations-coordination.ts`    | Justified exception | Coordination operations keep race, all, nested signal, and branch-dispatch semantics together around one coordinator boundary.                   |
+| `src/server/operations/storage.ts`              | Justified exception | Storage operations keep REST-only bindings, binary body handling, batch validation, and fault shaping in one route contract.                     |
+| `src/core/engine/operations-activity.ts`        | Justified exception | Activity operations coordinate interceptors, retries, reconciliation, async completion, verification, and result feeding together.               |
+| `src/core/engine/signals.ts`                    | Justified exception | Signal buffering, waiter tracking, payload validation, and atomic consumption share one durable signal-delivery contract.                        |
+| `src/client/http-client-requests.ts`            | Justified exception | HTTP request helpers are grouped by one client transport and mostly sit just above the threshold; splitting would add routing noise.             |
+| `scripts/generate-operation-client.ts`          | Justified exception | The operation-client generator keeps schema normalization, alias selection, rendering, formatting, and drift output together.                    |
+
 To clean build artifacts, coverage output, and caches:
 
 ```bash
