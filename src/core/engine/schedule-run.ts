@@ -34,39 +34,38 @@ export async function startScheduledRun(
       key: KEYS.scheduleRun(workflowId),
       value: encodeScheduleRunMetadata(state.id, occurrence),
     },
+    {
+      type: 'put',
+      key: KEYS.terminalCleanupNeeded(workflowId),
+      value: EMPTY_STORAGE_VALUE,
+    },
   ];
 
   const resolution = await resolveScheduledRunServices(internals, workflowId, state, occurrence);
 
   if (resolution !== null) {
-    // Write the "expects services" marker and terminal-cleanup flag atomically
-    // with the workflow record. This mirrors startWorkflow's buildPerRunScratchOperations
-    // path and is required for both the available and unavailable cases so a
-    // fresh-process recovery can tell "never had services" from "had services".
-    scheduleRunOperations.push(
-      { type: 'put', key: KEYS.workflowHasServices(workflowId), value: EMPTY_STORAGE_VALUE },
-      { type: 'put', key: KEYS.terminalCleanupNeeded(workflowId), value: EMPTY_STORAGE_VALUE },
-    );
+    // Write the "expects services" marker atomically with the workflow record.
+    // This mirrors startWorkflow's buildPerRunScratchOperations path and is
+    // required for both the available and unavailable cases so a fresh-process
+    // recovery can tell "never had services" from "had services".
+    scheduleRunOperations.push({
+      type: 'put',
+      key: KEYS.workflowHasServices(workflowId),
+      value: EMPTY_STORAGE_VALUE,
+    });
 
-    // Register the terminal-cleanup obligation and, for the available case,
-    // store the services in engine memory BEFORE startWorkflow is called.
-    //
-    // Critically, `startWorkflow` internally calls `queueInlineWorkflowExecutionStart`
-    // which posts a MessageChannel message. In Bun/Node.js the handler for that
-    // message can fire before our code after `await startWorkflow(...)` runs —
-    // making a post-startWorkflow set arrive too late for the completion check
-    // in `completeWorkflow` (which reads `workflowsNeedingTerminalCleanup` to
-    // decide whether to schedule the deferred terminal cleanup timer). Setting
-    // both values synchronously before the call guarantees the completion path
-    // always sees them regardless of MessageChannel scheduling.
-    //
-    // If `startWorkflow` throws, `rollbackTransientStartState` inside it clears
-    // both maps for the workflowId, so no leak occurs on the failure path.
-    internals.workflowsNeedingTerminalCleanup.add(workflowId);
     if (resolution.status === 'available') {
       internals.workflowServices.set(workflowId, resolution.services);
     }
   }
+
+  // Register the terminal-cleanup obligation before startWorkflow is called.
+  // Every scheduled run writes `schedule-run` metadata, and the inline start can
+  // complete before this function resumes after the await. The in-memory set is
+  // what makes completion schedule the deferred durable cleanup timer that
+  // sweeps that metadata if the fire-and-forget scheduled-terminal handler is
+  // interrupted. If startWorkflow throws, rollbackTransientStartState clears it.
+  internals.workflowsNeedingTerminalCleanup.add(workflowId);
 
   // An empty array and `undefined` are equivalent at the receiving end
   // (buildStartBatchOperations spreads `?? []`), so pass the array directly.

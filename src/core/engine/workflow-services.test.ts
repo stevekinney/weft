@@ -20,7 +20,7 @@ import {
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { encode } from '../codec.ts';
-import { DevelopmentWarningEvent } from '../events.ts';
+import { DevelopmentWarningEvent, ScheduleFiredEvent } from '../events.ts';
 import type { ScheduleOverlapPolicy, WorkflowContext } from '../types.ts';
 import { workflow } from '../types.ts';
 import { Engine } from './index.ts';
@@ -1112,12 +1112,17 @@ describe('ctx.services — scheduled workflow (engine.schedule)', () => {
   it('does not consult the resolver for scheduled workflows when none is configured', async () => {
     // Regression: scheduled runs must still work on an engine with no resolver.
     const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+    const storage = new MemoryStorage();
     const executions: string[] = [];
+    const firedWorkflowIds: string[] = [];
 
     const engine = new Engine({
-      storage: new MemoryStorage(),
+      storage,
       getNow: () => clock.now,
       // No resolveWorkflowServices.
+    });
+    engine.addEventListener(ScheduleFiredEvent.type, (event) => {
+      firedWorkflowIds.push(event.workflowId);
     });
 
     const wf = workflow({ name: 'scheduled-plain' }).execute(async function* () {
@@ -1133,6 +1138,18 @@ describe('ctx.services — scheduled workflow (engine.schedule)', () => {
     await flush();
 
     expect(executions).toEqual(['ran']);
+    expect(firedWorkflowIds).toHaveLength(1);
+    expect(await storage.get(KEYS.terminalCleanupNeeded(firedWorkflowIds[0]!))).not.toBeNull();
+    await storage.put(
+      KEYS.scheduleRun(firedWorkflowIds[0]!),
+      encode({ id: description.id, occurrence: description.nextFireAt! }),
+    );
+    expect(await storage.get(KEYS.scheduleRun(firedWorkflowIds[0]!))).not.toBeNull();
+
+    await schedule.pause();
+    await engine.scheduler.tick(clock.now + 90_000);
+    expect(await storage.get(KEYS.terminalCleanupNeeded(firedWorkflowIds[0]!))).toBeNull();
+    expect(await storage.get(KEYS.scheduleRun(firedWorkflowIds[0]!))).toBeNull();
     await engine[Symbol.asyncDispose]();
   });
 

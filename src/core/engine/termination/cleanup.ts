@@ -458,12 +458,14 @@ export async function runDeferredTerminalCleanup(
   }
 
   try {
+    await finalizeScheduledWorkflowTerminal(internals, workflowId, callbacks);
     await cleanupTerminalWorkflowDurableState(
       internals,
       workflowId,
       parsedTimer.includeOutputArtifacts,
       callbacks,
     );
+    await internals.storage.delete(KEYS.scheduleRun(workflowId));
   } catch (error) {
     callbacks.handleCleanupError('cleanupTerminalWorkflowDurableState', error, workflowId);
     throw error;

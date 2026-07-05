@@ -162,10 +162,29 @@ async function scheduleFromWorkflowState(
   if (scheduleState === null) {
     return null;
   }
+  if (scheduleState.workflowType !== state.type) {
+    return null;
+  }
 
   if (scheduleState.overlap === 'allow') {
     return metadata.occurrence !== undefined ? metadata : null;
   }
 
-  return scheduleState.currentWorkflowId === state.id ? metadata : null;
+  if (scheduleState.currentWorkflowId === state.id) {
+    return metadata;
+  }
+
+  if (metadata.occurrence !== undefined && scheduleState.nextFireAt === metadata.occurrence) {
+    return metadata;
+  }
+
+  if (
+    metadata.occurrence === undefined &&
+    scheduleState.overlap === 'queue' &&
+    scheduleState.queuedRuns > 0
+  ) {
+    return metadata;
+  }
+
+  return null;
 }

@@ -41,4 +41,8 @@ describe('schedule-run metadata', () => {
       expect(decodeScheduleRunMetadata(encode(malformed))).toBeNull();
     }
   });
+
+  it('rejects unreadable persisted metadata bytes', () => {
+    expect(decodeScheduleRunMetadata(new Uint8Array([0xc1]))).toBeNull();
+  });
 });

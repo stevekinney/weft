@@ -1,4 +1,5 @@
 import { decode, encode } from '../codec.ts';
+import { isRecord } from '../debug-output.ts';
 import type { WorkflowServicesResolverScheduleInfo } from '../types.ts';
 import { isValidScheduleIdentifier } from './validation/schedule.ts';
 
@@ -20,17 +21,22 @@ export function encodeScheduleRunMetadata(
 export function decodeScheduleRunMetadata(
   bytes: Uint8Array,
 ): WorkflowServicesResolverScheduleInfo | null {
-  const decoded = decode(bytes);
+  let decoded: unknown;
+  try {
+    decoded = decode(bytes);
+  } catch {
+    return null;
+  }
 
   if (typeof decoded === 'string') {
     return isValidScheduleIdentifier(decoded) ? { id: decoded } : null;
   }
 
-  if (typeof decoded !== 'object' || decoded === null || Array.isArray(decoded)) {
+  if (!isRecord(decoded)) {
     return null;
   }
 
-  const { id, occurrence } = decoded as Record<string, unknown>;
+  const { id, occurrence } = decoded;
   if (!isValidScheduleIdentifier(id)) {
     return null;
   }
