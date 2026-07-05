@@ -6,8 +6,10 @@ import { write } from 'bun';
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
 import {
+  assertUniqueClassifications,
   CLASSIFIED_OVERSIZED_IMPLEMENTATION_FILES,
   IMPLEMENTATION_FILE_SIZE_LIMIT,
+  runCli,
   type OversizedImplementationFileClassification,
 } from './check-implementation-file-sizes.ts';
 
@@ -28,6 +30,32 @@ function run(root: string): RunResult {
     stdout: result.stdout.toString(),
     stderr: result.stderr.toString(),
   };
+}
+
+async function runDirect(argv: readonly string[]): Promise<RunResult> {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+
+  console.log = (...values: unknown[]): void => {
+    stdout.push(values.map(String).join(' '));
+  };
+  console.error = (...values: unknown[]): void => {
+    stderr.push(values.map(String).join(' '));
+  };
+
+  try {
+    const exitCode = await runCli(argv);
+    return {
+      exitCode,
+      stdout: stdout.join('\n'),
+      stderr: stderr.join('\n'),
+    };
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+  }
 }
 
 async function writeFixtureFile(
@@ -89,10 +117,34 @@ describe('check-implementation-file-sizes', () => {
     expect(result.stdout).toContain('OK: 0 implementation file(s)');
   });
 
+  it('passes direct execution for empty and threshold-sized implementation files', async () => {
+    await mkdir(join(root, 'src'), { recursive: true });
+    await write(join(root, 'src/empty.ts'), '');
+    await write(
+      join(root, 'src/small-no-newline.ts'),
+      Array.from({ length: IMPLEMENTATION_FILE_SIZE_LIMIT }, () => 'export {};').join('\n'),
+    );
+
+    const result = await runDirect(['--root', root]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('OK: 0 implementation file(s)');
+  });
+
   it('fails when an oversized implementation file is not classified', async () => {
     await writeFixtureFile(root, 'src/oversized.ts', IMPLEMENTATION_FILE_SIZE_LIMIT + 1);
 
     const result = run(root);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('without a classification');
+    expect(result.stderr).toContain('src/oversized.ts');
+  });
+
+  it('fails direct execution when an oversized implementation file is not classified', async () => {
+    await writeFixtureFile(root, 'src/oversized.ts', IMPLEMENTATION_FILE_SIZE_LIMIT + 1);
+
+    const result = await runDirect(['--root', root]);
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('without a classification');
@@ -117,11 +169,57 @@ describe('check-implementation-file-sizes', () => {
     expect(result.stdout).toContain('OK: 0 implementation file(s)');
   });
 
+  it('excludes generated, test, and spec files during direct execution', async () => {
+    await writeFixtureFile(
+      root,
+      'src/generated/operation-client.ts',
+      IMPLEMENTATION_FILE_SIZE_LIMIT + 1,
+    );
+    await writeFixtureFile(root, 'src/large.test.ts', IMPLEMENTATION_FILE_SIZE_LIMIT + 1);
+    await writeFixtureFile(root, 'src/large.test-d.ts', IMPLEMENTATION_FILE_SIZE_LIMIT + 1);
+    await writeFixtureFile(root, 'src/large.test.svelte', IMPLEMENTATION_FILE_SIZE_LIMIT + 1);
+    await writeFixtureFile(root, 'scripts/large.spec.ts', IMPLEMENTATION_FILE_SIZE_LIMIT + 1);
+    await writeFixtureFile(root, 'tests/large.spec.svelte', IMPLEMENTATION_FILE_SIZE_LIMIT + 1);
+
+    const result = await runDirect(['--root', root]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('OK: 0 implementation file(s)');
+  });
+
   it('does not fail just because classified files are absent from a fixture root', async () => {
     const result = run(root);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('OK: 0 implementation file(s)');
+  });
+
+  it('prints usage without scanning when help is requested', async () => {
+    const result = await runDirect(['--help']);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Usage: bun scripts/check-implementation-file-sizes.ts');
+  });
+
+  it('rejects unknown arguments', async () => {
+    await expect(runCli(['--unknown'])).rejects.toThrow('Unknown argument: --unknown');
+  });
+
+  it('rejects duplicate oversized-file classifications', () => {
+    expect(() =>
+      assertUniqueClassifications([
+        {
+          path: 'src/example.ts',
+          classification: 'justified-exception',
+          rationale: 'First classification for duplicate detection.',
+        },
+        {
+          path: 'src/example.ts',
+          classification: 'tracked-elsewhere',
+          rationale: 'Second classification for duplicate detection.',
+        },
+      ]),
+    ).toThrow('Duplicate oversized-file classification for src/example.ts');
   });
 
   it('keeps the contributor documentation table synchronized with the enforced classifications', async () => {

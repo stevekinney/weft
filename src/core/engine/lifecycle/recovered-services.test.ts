@@ -187,6 +187,42 @@ describe('reprovideRecoveredServices', () => {
     expect(seenSchedule).toBeUndefined();
   });
 
+  it('ignores malformed schedule-run metadata during services recovery', async () => {
+    let seenSchedule: unknown = 'not-called';
+    const { internals, storage } = makeInternals({
+      resolver: (info) => {
+        seenSchedule = info.schedule;
+        return { status: 'available', services: {} };
+      },
+    });
+    await storage.put(
+      KEYS.scheduleRun('run-1'),
+      encode({ id: 'malformed-schedule', occurrence: 1.5 }),
+    );
+
+    await reprovideRecoveredServices(internals, makeState(), async () => {}, noopCommitError);
+
+    expect(seenSchedule).toBeUndefined();
+  });
+
+  it('ignores orphaned schedule-run metadata when the schedule record is gone', async () => {
+    let seenSchedule: unknown = 'not-called';
+    const { internals, storage } = makeInternals({
+      resolver: (info) => {
+        seenSchedule = info.schedule;
+        return { status: 'available', services: {} };
+      },
+    });
+    await storage.put(
+      KEYS.scheduleRun('run-1'),
+      encode({ id: 'missing-schedule', occurrence: 1_767_225_600_000 }),
+    );
+
+    await reprovideRecoveredServices(internals, makeState(), async () => {}, noopCommitError);
+
+    expect(seenSchedule).toBeUndefined();
+  });
+
   it('accepts allow-overlap schedule-run metadata without currentWorkflowId', async () => {
     let seenSchedule: unknown;
     const { internals, storage } = makeInternals({

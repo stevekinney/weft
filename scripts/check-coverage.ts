@@ -228,6 +228,16 @@ const BASE_COVERAGE_ALLOWANCES = buildAllowanceLayer('BASE_COVERAGE_ALLOWANCES',
     },
   ],
   [
+    'scripts/check-implementation-file-sizes.ts',
+    {
+      // Scanner, status handling, help, and error branches are unit-tested
+      // in-process, and the standalone entrypoint is exercised by subprocess
+      // tests. The remaining miss is only the `import.meta.main` wrapper.
+      functions: 1,
+      lines: new Set([354, 355]),
+    },
+  ],
+  [
     'scripts/verify-no-test-sleeps.ts',
     {
       // The detector and CLI status handling are unit-tested in-process. The

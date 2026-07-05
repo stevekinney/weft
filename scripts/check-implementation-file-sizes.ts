@@ -232,6 +232,7 @@ export const CLASSIFIED_OVERSIZED_IMPLEMENTATION_FILES = [
 
 type CliArguments = {
   readonly root: string;
+  readonly showHelp: boolean;
 };
 
 type MeasuredImplementationFile = {
@@ -248,14 +249,13 @@ function parseArguments(argv: readonly string[]): CliArguments {
       root = argv[index + 1] ?? null;
       index += 1;
     } else if (argument === '--help' || argument === '-h') {
-      printUsage();
-      process.exit(0);
+      return { root: root ?? join(import.meta.dir, '..'), showHelp: true };
     } else {
       throw new Error(`Unknown argument: ${argument}`);
     }
   }
 
-  return { root: root ?? join(import.meta.dir, '..') };
+  return { root: root ?? join(import.meta.dir, '..'), showHelp: false };
 }
 
 function printUsage(): void {
@@ -306,9 +306,11 @@ async function measureOversizedFiles(root: string): Promise<MeasuredImplementati
   );
 }
 
-function assertUniqueClassifications(): void {
+export function assertUniqueClassifications(
+  classifications: readonly OversizedImplementationFile[] = CLASSIFIED_OVERSIZED_IMPLEMENTATION_FILES,
+): void {
   const seen = new Set<string>();
-  for (const classification of CLASSIFIED_OVERSIZED_IMPLEMENTATION_FILES) {
+  for (const classification of classifications) {
     if (seen.has(classification.path)) {
       throw new Error(`Duplicate oversized-file classification for ${classification.path}`);
     }
@@ -317,7 +319,11 @@ function assertUniqueClassifications(): void {
 }
 
 export async function runCli(argv: readonly string[]): Promise<number> {
-  const { root } = parseArguments(argv);
+  const { root, showHelp } = parseArguments(argv);
+  if (showHelp) {
+    printUsage();
+    return 0;
+  }
   assertUniqueClassifications();
 
   const classifications = new Map(
