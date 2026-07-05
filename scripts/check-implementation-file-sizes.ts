@@ -61,12 +61,6 @@ export const CLASSIFIED_OVERSIZED_IMPLEMENTATION_FILES = [
       'Workflow state decoding, summaries, filters, and debug sanitization are coupled around the persisted workflow-state boundary.',
   },
   {
-    path: 'src/core/type-ergonomics.test-d.ts',
-    classification: 'justified-exception',
-    rationale:
-      'The source-entry type oracle must keep related compile-time assertions in one file so declarations are checked through one import surface.',
-  },
-  {
     path: 'scripts/snapshot-public-api.ts',
     classification: 'justified-exception',
     rationale:
@@ -277,8 +271,7 @@ function printUsage(): void {
 function isExcludedPath(relativePath: string): boolean {
   return (
     relativePath.includes('/generated/') ||
-    /\.test\.(ts|tsx|mts|cts)$/.test(relativePath) ||
-    /\.spec\.(ts|tsx|mts|cts)$/.test(relativePath)
+    /\.(?:test|spec)(?:-d)?\.(?:ts|tsx|mts|cts|svelte)$/.test(relativePath)
   );
 }
 
