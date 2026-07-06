@@ -46,7 +46,7 @@ Catches: type errors across the full codebase that the build step may not surfac
 bun run lint
 ```
 
-Catches: style violations, potential bugs, unused imports, promise handling mistakes. Uses Oxlint with type-aware rules and TypeScript/promise/unicorn/import plugins.
+Catches: style violations, potential bugs, unused imports, promise handling mistakes, lint-disable policy drift, oversized unclassified implementation files, import cycles, internal-import boundary violations, operation-catalog drift, and type-ergonomics regressions. Uses Oxlint with type-aware rules and TypeScript/promise/unicorn/import plugins, then runs the repository's check scripts.
 
 When a change adds, removes, or edits `oxlint-disable` directives, also run:
 
@@ -55,6 +55,14 @@ bun scripts/check-lint-disables.ts
 ```
 
 The checker enforces the production-source suppression ceiling and the mechanical rationale length floor that `bun run lint` and the pre-commit hook rely on. Full rationale quality still belongs in pull request review.
+
+When a change adds, splits, or newly classifies an implementation file near the 500-line ceiling, also run:
+
+```bash
+bun run scripts/check-implementation-file-sizes.ts
+```
+
+The file-size audit scans non-generated TypeScript/Svelte implementation files under `src/`, `scripts`, and `tests`; every file above 500 physical lines must either be split along an existing responsibility boundary or classified with a durable rationale in `documentation/contributing/development-setup.md`.
 
 ### Phase 4: Test
 
