@@ -366,19 +366,25 @@ describe('async activity completion acknowledgement durability', () => {
   it('surfaces same-epoch acknowledgement precondition loss under lease ownership', async () => {
     await using storage = new MemoryStorage();
     const engine = await Engine.create({ storage, ownership: 'lease' });
-    engine.register(approvalWorkflow);
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+    try {
+      engine.register(approvalWorkflow);
 
-    const tokenPromise = nextAsyncPendingToken(engine);
-    const handle = await engine.start('ack-durability-order', null);
-    const token = await tokenPromise;
+      const tokenPromise = nextAsyncPendingToken(engine);
+      const handle = await engine.start('ack-durability-order', null);
+      const token = await tokenPromise;
 
-    storage.conditionalBatch = async () => false;
+      storage.conditionalBatch = async () => false;
 
-    await expect(engine.completeAsyncActivity(token, { decision: 'approved' })).rejects.toThrow(
-      `Async activity acknowledgement for token "${token}" lost its precondition.`,
-    );
+      await expect(engine.completeAsyncActivity(token, { decision: 'approved' })).rejects.toThrow(
+        `Async activity acknowledgement for token "${token}" lost its precondition.`,
+      );
 
-    expect(await storage.get(KEYS.asyncActivity(handle.id, token))).not.toBeNull();
+      expect(await storage.get(KEYS.asyncActivity(handle.id, token))).not.toBeNull();
+    } finally {
+      storage.conditionalBatch = originalConditionalBatch;
+      await engine.shutdown();
+    }
   });
 
   it('resumes the workflow with the acked result after a crash that follows the acknowledgement', async () => {

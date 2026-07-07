@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'bun:test';
 
-import { encode } from '../../core/codec.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { nextAsyncPendingToken } from '../../testing/async-activity.test-support.ts';
 import { withTimeout } from '../../testing/fake-timers.test-support.ts';
+import { encode } from '../codec.ts';
 import { Engine } from '../engine.ts';
 import type { ActivityContext, WorkflowContext } from '../types.ts';
 import { activity, workflow } from '../types.ts';
