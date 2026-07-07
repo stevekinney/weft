@@ -18,7 +18,7 @@ Activities are side effects in external systems. If an activity completes extern
 
 The Tier-0 activity reconciliation track closes this gap for keyed and verifiable activities by adding durable activity result reconciliation. It is specified in the [Tier-0 Behavioral Contract](tier-0-behavioral-contract.md#activity-result-reconciliation), but it is not the current blanket guarantee.
 
-Out-of-band async activity completion uses the same commit boundary: a successful completion consumes the single-use token in the workflow checkpoint batch that records the result. If the payload is malformed or oversized, Weft rejects it before token consumption so the parked workflow can still be completed later.
+Out-of-band async activity completion is acknowledged durably: `completeAsyncActivity` / `failAsyncActivity` (and the REST operations built on them) resolve only after one atomic batch has consumed the single-use token and persisted the supplied outcome as a resolution record. A crash after the acknowledgement cannot lose the outcome — recovery redelivers the persisted resolution when replay re-parks on the same deterministic token, and the resolution record is retired with the checkpoint that records the resumed result. If the acknowledgement's storage write fails, the call rejects and the token remains completable, so the caller knows to retry. If the payload is malformed or oversized, Weft rejects it before token consumption so the parked workflow can still be completed later.
 
 ## Operational Boundary
 

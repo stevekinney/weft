@@ -2,7 +2,7 @@ import type { BatchOperation } from '../../../storage/interface.ts';
 import { KEYS, encodeStorageKeyComponent, storageHas } from '../../../storage/interface.ts';
 import { CleanupWarningEvent } from '../../events.ts';
 import type { WorkflowState, WorkflowStatus } from '../../types.ts';
-import { asyncActivityWorkflowPrefix } from '../async-activity-completion.ts';
+import { asyncActivityWorkflowPrefix } from '../async-activity-records.ts';
 import { forgetCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
 import type { EngineInternals } from '../internals.ts';
 import { parseTerminalCleanupTimerId, workflowFeedListenerKey } from '../state-utilities.ts';

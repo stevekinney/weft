@@ -6,7 +6,7 @@ import { withTimeout } from '../../testing/fake-timers.test-support.ts';
 import { Engine } from '../engine.ts';
 import type { ActivityContext, WorkflowContext } from '../types.ts';
 import { activity, workflow } from '../types.ts';
-import { recoverPendingAsyncActivities } from './async-activity-completion.ts';
+import { recoverPendingAsyncActivities } from './async-activity-records.ts';
 import { getInternals } from './internals.ts';
 
 const awaitCallback = activity({

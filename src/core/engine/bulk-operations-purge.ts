@@ -16,7 +16,7 @@ import type {
   WorkflowState,
 } from '../types.ts';
 import { buildWorkflowTagIndexOperations, normalizeWorkflowTags } from '../workflow-tags.ts';
-import { asyncActivityWorkflowPrefix } from './async-activity-completion.ts';
+import { asyncActivityWorkflowPrefix } from './async-activity-records.ts';
 import { forgetCommittedCheckpointBytes } from './checkpoint-commit-snapshots.ts';
 import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';

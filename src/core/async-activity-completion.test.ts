@@ -12,7 +12,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import { LocalClient } from '../client/local.ts';
-import { KEYS } from '../storage/interface.ts';
+import { KEYS, type BatchOperation, type ConditionalBatchCondition } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { nextAsyncPendingToken } from '../testing/async-activity.test-support.ts';
 import { AsyncActivityTokenNotFoundError, Engine } from './engine.ts';
@@ -29,6 +29,62 @@ const awaitCallback = activity({
 class DeleteRejectingMemoryStorage extends MemoryStorage {
   override async delete(key: string): Promise<void> {
     throw new Error(`unexpected direct delete for ${key}`);
+  }
+}
+
+/** A parked durable write captured by {@link WriteBarrierMemoryStorage}. */
+type ParkedWrite = { release: () => void; reject: (error: Error) => void };
+
+/**
+ * MemoryStorage with two crash-simulation controls:
+ *
+ * - `armBarrier(key)` parks the next `batch`/`conditionalBatch` whose operations
+ *   touch `key`, handing the test a deterministic {@link ParkedWrite} to release
+ *   or reject. This is condition-based (no sleeps): the returned promise resolves
+ *   exactly when the engine attempts the write under test.
+ * - `rejectAllWrites` simulates a hard crash boundary: every subsequent write
+ *   fails, so nothing after the flag flips can become durable.
+ */
+class WriteBarrierMemoryStorage extends MemoryStorage {
+  #barrierKey: string | null = null;
+  #onParked: ((parked: ParkedWrite) => void) | null = null;
+  rejectAllWrites = false;
+
+  armBarrier(key: string): Promise<ParkedWrite> {
+    this.#barrierKey = key;
+    return new Promise((resolve) => {
+      this.#onParked = resolve;
+    });
+  }
+
+  #gate(operations: BatchOperation[]): Promise<void> | null {
+    if (this.rejectAllWrites) {
+      return Promise.reject(new Error('simulated crash: storage unavailable'));
+    }
+    if (this.#barrierKey === null) return null;
+    const key = this.#barrierKey;
+    if (!operations.some((operation) => operation.key === key)) return null;
+    // One-shot: disarm so a retry after rejection proceeds unimpeded.
+    this.#barrierKey = null;
+    return new Promise<void>((resolve, reject) => {
+      this.#onParked?.({ release: resolve, reject });
+      this.#onParked = null;
+    });
+  }
+
+  override async batch(operations: BatchOperation[]): Promise<void> {
+    const gate = this.#gate(operations);
+    if (gate) await gate;
+    return super.batch(operations);
+  }
+
+  override async conditionalBatch(
+    conditions: ConditionalBatchCondition[],
+    operations: BatchOperation[],
+  ): Promise<boolean> {
+    const gate = this.#gate(operations);
+    if (gate) await gate;
+    return super.conditionalBatch(conditions, operations);
   }
 }
 
@@ -223,5 +279,154 @@ describe('async activity completion', () => {
     });
 
     recoveredEngine[Symbol.dispose]();
+  });
+});
+
+describe('async activity completion acknowledgement durability', () => {
+  const approvalWorkflow = workflow({ name: 'ack-durability-order' })
+    .activities({ awaitCallback })
+    .execute(async function* (ctx: WorkflowContext) {
+      const approval = yield* ctx.run(awaitCallback);
+      return { approval };
+    });
+
+  const catchingWorkflow = workflow({ name: 'ack-durability-catch' })
+    .activities({ awaitCallback })
+    .execute(async function* (ctx: WorkflowContext) {
+      try {
+        yield* ctx.run(awaitCallback);
+        return 'should-not-reach';
+      } catch (error) {
+        return `caught:${(error as Error).message}`;
+      }
+    });
+
+  it('does not acknowledge a completion before its durable write commits', async () => {
+    await using storage = new WriteBarrierMemoryStorage();
+    const engine = new Engine({ storage });
+    engine.register(approvalWorkflow);
+
+    const tokenPromise = nextAsyncPendingToken(engine);
+    const handle = await engine.start('ack-durability-order', null);
+    const token = await tokenPromise;
+
+    // Park the first write that consumes the durable token record, then complete.
+    const parkedPromise = storage.armBarrier(KEYS.asyncActivity(handle.id, token));
+    let ackSettled = false;
+    const ack = engine.completeAsyncActivity(token, { decision: 'approved' });
+    void ack
+      .then(() => {
+        ackSettled = true;
+      })
+      .catch(() => {
+        ackSettled = true;
+      });
+
+    // Deterministic rendezvous: the engine is now attempting the durable write
+    // that consumes the token. The acknowledgement must still be pending —
+    // resolving earlier would tell the caller the completion is durable when
+    // nothing has been written.
+    const parked = await parkedPromise;
+    expect(ackSettled).toBe(false);
+
+    parked.release();
+    await ack;
+
+    // Once acknowledged, the single-use consumption is durable.
+    expect(await storage.get(KEYS.asyncActivity(handle.id, token))).toBeNull();
+    await expect(handle.result()).resolves.toEqual({ approval: { decision: 'approved' } });
+
+    engine[Symbol.dispose]();
+  });
+
+  it('rejects the acknowledgement when its durable write fails and leaves the token completable', async () => {
+    await using storage = new WriteBarrierMemoryStorage();
+    const engine = new Engine({ storage });
+    engine.register(approvalWorkflow);
+
+    const tokenPromise = nextAsyncPendingToken(engine);
+    const handle = await engine.start('ack-durability-order', null);
+    const token = await tokenPromise;
+
+    const parkedPromise = storage.armBarrier(KEYS.asyncActivity(handle.id, token));
+    const ack = engine.completeAsyncActivity(token, { decision: 'first' });
+    const parked = await parkedPromise;
+    parked.reject(new Error('simulated storage failure'));
+
+    // The caller must learn the completion did NOT stick, so it can retry.
+    await expect(ack).rejects.toThrow();
+
+    // The token must remain completable: the failed acknowledgement consumed nothing.
+    await engine.completeAsyncActivity(token, { decision: 'second' });
+    await expect(handle.result()).resolves.toEqual({ approval: { decision: 'second' } });
+
+    engine[Symbol.dispose]();
+  });
+
+  it('resumes the workflow with the acked result after a crash that follows the acknowledgement', async () => {
+    const storage = new WriteBarrierMemoryStorage();
+
+    let workflowId: string;
+    let token: string;
+    {
+      const engine = new Engine({ storage });
+      engine.register(approvalWorkflow);
+      const tokenPromise = nextAsyncPendingToken(engine);
+      const handle = await engine.start('ack-durability-order', null);
+      workflowId = handle.id;
+      token = await tokenPromise;
+
+      await engine.completeAsyncActivity(token, { decision: 'approved' });
+
+      // Crash boundary: nothing after the acknowledgement becomes durable.
+      storage.rejectAllWrites = true;
+      engine[Symbol.dispose]();
+    }
+
+    storage.rejectAllWrites = false;
+    const recovered = new Engine({ storage });
+    recovered.register(approvalWorkflow);
+    await recovered.recoverAll();
+
+    // The acknowledged completion must have consumed the token durably — recovery
+    // must not re-park the workflow waiting on a delivery that already happened.
+    expect(await storage.get(KEYS.asyncActivity(workflowId, token))).toBeNull();
+    const handle = recovered.getHandle(workflowId);
+    await expect(handle.result()).resolves.toEqual({ approval: { decision: 'approved' } });
+
+    recovered[Symbol.dispose]();
+    storage[Symbol.dispose]();
+  });
+
+  it('resumes the workflow with the acked failure after a crash that follows the acknowledgement', async () => {
+    const storage = new WriteBarrierMemoryStorage();
+
+    let workflowId: string;
+    let token: string;
+    {
+      const engine = new Engine({ storage });
+      engine.register(catchingWorkflow);
+      const tokenPromise = nextAsyncPendingToken(engine);
+      const handle = await engine.start('ack-durability-catch', null);
+      workflowId = handle.id;
+      token = await tokenPromise;
+
+      await engine.failAsyncActivity(token, new Error('callback rejected'));
+
+      storage.rejectAllWrites = true;
+      engine[Symbol.dispose]();
+    }
+
+    storage.rejectAllWrites = false;
+    const recovered = new Engine({ storage });
+    recovered.register(catchingWorkflow);
+    await recovered.recoverAll();
+
+    expect(await storage.get(KEYS.asyncActivity(workflowId, token))).toBeNull();
+    const handle = recovered.getHandle(workflowId);
+    await expect(handle.result()).resolves.toBe('caught:callback rejected');
+
+    recovered[Symbol.dispose]();
+    storage[Symbol.dispose]();
   });
 });

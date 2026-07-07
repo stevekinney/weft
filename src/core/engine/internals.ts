@@ -206,10 +206,7 @@ export interface EngineInternals {
    * by their durable task token. Mirrored to storage (`KEYS.asyncActivity`) and
    * reloaded by `recoverAll()`. See `async-activity-completion.ts`.
    */
-  pendingAsyncActivities: Map<
-    string,
-    import('./async-activity-completion.ts').PendingAsyncActivity
-  >;
+  pendingAsyncActivities: Map<string, import('./async-activity-records.ts').PendingAsyncActivity>;
   /**
    * Completed or failed async-activity tokens that were consumed before inline
    * recovery adopted the workflow generator. Replay drains these by workflow id
@@ -217,7 +214,7 @@ export interface EngineInternals {
    */
   pendingAsyncActivityResolutions: Map<
     string,
-    import('./async-activity-completion.ts').PendingAsyncActivityResolution[]
+    import('./async-activity-records.ts').PendingAsyncActivityResolution[]
   >;
   pendingStarts: Set<string>;
   pendingScheduleCreations: Set<string>;

@@ -2,7 +2,7 @@ import { describe, expect, it, mock } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
-import { registerPendingAsyncActivity } from './async-activity-completion.ts';
+import { registerPendingAsyncActivity } from './async-activity-records.ts';
 import { encodeEpoch } from './lease-codec.ts';
 
 describe('async activity registration', () => {

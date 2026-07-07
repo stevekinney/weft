@@ -130,7 +130,10 @@ export const completeAsyncActivityOperation = defineOperation<
     'workflow as though the activity had returned that result inline. Requires the ' +
     'durable task token announced through the `activity:async-pending` event. Faults ' +
     'with NotFound when the token is unknown or already completed/failed (tokens are ' +
-    'single-use), and InvalidParams when the result exceeds the payload size limit.',
+    'single-use), and InvalidParams when the result exceeds the payload size limit. ' +
+    'A success response is durable — the completion is persisted before the operation ' +
+    'returns, and a crash afterward cannot lose it. A failed call leaves the token ' +
+    'completable, so treat storage-side faults as retryable.',
   destructive: true,
   tags: ['Activities'],
   inputSchema: completeAsyncActivityInput,
@@ -166,7 +169,10 @@ export const failAsyncActivityOperation = defineOperation<
     'so the workflow’s own try/catch and retry policy apply unchanged. Requires the ' +
     'durable task token from the `activity:async-pending` event. Faults with NotFound ' +
     'when the token is unknown or already completed/failed (tokens are single-use), and ' +
-    'InvalidParams when the failure message exceeds the payload size limit.',
+    'InvalidParams when the failure message exceeds the payload size limit. ' +
+    'A success response is durable — the failure outcome is persisted before the ' +
+    'operation returns, and a crash afterward cannot lose it. A failed call leaves the ' +
+    'token completable, so treat storage-side faults as retryable.',
   destructive: true,
   tags: ['Activities'],
   inputSchema: failAsyncActivityInput,

@@ -89,8 +89,8 @@ import {
 import {
   completeAsyncActivity as completeAsyncActivityFromInternals,
   failAsyncActivity as failAsyncActivityFromInternals,
-  recoverPendingAsyncActivities,
 } from './async-activity-completion.ts';
+import { recoverPendingAsyncActivities } from './async-activity-records.ts';
 import { broadcast as broadcastFromInternals, type BroadcastCallbacks } from './broadcast.ts';
 import {
   cancelAll as cancelAllWorkflows,
@@ -269,7 +269,7 @@ export {
   ActivityReconciliationIndeterminateError,
 } from './activity-reconciliation.ts';
 export { AsyncActivityTokenNotFoundError } from './async-activity-completion.ts';
-export type { PendingAsyncActivity } from './async-activity-completion.ts';
+export type { PendingAsyncActivity } from './async-activity-records.ts';
 export type {
   PendingTimelineEntry,
   RegistrationEntry,

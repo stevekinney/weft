@@ -549,6 +549,10 @@ export const KEYS = {
     `op:resolved-by-time:${formatSortableTimestamp(resolvedAt)}:${encodeStorageKeyComponent(id)}`,
   asyncActivity: (workflowId: string, token: string) =>
     `async-act:v1:${encodeStorageKeyComponent(workflowId)}:${encodeStorageKeyComponent(token)}`,
+  // The raw `:resolution` suffix cannot collide with a token key: token
+  // components are percent-encoded, so an encoded token never contains `:`.
+  asyncActivityResolution: (workflowId: string, token: string) =>
+    `async-act:v1:${encodeStorageKeyComponent(workflowId)}:${encodeStorageKeyComponent(token)}:resolution`,
   activityReconciliationPrefix: (workflowId: string) =>
     `actrec:v1:${encodeStorageKeyComponent(workflowId)}:`,
   activityReconciliation: (

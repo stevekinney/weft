@@ -26,19 +26,47 @@
  * arrives after token recovery but before replay has adopted the workflow
  * generator, the engine buffers the completion or failure outcome and drains it
  * when replay reaches the same deterministic token.
+ *
+ * Acknowledgement durability: `completeAsyncActivity` / `failAsyncActivity`
+ * resolve only after ONE fenced batch has durably (a) deleted the single-use
+ * token record and (b) written a resolution record
+ * ({@link KEYS.asyncActivityResolution}) carrying the supplied outcome. A crash
+ * any time after the acknowledgement therefore cannot lose the outcome:
+ * recovery reloads the resolution record, queues it, and redelivers it when
+ * replay re-parks on the same deterministic token. The resolution record is
+ * deleted through the atomic side-effect buffer, so in the normal case it rides
+ * the very checkpoint that records the resumed result; a record whose delete
+ * never commits is simply redelivered (idempotent for a deterministic token) or
+ * swept by terminal cleanup/purge. If the acknowledgement batch itself fails,
+ * the in-memory token claim is restored and the error propagates — the caller
+ * learns the completion did NOT stick and can retry the still-live token.
+ *
+ * One caveat survives a crash: the failure path's raw thrown reason
+ * (`originalReason`) is delivered as-is only within the acknowledging process.
+ * A redelivery after recovery reconstructs the error from the persisted outcome
+ * (message, name, failure category) — the same fidelity the worker resume path
+ * has always had.
+ *
+ * The persisted record shapes, decode guards, key derivations, and the queued
+ * resolution buffer live in `async-activity-records.ts`.
  */
 
-import { KEYS, encodeStorageKeyComponent, type BatchOperation } from '../../storage/interface.ts';
-import { decode, encode } from '../codec.ts';
-import { ActivityAsyncPendingEvent } from '../events.ts';
+import { KEYS } from '../../storage/interface.ts';
 import { assertPayloadWithinLimit } from '../payload-size.ts';
 import type { OperationOutcome } from '../types.ts';
 import { WeftError } from '../weft-error.ts';
+import {
+  buildAsyncActivityAcknowledgementOperations,
+  queuePendingAsyncActivityResolution,
+  registerPendingAsyncActivity,
+  shouldBufferPendingAsyncActivityResolution,
+  takePendingAsyncActivityResolution,
+  type PendingAsyncActivity,
+  type PendingAsyncActivityResolution,
+} from './async-activity-records.ts';
 import { stageAtomicWorkflowCommitSideEffects } from './checkpoint-side-effects.ts';
 import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
-
-const ASYNC_ACTIVITY_TOKEN_PREFIX = 'async-act:v1';
 
 type AsyncActivityResolutionCallbacks = {
   feedOperationResult: (
@@ -48,23 +76,6 @@ type AsyncActivityResolutionCallbacks = {
   ) => void;
   finalizeTimeline: (workflowId: string, status: 'completed' | 'failed', output: unknown) => void;
 };
-
-/**
- * Storage-key prefix for durable pending-async-activity records. Matches the
- * base of {@link KEYS.asyncActivity}; the full key appends
- * `<workflowId>:<token>`. The trailing colon (absent from the token prefix)
- * scopes the global recovery scan to record keys only.
- */
-const ASYNC_ACTIVITY_KEY_PREFIX = 'async-act:v1:';
-
-/**
- * Per-workflow prefix for all async-activity storage keys. Used by cleanup and
- * purge paths that need to sweep every async-activity record for a workflow
- * without enumerating individual tokens.
- */
-export function asyncActivityWorkflowPrefix(workflowId: string): string {
-  return `${ASYNC_ACTIVITY_KEY_PREFIX}${encodeStorageKeyComponent(workflowId)}:`;
-}
 
 /**
  * Sentinel thrown by `ActivityContext.completeAsync()` to signal that the
@@ -117,125 +128,6 @@ export class AsyncActivityTokenNotFoundError extends WeftError<'AsyncActivityTok
 }
 
 /**
- * In-memory record of an activity that deferred to out-of-band completion and
- * is awaiting `completeAsyncActivity` / `failAsyncActivity`.
- */
-export type PendingAsyncActivity = {
-  readonly token: string;
-  readonly workflowId: string;
-  readonly activityName: string;
-  readonly operationId: string;
-  readonly step: number;
-  readonly attempt: number;
-  readonly createdAt: number;
-};
-
-export type PendingAsyncActivityResolution = {
-  readonly token: string;
-  readonly outcome: OperationOutcome;
-  readonly originalReason?: { value: unknown };
-  readonly timelineStatus: 'completed' | 'failed';
-  readonly timelineOutput: unknown;
-};
-
-/** Durable shape persisted under {@link KEYS.asyncActivity}. */
-type PersistedAsyncActivity = {
-  readonly version: 1;
-  readonly token: string;
-  readonly workflowId: string;
-  readonly activityName: string;
-  readonly operationId: string;
-  readonly step: number;
-  readonly attempt: number;
-  readonly createdAt: number;
-};
-
-function isPersistedAsyncActivity(value: unknown): value is PersistedAsyncActivity {
-  if (typeof value !== 'object' || value === null) return false;
-  const record = value as Record<string, unknown>;
-  return (
-    record['version'] === 1 &&
-    typeof record['token'] === 'string' &&
-    typeof record['workflowId'] === 'string' &&
-    typeof record['activityName'] === 'string' &&
-    typeof record['operationId'] === 'string' &&
-    typeof record['step'] === 'number' &&
-    typeof record['attempt'] === 'number' &&
-    typeof record['createdAt'] === 'number'
-  );
-}
-
-/**
- * Derive the durable, deterministic task token for an async activity.
- *
- * The token is anchored to the workflow id, the activity state key, and the
- * dispatch attempt — all of which are stable across replay — so a workflow that
- * crashes while parked on an async activity mints the identical token after
- * recovery. Plain `ctx.run()` uses the workflow step as the state key.
- * `operationId` is deliberately excluded because it is regenerated on every
- * yield and would change on replay.
- */
-export function deriveAsyncActivityToken(
-  workflowId: string,
-  step: number | string,
-  attempt: number,
-): string {
-  return `${ASYNC_ACTIVITY_TOKEN_PREFIX}:${workflowId}:${step}:${attempt}`;
-}
-
-function buildPersistPendingAsyncActivityOperation(pending: PendingAsyncActivity): BatchOperation {
-  const record: PersistedAsyncActivity = {
-    version: 1,
-    token: pending.token,
-    workflowId: pending.workflowId,
-    activityName: pending.activityName,
-    operationId: pending.operationId,
-    step: pending.step,
-    attempt: pending.attempt,
-    createdAt: pending.createdAt,
-  };
-  return {
-    type: 'put',
-    key: KEYS.asyncActivity(pending.workflowId, pending.token),
-    value: encode(record),
-  };
-}
-
-/**
- * Register a deferred activity: record it in memory and durably, then announce
- * the token via {@link ActivityAsyncPendingEvent}. Idempotent on `token`: if the
- * token is already registered (e.g. because `recoverPendingAsyncActivities` loaded
- * it before the workflow replayed and re-deferred), the durable record is
- * refreshed but the event is NOT re-emitted, preventing duplicate side-effects
- * (e.g. re-sending a webhook notification) on replay.
- */
-export async function registerPendingAsyncActivity(
-  internals: EngineInternals,
-  pending: PendingAsyncActivity,
-): Promise<void> {
-  const alreadyRegistered = internals.pendingAsyncActivities.has(pending.token);
-  internals.pendingAsyncActivities.set(pending.token, pending);
-  await commitFencedEngineWrite(
-    internals,
-    [buildPersistPendingAsyncActivityOperation(pending)],
-    [],
-    () =>
-      new Error(`Async activity registration for token "${pending.token}" lost its precondition.`),
-  );
-  if (!alreadyRegistered) {
-    internals.engine.dispatchEvent(
-      new ActivityAsyncPendingEvent(
-        pending.token,
-        pending.operationId,
-        pending.workflowId,
-        pending.activityName,
-        pending.attempt,
-      ),
-    );
-  }
-}
-
-/**
  * Park an activity that threw {@link AsyncActivityDeferral}: register the
  * pending entry durably and return a promise that never settles, so the
  * surrounding `runOperationWithResult` leaves the workflow suspended until an
@@ -254,7 +146,12 @@ export async function parkDeferredAsyncActivity(
     deferral.token,
   );
   if (queuedResolution !== undefined) {
-    deliverPendingAsyncActivityResolution(details.workflowId, queuedResolution, callbacks);
+    deliverPendingAsyncActivityResolution(
+      internals,
+      details.workflowId,
+      queuedResolution,
+      callbacks,
+    );
     return new Promise<never>(() => {});
   }
 
@@ -267,41 +164,19 @@ export async function parkDeferredAsyncActivity(
 }
 
 /**
- * Reload pending async-activity records from storage into memory. Called by
- * `recoverAll()` so a token minted before a crash is resolvable again — even
- * before the recovered workflow has replayed far enough to re-register it.
- */
-export async function recoverPendingAsyncActivities(internals: EngineInternals): Promise<void> {
-  // Global scan prefix shared with `KEYS.asyncActivity`; the per-token suffix
-  // (`<workflowId>:<token>`) follows this base.
-  for await (const [, bytes] of internals.storage.scan(ASYNC_ACTIVITY_KEY_PREFIX)) {
-    const decoded = decode(bytes);
-    if (!isPersistedAsyncActivity(decoded)) continue;
-    internals.pendingAsyncActivities.set(decoded.token, {
-      token: decoded.token,
-      workflowId: decoded.workflowId,
-      activityName: decoded.activityName,
-      operationId: decoded.operationId,
-      step: decoded.step,
-      attempt: decoded.attempt,
-      createdAt: decoded.createdAt,
-    });
-  }
-}
-
-/**
- * Consume a pending async-activity token: remove the in-memory entry and delete
- * the durable record. Returns the consumed record, or throws
- * {@link AsyncActivityTokenNotFoundError} when the token is unknown or already
- * consumed (tokens are single-use).
+ * Consume a pending async-activity token: claim the in-memory entry, then
+ * durably commit the acknowledgement — one fenced batch that deletes the token
+ * record and writes the resolution record carrying `outcome`. Returns the
+ * consumed record, or throws {@link AsyncActivityTokenNotFoundError} when the
+ * token is unknown or already consumed (tokens are single-use).
  *
- * Recovery may consume a token before workflow replay has adopted the inline
- * generator. The consumed result is buffered by workflow id and delivered when
- * replay reaches the same deterministic async-activity token again.
+ * If the acknowledgement batch fails, the in-memory claim is restored before
+ * the error propagates, so the caller can retry the same still-live token.
  */
 async function consumePendingAsyncActivity(
   internals: EngineInternals,
   token: string,
+  outcome: OperationOutcome,
 ): Promise<PendingAsyncActivity> {
   const pending = internals.pendingAsyncActivities.get(token);
   if (!pending) {
@@ -314,55 +189,39 @@ async function consumePendingAsyncActivity(
   // The synchronous delete makes the second caller's `get` miss and throw
   // `AsyncActivityTokenNotFoundError`.
   internals.pendingAsyncActivities.delete(token);
-  stageAtomicWorkflowCommitSideEffects(internals, pending.workflowId, {
-    conditions: [],
-    operations: [{ type: 'delete', key: KEYS.asyncActivity(pending.workflowId, token) }],
-  });
+  try {
+    await commitFencedEngineWrite(
+      internals,
+      buildAsyncActivityAcknowledgementOperations(pending, outcome),
+      [],
+      () => new Error(`Async activity acknowledgement for token "${token}" lost its precondition.`),
+    );
+  } catch (error) {
+    // The acknowledgement never became durable. Restore the in-memory claim so
+    // a retry of this single-use token can succeed, then surface the failure.
+    internals.pendingAsyncActivities.set(token, pending);
+    throw error;
+  }
   return pending;
 }
 
-function shouldBufferPendingAsyncActivityResolution(
-  internals: EngineInternals,
-  workflowId: string,
-): boolean {
-  return internals.inlineStrategy !== null && !internals.inlineStrategy.hasGenerator(workflowId);
-}
-
-function queuePendingAsyncActivityResolution(
-  internals: EngineInternals,
-  workflowId: string,
-  resolution: PendingAsyncActivityResolution,
-): void {
-  internals.pendingAsyncActivityResolutions ??= new Map();
-  const queued = internals.pendingAsyncActivityResolutions.get(workflowId) ?? [];
-  queued.push(resolution);
-  internals.pendingAsyncActivityResolutions.set(workflowId, queued);
-}
-
-function takePendingAsyncActivityResolution(
-  internals: EngineInternals,
-  workflowId: string,
-  token: string,
-): PendingAsyncActivityResolution | undefined {
-  internals.pendingAsyncActivityResolutions ??= new Map();
-  const queued = internals.pendingAsyncActivityResolutions.get(workflowId);
-  if (queued === undefined) return undefined;
-  const index = queued.findIndex((resolution) => resolution.token === token);
-  if (index === -1) return undefined;
-  const resolution = queued[index];
-  if (resolution === undefined) return undefined;
-  queued.splice(index, 1);
-  if (queued.length === 0) {
-    internals.pendingAsyncActivityResolutions.delete(workflowId);
-  }
-  return resolution;
-}
-
 function deliverPendingAsyncActivityResolution(
+  internals: EngineInternals,
   workflowId: string,
   resolution: PendingAsyncActivityResolution,
   callbacks: AsyncActivityResolutionCallbacks,
 ): void {
+  // Retire the durable resolution record with the checkpoint that records the
+  // delivered result. Staging (rather than deleting standalone) keeps the
+  // outcome recoverable until the workflow has durably adopted it; a record
+  // whose delete never commits is redelivered on recovery, which is idempotent
+  // for a deterministic token.
+  stageAtomicWorkflowCommitSideEffects(internals, workflowId, {
+    conditions: [],
+    operations: [
+      { type: 'delete', key: KEYS.asyncActivityResolution(workflowId, resolution.token) },
+    ],
+  });
   callbacks.finalizeTimeline(workflowId, resolution.timelineStatus, resolution.timelineOutput);
   callbacks.feedOperationResult(workflowId, resolution.outcome, resolution.originalReason);
 }
@@ -384,7 +243,7 @@ async function resolvePendingAsyncActivity(
   callbacks: AsyncActivityResolutionCallbacks,
   originalReason?: { value: unknown },
 ): Promise<void> {
-  const pending = await consumePendingAsyncActivity(internals, token);
+  const pending = await consumePendingAsyncActivity(internals, token, outcome);
   const timelineOutput = outcome.status === 'completed' ? outcome.value : outcome.error;
   const resolution: PendingAsyncActivityResolution = {
     token,
@@ -397,7 +256,7 @@ async function resolvePendingAsyncActivity(
     queuePendingAsyncActivityResolution(internals, pending.workflowId, resolution);
     return;
   }
-  deliverPendingAsyncActivityResolution(pending.workflowId, resolution, callbacks);
+  deliverPendingAsyncActivityResolution(internals, pending.workflowId, resolution, callbacks);
 }
 
 /**

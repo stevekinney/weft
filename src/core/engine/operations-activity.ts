@@ -23,10 +23,10 @@ import {
 import { getActivityFunctionWithMetadata, resolveActivityFunction } from './activity-resolution.ts';
 import {
   AsyncActivityDeferral,
-  deriveAsyncActivityToken,
   driveWorkflowInterceptorGenerator,
   parkDeferredAsyncActivity,
 } from './async-activity-completion.ts';
+import { deriveAsyncActivityToken } from './async-activity-records.ts';
 import type { EngineInternals } from './internals.ts';
 import type { SpeculativeExecutionState } from './speculative-execution-state.ts';
 import { callActivityFunction } from './state-utilities.ts';
