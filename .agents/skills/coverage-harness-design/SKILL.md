@@ -26,6 +26,7 @@ description: >-
 - Restoring retry/checkpoint coverage around `run-operation` by proving corrupt persisted retry attempts or sleep counts fail, missing retry policies on replay fail, non-`Error` failures still honor `nonRetryableErrors`, and retry-to-sleep-to-success paths checkpoint correctly.
 - Restoring schedule, task-polling, worker replay, or interceptor coverage by driving schedule spec/options validation, malformed schedule-record decoding, invalid create-schedule `jitter`, post-`taskResult` persistence-failure logging, worker `getVersion()` replay, or omitted interceptor context.
 - Restoring coverage for parallel-operation caches, activity reconciliation, callback checkpoint persistence, or coverage allowance refresh entries.
+- Restoring async activity completion coverage around acknowledgement CAS loss, durable token preservation, malformed persisted resolution outcomes, or recovery-buffer admission.
 - Restoring runtime coverage around worker socket lifecycle and result-resolution diagnostics, including stale same-`workerId` socket closes and post-`taskResult` storage failures.
 - Covering inline parking regressions where a workflow waiting on `waitForSignal()` replays, resumes, or serves `ctx.onQuery()` from a retained context.
 - Covering `ctx.race()` / `ctx.all()` sleep, wait-signal, and activity branches, including nested deferred-consume envelopes, losing `ctx.run()` activity aborts, `ctx.speculate` finalization, duplicate signal-name rejection, and long sleep disposal.
@@ -74,6 +75,7 @@ description: >-
 30. For coverage ignore-pattern integration, read `coveragePathIgnorePatterns` from `bunfig.toml` as the source of truth and reject allowances for files the coverage runner never instruments.
 31. For `resolveDefaultStorage()` coverage, inject runtime globals instead of mutating `globalThis`, and assert the selected adapter receives the same WebExtension namespace or IndexedDB globals used during detection.
 32. For schedule and worker seam coverage, add focused assertions for public validation and replay behavior first: malformed schedule records should decode safely, invalid `jitter` should surface as a create-schedule input error, worker `getVersion()` replay should cover missing and cached replay state, interceptor context should stay omitted when no signal or tokens exist, and task-result persistence failures should emit the operator-facing leak diagnostic.
+33. For async activity completion coverage, assert the durable token record survives acknowledgement precondition loss under `ownership: 'lease'`, and assert malformed persisted resolution outcomes are dropped during recovery instead of being buffered for workflow adoption.
 
 ## Verification
 
@@ -83,6 +85,7 @@ description: >-
 - For retry-state coverage, run `bun test src/core/context/run-operation.test.ts` before the coverage gate.
 - For schedule and worker seam coverage, run `bun test src/core/schedule.test.ts src/server/operations/create-schedule.test.ts src/server/runtime/task-polling.characterization.test.ts src/worker/execute-with-interceptors.test.ts src/workers/workflow-runner-log.test.ts` before the coverage gate.
 - For parallel-cache, reconciliation, and callback checkpoint persistence coverage, run `bun test src/core/context.test.ts src/core/engine/activity-reconciliation.test.ts src/core/engine/callback-checkpoint-persistence.test.ts src/core/engine/checkpoint-io.test.ts` before the coverage gate.
+- For async activity completion coverage, run `bun test src/core/async-activity-completion.test.ts src/core/engine/async-activity-completion-recovery.test.ts` before the coverage gate.
 - For inline parking coverage, run `bun test src/core/engine/inline-parking.test.ts src/core/engine.test.ts src/core/engine/suspend-resume.test.ts` before the coverage gate.
 - For race/all branch coverage, run `bun test src/core/engine/race-branches.test.ts src/core/engine/operations-coordination.test.ts src/core/crash-recovery.test.ts` before the coverage gate.
 - For durable operation helper coverage, run `bun test src/core/context/durable-operations.test.ts` before the coverage gate.

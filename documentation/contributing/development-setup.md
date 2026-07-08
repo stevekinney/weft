@@ -79,6 +79,8 @@ When restoring coverage around schedules or worker replay, drive the public vali
 
 When restoring coverage around retry, checkpoint, or reconciliation paths, drive the durable behavior before changing `scripts/check-coverage.ts`. Recent focused tests cover corrupt retry-state locals, `ctx.runAll()` cached replay reconstruction, malformed activity reconciliation records, fenced-write conflicts, callback checkpoint persistence through a live engine, and `history.maxEvents` circuit-breaker termination. Remove duplicate or stale allowance refresh entries after fresh LCOV proves the remaining miss is instrumentation drift rather than reachable behavior.
 
+When restoring coverage around async activity completion, prove the acknowledgement durability contract directly before moving allowances. Recent focused tests cover same-epoch acknowledgement precondition loss under `ownership: 'lease'` by asserting the token record remains retryable, and recovery from malformed persisted resolution outcomes by asserting nothing is queued into pending async activity resolutions.
+
 ### Testing conventions
 
 Test files live next to the source they test, using the `.test.ts` suffix. A separate `tsconfig.test.json` provides relaxed TypeScript settings for test code. Oxlint rules are also relaxed for test files (`*.test.ts`, `*.spec.ts`, `test/**`, `__tests__/**`)—you can freely use `any`, non-null assertions, unused variables, and other patterns that would normally be flagged in production code.
