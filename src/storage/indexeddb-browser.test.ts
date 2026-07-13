@@ -3,7 +3,7 @@
  *
  * Validates IndexedDBStorage against a real Chromium engine (not fake-indexeddb).
  * The existing indexeddb.test.ts suite exercises the adapter against the
- * fake-indexeddb shim. This file validates the real-browser behaviors that matter
+ * fake-indexeddb polyfill. This file validates the real-browser behaviors that matter
  * for a durability adapter:
  *
  *  1. capabilities() matches the declared contract in a real browser.
@@ -52,7 +52,7 @@ const shouldRun = Bun.env['WEFT_BROWSER_SMOKE'] === '1';
  * Build the IndexedDB adapter as a browser-compatible IIFE and return its
  * source so it can be served as a static asset over HTTP.
  *
- * Bun.build() cannot use data: URL entrypoints, so we write a tiny shim file
+ * Bun.build() cannot use data: URL entrypoints, so we write a temporary build entry
  * into a temp directory, build from there, then clean up.
  */
 async function buildAdapterScript(): Promise<string> {
@@ -60,7 +60,7 @@ async function buildAdapterScript(): Promise<string> {
   const temporaryDirectory = mkdtempSync(join(tmpdir(), 'weft-idb-build-'));
   const entryPath = join(temporaryDirectory, 'entry.ts');
 
-  // Shim that imports IndexedDBStorage and exposes it on globalThis so
+  // Build entry that imports IndexedDBStorage and exposes it on globalThis so
   // in-page evaluate calls can access it as window.IndexedDBStorage.
   await Bun.write(
     entryPath,

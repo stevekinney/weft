@@ -1,7 +1,7 @@
 /**
  * Library half of `scripts/rebuild-workflow-visibility-indexes.ts`. Lives
  * here so it can be exercised by unit tests against `MemoryStorage`
- * without spawning the CLI shim.
+ * without spawning the CLI executable entrypoint.
  *
  * @module scripts/lib/workflow-visibility-backfill
  */

@@ -16,7 +16,7 @@ describe('generated .d.ts typecheck fixture', () => {
     // `bun` directly, rather than `bunx tsc`. `bunx` adds ~1.7s of package
     // resolution per call and offers nothing here; resolving the package entry
     // works in this worktree's layout (no local node_modules — deps resolve from
-    // the project root) without relying on a PATH shim.
+    // the project root) without relying on a PATH-provided executable.
     const tscPath = Bun.resolveSync('typescript/bin/tsc', TYPECHECK_FIXTURE_DIR);
     const proc = Bun.spawn(['bun', tscPath, '-p', TYPECHECK_FIXTURE_DIR, '--noEmit'], {
       stdout: 'pipe',

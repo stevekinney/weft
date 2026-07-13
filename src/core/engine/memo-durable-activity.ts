@@ -336,7 +336,7 @@ class MemoDurableActivityScope implements DurableActivityScope {
 
       void operation
         .then((value) => {
-          settle(() => {
+          return settle(() => {
             if (this.#closed || signal.aborted) {
               reject(this.#abortError());
               return;
