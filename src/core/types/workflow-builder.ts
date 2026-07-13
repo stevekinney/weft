@@ -83,8 +83,8 @@ export type WorkflowGenerator<
  * Bare-`WorkflowContext` callers (no declared activity/signal/etc. maps)
  * typecheck because the interface's generics all default to permissive shapes:
  * the typed overloads de-prioritise to `never` and the dynamic string-name /
- * callable overloads match instead. This permissive path is current API — it is
- * how untyped, ad-hoc-name authoring is supported, not a compatibility shim.
+ * callable overloads match instead. This permissive path is the current API for
+ * untyped, ad-hoc-name authoring.
  */
 export type WorkflowContextOf<
   TActivities extends ActivityMap = ActivityMap,

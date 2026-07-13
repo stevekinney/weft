@@ -1,4 +1,3 @@
-import { AlertManager } from '../../alerting/alert-manager.ts';
 import { CompressedStorage } from '../../storage/compressed-storage.ts';
 import type { Storage as WeftStorage } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
@@ -13,7 +12,6 @@ import {
   DEFAULT_RETENTION_SWEEP_INTERVAL_MS,
   type AnyActivityDefinition,
   type AnyWorkflowDefinition,
-  type EngineOptions,
   type RegisteredWorkflowDefinition,
 } from '../types.ts';
 import type { WorkflowLogRecord } from '../types/workflow-log.ts';
@@ -29,7 +27,7 @@ import type {
   RegistrationEntry,
   ResolvedOptions,
 } from './engine-internal-types.ts';
-import { resolveOwnershipFields } from './ownership-options.ts';
+import { resolveBackgroundTaskMode, resolveOwnershipFields } from './ownership-options.ts';
 import {
   normalizeHistoryPolicy,
   normalizePayloadSizePolicy,
@@ -294,6 +292,7 @@ export function resolveEngineOptions(
     getNow,
     resolveWorkflowServices: options?.resolveWorkflowServices ?? null,
     onLog: options?.onLog ?? null,
+    backgroundTaskMode: resolveBackgroundTaskMode(options),
     ...resolveBooleanDefaults(options),
     ...resolveNumericDefaults(options),
     ...resolveRetentionFields(options),
@@ -484,17 +483,4 @@ export function createActivityWorkerDispatcher(
       smol: activityExecution.smol ?? false,
     }),
   );
-}
-
-export function createAlertManagerForEngine(
-  // Typed as the structural parent `EventTarget` rather than `Engine<...>` to
-  // keep this module free of an Engine import (see `typedEngineView` for the
-  // cycle rationale). `AlertManager` only relies on the EventTarget surface;
-  // no workflow/activity generic information is lost at call sites because
-  // they retain their `Engine` typing.
-  engine: EventTarget,
-  alerts: EngineOptions['alerts'] | undefined,
-  getNow: () => number,
-): AlertManager | null {
-  return alerts ? new AlertManager(engine, alerts, getNow) : null;
 }

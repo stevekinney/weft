@@ -51,7 +51,7 @@ describe('validateWorkflowOrActivityName', () => {
     );
   });
 
-  it('includes migration guidance pointing at the rename pattern', () => {
+  it('includes rename guidance pointing at the current name pattern', () => {
     expect(() => validateWorkflowOrActivityName('payments.charge', 'workflow')).toThrow(
       /payments-charge|paymentsCharge/,
     );

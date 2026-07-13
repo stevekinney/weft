@@ -1,4 +1,5 @@
 /* oxlint-disable max-lines -- Engine's public overload signatures (~191 lines: register/start/signal/update/query, the five bulk dry-run-vs-commit methods, schedule, and static create) plus member JSDoc (~130 lines) ARE the published declaration surface, gated byte-for-byte by verify:jsdoc:declarations and the scoped Engine class-block .d.ts oracle; the irreducible declaration floor alone (>=531 lines, counted with skipBlankLines:false skipComments:false) exceeds the 500 ceiling before any method body is counted. The aggressive class split was attempted (task 3765ffa6, documentation/engine-split-log/PR-33.md): a class-expression mixin regresses the emitted .d.ts (Engine extends a synthetic any-typed Engine_base intersection; schedule methods leave the Engine block), and a verbatim class move only relocates this suppression because max-lines is repo-wide; rejected. All extractable bodies live in ~90 sibling modules under src/core/engine/. */
+import { AlertManager } from '../../alerting/alert-manager.ts';
 import {
   KEYS,
   requireStorageCapability,
@@ -121,7 +122,6 @@ import {
 import {
   copyWorkflowDefinition,
   createActivityWorkerDispatcher,
-  createAlertManagerForEngine,
   createExecutionStrategyBundle,
   definitionEntries,
   resolveEngineInterceptors,
@@ -153,6 +153,8 @@ import {
   createSecondInstanceDetectorResolver,
   drainQueuedInlineWorkflowStartsForEngine,
   isActivityDefinition,
+  shouldStartEngineScheduler,
+  validateEngineCreateBackgroundTaskOptions,
 } from './engine-runtime-helpers.ts';
 import type { EngineStateNamespace } from './engine-state-namespace.ts';
 import { EngineCreateNameMismatchError, EngineDisposedError } from './errors.ts';
@@ -472,6 +474,7 @@ export class Engine<
     >
   >;
   static async create(options: EngineCreateRuntimeOptions): Promise<unknown> {
+    validateEngineCreateBackgroundTaskOptions(options);
     const engine = new Engine<object, object>(options);
 
     try {
@@ -511,7 +514,10 @@ export class Engine<
       // `recover: false` host that owns its own recovery can arm the poller with
       // `startScheduler: true`, and tests / `ScopedStorage` engines that tick the
       // scheduler deterministically can keep it stopped with `startScheduler: false`.
-      const shouldStartScheduler = options.startScheduler ?? options.recover !== false;
+      const shouldStartScheduler = shouldStartEngineScheduler(
+        options,
+        getInternals(engine).options.backgroundTaskMode,
+      );
       if (shouldStartScheduler) {
         getInternals(engine).scheduler.start();
       }
@@ -655,10 +661,10 @@ export class Engine<
       secondInstanceDetectionInterval: null,
       testToken: consumeNextEngineLeakWarningTokenForTesting(),
     };
-    const cleanupInterval = setInterval(
-      createCleanupIntervalTick(weakEngine, cleanupIntervalDisposalTracker),
-      60_000,
-    );
+    const cleanupInterval =
+      resolvedOptions.backgroundTaskMode === 'automatic'
+        ? setInterval(createCleanupIntervalTick(weakEngine, cleanupIntervalDisposalTracker), 60_000)
+        : null;
     cleanupIntervalDisposalTracker.cleanupInterval = cleanupInterval;
     getInternals(this).cleanupInterval = cleanupInterval;
     getInternals(this).cleanupIntervalDisposalTracker = cleanupIntervalDisposalTracker;
@@ -687,7 +693,14 @@ export class Engine<
       options?.activityExecution,
     );
     getInternals(this).strategy.onMessage(this.#handleStrategyMessage.bind(this));
-    getInternals(this).alertManager = createAlertManagerForEngine(this, options?.alerts, getNow);
+    getInternals(this).alertManager = options?.alerts
+      ? new AlertManager(
+          this,
+          options.alerts,
+          getNow,
+          resolvedOptions.backgroundTaskMode === 'automatic',
+        )
+      : null;
     this.#ensureRetentionSweepInterval();
     this.#startSecondInstanceDetection();
   }
@@ -1248,6 +1261,28 @@ export class Engine<
     return getRetentionOverviewSnapshot(getInternals(this), (type) =>
       resolveWorkflowTypeRetention(getInternals(this), type),
     );
+  }
+  /**
+   * Run one host-driven maintenance cycle. This fires due durable timers,
+   * deletes expired update responses, applies configured retention, and
+   * re-evaluates alert rules without relying on process-local intervals.
+   *
+   * Use with `backgroundTasks: 'manual'` from a serverless alarm, Cron trigger,
+   * or another externally scheduled wake-up. Concurrent calls are safe, but a
+   * host should await each cycle before scheduling another.
+   */
+  async runMaintenance(now = getInternals(this).options.getNow()): Promise<void> {
+    const internals = getInternals(this);
+    await internals.scheduler.tick(now);
+    try {
+      await internals.updateCoordinator.cleanupExpiredResponses();
+    } catch (error) {
+      this.#createTerminationCallbacks().handleCleanupError('cleanupExpiredResponses', error);
+    }
+    if (this.#hasConfiguredRetention()) {
+      await this.#runRetentionSweep();
+    }
+    internals.alertManager?.tick();
   }
   async purge(filter?: ListFilter): Promise<PurgeResult> {
     return purgeWorkflows(getInternals(this), filter, (workflowId) =>

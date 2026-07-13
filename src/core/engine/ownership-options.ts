@@ -17,6 +17,30 @@ export const DEFAULT_LEASE_RENEW_INTERVAL_MS = 5_000;
 /** Default boot-time lease acquisition wait window for `ownership: 'lease'`. */
 export const DEFAULT_LEASE_WAIT_TIMEOUT_MS = 60_000;
 
+export function resolveBackgroundTaskMode(
+  options: EngineConstructorOptions | undefined,
+): ResolvedOptions['backgroundTaskMode'] {
+  const mode = options?.backgroundTasks ?? 'automatic';
+  if (mode !== 'automatic' && mode !== 'manual') {
+    throw new Error('options.backgroundTasks must be "automatic" or "manual" when provided');
+  }
+  if (mode === 'manual') {
+    assertManualBackgroundTaskCompatibility(options);
+  }
+  return mode;
+}
+
+function assertManualBackgroundTaskCompatibility(
+  options: EngineConstructorOptions | undefined,
+): void {
+  if (options?.detectSecondInstance === true) {
+    throw new Error('detectSecondInstance cannot be enabled when backgroundTasks is "manual"');
+  }
+  if (options?.ownership === 'lease') {
+    throw new Error('ownership cannot be "lease" when backgroundTasks is "manual"');
+  }
+}
+
 /**
  * Resolve the ownership posture and lease tuning into their `ResolvedOptions`
  * fields. Defaults to `'none'`. The lease durations are documented as "ignored
