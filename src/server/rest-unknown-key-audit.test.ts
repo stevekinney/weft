@@ -279,7 +279,7 @@ describe('REST unknown-key disposition baseline audit', () => {
       );
 
       // The baseline disposition is 'strip' or 'passthrough': the extra
-      // key must not change the response status. If a migration flips a
+      // key must not change the response status. If a policy change flips a
       // route to 'reject', THIS is the test that catches it — update the
       // expected status to 400 at the same commit that sets
       // `unknownKeyPolicy.http: 'reject'`.
