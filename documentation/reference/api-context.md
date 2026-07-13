@@ -266,12 +266,20 @@ Run multiple durable operations in parallel, returning the result of whichever c
 
 Signal-wait losers are non-destructive. If a `context.waitForSignal()` branch loses the race, it releases its waiter without consuming the durable signal record. Nested `all()` / `race()` branches defer signal consumption until the top coordinator has selected the winning result.
 
+**Non-blocking buffered-signal drain.** Race a direct `waitForSignal()` branch against `sleep(0)` when the workflow should consume one signal that is already buffered, but continue immediately when none is available. Weft checks the durable signal buffer before allowing the literal zero-duration sleep to win, so this pattern needs no arbitrary positive drain window:
+
+The stronger ordering applies only to a literal zero-duration sleep. Positive-duration timeouts, including a positive timeout whose deadline becomes past-due before dispatch, retain ordinary race behavior. The signal branch remains non-destructive unless it wins. If the signal payload itself may be `undefined`, use a non-`undefined` payload when the caller needs to distinguish “signal drained” from “no buffered signal.”
+
 ```ts partial
 async function* example(context: Context) {
-  const result = yield* context.race([
-    context.run('fetchFromPrimary', key),
-    context.run('fetchFromFallback', key),
+  const pendingSync = yield* context.race([
+    context.waitForSignal<{ requested: true }>('sync_requested'),
+    context.sleep(0),
   ]);
+
+  if (pendingSync !== undefined) {
+    // Coalesce the buffered request into another sync pass.
+  }
 }
 ```
 

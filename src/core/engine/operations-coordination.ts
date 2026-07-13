@@ -25,6 +25,7 @@ import {
 } from './parallel-dispatch.ts';
 import {
   consumeSignalWithAtomicWorkflowCommit,
+  peekSignal,
   trackWaiterKey,
   untrackWaiterKey,
 } from './signals.ts';
@@ -296,36 +297,19 @@ function assertPartialFailurePersistenceSupported(
 }
 
 export async function processRaceOperation(
-  _internals: EngineInternals,
+  internals: EngineInternals,
   workflowId: string,
   operation: RaceOperation,
   callbacks: Pick<CoordinationOperationCallbacks, 'executeSubOperation' | 'runOperationWithResult'>,
 ): Promise<void> {
   return callbacks.runOperationWithResult(workflowId, operation, async () => {
     assertSupportedSignalBranches(operation.operations);
-    // Abort losing sub-operations once the race settles so background work does
-    // not keep consuming budget or emit events with no observer.
-    const controller = new AbortController();
-    const subOperations = operation.operations.map((subOperation) =>
-      callbacks.executeSubOperation(workflowId, subOperation, controller.signal),
+    const winner = await executeRaceSubOperations(
+      internals,
+      workflowId,
+      operation.operations,
+      (subOperation, signal) => callbacks.executeSubOperation(workflowId, subOperation, signal),
     );
-    // Swallow rejections from losing branches — only the race winner's
-    // result (or error) is surfaced. Losers typically reject with
-    // AbortError after the controller fires in the finally block, and
-    // without a handler those would surface as unhandled promise
-    // rejections.
-    void Promise.allSettled(subOperations);
-    let winner: unknown;
-    try {
-      winner = await Promise.race(subOperations);
-    } finally {
-      // Abort losers as soon as the race settles — BEFORE the (possibly slow)
-      // finalize below — so background work does not keep running, consuming
-      // budget, or emitting events with no observer while the winner's signal is
-      // consumed. The winning branch has already settled, so aborting cannot
-      // un-resolve it or disturb its deferred-consume envelope.
-      controller.abort();
-    }
     // Finalize-and-unwrap the winner: a winning wait-signal branch resolves with
     // a deferred-consume envelope, and this is the linearization point of "this
     // branch won", so consuming here (after the race settles, before the result
@@ -333,6 +317,77 @@ export async function processRaceOperation(
     // winner. Losers' envelopes are dropped unfinalized.
     return finalizeAndUnwrap(winner);
   });
+}
+
+/**
+ * Execute race branches while giving an already-buffered signal priority over a
+ * literal zero-duration sleep. The preflight is non-destructive: the selected
+ * wait-signal branch still returns its deferred-consume envelope, so the owning
+ * coordinator remains the only place that consumes the durable record.
+ *
+ * Positive-duration sleeps deliberately bypass this preflight, including when
+ * their deadline becomes past-due before dispatch. That keeps ordinary timeout
+ * races on the existing Promise.race path and limits the stronger ordering
+ * guarantee to the explicit non-blocking-drain idiom.
+ */
+export async function executeRaceSubOperations(
+  internals: EngineInternals,
+  workflowId: string,
+  operations: readonly ContextOperationRequest[],
+  execute: (operation: ContextOperationRequest, signal: AbortSignal) => Promise<unknown>,
+  parentSignal?: AbortSignal,
+): Promise<unknown> {
+  parentSignal?.throwIfAborted();
+
+  const controller = new AbortController();
+  const abortFromParent = () => controller.abort(parentSignal?.reason);
+  parentSignal?.addEventListener('abort', abortFromParent, { once: true });
+
+  try {
+    const bufferedSignal = await findBufferedSignalDrainBranch(internals, workflowId, operations);
+    parentSignal?.throwIfAborted();
+
+    if (bufferedSignal !== undefined) {
+      return await execute(bufferedSignal, controller.signal);
+    }
+
+    const subOperations = operations.map((operation) => execute(operation, controller.signal));
+    // Swallow rejections from losing branches — only the race winner's result
+    // (or error) is surfaced. Losers usually reject after the controller aborts.
+    void Promise.allSettled(subOperations);
+    return await Promise.race(subOperations);
+  } finally {
+    parentSignal?.removeEventListener('abort', abortFromParent);
+    // Abort losers before the owning coordinator finalizes a signal envelope.
+    controller.abort();
+  }
+}
+
+async function findBufferedSignalDrainBranch(
+  internals: EngineInternals,
+  workflowId: string,
+  operations: readonly ContextOperationRequest[],
+): Promise<WaitSignalOperation | undefined> {
+  if (!operations.some((operation) => operation.type === 'sleep' && operation.duration === 0)) {
+    return undefined;
+  }
+
+  const waitSignalOperations = operations.filter(
+    (operation): operation is WaitSignalOperation => operation.type === 'wait-signal',
+  );
+  const peekResults = await Promise.allSettled(
+    waitSignalOperations.map((operation) =>
+      peekSignal(internals, workflowId, operation.signalName),
+    ),
+  );
+
+  for (let index = 0; index < waitSignalOperations.length; index++) {
+    const result = peekResults[index];
+    if (result?.status === 'fulfilled' && result.value.found) {
+      return waitSignalOperations[index];
+    }
+  }
+  return undefined;
 }
 
 export async function processRunAllOperation(

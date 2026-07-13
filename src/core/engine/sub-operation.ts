@@ -21,6 +21,7 @@ import {
   type ActivityOperationCallbacks,
 } from './operations-activity.ts';
 import {
+  executeRaceSubOperations,
   executeRunAllOperationResult,
   type CoordinationOperationCallbacks,
 } from './operations-coordination.ts';
@@ -289,27 +290,19 @@ async function executeRaceSubOperation(
   speculativeState?: SpeculativeExecutionState,
 ): Promise<unknown> {
   signal?.throwIfAborted();
-
-  const controller = new AbortController();
-  const abortNestedRace = () => {
-    controller.abort(signal?.reason);
-  };
-  signal?.addEventListener('abort', abortNestedRace, { once: true });
-  const subOperations = operation.operations.map((subOperation) =>
-    executeSubOperation(
-      internals,
-      workflowId,
-      subOperation,
-      callbacks,
-      controller.signal,
-      speculativeState,
-    ),
+  return executeRaceSubOperations(
+    internals,
+    workflowId,
+    operation.operations,
+    (subOperation, branchSignal) =>
+      executeSubOperation(
+        internals,
+        workflowId,
+        subOperation,
+        callbacks,
+        branchSignal,
+        speculativeState,
+      ),
+    signal,
   );
-  void Promise.allSettled(subOperations);
-  try {
-    return await Promise.race(subOperations);
-  } finally {
-    signal?.removeEventListener('abort', abortNestedRace);
-    controller.abort();
-  }
 }
