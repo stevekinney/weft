@@ -368,26 +368,22 @@ async function findBufferedSignalDrainBranch(
   workflowId: string,
   operations: readonly ContextOperationRequest[],
 ): Promise<WaitSignalOperation | undefined> {
-  if (!operations.some((operation) => operation.type === 'sleep' && operation.duration === 0)) {
+  if (operations.length !== 2) {
     return undefined;
   }
 
-  const waitSignalOperations = operations.filter(
+  const waitSignalOperation = operations.find(
     (operation): operation is WaitSignalOperation => operation.type === 'wait-signal',
   );
-  const peekResults = await Promise.allSettled(
-    waitSignalOperations.map((operation) =>
-      peekSignal(internals, workflowId, operation.signalName),
-    ),
+  const zeroDurationSleep = operations.find(
+    (operation) => operation.type === 'sleep' && operation.duration === 0,
   );
-
-  for (let index = 0; index < waitSignalOperations.length; index++) {
-    const result = peekResults[index];
-    if (result?.status === 'fulfilled' && result.value.found) {
-      return waitSignalOperations[index];
-    }
+  if (waitSignalOperation === undefined || zeroDurationSleep === undefined) {
+    return undefined;
   }
-  return undefined;
+
+  const bufferedSignal = await peekSignal(internals, workflowId, waitSignalOperation.signalName);
+  return bufferedSignal.found ? waitSignalOperation : undefined;
 }
 
 export async function processRunAllOperation(

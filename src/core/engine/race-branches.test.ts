@@ -30,6 +30,7 @@ import { isDeferredConsumeEnvelope } from './deferred-consume-envelope.ts';
 import { Engine } from './index.ts';
 import type { EngineInternals } from './internals.ts';
 import { getInternals } from './internals.ts';
+import { executeRaceSubOperations } from './operations-coordination.ts';
 import { peekSignal } from './signals.ts';
 import { executeSubOperation } from './sub-operation.ts';
 
@@ -334,6 +335,79 @@ describe('#456 ctx.race / ctx.all with wait-signal branches', () => {
     expect(await handle.result()).toBeUndefined();
     expect(getInternals(engine).signalWaiters.size).toBe(0);
     expect(getInternals(engine).signalWaitersByWorkflow.has('empty-drain')).toBe(false);
+  });
+
+  it('keeps races with additional branches on the ordinary dispatch path', async () => {
+    const { promise: activityStarted, resolve: markActivityStarted } =
+      Promise.withResolvers<void>();
+    const { promise: releaseActivity, resolve: release } = Promise.withResolvers<void>();
+    let additionalBranchRan = false;
+
+    await using engine = new Engine();
+    engine.register(
+      workflow({ name: 'mixed-zero-duration-race' })
+        .activities({
+          hold: async () => {
+            markActivityStarted();
+            await releaseActivity;
+          },
+          observe: async () => {
+            additionalBranchRan = true;
+          },
+        })
+        .execute(async function* (ctx: WorkflowContext) {
+          yield* ctx.run('hold');
+          const winner = yield* ctx.race([
+            ctx.waitForSignal<string>('sync-requested'),
+            ctx.sleep(0),
+            ctx.run('observe'),
+          ]);
+          yield* ctx.waitForSignal('finish');
+          return winner;
+        }),
+    );
+
+    const handle = await engine.start('mixed-zero-duration-race', null, { id: 'mixed-race' });
+    await activityStarted;
+    await engine.signal('mixed-race', 'sync-requested', 'buffered');
+    release();
+    await waitForCondition(() => getInternals(engine).parkedInlineWorkflows.has('mixed-race'), {
+      timeoutMs: 2000,
+      label: 'mixed race settled and workflow parked on finish',
+    });
+
+    expect(additionalBranchRan).toBe(true);
+    const bufferedSignal = await peekSignal(getInternals(engine), 'mixed-race', 'sync-requested');
+    expect(bufferedSignal.found).toBe(true);
+    await engine.signal('mixed-race', 'finish', null);
+    expect(await handle.result()).toBeUndefined();
+  });
+
+  it('surfaces a buffered-signal preflight read failure', async () => {
+    const internals = createSignalInternals(
+      createSequencedStorage(signalScanPrefix('preflight-failure', 'ev'), [
+        () => {
+          throw new Error('signal scan failed');
+        },
+      ]),
+    );
+
+    await expect(
+      executeRaceSubOperations(
+        internals,
+        'preflight-failure',
+        [
+          { type: 'wait-signal', operationId: 'wait', signalName: 'ev' },
+          {
+            type: 'sleep',
+            operationId: 'sleep',
+            duration: 0,
+            scheduledFireAt: 0,
+          },
+        ],
+        () => Promise.resolve(undefined),
+      ),
+    ).rejects.toThrow('signal scan failed');
   });
 
   it('race([waitForSignal, sleep]) — signal wins and the workflow sees its payload', async () => {
