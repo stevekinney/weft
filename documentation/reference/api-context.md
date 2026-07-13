@@ -293,6 +293,8 @@ async function* example(context: Context) {
 
 Run named durable operations in parallel, returning the winning branch name together with its value. The branch map preserves each operation's result type as a discriminated union, so checking `winner.key` narrows `winner.value`.
 
+The branch map must contain at least one operation. Branch names use JavaScript object-key semantics: numeric keys are returned as strings, and symbol keys are rejected.
+
 `raceKeyed()` uses the same durable coordination path as `race()`: signal-wait losers remain non-destructive, losing sleep branches release their timers, and losing inline activities receive a cooperative abort through `ActivityContext.signal`. Worker-pooled activities do not receive this race-loss abort. The winning `{ key, value }` is checkpointed and replayed without re-running the branch.
 
 ```ts partial

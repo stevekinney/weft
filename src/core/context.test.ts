@@ -756,6 +756,28 @@ describe('Context', () => {
       expect(request.branchNames).toEqual(['first', 'second']);
     });
 
+    it('rejects an empty keyed race before yielding', () => {
+      const context = createContext();
+
+      expect(() => context.raceKeyed({}).next()).toThrow(
+        'ctx.raceKeyed requires at least one branch',
+      );
+    });
+
+    it('rejects symbol-keyed branches before enumeration can omit them', () => {
+      const context = createContext();
+      const symbolBranch = Symbol('symbol-branch');
+
+      expect(() =>
+        context
+          .raceKeyed({
+            named: context.run(taskA),
+            [symbolBranch]: context.run(taskB),
+          })
+          .next(),
+      ).toThrow('ctx.raceKeyed branch names must be strings or numbers, not symbols');
+    });
+
     it('returns a non-marker cached race value directly without advancing past sub-operations', () => {
       const context = createContext({
         accumulatedResults: new Map<number, unknown>([

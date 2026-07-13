@@ -216,6 +216,20 @@ const welcomeBuilder = workflow({ name: 'localWelcome' })
       void countWinner;
       void invalidCountWinner;
     }
+    const numericKeyedRace = yield* ctx.raceKeyed({
+      0: ctx.run('formatGreeting', input),
+      1: ctx.run(async () => 42),
+    });
+    if (numericKeyedRace.key === '0') {
+      const greetingWinner: string = numericKeyedRace.value;
+      void greetingWinner;
+    } else {
+      const countWinner: number = numericKeyedRace.value;
+      void countWinner;
+    }
+    // @ts-expect-error numeric branch names are stringified by JavaScript object enumeration.
+    const numericWinnerKey: 0 | 1 = numericKeyedRace.key;
+    void numericWinnerKey;
     const offloadReference = yield* ctx.offload('welcome-output', async () => child);
     const loaded = yield* ctx.load<WelcomeOutput>(offloadReference);
     yield* ctx.archive('welcome-output', loaded);

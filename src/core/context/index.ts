@@ -345,7 +345,13 @@ export class Context implements WorkflowContext {
   *raceKeyed<const TOperations extends Readonly<Record<string, WorkflowOperation<unknown>>>>(
     operations: TOperations,
   ): Generator<ContextOperationRequest, WorkflowKeyedRaceResult<TOperations>, unknown> {
+    if (Object.getOwnPropertySymbols(operations).length > 0) {
+      throw new TypeError('ctx.raceKeyed branch names must be strings or numbers, not symbols');
+    }
     const entries = Object.entries(operations);
+    if (entries.length === 0) {
+      throw new TypeError('ctx.raceKeyed requires at least one branch');
+    }
     return (yield* parallelOperations.race(
       this,
       getInternals(this),

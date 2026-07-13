@@ -56,6 +56,8 @@ export type WorkflowOperationTupleResult<
 /**
  * Discriminated winner returned by {@link WorkflowContext.raceKeyed}. Checking
  * `key` narrows `value` to the result type of that named workflow operation.
+ * Numeric object keys are returned as strings, matching JavaScript object
+ * enumeration; symbol keys are rejected at runtime.
  *
  * @example
  * ```ts
@@ -75,7 +77,7 @@ export type WorkflowKeyedRaceResult<
   TOperations extends Readonly<Record<string, WorkflowOperation<unknown>>>,
 > = {
   [TKey in keyof TOperations]: {
-    key: TKey;
+    key: TKey extends string | number ? `${TKey}` : never;
     value: WorkflowOperationResult<TOperations[TKey]>;
   };
 }[keyof TOperations];
