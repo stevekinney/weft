@@ -631,6 +631,63 @@ describe('crash recovery', () => {
     engine2[Symbol.dispose]();
   });
 
+  it('replays a buffered signal that won a zero-duration drain race after recovery (#681)', async () => {
+    const storage = new MemoryStorage();
+    const { promise: activityStarted, resolve: markActivityStarted } =
+      Promise.withResolvers<void>();
+    const { promise: releaseActivity, resolve: release } = Promise.withResolvers<void>();
+
+    function makeWorkflow() {
+      return workflow({ name: 'zero-duration-signal-drain' })
+        .activities({
+          hold: async () => {
+            markActivityStarted();
+            await releaseActivity;
+          },
+        })
+        .execute(async function* (ctx) {
+          yield* ctx.run('hold');
+          const drained = yield* ctx.race([
+            ctx.waitForSignal<string>('sync-requested'),
+            ctx.sleep('0ms'),
+          ]);
+          const gate = yield* ctx.waitForSignal<string>('gate');
+          return { drained, gate };
+        });
+    }
+
+    const bufferedSignalPrefix = `sig:${encodeStorageKeyComponent('zero-duration-drain')}:${encodeStorageKeyComponent('sync-requested')}:`;
+    const hasBufferedSignal = async () => {
+      for await (const _entry of storage.scan(bufferedSignalPrefix, { limit: 1 })) return true;
+      return false;
+    };
+
+    const engine1 = new Engine({ storage });
+    engine1.register(makeWorkflow());
+    await engine1.start('zero-duration-signal-drain', null, { id: 'zero-duration-drain' });
+    await activityStarted;
+    await engine1.signal('zero-duration-drain', 'sync-requested', 'run-again');
+    release();
+
+    await waitForCondition(async () => !(await hasBufferedSignal()), {
+      timeoutMs: 2000,
+      label: 'zero-duration drain consumed and checkpointed the buffered signal',
+    });
+    expect(await storage.get(STORAGE_KEYS.checkpoint('zero-duration-drain'))).not.toBeNull();
+    engine1[Symbol.dispose]();
+
+    const engine2 = new Engine({ storage });
+    engine2.register(makeWorkflow());
+    const handles = await engine2.recoverAll();
+    expect(handles).toHaveLength(1);
+    await flush();
+
+    await engine2.signal('zero-duration-drain', 'gate', 'continue');
+    expect(await handles[0]!.result()).toEqual({ drained: 'run-again', gate: 'continue' });
+
+    engine2[Symbol.dispose]();
+  });
+
   it('resumes after crash during sleep and completes when timer fires', async () => {
     const { TestEngine } = await import('../testing/test-engine.ts');
 

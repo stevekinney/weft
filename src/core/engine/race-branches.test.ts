@@ -30,7 +30,7 @@ import { isDeferredConsumeEnvelope } from './deferred-consume-envelope.ts';
 import { Engine } from './index.ts';
 import type { EngineInternals } from './internals.ts';
 import { getInternals } from './internals.ts';
-import { assertValidRaceBranchNames } from './operations-coordination.ts';
+import { assertValidRaceBranchNames, executeRaceSubOperations } from './operations-coordination.ts';
 import { peekSignal } from './signals.ts';
 import { executeSubOperation } from './sub-operation.ts';
 
@@ -288,6 +288,128 @@ describe('#456 nextSleepTimerDelayMs clamps to the host setTimeout ceiling', () 
 });
 
 describe('#456 ctx.race / ctx.all with wait-signal branches', () => {
+  it('lets an already-buffered signal win over a zero-duration sleep', async () => {
+    const { promise: activityStarted, resolve: markActivityStarted } =
+      Promise.withResolvers<void>();
+    const { promise: releaseActivity, resolve: release } = Promise.withResolvers<void>();
+
+    await using engine = new Engine();
+    engine.register(
+      workflow({ name: 'drain-buffered-signal' })
+        .activities({
+          hold: async () => {
+            markActivityStarted();
+            await releaseActivity;
+          },
+        })
+        .execute(async function* (ctx: WorkflowContext) {
+          yield* ctx.run('hold');
+          return yield* ctx.race([ctx.waitForSignal<string>('sync-requested'), ctx.sleep('0ms')]);
+        }),
+    );
+
+    const handle = await engine.start('drain-buffered-signal', null, { id: 'drain-buffered' });
+    await activityStarted;
+    await engine.signal('drain-buffered', 'sync-requested', 'run-again');
+    release();
+
+    expect(await handle.result()).toBe('run-again');
+    const residualSignal = await peekSignal(
+      getInternals(engine),
+      'drain-buffered',
+      'sync-requested',
+    );
+    expect(residualSignal.found).toBe(false);
+  });
+
+  it('continues immediately when a zero-duration drain finds no buffered signal', async () => {
+    await using engine = new Engine();
+    engine.register(
+      workflow({ name: 'empty-signal-drain' }).execute(async function* (ctx: WorkflowContext) {
+        return yield* ctx.race([ctx.waitForSignal<string>('sync-requested'), ctx.sleep(0)]);
+      }),
+    );
+
+    const handle = await engine.start('empty-signal-drain', null, { id: 'empty-drain' });
+
+    expect(await handle.result()).toBeUndefined();
+    expect(getInternals(engine).signalWaiters.size).toBe(0);
+    expect(getInternals(engine).signalWaitersByWorkflow.has('empty-drain')).toBe(false);
+  });
+
+  it('keeps races with additional branches on the ordinary dispatch path', async () => {
+    const { promise: activityStarted, resolve: markActivityStarted } =
+      Promise.withResolvers<void>();
+    const { promise: releaseActivity, resolve: release } = Promise.withResolvers<void>();
+    let additionalBranchRan = false;
+
+    await using engine = new Engine();
+    engine.register(
+      workflow({ name: 'mixed-zero-duration-race' })
+        .activities({
+          hold: async () => {
+            markActivityStarted();
+            await releaseActivity;
+          },
+          observe: async () => {
+            additionalBranchRan = true;
+          },
+        })
+        .execute(async function* (ctx: WorkflowContext) {
+          yield* ctx.run('hold');
+          const winner = yield* ctx.race([
+            ctx.waitForSignal<string>('sync-requested'),
+            ctx.sleep(0),
+            ctx.run('observe'),
+          ]);
+          yield* ctx.waitForSignal('finish');
+          return winner;
+        }),
+    );
+
+    const handle = await engine.start('mixed-zero-duration-race', null, { id: 'mixed-race' });
+    await activityStarted;
+    await engine.signal('mixed-race', 'sync-requested', 'buffered');
+    release();
+    await waitForCondition(() => getInternals(engine).parkedInlineWorkflows.has('mixed-race'), {
+      timeoutMs: 2000,
+      label: 'mixed race settled and workflow parked on finish',
+    });
+
+    expect(additionalBranchRan).toBe(true);
+    const bufferedSignal = await peekSignal(getInternals(engine), 'mixed-race', 'sync-requested');
+    expect(bufferedSignal.found).toBe(true);
+    await engine.signal('mixed-race', 'finish', null);
+    expect(await handle.result()).toBeUndefined();
+  });
+
+  it('surfaces a buffered-signal preflight read failure', async () => {
+    const internals = createSignalInternals(
+      createSequencedStorage(signalScanPrefix('preflight-failure', 'ev'), [
+        () => {
+          throw new Error('signal scan failed');
+        },
+      ]),
+    );
+
+    await expect(
+      executeRaceSubOperations(
+        internals,
+        'preflight-failure',
+        [
+          { type: 'wait-signal', operationId: 'wait', signalName: 'ev' },
+          {
+            type: 'sleep',
+            operationId: 'sleep',
+            duration: 0,
+            scheduledFireAt: 0,
+          },
+        ],
+        () => Promise.resolve(undefined),
+      ),
+    ).rejects.toThrow('signal scan failed');
+  });
+
   it('race([waitForSignal, sleep]) — signal wins and the workflow sees its payload', async () => {
     await using engine = new Engine();
     engine.register(
@@ -492,6 +614,33 @@ describe('#679 ctx.raceKeyed winner metadata', () => {
 });
 
 describe('#456 a losing wait-signal branch must not consume the signal', () => {
+  it('keeps positive-timeout races on their ordinary timer path', async () => {
+    await using engine = new Engine();
+    engine.register(
+      workflow({ name: 'positive-timeout-signal-race' }).execute(async function* (
+        ctx: WorkflowContext,
+      ) {
+        const timedOut = yield* ctx.race([ctx.waitForSignal<string>('ev'), ctx.sleep('5ms')]);
+        const later = yield* ctx.waitForSignal<string>('ev');
+        return { timedOut, later };
+      }),
+    );
+
+    const handle = await engine.start('positive-timeout-signal-race', null, {
+      id: 'positive-timeout',
+    });
+    await waitForCondition(
+      () => getInternals(engine).parkedInlineWorkflows.has('positive-timeout'),
+      {
+        timeoutMs: 2000,
+        label: 'positive timeout settled and workflow parked on the later signal wait',
+      },
+    );
+    await engine.signal('positive-timeout', 'ev', 'late-signal');
+
+    expect(await handle.result()).toEqual({ timedOut: undefined, later: 'late-signal' });
+  });
+
   it('a losing wait-signal branch leaves the signal for a later top-level waitForSignal', async () => {
     // The supersede idiom: race a waitForSignal against an instant activity. The
     // activity wins, so the waitForSignal branch is the loser and must tear down

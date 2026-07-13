@@ -22,6 +22,7 @@ import {
 } from './operations-activity.ts';
 import {
   assertValidRaceBranchNames,
+  executeRaceSubOperations,
   executeRunAllOperationResult,
   wrapRaceWinner,
   type CoordinationOperationCallbacks,
@@ -291,29 +292,21 @@ async function executeRaceSubOperation(
   speculativeState?: SpeculativeExecutionState,
 ): Promise<unknown> {
   signal?.throwIfAborted();
-
-  const controller = new AbortController();
-  const abortNestedRace = () => {
-    controller.abort(signal?.reason);
-  };
-  signal?.addEventListener('abort', abortNestedRace, { once: true });
   assertValidRaceBranchNames(operation);
-  const subOperations = operation.operations.map((subOperation, index) =>
-    executeSubOperation(
-      internals,
-      workflowId,
-      subOperation,
-      callbacks,
-      controller.signal,
-      speculativeState,
-    ).then((value) => ({ index, value })),
+  return executeRaceSubOperations(
+    internals,
+    workflowId,
+    operation.operations,
+    (subOperation, branchSignal) =>
+      executeSubOperation(
+        internals,
+        workflowId,
+        subOperation,
+        callbacks,
+        branchSignal,
+        speculativeState,
+      ),
+    signal,
+    (winnerIndex, value) => wrapRaceWinner(operation, winnerIndex, value),
   );
-  void Promise.allSettled(subOperations);
-  try {
-    const winner = await Promise.race(subOperations);
-    return wrapRaceWinner(operation, winner.index, winner.value);
-  } finally {
-    signal?.removeEventListener('abort', abortNestedRace);
-    controller.abort();
-  }
 }
