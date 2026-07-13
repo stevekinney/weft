@@ -215,6 +215,108 @@ describe('ctx.services — recovery re-provision', () => {
     await secondEngine[Symbol.asyncDispose]();
   });
 
+  it('runs the recovery hook with durable context and resolved services before user code advances', async () => {
+    const storage = new MemoryStorage();
+    const recoveryOrder: string[] = [];
+    const wf = workflow({ name: 'hooked-recovery' }).execute(async function* (
+      ctx: WorkflowContext,
+      input: { accountId: string },
+    ) {
+      recoveryOrder.push('workflow');
+      yield* ctx.waitForSignal('continue');
+      return `${input.accountId}:${(ctx.services as { origin: string }).origin}`;
+    });
+
+    const firstEngine = await Engine.create({
+      storage,
+      recover: false,
+      workflows: { 'hooked-recovery': wf },
+    });
+    await firstEngine.start(
+      'hooked-recovery',
+      { accountId: 'account-42' },
+      {
+        id: 'hooked-run',
+        tags: ['live-surface'],
+        services: { origin: 'first-engine' },
+      },
+    );
+    await flush();
+    await firstEngine[Symbol.asyncDispose]();
+    recoveryOrder.length = 0;
+
+    const secondEngine = await Engine.create({
+      storage,
+      recover: false,
+      workflows: { 'hooked-recovery': wf },
+      resolveWorkflowServices: () => ({
+        status: 'available',
+        services: { origin: 'second-engine' },
+      }),
+    });
+
+    const handles = await secondEngine.recoverAll({
+      onRecoveredWorkflow: async (info) => {
+        await Promise.resolve();
+        recoveryOrder.push('hook');
+        expect(info.workflowId).toBe('hooked-run');
+        expect(info.workflowType).toBe('hooked-recovery');
+        expect(info.input).toEqual({ accountId: 'account-42' });
+        expect(info.launchOptions).toEqual({ id: 'hooked-run', tags: ['live-surface'] });
+        expect(info.schedule).toBeUndefined();
+        expect(info.handle.id).toBe('hooked-run');
+        expect(info.services).toEqual({ origin: 'second-engine' });
+      },
+    });
+
+    expect(recoveryOrder).toEqual(['hook', 'workflow']);
+    await handles[0]!.signal('continue');
+    expect(await handles[0]!.result()).toBe('account-42:second-engine');
+    await secondEngine[Symbol.asyncDispose]();
+  });
+
+  it('isolates a recovery hook failure to its run and continues recovering siblings', async () => {
+    const storage = new MemoryStorage();
+    const wf = workflow({ name: 'hook-failure-sibling' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      yield* ctx.waitForSignal('continue');
+      return 'completed';
+    });
+    const firstEngine = await Engine.create({
+      storage,
+      recover: false,
+      workflows: { 'hook-failure-sibling': wf },
+    });
+    await firstEngine.start('hook-failure-sibling', null, { id: 'bad-hook-run' });
+    await firstEngine.start('hook-failure-sibling', null, { id: 'healthy-hook-run' });
+    await flush();
+    await firstEngine[Symbol.asyncDispose]();
+
+    const secondEngine = await Engine.create({
+      storage,
+      recover: false,
+      workflows: { 'hook-failure-sibling': wf },
+    });
+    const handles = await secondEngine.recoverAll({
+      onRecoveredWorkflow: ({ workflowId, services }) => {
+        expect(services).toBeUndefined();
+        if (workflowId === 'bad-hook-run') {
+          throw new Error('live surface unavailable');
+        }
+      },
+    });
+
+    expect(handles).toHaveLength(2);
+    const failedRun = await secondEngine.get('bad-hook-run');
+    expect(failedRun?.status).toBe('failed');
+    expect(failedRun?.error).toContain('live surface unavailable');
+    const healthy = handles.find((handle) => handle.id === 'healthy-hook-run')!;
+    await healthy.signal('continue');
+    expect(await healthy.result()).toBe('completed');
+    await secondEngine[Symbol.asyncDispose]();
+  });
+
   it('passes current launch tags to the recovered services resolver', async () => {
     const storage = new MemoryStorage();
     const wf = workflow({ name: 'tagged-resumable' }).execute(async function* (
@@ -778,9 +880,15 @@ describe('ctx.services — scheduled workflow (engine.schedule)', () => {
         },
       });
 
-      const handles = await secondEngine.recoverAll();
+      const recoveryHookScheduleContexts: unknown[] = [];
+      const handles = await secondEngine.recoverAll({
+        onRecoveredWorkflow: (info) => {
+          recoveryHookScheduleContexts.push(info.schedule);
+        },
+      });
       expect(handles).toHaveLength(1);
       expect(recoveredScheduleContexts).toEqual([{ id: scheduleId, occurrence }]);
+      expect(recoveryHookScheduleContexts).toEqual([{ id: scheduleId, occurrence }]);
       await handles[0]!.signal('release');
       expect(await handles[0]!.result()).toBe('second-engine');
       await secondEngine[Symbol.asyncDispose]();

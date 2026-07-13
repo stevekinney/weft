@@ -15,6 +15,7 @@ export {
   setWorkflowStartHeaders,
   type LifecycleCallbacks,
   type RecoverAllOptions,
+  type RecoveredWorkflowInfo,
 } from './lifecycle/shared.ts';
 
 export {

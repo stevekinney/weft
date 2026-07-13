@@ -68,7 +68,12 @@ export {
   WorkflowTeardownPendingError,
   WorkflowTypeNotRegisteredForRecoveryError,
 } from './core/engine';
-export type { EngineCreateOptions, EngineStateNamespace, RecoverAllOptions } from './core/engine';
+export type {
+  EngineCreateOptions,
+  EngineStateNamespace,
+  RecoverAllOptions,
+  RecoveredWorkflowInfo,
+} from './core/engine';
 export {
   DEFAULT_CHECKPOINT_SIZE_WARNING_THRESHOLD,
   DEFAULT_MAX_NESTING_DEPTH,
