@@ -2,6 +2,10 @@ import { KEYS, storageHas } from '../../../storage/interface.ts';
 import { EventLog } from '../../event-log.ts';
 import type { ComposedWorkflowInterceptor } from '../../interceptor.ts';
 import { coerceStartWorkflowTags } from '../../start-workflow-validation.ts';
+import type {
+  WorkflowServicesResolverLaunchOptions,
+  WorkflowServicesResolverScheduleInfo,
+} from '../../types.ts';
 import { normalizeWorkflowTags } from '../../workflow-tags.ts';
 import type { QueuedInlineWorkflowExecutionStart } from '../engine-internal-types.ts';
 import { type WorkflowHandle } from '../handles.ts';
@@ -14,6 +18,31 @@ export type RegistrationEntry =
 export const FORK_LINEAGE_ATTRIBUTE = 'weft:forkedFrom';
 
 export const EMPTY_STORAGE_VALUE = new Uint8Array(0);
+
+/**
+ * Durable run context passed to {@link RecoverAllOptions.onRecoveredWorkflow}
+ * before recovered user code advances.
+ *
+ * @example
+ * ```ts
+ * import type { RecoveredWorkflowInfo } from '@lostgradient/weft';
+ *
+ * function registerSurface(info: RecoveredWorkflowInfo): void {
+ *   console.log(`Recovered ${info.workflowType}/${info.workflowId}`);
+ * }
+ * ```
+ */
+export interface RecoveredWorkflowInfo {
+  /** Handle for the recovered run. */
+  handle: WorkflowHandle;
+  workflowId: string;
+  workflowType: string;
+  input: unknown;
+  launchOptions: WorkflowServicesResolverLaunchOptions;
+  schedule?: WorkflowServicesResolverScheduleInfo;
+  /** Re-provided host services, or `undefined` when the run did not use services. */
+  services: unknown;
+}
 
 /**
  * Options for {@link Engine.recoverAll}. The acknowledgement flag is an
@@ -35,6 +64,13 @@ export type RecoverAllOptions = {
    * rolling deploys or explicit operator storage repair.
    */
   acknowledgeUnknownWorkflowTypes?: boolean;
+  /**
+   * Register consumer-owned live state for each recovered run after services
+   * are re-provided but before the workflow generator advances. The callback is
+   * awaited. If it throws, only that run fails with a `system` failure and
+   * recovery continues with its siblings.
+   */
+  onRecoveredWorkflow?: (info: RecoveredWorkflowInfo) => void | Promise<void>;
 };
 
 export type LifecycleCallbacks = {
@@ -67,6 +103,8 @@ export type LifecycleCallbacks = {
    * `error` is the canonical {@link unavailableServicesError}.
    */
   failWorkflowForUnavailableServices: (workflowId: string, error: Error) => Promise<void>;
+  /** Fail one recovered workflow whose pre-resume consumer hook threw. */
+  failWorkflowForRecoveryHook: (workflowId: string, error: Error) => Promise<void>;
   /**
    * Force a recovered workflow to a terminal `failed` state because its
    * persisted checkpoint cannot be decoded on this runtime. The failure is

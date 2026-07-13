@@ -300,7 +300,7 @@ export {
   EngineLeaseCorruptedError,
   EngineLeaseNotHeldError,
 } from './lease-errors.ts';
-export type { RecoverAllOptions } from './lifecycle.ts';
+export type { RecoverAllOptions, RecoveredWorkflowInfo } from './lifecycle.ts';
 export { ScheduleHandle } from './schedule-handle.ts';
 export type {
   WorkflowFeedListener,

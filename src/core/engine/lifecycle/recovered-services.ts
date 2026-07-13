@@ -1,6 +1,7 @@
 import { KEYS } from '../../../storage/interface.ts';
 import { DevelopmentWarningEvent } from '../../events.ts';
 import type {
+  WorkflowServicesResolverInfo,
   WorkflowServicesResolverLaunchOptions,
   WorkflowServicesResolverScheduleInfo,
   WorkflowState,
@@ -53,6 +54,7 @@ export async function reprovideRecoveredServices(
   failRun: (workflowId: string, error: Error) => Promise<void>,
   onCommitError: (source: string, error: unknown, workflowId: string) => void,
   dispatchDiagnostic: (event: Event) => void = () => {},
+  resolverInfo?: WorkflowServicesResolverInfo,
 ): Promise<boolean> {
   const resolver = internals.options.resolveWorkflowServices;
   if (internals.inlineStrategy === null) {
@@ -85,15 +87,9 @@ export async function reprovideRecoveredServices(
   }
 
   let reason: string;
-  const schedule = await scheduleFromWorkflowState(internals, state);
+  const info = resolverInfo ?? (await workflowServicesResolverInfoFromState(internals, state));
   try {
-    const resolution = await resolver({
-      workflowId: state.id,
-      workflowType: state.type,
-      input: state.input,
-      launchOptions: launchOptionsFromWorkflowState(state),
-      ...(schedule !== null ? { schedule } : {}),
-    });
+    const resolution = await resolver(info);
     if (resolution.status === 'available') {
       internals.workflowServices.set(state.id, resolution.services);
       return false;
@@ -114,6 +110,21 @@ export async function reprovideRecoveredServices(
     onCommitError('reprovideRecoveredServices', error, state.id);
   }
   return true;
+}
+
+/** Build the durable recovery context shared by the services resolver and recovery hook. */
+export async function workflowServicesResolverInfoFromState(
+  internals: EngineInternals,
+  state: WorkflowState,
+): Promise<WorkflowServicesResolverInfo> {
+  const schedule = await scheduleFromWorkflowState(internals, state);
+  return {
+    workflowId: state.id,
+    workflowType: state.type,
+    input: state.input,
+    launchOptions: launchOptionsFromWorkflowState(state),
+    ...(schedule !== null ? { schedule } : {}),
+  };
 }
 
 /**

@@ -5,7 +5,7 @@ import { Context, setContextWorkflowInterceptor } from '../../context.ts';
 import { EventLog, type EventHeadRecord } from '../../event-log.ts';
 import { WorkflowResumedEvent } from '../../events.ts';
 import { buildTimerBatchOperations } from '../../scheduler.ts';
-import type { Checkpoint, WorkflowState } from '../../types.ts';
+import type { Checkpoint, WorkflowServicesResolverInfo, WorkflowState } from '../../types.ts';
 import { type WorkflowVersionTuple } from '../../workflow-version-tuple.ts';
 import { createCancelHandlerRegistration, resetCancelHandlers } from '../cancel-handlers.ts';
 import { rememberCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
@@ -18,13 +18,18 @@ import { getComposedWorkflowInterceptor } from '../strategy-helpers.ts';
 import { decodeWorkflowState } from '../validation.ts';
 import { buildWorkflowVisibilityIndexTransition } from '../workflow-indexes.ts';
 import { prepareResumeState } from './persist.ts';
-import { reprovideRecoveredServices } from './recovered-services.ts';
+import {
+  reprovideRecoveredServices,
+  workflowServicesResolverInfoFromState,
+} from './recovered-services.ts';
 import {
   enforceHistoryPolicyBeforeReplay,
   loadTerminalCleanupTrackedState,
   loadWorkflowStartHeaders,
   setWorkflowStartHeaders,
   type LifecycleCallbacks,
+  type RecoverAllOptions,
+  type RecoveredWorkflowInfo,
   type RegistrationEntry,
 } from './shared.ts';
 
@@ -49,6 +54,7 @@ async function prepareRecoveredServicesOrFail(
   internals: EngineInternals,
   state: WorkflowState,
   callbacks: LifecycleCallbacks,
+  resolverInfo?: WorkflowServicesResolverInfo,
 ): Promise<boolean> {
   return reprovideRecoveredServices(
     internals,
@@ -56,7 +62,65 @@ async function prepareRecoveredServicesOrFail(
     callbacks.failWorkflowForUnavailableServices,
     callbacks.handleCleanupError,
     callbacks.dispatchEvent,
+    resolverInfo,
   );
+}
+
+async function runRecoveredWorkflowHookOrFail(
+  internals: EngineInternals,
+  state: WorkflowState,
+  handle: WorkflowHandle,
+  resolverInfo: WorkflowServicesResolverInfo,
+  onRecoveredWorkflow: NonNullable<RecoverAllOptions['onRecoveredWorkflow']>,
+  callbacks: LifecycleCallbacks,
+): Promise<boolean> {
+  const info: RecoveredWorkflowInfo = {
+    ...resolverInfo,
+    handle,
+    launchOptions: resolverInfo.launchOptions ?? { id: state.id },
+    services: internals.workflowServices.get(state.id),
+  };
+  try {
+    await onRecoveredWorkflow(info);
+    return false;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    const hookError = new Error(`Recovery hook failed for workflow "${state.id}": ${reason}`);
+    try {
+      await callbacks.failWorkflowForRecoveryHook(state.id, hookError);
+    } catch (commitError) {
+      callbacks.handleCleanupError('onRecoveredWorkflow', commitError, state.id);
+    }
+    return true;
+  }
+}
+
+async function prepareRecoveredWorkflowOrFail(
+  internals: EngineInternals,
+  state: WorkflowState,
+  callbacks: LifecycleCallbacks,
+  onRecoveredWorkflow: RecoverAllOptions['onRecoveredWorkflow'],
+): Promise<{ handle: WorkflowHandle; shouldStop: boolean }> {
+  const resolverInfo =
+    onRecoveredWorkflow === undefined
+      ? undefined
+      : await workflowServicesResolverInfoFromState(internals, state);
+  const handle = callbacks.getHandle(state.id);
+  if (await prepareRecoveredServicesOrFail(internals, state, callbacks, resolverInfo)) {
+    return { handle, shouldStop: true };
+  }
+  if (onRecoveredWorkflow === undefined || resolverInfo === undefined) {
+    return { handle, shouldStop: false };
+  }
+  const shouldStop = await runRecoveredWorkflowHookOrFail(
+    internals,
+    state,
+    handle,
+    resolverInfo,
+    onRecoveredWorkflow,
+    callbacks,
+  );
+  return { handle, shouldStop };
 }
 
 function assertResumeNotTerminating(internals: EngineInternals, workflowId: string): void {
@@ -278,6 +342,7 @@ export async function resumeWorkflowFromStorage(
   workflowId: string,
   dispatchResumedEvent: boolean,
   callbacks: LifecycleCallbacks,
+  onRecoveredWorkflow?: RecoverAllOptions['onRecoveredWorkflow'],
 ): Promise<WorkflowHandle> {
   // Load workflow state
   const stateBytes = await internals.storage.get(KEYS.workflow(workflowId));
@@ -341,11 +406,15 @@ export async function resumeWorkflowFromStorage(
   // non-serializable value (and `engine.start` rejected `services` there). When
   // the resolver reports the run unavailable, fail just this run and skip the
   // resume so the engine and other recovered runs are unaffected.
-  if (await prepareRecoveredServicesOrFail(internals, state, callbacks)) {
-    return callbacks.getHandle(workflowId);
+  const { handle, shouldStop } = await prepareRecoveredWorkflowOrFail(
+    internals,
+    state,
+    callbacks,
+    onRecoveredWorkflow,
+  );
+  if (shouldStop) {
+    return handle;
   }
-
-  const handle = callbacks.getHandle(workflowId);
   await callbacks.runSerializedWorkflowStateWrite(workflowId, () =>
     performSerializedResume(internals, {
       workflowId,

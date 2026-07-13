@@ -152,6 +152,14 @@ export function createLifecycleCallbacks<TWorkflows extends object, TActivities 
         createTerminationCallbacks(engine),
         'system',
       ),
+    failWorkflowForRecoveryHook: (workflowId, error) =>
+      failWorkflow(
+        getInternals(engine),
+        workflowId,
+        error,
+        createTerminationCallbacks(engine),
+        'system',
+      ),
     failWorkflowForCheckpointDecodeError: (workflowId, error) =>
       failWorkflow(
         getInternals(engine),

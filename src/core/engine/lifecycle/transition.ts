@@ -153,7 +153,9 @@ export async function recoverAll(
       continue;
     }
     try {
-      handles.push(await resume(internals, entry.workflowId, callbacks));
+      handles.push(
+        await resume(internals, entry.workflowId, callbacks, options?.onRecoveredWorkflow),
+      );
     } catch (error) {
       if (error instanceof RegExpExtensionDecodeError) {
         await callbacks.failWorkflowForCheckpointDecodeError(entry.workflowId, error);
@@ -170,6 +172,7 @@ export async function resume(
   internals: EngineInternals,
   workflowId: string,
   callbacks: LifecycleCallbacks,
+  onRecoveredWorkflow?: RecoverAllOptions['onRecoveredWorkflow'],
 ): Promise<WorkflowHandle> {
   const workflowState = await loadWorkflowState(internals, workflowId);
   if (workflowState !== null) {
@@ -190,7 +193,7 @@ export async function resume(
     }
   }
 
-  return resumeWorkflowFromStorage(internals, workflowId, true, callbacks);
+  return resumeWorkflowFromStorage(internals, workflowId, true, callbacks, onRecoveredWorkflow);
 }
 
 export async function fork(

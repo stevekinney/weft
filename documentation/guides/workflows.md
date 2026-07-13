@@ -224,6 +224,24 @@ Fresh-process recovery consults the resolver only for inline runs that were laun
 
 The resolver info includes `launchOptions.id` and current durable tags for recovered runs. Scheduled occurrences include `schedule.id` and the occurrence timestamp when one is known, so a resolver can branch on schedule origin without adding duplicate `scheduleId` fields to every workflow input.
 
+When a host also needs to rebuild a live event emitter, progress adapter, or other non-durable run surface, pass `onRecoveredWorkflow` to `recoverAll()`. Weft awaits this hook after services are re-provided and before the recovered generator advances, so the surface is ready for the first post-recovery event:
+
+```typescript partial
+const handles = await engine.recoverAll({
+  onRecoveredWorkflow: async ({ handle, input, launchOptions, schedule, services }) => {
+    await registerLiveRunSurface({
+      workflowId: handle.id,
+      input,
+      tags: launchOptions.tags,
+      schedule,
+      services,
+    });
+  },
+});
+```
+
+The callback receives the handle, workflow id and type, durable input, current launch tags, schedule metadata when present, and the resolved services value (or `undefined` for a run that did not use services). If the callback throws, Weft fails only that run with a `system` failure category and continues recovering siblings. Omitting the callback preserves the ordinary `recoverAll()` behavior.
+
 > Warning: if a recovered run has the durable services marker but the fresh engine was created without `resolveWorkflowServices`, Weft fails that run before the workflow body advances and emits a `DevelopmentWarningEvent` naming the workflow id and `EngineOptions.resolveWorkflowServices`. It never resumes the workflow with `ctx.services === undefined`.
 
 ## Bounded checkpoint growth

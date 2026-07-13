@@ -220,6 +220,7 @@ function unexpectedStartOrSignalCallbacks(): StartOrSignalCallbacks {
     swallowPromiseRejection: async () => {},
     enforceHistoryCircuitBreaker: unexpectedAsync,
     failWorkflowForUnavailableServices: unexpectedAsync,
+    failWorkflowForRecoveryHook: unexpectedAsync,
     failWorkflowForCheckpointDecodeError: unexpectedAsync,
     signalExistingWorkflow: unexpectedAsync,
   };
