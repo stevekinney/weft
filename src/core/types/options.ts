@@ -234,6 +234,18 @@ export interface ForkOptions {
 export interface EngineOptions<TServices = unknown> {
   storage?: WeftStorage;
   development?: boolean;
+  /**
+   * Select how engine-owned periodic work is driven. The default `'automatic'`
+   * profile starts in-process intervals for update-response cleanup, configured
+   * retention sweeps, alert re-evaluation, and the durable-timer scheduler used
+   * by {@link Engine.create}. Use `'manual'` in runtimes such as Cloudflare
+   * Durable Objects where the host must wake the engine through alarms or Cron
+   * triggers, then call {@link Engine.runMaintenance} from each wake-up.
+   *
+   * Manual mode rejects interval-dependent ownership and second-instance
+   * detection options instead of silently starting background work.
+   */
+  backgroundTasks?: 'automatic' | 'manual';
   serializer?: Serializer;
   retention?: RetentionPolicy;
   retentionSweepInterval?: Duration;

@@ -39,6 +39,7 @@ export interface RegistrationEntry {
 export interface ResolvedOptions {
   storage: WeftStorage;
   development: boolean;
+  backgroundTaskMode: 'automatic' | 'manual';
   checkpointHistory: number;
   checkpointSizeWarningThreshold: number;
   maxNestingDepth: number;

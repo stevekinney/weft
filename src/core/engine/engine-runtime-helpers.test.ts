@@ -6,11 +6,30 @@ import { Engine } from '../engine.ts';
 import { CleanupWarningEvent } from '../events.ts';
 import {
   createCleanupIntervalTick,
+  createQueuedInlineWorkflowStartHandler,
   createSecondInstanceDetectorResolver,
 } from './engine-runtime-helpers.ts';
 import { getInternals } from './internals.ts';
 
 describe('engine runtime helpers', () => {
+  it('closes queued-start message ports after the engine is collected', () => {
+    const closePortOne = mock(() => {});
+    const closePortTwo = mock(() => {});
+    const channel = {
+      port1: { close: closePortOne },
+      port2: { close: closePortTwo },
+    } as unknown as MessageChannel;
+    const handleQueuedStart = createQueuedInlineWorkflowStartHandler(
+      { deref: () => undefined } as WeakRef<Engine<object, object>>,
+      channel,
+    );
+
+    handleQueuedStart();
+
+    expect(closePortOne).toHaveBeenCalledTimes(1);
+    expect(closePortTwo).toHaveBeenCalledTimes(1);
+  });
+
   it('clears the cleanup interval when the engine has been collected', () => {
     const cleanupInterval = setInterval(() => {}, 1_000);
     const tracker = {

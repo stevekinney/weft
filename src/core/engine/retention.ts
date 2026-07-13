@@ -32,6 +32,10 @@ export function ensureRetentionSweepInterval(
   internals: EngineInternals,
   callbacks: RetentionSweepCallbacks,
 ): void {
+  if (internals.options.backgroundTaskMode === 'manual') {
+    internals.nextRetentionSweepAt = null;
+    return;
+  }
   if (!callbacks.hasConfiguredRetention()) {
     if (internals.retentionSweepInterval !== null) {
       clearInterval(internals.retentionSweepInterval ?? undefined);
