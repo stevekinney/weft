@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import type { ScanOptions } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 import { flush } from '../testing/storage-backends.test-support.ts';
+import { encode } from './codec.ts';
 import {
   clearEngineLeakWarningTokenForTesting,
   Engine,
@@ -12,6 +14,7 @@ import {
   setNextEngineLeakWarningTokenForTesting,
   shouldEmitEngineLeakWarningForTesting,
 } from './engine.ts';
+import { CleanupWarningEvent } from './events.ts';
 import { activity, workflow, type WorkflowContext } from './types.ts';
 
 async function forceFinalizers(stopWhen: () => boolean): Promise<void> {
@@ -122,6 +125,114 @@ describe('Engine lifecycle ergonomics', () => {
     await recovered.signal('recoverable-workflow', 'release', 'ok');
     await expect(recovered.getHandle('recoverable-workflow').result()).resolves.toBe('done:ok');
     recovered[Symbol.dispose]();
+  });
+
+  it('runs durable timers without constructing background intervals in manual mode', async () => {
+    const originalSetInterval = globalThis.setInterval;
+    const sleeper = workflow({ name: 'sleeper' }).execute(async function* (
+      ctx: WorkflowContext,
+    ): AsyncGenerator<unknown, string, unknown> {
+      yield* ctx.sleep('1m');
+      return 'awake';
+    });
+    let disposeEngine: (() => void) | undefined;
+
+    globalThis.setInterval = (() => {
+      throw new Error('manual background tasks must not create an interval');
+    }) as typeof setInterval;
+
+    try {
+      const engine = await Engine.create({
+        backgroundTasks: 'manual',
+        workflows: { sleeper },
+        retention: { completed: '1d' },
+        alerts: {
+          rules: [{ metric: 'workflow.failure_rate', threshold: 1, action: 'log' }],
+        },
+      });
+      disposeEngine = () => engine[Symbol.dispose]();
+      const handle = await engine.start('sleeper', undefined);
+      await flush();
+
+      await engine.runMaintenance(Date.now() + 60_000);
+
+      await expect(handle.result()).resolves.toBe('awake');
+    } finally {
+      disposeEngine?.();
+      globalThis.setInterval = originalSetInterval;
+    }
+  });
+
+  it('rejects interval-owning options in manual background-task mode', async () => {
+    expect(() => new Engine({ backgroundTasks: 'manual', detectSecondInstance: true })).toThrow(
+      'detectSecondInstance cannot be enabled when backgroundTasks is "manual"',
+    );
+    expect(() => new Engine({ backgroundTasks: 'manual', ownership: 'lease' })).toThrow(
+      'ownership cannot be "lease" when backgroundTasks is "manual"',
+    );
+    await expect(
+      Engine.create({ backgroundTasks: 'manual', startScheduler: true }),
+    ).rejects.toThrow('startScheduler cannot be true when backgroundTasks is "manual"');
+    expect(() => new Engine({ backgroundTasks: 'invalid' } as never)).toThrow(
+      'options.backgroundTasks must be "automatic" or "manual" when provided',
+    );
+  });
+
+  it('reports manual update-response cleanup failures without skipping the cycle', async () => {
+    class CleanupFailingStorage extends MemoryStorage {
+      override async *scan(
+        prefix: string,
+        options?: ScanOptions,
+      ): AsyncIterable<[string, Uint8Array]> {
+        if (prefix === 'upr:') throw new Error('manual cleanup exploded');
+        yield* super.scan(prefix, options);
+      }
+    }
+    using engine = new Engine({
+      backgroundTasks: 'manual',
+      storage: new CleanupFailingStorage(),
+    });
+    const warnings: CleanupWarningEvent[] = [];
+    engine.addEventListener(CleanupWarningEvent.type, (event) => warnings.push(event));
+
+    await engine.runMaintenance();
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]!.source).toBe('cleanupExpiredResponses');
+    expect(warnings[0]!.error.message).toBe('manual cleanup exploded');
+  });
+
+  it('runs update-response cleanup and retention during manual maintenance', async () => {
+    const storage = new MemoryStorage();
+    const completes = workflow({ name: 'completes' }).execute(async function* () {
+      return 'done';
+    });
+    const engine = await Engine.create({
+      backgroundTasks: 'manual',
+      storage,
+      retention: { completed: 0 },
+      workflows: { completes },
+    });
+
+    try {
+      const handle = await engine.start('completes', undefined, { id: 'retained-workflow' });
+      await expect(handle.result()).resolves.toBe('done');
+      await storage.put(
+        'upr:expired-update',
+        encode({
+          updateId: 'expired-update',
+          result: 'stale',
+          createdAt: Date.now() - 25 * 60 * 60 * 1_000,
+        }),
+      );
+
+      await engine.runMaintenance();
+
+      expect(await storage.get('upr:expired-update')).toBeNull();
+      expect(await engine.get('retained-workflow')).toBeNull();
+    } finally {
+      engine[Symbol.dispose]();
+    }
   });
 
   it('registers activity definitions through register()', async () => {

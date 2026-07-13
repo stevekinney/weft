@@ -57,7 +57,12 @@ export class AlertManager implements Disposable {
   #getNow: () => number;
   #tickInterval: ReturnType<typeof setInterval> | null;
 
-  constructor(target: EventTarget, options: AlertingOptions, getNow: () => number = Date.now) {
+  constructor(
+    target: EventTarget,
+    options: AlertingOptions,
+    getNow: () => number = Date.now,
+    startBackgroundTick = true,
+  ) {
     this.#target = target;
     this.#options = options;
     this.#getNow = getNow;
@@ -93,7 +98,14 @@ export class AlertManager implements Disposable {
 
     // Periodic tick to re-evaluate rules even when no events arrive,
     // so alerts in 'firing' state can auto-resolve once the window expires.
-    this.#tickInterval = setInterval(this.#evaluateAll.bind(this), TICK_INTERVAL_MS);
+    this.#tickInterval = startBackgroundTick
+      ? setInterval(this.#evaluateAll.bind(this), TICK_INTERVAL_MS)
+      : null;
+  }
+
+  /** Re-evaluate every rule once, for hosts that drive maintenance explicitly. */
+  tick(): void {
+    this.#evaluateAll();
   }
 
   #evaluateAll(): void {

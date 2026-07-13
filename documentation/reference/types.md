@@ -628,6 +628,7 @@ Immediate result durability applies only when the activity has an idempotency ke
 interface EngineOptions {
   storage?: Storage;
   development?: boolean;
+  backgroundTasks?: 'automatic' | 'manual';
   serializer?: Serializer;
   retention?: RetentionPolicy;
   retentionSweepInterval?: Duration;

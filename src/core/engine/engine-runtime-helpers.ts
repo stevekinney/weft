@@ -24,6 +24,28 @@ export function isActivityDefinition(value: unknown): value is AnyActivityDefini
   );
 }
 
+type EngineCreateBackgroundTaskOptions = {
+  backgroundTasks?: 'automatic' | 'manual' | undefined;
+  recover?: boolean | undefined;
+  startScheduler?: boolean | undefined;
+};
+
+export function validateEngineCreateBackgroundTaskOptions(
+  options: EngineCreateBackgroundTaskOptions,
+): void {
+  if (options.backgroundTasks === 'manual' && options.startScheduler === true) {
+    throw new Error('startScheduler cannot be true when backgroundTasks is "manual"');
+  }
+}
+
+export function shouldStartEngineScheduler(
+  options: EngineCreateBackgroundTaskOptions,
+  backgroundTaskMode: 'automatic' | 'manual',
+): boolean {
+  if (backgroundTaskMode === 'manual') return false;
+  return options.startScheduler ?? options.recover !== false;
+}
+
 /**
  * Build the {@link InlineLaunchQueueCallbacks} for an engine. Single owner for
  * the scheduled-flush handler and the dispose-time drain so both advance a

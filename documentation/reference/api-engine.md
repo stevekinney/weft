@@ -22,6 +22,7 @@ Creates a new engine instance. All options are optional — sensible defaults ar
 | -------------------------------- | -------------------------- | --------------------- | ------------------------------------------------------------------------------ |
 | `storage`                        | `Storage`                  | `new MemoryStorage()` | Storage backend for workflow state and checkpoints                             |
 | `development`                    | `boolean`                  | `false`               | Enable development-mode checkpoint validation                                  |
+| `backgroundTasks`                | `'automatic' \| 'manual'`  | `'automatic'`         | Run periodic engine maintenance in-process or through explicit host ticks      |
 | `serializer`                     | `Serializer`               | built-in codec        | Custom serialization for checkpoint data                                       |
 | `retention`                      | `RetentionPolicy`          | `undefined`           | Default retention policy for completed, failed, and cancelled workflows        |
 | `retentionSweepInterval`         | `Duration`                 | internal default      | Interval for automatic retention sweeps                                        |
@@ -77,7 +78,44 @@ By default the durable-timer polling loop starts whenever recovery runs (`recove
 
 The `schedulerPollIntervalMs` option sets how often that poller scans for expired timers, defaulting to `DEFAULT_POLL_INTERVAL_MS` (1000ms). It is primarily a test seam: a regression test that asserts `startScheduler` armed (or did not arm) the poller can drop the interval to ~10ms instead of waiting a full real poll cycle, since the poll loop runs on a real `setInterval` rather than a macrotask.
 
+Set `backgroundTasks: 'manual'` for serverless runtimes that cannot keep process-local intervals alive. Manual mode never starts the scheduler, update-response cleanup, retention, or alert-evaluation intervals; call `engine.runMaintenance()` from the host's alarm or Cron wake-up instead. Because lease renewal and second-instance detection require heartbeats, manual mode rejects `ownership: 'lease'`, `detectSecondInstance: true`, and `startScheduler: true` with actionable construction errors.
+
 TypeScript treats `Engine.create({ workflows: {} })` the same as omitting `workflows`: both return the default-registry engine type. A non-empty map narrows the returned engine type to those workflow definitions, so `engine.start(...)` autocompletes their names and checks their input/output types.
+
+### `runMaintenance()`
+
+```ts
+import { Engine } from '@lostgradient/weft';
+
+const manualEngine = new Engine({ backgroundTasks: 'manual' });
+await manualEngine.runMaintenance();
+manualEngine[Symbol.dispose]();
+```
+
+Run one externally driven maintenance cycle. The cycle fires due durable timers, delayed starts, and scheduled occurrences; deletes expired update responses; applies configured workflow retention; and re-evaluates alert rules. Await the returned promise before allowing the host to suspend or scheduling another cycle.
+
+Cloudflare Durable Objects can connect this to an alarm, while a Workers Cron handler can signal the owning Durable Object to run the same method:
+
+```ts
+import { Engine, MemoryStorage } from '@lostgradient/weft';
+
+const durableObjectStorage = new MemoryStorage(); // Replace with the Durable Object adapter.
+const workflows = {};
+
+export class WorkflowDurableObject {
+  private readonly engine = Engine.create({
+    storage: durableObjectStorage,
+    backgroundTasks: 'manual',
+    workflows,
+  });
+
+  async alarm(): Promise<void> {
+    await (await this.engine).runMaintenance();
+  }
+}
+```
+
+The storage adapter and `workflows` map are host-owned in this example. Configure the next `ctx.storage.setAlarm(...)` wake-up, or route a Cron trigger to the object, according to the deployment's required cadence.
 
 ### `register()`
 
