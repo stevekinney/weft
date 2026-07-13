@@ -165,7 +165,7 @@ export class WorkflowTypeNotRegisteredForRecoveryError extends WeftError<'Workfl
       'WorkflowTypeNotRegisteredForRecoveryError',
       `Cannot recover ${missingWorkflowCount} running workflow(s): workflow type(s) not registered: ${summarizedTypes}. ` +
         'Register the missing workflow types before calling `recoverAll()`, or pass ' +
-        '`{ acknowledgeUnknownWorkflowTypes: true }` (dangerous — see the current release upgrade guide).',
+        '`{ acknowledgeUnknownWorkflowTypes: true }` (dangerous — follow the current release guidance in `BREAKING-CHANGES.md`).',
     );
     this.registeredTypes = registeredTypes;
     this.missingTypes = missingTypes;
