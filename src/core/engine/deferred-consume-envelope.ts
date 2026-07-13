@@ -26,6 +26,7 @@
  */
 
 const DEFERRED_CONSUME_BRAND: unique symbol = Symbol('weft.deferredConsume');
+const KEYED_RACE_RESULT_BRAND: unique symbol = Symbol('weft.keyedRaceResult');
 
 /**
  * A branch result whose real value is produced by a single deferred consume that
@@ -36,6 +37,27 @@ export type DeferredConsumeEnvelope = {
   /** Perform the single destructive consume and return the consumed payload. */
   readonly finalize: () => Promise<unknown>;
 };
+
+type KeyedRaceResultEnvelope = {
+  readonly [KEYED_RACE_RESULT_BRAND]: true;
+  readonly key: string;
+  readonly value: unknown;
+};
+
+export function createKeyedRaceResultEnvelope(
+  key: string,
+  value: unknown,
+): KeyedRaceResultEnvelope {
+  return { [KEYED_RACE_RESULT_BRAND]: true, key, value };
+}
+
+function isKeyedRaceResultEnvelope(value: unknown): value is KeyedRaceResultEnvelope {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as Record<PropertyKey, unknown>)[KEYED_RACE_RESULT_BRAND] === true
+  );
+}
 
 /** Wrap a deferred consume into a branded envelope. */
 export function createDeferredConsumeEnvelope(
@@ -58,7 +80,9 @@ export function isDeferredConsumeEnvelope(value: unknown): value is DeferredCons
  * cache. A winning `wait-signal` branch surfaces a {@link DeferredConsumeEnvelope}
  * whose `finalize()` performs the single consume; a nested `ctx.all` branch
  * surfaces an ARRAY that may hold envelopes at arbitrary positions, so arrays are
- * walked and each element finalized. Any other value passes through untouched.
+ * walked and each element finalized. A nested `ctx.raceKeyed()` winner is walked
+ * through its value while retaining its key. Any other value passes through
+ * untouched.
  *
  * This runs only on the WINNING path (race winner, or every branch of a settled
  * `ctx.all`), so finalizing here is exactly the linearization point of "this
@@ -76,6 +100,9 @@ export async function finalizeAndUnwrap(value: unknown): Promise<unknown> {
   }
   if (Array.isArray(value)) {
     return Promise.all(value.map((element) => finalizeAndUnwrap(element)));
+  }
+  if (isKeyedRaceResultEnvelope(value)) {
+    return { key: value.key, value: await finalizeAndUnwrap(value.value) };
   }
   return value;
 }

@@ -53,6 +53,33 @@ export type WorkflowOperationTupleResult<
   -readonly [TIndex in keyof TOperations]: WorkflowOperationResult<TOperations[TIndex]>;
 };
 
+/**
+ * Discriminated winner returned by {@link WorkflowContext.raceKeyed}. Checking
+ * `key` narrows `value` to the result type of that named workflow operation.
+ *
+ * @example
+ * ```ts
+ * import type { WorkflowKeyedRaceResult, WorkflowOperation } from '@lostgradient/weft';
+ *
+ * type Winner = WorkflowKeyedRaceResult<{
+ *   event: WorkflowOperation<string>;
+ *   idle: WorkflowOperation<void>;
+ * }>;
+ *
+ * function handleWinner(winner: Winner): string {
+ *   return winner.key === 'event' ? winner.value : 'timed out';
+ * }
+ * ```
+ */
+export type WorkflowKeyedRaceResult<
+  TOperations extends Readonly<Record<string, WorkflowOperation<unknown>>>,
+> = {
+  [TKey in keyof TOperations]: {
+    key: TKey;
+    value: WorkflowOperationResult<TOperations[TKey]>;
+  };
+}[keyof TOperations];
+
 type RunAllBranchResult<TBranch> = TBranch extends readonly [
   execute: infer TExecute,
   ...rest: unknown[],
@@ -284,6 +311,9 @@ export interface WorkflowContext<
   race<const TOperations extends readonly WorkflowOperation<unknown>[]>(
     operations: TOperations,
   ): WorkflowOperation<WorkflowOperationTupleResult<TOperations>[number]>;
+  raceKeyed<const TOperations extends Readonly<Record<string, WorkflowOperation<unknown>>>>(
+    operations: TOperations,
+  ): WorkflowOperation<WorkflowKeyedRaceResult<TOperations>>;
   memo<T>(key: string, fn: () => T | Promise<T>): WorkflowOperation<T>;
   offload<T>(key: string, fn: () => Promise<T>): WorkflowOperation<OffloadReference>;
   stream(

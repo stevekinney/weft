@@ -96,32 +96,37 @@ async function* fetchWithFallback(ctx: Context, url: string) {
 
 This is useful for timeout patterns, redundant fetches, and any scenario where you want the fastest answer. The engine records whichever result arrives first as the checkpoint, so on recovery you get the same winner.
 
-> [!WARNING] `ctx.race` selects a result; it does _not_ cancel a losing activity
-> When a branch wins, the race tears down the _coordination_ work of the losers: a losing `ctx.sleep` clears its timer, and a losing `ctx.waitForSignal` releases its waiter. But a losing **activity is not cancelled**—its `ActivityContext.signal` does not fire, and the activity function runs to completion in the background. The race only stops _awaiting_ it; the result is discarded, but the work, and any side effects, still happen.
+> [!WARNING] `ctx.race` cancellation is cooperative
+> When a branch wins, the race tears down the coordination work of the losers: a losing `ctx.sleep` clears its timer, a losing `ctx.waitForSignal` releases its waiter, and a losing activity receives an abort through `ActivityContext.signal`. The race stops awaiting the losing result, but an activity that ignores the signal can keep running and producing side effects.
 >
-> So `ctx.race([ctx.run('slowApiCall'), ctx.sleep('30s')])` does not stop `slowApiCall` when the sleep wins—it keeps running, consuming connections, compute, and external API budget, until it finishes on its own. Design race branches to be idempotent or pair them with compensation, because Weft will not clean up after a losing activity. To actually stop a losing activity, see [Cancelling a running activity](./activities.md#cancelling-a-running-activity).
+> Pass `ActivityContext.signal` into interruptible work such as `fetch` and check it in long-running loops. Keep side effects idempotent or fenced because an abort signal cannot roll back work that already happened. See [Cancelling a running activity](./activities.md#cancelling-a-running-activity).
 
-A common pattern pairs a real operation with a sleep to implement a deadline:
+A common pattern pairs an event with a sleep to implement a deadline. Use `ctx.raceKeyed()` when the branch identity matters—the key is engine-owned metadata, so the signal payload only needs to carry domain data:
 
 ```typescript partial
 async function* example(ctx: Context) {
-  const result = yield* ctx.race([
-    ctx.run('callExternalApi', payload),
-    ctx.sleep('30s'), // returns undefined after 30 seconds
-  ]);
+  const winner = yield* ctx.raceKeyed({
+    event: ctx.waitForSignal<{ pullRequestNumber: number }>('event'),
+    idle: ctx.sleep('7d'),
+  });
 
-  if (result === undefined) {
-    // The sleep won—the API call took too long
-    yield* ctx.run('notifyTimeout', payload);
+  if (winner.key === 'event') {
+    // winner.value narrows to the event payload here.
+    return winner.value.pullRequestNumber;
   }
+
+  // The idle sleep won; its value is undefined.
+  return undefined;
 }
 ```
+
+The keyed winner is checkpointed as one durable result. Recovery returns the same `{ key, value }` without re-running the winning branch. Branch names and their order must stay deterministic across workflow retries, just like the positional branch order passed to `ctx.race()`.
 
 Signal waits can also participate in a race. A losing `ctx.waitForSignal()` branch does not consume its durable signal; the signal remains buffered for a later wait or replay. Only the winning coordinator finalizes the signal value, and nested `ctx.all()` / `ctx.race()` coordinators carry that deferred consume up to the top coordinator before the result is checkpointed.
 
 ## Under the hood
 
-Both `ctx.all()` and `ctx.race()` work by collecting the first yielded operation from each generator you pass in, then emitting a single `parallel` or `race` operation request. The engine handles the concurrent dispatch and result collection internally.
+`ctx.all()`, `ctx.race()`, and `ctx.raceKeyed()` work by collecting the first yielded operation from each generator you pass in, then emitting a single `parallel` or `race` operation request. The engine handles the concurrent dispatch and result collection internally.
 
 Note that `ctx.race()` emits `{ type: 'race', ... }` rather than `{ type: 'parallel', ... }`. Each sub-operation also advances the workflow's `stepIndex`, which is why subsequent steps remain replay-stable after a parallel or race completes.
 

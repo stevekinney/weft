@@ -581,6 +581,53 @@ describe('crash recovery', () => {
     engine2[Symbol.dispose]();
   });
 
+  it('replays a checkpointed ctx.raceKeyed winner with its branch identity (#679)', async () => {
+    const storage = new MemoryStorage();
+
+    function makeWorkflow() {
+      return workflow({ name: 'keyed-race-signal-crash' }).execute(async function* (ctx) {
+        const winner = yield* ctx.raceKeyed({
+          event: ctx.waitForSignal<string>('event'),
+          idle: ctx.sleep('30s'),
+        });
+        const gate = yield* ctx.waitForSignal<string>('gate');
+        return { winner, gate };
+      });
+    }
+
+    const eventSignalPrefix = `sig:${encodeStorageKeyComponent('wf-keyed-race')}:${encodeStorageKeyComponent('event')}:`;
+    const hasBufferedEvent = async () => {
+      for await (const _entry of storage.scan(eventSignalPrefix, { limit: 1 })) return true;
+      return false;
+    };
+
+    const engine1 = new Engine({ storage });
+    engine1.register(makeWorkflow());
+    await engine1.start('keyed-race-signal-crash', null, { id: 'wf-keyed-race' });
+    await flush();
+    await engine1.signal('wf-keyed-race', 'event', 'event-payload');
+    await waitForCondition(async () => !(await hasBufferedEvent()), {
+      timeoutMs: 2000,
+      label: 'keyed race consumed the event and checkpointed before the crash',
+    });
+    expect(await storage.get(STORAGE_KEYS.checkpoint('wf-keyed-race'))).not.toBeNull();
+    engine1[Symbol.dispose]();
+
+    const engine2 = new Engine({ storage });
+    engine2.register(makeWorkflow());
+    const handles = await engine2.recoverAll();
+    expect(handles).toHaveLength(1);
+    await flush();
+
+    await engine2.signal('wf-keyed-race', 'gate', 'gate-payload');
+    expect(await handles[0]!.result()).toEqual({
+      winner: { key: 'event', value: 'event-payload' },
+      gate: 'gate-payload',
+    });
+
+    engine2[Symbol.dispose]();
+  });
+
   it('resumes after crash during sleep and completes when timer fires', async () => {
     const { TestEngine } = await import('../testing/test-engine.ts');
 

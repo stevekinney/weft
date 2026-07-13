@@ -128,6 +128,9 @@ interface WorkflowContext {
   ): WorkflowOperation<ChildWorkflowHandle<TResult>>;
   all(operations: WorkflowOperation<unknown>[]): WorkflowOperation<unknown[]>;
   race(operations: WorkflowOperation<unknown>[]): WorkflowOperation<unknown>;
+  raceKeyed(
+    operations: Record<string, WorkflowOperation<unknown>>,
+  ): WorkflowOperation<{ key: string; value: unknown }>;
   offload<T>(key: string, fn: () => Promise<T>): WorkflowOperation<OffloadReference>;
   stream(
     key: string,

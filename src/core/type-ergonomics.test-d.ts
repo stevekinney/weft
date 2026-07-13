@@ -199,6 +199,23 @@ const welcomeBuilder = workflow({ name: 'localWelcome' })
       ctx.run('formatGreeting', input),
       ctx.run(async () => 42),
     ]);
+    const keyedRace = yield* ctx.raceKeyed({
+      greeting: ctx.run('formatGreeting', input),
+      count: ctx.run(async () => 42),
+    });
+    if (keyedRace.key === 'greeting') {
+      const greetingWinner: string = keyedRace.value;
+      // @ts-expect-error the greeting branch cannot produce a number.
+      const invalidGreetingWinner: number = keyedRace.value;
+      void greetingWinner;
+      void invalidGreetingWinner;
+    } else {
+      const countWinner: number = keyedRace.value;
+      // @ts-expect-error the count branch cannot produce a string.
+      const invalidCountWinner: string = keyedRace.value;
+      void countWinner;
+      void invalidCountWinner;
+    }
     const offloadReference = yield* ctx.offload('welcome-output', async () => child);
     const loaded = yield* ctx.load<WelcomeOutput>(offloadReference);
     yield* ctx.archive('welcome-output', loaded);
@@ -223,6 +240,7 @@ const welcomeBuilder = workflow({ name: 'localWelcome' })
     void customer;
     void attributes;
     void typedParallel;
+    void keyedRace;
     void raced;
     void typedRace;
     void streamUrl;

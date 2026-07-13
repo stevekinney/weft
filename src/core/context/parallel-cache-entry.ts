@@ -51,7 +51,7 @@ export type ParallelOperationCacheEntry = {
   formatVersion: 2;
   variant: 'all' | 'race' | 'run-all';
   branches: ParallelBranchSlot[];
-  /** Ordered key list for `run-all`; absent for `all` and `race`. */
+  /** Ordered key list for `run-all` or `raceKeyed`; absent for `all` and positional `race`. */
   branchNames?: string[];
   subOperationCount: number;
 };
@@ -128,12 +128,7 @@ function hasValidBranchTopology(
   branchNames: unknown,
 ): boolean {
   if (variant === 'race') {
-    // Race always caches exactly one fulfilled winner; anything else is
-    // malformed and would skip the stepIndex advance on resume.
-    if (branches.length !== 1 || subOperationCount < 1) return false;
-    const winner = branches[0] as Record<string, unknown> | null | undefined;
-    if (winner == null || typeof winner !== 'object') return false;
-    return winner['status'] === 'fulfilled' && branchNames === undefined;
+    return hasValidRaceTopology(branches, subOperationCount, branchNames);
   }
   if (branches.length !== subOperationCount) {
     return false;
@@ -142,6 +137,23 @@ function hasValidBranchTopology(
     return Array.isArray(branchNames) && branchNames.length === subOperationCount;
   }
   return branchNames === undefined;
+}
+
+function hasValidRaceTopology(
+  branches: unknown[],
+  subOperationCount: number,
+  branchNames: unknown,
+): boolean {
+  // Race always caches exactly one fulfilled winner; anything else is malformed
+  // and would skip the stepIndex advance on resume.
+  if (branches.length !== 1 || subOperationCount < 1) return false;
+  const winner = branches[0] as Record<string, unknown> | null | undefined;
+  if (winner == null || typeof winner !== 'object') return false;
+  if (winner['status'] !== 'fulfilled') return false;
+  return (
+    branchNames === undefined ||
+    (Array.isArray(branchNames) && branchNames.length === subOperationCount)
+  );
 }
 
 /** Type guard for the v2 parallel-operation cache entry shape. */

@@ -136,6 +136,8 @@ export type ContextOperationRequest =
       type: 'race';
       operationId: string;
       operations: ContextOperationRequest[];
+      /** Ordered branch names for `ctx.raceKeyed`; absent for positional `ctx.race`. */
+      branchNames?: string[];
       callerStack?: string;
     }
   | {

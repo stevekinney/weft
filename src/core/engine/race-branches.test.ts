@@ -377,6 +377,133 @@ describe('#456 ctx.race / ctx.all with wait-signal branches', () => {
   });
 });
 
+describe('#679 ctx.raceKeyed winner metadata', () => {
+  it('returns the signal branch key and payload when the signal wins', async () => {
+    await using engine = new Engine();
+    engine.register(
+      workflow({ name: 'keyed-race-signal' }).execute(async function* (ctx: WorkflowContext) {
+        return yield* ctx.raceKeyed({
+          event: ctx.waitForSignal<string>('event'),
+          idle: ctx.sleep('5s'),
+        });
+      }),
+    );
+
+    const handle = await engine.start('keyed-race-signal', null, { id: 'keyed-signal' });
+    await engine.signal('keyed-signal', 'event', 'payload');
+
+    expect(await handle.result()).toEqual({ key: 'event', value: 'payload' });
+  });
+
+  it('returns the sleep branch key when the timeout wins', async () => {
+    await using engine = new Engine();
+    engine.register(
+      workflow({ name: 'keyed-race-sleep' }).execute(async function* (ctx: WorkflowContext) {
+        return yield* ctx.raceKeyed({
+          event: ctx.waitForSignal<string>('event'),
+          idle: ctx.sleep('10ms'),
+        });
+      }),
+    );
+
+    const handle = await engine.start('keyed-race-sleep', null);
+
+    expect(await handle.result()).toEqual({ key: 'idle', value: undefined });
+  });
+
+  it('returns the activity branch key and value when the activity wins', async () => {
+    await using engine = new Engine();
+    engine.register(
+      workflow({ name: 'keyed-race-activity' })
+        .activities({ work: async () => 'complete' })
+        .execute(async function* (ctx: WorkflowContext) {
+          return yield* ctx.raceKeyed({
+            work: ctx.run('work'),
+            idle: ctx.sleep('5s'),
+          });
+        }),
+    );
+
+    const handle = await engine.start('keyed-race-activity', null);
+
+    expect(await handle.result()).toEqual({ key: 'work', value: 'complete' });
+  });
+
+  it('releases a losing signal waiter without consuming a later signal', async () => {
+    await using engine = new Engine();
+    engine.register(
+      workflow({ name: 'keyed-race-signal-loser' })
+        .activities({ work: async () => 'complete' })
+        .execute(async function* (ctx: WorkflowContext) {
+          const winner = yield* ctx.raceKeyed({
+            event: ctx.waitForSignal<string>('event'),
+            work: ctx.run('work'),
+          });
+          const laterEvent = yield* ctx.waitForSignal<string>('event');
+          return { winner, laterEvent };
+        }),
+    );
+
+    const handle = await engine.start('keyed-race-signal-loser', null, {
+      id: 'keyed-signal-loser',
+    });
+    await waitForCondition(
+      () => getInternals(engine).parkedInlineWorkflows.has('keyed-signal-loser'),
+      { timeoutMs: 2000, label: 'workflow parked on the later event wait' },
+    );
+    await engine.signal('keyed-signal-loser', 'event', 'later-payload');
+
+    expect(await handle.result()).toEqual({
+      winner: { key: 'work', value: 'complete' },
+      laterEvent: 'later-payload',
+    });
+  });
+
+  it('preserves keyed signal metadata through a nested race coordinator', async () => {
+    await using engine = new Engine();
+    engine.register(
+      workflow({ name: 'nested-keyed-race-signal' }).execute(async function* (
+        ctx: WorkflowContext,
+      ) {
+        return yield* ctx.race([
+          ctx.raceKeyed({
+            event: ctx.waitForSignal<string>('event'),
+            innerIdle: ctx.sleep('5s'),
+          }),
+          ctx.sleep('10s'),
+        ]);
+      }),
+    );
+
+    const handle = await engine.start('nested-keyed-race-signal', null, {
+      id: 'nested-keyed-signal',
+    });
+    await engine.signal('nested-keyed-signal', 'event', 'payload');
+
+    expect(await handle.result()).toEqual({ key: 'event', value: 'payload' });
+  });
+
+  it('rejects duplicate signal names through the existing coordination validation', async () => {
+    await using engine = new Engine();
+    engine.register(
+      workflow({ name: 'keyed-race-duplicate-signal' }).execute(async function* (
+        ctx: WorkflowContext,
+      ) {
+        return yield* ctx.raceKeyed({
+          first: ctx.waitForSignal('event'),
+          second: ctx.waitForSignal('event'),
+        });
+      }),
+    );
+
+    const handle = await engine.start('keyed-race-duplicate-signal', null);
+
+    await expect(handle.result()).rejects.toThrow(
+      'cannot have two branches waiting on the same signal',
+    );
+  });
+});
+
 describe('#456 a losing wait-signal branch must not consume the signal', () => {
   it('a losing wait-signal branch leaves the signal for a later top-level waitForSignal', async () => {
     // The supersede idiom: race a waitForSignal against an instant activity. The

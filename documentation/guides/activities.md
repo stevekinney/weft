@@ -107,7 +107,7 @@ const processLargeFile = async (path: string, context?: ActivityContext) => {
 
 ### Cancelling a running activity
 
-Activity cancellation in Weft is **cooperative**, and the `ActivityContext.signal` fires on two events: **workflow cancellation** (`engine.cancel(id)` / `handle.cancel()`) and an **inline per-attempt `timeout` expiry**, configured through [Per-call options](#per-call-options). On workflow cancellation Weft aborts the workflow's `AbortController` and every in-flight activity sees its `ActivityContext.signal` flip to aborted; on an inline per-attempt timeout only that attempt's signal aborts. (Worker-pool mode bounds an attempt with `visibilityTimeout`, the claim/visibility expiry, which does not abort `ctx.signal` this way.) In both cases the signal is an _offer_ to stop, not a forced interrupt—an activity that does nothing with it still runs to completion. This is different from Temporal's `CancellationScope.cancel()`, which interrupts at `await` boundaries preemptively. To make an activity actually stop, it has to check the signal:
+Activity cancellation in Weft is **cooperative**, and the `ActivityContext.signal` fires on workflow cancellation (`engine.cancel(id)` / `handle.cancel()`), an inline per-attempt `timeout` expiry configured through [Per-call options](#per-call-options), or when the activity loses a `ctx.race()`. On workflow cancellation Weft aborts the workflow's `AbortController`; on a timeout or race loss only that activity attempt's signal aborts. (Worker-pool mode bounds an attempt with `visibilityTimeout`, the claim/visibility expiry, which does not abort `ctx.signal` this way.) In every case the signal is an _offer_ to stop, not a forced interrupt—an activity that does nothing with it still runs to completion. This is different from Temporal's `CancellationScope.cancel()`, which interrupts at `await` boundaries preemptively. To make an activity actually stop, it has to check the signal:
 
 ```typescript partial
 const pollUntilReady = async (jobId: string, context?: ActivityContext) => {
@@ -129,10 +129,10 @@ const streamReport = async (url: string, context?: ActivityContext) => {
 };
 ```
 
-> [!WARNING] `ctx.race` does not cancel a losing activity
-> It is tempting to read `ctx.race([ctx.run('longJob'), ctx.sleep('5s')])` as "run the job, but cancel it after 5 seconds." It is not. `ctx.race` is a _result-selection_ primitive: when the sleep wins, the race stops _awaiting_ `longJob`, but `longJob` keeps running to completion—its `ActivityContext.signal` never fires. The losing activity's result is discarded; its work, and its side effects, are not.
+> [!WARNING] `ctx.race` cancellation is cooperative
+> When the sleep wins in `ctx.race([ctx.run('longJob'), ctx.sleep('5s')])`, the race stops awaiting `longJob` and aborts its `ActivityContext.signal`. The activity only stops if its implementation observes that signal; work and side effects can continue when it does not.
 >
-> So `ctx.race` is **not** a `CancellationScope` replacement for activities. It is the right tool when the losing work is cheap enough to let finish (a sub-second call, an idempotent fetch). To genuinely stop a long-running activity, you need one of: workflow-level cancellation (`engine.cancel`), an inline per-attempt `timeout` (both fire the activity's signal; in worker-pool mode `visibilityTimeout` bounds the attempt but does not fire the signal), an activity that imposes its own internal deadline, or a cancellation token you pass through the activity's _input_ and check cooperatively. Losing a `ctx.race` is none of those, so it does not fire the signal—the loser keeps running. Choose race-with-sleep only when running the loser to completion is acceptable.
+> `ctx.race` is therefore not a preemptive `CancellationScope` replacement. Pass the signal into interruptible work and check it in long-running loops. Keep side effects idempotent or fenced because cooperative cancellation cannot roll back work that already happened.
 
 ### Fencing external writes
 

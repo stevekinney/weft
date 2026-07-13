@@ -173,6 +173,31 @@ describe('Worker replay operation signatures', () => {
     expect(first.stableFieldsDigest).not.toBe(second.stableFieldsDigest);
   });
 
+  it('includes keyed race branch names in replay signatures', async () => {
+    const operation = {
+      type: 'race' as const,
+      operationId: 'race-keyed',
+      operations: [
+        {
+          type: 'sleep' as const,
+          operationId: 'race-keyed:0',
+          duration: 1_000,
+          scheduledFireAt: 10_000,
+        },
+      ],
+    };
+    const event = await createWorkerReplayOperationSignature(
+      { ...operation, branchNames: ['event'] },
+      MIN_WORKER_PROTOCOL_MESSAGE_BYTES,
+    );
+    const idle = await createWorkerReplayOperationSignature(
+      { ...operation, branchNames: ['idle'] },
+      MIN_WORKER_PROTOCOL_MESSAGE_BYTES,
+    );
+
+    expect(event.stableFieldsDigest).not.toBe(idle.stableFieldsDigest);
+  });
+
   it('keeps sleep signatures stable when scheduled fire times change', async () => {
     const first = await createWorkerReplayOperationSignature(
       {

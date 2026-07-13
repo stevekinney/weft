@@ -203,6 +203,7 @@ export type {
   WorkflowFunction,
   WorkflowGenerator,
   WorkflowId,
+  WorkflowKeyedRaceResult,
   WorkflowLogLevel,
   WorkflowLogRecord,
   WorkflowLogger,

@@ -160,6 +160,7 @@ export function* race(
   context: Context,
   internals: ContextInternals,
   operations: Generator<ContextOperationRequest, unknown, unknown>[],
+  branchNames?: string[],
 ): Generator<ContextOperationRequest, unknown, unknown> {
   const step = internals.stepIndex++;
 
@@ -172,15 +173,7 @@ export function* race(
           `ctx.race step ${step} found a cached entry of variant '${cached.variant}'. The same step must use the same parallel primitive across retries.`,
         );
       }
-      // Branch count must be deterministic across retries. A workflow
-      // that changed `operations.length` between attempts would
-      // otherwise skip the wrong number of sub-operations on stepIndex
-      // advancement.
-      if (operations.length !== cached.subOperationCount) {
-        throw new BranchTopologyChangedError(
-          `ctx.race branch count changed across retry: expected ${cached.subOperationCount}, got ${operations.length}. Branch count must be deterministic.`,
-        );
-      }
+      assertRaceBranchTopology(operations.length, branchNames, cached);
       // Race only ever caches a fulfilled winner. The topology guard in
       // hasValidBranchTopology requires race entries to have exactly one
       // fulfilled slot, so by the time we reach this code the winner is
@@ -207,6 +200,7 @@ export function* race(
     type: 'race',
     operationId,
     operations: subOperations,
+    ...(branchNames !== undefined ? { branchNames } : {}),
     callerStack,
   };
 
@@ -221,9 +215,39 @@ export function* race(
     formatVersion: 2,
     variant: 'race',
     branches: [{ status: 'fulfilled', value: result, operationId: `${operationId}:winner` }],
+    ...(branchNames !== undefined ? { branchNames } : {}),
     subOperationCount: subOperations.length,
   } satisfies ParallelOperationCacheEntry);
   return result;
+}
+
+function sameBranchNames(left: string[] | undefined, right: string[] | undefined): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return left.length === right.length && left.every((name, index) => name === right[index]);
+}
+
+function assertRaceBranchTopology(
+  operationCount: number,
+  branchNames: string[] | undefined,
+  cached: ParallelOperationCacheEntry,
+): void {
+  // Count and keyed branch order must be deterministic across retries. A changed
+  // topology would otherwise skip the wrong sub-operation steps or attach the
+  // cached winner value to a different public key.
+  if (operationCount !== cached.subOperationCount) {
+    throw new BranchTopologyChangedError(
+      `ctx.race branch count changed across retry: expected ${cached.subOperationCount}, got ${operationCount}. Branch count must be deterministic.`,
+    );
+  }
+  if (!sameBranchNames(branchNames, cached.branchNames)) {
+    throw new BranchTopologyChangedError(
+      `ctx.race branch names changed across retry: expected ${formatBranchNames(cached.branchNames)}, got ${formatBranchNames(branchNames)}. Branch names and order must be deterministic.`,
+    );
+  }
+}
+
+function formatBranchNames(branchNames: string[] | undefined): string {
+  return branchNames === undefined ? 'positional branches' : JSON.stringify(branchNames);
 }
 
 /**

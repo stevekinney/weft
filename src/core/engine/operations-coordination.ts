@@ -10,7 +10,7 @@ import {
   type RunAllBranch,
   type RunAllBranchOutcome,
 } from '../engine-helpers.ts';
-import { finalizeAndUnwrap } from './deferred-consume-envelope.ts';
+import { createKeyedRaceResultEnvelope, finalizeAndUnwrap } from './deferred-consume-envelope.ts';
 import type { EngineInternals } from './internals.ts';
 import {
   executeActivityOperationResult as executeActivityOperationResultFromInternals,
@@ -306,8 +306,11 @@ export async function processRaceOperation(
     // Abort losing sub-operations once the race settles so background work does
     // not keep consuming budget or emit events with no observer.
     const controller = new AbortController();
-    const subOperations = operation.operations.map((subOperation) =>
-      callbacks.executeSubOperation(workflowId, subOperation, controller.signal),
+    assertValidRaceBranchNames(operation);
+    const subOperations = operation.operations.map((subOperation, index) =>
+      callbacks
+        .executeSubOperation(workflowId, subOperation, controller.signal)
+        .then((value) => ({ index, value })),
     );
     // Swallow rejections from losing branches — only the race winner's
     // result (or error) is surfaced. Losers typically reject with
@@ -315,7 +318,7 @@ export async function processRaceOperation(
     // without a handler those would surface as unhandled promise
     // rejections.
     void Promise.allSettled(subOperations);
-    let winner: unknown;
+    let winner: { index: number; value: unknown };
     try {
       winner = await Promise.race(subOperations);
     } finally {
@@ -331,8 +334,26 @@ export async function processRaceOperation(
     // branch won", so consuming here (after the race settles, before the result
     // reaches the durable cache) deletes the signal exactly once and only for the
     // winner. Losers' envelopes are dropped unfinalized.
-    return finalizeAndUnwrap(winner);
+    return finalizeAndUnwrap(wrapRaceWinner(operation, winner.index, winner.value));
   });
+}
+
+export function assertValidRaceBranchNames(operation: RaceOperation): void {
+  if (
+    operation.branchNames !== undefined &&
+    operation.branchNames.length !== operation.operations.length
+  ) {
+    throw new Error('ctx.raceKeyed branch names must match its operation count');
+  }
+}
+
+export function wrapRaceWinner(
+  operation: RaceOperation,
+  winnerIndex: number,
+  value: unknown,
+): unknown {
+  const key = operation.branchNames?.[winnerIndex];
+  return key === undefined ? value : createKeyedRaceResultEnvelope(key, value);
 }
 
 export async function processRunAllOperation(

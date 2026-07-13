@@ -78,6 +78,15 @@ const packageRootWelcome = workflow({ name: 'packageRootWelcome' })
       ctx.run(async () => 42),
     ]);
     const typedRace: string | number = raced;
+    const keyedRace = yield* ctx.raceKeyed({
+      greeting: ctx.run('packageRootFormatGreeting', { name: input.name }),
+      count: ctx.run(async () => 42),
+    });
+    if (keyedRace.key === 'greeting') {
+      void (keyedRace.value satisfies string);
+    } else {
+      void (keyedRace.value satisfies number);
+    }
     const runAllResult = yield* ctx.runAll({
       greeting: [async (value: PackageRootWelcomeInput) => value.name, input],
       count: [async () => 42],

@@ -262,7 +262,7 @@ Run multiple durable operations in parallel, returning the result of whichever c
 
 **Returns:** The result of the first operation to complete.
 
-**Loser results are abandoned.** Once a winner is selected, Weft stops driving the losing branch generators and discards their results. In-flight activities that already started keep running unless the workflow is cancelled, so design race branches to be idempotent or pair them with compensation.
+**Loser results are abandoned.** Once a winner is selected, Weft stops driving the losing branch generators and discards their results. A losing activity receives an abort through `ActivityContext.signal`, but cancellation is cooperative: work and side effects can continue when the activity does not observe that signal. Design race branches to be idempotent or pair them with compensation.
 
 Signal-wait losers are non-destructive. If a `context.waitForSignal()` branch loses the race, it releases its waiter without consuming the durable signal record. Nested `all()` / `race()` branches defer signal consumption until the top coordinator has selected the winning result.
 
@@ -272,6 +272,33 @@ async function* example(context: Context) {
     context.run('fetchFromPrimary', key),
     context.run('fetchFromFallback', key),
   ]);
+}
+```
+
+### `raceKeyed()`
+
+```ts partial
+*raceKeyed(
+  operations: Record<string, Generator<ContextOperationRequest, unknown, unknown>>,
+): Generator<ContextOperationRequest, { key: string; value: unknown }, unknown>
+```
+
+Run named durable operations in parallel, returning the winning branch name together with its value. The branch map preserves each operation's result type as a discriminated union, so checking `winner.key` narrows `winner.value`.
+
+`raceKeyed()` uses the same durable coordination path as `race()`: signal-wait losers remain non-destructive, losing sleep branches release their timers, and losing activities receive a cooperative abort through `ActivityContext.signal`. The winning `{ key, value }` is checkpointed and replayed without re-running the branch.
+
+```ts partial
+async function* waitForEvent(context: Context) {
+  const winner = yield* context.raceKeyed({
+    event: context.waitForSignal<{ pullRequestNumber: number }>('event'),
+    idle: context.sleep('7d'),
+  });
+
+  if (winner.key === 'event') {
+    return winner.value.pullRequestNumber;
+  }
+
+  return undefined;
 }
 ```
 
