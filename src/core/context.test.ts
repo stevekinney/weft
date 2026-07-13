@@ -775,6 +775,37 @@ describe('Context', () => {
       expect(nextStep.value).toBe('next-cached-result');
     });
 
+    it('rejects a raw cached positional race value when replay changes to raceKeyed', () => {
+      const context = createContext({
+        accumulatedResults: new Map<number, unknown>([[0, 'raw-positional-winner']]),
+      });
+
+      const generator = context.raceKeyed({
+        first: context.run(taskA),
+        second: context.run(taskB),
+      });
+
+      expect(() => generator.next()).toThrow(BranchTopologyChangedError);
+    });
+
+    it('returns a synchronously completed keyed branch with its original key', () => {
+      const context = createContext({
+        accumulatedResults: new Map<number, unknown>([[1, 'cached-memo-winner']]),
+      });
+
+      const result = context
+        .raceKeyed({
+          cached: context.memo('cached', () => 'not-run'),
+          activity: context.run(taskA),
+        })
+        .next();
+
+      expect(result).toEqual({
+        done: true,
+        value: { key: 'cached', value: 'cached-memo-winner' },
+      });
+    });
+
     it('advances recovery past cached race sub-operations for new checkpoints', () => {
       const context = createContext({
         accumulatedResults: new Map<number, unknown>([

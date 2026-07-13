@@ -181,11 +181,29 @@ export function* race(
       return winner.value;
     }
 
+    if (branchNames !== undefined) {
+      throw new BranchTopologyChangedError(
+        `ctx.raceKeyed step ${step} found a raw cached race value without keyed branch topology. The same step must use raceKeyed across retries.`,
+      );
+    }
     return cached;
   }
 
-  const subOperations = primeParallelOperations(operations);
   const operationId = `race:${step}`;
+  let subOperations: ContextOperationRequest[];
+  if (branchNames === undefined) {
+    subOperations = primeParallelOperations(operations);
+  } else {
+    const primed = primeKeyedRaceOperations(operations);
+    subOperations = primed.subOperations;
+    if (primed.synchronousWinner !== undefined) {
+      // raceKeyed supplies one name per operation in the same object-entry order.
+      const key = branchNames[primed.synchronousWinner.index]!;
+      const result = { key, value: primed.synchronousWinner.value };
+      cacheRaceWinner(context, step, result, operationId, operations.length, branchNames);
+      return result;
+    }
+  }
   stampDeterministicOperationIds(subOperations, operationId);
   const callerStack = captureCallerStack();
   const result = yield {
@@ -202,15 +220,47 @@ export function* race(
   // on resume. `subOperationCount` keeps the original branch count so
   // the resume path can still advance the workflow's stepIndex past the
   // race's primed sub-operations.
+  cacheRaceWinner(context, step, result, operationId, subOperations.length, branchNames);
+  return result;
+}
+
+function primeKeyedRaceOperations(
+  operations: Generator<ContextOperationRequest, unknown, unknown>[],
+): {
+  subOperations: ContextOperationRequest[];
+  synchronousWinner: { index: number; value: unknown } | undefined;
+} {
+  const subOperations: ContextOperationRequest[] = [];
+  let synchronousWinner: { index: number; value: unknown } | undefined;
+
+  for (const [index, operation] of operations.entries()) {
+    const primed = operation.next();
+    if (primed.done) {
+      synchronousWinner ??= { index, value: primed.value };
+    } else {
+      subOperations.push(primed.value);
+    }
+  }
+
+  return { subOperations, synchronousWinner };
+}
+
+function cacheRaceWinner(
+  context: Context,
+  step: number,
+  result: unknown,
+  operationId: string,
+  subOperationCount: number,
+  branchNames: string[] | undefined,
+): void {
   context.accumulatedResults.set(step, {
     __weftParallelOperationCache: true,
     formatVersion: 2,
     variant: 'race',
     branches: [{ status: 'fulfilled', value: result, operationId: `${operationId}:winner` }],
     ...(branchNames !== undefined ? { branchNames } : {}),
-    subOperationCount: subOperations.length,
+    subOperationCount,
   } satisfies ParallelOperationCacheEntry);
-  return result;
 }
 
 function sameBranchNames(left: string[] | undefined, right: string[] | undefined): boolean {

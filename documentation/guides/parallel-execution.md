@@ -97,7 +97,7 @@ async function* fetchWithFallback(ctx: Context, url: string) {
 This is useful for timeout patterns, redundant fetches, and any scenario where you want the fastest answer. The engine records whichever result arrives first as the checkpoint, so on recovery you get the same winner.
 
 > [!WARNING] `ctx.race` cancellation is cooperative
-> When a branch wins, the race tears down the coordination work of the losers: a losing `ctx.sleep` clears its timer, a losing `ctx.waitForSignal` releases its waiter, and a losing activity receives an abort through `ActivityContext.signal`. The race stops awaiting the losing result, but an activity that ignores the signal can keep running and producing side effects.
+> When a branch wins, the race tears down the coordination work of the losers: a losing `ctx.sleep` clears its timer, a losing `ctx.waitForSignal` releases its waiter, and a losing inline activity receives an abort through `ActivityContext.signal`. The race stops awaiting every losing result, but worker-pooled activities do not receive the inline race-loss abort, and an inline activity that ignores its signal can keep running and producing side effects.
 >
 > Pass `ActivityContext.signal` into interruptible work such as `fetch` and check it in long-running loops. Keep side effects idempotent or fenced because an abort signal cannot roll back work that already happened. See [Cancelling a running activity](./activities.md#cancelling-a-running-activity).
 

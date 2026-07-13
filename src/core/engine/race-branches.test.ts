@@ -575,6 +575,15 @@ describe('#679 ctx.raceKeyed winner metadata', () => {
         });
       }),
     );
+    engine.register(
+      workflow({ name: 'keyed-race-cached-memo' }).execute(async function* (ctx: WorkflowContext) {
+        yield* ctx.memo('cached-winner', () => 'memo-value');
+        return yield* ctx.raceKeyed({
+          cached: ctx.memo('cached-winner', () => 'not-run'),
+          idle: ctx.sleep('5s'),
+        });
+      }),
+    );
 
     const signalHandle = await engine.start('keyed-race-signal', null, { id: 'keyed-signal' });
     await engine.signal('keyed-signal', 'event', 'payload');
@@ -604,6 +613,9 @@ describe('#679 ctx.raceKeyed winner metadata', () => {
     });
     await engine.signal('nested-keyed-signal', 'event', 'payload');
     expect(await nestedHandle.result()).toEqual({ key: 'event', value: 'payload' });
+
+    const cachedMemoHandle = await engine.start('keyed-race-cached-memo', null);
+    expect(await cachedMemoHandle.result()).toEqual({ key: 'cached', value: 'memo-value' });
 
     const duplicateSignalHandle = await engine.start('keyed-race-duplicate-signal', null);
 
