@@ -339,7 +339,9 @@ describe('crash recovery', () => {
       expect(typedError.message).toContain('shape-type-00');
       expect(typedError.message).toContain('+2 more');
       expect(typedError.message).not.toContain('shape-workflow-00');
-      expect(typedError.message).toContain('BREAKING-CHANGES.md');
+      expect(typedError.message).toContain(
+        'documentation/guides/recovery-and-deploys.md#acknowledging-drift-acknowledgeunknownworkflowtypes',
+      );
     }
 
     engine[Symbol.dispose]();
