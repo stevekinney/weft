@@ -174,17 +174,9 @@ export function* race(
         );
       }
       assertRaceBranchTopology(operations.length, branchNames, cached);
-      // Race only ever caches a fulfilled winner. The topology guard in
-      // hasValidBranchTopology requires race entries to have exactly one
-      // fulfilled slot, so by the time we reach this code the winner is
-      // guaranteed to exist — but assert defensively to make the
-      // invariant readable at the call site.
-      const winner = cached.branches[0];
-      if (winner?.status !== 'fulfilled') {
-        throw new BranchTopologyChangedError(
-          `ctx.race step ${step} cached entry has no fulfilled winner slot — entry is malformed.`,
-        );
-      }
+      // isParallelOperationCacheEntry validates that a race cache contains
+      // exactly one fulfilled winner, so the narrowed slot is trusted here.
+      const winner = cached.branches[0] as Extract<ParallelBranchSlot, { status: 'fulfilled' }>;
       internals.stepIndex += cached.subOperationCount;
       return winner.value;
     }

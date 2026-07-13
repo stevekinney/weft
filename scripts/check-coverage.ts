@@ -1454,7 +1454,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/core/engine/inline-launch-queue.ts',
       { functions: 1, lines: new Set([29, 31, 32, 33, 42, 43, 75, 165]) },
     ],
-    ['src/core/engine/lifecycle/resume.ts', { lines: new Set([67]) }],
+    ['src/core/engine/lifecycle/resume.ts', { lines: new Set([91]) }],
     [
       'src/core/engine/list-candidate-resolution.ts',
       {
@@ -2060,7 +2060,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
     ['src/core/engine/checkpoint-replay.ts', { lines: new Set([134]) }],
     ['src/core/engine/index.ts', { functions: 3 }],
     ['src/core/engine/lease-deposition.ts', { functions: 1 }],
-    ['src/core/engine/lifecycle/resume.ts', { functions: 1, lines: new Set([67]) }],
+    ['src/core/engine/lifecycle/resume.ts', { functions: 1, lines: new Set([91]) }],
     ['src/core/engine/lifecycle/recovered-services.ts', { functions: 1, lines: new Set([75]) }],
     [
       'src/core/engine/lifecycle/start-commit.ts',
