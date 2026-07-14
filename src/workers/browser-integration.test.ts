@@ -5,7 +5,7 @@
  * `workflow-worker-entry.ts`, backed by `workflow-runner.ts`) runs in browser
  * Web Workers using the standard Worker API. The test-browser-worker.ts entry
  * point imports the real `initializeWorkerMessageLoop` and registers test
- * workflow handlers — no reimplementation, no shims.
+ * workflow handlers, exercising the production implementation directly.
  *
  * @module workers/browser-integration
  */

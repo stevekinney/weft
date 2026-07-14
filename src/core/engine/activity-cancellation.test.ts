@@ -11,8 +11,8 @@
  * wait-signal branches are torn down, and enabling the supersede idiom to signal
  * cooperative cancellation without application-level generation fencing.
  *
- * These tests pin the current behavior so migrations from Temporal's
- * CancellationScope are documented accurately.
+ * These tests pin the current behavior so comparisons with Temporal's
+ * CancellationScope remain accurate.
  */
 import { describe, expect, it } from 'bun:test';
 
