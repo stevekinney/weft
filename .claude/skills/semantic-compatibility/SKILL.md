@@ -15,7 +15,7 @@ description: >-
 - Changing semantic hash inputs, canonicalization, serialization, or codec behavior.
 - Updating `JSONValue`, tool-call, tool-result, checkpoint, storage, or effect-log data.
 - Adding storage primitives that can delete persisted ranges, especially `deleteRange` bounds, prefix intersection, event-log compaction watermarks, or watermark truncation semantics.
-- Changing history policy, payload-size admission, archive export, Worker replay signatures, checkpoint failure metadata, or event-log verification.
+- Changing history policy, payload-size admission, archive export, Worker replay signatures, keyed race branch topology, checkpoint failure metadata, or event-log verification.
 - Adding compatibility with another package while Weft still owns the runtime contract.
 - Generating or validating cross-process declarations from registry snapshots, or wrapping byte-oriented storage for string-oriented consumers.
 - Refactoring registry-driven generated clients, especially when JSON Schema shapes become shared aliases instead of inline object types.
@@ -65,6 +65,7 @@ description: >-
 24. When persisted data or checkpoint wording is touched, frame exact-schema rejection as the current contract: Weft does not upgrade older database records in place unless the task explicitly adds and tests that upgrade path.
 25. For unknown persisted workflow-state fields, add neutral extra-field fixtures that prove decode drops the field and resumes with only current `WorkflowState` keys. Do not reintroduce tenant-specific or legacy alias normalization when the current contract is tolerate-and-strip.
 26. For JSON value validation or typed storage codecs, reject values whose JSON encoding would erase information. `-0` must stay invalid because `JSON.stringify(-0)` emits `0`; add regression coverage in both `src/core/json.test.ts` and `src/storage/typed-storage.test.ts` when this boundary moves.
+27. For keyed race topology, treat branch names as replayed durable metadata. Keep branch count and name order stable across checkpoints and Worker replay signatures, reject positional-vs-keyed changes at the same step, reject empty or symbol-keyed maps before a durable step is consumed, and preserve JavaScript object-key stringification for numeric keys in public winner results.
 
 ## Verification
 
@@ -84,4 +85,5 @@ description: >-
 - For unknown workflow-state field cleanup, run `bun test src/core/engine/validation.test.ts src/core/engine.test.ts src/core/crash-recovery.test.ts tests/replay-fixtures/replay-fixtures.test.ts`.
 - For failure-category compatibility changes, run `bun test src/core/failure-category.test.ts src/core/list-filter-validation.test.ts src/core/engine/validation.test.ts src/core/engine/list-candidate-resolution.test.ts src/server/operations/list-workflows.test.ts src/server/json-rpc-http-integration.test.ts`.
 - For versioning-surface removals or recovery-guard changes, run `bun test src/core/versioning.test.ts src/diagnostics/version-check.test.ts src/diagnostics/format.test.ts src/core/engine.test.ts` plus `bun run verify:documentation`.
+- For keyed race topology changes, run the focused context, race-branch, crash-recovery, worker-protocol, and type-ergonomics tests that prove keyed winners replay, branch-name changes fail recovery, positional/keyed mismatches are rejected, and public result narrowing still works.
 - Run the relevant focused test, then `bun run typecheck` and `bun run validate` before shipping.
