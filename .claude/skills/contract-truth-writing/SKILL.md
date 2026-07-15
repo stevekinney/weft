@@ -44,6 +44,7 @@ description: >-
 18. For cleanup wording in tests and comments, describe the current contract directly. Use "retired" or "persisted-state fields" when code tolerates old shapes; avoid "legacy", "migration", or "compatibility" framing unless the file is an actual migration guide or compatibility policy.
 19. For Tier-0 or persisted-format prose, use rolling-upgrade contract language when that is the actual guarantee. Do not describe pre-release current behavior as "legacy" behavior, and do not call shape tests "migration tests" unless they test an implemented migration path.
 20. For fixture names, reserve `historical-*` for old persisted records or protocol shapes. When a test only compares current behavior, use direct names such as `retiredField`, `old`, or `current` instead of `legacy`.
+21. For implementation-file-size exceptions, update `documentation/contributing/development-setup.md` and `scripts/check-implementation-file-sizes.ts` together. The rationale should name the current responsibility boundary, not preservation of old import paths, compatibility barrels, or shim layers.
 
 ## Verification
 

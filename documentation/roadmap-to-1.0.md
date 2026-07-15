@@ -1,6 +1,6 @@
 # Roadmap to 1.0
 
-Weft is on the `0.6.x` release line while the final correctness and compatibility contracts settle. A `1.0` release should mean a durable, documented support promise for the stable tier, not just a larger version number.
+Weft is on the `0.10.x` release line while the final correctness and compatibility contracts settle. A `1.0` release should mean a durable, documented support promise for the stable tier, not just a larger version number.
 
 ## What 1.0 Means for Adopters
 
