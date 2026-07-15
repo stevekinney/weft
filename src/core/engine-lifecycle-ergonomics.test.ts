@@ -8,12 +8,12 @@ import { encode } from './codec.ts';
 import {
   clearEngineLeakWarningTokenForTesting,
   Engine,
-  getEngineLeakCollectionCountForTesting,
   hasEngineLeakWarningTokenForTesting,
   setEngineLeakWarningOverrideForTesting,
   setNextEngineLeakWarningTokenForTesting,
   shouldEmitEngineLeakWarningForTesting,
 } from './engine.ts';
+import { finalizeEngineCleanupIntervalTrackerForTesting } from './engine/engine-leak-warnings.ts';
 import { CleanupWarningEvent } from './events.ts';
 import { activity, workflow, type WorkflowContext } from './types.ts';
 
@@ -30,11 +30,10 @@ async function forceFinalizers(stopWhen: () => boolean): Promise<void> {
 }
 
 async function captureLeakWarning(run: () => void, token: symbol): Promise<boolean> {
-  const initialCollectionCount = getEngineLeakCollectionCountForTesting();
   setNextEngineLeakWarningTokenForTesting(token);
   run();
   await flush();
-  await forceFinalizers(() => getEngineLeakCollectionCountForTesting() > initialCollectionCount);
+  await forceFinalizers(() => hasEngineLeakWarningTokenForTesting(token));
   await flush();
   return hasEngineLeakWarningTokenForTesting(token);
 }
@@ -83,9 +82,14 @@ describe('Engine lifecycle ergonomics', () => {
     expect(shouldEmitEngineLeakWarningForTesting()).toBe(false);
 
     const token = Symbol('disabled leaked engine warning');
-    const emittedWarning = await captureLeakWarning(createLeakedEngine, token);
+    finalizeEngineCleanupIntervalTrackerForTesting({
+      disposed: false,
+      cleanupInterval: null,
+      secondInstanceDetectionInterval: null,
+      testToken: token,
+    });
 
-    expect(emittedWarning).toBe(false);
+    expect(hasEngineLeakWarningTokenForTesting(token)).toBe(false);
     clearEngineLeakWarningTokenForTesting(token);
 
     setEngineLeakWarningOverrideForTesting(true);

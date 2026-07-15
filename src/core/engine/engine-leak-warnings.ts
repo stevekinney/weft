@@ -21,30 +21,41 @@ let engineLeakCollectionCountForTesting = 0;
 let nextEngineLeakWarningTokenForTesting: symbol | undefined;
 const engineLeakWarningTokensForTesting = new Set<symbol>();
 
+function finalizeEngineCleanupIntervalTracker(tracker: EngineCleanupIntervalDisposalTracker): void {
+  engineLeakCollectionCountForTesting++;
+
+  if (tracker.cleanupInterval !== null) {
+    clearInterval(tracker.cleanupInterval);
+    tracker.cleanupInterval = null;
+  }
+
+  if (tracker.secondInstanceDetectionInterval !== null) {
+    clearInterval(tracker.secondInstanceDetectionInterval);
+    tracker.secondInstanceDetectionInterval = null;
+  }
+
+  if (!tracker.disposed && shouldEmitEngineLeakWarning()) {
+    if (tracker.testToken !== undefined) {
+      engineLeakWarningTokensForTesting.add(tracker.testToken);
+    }
+
+    process.emitWarning(
+      'WeftEngineLeakWarning: A Weft Engine was garbage-collected without calling [Symbol.dispose](). Use `using`, `await using`, or call engine[Symbol.dispose]() to clear background timers and release runtime resources.',
+    );
+  }
+}
+
 export const engineCleanupIntervalFinalizer =
   new FinalizationRegistry<EngineCleanupIntervalDisposalTracker>((tracker) => {
-    engineLeakCollectionCountForTesting++;
-
-    if (tracker.cleanupInterval !== null) {
-      clearInterval(tracker.cleanupInterval);
-      tracker.cleanupInterval = null;
-    }
-
-    if (tracker.secondInstanceDetectionInterval !== null) {
-      clearInterval(tracker.secondInstanceDetectionInterval);
-      tracker.secondInstanceDetectionInterval = null;
-    }
-
-    if (!tracker.disposed && shouldEmitEngineLeakWarning()) {
-      if (tracker.testToken !== undefined) {
-        engineLeakWarningTokensForTesting.add(tracker.testToken);
-      }
-
-      process.emitWarning(
-        'WeftEngineLeakWarning: A Weft Engine was garbage-collected without calling [Symbol.dispose](). Use `using`, `await using`, or call engine[Symbol.dispose]() to clear background timers and release runtime resources.',
-      );
-    }
+    finalizeEngineCleanupIntervalTracker(tracker);
   });
+
+/** Test-only hook for the finalizer callback's synchronous warning gate. */
+export function finalizeEngineCleanupIntervalTrackerForTesting(
+  tracker: EngineCleanupIntervalDisposalTracker,
+): void {
+  finalizeEngineCleanupIntervalTracker(tracker);
+}
 
 export function shouldEmitEngineLeakWarning(): boolean {
   if (engineLeakWarningOverrideForTesting !== undefined) {
