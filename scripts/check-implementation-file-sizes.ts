@@ -118,7 +118,7 @@ export const CLASSIFIED_OVERSIZED_IMPLEMENTATION_FILES = [
     path: 'src/client/http-client.ts',
     classification: 'justified-exception',
     rationale:
-      'The HTTP client class centralizes the transport implementation behind the public client interface without adding old-path shims.',
+      'The HTTP client class centralizes the transport implementation behind the public client interface without preserving old import paths.',
   },
   {
     path: 'src/workers/workflow-runner.ts',
