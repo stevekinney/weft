@@ -8,6 +8,7 @@ import { encode } from './codec.ts';
 import {
   clearEngineLeakWarningTokenForTesting,
   Engine,
+  getEngineLeakCollectionCountForTesting,
   hasEngineLeakWarningTokenForTesting,
   setEngineLeakWarningOverrideForTesting,
   setNextEngineLeakWarningTokenForTesting,
@@ -80,6 +81,7 @@ describe('Engine lifecycle ergonomics', () => {
   it('does not emit disposal warnings when the leak-warning gate is disabled', async () => {
     setEngineLeakWarningOverrideForTesting(false);
     expect(shouldEmitEngineLeakWarningForTesting()).toBe(false);
+    const initialCollectionCount = getEngineLeakCollectionCountForTesting();
 
     const token = Symbol('disabled leaked engine warning');
     finalizeEngineCleanupIntervalTrackerForTesting({
@@ -90,6 +92,7 @@ describe('Engine lifecycle ergonomics', () => {
     });
 
     expect(hasEngineLeakWarningTokenForTesting(token)).toBe(false);
+    expect(getEngineLeakCollectionCountForTesting()).toBe(initialCollectionCount + 1);
     clearEngineLeakWarningTokenForTesting(token);
 
     setEngineLeakWarningOverrideForTesting(true);
