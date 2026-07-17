@@ -582,6 +582,8 @@ export class Engine<
     getInternals(this).updateWaitersByWorkflow = new Map();
     getInternals(this).sleepResolvers = new Map();
     getInternals(this).sleepResolversByWorkflow = new Map();
+    getInternals(this).sleepTimerAcknowledgementWaiters = new Map();
+    getInternals(this).durableInlineOperations = new Map();
     getInternals(this).sleepTimersFiredWithoutResolver = new Map();
     getInternals(this).interceptors = resolveEngineInterceptors(options);
     getInternals(this).composedWorkflowInterceptor = undefined;

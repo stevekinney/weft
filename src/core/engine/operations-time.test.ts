@@ -681,6 +681,7 @@ describe('processSleepOperation', () => {
       }),
       sleepResolvers,
       sleepResolversByWorkflow,
+      sleepTimerAcknowledgementWaiters: new Map(),
       sleepTimersFiredWithoutResolver: firedWithoutResolver,
       storage,
     } as never;

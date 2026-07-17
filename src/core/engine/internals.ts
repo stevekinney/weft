@@ -23,6 +23,7 @@ import type { AlertManager } from '../../alerting/alert-manager.ts';
 import type { Storage as WeftStorage } from '../../storage/interface.ts';
 import type { ActivityWorkerDispatcher } from '../../workers/activity-worker-dispatcher.ts';
 import type { ActivityRegistry } from '../activity-registry.ts';
+import type { ContextOperationRequest } from '../context.ts';
 import type { EventHeadRecord } from '../event-log.ts';
 import type { ExecutionStrategy } from '../execution-strategy.ts';
 import type { InlineExecutionStrategy } from '../inline-execution-strategy.ts';
@@ -52,6 +53,19 @@ import type { WorkflowFeedListener } from './index.ts';
 import type { LeaseManager } from './lease-manager.ts';
 import type { ScheduleHandleEngine } from './schedule-handle.ts';
 import type { SecondInstanceDetector } from './second-instance-detector.ts';
+
+export type SleepTimerAcknowledgementWaiter = {
+  fireAt: number;
+  operationId: string;
+  reject: (error: Error) => void;
+  resolve: () => void;
+};
+
+export type DurableInlineOperation = {
+  operationId: string;
+  scheduledFireAt?: number;
+  type: ContextOperationRequest['type'];
+};
 
 type EngineRuntime = WorkflowHandleEngine &
   ScheduleHandleEngine & {
@@ -116,6 +130,15 @@ export interface EngineInternals {
    */
   sleepResolvers: Map<string, { resolve: () => void; fireAt: number }>;
   sleepResolversByWorkflow: Map<string, Set<string>>;
+  /**
+   * Fired sleep timers awaiting proof that the awakened inline workflow reached
+   * its next durable checkpoint or terminal state. External schedulers must not
+   * delete a timer before these waiters settle, or a Service Worker eviction can
+   * lose the only durable wake-up between resolver settlement and checkpointing.
+   */
+  sleepTimerAcknowledgementWaiters: Map<string, Set<SleepTimerAcknowledgementWaiter>>;
+  /** Most recently persisted inline operation, used to reject stale sleep-timer callbacks. */
+  durableInlineOperations: Map<string, DurableInlineOperation>;
   /**
    * Per-workflow maps of `operationId` → fired timer `fireAt` for sleep timers
    * the scheduler tick fired before the resolver was registered. Keyed by

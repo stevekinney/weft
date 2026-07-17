@@ -2,6 +2,7 @@ import { describe, expect, it, mock, spyOn } from 'bun:test';
 import { sleepForTesting, withTimeout } from '../testing/fake-timers.test-support.ts';
 
 import type {
+  BatchOperation,
   ScanOptions,
   StorageCapabilities,
   Storage as WeftStorage,
@@ -245,6 +246,167 @@ describe('Engine', () => {
     ).resolves.toBeUndefined();
 
     engine[Symbol.dispose]();
+  });
+
+  it('fireTimer waits for an awakened sleep to commit durable progress', async () => {
+    const innerStorage = new MemoryStorage();
+    const completionWriteStarted = Promise.withResolvers<void>();
+    const releaseCompletionWrite = Promise.withResolvers<void>();
+    const workflowId = 'fire-timer-durable-acknowledgement';
+    let blockedCompletionWrite = false;
+    const storage = new Proxy(innerStorage, {
+      get(target, property, receiver) {
+        if (property === 'batch') {
+          return async (operations: BatchOperation[]): Promise<void> => {
+            const workflowWrite = operations.find(
+              (operation): operation is Extract<BatchOperation, { type: 'put' }> =>
+                operation.type === 'put' && operation.key === KEYS.workflow(workflowId),
+            );
+            const nextState = workflowWrite
+              ? (decode(workflowWrite.value) as WorkflowState)
+              : undefined;
+            if (!blockedCompletionWrite && nextState?.status === 'completed') {
+              blockedCompletionWrite = true;
+              completionWriteStarted.resolve();
+              await releaseCompletionWrite.promise;
+            }
+            await target.batch(operations);
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    let now = 1_000;
+    const engine = new Engine({ storage, getNow: () => now });
+    engine.register(
+      workflow({ name: 'sleep-before-durable-acknowledgement' }).execute(async function* (ctx) {
+        yield* ctx.sleep(1_000);
+        return 'done';
+      }),
+    );
+
+    try {
+      const handle = await engine.start('sleep-before-durable-acknowledgement', null, {
+        id: workflowId,
+      });
+      await flush();
+      const timerEntry = await findStoredTimerEntry(
+        innerStorage,
+        (entry) => entry.kind === 'sleep' && entry.workflowId === workflowId,
+      );
+      now = timerEntry.fireAt;
+
+      let timerAcknowledged = false;
+      const fireTimer = engine.fireTimer(timerEntry).then(() => {
+        timerAcknowledged = true;
+      });
+      await completionWriteStarted.promise;
+
+      expect(timerAcknowledged).toBe(false);
+
+      releaseCompletionWrite.resolve();
+      await fireTimer;
+      await expect(handle.result()).resolves.toBe('done');
+    } finally {
+      releaseCompletionWrite.resolve();
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('fireTimer waits for recovery replay to durably consume an early timer', async () => {
+    const storage = new MemoryStorage();
+    const workflowId = 'fire-timer-recovery-acknowledgement';
+    const workflowName = 'sleep-during-recovery-acknowledgement';
+    let now = 1_000;
+    const originalEngine = new Engine({ storage, getNow: () => now });
+    originalEngine.register(
+      workflow({ name: workflowName }).execute(async function* (ctx) {
+        yield* ctx.sleep(1_000);
+        return 'done';
+      }),
+    );
+
+    await originalEngine.start(workflowName, null, { id: workflowId });
+    await flush();
+    const timerEntry = await findStoredTimerEntry(
+      storage,
+      (entry) => entry.kind === 'sleep' && entry.workflowId === workflowId,
+    );
+    await originalEngine[Symbol.asyncDispose]();
+
+    const allowRecoveryReplay = Promise.withResolvers<void>();
+    const recoveredEngine = new Engine({ storage, getNow: () => now });
+    recoveredEngine.register(
+      workflow({ name: workflowName }).execute(async function* (ctx) {
+        await allowRecoveryReplay.promise;
+        yield* ctx.sleep(1_000);
+        return 'done';
+      }),
+    );
+
+    try {
+      const [recoveredHandle] = await recoveredEngine.recoverAll();
+      expect(recoveredHandle).toBeDefined();
+      now = timerEntry.fireAt;
+
+      let timerAcknowledged = false;
+      const fireTimer = recoveredEngine.fireTimer(timerEntry).then(() => {
+        timerAcknowledged = true;
+      });
+      await flush();
+
+      expect(timerAcknowledged).toBe(false);
+
+      allowRecoveryReplay.resolve();
+      await fireTimer;
+      await expect(recoveredHandle!.result()).resolves.toBe('done');
+    } finally {
+      allowRecoveryReplay.resolve();
+      await recoveredEngine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('retains a sleep timer that fires before recovery is ready to consume it', async () => {
+    const storage = new MemoryStorage();
+    const workflowId = 'fire-timer-before-recovery';
+    const workflowName = 'sleep-before-recovery';
+    let now = 1_000;
+    const definition = workflow({ name: workflowName }).execute(async function* (ctx) {
+      yield* ctx.sleep(1_000);
+      return 'done';
+    });
+    const originalEngine = new Engine({ storage, getNow: () => now });
+    originalEngine.register(definition);
+
+    await originalEngine.start(workflowName, null, { id: workflowId });
+    await flush();
+    const timerEntry = await findStoredTimerEntry(
+      storage,
+      (entry) => entry.kind === 'sleep' && entry.workflowId === workflowId,
+    );
+    await originalEngine[Symbol.asyncDispose]();
+
+    const recoveredEngine = new Engine({ storage, getNow: () => now });
+    recoveredEngine.register(definition);
+    const originalConsoleError = console.error;
+    console.error = () => {};
+
+    try {
+      now = timerEntry.fireAt;
+      await recoveredEngine.scheduler.tick(now);
+      expect(await storage.get(`timer-idx:${timerEntry.id}`)).not.toBeNull();
+
+      const [recoveredHandle] = await recoveredEngine.recoverAll();
+      await flush();
+      await recoveredEngine.scheduler.tick(now);
+
+      expect(await storage.get(`timer-idx:${timerEntry.id}`)).toBeNull();
+      await expect(recoveredHandle!.result()).resolves.toBe('done');
+    } finally {
+      console.error = originalConsoleError;
+      await recoveredEngine[Symbol.asyncDispose]();
+    }
   });
 
   it('Engine.create registers activities before workflows and runs recovery by default', async () => {

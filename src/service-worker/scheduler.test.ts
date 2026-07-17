@@ -421,6 +421,38 @@ describe('ServiceWorkerScheduler — implementation-specific', () => {
     expect(asyncFired[0]!.id).toBe('timer-1');
   });
 
+  it('retains a fired timer until its callback acknowledges durable progress', async () => {
+    let callbackAttempts = 0;
+    const originalError = console.error;
+    console.error = () => {};
+    scheduler[Symbol.dispose]();
+    scheduler = new ServiceWorkerScheduler({
+      storage,
+      onTimerFired: () => {
+        callbackAttempts++;
+        if (callbackAttempts === 1) {
+          throw new Error('durable progress was not acknowledged');
+        }
+      },
+      getNow: () => now(),
+    });
+    const entry = makeTimer({ fireAt: now() - 1000 });
+
+    try {
+      await scheduler.schedule(entry);
+      await scheduler.tick(now());
+
+      expect(await storage.get(`timer-idx:${entry.id}`)).not.toBeNull();
+
+      await scheduler.tick(now());
+
+      expect(callbackAttempts).toBe(2);
+      expect(await storage.get(`timer-idx:${entry.id}`)).toBeNull();
+    } finally {
+      console.error = originalError;
+    }
+  });
+
   it('logs polling errors when the scheduled tick throws', async () => {
     const errorSpy = mock((_message?: unknown, ..._args: unknown[]) => {});
     const originalError = console.error;

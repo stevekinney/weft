@@ -9,6 +9,11 @@ import type { WorkflowVersionTuple } from '../workflow-version-tuple.ts';
 import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
 import { reprovideRecoveredServices } from './lifecycle/recovered-services.ts';
+import {
+  acknowledgeSupersededSleepTimers,
+  handleSleepTimerWithAcknowledgement,
+  resolveSleepTimer,
+} from './sleep-timer-acknowledgements.ts';
 import { buildWorkflowVisibilityIndexTransition } from './workflow-indexes.ts';
 
 type RegistrationEntry =
@@ -83,6 +88,9 @@ function sleepTimerFiredEarly(
   workflowMarkers.delete(operation.operationId);
   if (workflowMarkers.size === 0) {
     internals.sleepTimersFiredWithoutResolver.delete(workflowId);
+  }
+  if (markedFireAt < operation.scheduledFireAt) {
+    acknowledgeSupersededSleepTimers(internals, workflowId, operation.scheduledFireAt);
   }
   return markedFireAt >= operation.scheduledFireAt;
 }
@@ -400,7 +408,7 @@ export async function handleTimerFired(
   }
 
   if (entry.kind === 'sleep') {
-    resolveSleepTimer(internals, entry);
+    await handleSleepTimerWithAcknowledgement(internals, entry, callbacks.loadWorkflowState);
   } else if (entry.kind === 'wait-condition') {
     resolveConditionTimer(internals, entry);
   } else if (entry.kind === 'execution-deadline') {
@@ -438,52 +446,4 @@ async function handleReviewTimer(
   const state = await callbacks.loadWorkflowState(entry.workflowId);
   if (!state || state.status !== 'running') return;
   await handler(entry);
-}
-
-function resolveSleepTimer(internals: EngineInternals, entry: TimerEntry): void {
-  const operationId = entry.id.replace('sleep:', '');
-  const resolverKey = `${entry.workflowId}:${operationId}`;
-  const resolver = internals.sleepResolvers.get(resolverKey);
-  if (!resolver) {
-    // No resolver registered yet — the tick fired in the window between
-    // schedule() completing and registerSleepResolver() running. Record the
-    // fired timer's deadline so processSleepOperation can self-resolve after
-    // registration (only if that deadline is this run's, not a stale earlier
-    // run's) instead of parking on a promise that will never be called.
-    let workflowMarkers = internals.sleepTimersFiredWithoutResolver.get(entry.workflowId);
-    if (!workflowMarkers) {
-      workflowMarkers = new Map();
-      internals.sleepTimersFiredWithoutResolver.set(entry.workflowId, workflowMarkers);
-    }
-    // Keep the latest (largest) deadline seen for this operation id: only a
-    // timer whose deadline reaches this run's scheduledFireAt should settle it.
-    const existing = workflowMarkers.get(operationId);
-    if (existing === undefined || entry.fireAt > existing) {
-      workflowMarkers.set(operationId, entry.fireAt);
-    }
-    return;
-  }
-
-  // Ignore a stale timer left behind by a terminated run that reused this same
-  // deterministic operationId. The durable sleep timer outlives terminal cleanup
-  // (cleanup only drops the in-memory resolver), so a start-new replacement at
-  // the same id+step would otherwise have its sleep resolved early when the old
-  // timer fires. The replacement run's own timer fires at its own (>=) deadline.
-  if (entry.fireAt < resolver.fireAt) return;
-
-  internals.sleepResolvers.delete(resolverKey);
-  untrackSleepResolver(internals, entry.workflowId, operationId);
-  resolver.resolve();
-}
-
-function untrackSleepResolver(
-  internals: EngineInternals,
-  workflowId: string,
-  operationId: string,
-): void {
-  const workflowOperations = internals.sleepResolversByWorkflow.get(workflowId);
-  if (!workflowOperations) return;
-
-  workflowOperations.delete(operationId);
-  if (workflowOperations.size === 0) internals.sleepResolversByWorkflow.delete(workflowId);
 }

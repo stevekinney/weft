@@ -7,6 +7,10 @@ import {
   type LifecycleCallbacks,
 } from './lifecycle.ts';
 import {
+  recordDurableInlineOperation,
+  rejectSleepTimerAcknowledgements,
+} from './sleep-timer-acknowledgements.ts';
+import {
   completeWorkflow as completeWorkflowFromTermination,
   failWorkflow as failWorkflowFromTermination,
   type TerminationCallbacks,
@@ -151,7 +155,7 @@ export async function getParkedWorkflowResumeDisposition(
   return 'resumable';
 }
 
-export async function handleStrategyMessage(
+async function dispatchStrategyMessage(
   internals: EngineInternals,
   message: WorkerOutboundMessage,
   callbacks: InlineParkingCallbacks,
@@ -188,6 +192,7 @@ export async function handleStrategyMessage(
 
       // Persist checkpoint at this yield boundary
       await callbacks.persistCheckpoint(message.workflowId, operation, message.checkpoint);
+      recordDurableInlineOperation(internals, message.workflowId, operation);
 
       // Development mode: validate checkpoint round-trip
       callbacks.validateDevelopmentCheckpoint(message.workflowId);
@@ -223,5 +228,18 @@ export async function handleStrategyMessage(
       await callbacks.processOperation(message.workflowId, operation);
       break;
     }
+  }
+}
+
+export async function handleStrategyMessage(
+  internals: EngineInternals,
+  message: WorkerOutboundMessage,
+  callbacks: InlineParkingCallbacks,
+): Promise<void> {
+  try {
+    await dispatchStrategyMessage(internals, message, callbacks);
+  } catch (error) {
+    rejectSleepTimerAcknowledgements(internals, message.workflowId, error);
+    throw error;
   }
 }

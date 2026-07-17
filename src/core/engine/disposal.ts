@@ -2,6 +2,7 @@ import { disposeEngineCleanupInterval } from './engine-runtime-helpers.ts';
 import { EngineDisposedError } from './errors.ts';
 import { disposeQueuedInlineWorkflowStarts } from './inline-launch-queue.ts';
 import type { EngineInternals } from './internals.ts';
+import { rejectAllSleepTimerAcknowledgements } from './sleep-timer-acknowledgements.ts';
 
 /**
  * Synchronous teardown for an {@link Engine}. Moved verbatim from
@@ -49,6 +50,7 @@ export function disposeEngine(internals: EngineInternals): void {
   for (const waiter of internals.resultResolvers.values()) {
     waiter.reject(new EngineDisposedError());
   }
+  rejectAllSleepTimerAcknowledgements(internals, new EngineDisposedError());
   internals.resultResolvers.clear();
   internals.updateWaiters.clear();
   internals.updateWaitersByWorkflow.clear();
@@ -64,6 +66,8 @@ export function disposeEngine(internals: EngineInternals): void {
   internals.pendingWebhooks.clear();
   internals.sleepResolvers.clear();
   internals.sleepResolversByWorkflow.clear();
+  internals.sleepTimerAcknowledgementWaiters.clear();
+  internals.durableInlineOperations.clear();
   internals.sleepTimersFiredWithoutResolver.clear();
   internals.checkpoints.clear();
   internals.pendingExecutionStateOwnerId = undefined;

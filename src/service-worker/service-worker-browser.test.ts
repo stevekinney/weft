@@ -271,7 +271,7 @@ serviceWorker.addEventListener('message', (event) => {
   event.waitUntil((async () => {
     // Await the setup promise (which includes recovery) before replying.
     // This makes weft:test:instance a reliable recovery-completion barrier.
-    const { scheduler, storage } = await setup;
+    const { engine, scheduler, storage } = await setup;
     if (message.type === 'weft:test:instance') {
       port.postMessage({ instanceId });
       return;
@@ -299,7 +299,16 @@ serviceWorker.addEventListener('message', (event) => {
       // ticks at real Date.now(); driving the returned scheduler directly with
       // an explicit future time keeps the test hermetic.
       await scheduler.tick(Date.now() + 2 * 60 * 60 * 1000);
-      port.postMessage({ ticked: true });
+      let remainingTimerCount = 0;
+      for await (const _entry of storage.scan('wf-deadline:')) {
+        remainingTimerCount++;
+      }
+      const workflowState = await engine.get('setup-timer-workflow');
+      port.postMessage({
+        ticked: true,
+        remainingTimerCount,
+        workflowStatus: workflowState?.status ?? null,
+      });
       return;
     }
     port.postMessage({ error: 'unknown message type' });
@@ -802,7 +811,16 @@ describe('Service Worker browser smoke', () => {
       // Drive a periodic-sync tick with the scheduler clock advanced past the
       // timer deadline. The recovered worker must fire the re-armed timer and
       // let the workflow run to completion.
-      await sendWorkerMessage(page, { type: 'weft:test:periodic-sync' });
+      const tickResult = await sendWorkerMessage<{
+        remainingTimerCount: number;
+        ticked: boolean;
+        workflowStatus: string | null;
+      }>(page, { type: 'weft:test:periodic-sync' });
+      expect(tickResult).toMatchObject({
+        remainingTimerCount: 0,
+        ticked: true,
+        workflowStatus: 'completed',
+      });
 
       await expect(
         page.evaluate(async () => {

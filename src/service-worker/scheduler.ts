@@ -166,6 +166,7 @@ export class ServiceWorkerScheduler implements Disposable {
         await this.#onTimerFired(entry);
       } catch (error) {
         console.error(`Timer callback failed for timer ${entry.id}:`, error);
+        continue;
       }
 
       const indexKey = `timer-idx:${entry.id}`;

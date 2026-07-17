@@ -5,6 +5,7 @@ import type { WorkflowState, WorkflowStatus } from '../../types.ts';
 import { asyncActivityWorkflowPrefix } from '../async-activity-records.ts';
 import { forgetCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
 import type { EngineInternals } from '../internals.ts';
+import { settleSleepTimerAcknowledgements } from '../sleep-timer-acknowledgements.ts';
 import { parseTerminalCleanupTimerId, workflowFeedListenerKey } from '../state-utilities.ts';
 import { releaseWorkflowConcurrencySlot } from '../workflow-concurrency.ts';
 
@@ -233,6 +234,7 @@ export function evictSuspendedWorkflowWaiters(
   workflowId: string,
   callbacks: Pick<TerminationCallbacks, 'swallowPromiseRejection'>,
 ): void {
+  settleSleepTimerAcknowledgements(internals, workflowId, 'suspended');
   for (const kind of TRACKED_WAITER_KINDS) {
     cleanupTrackedWaiter(internals, workflowId, kind);
   }
@@ -363,6 +365,7 @@ export function cleanupTerminalWorkflowMemory(
   workflowId: string,
   callbacks: Pick<TerminationCallbacks, 'swallowPromiseRejection'>,
 ): void {
+  settleSleepTimerAcknowledgements(internals, workflowId, 'terminal');
   internals.workflowsNeedingTerminalCleanup.delete(workflowId);
   forgetCommittedCheckpointBytes(internals, workflowId);
   internals.checkpoints.delete(workflowId);
