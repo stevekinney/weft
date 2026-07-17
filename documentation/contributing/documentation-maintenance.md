@@ -32,6 +32,8 @@ When refreshing documentation from recent pull requests, build the evidence set 
 
 For documentation-only refresh pull requests, include an evidence section in the pull request body that names the source pull requests and the specific contracts being documented. The June 2026 worker and restart refresh used this pattern for restart-capable `startOrSignal`, services resolver context, WebSocket frame limits, duplicate `workerId` registration, and browser smoke verification. Do not re-document already-covered behavior when the latest pull request in the window was itself a documentation refresh.
 
+When the requested window contains only a prior documentation refresh, treat that pull request as the new lower bound instead of inventing a README or API-doc change. Record in the next pull request evidence that no post-refresh runtime, API, or workflow behavior landed, and keep public documentation unchanged unless a concrete stale claim remains in `README.md` or `documentation/**`.
+
 ## Recovery Examples
 
 Recovery examples should say the durable contract directly:

@@ -18,9 +18,10 @@ description: >-
 1. Start from the requested pull request window. If an earlier documentation refresh already covered part of the window, treat that refresh as the lower bound instead of documenting the same behavior twice.
 2. Gather evidence before editing: pull request titles, bodies, changed files, review comments, and verification commands. Prefer merged pull requests; do not document open pull request behavior as shipped.
 3. Map behavior changes to the right surface. User-facing runtime behavior belongs in `README.md` or `documentation/**`; agent workflow lessons belong in `AGENTS.md`, `CLAUDE.md`, `.agents/skills/**`, and `.claude/skills/**`.
-4. Keep each update anchored to exact contracts, commands, and file paths. Avoid generic advice that could apply to any repository.
-5. Mirror skill changes between `.agents/skills` and `.claude/skills` when the same workflow applies to both agent surfaces.
-6. In the pull request body, include an evidence section that names the source pull requests and the contracts or workflows documented.
+4. If the window contains only a documentation-refresh pull request, use it as the new lower bound. Do not invent a public-doc edit; state in the pull request evidence that no post-refresh runtime, API, or workflow behavior landed.
+5. Keep each update anchored to exact contracts, commands, and file paths. Avoid generic advice that could apply to any repository.
+6. Mirror skill changes between `.agents/skills` and `.claude/skills` when the same workflow applies to both agent surfaces.
+7. In the pull request body, include an evidence section that names the source pull requests and the contracts or workflows documented.
 
 ## Verification
 
