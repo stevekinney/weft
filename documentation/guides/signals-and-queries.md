@@ -69,6 +69,9 @@ const handle = await engine.startOrSignal(
 
 An absent target is created and receives the first signal in the same durable batch. A running, pending, or suspended target receives the signal through the normal signal path. A terminal target returns a conflict by default. For stable-id re-sync flows, pass `onTerminalConflict: 'start-new'` with both `id` and `signalId` to replace a terminal prior run and deliver the first signal to the fresh run. That restart policy rejects `idempotencyKey`; idempotency keys are permanent at-most-once mappings. Concurrent callers converge on one workflow and one signal only when they share `idempotencyKey`, or when they share both `id` and `signalId`. A bare `signalId` starts a fresh generated workflow id per absent-target caller, so it is useful for single-call signal identity but not for multi-caller convergence.
 
+> [!TIP]
+> If a workflow drains signals with `ctx.race([ctx.waitForSignal(name), ctx.sleep(0)])` and then returns, use a stable `id`, a deterministic per-event `signalId`, and `onTerminalConflict: 'start-new'` on the corresponding `startOrSignal` calls. Weft serializes delivery against terminal completion: a signal that arrives before completion is consumed by the current run, while one that arrives after the drain decision is handed to the successor run. A positive drain window is not required for correctness.
+
 ## Signal durability
 
 Signals are persisted to [storage](storage.md) when they are sent. This means:

@@ -157,7 +157,11 @@ import {
   validateEngineCreateBackgroundTaskOptions,
 } from './engine-runtime-helpers.ts';
 import type { EngineStateNamespace } from './engine-state-namespace.ts';
-import { EngineCreateNameMismatchError, EngineDisposedError } from './errors.ts';
+import {
+  EngineCreateNameMismatchError,
+  EngineDisposedError,
+  StartOrSignalConflictError,
+} from './errors.ts';
 import { assertLeaseHeldForEngineWork, commitFencedEngineWrite } from './fenced-write.ts';
 import { recordFinalizerState } from './finalizer-state.ts';
 import {
@@ -235,7 +239,11 @@ import {
   createSecondInstanceDetector,
 } from './second-instance-detector.ts';
 import { signal as signalWorkflow } from './signals.ts';
-import { loadScheduleState, loadWorkflowState } from './storage-io.ts';
+import {
+  loadScheduleState,
+  loadWorkflowState,
+  runSerializedWorkflowStateWrite,
+} from './storage-io.ts';
 import {
   feedOperationResult,
   getComposedWorkflowInterceptor,
@@ -255,6 +263,7 @@ import {
   update as updateFromInternals,
   type UpdateCallbacks,
 } from './updates.ts';
+import { isTerminalWorkflowStatus } from './validation.ts';
 import { coerceScheduleId } from './validation/schedule.ts';
 import {
   replayWorkflowFeed,
@@ -1185,9 +1194,12 @@ export class Engine<
    * (signal-with-start). With an absent target, the workflow record and the
    * first signal commit in one batch and the freshly-launched run consumes the
    * signal on its first drive. A non-terminal target (running, pending, or
-   * suspended) is signalled through the normal signal path; a terminal target
-   * throws {@link StartOrSignalConflictError} unless
-   * `options.onTerminalConflict: 'start-new'` is supplied with an explicit
+   * suspended) is signalled through a workflow-serialized signal path. If
+   * terminal completion wins that handoff, the target is treated as terminal:
+   * the default path throws {@link StartOrSignalConflictError}, while
+   * `options.onTerminalConflict: 'start-new'` transfers the signal to the
+   * replacement run. A terminal target throws {@link StartOrSignalConflictError}
+   * unless `options.onTerminalConflict: 'start-new'` is supplied with an explicit
    * workflow id and deterministic `signal.signalId`.
    *
    * Concurrent callers converge on one workflow and one delivered signal. Pass
@@ -1232,7 +1244,13 @@ export class Engine<
     return {
       ...this.#createLifecycleCallbacks(),
       signalExistingWorkflow: (workflowId, signalName, payload, signalId) =>
-        this.signal(workflowId, signalName, payload, { signalId }),
+        runSerializedWorkflowStateWrite(getInternals(this), workflowId, async () => {
+          const state = await loadWorkflowState(getInternals(this), workflowId);
+          if (state && isTerminalWorkflowStatus(state.status)) {
+            throw new StartOrSignalConflictError(workflowId, state.status);
+          }
+          await this.signal(workflowId, signalName, payload, { signalId });
+        }),
     };
   }
   getHandle(workflowId: string): WorkflowHandle {

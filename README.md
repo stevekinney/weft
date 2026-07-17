@@ -256,6 +256,8 @@ The idempotency mapping intentionally outlives terminal cleanup. If retention re
 
 For stable-id re-sync flows, `engine.startOrSignal()` can replace a terminal prior run with `{ id, onTerminalConflict: 'start-new' }` when the initial signal also carries a deterministic `signalId`. Non-terminal runs are still signalled, not replaced, and restart-capable calls reject `idempotencyKey` because idempotency keys are permanent at-most-once mappings. Signal identifiers are treated as opaque user identifiers before storage-key construction, so caller-provided values that contain separator-looking text such as `anonymous:` stay explicit signal IDs instead of colliding with Weft's generated anonymous-signal sequence.
 
+When a workflow drains signals with `ctx.race([ctx.waitForSignal(name), ctx.sleep(0)])` and then returns, use that stable `id`, a deterministic per-event `signalId`, and `onTerminalConflict: 'start-new'` for the corresponding `startOrSignal` calls. Delivery is serialized against terminal completion, so a signal arriving across the completion boundary is consumed by the current run or handed to its successor; a positive drain window is not needed for correctness.
+
 ### Search Attributes
 
 Attach indexed metadata to a workflow at runtime, then list and filter on it.

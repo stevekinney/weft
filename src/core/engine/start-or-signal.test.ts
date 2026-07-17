@@ -4,9 +4,11 @@ import { CompressedStorage } from '../../storage/compressed-storage.ts';
 import type { BatchOperation, Storage } from '../../storage/interface.ts';
 import { encodeStorageKeyComponent, KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { flushMicrotasks } from '../../testing/fake-timers.test-support.ts';
 import { TestEngine } from '../../testing/test-engine.ts';
 import { decode, encode } from '../codec.ts';
 import { Engine } from '../engine.ts';
+import { WorkflowCompletedEvent } from '../events.ts';
 import type { WorkflowContext, WorkflowState } from '../types.ts';
 import { workflow } from '../types.ts';
 import { drainQueuedInlineWorkflowStartsForEngine } from './engine-runtime-helpers.ts';
@@ -47,6 +49,13 @@ const releaseThenHold = workflow({ name: 'release-then-hold' }).execute(async fu
   return yield* ctx.waitForSignal<string>('hold');
 });
 
+const drainsAndCompletes = workflow({ name: 'drains-and-completes' }).execute(async function* (
+  ctx: WorkflowContext,
+) {
+  const result = yield* ctx.race([ctx.waitForSignal<string>('handoff'), ctx.sleep(0)] as const);
+  return result ?? 'completed-before-handoff';
+});
+
 // Consumes `ev` signals in a loop, recording each payload's tag, and returns the
 // ordered list when a signal carries `stop: true`. Used to prove FIFO buffering:
 // the order of the returned tags is the order the engine consumed the signals.
@@ -70,8 +79,39 @@ function createEngine(storage: Storage = new MemoryStorage()): Engine {
   engine.register(completesImmediately);
   engine.register(throwsImmediately);
   engine.register(releaseThenHold);
+  engine.register(drainsAndCompletes);
   engine.register(collectEvents);
   return engine;
+}
+
+function storageWithBlockedCompletionBatch(
+  inner: Storage,
+  workflowId: string,
+  onBlocked: () => void,
+  release: Promise<void>,
+): Storage {
+  let blocked = false;
+  return new Proxy(inner, {
+    get(target, property, receiver) {
+      if (property === 'batch') {
+        return async (operations: BatchOperation[]): Promise<void> => {
+          const completion = operations.find(
+            (operation): operation is Extract<BatchOperation, { type: 'put' }> =>
+              operation.type === 'put' && operation.key === KEYS.workflow(workflowId),
+          );
+          const nextState = completion ? (decode(completion.value) as WorkflowState) : undefined;
+          if (!blocked && nextState?.status === 'completed') {
+            blocked = true;
+            onBlocked();
+            await release;
+          }
+          return target.batch(operations);
+        };
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
 }
 
 /**
@@ -477,6 +517,50 @@ describe('engine.startOrSignal', () => {
       expect(await started.result()).toBe('late');
       expect(await countWorkflowRecords(engine)).toBe(1);
     } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('hands off to a successor when completion is already committing (#693)', async () => {
+    const inner = new MemoryStorage();
+    const completionBlocked = Promise.withResolvers<void>();
+    const releaseCompletion = Promise.withResolvers<void>();
+    const workflowId = 'sos-completion-handoff';
+    const engine = createEngine(
+      storageWithBlockedCompletionBatch(
+        inner,
+        workflowId,
+        completionBlocked.resolve,
+        releaseCompletion.promise,
+      ),
+    );
+    const completedResults: unknown[] = [];
+    engine.addEventListener(WorkflowCompletedEvent.type, (event) => {
+      if (event.workflowId === workflowId) completedResults.push(event.result);
+    });
+
+    try {
+      await engine.start('drains-and-completes', null, { id: workflowId });
+      await completionBlocked.promise;
+
+      const handoff = engine.startOrSignal(
+        'drains-and-completes',
+        null,
+        { name: 'handoff', payload: 'delivered-after-drain', signalId: 'sig-handoff' },
+        { id: workflowId, onTerminalConflict: 'start-new' },
+      );
+
+      await flushMicrotasks(10);
+      releaseCompletion.resolve();
+
+      const result = await handoff;
+      expect(result.outcome).toBe('started');
+      expect(result.handle.id).toBe(workflowId);
+      expect(completedResults).toContain('completed-before-handoff');
+      expect(await result.handle.result()).toBe('delivered-after-drain');
+      expect(await countWorkflowRecords(engine)).toBe(1);
+    } finally {
+      releaseCompletion.resolve();
       await engine[Symbol.asyncDispose]();
     }
   });
