@@ -68,7 +68,7 @@ export function validateCheckpointShape(value: unknown): asserts value is Checkp
   validateAccumulatedResultReplayWatermark(record);
   validateWorkerReplaySignatures(record);
   validateWorkerReplayFailures(record);
-  dropLegacyPendingSignals(record);
+  dropRetiredPendingSignals(record);
   assertRecordField(record, 'searchAttributes');
   assertStringField(record, 'version');
   assertNumberField(record, 'createdAt');
@@ -239,7 +239,7 @@ function validateAccumulatedResultReplayWatermark(record: Record<string, unknown
   }
 }
 
-function dropLegacyPendingSignals(record: Record<string, unknown>): void {
+function dropRetiredPendingSignals(record: Record<string, unknown>): void {
   delete record['pendingSignals'];
 }
 

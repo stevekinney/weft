@@ -190,7 +190,7 @@ describe('serializeCheckpoint / deserializeCheckpoint', () => {
     expect(restored).not.toHaveProperty('pendingSignals');
   });
 
-  it('normalizes old checkpoints that still contain pendingSignals', () => {
+  it('normalizes checkpoints that still contain the retired pendingSignals field', () => {
     const { encode } = require('./codec.ts');
     const bytes = encode({
       workflowId: 'wf-old-signals',
