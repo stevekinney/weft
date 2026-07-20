@@ -443,6 +443,14 @@ export class WeftDurableObject extends DurableObject {
 
 The underlying schema is a single `kv(key TEXT PRIMARY KEY, value TEXT NOT NULL)` table (name configurable via the `table` option, validated as a strict SQL identifier). Values are stored as base64-encoded text rather than `BLOB`, keeping the adapter's binding contract to the TEXT/number/null value types the Durable Object SQL binding guarantees.
 
+> [!NOTE] `ctx.storage.sql` requires the SQLite-backed Durable Object class
+> `ctx.storage.sql` is only present on Durable Object classes configured for
+> Cloudflare's SQLite storage backend (a `new_sqlite_classes` migration in your
+> Wrangler configuration). A Durable Object still running the legacy key-value
+> storage backend has no `sql` property on `ctx.storage` — passing `undefined`
+> here fails fast at construction rather than surfacing as a confusing runtime
+> error later.
+
 `ctx.storage.sql.exec()` is synchronous, and Durable Object storage stays transactional only up to the next `await`/yield point in the calling code. Every method that needs an atomic read-compare-write or multi-write (`batch()`, `conditionalBatch()`, `scan()`) issues its `exec()` calls back-to-back with no `await` in between, so a single `Storage` call is one atomic unit of Durable Object storage work. `deletePrefix()` and `deleteRange()` are native single-statement `DELETE`s, so `capabilities().boundedRangeDelete` is honestly `true`.
 
 This adapter is a **non-owning** view over the injected `sql` binding: the Durable Object owns its storage connection, so `[Symbol.dispose]()` is a no-op. There is nothing for this adapter to close.
