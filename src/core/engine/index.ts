@@ -1672,6 +1672,12 @@ export class Engine<
    * deploys or explicit operator storage repair.
    * When set, unknown workflow types are skipped and reported through
    * {@link WorkflowRecoverySkippedEvent}.
+   *
+   * A recovered workflow whose persisted version metadata no longer matches
+   * its registered `WorkflowDefinition.version` is isolated per
+   * {@link RecoverAllOptions.versionMismatchPolicy} (default `'fail-run'`):
+   * only that workflow fails, and `recoverAll()` continues recovering its
+   * siblings in the same call.
    */
   async recoverAll(options?: RecoverAllOptions): Promise<WorkflowHandle[]> {
     // Acquire the ownership lease before recovery on the `new Engine()` +

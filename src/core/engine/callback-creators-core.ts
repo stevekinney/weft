@@ -168,6 +168,14 @@ export function createLifecycleCallbacks<TWorkflows extends object, TActivities 
         createTerminationCallbacks(engine),
         'system',
       ),
+    failWorkflowForVersionMismatch: (workflowId, error) =>
+      failWorkflow(
+        getInternals(engine),
+        workflowId,
+        error,
+        createTerminationCallbacks(engine),
+        'system',
+      ),
   };
 }
 

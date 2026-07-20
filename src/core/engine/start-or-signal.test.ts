@@ -262,6 +262,7 @@ function unexpectedStartOrSignalCallbacks(): StartOrSignalCallbacks {
     failWorkflowForUnavailableServices: unexpectedAsync,
     failWorkflowForRecoveryHook: unexpectedAsync,
     failWorkflowForCheckpointDecodeError: unexpectedAsync,
+    failWorkflowForVersionMismatch: unexpectedAsync,
     signalExistingWorkflow: unexpectedAsync,
   };
 }
