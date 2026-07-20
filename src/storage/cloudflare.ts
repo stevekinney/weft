@@ -216,19 +216,29 @@ export class CloudflareDurableObjectSQLiteStorage implements Storage {
 
   async deletePrefix(prefix: string): Promise<number> {
     const [rangeStart, rangeEnd] = buildSqlitePrefixRangeParameters(prefix);
-    const cursor = this.#sql.exec(
-      `DELETE FROM ${this.#table} WHERE key >= ? AND key < ?`,
-      rangeStart,
-      rangeEnd,
-    );
-    return cursor.rowsWritten;
+    this.#sql.exec(`DELETE FROM ${this.#table} WHERE key >= ? AND key < ?`, rangeStart, rangeEnd);
+    return this.#logicalChangeCount();
   }
 
   async deleteRange(prefix: string, options: DeleteRangeOptions): Promise<number> {
     const normalized = normalizeDeleteRangeOptions(options);
     const { parameters, sql } = buildSqliteKeyRangeDelete(prefix, normalized, this.#table);
-    const cursor = this.#sql.exec(sql, ...parameters);
-    return cursor.rowsWritten;
+    this.#sql.exec(sql, ...parameters);
+    return this.#logicalChangeCount();
+  }
+
+  /**
+   * Read the logical rows-affected count for the immediately-preceding write
+   * on this connection, via SQLite's `changes()` function. Deliberately not
+   * `SqlStorageCursor.rowsWritten`: on the real Durable Object binding that
+   * field is a billing counter that also includes index writes, so a
+   * single-row `DELETE` against this `kv` table's implicit primary-key index
+   * can report more than one. Called with no `await` between it and the write
+   * it measures, so it observes exactly that write's effect.
+   */
+  #logicalChangeCount(): number {
+    const rows = [...this.#sql.exec<{ value: number }>('SELECT changes() AS value')];
+    return rows[0]?.value ?? 0;
   }
 
   async *scan(prefix: string, options: ScanOptions = {}): AsyncIterable<[string, Uint8Array]> {

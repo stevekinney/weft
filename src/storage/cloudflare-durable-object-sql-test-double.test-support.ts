@@ -4,10 +4,7 @@
  *
  * Cloudflare's real `ctx.storage.sql.exec()` is synchronous, so this double
  * mirrors that exactly: no `await` anywhere in `exec()`. Row iteration comes
- * from `Statement.all()`; the affected-row count for `INSERT`/`UPDATE`/`DELETE`
- * statements comes from a same-connection `SELECT changes()` query run
- * immediately after, in the same synchronous stretch (bun:sqlite's `Database`
- * does not otherwise expose the changes count from `.all()`).
+ * from `Statement.all()`.
  *
  * The `.test-support.ts` suffix excludes this module from `dist/` (see
  * `tsconfig.build.json`), so the `bun:sqlite` import never leaks into the
@@ -43,13 +40,8 @@ export function createCloudflareSqlTestDouble(): CloudflareSqlTestDouble {
       // cast documents that gap rather than widening bun:sqlite's own type.
       const statement = database.query<T, SQLQueryBindings[]>(query);
       const rows = statement.all(...(bindings as SQLQueryBindings[]));
-      const changesRow = database.query<{ value: number }, []>('SELECT changes() AS value').get();
-      const rowsWritten = changesRow?.value ?? 0;
 
-      return {
-        [Symbol.iterator]: () => rows[Symbol.iterator](),
-        rowsWritten,
-      };
+      return rows;
     },
   };
 }

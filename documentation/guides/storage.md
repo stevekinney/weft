@@ -443,6 +443,14 @@ export class WeftDurableObject extends DurableObject {
 
 The underlying schema is a single `kv(key TEXT PRIMARY KEY, value TEXT NOT NULL)` table (name configurable via the `table` option, validated as a strict SQL identifier). Values are stored as base64-encoded text rather than `BLOB`, keeping the adapter's binding contract to the TEXT/number/null value types the Durable Object SQL binding guarantees.
 
+> [!WARNING] Base64 encoding inflates value size by roughly 4/3
+> Base64 expands a `Uint8Array` by roughly 4/3 before it is stored, so a value
+> approaching Cloudflare's per-row size limit as raw bytes can fail only on
+> this adapter once encoded. If your workflow checkpoints or activity results
+> can approach that limit, keep them well under it, or wrap this adapter with
+> `CompressedStorage` so values are compressed before the 4/3 base64
+> expansion is applied.
+
 > [!NOTE] `ctx.storage.sql` requires the SQLite-backed Durable Object class
 > `ctx.storage.sql` is only present on Durable Object classes configured for
 > Cloudflare's SQLite storage backend (a `new_sqlite_classes` migration in your

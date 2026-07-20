@@ -27,12 +27,18 @@ export type SqlStorageValue = ArrayBuffer | string | number | null;
 
 /**
  * The lazily-iterated result of one `Sql.exec()` call. Matches the subset of
- * Cloudflare's `SqlStorageCursor` this adapter reads: row iteration plus the
- * `rowsWritten` count `INSERT`/`UPDATE`/`DELETE` statements report.
+ * Cloudflare's `SqlStorageCursor` this adapter reads: row iteration.
+ *
+ * Deliberately omits `rowsWritten`: on the real Durable Object binding that
+ * field is a billing counter that also counts index writes, not a logical
+ * rows-affected count — this `kv` table's implicit primary-key index means a
+ * single-row `DELETE` can report more than one. `deletePrefix()` and
+ * `deleteRange()` instead read the logical count with a same-connection
+ * `SELECT changes()` query run immediately after the write, with no `await`
+ * in between (see `cloudflare.ts`).
  *
  * On the real binding, `exec()` runs the statement immediately — iterating
- * (or reading `rowsWritten`) only consumes the already-computed result, it
- * does not defer execution.
+ * only consumes the already-computed result, it does not defer execution.
  *
  * @example
  * ```ts
@@ -44,10 +50,7 @@ export type SqlStorageValue = ArrayBuffer | string | number | null;
  * void rows;
  * ```
  */
-export interface SqlStorageCursor<T = Record<string, SqlStorageValue>> extends Iterable<T> {
-  /** Number of rows affected by an `INSERT`/`UPDATE`/`DELETE` statement. */
-  readonly rowsWritten: number;
-}
+export type SqlStorageCursor<T = Record<string, SqlStorageValue>> = Iterable<T>;
 
 /**
  * The structural shape of a Cloudflare Durable Object's `ctx.storage.sql`
