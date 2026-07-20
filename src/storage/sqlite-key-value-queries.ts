@@ -99,24 +99,30 @@ export function buildSqliteKeyRangeQuery(
 }
 
 /**
- * Build a bounded-range `DELETE` for the `kv` table from already-validated
+ * Build a bounded-range `DELETE` for a `kv`-shaped table from already-validated
  * delete options.
  *
- * Without `limit`, emits a plain `DELETE FROM kv WHERE <conditions>` — no
+ * Without `limit`, emits a plain `DELETE FROM <table> WHERE <conditions>` — no
  * ordering, since order is meaningless when deleting the whole matched range.
  * With `limit`, emits a portable subquery form so the lowest (ascending) keys
- * are deleted first: `DELETE FROM kv WHERE key IN (SELECT key FROM kv WHERE
- * <conditions> ORDER BY key ASC LIMIT ?)`. The subquery avoids relying on
- * `DELETE ... ORDER BY ... LIMIT`, which requires the
+ * are deleted first: `DELETE FROM <table> WHERE key IN (SELECT key FROM
+ * <table> WHERE <conditions> ORDER BY key ASC LIMIT ?)`. The subquery avoids
+ * relying on `DELETE ... ORDER BY ... LIMIT`, which requires the
  * `SQLITE_ENABLE_UPDATE_DELETE_LIMIT` compile flag and is not available on
  * libSQL/Turso.
  *
  * Requires {@link NormalizedDeleteRangeOptions}: the type guarantees at least
  * one bound is present, so this builder can never produce a whole-prefix wipe.
+ *
+ * `table` defaults to the unqualified `kv` so every existing caller (which all
+ * use the fixed `kv` table) emits byte-identical SQL. Adapters with a
+ * caller-configured table name (validated as a strict SQL identifier before it
+ * reaches this builder) pass their own table reference.
  */
 export function buildSqliteKeyRangeDelete(
   prefix: string,
   options: NormalizedDeleteRangeOptions,
+  table: string = 'kv',
 ): SqliteBuiltQuery {
   const { conditions, parameters } = buildSqliteKeyRangeConditions(prefix, options);
   const whereClause = conditions.join(' AND ');
@@ -124,14 +130,14 @@ export function buildSqliteKeyRangeDelete(
   if (options.limit === undefined) {
     return {
       parameters,
-      sql: `DELETE FROM kv WHERE ${whereClause}`,
+      sql: `DELETE FROM ${table} WHERE ${whereClause}`,
     };
   }
 
   parameters.push(options.limit);
   return {
     parameters,
-    sql: `DELETE FROM kv WHERE key IN (SELECT key FROM kv WHERE ${whereClause} ORDER BY key ASC LIMIT ?)`,
+    sql: `DELETE FROM ${table} WHERE key IN (SELECT key FROM ${table} WHERE ${whereClause} ORDER BY key ASC LIMIT ?)`,
   };
 }
 

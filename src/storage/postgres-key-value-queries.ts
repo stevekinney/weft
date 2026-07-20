@@ -1,5 +1,6 @@
 import type { NormalizedDeleteRangeOptions } from './delete-range.ts';
 import { resolvePrefixRangeEnd, type ScanOptions } from './interface.ts';
+import { assertSqlIdentifier } from './sql-identifier.ts';
 
 /**
  * The Postgres counterpart of `sqlite-key-value-queries.ts`. The schema is the
@@ -26,21 +27,21 @@ import { resolvePrefixRangeEnd, type ScanOptions } from './interface.ts';
 /** The default unqualified table reference (resolves through `search_path`). */
 export const DEFAULT_POSTGRES_TABLE_REFERENCE = 'kv';
 
-const POSTGRES_IDENTIFIER_PATTERN = /^[a-z_][a-z0-9_]*$/i;
-
 /**
  * Validate a Postgres identifier (schema or table name) against a strict
  * `[a-z_][a-z0-9_]*` pattern. Identifiers cannot be bound as `$n` parameters, so
  * they must be interpolated into the SQL text — this validation, run once at
  * construction, is the injection guard that makes interpolation safe. The strict
  * pattern excludes the `"` quote character, so no quote-doubling is required.
+ *
+ * A thin Postgres-flavored wrapper over the driver-neutral
+ * {@link assertSqlIdentifier} (`./sql-identifier.ts`), which also backs the
+ * Cloudflare Durable Object SQLite adapter's table-name validation. Kept as a
+ * named export with the `'schema' | 'table'` role union and the "Postgres"
+ * wording so existing call sites and error-message assertions stay unchanged.
  */
 export function assertPostgresIdentifier(value: string, role: 'schema' | 'table'): void {
-  if (!POSTGRES_IDENTIFIER_PATTERN.test(value)) {
-    throw new Error(
-      `Postgres storage ${role} name "${value}" is not a valid Postgres identifier. Use only letters, digits, and underscores, starting with a letter or underscore (matching ${POSTGRES_IDENTIFIER_PATTERN.source}).`,
-    );
-  }
+  assertSqlIdentifier(value, role, 'Postgres');
 }
 
 /**

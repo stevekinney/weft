@@ -23,19 +23,20 @@ Under Bun and Node, the SQLite path lives under `${tmpdir()}/weft-default/<cwd-h
 
 Use the narrowest adapter that matches where the engine runs:
 
-| Backend                | Environment       | `capabilities().persistence`      | Stability tier                 | Optional dep               | Notes                                                                                                            |
-| ---------------------- | ----------------- | --------------------------------- | ------------------------------ | -------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `MemoryStorage`        | All               | `ephemeral`                       | Candidate-stable for tests/dev | None                       | Tests/demos only—data lost on restart.                                                                           |
-| `SQLiteStorage` (Bun)  | Bun               | `ephemeral` or `local`            | Candidate-stable, provisional  | None                       | Default for the Bun runtime.                                                                                     |
-| `SQLiteStorage` (Node) | Node >= 22        | `ephemeral` or `local`            | Candidate-stable, provisional  | `better-sqlite3`           | Default for the Node runtime.                                                                                    |
-| `LMDBStorage`          | Bun/Node          | `local`                           | Candidate-stable, provisional  | `lmdb`                     | High-throughput memory-mapped key-value.                                                                         |
-| `TursoStorage`         | Bun/Node          | `ephemeral`, `local`, or `remote` | Experimental                   | `@libsql/client`           | Stable tier is pending conformance proof.                                                                        |
-| `NeonStorage`          | Bun/Node          | `remote`                          | Experimental                   | `@neondatabase/serverless` | Neon/Postgres for durable remote deployments.                                                                    |
-| `PostgresStorage`      | Bun/Node          | `remote`                          | Experimental                   | `pg`                       | Standard Postgres over the ordinary wire protocol (`pg` driver); shares a database with app tables via `schema`. |
-| `IndexedDBStorage`     | Browser           | `local`                           | Experimental                   | None                       | Browser native; no SQL passthrough.                                                                              |
-| `WebExtensionStorage`  | Browser extension | `ephemeral`, `local`, or `remote` | Experimental                   | None                       | `chrome.storage` / `browser.storage`.                                                                            |
-| `HTTPStorage`          | All               | `remote`                          | Experimental                   | None                       | Connects to a remote Weft storage API.                                                                           |
-| `CompressedStorage`    | All               | Same as wrapped storage           | Experimental                   | None                       | Wraps another adapter; compresses values.                                                                        |
+| Backend                                | Environment                          | `capabilities().persistence`      | Stability tier                 | Optional dep                         | Notes                                                                                                            |
+| -------------------------------------- | ------------------------------------ | --------------------------------- | ------------------------------ | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `MemoryStorage`                        | All                                  | `ephemeral`                       | Candidate-stable for tests/dev | None                                 | Tests/demos only—data lost on restart.                                                                           |
+| `SQLiteStorage` (Bun)                  | Bun                                  | `ephemeral` or `local`            | Candidate-stable, provisional  | None                                 | Default for the Bun runtime.                                                                                     |
+| `SQLiteStorage` (Node)                 | Node >= 22                           | `ephemeral` or `local`            | Candidate-stable, provisional  | `better-sqlite3`                     | Default for the Node runtime.                                                                                    |
+| `LMDBStorage`                          | Bun/Node                             | `local`                           | Candidate-stable, provisional  | `lmdb`                               | High-throughput memory-mapped key-value.                                                                         |
+| `TursoStorage`                         | Bun/Node                             | `ephemeral`, `local`, or `remote` | Experimental                   | `@libsql/client`                     | Stable tier is pending conformance proof.                                                                        |
+| `NeonStorage`                          | Bun/Node                             | `remote`                          | Experimental                   | `@neondatabase/serverless`           | Neon/Postgres for durable remote deployments.                                                                    |
+| `PostgresStorage`                      | Bun/Node                             | `remote`                          | Experimental                   | `pg`                                 | Standard Postgres over the ordinary wire protocol (`pg` driver); shares a database with app tables via `schema`. |
+| `CloudflareDurableObjectSQLiteStorage` | Cloudflare Workers (Durable Objects) | `local`                           | Experimental                   | None (caller-injected `sql` binding) | Wraps a Durable Object's `ctx.storage.sql`; non-owning, no `@cloudflare/workers-types` dependency.               |
+| `IndexedDBStorage`                     | Browser                              | `local`                           | Experimental                   | None                                 | Browser native; no SQL passthrough.                                                                              |
+| `WebExtensionStorage`                  | Browser extension                    | `ephemeral`, `local`, or `remote` | Experimental                   | None                                 | `chrome.storage` / `browser.storage`.                                                                            |
+| `HTTPStorage`                          | All                                  | `remote`                          | Experimental                   | None                                 | Connects to a remote Weft storage API.                                                                           |
+| `CompressedStorage`                    | All                                  | Same as wrapped storage           | Experimental                   | None                                 | Wraps another adapter; compresses values.                                                                        |
 
 > [!NOTE]
 > Candidate-stable is provisional while the [Tier-0 Behavioral Contract](../architecture/tier-0-behavioral-contract.md) is still shaping failure semantics. The storage adapters above keep their current capability contracts, but Tier-0 work may still add guarded failure modes when a deployment asks for behavior a backend cannot provide. The experimental browser adapters (`IndexedDBStorage`, `WebExtensionStorage`) graduate on a separate, mechanical criterion: their real-browser smoke tests must be green in a required CI gate. See the [browser-surface promotion gate](../roadmap-to-1.0.md#browser-surface-promotion-gate).
@@ -174,18 +175,19 @@ The Tier-0 failure-semantics contract relies on this capability split for activi
 
 The honest profile per built-in adapter:
 
-| Adapter               | persistence                       | readAfterWrite | scanConsistency | atomicBatch            | conditionalBatch | boundedRangeDelete |
-| --------------------- | --------------------------------- | -------------- | --------------- | ---------------------- | ---------------- | ------------------ |
-| `MemoryStorage`       | `ephemeral`                       | `linearizable` | `snapshot`      | yes                    | yes              | yes                |
-| `BunSQLiteStorage`    | `ephemeral` or `local`            | `linearizable` | `snapshot`      | yes                    | yes              | yes                |
-| `NodeSQLiteStorage`   | `ephemeral` or `local`            | `linearizable` | `snapshot`      | yes                    | yes              | no                 |
-| `LMDBStorage`         | `local`                           | `linearizable` | `snapshot`      | yes                    | yes              | no                 |
-| `IndexedDBStorage`    | `local`                           | `linearizable` | `best-effort`   | yes                    | yes              | yes                |
-| `TursoStorage`        | `ephemeral`, `local`, or `remote` | `session`      | `snapshot`      | yes                    | yes              | yes                |
-| `NeonStorage`         | `remote`                          | `linearizable` | `snapshot`      | yes                    | yes              | yes                |
-| `PostgresStorage`     | `remote`                          | `linearizable` | `snapshot`      | yes                    | yes              | yes                |
-| `HTTPStorage`         | `remote`                          | `eventual`     | `best-effort`   | yes                    | no (opt-in)      | no                 |
-| `WebExtensionStorage` | `ephemeral`, `local`, or `remote` | `session`      | `best-effort`   | no (same context only) | no               | no                 |
+| Adapter                                | persistence                       | readAfterWrite | scanConsistency | atomicBatch            | conditionalBatch | boundedRangeDelete |
+| -------------------------------------- | --------------------------------- | -------------- | --------------- | ---------------------- | ---------------- | ------------------ |
+| `MemoryStorage`                        | `ephemeral`                       | `linearizable` | `snapshot`      | yes                    | yes              | yes                |
+| `BunSQLiteStorage`                     | `ephemeral` or `local`            | `linearizable` | `snapshot`      | yes                    | yes              | yes                |
+| `NodeSQLiteStorage`                    | `ephemeral` or `local`            | `linearizable` | `snapshot`      | yes                    | yes              | no                 |
+| `LMDBStorage`                          | `local`                           | `linearizable` | `snapshot`      | yes                    | yes              | no                 |
+| `IndexedDBStorage`                     | `local`                           | `linearizable` | `best-effort`   | yes                    | yes              | yes                |
+| `TursoStorage`                         | `ephemeral`, `local`, or `remote` | `session`      | `snapshot`      | yes                    | yes              | yes                |
+| `NeonStorage`                          | `remote`                          | `linearizable` | `snapshot`      | yes                    | yes              | yes                |
+| `PostgresStorage`                      | `remote`                          | `linearizable` | `snapshot`      | yes                    | yes              | yes                |
+| `CloudflareDurableObjectSQLiteStorage` | `local`                           | `linearizable` | `snapshot`      | yes                    | yes              | yes                |
+| `HTTPStorage`                          | `remote`                          | `eventual`     | `best-effort`   | yes                    | no (opt-in)      | no                 |
+| `WebExtensionStorage`                  | `ephemeral`, `local`, or `remote` | `session`      | `best-effort`   | no (same context only) | no               | no                 |
 
 Three kinds of capability, treated differently:
 
@@ -423,6 +425,59 @@ await using scopedStorage = new PostgresStorage({
   schema: 'weft',
 });
 ```
+
+### `CloudflareDurableObjectSQLiteStorage`
+
+Wraps a Cloudflare Durable Object's SQLite storage — `ctx.storage.sql` — in the `Storage` interface. No `@cloudflare/workers-types` dependency: the adapter defines its own minimal structural `Sql`/`SqlStorageCursor` types for the slice of the binding it uses, so it type-checks and tests without the real Durable Object runtime.
+
+```ts partial
+import { CloudflareDurableObjectSQLiteStorage } from '@lostgradient/weft/storage/cloudflare';
+
+export class WeftDurableObject extends DurableObject {
+  async fetch(request: Request): Promise<Response> {
+    const storage = new CloudflareDurableObjectSQLiteStorage({ sql: this.ctx.storage.sql });
+    // ... build an engine over `storage` and handle the request
+  }
+}
+```
+
+The underlying schema is a single `kv(key TEXT PRIMARY KEY, value TEXT NOT NULL)` table (name configurable via the `table` option, validated as a strict SQL identifier). Values are stored as base64-encoded text rather than `BLOB`, keeping the adapter's binding contract to the TEXT/number/null value types the Durable Object SQL binding guarantees.
+
+`ctx.storage.sql.exec()` is synchronous, and Durable Object storage stays transactional only up to the next `await`/yield point in the calling code. Every method that needs an atomic read-compare-write or multi-write (`batch()`, `conditionalBatch()`, `scan()`) issues its `exec()` calls back-to-back with no `await` in between, so a single `Storage` call is one atomic unit of Durable Object storage work. `deletePrefix()` and `deleteRange()` are native single-statement `DELETE`s, so `capabilities().boundedRangeDelete` is honestly `true`.
+
+This adapter is a **non-owning** view over the injected `sql` binding: the Durable Object owns its storage connection, so `[Symbol.dispose]()` is a no-op. There is nothing for this adapter to close.
+
+Because it has no runtime-specific imports of its own (the `sql` binding is supplied by the caller), the module is bundleable for Bun, Node, and the Cloudflare Workers (`workerd`) runtime alike — import it from `@lostgradient/weft/storage/cloudflare`.
+
+> [!NOTE] Manual background tasks: Durable Object alarms or Worker Cron Triggers
+> A Durable Object drives its own event loop with no host process to own background
+> `setInterval` timers, so build the engine with `backgroundTasks: 'manual'` and
+> `startScheduler: false`, then drive maintenance explicitly:
+>
+> ```ts partial
+> import { CloudflareDurableObjectSQLiteStorage } from '@lostgradient/weft/storage/cloudflare';
+> import { Engine } from '@lostgradient/weft';
+>
+> export class WeftDurableObject extends DurableObject {
+>   async #getEngine() {
+>     const storage = new CloudflareDurableObjectSQLiteStorage({ sql: this.ctx.storage.sql });
+>     return Engine.create({ storage, backgroundTasks: 'manual', startScheduler: false });
+>   }
+>
+>   async alarm(): Promise<void> {
+>     const engine = await this.#getEngine();
+>     await engine.runMaintenance();
+>     // Re-arm the next alarm — e.g. `this.ctx.storage.setAlarm(Date.now() + intervalMs)` —
+>     // using whatever cadence fits your workload.
+>   }
+> }
+> ```
+>
+> Any trigger that can call `engine.runMaintenance()` on a schedule works — a
+> Durable Object alarm (`ctx.storage.setAlarm()` plus an `alarm()` handler on the
+> `DurableObject` subclass) or a separate Worker with a Cron Trigger that calls into
+> the Durable Object. Pick whichever fits your deployment; this adapter does not
+> require either specific mechanism.
 
 ### `IndexedDBStorage`
 

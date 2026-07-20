@@ -123,6 +123,11 @@
       "import": "./dist/storage/postgres.js",
       "default": "./dist/storage/postgres.js"
     },
+    "./storage/cloudflare": {
+      "types": "./dist/storage/cloudflare.d.ts",
+      "import": "./dist/storage/cloudflare.js",
+      "default": "./dist/storage/cloudflare.js"
+    },
     "./storage/indexeddb": {
       "types": "./dist/storage/indexeddb.d.ts",
       "import": "./dist/storage/indexeddb.js",

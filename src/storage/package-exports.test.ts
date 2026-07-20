@@ -76,6 +76,17 @@ describe('storage package exports', () => {
     });
   });
 
+  it('exposes the Cloudflare Durable Object SQLite adapter as a portable subpath', () => {
+    // No `bun`/`node` condition: the adapter has zero runtime-specific
+    // imports of its own (the `sql` binding is caller-injected), so it uses
+    // the same portable `import`/`default` shape as indexeddb/web-extension.
+    expect(packageJson.exports['./storage/cloudflare']).toEqual({
+      types: './dist/storage/cloudflare.d.ts',
+      import: './dist/storage/cloudflare.js',
+      default: './dist/storage/cloudflare.js',
+    });
+  });
+
   it('exposes the RemoteWorker protocol contract as a package subpath', () => {
     expect(packageJson.exports['./worker-protocol']).toEqual({
       types: './dist/worker/protocol.d.ts',

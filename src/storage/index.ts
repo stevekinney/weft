@@ -14,6 +14,7 @@
  * import { LMDBStorage }       from '@lostgradient/weft/storage/lmdb';       // peer: lmdb
  * import { TursoStorage }      from '@lostgradient/weft/storage/turso';      // peer: @libsql/client
  * import { NeonStorage }       from '@lostgradient/weft/storage/neon';       // peer: @neondatabase/serverless
+ * import { CloudflareDurableObjectSQLiteStorage } from '@lostgradient/weft/storage/cloudflare'; // caller-injected `sql` binding, zero runtime deps
  * import { IndexedDBStorage }  from '@lostgradient/weft/storage/indexeddb';  // browser-only
  * import { WebExtensionStorage } from '@lostgradient/weft/storage/web-extension'; // extension-only
  * import { HTTPStorage }       from '@lostgradient/weft/storage/http';       // remote storage

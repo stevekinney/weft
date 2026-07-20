@@ -27,6 +27,7 @@ const PORTABLE_ENTRIES: PortableEntry[] = [
   { name: '@lostgradient/weft/client', entrypoint: './src/client/index.ts' },
   { name: '@lostgradient/weft/service-worker', entrypoint: './src/service-worker/index.ts' },
   { name: '@lostgradient/weft/storage/http', entrypoint: './src/storage/http.ts' },
+  { name: '@lostgradient/weft/storage/cloudflare', entrypoint: './src/storage/cloudflare.ts' },
   { name: '@lostgradient/weft/storage/indexeddb', entrypoint: './src/storage/indexeddb.ts' },
   { name: '@lostgradient/weft/storage/resolve', entrypoint: './src/storage/resolve.ts' },
   {
