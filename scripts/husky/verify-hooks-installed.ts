@@ -3,12 +3,12 @@
  *
  * Both git and husky treat a missing hook as an opt-out, not an error: git
  * silently no-ops when the file at `core.hooksPath` doesn't exist, and
- * husky's own dispatcher (`.husky/_/h`) does `[ ! -f "$s" ] && exit 0` when
- * the tracked hook script is missing. Neither layer prints a warning. A
- * worktree where `bun install` never ran (or ran once and `.husky/_` was
- * later removed) silently runs zero pre-commit checks — commits succeed,
- * nothing complains, and the only signal is CI catching what the hook
- * should have caught locally.
+ * husky's own dispatcher (`.husky/_/h`) does the same (`[ ! -f "$s" ] && exit
+ * 0`) when the tracked hook script is missing. Neither layer prints a
+ * warning. A worktree where `bun install` never ran (or ran once and
+ * `.husky/_` was later removed) silently runs zero pre-commit checks —
+ * commits succeed, nothing complains, and the only signal is CI catching
+ * what the hook should have caught locally.
  *
  * This check is wired into `prepare`, so `bun install` fails loudly if the
  * wiring didn't take. It cannot catch `.husky/_` being removed *after* a
@@ -24,9 +24,9 @@ const REQUIRED_HOOKS_PATH = '.husky/_';
 
 export type HooksInstalledCheck = { ok: true } | { ok: false; reason: string };
 
-function isExecutableFile(path: string): boolean {
+function exists(path: string, mode: number): boolean {
   try {
-    accessSync(path, constants.X_OK);
+    accessSync(path, mode);
     return true;
   } catch {
     return false;
@@ -45,19 +45,23 @@ export async function verifyHooksInstalled(repoRoot: string): Promise<HooksInsta
     };
   }
 
+  // Git execs this file directly, so it genuinely needs the executable bit.
   const dispatcher = resolve(repoRoot, REQUIRED_HOOKS_PATH, 'pre-commit');
-  if (!isExecutableFile(dispatcher)) {
+  if (!exists(dispatcher, constants.X_OK)) {
     return {
       ok: false,
       reason: `${REQUIRED_HOOKS_PATH}/pre-commit is missing or not executable — husky's generated dispatcher isn't present in this worktree.`,
     };
   }
 
+  // Husky's dispatcher runs this one via `sh -e "$s"`, so it only needs to be
+  // readable — requiring the executable bit would false-fail on checkouts
+  // that don't preserve it (core.filemode=false, some Windows setups).
   const trackedSource = resolve(repoRoot, '.husky/pre-commit');
-  if (!isExecutableFile(trackedSource)) {
+  if (!exists(trackedSource, constants.R_OK)) {
     return {
       ok: false,
-      reason: '.husky/pre-commit is missing or not executable.',
+      reason: '.husky/pre-commit is missing or not readable.',
     };
   }
 
@@ -65,13 +69,21 @@ export async function verifyHooksInstalled(repoRoot: string): Promise<HooksInsta
 }
 
 if (import.meta.main) {
-  const repoRoot = resolve(import.meta.dir, '../..');
-  const result = await verifyHooksInstalled(repoRoot);
-  if (!result.ok) {
-    console.error(
-      `husky-verify: git hooks are not wired up in this worktree.\n  ${result.reason}\n  → This worktree will silently skip every pre-commit check (git and husky both no-op on a missing hook instead of erroring). Re-run \`bun install\`, or \`bunx husky\` directly, then retry.`,
-    );
-    process.exit(1);
+  // Matches husky's own opt-out (node_modules/husky/index.js): HUSKY=0 skips
+  // its entire install, including setting core.hooksPath, for CI/Docker/
+  // container builds that intentionally don't want hooks. Verifying against
+  // that state would turn a supported no-op into a broken `bun install`.
+  if (process.env['HUSKY'] === '0') {
+    console.log('husky-verify: HUSKY=0 — skipping (hooks intentionally not installed).');
+  } else {
+    const repoRoot = resolve(import.meta.dir, '../..');
+    const result = await verifyHooksInstalled(repoRoot);
+    if (!result.ok) {
+      console.error(
+        `husky-verify: git hooks are not wired up in this worktree.\n  ${result.reason}\n  → This worktree will silently skip every pre-commit check (git and husky both no-op on a missing hook instead of erroring). Re-run \`bun install\`, or \`bunx husky\` directly, then retry.`,
+      );
+      process.exit(1);
+    }
+    console.log('husky-verify: git hooks are installed and wired up.');
   }
-  console.log('husky-verify: git hooks are installed and wired up.');
 }
