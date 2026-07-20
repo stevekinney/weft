@@ -233,6 +233,7 @@
     "verify:jsdoc:doctests": "bun run scripts/verify-jsdoc-doctests.ts",
     "verify:jsdoc:full": "bun run build && bun run verify:jsdoc && bun run verify:jsdoc:doctests && bun run verify:jsdoc:declarations && bun run verify:markdown-doctests",
     "verify:markdown-doctests": "bun run scripts/extract-markdown-doctests.ts verify",
+    "verify:markdown-doctests:ratchet": "bun run scripts/extract-markdown-doctests.ts ratchet",
     "verify:no-test-sleeps": "bun run scripts/verify-no-test-sleeps.ts",
     "verify:portability": "bun run scripts/verify-portability.ts",
     "verify:public-api-jsdoc": "bun run build && bun run verify:jsdoc",

@@ -188,7 +188,30 @@ if (stagedTouchesPublicSurface) {
   info('Skipping JSDoc audit (no public surface changes staged)');
 }
 
-// 9) lint-staged (format staged files; always last)
+// 9) markdown doctest skip-count ratchet (only when documentation changed).
+// This is the fast half of `verify:markdown-doctests` — classification and
+// the skip-count ceiling only, no doctest extraction/typecheck — so it stays
+// cheap enough for every commit. The full doctest compile still runs in CI's
+// verify-jsdoc workflow.
+const stagedTouchesDocumentation = staged.some(
+  (file) => file.startsWith('documentation/') && file.endsWith('.md'),
+);
+if (stagedTouchesDocumentation) {
+  info('Running markdown doctest skip-count check…');
+  try {
+    await $`bun run verify:markdown-doctests:ratchet`;
+    success('Markdown doctest skip-count check passed');
+  } catch {
+    error(
+      'Markdown doctest skip-count check failed — see hint above. Update scripts/markdown-doctest-skip-counts.json to match the new counts in this commit.',
+    );
+    ok = false;
+  }
+} else {
+  info('Skipping markdown doctest skip-count check (no documentation changes staged)');
+}
+
+// 10) lint-staged (format staged files; always last)
 info('Running lint-staged…');
 try {
   await $`bunx lint-staged`;

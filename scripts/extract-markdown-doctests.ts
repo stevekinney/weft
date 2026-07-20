@@ -44,6 +44,14 @@
  * Usage:
  *   bun run scripts/extract-markdown-doctests.ts inventory [--paths <p1> <p2> ...]
  *   bun run scripts/extract-markdown-doctests.ts verify    [--paths <p1> <p2> ...]
+ *   bun run scripts/extract-markdown-doctests.ts ratchet
+ *
+ * `ratchet` is `verify` minus the doctest extraction/typecheck: it only
+ * classifies fences and enforces the skip-count ceiling (~1s vs. the ~10-20s
+ * `verify` costs by compiling every runnable block). It exists so the
+ * pre-commit hook can catch skip-count drift — the one check in this file
+ * with no other local guardrail — without paying the full doctest-compile
+ * cost on every commit.
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -61,7 +69,7 @@ const INVENTORY_PATH = resolve(REPO_ROOT, 'tmp/markdown-doctest-inventory.json')
 const SKIP_COUNTS_PATH = resolve(REPO_ROOT, 'scripts/markdown-doctest-skip-counts.json');
 const SKIP_REASONS_PATH = resolve(REPO_ROOT, 'scripts/markdown-doctest-skip-reasons.txt');
 
-type Mode = 'inventory' | 'verify';
+type Mode = 'inventory' | 'verify' | 'ratchet';
 
 type FenceClassification =
   | { kind: 'runnable' }
@@ -97,8 +105,10 @@ function slugify(input: string): string {
 function parseArgs(argv: string[]): { mode: Mode; paths: string[] } {
   const positional = argv.filter((a) => !a.startsWith('--'));
   const mode = positional[0] as Mode | undefined;
-  if (mode !== 'inventory' && mode !== 'verify') {
-    console.error('extract-markdown-doctests: usage: <inventory|verify> [--paths p1 p2 ...]');
+  if (mode !== 'inventory' && mode !== 'verify' && mode !== 'ratchet') {
+    console.error(
+      'extract-markdown-doctests: usage: <inventory|verify|ratchet> [--paths p1 p2 ...]',
+    );
     process.exit(1);
   }
   const pathsIdx = argv.indexOf('--paths');
@@ -434,9 +444,20 @@ function reportVerifyFailures(perFileFailures: Map<string, string[]>): void {
 function main(): void {
   const { mode, paths: allowedPaths } = parseArgs(process.argv.slice(2));
   assertPrerequisites();
-  const manifest = buildManifest();
   const allowedReasons = loadSkipReasons();
   const baselineCounts = loadSkipCounts();
+
+  if (mode === 'ratchet') {
+    // No manifest build and no doctest extraction — those only feed the
+    // typecheck step below, which `ratchet` deliberately skips.
+    const { blocks, unknownLanguageBlocks } = collectAllBlocks([], allowedReasons);
+    reportUnknownFences(unknownLanguageBlocks);
+    enforceSkipRatchet(blocks, baselineCounts);
+    console.log('extract-markdown-doctests (ratchet): skip-count baseline holds');
+    return;
+  }
+
+  const manifest = buildManifest();
 
   if (existsSync(DOCTESTS_DIR)) rmSync(DOCTESTS_DIR, { recursive: true, force: true });
   mkdirSync(DOCTESTS_DIR, { recursive: true });
