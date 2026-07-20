@@ -101,6 +101,39 @@ The resolver is consulted only for recovered inline workflows that were original
 
 Do not use `services` to hide durable business state outside checkpoints. Put durable decisions in workflow input, checkpointed local state, `ctx.state`, activities, or offloads. Use `services` only for live capabilities that can be reconstructed from durable input or deployment configuration.
 
+## Version drift: `versionMismatchPolicy`
+
+`workflow({ name, version })` lets you pin a workflow definition's version. When a stored run's persisted version metadata (`WorkflowState.versionTuple`) no longer matches the registered `WorkflowDefinition.version`, the engine cannot safely replay that checkpoint against the new code — the definition may have taken a different branch, added or removed a step, or changed a signature the checkpoint depends on.
+
+By default, `recoverAll()` isolates that drift to the affected run instead of aborting the whole batch:
+
+```typescript partial
+const handles = await engine.recoverAll();
+// A mismatched sibling never appears in `handles` — it fails to a terminal
+// `failed` state with a `system` failure category instead, and every other
+// recovered workflow in the same call still comes back normally.
+```
+
+The mismatch is detected before the engine re-provides `services` or invokes `onRecoveredWorkflow` for that run, so a mismatched workflow never resolves live capabilities or reaches your recovery hook — it never advances user workflow code at all.
+
+If you need the pre-#702 behavior — reject the entire `recoverAll()` call the moment any workflow's version drifts, so nothing in the batch resumes until you resolve it — opt in explicitly:
+
+```typescript partial
+import { VersionMismatchError } from '@lostgradient/weft';
+
+try {
+  await engine.recoverAll({ versionMismatchPolicy: 'throw' });
+} catch (error) {
+  if (error instanceof VersionMismatchError) {
+    console.error(`Version drift blocked recovery for ${error.workflowId}:`, error.message);
+    process.exit(1);
+  }
+  throw error;
+}
+```
+
+`versionMismatchPolicy: 'throw'` rethrows the `VersionMismatchError` out of `recoverAll()` as soon as it hits the first mismatched workflow in storage-scan order, so any sibling not yet processed in that call is left unresumed. Use it only when you deliberately want version drift to block the whole boot — for example, a strict environment where any drift indicates an operator error that must be fixed before anything runs.
+
 ## Acknowledging drift: `acknowledgeUnknownWorkflowTypes`
 
 Sometimes drift is intentional: a rolling deploy where old pods are still serving the workflow type the new pod doesn't know; a storage migration where you're copying records into a partial registry; a one-shot operator script that doesn't need to drive every workflow type the database holds.

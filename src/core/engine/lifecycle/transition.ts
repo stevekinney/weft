@@ -5,6 +5,7 @@ import { Context, setContextWorkflowInterceptor } from '../../context.ts';
 import { EMPTY_EVENT_HEAD } from '../../event-log.ts';
 import { WorkflowRecoverySkippedEvent, WorkflowStartedEvent } from '../../events.ts';
 import type { Checkpoint, ForkOptions, WorkflowState } from '../../types.ts';
+import { VersionMismatchError } from '../../versioning.ts';
 import { createCancelHandlerRegistration, resetCancelHandlers } from '../cancel-handlers.ts';
 import { forgetCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
 import { hydrateCheckpointReplayState } from '../checkpoint-replay.ts';
@@ -119,6 +120,39 @@ async function preflightRecoverAll(
   return result;
 }
 
+/**
+ * Resume one recoverable preflight entry, isolating the failures `recoverAll()`
+ * knows how to contain to just this workflow instead of aborting the batch:
+ *
+ * - `RegExpExtensionDecodeError` (an undecodable checkpoint on this runtime).
+ * - `VersionMismatchError`, unless `options.versionMismatchPolicy` is
+ *   `'throw'`, which preserves the pre-#702 abort-the-batch behavior.
+ *
+ * Returns `null` when the failure was isolated (nothing to push onto the
+ * caller's handle list); rethrows anything else, including an opted-in
+ * `VersionMismatchError` throw.
+ */
+async function recoverEntryOrIsolateFailure(
+  internals: EngineInternals,
+  workflowId: string,
+  callbacks: LifecycleCallbacks,
+  options: RecoverAllOptions | undefined,
+): Promise<WorkflowHandle | null> {
+  try {
+    return await resume(internals, workflowId, callbacks, options?.onRecoveredWorkflow);
+  } catch (error) {
+    if (error instanceof RegExpExtensionDecodeError) {
+      await callbacks.failWorkflowForCheckpointDecodeError(workflowId, error);
+      return null;
+    }
+    if (error instanceof VersionMismatchError && options?.versionMismatchPolicy !== 'throw') {
+      await callbacks.failWorkflowForVersionMismatch(workflowId, error);
+      return null;
+    }
+    throw error;
+  }
+}
+
 export async function recoverAll(
   internals: EngineInternals,
   callbacks: LifecycleCallbacks,
@@ -152,16 +186,14 @@ export async function recoverAll(
       );
       continue;
     }
-    try {
-      handles.push(
-        await resume(internals, entry.workflowId, callbacks, options?.onRecoveredWorkflow),
-      );
-    } catch (error) {
-      if (error instanceof RegExpExtensionDecodeError) {
-        await callbacks.failWorkflowForCheckpointDecodeError(entry.workflowId, error);
-        continue;
-      }
-      throw error;
+    const handle = await recoverEntryOrIsolateFailure(
+      internals,
+      entry.workflowId,
+      callbacks,
+      options,
+    );
+    if (handle !== null) {
+      handles.push(handle);
     }
   }
 

@@ -1564,7 +1564,13 @@ describe('Engine', () => {
 
     const engine2 = new Engine({ storage });
     registerWorkflow(engine2);
-    await expect(engine2.recoverAll()).rejects.toThrow('Version mismatch');
+    // #702: recoverAll()'s default versionMismatchPolicy is 'fail-run', which
+    // isolates the mismatch to this workflow instead of rejecting the call.
+    // Opt into strict 'throw' to keep pinning the pre-#702 abort-the-batch
+    // behavior for a caller that explicitly wants it.
+    await expect(engine2.recoverAll({ versionMismatchPolicy: 'throw' })).rejects.toThrow(
+      'Version mismatch',
+    );
 
     engine2[Symbol.dispose]();
   });
@@ -1600,7 +1606,12 @@ describe('Engine', () => {
 
     const engine2 = new Engine({ storage });
     engine2.register(versionedWorkflowV2);
-    await expect(engine2.recoverAll()).rejects.toThrow('Version mismatch');
+    // #702: opt into strict 'throw' to keep pinning the pre-#702 abort-the-batch
+    // behavior; the default 'fail-run' policy is covered in
+    // version-mismatch-recovery.test.ts.
+    await expect(engine2.recoverAll({ versionMismatchPolicy: 'throw' })).rejects.toThrow(
+      'Version mismatch',
+    );
 
     const checkpoint = deserializeCheckpoint((await storage.get(KEYS.checkpoint(workflowId)))!);
     expect(checkpoint.version).toBe('1.0.0');
