@@ -5,6 +5,7 @@
  * @module server
  */
 
+import type { Engine, RegistryAgnosticEngine } from '../core/engine.ts';
 import type { RetryPolicy } from '../core/types.ts';
 import type { PrometheusExporter } from '../observability/metrics.ts';
 import type { RoutingPolicy } from '../worker/registry.ts';
@@ -175,7 +176,17 @@ export type UnauthenticatedAccessPolicy = 'warn' | 'allow' | 'reject';
  * ```
  */
 export interface ServeOptions {
-  engine: import('../core/engine.ts').Engine;
+  /**
+   * The engine `serve()` hosts. Typed as {@link RegistryAgnosticEngine}
+   * (see its JSDoc) rather than the plain default `Engine`, so both
+   * documented construction patterns type-check: `new Engine({ storage })`
+   * (registry inferred as the default, empty registry) and
+   * `Engine.create({ workflows })` (registry narrowed to the concrete
+   * workflow map). `serve()` never calls registry-typed methods
+   * (`register`, `start`, etc.) on this value — only registry-erased ones
+   * (`storage`, event listening, `dispatchEvent`). See #708.
+   */
+  engine: RegistryAgnosticEngine;
   port?: number;
   hostname?: string;
   /** Enable Bun's development mode (HMR, source maps, detailed errors). */
@@ -485,7 +496,11 @@ export function serve(options: ServeOptions): WeftServer {
 
   let broadcastingHandle: EventBroadcastingHandle;
   try {
-    broadcastingHandle = wireEventBroadcasting(options.engine, server, {
+    // Registry-erase the widened `ServeOptions.engine` back to the plain
+    // default `Engine` `wireEventBroadcasting` expects — see the field's
+    // JSDoc / #708. Every caller in this module only exercises
+    // registry-erased `Engine` behavior.
+    broadcastingHandle = wireEventBroadcasting(options.engine as Engine, server, {
       publishTokenMessage: (workflowId, sequence, message) => {
         publishTokenMessage(context, workflowId, sequence, message);
       },

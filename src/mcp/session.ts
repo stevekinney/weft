@@ -1,4 +1,4 @@
-import type { Engine } from '../core/engine.ts';
+import type { Engine, RegistryAgnosticEngine } from '../core/engine.ts';
 import { WorkflowDefinitionRegisteredEvent, type WeftEventMap } from '../core/events.ts';
 import { WeftError } from '../core/weft-error.ts';
 import type { JsonRpcId } from '../server/json-rpc-protocol.ts';
@@ -246,12 +246,17 @@ export class McpSessionManager implements AsyncDisposable {
   readonly #currentTimeMilliseconds: () => number;
   #toolListSignature: ReadonlyArray<ToolListSignatureEntry>;
 
-  constructor(engine: Engine, options: McpSessionManagerOptions = {}) {
-    this.#engine = engine;
+  constructor(engine: RegistryAgnosticEngine, options: McpSessionManagerOptions = {}) {
+    // Registry-erase the covariance-widened constructor parameter (see this
+    // class's JSDoc / #708 — the same widening as `ServeOptions.engine`) to
+    // the plain default `Engine` this class stores and uses internally; every
+    // usage below only calls registry-erased methods.
+    const erasedEngine = engine as Engine;
+    this.#engine = erasedEngine;
     this.#maximumSessions = options.maximumSessions ?? 1_024;
     this.#sessionIdleTimeoutMilliseconds = options.sessionIdleTimeoutMilliseconds ?? 30 * 60 * 1000;
     this.#currentTimeMilliseconds = options.currentTimeMilliseconds ?? Date.now;
-    this.#toolListSignature = toolListSignature(engine);
+    this.#toolListSignature = toolListSignature(erasedEngine);
     this.#resourceListener = (event) => {
       const workflowId = (event as { workflowId?: unknown }).workflowId;
       if (typeof workflowId !== 'string') return;
@@ -423,7 +428,7 @@ function toolListSignaturesEqual(
  * ```
  */
 export function createMcpSessionManager(
-  engine: Engine,
+  engine: RegistryAgnosticEngine,
   options?: McpSessionManagerOptions,
 ): McpSessionManager {
   return new McpSessionManager(engine, options);

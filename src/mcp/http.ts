@@ -1,4 +1,4 @@
-import type { Engine } from '../core/engine.ts';
+import type { Engine, RegistryAgnosticEngine } from '../core/engine.ts';
 import { WeftError } from '../core/weft-error.ts';
 import { anonymousPrincipal, isAuthenticated, type Principal } from '../server/principal.ts';
 import { dispatchMcpMessage } from './dispatcher.ts';
@@ -38,7 +38,12 @@ import { McpSessionLimitExceededError, McpSessionManager, type McpSession } from
  */
 export type McpHttpRequestOptions = {
   readonly request: Request;
-  readonly engine: Engine;
+  /**
+   * Typed as {@link RegistryAgnosticEngine} (see its JSDoc) rather than the
+   * plain default `Engine`, so both `new Engine({ storage })` and
+   * `Engine.create({ workflows })` type-check here directly.
+   */
+  readonly engine: RegistryAgnosticEngine;
   readonly sessionManager: McpSessionManager;
   readonly principal?: Principal;
   readonly authRequired: boolean;
@@ -122,7 +127,10 @@ async function handleMcpPost(options: McpHttpRequestOptions): Promise<Response> 
   const { session, createdSession, principal } = sessionResolution;
 
   const result = await dispatchMcpMessage(parsed.value, {
-    engine: options.engine,
+    // Registry-erase the widened `McpHttpRequestOptions.engine` back to the
+    // plain default `Engine` `dispatchMcpMessage` expects — see this option's
+    // JSDoc / #708.
+    engine: options.engine as Engine,
     session,
     principal,
     authRequired: authRequiredFromOptions(options),

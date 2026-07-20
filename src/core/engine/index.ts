@@ -2010,3 +2010,36 @@ export class Engine<
     );
   }
 }
+
+/**
+ * `Engine` with its workflow/activity-registry-typed members removed —
+ * `register`, `registerWorkflows`, `start`, and `startOrSignal`, whose
+ * overload signatures vary with the phantom `TWorkflows`/`TActivities`
+ * registry generics (see `register()`'s JSDoc: registering returns "this
+ * same engine with the definition added to its phantom type registry").
+ * Because those chained-builder methods return `Engine<NarrowedRegistry>`,
+ * `Engine` is invariant in its registry generics — a concretely narrowed
+ * `Engine<Concrete>` (e.g. from `Engine.create({ workflows })`) is not
+ * structurally assignable to the plain default `Engine<DefaultWorkflowRegistry>`,
+ * even though every *other* member is registry-independent.
+ *
+ * Host-facing options that accept an already-constructed `Engine` without
+ * needing those four registry-typed convenience methods — `serve({ engine })`,
+ * the Service Worker helpers, the MCP session/HTTP/stdio surfaces — use this
+ * type instead of the bare default `Engine`, so both `new Engine({ storage })`
+ * and `Engine.create({ workflows })` are accepted without a call-site cast.
+ * See #708.
+ *
+ * (`Engine<object, object>` looks like the obvious fix — the widest legal
+ * instantiation of the registry generics — but TypeScript's structural check
+ * on `register()`'s self-referential return type does not reliably resolve
+ * that relationship: it can pass or fail for the identical `Engine<A>` /
+ * `Engine<B>` pair depending on unrelated compilation context, such as other
+ * files in the same program. Removing the registry-typed members entirely,
+ * rather than widening their generic arguments, avoids the recursive
+ * comparison altogether.)
+ */
+export type RegistryAgnosticEngine = Omit<
+  Engine,
+  'register' | 'registerWorkflows' | 'start' | 'startOrSignal'
+>;

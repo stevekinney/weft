@@ -7,7 +7,7 @@
  * @module service-worker
  */
 
-import type { Engine } from '../core/engine';
+import type { RegistryAgnosticEngine } from '../core/engine';
 import { handleRequest } from '../server/handler';
 import type { ServiceWorkerScheduler } from './scheduler.ts';
 import type {
@@ -53,7 +53,13 @@ export type {
  * ```
  */
 export interface ServiceWorkerOptions {
-  engine: Engine;
+  /**
+   * The engine this handler delegates workflow requests to. Typed as
+   * {@link RegistryAgnosticEngine} (see its JSDoc) rather than the plain
+   * default `Engine`, so both `new Engine({ storage })` and
+   * `Engine.create({ workflows })` type-check here directly.
+   */
+  engine: RegistryAgnosticEngine;
   pathPrefix?: string;
 }
 

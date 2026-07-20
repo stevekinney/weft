@@ -11,7 +11,7 @@
  * @module service-worker/setup
  */
 
-import { Engine } from '../core/engine';
+import { Engine, type RegistryAgnosticEngine } from '../core/engine';
 import { handleRequest } from '../server/handler';
 import { IndexedDBStorage } from '../storage/indexeddb';
 import type { Storage as WeftStorage } from '../storage/interface';
@@ -61,8 +61,12 @@ export interface SetupServiceWorkerOptions {
   /**
    * Pre-built engine. If provided, must use the same storage instance as
    * `options.storage` (or its own storage if `storage` is omitted).
+   *
+   * Typed as {@link RegistryAgnosticEngine} (see its JSDoc) rather than the
+   * plain default `Engine`, so both `new Engine({ storage })` and
+   * `Engine.create({ workflows })` type-check here directly.
    */
-  engine?: Engine;
+  engine?: RegistryAgnosticEngine;
   /**
    * Pre-built storage instance. Must be the same `===` reference as the
    * engine's storage when both are provided.
@@ -178,7 +182,12 @@ function resolveStorageAndEngine(options: SetupServiceWorkerOptions): {
   }
   if (options.engine !== undefined) {
     return {
-      engine: options.engine,
+      // Registry-erase the widened `options.engine` (`RegistryAgnosticEngine`,
+      // see `SetupServiceWorkerOptions.engine`'s JSDoc / #708) back to the
+      // plain default `Engine` this function returns — every caller here only
+      // uses registry-erased methods (`storage`, `register` via the user's own
+      // callback, `recoverAll`, `dispatchEvent`).
+      engine: options.engine as Engine,
       storage: options.storage ?? options.engine.storage,
     };
   }

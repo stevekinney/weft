@@ -1,5 +1,6 @@
-import { createMetricsCollectorExporter, Engine } from '@lostgradient/weft';
+import { createMetricsCollectorExporter, Engine, workflow } from '@lostgradient/weft';
 import {
+  serve,
   WorkerRegistry,
   type AuthConfig,
   type DashboardRouteTarget,
@@ -114,3 +115,22 @@ void packageRootTaskQueue;
 // constructable — not merely nameable as a type.
 const packageRootConstructedRegistry = new WorkerRegistry();
 void packageRootConstructedRegistry;
+
+// Regression guard for #708: `ServeOptions.engine` must accept BOTH
+// documented construction patterns from the published package without a
+// call-site cast — `new Engine({ storage })` (the default, empty registry —
+// covered by `packageRootServeOptions` above) and `Engine.create({ workflows })`
+// (a concretely narrowed, non-empty registry — the README "Hello, World"
+// pattern, which used to fail with TS2322 before the fix).
+async function verifyPackageRootConcreteWorkflowRegistryEngineAcceptedByServe(): Promise<void> {
+  const greet = workflow({ name: 'greet' }).execute(async function* (_ctx, input: { a: number }) {
+    return { b: input.a };
+  });
+  const concreteEngine = await Engine.create({ workflows: { greet } });
+  const options: ServeOptions = { engine: concreteEngine };
+  void options;
+
+  await using server = serve({ engine: concreteEngine, port: 0 });
+  void server;
+}
+void verifyPackageRootConcreteWorkflowRegistryEngineAcceptedByServe;

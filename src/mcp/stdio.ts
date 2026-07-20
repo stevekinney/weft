@@ -1,4 +1,4 @@
-import type { Engine } from '../core/engine.ts';
+import type { Engine, RegistryAgnosticEngine } from '../core/engine.ts';
 import { principalFromStdioLocal } from '../server/principal.ts';
 import { dispatchMcpMessage } from './dispatcher.ts';
 import { parseMcpMessage } from './protocol.ts';
@@ -47,7 +47,12 @@ export type McpStdioAdmission =
 export type McpStdioSessionOptions = {
   readonly input: ReadableStream<Uint8Array>;
   readonly output: WritableStream<Uint8Array>;
-  readonly engine: Engine;
+  /**
+   * Typed as {@link RegistryAgnosticEngine} (see its JSDoc) rather than the
+   * plain default `Engine`, so both `new Engine({ storage })` and
+   * `Engine.create({ workflows })` type-check here directly.
+   */
+  readonly engine: RegistryAgnosticEngine;
   readonly admission: McpStdioAdmission;
   readonly maxFrameBytes?: number;
   readonly sessionManagerOptions?: McpSessionManagerOptions;
@@ -219,9 +224,13 @@ function addPendingLine(
 ): void {
   if (line.trim().length === 0) return;
   runtime.manager.touch(runtime.session);
-  const task = handleLine(line, options.engine, runtime.session, runtime.write).finally(() => {
-    pending.delete(task);
-  });
+  // Registry-erase the widened `McpStdioSessionOptions.engine` back to the
+  // plain default `Engine` `handleLine` expects — see this option's JSDoc / #708.
+  const task = handleLine(line, options.engine as Engine, runtime.session, runtime.write).finally(
+    () => {
+      pending.delete(task);
+    },
+  );
   pending.add(task);
 }
 

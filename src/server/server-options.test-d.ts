@@ -1,8 +1,10 @@
 import { Engine } from '../core/engine.ts';
+import { workflow } from '../core/types.ts';
 import { createMetricsCollectorExporter, MetricsCollector } from '../observability/metrics.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import type { HandlerOptions } from './handler.ts';
 import {
+  serve,
   WorkerRegistry,
   type AuthConfig,
   type DashboardRouteTarget,
@@ -131,3 +133,27 @@ async function verifyEmptyWorkflowsEngineAcceptedByServe(): Promise<void> {
   void options;
 }
 void verifyEmptyWorkflowsEngineAcceptedByServe;
+
+// Regression guard for #708: `ServeOptions.engine` must accept BOTH
+// documented construction patterns without a call-site cast —
+// `new Engine({ storage })` (the default, empty registry — covered by
+// `serveOptions` above) and `Engine.create({ workflows })` (a concretely
+// narrowed, non-empty registry — the README "Hello, World" pattern, which
+// used to fail with TS2322 before the fix). `serve()` itself is called, not
+// just `ServeOptions`, so this also pins that `serve({ engine, port })`
+// type-checks end to end.
+async function verifyConcreteWorkflowRegistryEngineAcceptedByServe(): Promise<void> {
+  const greet = workflow({ name: 'greet' }).execute(async function* (_ctx, input: { a: number }) {
+    return { b: input.a };
+  });
+  const concreteEngine = await Engine.create({
+    storage: new MemoryStorage(),
+    workflows: { greet },
+  });
+  const options: ServeOptions = { engine: concreteEngine };
+  void options;
+
+  await using concreteEngineServer = serve({ engine: concreteEngine, port: 0 });
+  void concreteEngineServer;
+}
+void verifyConcreteWorkflowRegistryEngineAcceptedByServe;

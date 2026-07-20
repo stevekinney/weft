@@ -6,6 +6,7 @@
  */
 
 import { decode } from '../core/codec.ts';
+import type { Engine } from '../core/engine.ts';
 import { getEnginePayloadSizeMaxBytes } from '../core/engine/payload-size-policy.ts';
 import { createMcpSessionManager } from '../mcp/session.ts';
 import { createMetricsCollectorExporter, MetricsCollector } from '../observability/metrics.ts';
@@ -218,7 +219,12 @@ export function buildServerContext(
       ? { schedulingPolicy: options.schedulingPolicy }
       : undefined,
   );
-  const eventFeedBackend = createEngineEventFeedBackend(options.engine);
+  // Registry-erase the widened `ServeOptions.engine` back to the plain
+  // default `Engine` these internal helpers expect — see the field's JSDoc /
+  // #708. Every helper below only exercises registry-erased `Engine`
+  // behavior.
+  const engine = options.engine as Engine;
+  const eventFeedBackend = createEngineEventFeedBackend(engine);
   return {
     registry: workerRegistry,
     taskQueue,
@@ -249,7 +255,7 @@ export function buildServerContext(
     workflowEventFeed: createWorkflowEventFeed(eventFeedBackend),
     fleetEventFeed: createFleetEventFeed(options.engine.storage),
     activeJsonRpcSessions: new Set(),
-    mcpSessionManager: createMcpSessionManager(options.engine),
+    mcpSessionManager: createMcpSessionManager(engine),
     // The authenticator is initialized asynchronously (key import) but the
     // promise is created eagerly and resolved before the first request completes.
     authenticatorPromise: options.auth ? createAuthenticator(options.auth) : null,
@@ -258,7 +264,7 @@ export function buildServerContext(
     workerReconnectGracePeriodMs: clampWorkerReconnectGracePeriod(
       options.workerReconnectGracePeriodMs,
     ),
-    payloadSizeMaxBytes: getEnginePayloadSizeMaxBytes(options.engine),
+    payloadSizeMaxBytes: getEnginePayloadSizeMaxBytes(engine),
     pendingWorkerRequeues: new Map(),
     scanRunning: false,
     processingOperations: new Set(),
@@ -362,7 +368,12 @@ export function registerStackDisposers(
   });
   stack.defer(() => context.mcpSessionManager[Symbol.asyncDispose]());
 
-  stack.defer(registerWorkflowEventLifecycle(options.engine, context, broadcastingHandle));
+  // Registry-erase the widened `ServeOptions.engine` back to the plain
+  // default `Engine` `registerWorkflowEventLifecycle` expects — see the
+  // field's JSDoc / #708.
+  stack.defer(
+    registerWorkflowEventLifecycle(options.engine as Engine, context, broadcastingHandle),
+  );
   stack.defer(() =>
     shutdownAllWorkers(
       context,

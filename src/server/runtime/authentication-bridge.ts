@@ -1,7 +1,7 @@
 import type { ServerWebSocket } from 'bun';
 
 import { decode } from '../../core/codec.ts';
-import type { Engine } from '../../core/engine.ts';
+import type { Engine, RegistryAgnosticEngine } from '../../core/engine.ts';
 import { WorkerDisconnectedEvent } from '../../core/events.ts';
 import { handleMcpHttpRequest } from '../../mcp/http.ts';
 import type { PrometheusExporter } from '../../observability/metrics.ts';
@@ -38,7 +38,11 @@ import { handleWebSocketUpgrade } from './websocket-upgrade.ts';
 import { handleWorkerWebSocketMessage, isInflightRecord } from './websocket-worker.ts';
 
 type ServerFetchOptions = {
-  engine: Engine;
+  // Widened to `RegistryAgnosticEngine` (see its JSDoc / #708) to match the
+  // public `ServeOptions.engine` / `ResolvedServeOptions.engine` this type is
+  // always constructed from; every usage in this file only exercises
+  // registry-erased `Engine` behavior.
+  engine: RegistryAgnosticEngine;
   prometheusExporter?: PrometheusExporter;
   discoveryInfo?: import('../discovery-info.ts').DiscoveryInfo;
   publicOrigin?: string;
@@ -226,7 +230,7 @@ async function dispatchServerFetchRequest(
     return handleJsonRpcHttpRequestSafely({
       request,
       registry: context.liveOperationRegistry,
-      engine: options.engine,
+      engine: options.engine as Engine, // registry-erase back to plain Engine, see ServerFetchOptions.engine's JSDoc / #708
       authContext: authentication.authContext,
       ...(options.maxRequestBodyBytes !== undefined
         ? { maxBodyBytes: options.maxRequestBodyBytes }
@@ -293,7 +297,7 @@ export function createServerWebSocketHandlers(
       if (connectionType === 'watch' && workflowId) {
         ws.data.watchReplayInProgress = true;
         ws.data.pendingWatchMessages = [];
-        void replayWatchEvents(context, options.engine, ws, workflowId);
+        void replayWatchEvents(context, options.engine as Engine, ws, workflowId); // see ServerFetchOptions.engine's JSDoc / #708
       }
 
       // Worker sockets ride Bun pub/sub by pathname. Stream and watch sockets
@@ -316,7 +320,7 @@ export function createServerWebSocketHandlers(
         if (!addStreamSocket(context, workflowId, ws)) {
           return;
         }
-        void replayTokenStream(context, options.engine, ws, workflowId);
+        void replayTokenStream(context, options.engine as Engine, ws, workflowId); // see ServerFetchOptions.engine's JSDoc / #708
       }
 
       if (connectionType === 'jsonrpc') {

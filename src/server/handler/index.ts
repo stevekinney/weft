@@ -10,7 +10,7 @@
  * @module server/handler
  */
 
-import type { Engine } from '../../core/engine.ts';
+import type { Engine, RegistryAgnosticEngine } from '../../core/engine.ts';
 import { MalformedRouteParameterError } from '../rest-binding.ts';
 import { authContextToPrincipal } from './auth-context-principal.ts';
 import { matchRestBinding } from './binding-dispatch.ts';
@@ -180,6 +180,12 @@ async function dispatchMatchedRouteBoundary(
 /**
  * Pure HTTP request handler. Maps Request to Response.
  *
+ * `engine` is typed as {@link RegistryAgnosticEngine} (see its JSDoc) rather
+ * than the plain default `Engine`, so both `new Engine({ storage })` and
+ * `Engine.create({ workflows })` type-check here directly. This module's
+ * dispatch chain only calls registry-erased `Engine` methods, so the value is
+ * registry-erased back to the plain `Engine` once, internally.
+ *
  * @example
  * ```ts
  * import { workflow, Engine, MemoryStorage, handleRequest } from '@lostgradient/weft';
@@ -194,7 +200,7 @@ async function dispatchMatchedRouteBoundary(
  */
 export async function handleRequest(
   request: Request,
-  engine: Engine,
+  engine: RegistryAgnosticEngine,
   options?: HandlerOptions,
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -202,5 +208,7 @@ export async function handleRequest(
   const optionError = validateHandlerOptions(options);
   if (optionError !== null) return optionError;
 
-  return dispatchMatchedRouteBoundary(request, engine, options, url);
+  // Registry-erase back to the plain default `Engine` that the rest of this
+  // module's dispatch chain is typed against — see this function's JSDoc.
+  return dispatchMatchedRouteBoundary(request, engine as Engine, options, url);
 }
