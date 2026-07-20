@@ -203,9 +203,11 @@ if (stagedTouchesDocumentation) {
   // `git add`) would leak into the result and pass a commit CI then rejects.
   // Stash unstaged/untracked changes (keeping the index intact) so the check
   // runs against exactly what will be committed.
-  const stashCountBefore = (await $`git stash list`.text()).split('\n').filter(Boolean).length;
+  const stashListBefore = await $`git stash list`.text();
+  const stashCountBefore = stashListBefore.split('\n').filter(Boolean).length;
   await $`git stash push --keep-index -u -m pre-commit-markdown-doctest-ratchet`.quiet();
-  const stashCountAfter = (await $`git stash list`.text()).split('\n').filter(Boolean).length;
+  const stashListAfter = await $`git stash list`.text();
+  const stashCountAfter = stashListAfter.split('\n').filter(Boolean).length;
   const stashed = stashCountAfter > stashCountBefore;
   try {
     await $`bun run verify:markdown-doctests:ratchet`;
