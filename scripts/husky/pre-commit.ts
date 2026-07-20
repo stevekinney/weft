@@ -198,14 +198,27 @@ const stagedTouchesDocumentation = staged.some(
 );
 if (stagedTouchesDocumentation) {
   info('Running markdown doctest skip-count check…');
+  // The ratchet reads documentation/ and the skip-counts JSON straight off
+  // disk, so unstaged edits (e.g. a skip-count bump the developer forgot to
+  // `git add`) would leak into the result and pass a commit CI then rejects.
+  // Stash unstaged/untracked changes (keeping the index intact) so the check
+  // runs against exactly what will be committed.
+  const stashCountBefore = (await $`git stash list`.text()).split('\n').filter(Boolean).length;
+  await $`git stash push --keep-index -u -m pre-commit-markdown-doctest-ratchet`.quiet();
+  const stashCountAfter = (await $`git stash list`.text()).split('\n').filter(Boolean).length;
+  const stashed = stashCountAfter > stashCountBefore;
   try {
     await $`bun run verify:markdown-doctests:ratchet`;
     success('Markdown doctest skip-count check passed');
   } catch {
     error(
-      'Markdown doctest skip-count check failed — see hint above. Update scripts/markdown-doctest-skip-counts.json to match the new counts in this commit.',
+      'Markdown doctest skip-count check failed — see hint above. Update scripts/markdown-doctest-skip-counts.json to match the new counts and stage it in this commit.',
     );
     ok = false;
+  } finally {
+    if (stashed) {
+      await $`git stash pop`.quiet();
+    }
   }
 } else {
   info('Skipping markdown doctest skip-count check (no documentation changes staged)');
