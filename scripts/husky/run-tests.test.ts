@@ -292,7 +292,9 @@ describe('discoverTestFiles', () => {
     // a test joins this list only when it genuinely cannot be made
     // load-insensitive. This ceiling forces every addition to be a deliberate,
     // reviewed bump rather than silent list creep that erodes pre-commit signal.
-    expect(LOAD_SENSITIVE_TEST_PATHS.length).toBeLessThanOrEqual(5);
+    // Bumped 5 -> 6 for durable-activity.portability.test.ts (see its entry's
+    // rationale comment for the reproduction proof backing this addition).
+    expect(LOAD_SENSITIVE_TEST_PATHS.length).toBeLessThanOrEqual(6);
   });
 });
 

@@ -214,7 +214,7 @@
     "markdown-doctests:inventory": "bun run scripts/extract-markdown-doctests.ts inventory",
     "prepack": "bun run scripts/run-gates.ts prepack",
     "pr:title": "bun run scripts/pr-title.ts",
-    "prepare": "husky",
+    "prepare": "husky && bun run scripts/husky/verify-hooks-installed.ts",
     "prepublishOnly": "bun run validate",
     "start": "bun run src/index.ts",
     "test": "bun test --timeout 15000 --path-ignore-patterns='src/benchmarks/**' --path-ignore-patterns='examples/checkout/**' --path-ignore-patterns='src/service-worker/service-worker-browser.test.ts' --path-ignore-patterns='src/storage/indexeddb-browser.test.ts' --path-ignore-patterns='src/storage/web-extension-browser.test.ts'",
