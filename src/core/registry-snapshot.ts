@@ -9,11 +9,13 @@
  * its JSDoc for what reaches the wire vs server logs).
  *
  * **Ordering guarantee.** Builder code inserts workflow, activity, signal,
- * update, and query keys in alphabetical (codepoint) order. Public names cannot
- * be integer-like because the name grammar requires a leading letter or
- * underscore. Clients that want to protect themselves from future registry
- * sources should still sort `Object.keys(...)` before presenting or diffing
- * snapshot entries.
+ * update, and query keys in alphabetical (codepoint) order. Workflow and
+ * activity names cannot be integer-like (the name grammar requires a leading
+ * letter or underscore), but signal/update/query names accept any string, so
+ * integer-like message names could theoretically be reordered by JS engines
+ * despite the explicit sort. Clients that want to protect themselves from
+ * future registry sources should still sort `Object.keys(...)` before
+ * presenting or diffing snapshot entries.
  *
  * @module core/registry-snapshot
  */
