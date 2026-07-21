@@ -64,6 +64,7 @@ function createInternals(storage: MemoryStorage) {
     },
     storage,
     workflowStateWriteChains: new Map(),
+    scheduleStateOperationChains: new Map(),
   } as never;
 }
 

@@ -43,6 +43,39 @@ export async function runSerializedWorkflowStateWrite<TResult>(
   }
 }
 
+/**
+ * Serialize a schedule read-modify-write operation with its timer callback.
+ *
+ * Unlike workflow-state write serialization, a failed predecessor is propagated
+ * to callers that were already queued behind it. In particular, an update that
+ * arrives while a scanned timer callback is rearming must not delete the fired
+ * timer after that callback fails; rejecting the queued update leaves the durable
+ * timer available for the scheduler (or a lease successor) to retry.
+ */
+export async function runSerializedScheduleStateOperation<TResult>(
+  internals: EngineInternals,
+  scheduleId: string,
+  operation: () => Promise<TResult>,
+): Promise<TResult> {
+  const previousOperation =
+    internals.scheduleStateOperationChains.get(scheduleId) ?? Promise.resolve();
+  const execution = previousOperation.then(operation);
+  const trackedExecution = execution.then(() => undefined);
+  // Keep the rejected state available to an already-queued successor while
+  // marking this bookkeeping promise handled when there is no successor.
+  void trackedExecution.catch(() => undefined);
+
+  internals.scheduleStateOperationChains.set(scheduleId, trackedExecution);
+
+  try {
+    return await execution;
+  } finally {
+    if (internals.scheduleStateOperationChains.get(scheduleId) === trackedExecution) {
+      internals.scheduleStateOperationChains.delete(scheduleId);
+    }
+  }
+}
+
 /** Load and decode persisted workflow state by workflow ID. */
 export async function loadWorkflowState(
   internals: EngineInternals,

@@ -1,4 +1,4 @@
-import type { ScheduleSpec, StartOrSignalSignal } from '../core/types.ts';
+import type { ScheduleOptions, ScheduleSpec, StartOrSignalSignal } from '../core/types.ts';
 import type { ClientStartOptions, ClientStartOrSignalOptions } from './interface.ts';
 
 export function setIfDefined(body: Record<string, unknown>, key: string, value: unknown): void {
@@ -18,6 +18,22 @@ export function scheduleSpecToWireFields(spec: string | ScheduleSpec): Record<st
     return { every: spec.every };
   }
   return { cronExpression: spec.cron };
+}
+
+/** Build a schedule-create wire body from the explicitly supported option fields. */
+export function buildScheduleBody(
+  type: string,
+  input: unknown,
+  spec: string | ScheduleSpec,
+  options?: ScheduleOptions,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = { type, input, ...scheduleSpecToWireFields(spec) };
+  setIfDefined(body, 'id', options?.id);
+  setIfDefined(body, 'description', options?.description);
+  setIfDefined(body, 'overlap', options?.overlap);
+  setIfDefined(body, 'backfill', options?.backfill);
+  setIfDefined(body, 'jitter', options?.jitter);
+  return body;
 }
 
 /** Copy the shared client start-option wire fields onto a request body, omitting undefined. */

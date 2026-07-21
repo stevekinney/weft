@@ -823,7 +823,7 @@
         "jsonRpcWebSocket": true,
         "jsonRpcStdio": true
       },
-      "producibleFaults": ["Conflict", "NotFound"],
+      "producibleFaults": ["Conflict", "InvalidParams", "NotFound"],
       "inputSchema": {
         "additionalProperties": false,
         "properties": {

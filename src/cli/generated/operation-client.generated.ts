@@ -218,7 +218,7 @@ export type CatalogOperationTypes = {
       readonly scheduleId: string;
     };
     readonly output: null;
-    readonly faults: 'Conflict' | 'NotFound';
+    readonly faults: 'Conflict' | 'InvalidParams' | 'NotFound';
   };
   'weft.system.metrics': {
     readonly input: {};

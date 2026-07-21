@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import type { Engine } from '../../core/engine.ts';
+import { normalizeScheduleUpdateOptions } from '../../core/engine/validation/schedule.ts';
 import type { ScheduleUpdateOptions } from '../../core/types.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
@@ -76,6 +77,11 @@ function validateJitter(value: unknown): ScheduleUpdateOptions['jitter'] {
       'options.jitter must be a duration string or a number of milliseconds',
     );
   }
+  try {
+    normalizeScheduleUpdateOptions({ jitter: value });
+  } catch (error) {
+    throw invalidParamsFault(error instanceof Error ? error.message : String(error));
+  }
   return value;
 }
 
@@ -108,7 +114,7 @@ export const updateScheduleOperation = defineOperation<UpdateScheduleInput, null
   inputSchema: updateScheduleInput,
   outputSchema: z.null(),
   access: { kind: 'public' },
-  producibleFaults: ['NotFound', 'Conflict'],
+  producibleFaults: ['NotFound', 'Conflict', 'InvalidParams'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<null> => {

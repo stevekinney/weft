@@ -177,13 +177,22 @@ async function exerciseWorkflowHandleAndSchedule(httpClient: HttpClient): Promis
   expect(handle.id).toBe('wf-1');
   expect(await handle.result()).toBe('hello');
 
-  const scheduleHandle = await httpClient.schedule('echo', 'hourly', '0 * * * *', {
+  const scheduleOptionsWithExtraRuntimeFields = {
     id: 'schedule-1',
     description: 'Hourly schedule',
     overlap: 'queue',
     backfill: true,
     jitter: '10s',
-  });
+    type: 'wrong-workflow',
+    input: 'wrong-input',
+    cronExpression: '*/5 * * * *',
+  } as const;
+  const scheduleHandle = await httpClient.schedule(
+    'echo',
+    'hourly',
+    '0 * * * *',
+    scheduleOptionsWithExtraRuntimeFields,
+  );
   expect(scheduleHandle.id).toBe('schedule-1');
 
   await scheduleHandle.pause();

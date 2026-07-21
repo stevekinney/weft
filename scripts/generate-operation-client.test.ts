@@ -127,6 +127,7 @@ describe('schedule update operation generation', () => {
     expect(updateScheduleEntry).toContain('readonly description?: unknown;');
     expect(updateScheduleEntry).toContain('readonly jitter?: unknown;');
     expect(updateScheduleEntry).toContain('readonly overlap?: unknown;');
+    expect(snapshotOperation('weft.schedules.update').producibleFaults).toContain('InvalidParams');
   });
 });
 

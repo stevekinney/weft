@@ -99,7 +99,7 @@ import type {
 import { openClientEventSubscription } from './open-event-subscription.ts';
 import { buildScheduleListSearchParams } from './schedule-list-search-params.ts';
 import { buildWorkflowListSearchParams } from './search-params.ts';
-import { buildStartBody, buildStartOrSignalBody, scheduleSpecToWireFields } from './start-body.ts';
+import { buildScheduleBody, buildStartBody, buildStartOrSignalBody } from './start-body.ts';
 import type { KnownWorkflowName, UnknownNameWhenRegistryEmpty } from './workflow-name-typing.ts';
 
 /**
@@ -258,12 +258,7 @@ export class HttpClient implements WeftClient {
     spec: string | ScheduleSpec,
     options?: ScheduleOptions,
   ): Promise<ClientScheduleHandle> {
-    const body: Record<string, unknown> = {
-      type,
-      input,
-      ...scheduleSpecToWireFields(spec),
-      ...options,
-    };
+    const body = buildScheduleBody(type, input, spec, options);
 
     const response = await request<{ id: string }>(this.baseUrl, '/schedules', this.headers, {
       method: 'POST',

@@ -4,7 +4,11 @@ import type { EngineInternals } from './internals.ts';
 import { resolveEffectiveScheduleFireAt } from './schedule-jitter.ts';
 import { collectDueScheduleOccurrences, getNextScheduleOccurrence } from './schedule-occurrence.ts';
 import type { ScheduleCallbacks } from './schedules.ts';
-import { loadScheduleState, writeScheduleState } from './storage-io.ts';
+import {
+  loadScheduleState,
+  runSerializedScheduleStateOperation,
+  writeScheduleState,
+} from './storage-io.ts';
 
 const SCHEDULE_LATE_GRACE_MILLISECONDS = 1000;
 const MAX_SCHEDULE_BACKFILL_OCCURRENCES_PER_TICK = 256;
@@ -36,6 +40,16 @@ class ScheduleStatePersistenceError extends Error {
 }
 
 export async function handleScheduleTimer(
+  internals: EngineInternals,
+  entry: TimerEntry,
+  callbacks: ScheduleCallbacks,
+): Promise<void> {
+  await runSerializedScheduleStateOperation(internals, entry.workflowId, async () => {
+    await handleSerializedScheduleTimer(internals, entry, callbacks);
+  });
+}
+
+async function handleSerializedScheduleTimer(
   internals: EngineInternals,
   entry: TimerEntry,
   callbacks: ScheduleCallbacks,

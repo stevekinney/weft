@@ -1,5 +1,6 @@
 import { describe, expect, it, spyOn } from 'bun:test';
 import {
+  createDeferred,
   flushMicrotasks,
   waitForCondition,
   yieldToEventLoop,
@@ -119,6 +120,30 @@ class FailingScheduleBatchStorage extends MemoryStorage {
     if (failingKey !== null && operations.some((operation) => operation.key === failingKey)) {
       this.#nextFailingKey = null;
       throw new Error(`simulated schedule batch failure for ${failingKey}`);
+    }
+
+    return super.batch(operations);
+  }
+}
+
+class ControlledScheduleBatchStorage extends MemoryStorage {
+  readonly batchEntered = createDeferred();
+  readonly releaseBatch = createDeferred();
+  #blockedKey: string | null = null;
+  #failure: Error | null = null;
+
+  blockNextBatchContaining(key: string, failure?: Error): void {
+    this.#blockedKey = key;
+    this.#failure = failure ?? null;
+  }
+
+  override async batch(operations: BatchOperation[]): Promise<void> {
+    const blockedKey = this.#blockedKey;
+    if (blockedKey !== null && operations.some((operation) => operation.key === blockedKey)) {
+      this.#blockedKey = null;
+      this.batchEntered.resolve();
+      await this.releaseBatch.promise;
+      if (this.#failure !== null) throw this.#failure;
     }
 
     return super.batch(operations);
@@ -1249,6 +1274,123 @@ describe('recurring schedules', () => {
       ).toBeNull();
       expect(await storage.get('timer-idx:schedule:rearm-atomicity-schedule')).not.toBeNull();
     } finally {
+      errorSpy.mockRestore();
+      engine[Symbol.dispose]();
+    }
+  });
+
+  it('serializes an update behind a scanned timer callback and applies it after rearm succeeds.', async () => {
+    const storage = new ControlledScheduleBatchStorage();
+    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+    const engine = createEngine(clock, storage);
+
+    registerWorkflow(
+      engine,
+      'serialized-update-success-workflow',
+      async function* (_ctx: WorkflowContext, input: string) {
+        return input;
+      },
+    );
+
+    const schedule = await engine.schedule(
+      'serialized-update-success-workflow',
+      'run-once',
+      '*/15 * * * * *',
+      { id: 'serialized-update-success' },
+    );
+    const originalFireAt = requireNextFireAt(await schedule.describe());
+    const oldRearmFireAt = getNextCronOccurrence('*/15 * * * * *', originalFireAt);
+    storage.blockNextBatchContaining(
+      KEYS.scheduleTick(oldRearmFireAt, 'serialized-update-success'),
+    );
+
+    clock.now = originalFireAt;
+    const tickPromise = engine.scheduler.tick(clock.now);
+    await storage.batchEntered.promise;
+
+    let updateSettled = false;
+    const updatePromise = schedule.update('*/45 * * * * *').finally(() => {
+      updateSettled = true;
+    });
+    await flushMicrotasks();
+
+    try {
+      expect(updateSettled).toBe(false);
+    } finally {
+      storage.releaseBatch.resolve();
+      await tickPromise;
+    }
+
+    await updatePromise;
+    const updated = await schedule.describe();
+    expect(updated).toMatchObject({
+      cronExpression: '*/45 * * * * *',
+      lastFireAt: originalFireAt,
+    });
+    expect(
+      await storage.get(KEYS.scheduleTick(oldRearmFireAt, 'serialized-update-success')),
+    ).toBeNull();
+    expect(
+      await storage.get(KEYS.scheduleTick(requireNextFireAt(updated), 'serialized-update-success')),
+    ).not.toBeNull();
+
+    engine[Symbol.dispose]();
+  });
+
+  it('rejects a concurrent update and preserves the fired timer when callback rearm fails.', async () => {
+    const storage = new ControlledScheduleBatchStorage();
+    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+    const engine = createEngine(clock, storage);
+    const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+    registerWorkflow(
+      engine,
+      'serialized-update-failure-workflow',
+      async function* (_ctx: WorkflowContext, input: string) {
+        return input;
+      },
+    );
+
+    const schedule = await engine.schedule(
+      'serialized-update-failure-workflow',
+      'run-once',
+      '*/15 * * * * *',
+      { id: 'serialized-update-failure' },
+    );
+    const originalFireAt = requireNextFireAt(await schedule.describe());
+    const oldRearmFireAt = getNextCronOccurrence('*/15 * * * * *', originalFireAt);
+    storage.blockNextBatchContaining(
+      KEYS.scheduleTick(oldRearmFireAt, 'serialized-update-failure'),
+      new Error('simulated in-flight schedule rearm failure'),
+    );
+
+    clock.now = originalFireAt;
+    const tickPromise = engine.scheduler.tick(clock.now);
+    await storage.batchEntered.promise;
+
+    let updateSettled = false;
+    const updatePromise = schedule.update('*/45 * * * * *').finally(() => {
+      updateSettled = true;
+    });
+    await flushMicrotasks();
+
+    try {
+      expect(updateSettled).toBe(false);
+      storage.releaseBatch.resolve();
+      await tickPromise;
+      await expect(updatePromise).rejects.toThrow(
+        'Failed to persist schedule "serialized-update-failure" while processing its timer',
+      );
+
+      expect(await schedule.describe()).toMatchObject({
+        cronExpression: '*/15 * * * * *',
+        nextFireAt: originalFireAt,
+      });
+      expect(
+        await storage.get(KEYS.scheduleTick(originalFireAt, 'serialized-update-failure')),
+      ).not.toBeNull();
+    } finally {
+      storage.releaseBatch.resolve();
       errorSpy.mockRestore();
       engine[Symbol.dispose]();
     }

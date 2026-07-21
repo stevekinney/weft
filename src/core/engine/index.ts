@@ -603,6 +603,7 @@ export class Engine<
     getInternals(this).workflowNestingDepths = new Map();
     getInternals(this).workflowHeaders = new Map();
     getInternals(this).workflowStateWriteChains = new Map();
+    getInternals(this).scheduleStateOperationChains = new Map();
     getInternals(this).finalizationRegistry = new FinalizationRegistry<string>(
       createHandleCacheFinalizer(getInternals(this).handleCache),
     );

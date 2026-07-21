@@ -200,6 +200,7 @@ export interface EngineInternals {
   workflowNestingDepths: Map<string, number>;
   workflowHeaders: Map<string, Map<string, string>>;
   workflowStateWriteChains: Map<string, Promise<void>>;
+  scheduleStateOperationChains: Map<string, Promise<void>>;
   heartbeatDetails: Map<string, unknown>;
   /**
    * Last heartbeat payload PER ACTIVITY STEP, so a retry of a step can read the

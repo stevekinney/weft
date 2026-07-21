@@ -38,6 +38,7 @@ function createInternals(storage: MemoryStorage, now = 2_000) {
     registrations: new Map(),
     storage,
     workflowStateWriteChains: new Map(),
+    scheduleStateOperationChains: new Map(),
   } as never;
 }
 
