@@ -75,11 +75,11 @@ export type RecoverAllOptions = {
    * Policy for a recovered workflow whose persisted
    * {@link WorkflowVersionTuple} or checkpoint `version` no longer matches the
    * registered {@link WorkflowDefinition.version}. Recovery checks both
-   * records so it cannot replay a checkpoint produced by a different workflow
-   * definition even if the workflow-state metadata disagrees. The mismatch is
-   * detected before `resolveWorkflowServices` and `onRecoveredWorkflow` run
-   * for that workflow, so a mismatched run never re-provides services or
-   * invokes the hook.
+   * persisted records against the registered version so current workflow-state
+   * metadata cannot mask a stale checkpoint version. The mismatch is detected
+   * before `resolveWorkflowServices` and `onRecoveredWorkflow` run for that
+   * workflow, so a mismatched run never re-provides services or invokes the
+   * hook.
    *
    * - `'fail-run'` (default): fail only the mismatched run to a terminal
    *   `failed` state with a `system` failure category carrying the

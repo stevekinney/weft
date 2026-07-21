@@ -76,7 +76,7 @@ See [Web Standards architecture](../architecture/web-standards.md) and [Performa
 
 ## Workflow Versioning
 
-When new workflow code deploys while workflows are in-flight, the checkpoint model makes versioning explicit. The version is pinned at start time and stored in the workflow state. On resume, versions must match; if they differ, recovery stops with `VersionMismatchError` instead of replaying old event histories or silently running a new handler against state it may not understand.
+When new workflow code deploys while workflows are in-flight, the checkpoint model makes versioning explicit. The version is pinned at start time and stored in the workflow state. On resume, versions must match; if they differ, Weft refuses to resume that run with a `VersionMismatchError` instead of replaying old event histories or silently running a new handler against state it may not understand. By default, `recoverAll()` fails the affected run and continues recovering its siblings.
 
 See [Workflow Versioning guide](../guides/workflow-versioning.md).
 

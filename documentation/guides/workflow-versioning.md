@@ -6,10 +6,12 @@ recovery, Weft compares the stored version with the currently registered
 version. It also checks the recorded version tuple for workflow, agent, and tool
 version drift.
 
-Recovery continues only when the workflow versions match and the stored version
-tuple has not drifted. A workflow version mismatch or version-tuple drift stops
-recovery with a `VersionMismatchError` so the operator can decide how to handle
-the in-flight workflow deliberately. Weft does not run a checkpoint migration
+Recovery continues for a run only when the workflow versions match and the
+stored version tuple has not drifted. A workflow version mismatch or
+version-tuple drift blocks that run before user code advances. By default,
+`recoverAll()` fails the mismatched run with a `system` failure and continues
+recovering its siblings; `versionMismatchPolicy: 'throw'` instead stops at the
+first mismatch in storage-scan order. Weft does not run a checkpoint migration
 hook during recovery; changing a workflow version is an explicit recovery
 boundary, not an automatic data-upgrade path.
 
@@ -49,21 +51,26 @@ checkVersionCompatibility('1.0.0', '2.0.0'); // 'incompatible'
 
 Runtime recovery applies one additional guard after that comparison: if the
 stored `versionTuple` drifts from the registered workflow, agent, or tool
-versions, recovery also throws `VersionMismatchError`. The `weft version:check`
-diagnostic reports workflow-version compatibility; account for version-tuple
-drift separately when changing agent or tool version metadata.
+versions, it raises the same `VersionMismatchError` at the run's recovery
+boundary. `recoverAll()` handles that error according to its
+`versionMismatchPolicy`. The `weft version:check` diagnostic reports
+workflow-version compatibility; account for version-tuple drift separately when
+changing agent or tool version metadata.
 
 ## Handling Mismatches
 
 When recovery sees an incompatible workflow version or version-tuple drift, it
-throws `VersionMismatchError`. The error carries the workflow id, workflow type,
-stored version, registered version, and optional shape/version-drift details.
+creates a `VersionMismatchError`. The error carries the workflow id, workflow
+type, stored version, registered version, and optional shape/version-drift
+details. The default `recoverAll()` policy records that error on the affected
+run and continues with its siblings. Opt into fail-fast recovery when the host
+needs the error to reject the recovery call:
 
 ```typescript partial
 import { VersionMismatchError } from '@lostgradient/weft';
 
 try {
-  await engine.recoverAll();
+  await engine.recoverAll({ versionMismatchPolicy: 'throw' });
 } catch (error) {
   if (error instanceof VersionMismatchError) {
     console.log(error.workflowId);
@@ -73,6 +80,11 @@ try {
   }
 }
 ```
+
+The fail-fast policy is not an atomic preflight: siblings processed before the
+first mismatch may already be running, while later entries remain unresumed.
+See [Version drift](./recovery-and-deploys.md#version-drift-versionmismatchpolicy)
+for the full policy contract.
 
 Use `weft version:check` before deployment to see active workflow types whose
 stored versions do not match the code you are about to run. Resolve those runs

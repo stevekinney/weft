@@ -51,7 +51,7 @@ The contrast is _when_ you find out: in Temporal you discover serialization prob
 
 **The Temporal problem.** Changing workflow code while workflows are in-flight requires either the `patched()` / `deprecatePatch()` API—which litters your code with version branches that never go away—or Worker Versioning, a whole deployment orchestration system. The Temporal docs themselves acknowledge this is complex enough that they deprecated their first versioning approach and replaced it in 2025.
 
-**The Weft answer.** Checkpointing means code before the current checkpoint never re-executes. Changing steps after the current checkpoint can be safe, but recovery still requires the stored workflow version to match the registered version. If they differ, Weft stops with `VersionMismatchError` instead of silently resuming state with code that may not understand it.
+**The Weft answer.** Checkpointing means code before the current checkpoint never re-executes. Changing steps after the current checkpoint can be safe, but recovery still requires the stored workflow version to match the registered version. If they differ, Weft refuses to resume that run with a `VersionMismatchError` instead of silently applying code that may not understand its state. By default, `recoverAll()` fails the affected run and continues recovering its siblings.
 
 ```typescript pseudocode
 // Temporal: version branches that accumulate forever
