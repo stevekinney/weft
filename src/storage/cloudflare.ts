@@ -16,7 +16,11 @@
  * @module storage/cloudflare
  */
 
-import type { Sql } from './cloudflare-durable-object-sql.ts';
+import type { Sql, SqlStorageValue } from './cloudflare-durable-object-sql.ts';
+import {
+  resolveCloudflareValueCodec,
+  type CloudflareValueEncoding,
+} from './cloudflare-value-codec.ts';
 import { normalizeDeleteRangeOptions, type DeleteRangeOptions } from './delete-range.ts';
 import {
   assertStorageBatchOperationCount,
@@ -35,36 +39,13 @@ import {
 } from './sqlite-key-value-queries.ts';
 
 export type { Sql, SqlStorageCursor, SqlStorageValue } from './cloudflare-durable-object-sql.ts';
+export type { CloudflareValueEncoding } from './cloudflare-value-codec.ts';
 
 const DEFAULT_TABLE = 'kv';
+const DEFAULT_VALUE_ENCODING: CloudflareValueEncoding = 'base64';
 
-// btoa/atob operate on Latin1 strings; String.fromCharCode(...bytes) with a
-// large argument list overflows the call stack, so the byte→string
-// conversion runs in bounded chunks. This is the only encoding this adapter
-// uses — no `Buffer`, no `node:buffer`, so it stays portable to the Workers
-// runtime.
-const BASE64_CHUNK_SIZE = 0x8000;
-
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = '';
-  for (let offset = 0; offset < bytes.length; offset += BASE64_CHUNK_SIZE) {
-    const chunk = bytes.subarray(offset, offset + BASE64_CHUNK_SIZE);
-    binary += String.fromCharCode(...chunk);
-  }
-  return btoa(binary);
-}
-
-function base64ToBytes(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
-}
-
-type ValueRow = { value: string };
-type KeyValueRow = { key: string; value: string };
+type ValueRow = { value: SqlStorageValue };
+type KeyValueRow = { key: string; value: SqlStorageValue };
 type KeyRow = { key: string };
 type PresenceRow = { present: number };
 type CountRow = { count: number };
@@ -90,6 +71,23 @@ export type CloudflareDurableObjectSQLiteStorageOptions = {
    * Validated as a strict SQL identifier at construction; defaults to `kv`.
    */
   table?: string;
+  /**
+   * How values are stored in the `value` column. Defaults to `'base64'`
+   * (base64-encoded `TEXT`), which keeps this adapter's SQL binding contract
+   * to the TEXT/number/null value types the Durable Object SQL binding
+   * guarantees. Opt into `'blob'` to bind and store raw `ArrayBuffer`/`BLOB`
+   * values instead, avoiding base64's ~4/3 size expansion for large values —
+   * this requires the wider binding contract the real Durable Object SQL
+   * binding also supports.
+   *
+   * A table's `value` column holds whichever encoding wrote each row: pick
+   * one `valueEncoding` for a table's lifetime and do not change it. Reading
+   * a row written under the other encoding fails fast with a descriptive
+   * error rather than silently misinterpreting the bytes — see the
+   * `documentation/guides/storage.md` Cloudflare section for the full
+   * cross-mode contract.
+   */
+  valueEncoding?: CloudflareValueEncoding;
 };
 
 /**
@@ -100,11 +98,13 @@ export type CloudflareDurableObjectSQLiteStorageOptions = {
  * owns its storage connection, and `[Symbol.dispose]` is a no-op — there is
  * nothing here to close.
  *
- * Schema is one `kv(key TEXT PRIMARY KEY, value TEXT NOT NULL)` table (name
- * configurable via `table`). Values are stored as base64-encoded text rather
- * than `BLOB`: it keeps this adapter's SQL binding contract to the TEXT/
- * number/null value types the Durable Object SQL binding guarantees, without
- * assuming broader binary-parameter support.
+ * Schema is one `kv(key TEXT PRIMARY KEY, value ...)` table (name
+ * configurable via `table`). By default (`valueEncoding: 'base64'`) values
+ * are stored as base64-encoded text, keeping this adapter's SQL binding
+ * contract to the TEXT/number/null value types the Durable Object SQL
+ * binding guarantees. Set `valueEncoding: 'blob'` to bind and store raw
+ * `ArrayBuffer`/`BLOB` values instead — see
+ * {@link CloudflareDurableObjectSQLiteStorageOptions.valueEncoding}.
  *
  * `ctx.storage.sql.exec()` is synchronous — Durable Object storage is
  * transactional only up to the next `await`/yield point in the calling code.
@@ -148,19 +148,26 @@ export type CloudflareDurableObjectSQLiteStorageOptions = {
 export class CloudflareDurableObjectSQLiteStorage implements Storage {
   readonly #sql: Sql;
   readonly #table: string;
+  readonly #codec: ReturnType<typeof resolveCloudflareValueCodec>;
 
   constructor(options: CloudflareDurableObjectSQLiteStorageOptions) {
-    const { sql, table = DEFAULT_TABLE } = options;
+    const { sql, table = DEFAULT_TABLE, valueEncoding = DEFAULT_VALUE_ENCODING } = options;
     assertSqlIdentifier(table, 'table', 'Cloudflare Durable Object SQLite');
 
     this.#sql = sql;
     this.#table = table;
+    this.#codec = resolveCloudflareValueCodec(valueEncoding);
 
     // `exec()` is synchronous — DO SQLite requires no `await` here, unlike
-    // NeonStorage's lazily-awaited #ensureTable().
+    // NeonStorage's lazily-awaited #ensureTable(). `CREATE TABLE IF NOT
+    // EXISTS` only sets the declared column type for a fresh table; SQLite's
+    // manifest typing means an existing table keeps storing whatever type
+    // each row was actually written with regardless of the declared column
+    // type, which is what lets #codec.decode() catch a cross-encoding read
+    // at the row level (see cloudflare-value-codec.ts).
     this.#sql.exec(`CREATE TABLE IF NOT EXISTS ${this.#table} (
   key TEXT PRIMARY KEY,
-  value TEXT NOT NULL
+  value ${this.#codec.sqlColumnType} NOT NULL
 )`);
   }
 
@@ -258,7 +265,7 @@ export class CloudflareDurableObjectSQLiteStorage implements Storage {
     ];
 
     for (const row of rows) {
-      yield [row.key, base64ToBytes(row.value)];
+      yield [row.key, this.#codec.decode(row.value, row.key)];
     }
   }
 
@@ -315,14 +322,14 @@ export class CloudflareDurableObjectSQLiteStorage implements Storage {
       ...this.#sql.exec<ValueRow>(`SELECT value FROM ${this.#table} WHERE key = ?`, key),
     ];
     const row = rows[0];
-    return row ? base64ToBytes(row.value) : null;
+    return row ? this.#codec.decode(row.value, key) : null;
   }
 
   #putSync(key: string, value: Uint8Array): void {
     this.#sql.exec(
       `INSERT INTO ${this.#table} (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
       key,
-      bytesToBase64(value),
+      this.#codec.encode(value),
     );
   }
 

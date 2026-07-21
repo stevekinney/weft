@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { Engine, workflow, type WorkflowContext } from '../index.ts';
 import { flush } from '../testing/storage-backends.test-support.ts';
+import { assertDurableStorageForRecovery } from './capabilities.ts';
 import { createCloudflareSqlTestDouble } from './cloudflare-durable-object-sql-test-double.test-support.ts';
 import { CloudflareDurableObjectSQLiteStorage } from './cloudflare.ts';
 import {
@@ -49,6 +50,50 @@ runBinaryAndLargeScanStorageConformance('CloudflareDurableObjectSQLiteStorage', 
 
 runConcurrentConditionalBatchConformance('CloudflareDurableObjectSQLiteStorage', {
   create: () => new CloudflareDurableObjectSQLiteStorage({ sql: createCloudflareSqlTestDouble() }),
+});
+
+// The opt-in raw ArrayBuffer/BLOB value mode (valueEncoding: 'blob') runs the
+// same conformance suites as the default base64 mode above — binary
+// round-tripping and large scans matter most here, since avoiding base64's
+// ~4/3 expansion is the entire point of the mode.
+runStorageCapabilityConformance('CloudflareDurableObjectSQLiteStorage (blob mode)', {
+  create: () =>
+    new CloudflareDurableObjectSQLiteStorage({
+      sql: createCloudflareSqlTestDouble(),
+      valueEncoding: 'blob',
+    }),
+  expected: {
+    persistence: 'local',
+    readAfterWrite: 'linearizable',
+    scanConsistency: 'snapshot',
+    atomicBatch: true,
+    conditionalBatch: true,
+    boundedRangeDelete: true,
+  },
+});
+
+runBasicStorageContract('CloudflareDurableObjectSQLiteStorage (blob mode)', {
+  create: () =>
+    new CloudflareDurableObjectSQLiteStorage({
+      sql: createCloudflareSqlTestDouble(),
+      valueEncoding: 'blob',
+    }),
+});
+
+runBinaryAndLargeScanStorageConformance('CloudflareDurableObjectSQLiteStorage (blob mode)', {
+  create: () =>
+    new CloudflareDurableObjectSQLiteStorage({
+      sql: createCloudflareSqlTestDouble(),
+      valueEncoding: 'blob',
+    }),
+});
+
+runConcurrentConditionalBatchConformance('CloudflareDurableObjectSQLiteStorage (blob mode)', {
+  create: () =>
+    new CloudflareDurableObjectSQLiteStorage({
+      sql: createCloudflareSqlTestDouble(),
+      valueEncoding: 'blob',
+    }),
 });
 
 describe('CloudflareDurableObjectSQLiteStorage', () => {
@@ -378,5 +423,99 @@ describe('CloudflareDurableObjectSQLiteStorage', () => {
     await engine.runMaintenance(Date.now() + 60_000);
 
     await expect(handle.result()).resolves.toBe('awake');
+  });
+});
+
+describe('CloudflareDurableObjectSQLiteStorage valueEncoding', () => {
+  it('defaults to base64-encoded TEXT', async () => {
+    const sql = createCloudflareSqlTestDouble();
+    const storage = new CloudflareDurableObjectSQLiteStorage({ sql });
+    await storage.put('key', encode('value'));
+
+    const rows = [...sql.exec<{ value: string }>('SELECT value FROM kv WHERE key = ?', 'key')];
+    expect(typeof rows[0]?.value).toBe('string');
+    expect(rows[0]?.value).toBe(btoa('value'));
+  });
+
+  it('valueEncoding: "blob" creates a BLOB column and stores raw bytes, not base64 text', async () => {
+    const sql = createCloudflareSqlTestDouble();
+    const storage = new CloudflareDurableObjectSQLiteStorage({ sql, valueEncoding: 'blob' });
+    await storage.put('key', encode('value'));
+
+    const columns = [...sql.exec<{ name: string; type: string }>('PRAGMA table_info(kv)')];
+    expect(columns.find((column) => column.name === 'value')?.type).toBe('BLOB');
+
+    const rows = [...sql.exec<{ value: ArrayBuffer }>('SELECT value FROM kv WHERE key = ?', 'key')];
+    expect(rows[0]?.value).toBeInstanceOf(ArrayBuffer);
+    expect(Array.from(new Uint8Array(rows[0]!.value))).toEqual(Array.from(encode('value')));
+    // Raw bytes, not the base64 text encoding of the same value.
+    expect(rows[0]?.value.byteLength).toBe(encode('value').byteLength);
+  });
+
+  it('round-trips binary values through blob mode, including embedded NULs and an empty value', async () => {
+    const storage = new CloudflareDurableObjectSQLiteStorage({
+      sql: createCloudflareSqlTestDouble(),
+      valueEncoding: 'blob',
+    });
+    const binary = new Uint8Array([0, 1, 127, 128, 255, 42, 0, 13, 10]);
+    await storage.put('binary', binary);
+    expect(await storage.get('binary')).toEqual(binary);
+
+    await storage.put('empty', new Uint8Array([]));
+    const empty = await storage.get('empty');
+    expect(empty).not.toBeNull();
+    expect(empty).toEqual(new Uint8Array([]));
+  });
+
+  it('round-trips a large blob-mode value (over 64KB)', async () => {
+    const storage = new CloudflareDurableObjectSQLiteStorage({
+      sql: createCloudflareSqlTestDouble(),
+      valueEncoding: 'blob',
+    });
+    const large = new Uint8Array(200_000);
+    for (let index = 0; index < large.length; index += 1) {
+      large[index] = index % 256;
+    }
+    await storage.put('large', large);
+    expect(await storage.get('large')).toEqual(large);
+  });
+
+  it('is compatible with assertDurableStorageForRecovery() in blob mode', () => {
+    const storage = new CloudflareDurableObjectSQLiteStorage({
+      sql: createCloudflareSqlTestDouble(),
+      valueEncoding: 'blob',
+    });
+    expect(() => assertDurableStorageForRecovery(storage)).not.toThrow();
+  });
+
+  it('reading a base64-mode row through a blob-mode instance fails fast with a descriptive error', async () => {
+    const sql = createCloudflareSqlTestDouble();
+    const base64Storage = new CloudflareDurableObjectSQLiteStorage({ sql });
+    await base64Storage.put('shared-key', encode('value'));
+
+    const blobStorage = new CloudflareDurableObjectSQLiteStorage({ sql, valueEncoding: 'blob' });
+    await expect(blobStorage.get('shared-key')).rejects.toThrow(
+      /valueEncoding: 'blob'.*different valueEncoding/s,
+    );
+  });
+
+  it('reading a blob-mode row through a base64-mode instance fails fast with a descriptive error', async () => {
+    const sql = createCloudflareSqlTestDouble();
+    const blobStorage = new CloudflareDurableObjectSQLiteStorage({ sql, valueEncoding: 'blob' });
+    await blobStorage.put('shared-key', encode('value'));
+
+    const base64Storage = new CloudflareDurableObjectSQLiteStorage({ sql });
+    await expect(base64Storage.get('shared-key')).rejects.toThrow(
+      /valueEncoding: 'base64'.*different valueEncoding/s,
+    );
+  });
+
+  it('a cross-encoding mismatch surfaces during scan(), not just get()', async () => {
+    const sql = createCloudflareSqlTestDouble();
+    const blobStorage = new CloudflareDurableObjectSQLiteStorage({ sql, valueEncoding: 'blob' });
+    await blobStorage.put('scan:mismatch', encode('value'));
+
+    const base64Storage = new CloudflareDurableObjectSQLiteStorage({ sql });
+    await expect(collect(base64Storage.scan('scan:'))).rejects.toThrow(/different valueEncoding/);
   });
 });

@@ -441,15 +441,44 @@ export class WeftDurableObject extends DurableObject {
 }
 ```
 
-The underlying schema is a single `kv(key TEXT PRIMARY KEY, value TEXT NOT NULL)` table (name configurable via the `table` option, validated as a strict SQL identifier). Values are stored as base64-encoded text rather than `BLOB`, keeping the adapter's binding contract to the TEXT/number/null value types the Durable Object SQL binding guarantees.
+The underlying schema is a single `kv(key TEXT PRIMARY KEY, value ...)` table (name configurable via the `table` option, validated as a strict SQL identifier). By default (`valueEncoding: 'base64'`, the default), values are stored as base64-encoded text rather than `BLOB`, keeping the adapter's binding contract to the TEXT/number/null value types the Durable Object SQL binding guarantees.
 
 > [!WARNING] Base64 encoding inflates value size by roughly 4/3
 > Base64 expands a `Uint8Array` by roughly 4/3 before it is stored, so a value
 > approaching Cloudflare's per-row size limit as raw bytes can fail only on
 > this adapter once encoded. If your workflow checkpoints or activity results
-> can approach that limit, keep them well under it, or wrap this adapter with
-> `CompressedStorage` so values are compressed before the 4/3 base64
-> expansion is applied.
+> can approach that limit, either wrap this adapter with `CompressedStorage`
+> so values are compressed before the 4/3 base64 expansion is applied, or
+> opt into the raw `ArrayBuffer`/`BLOB` value mode below.
+
+#### Opt-in raw `ArrayBuffer`/`BLOB` value mode
+
+Pass `valueEncoding: 'blob'` to store values as raw `ArrayBuffer`/`BLOB` bind parameters instead of base64 text:
+
+```ts partial
+import { CloudflareDurableObjectSQLiteStorage } from '@lostgradient/weft/storage/cloudflare';
+
+const storage = new CloudflareDurableObjectSQLiteStorage({
+  sql: this.ctx.storage.sql,
+  valueEncoding: 'blob',
+});
+```
+
+This avoids base64's ~4/3 size expansion entirely, at the cost of a wider SQL binding contract: it requires the Durable Object SQL binding's `ArrayBuffer` bind-parameter and `BLOB` column support, which the real binding provides but which the default mode deliberately avoided depending on. Choose `'blob'` when large checkpoints or activity results are approaching Cloudflare's per-row size limit and the extra binding surface is acceptable; stick with the `'base64'` default otherwise.
+
+> [!WARNING] Pick one `valueEncoding` per table and do not change it
+> `valueEncoding` is a per-table storage-format decision, not a runtime
+> toggle. `CREATE TABLE IF NOT EXISTS` only sets the `value` column's
+> declared type for a table that does not yet exist — an existing table
+> keeps storing whichever type (`TEXT` or `BLOB`) each row was actually
+> written with, regardless of the declared column type. There is no
+> automatic migration and no dual-read fallback between encodings: if a
+> `CloudflareDurableObjectSQLiteStorage` instance reads a row that a
+> differently-configured instance wrote (`'blob'` reading a `'base64'` row,
+> or vice versa), it throws immediately with a descriptive error rather than
+> silently misinterpreting the bytes. Configure every instance pointed at
+> the same table with the same `valueEncoding`, or use a distinct `table`
+> name per encoding if a single Durable Object needs both.
 
 > [!NOTE] `ctx.storage.sql` requires the SQLite-backed Durable Object class
 > `ctx.storage.sql` is only present on Durable Object classes configured for
