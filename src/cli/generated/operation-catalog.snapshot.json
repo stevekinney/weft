@@ -853,7 +853,7 @@
       "destructive": true,
       "access": {
         "kind": "scoped",
-        "scopes": ["storage:admin", "storage:write"]
+        "scopes": ["storage:admin"]
       },
       "transports": {
         "http": true,
@@ -921,8 +921,8 @@
       "tags": ["Storage"],
       "destructive": true,
       "access": {
-        "kind": "scopedAlternatives",
-        "alternatives": [["storage:admin"], ["storage:read", "storage:write"]]
+        "kind": "scoped",
+        "scopes": ["storage:admin"]
       },
       "transports": {
         "http": true,
@@ -1023,7 +1023,7 @@
       "destructive": true,
       "access": {
         "kind": "scoped",
-        "scopes": ["storage:admin", "storage:write"]
+        "scopes": ["storage:admin"]
       },
       "transports": {
         "http": true,
@@ -1055,7 +1055,7 @@
       "destructive": false,
       "access": {
         "kind": "scoped",
-        "scopes": ["storage:admin", "storage:read"]
+        "scopes": ["storage:admin"]
       },
       "transports": {
         "http": true,
@@ -1095,7 +1095,7 @@
       "destructive": true,
       "access": {
         "kind": "scoped",
-        "scopes": ["storage:admin", "storage:write"]
+        "scopes": ["storage:admin"]
       },
       "transports": {
         "http": true,
@@ -1131,7 +1131,7 @@
       "destructive": false,
       "access": {
         "kind": "scoped",
-        "scopes": ["storage:admin", "storage:read"]
+        "scopes": ["storage:admin"]
       },
       "transports": {
         "http": true,

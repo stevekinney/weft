@@ -63,6 +63,18 @@ function writeOnlyStorageOptions() {
   };
 }
 
+function readWriteStorageOptions() {
+  return {
+    authContext: {
+      method: 'api-key' as const,
+      principal: principalFromApiKey({
+        subject: 'read-write-caller',
+        scopes: ['storage:read', 'storage:write'],
+      }),
+    },
+  };
+}
+
 function adminStorageOptions() {
   return {
     authContext: {
@@ -156,15 +168,23 @@ describe('storage REST operations', () => {
     expect(await storage.get('oversized-value')).toBeNull();
   });
 
-  it('declares conditional batch access as storage admin or read plus write', () => {
+  it('advertises storage admin as the only accepted scope for every raw operation', () => {
     const registry = createLiveOperationRegistry();
-    expect(registry.get('weft.storage.conditionalbatch')?.access).toEqual({
-      kind: 'scopedAlternatives',
-      alternatives: [
-        { kind: 'anyOf', scopes: ['storage:admin'] },
-        { kind: 'allOf', scopes: ['storage:read', 'storage:write'] },
-      ],
-    });
+    const storageOperationNames = [
+      'weft.storage.get',
+      'weft.storage.put',
+      'weft.storage.delete',
+      'weft.storage.scan',
+      'weft.storage.batch',
+      'weft.storage.conditionalbatch',
+    ];
+
+    for (const operationName of storageOperationNames) {
+      expect(registry.get(operationName)?.access).toEqual({
+        kind: 'scoped',
+        scopes: { kind: 'anyOf', scopes: ['storage:admin'] },
+      });
+    }
   });
 
   it('reads and writes bytes through admin storage', async () => {
@@ -404,7 +424,7 @@ describe('storage REST operations', () => {
     expect(decode(await rawStorage.get('wf:key'))).toBe('value');
   });
 
-  it('denies conditional batches for write-only callers because conditions reveal stored values', async () => {
+  it('denies conditional batches to callers with both narrower storage scopes', async () => {
     const rawStorage = new MemoryStorage();
     await rawStorage.put('wf:key', encode('existing'));
     const engine = new Engine({ storage: rawStorage });
@@ -419,13 +439,12 @@ describe('storage REST operations', () => {
         headers: { 'content-type': 'application/json' },
       }),
       engine,
-      writeOnlyStorageOptions(),
+      readWriteStorageOptions(),
     );
 
     expect(response.status).toBe(403);
     const body = (await response.json()) as { error?: string };
     expect(body.error).toContain('storage:admin');
-    expect(body.error).toContain('storage:read');
     expect(decode(await rawStorage.get('wf:key'))).toBe('existing');
   });
 

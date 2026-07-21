@@ -478,24 +478,20 @@ Raw key-value access to the engine's storage layer, used by `HTTPStorage` and an
 
 Every storage route requires authentication. Required scopes:
 
-| Routes                                                                                    | Required scopes                                                            |
-| ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `GET /api/v1/storage/:key`, `GET /api/v1/storage`                                         | `storage:read` or `storage:admin`                                          |
-| `PUT /api/v1/storage/:key`, `DELETE /api/v1/storage/:key`, `POST /api/v1/storage/-/batch` | `storage:write` or `storage:admin`                                         |
-| `POST /api/v1/storage/-/conditional-batch`                                                | `storage:admin` alone, or both `storage:read` and `storage:write` together |
-
-The conditional-batch route requires read access too because conditions compare against current values—a write-only caller would otherwise be able to probe key state through condition outcomes.
+| Routes                     | Required scope  |
+| -------------------------- | --------------- |
+| Every raw storage endpoint | `storage:admin` |
 
 #### Keyspace access
 
-Raw storage routes operate on the unscoped keyspace, so the principal must hold `storage:admin` in addition to satisfying the per-route scopes above. Without it, the server returns 403 with a `Forbidden` fault.
+Raw storage routes operate on the unscoped keyspace, so narrower `storage:read` and `storage:write` scopes do not grant access, even when a principal holds both. Without `storage:admin`, the server returns 403 with a `Forbidden` fault.
 
 #### `GET /api/v1/storage/:key`
 
 Read a value by key.
 
 - **Path parameter `:key`** — URL-encoded storage key. The server decodes it before lookup, so application keys can contain any characters except those forbidden in URL paths.
-- **Required scopes** — `storage:read` or `storage:admin`.
+- **Required scope** — `storage:admin`.
 - **Success response** — `200 OK`, `Content-Type: application/octet-stream`, body is the raw value bytes.
 - **Missing key** — `404 Not Found`, empty body.
 
@@ -518,7 +514,7 @@ Write a value by key. Overwrites any existing value.
 - **Path parameter `:key`** — URL-encoded storage key.
 - **Required headers** — `Authorization`, `Content-Type: application/octet-stream`.
 - **Request body** — raw value bytes.
-- **Required scopes** — `storage:write` or `storage:admin`.
+- **Required scope** — `storage:admin`.
 - **Success response** — `204 No Content`.
 
 ```http
@@ -538,7 +534,7 @@ HTTP/1.1 204 No Content
 Delete a value by key. No-op if the key does not exist.
 
 - **Path parameter `:key`** — URL-encoded storage key.
-- **Required scopes** — `storage:write` or `storage:admin`.
+- **Required scope** — `storage:admin`.
 - **Success response** — `204 No Content`.
 
 #### `GET /api/v1/storage`
@@ -550,7 +546,7 @@ Stream key-value pairs whose keys start with a prefix.
   - `limit` (optional) — positive integer; maximum number of entries returned.
   - `reverse` (optional) — `"true"` or `"false"` (string-typed in the query). Reverses lexicographic order.
   - `gt`, `gte`, `lt`, `lte` (optional) — string bounds on the key.
-- **Required scopes** — `storage:read` or `storage:admin`.
+- **Required scope** — `storage:admin`.
 - **Success response** — `200 OK`, `Content-Type: application/x-ndjson`. Each line is `{"key": "...", "value": "<base64>"}\n`. The stream is lazy: the underlying storage scan only advances as the response body is consumed.
 
 The `HTTPStorage` client enforces a 64 MB total response cap on its side; if your scan would exceed that, narrow the prefix or paginate with `limit` and `gt`.
@@ -586,7 +582,7 @@ Apply multiple put/delete operations as a single batch.
 
   Values are base64-encoded byte strings.
 
-- **Required scopes** — `storage:write` or `storage:admin`.
+- **Required scope** — `storage:admin`.
 - **Success response** — `204 No Content`.
 
 The interface-level guarantee: the operations are submitted to the underlying storage's `batch` primitive in a single call. Atomicity guarantees come from the backend—`SQLiteStorage`, `IndexedDBStorage`, `LMDBStorage`, and `TursoStorage` apply batches inside a transaction; see [the storage backend configuration notes](../guides/storage.md#per-backend-configuration) for per-backend behavior.
@@ -610,7 +606,7 @@ Apply a compare-and-swap batch: validate every condition before applying any ope
 
   `expectedValue: null` asserts the key is currently missing; a base64 string asserts the key currently holds those exact bytes.
 
-- **Required scopes** — `storage:admin` alone, or both `storage:read` and `storage:write` together.
+- **Required scope** — `storage:admin`.
 - **Success response** — `200 OK`, `Content-Type: application/json`, body `{ "applied": true }` or `{ "applied": false }`.
 
 The `applied` boolean tells the caller whether the conditions all passed and the operations ran. The HTTP status is `200` either way—a `false` result is not an error, it's an expected CAS failure.

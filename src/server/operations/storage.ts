@@ -22,22 +22,9 @@ import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { readRestBodyBounded, readRestJsonBody } from '../rest-body.ts';
 import { invalidParamsFault, isOperationFault, shapeRestFault } from './operation-helpers.ts';
 
-const storageReadAccess: AccessPolicy = {
+const rawStorageAccess: AccessPolicy = {
   kind: 'scoped',
-  scopes: { kind: 'anyOf', scopes: ['storage:read', 'storage:admin'] },
-};
-
-const storageWriteAccess: AccessPolicy = {
-  kind: 'scoped',
-  scopes: { kind: 'anyOf', scopes: ['storage:write', 'storage:admin'] },
-};
-
-const storageConditionalBatchAccess: AccessPolicy = {
-  kind: 'scopedAlternatives',
-  alternatives: [
-    { kind: 'anyOf', scopes: ['storage:admin'] },
-    { kind: 'allOf', scopes: ['storage:read', 'storage:write'] },
-  ],
+  scopes: { kind: 'anyOf', scopes: ['storage:admin'] },
 };
 
 const httpOnlyStorageTransports = {
@@ -286,7 +273,7 @@ export const storageGetOperation = defineOperation<StorageGetInput, Uint8Array |
   tags: ['Storage'],
   inputSchema: storageGetInput,
   outputSchema: storageGetOutput,
-  access: storageReadAccess,
+  access: rawStorageAccess,
   discoverable: true,
   transports: httpOnlyStorageTransports,
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
@@ -304,7 +291,7 @@ export const storagePutOperation = defineOperation<StoragePutInput, null>({
   tags: ['Storage'],
   inputSchema: storagePutInput,
   outputSchema: emptyOutput,
-  access: storageWriteAccess,
+  access: rawStorageAccess,
   discoverable: true,
   transports: httpOnlyStorageTransports,
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
@@ -323,7 +310,7 @@ export const storageDeleteOperation = defineOperation<StorageDeleteInput, null>(
   tags: ['Storage'],
   inputSchema: storageDeleteInput,
   outputSchema: emptyOutput,
-  access: storageWriteAccess,
+  access: rawStorageAccess,
   discoverable: true,
   transports: httpOnlyStorageTransports,
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
@@ -342,7 +329,7 @@ export const storageScanOperation = defineOperation<StorageScanInput, StorageSca
   tags: ['Storage'],
   inputSchema: storageScanInput,
   outputSchema: storageScanOutput,
-  access: storageReadAccess,
+  access: rawStorageAccess,
   discoverable: true,
   transports: httpOnlyStorageTransports,
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
@@ -360,7 +347,7 @@ export const storageBatchOperation = defineOperation<StorageBatchInput, null>({
   tags: ['Storage'],
   inputSchema: storageBatchInput,
   outputSchema: emptyOutput,
-  access: storageWriteAccess,
+  access: rawStorageAccess,
   discoverable: true,
   transports: httpOnlyStorageTransports,
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
@@ -382,7 +369,7 @@ export const storageConditionalBatchOperation = defineOperation<
   tags: ['Storage'],
   inputSchema: storageConditionalBatchInput,
   outputSchema: storageConditionalBatchOutput,
-  access: storageConditionalBatchAccess,
+  access: rawStorageAccess,
   discoverable: true,
   transports: httpOnlyStorageTransports,
   producibleFaults: ['NotImplemented'], // backend reports no conditionalBatch
