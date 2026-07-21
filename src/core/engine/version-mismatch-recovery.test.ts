@@ -38,7 +38,7 @@ async function driftStoredWorkflowVersion(
   await storage.put(KEYS.workflow(workflowId), encode(persisted));
 }
 
-describe('recoverAll() version mismatch isolation (#702)', () => {
+describe('recoverAll() version mismatch policies', () => {
   it('fails only the mismatched sibling and recovers the matching one under the default fail-run policy', async () => {
     const storage = new MemoryStorage();
 
@@ -99,7 +99,7 @@ describe('recoverAll() version mismatch isolation (#702)', () => {
     expect(summary?.status).toBe('failed');
   });
 
-  it('rethrows and aborts remaining recovery when versionMismatchPolicy is "throw"', async () => {
+  it('fails fast and leaves later workflows unresumed when versionMismatchPolicy is "throw"', async () => {
     const storage = new MemoryStorage();
 
     {

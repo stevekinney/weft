@@ -116,7 +116,7 @@ const handles = await engine.recoverAll();
 
 The mismatch is detected before the engine re-provides `services` or invokes `onRecoveredWorkflow` for that run, so a mismatched workflow never resolves live capabilities or reaches your recovery hook — it never advances user workflow code at all.
 
-If you need the pre-#702 behavior — reject the entire `recoverAll()` call the moment any workflow's version drifts, so nothing in the batch resumes until you resolve it — opt in explicitly:
+If version drift should reject `recoverAll()` immediately, opt into the fail-fast policy:
 
 ```typescript partial
 import { VersionMismatchError } from '@lostgradient/weft';
@@ -132,7 +132,7 @@ try {
 }
 ```
 
-`versionMismatchPolicy: 'throw'` rethrows the `VersionMismatchError` out of `recoverAll()` as soon as it hits the first mismatched workflow in storage-scan order, so any sibling not yet processed in that call is left unresumed. Use it only when you deliberately want version drift to block the whole boot — for example, a strict environment where any drift indicates an operator error that must be fixed before anything runs.
+`versionMismatchPolicy: 'throw'` rethrows the `VersionMismatchError` out of `recoverAll()` as soon as it reaches the first mismatched workflow in storage-scan order. Any sibling not yet processed in that call is left unresumed; siblings processed before the mismatch may already be running. Use it when version drift is an operator error that should stop further recovery during that boot attempt.
 
 ## Acknowledging drift: `acknowledgeUnknownWorkflowTypes`
 

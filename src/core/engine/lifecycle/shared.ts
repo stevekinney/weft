@@ -72,19 +72,22 @@ export type RecoverAllOptions = {
    */
   onRecoveredWorkflow?: (info: RecoveredWorkflowInfo) => void | Promise<void>;
   /**
-   * Policy for a recovered workflow whose stored {@link WorkflowVersionTuple}
-   * (or legacy checkpoint `version`) no longer matches the registered
-   * {@link WorkflowDefinition.version}. The mismatch is detected before
-   * `resolveWorkflowServices` and `onRecoveredWorkflow` run for that workflow,
-   * so a mismatched run never re-provides services or invokes the hook.
+   * Policy for a recovered workflow whose persisted
+   * {@link WorkflowVersionTuple} or checkpoint `version` no longer matches the
+   * registered {@link WorkflowDefinition.version}. Recovery checks both
+   * records so it cannot replay a checkpoint produced by a different workflow
+   * definition even if the workflow-state metadata disagrees. The mismatch is
+   * detected before `resolveWorkflowServices` and `onRecoveredWorkflow` run
+   * for that workflow, so a mismatched run never re-provides services or
+   * invokes the hook.
    *
    * - `'fail-run'` (default): fail only the mismatched run to a terminal
    *   `failed` state with a `system` failure category carrying the
    *   {@link VersionMismatchError} message, then continue recovering its
    *   siblings. The run never advances user workflow code.
-   * - `'throw'`: preserve the pre-#702 behavior — rethrow the
-   *   {@link VersionMismatchError} out of `recoverAll()` immediately, aborting
-   *   recovery for every workflow not yet processed in this batch.
+   * - `'throw'`: use fail-fast recovery — rethrow the
+   *   {@link VersionMismatchError} out of `recoverAll()` immediately, leaving
+   *   every workflow not yet processed in this batch unresumed.
    */
   versionMismatchPolicy?: 'fail-run' | 'throw';
 };

@@ -1564,10 +1564,9 @@ describe('Engine', () => {
 
     const engine2 = new Engine({ storage });
     registerWorkflow(engine2);
-    // #702: recoverAll()'s default versionMismatchPolicy is 'fail-run', which
-    // isolates the mismatch to this workflow instead of rejecting the call.
-    // Opt into strict 'throw' to keep pinning the pre-#702 abort-the-batch
-    // behavior for a caller that explicitly wants it.
+    // The default 'fail-run' policy isolates the mismatch to this workflow.
+    // Opt into fail-fast 'throw' to pin the strict contract for callers that
+    // require any detected version drift to reject recovery immediately.
     await expect(engine2.recoverAll({ versionMismatchPolicy: 'throw' })).rejects.toThrow(
       'Version mismatch',
     );
@@ -1606,9 +1605,8 @@ describe('Engine', () => {
 
     const engine2 = new Engine({ storage });
     engine2.register(versionedWorkflowV2);
-    // #702: opt into strict 'throw' to keep pinning the pre-#702 abort-the-batch
-    // behavior; the default 'fail-run' policy is covered in
-    // version-mismatch-recovery.test.ts.
+    // Opt into fail-fast 'throw' to pin the strict recovery contract; the
+    // default 'fail-run' policy is covered in version-mismatch-recovery.test.ts.
     await expect(engine2.recoverAll({ versionMismatchPolicy: 'throw' })).rejects.toThrow(
       'Version mismatch',
     );

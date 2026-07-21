@@ -126,7 +126,8 @@ async function preflightRecoverAll(
  *
  * - `RegExpExtensionDecodeError` (an undecodable checkpoint on this runtime).
  * - `VersionMismatchError`, unless `options.versionMismatchPolicy` is
- *   `'throw'`, which preserves the pre-#702 abort-the-batch behavior.
+ *   `'throw'`, which selects fail-fast recovery and leaves later entries in
+ *   storage-scan order unresumed.
  *
  * Returns `null` when the failure was isolated (nothing to push onto the
  * caller's handle list); rethrows anything else, including an opted-in
