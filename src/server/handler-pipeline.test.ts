@@ -24,6 +24,7 @@ import { workflow } from '../core/types.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { WorkerRegistry } from '../worker/registry.ts';
 import { handleRequest, type HandlerOptions } from './handler.ts';
+import { defaultOperationRegistry } from './handler/route-dispatch.ts';
 import { createOperationRegistry, type OperationRegistry } from './operation-catalog.ts';
 import { defineOperation } from './operation-registry.ts';
 import { principalFromApiKey, type Principal } from './principal.ts';
@@ -153,6 +154,19 @@ describe('handler pipeline — restBindings / operationRegistry pairing guard', 
 });
 
 describe('handler pipeline — live worker infrastructure', () => {
+  it('reuses the live operation registry for the same injected worker infrastructure', () => {
+    const workerRegistry = new WorkerRegistry();
+    using taskQueue = new TaskQueue();
+    using otherTaskQueue = new TaskQueue();
+
+    const first = defaultOperationRegistry({ workerRegistry, taskQueue });
+    const samePair = defaultOperationRegistry({ workerRegistry, taskQueue });
+    const differentPair = defaultOperationRegistry({ workerRegistry, taskQueue: otherTaskQueue });
+
+    expect(samePair).toBe(first);
+    expect(differentPair).not.toBe(first);
+  });
+
   it('uses HandlerOptions worker and queue state with the default REST bindings', async () => {
     const engine = createEngine();
     const workerRegistry = new WorkerRegistry();

@@ -441,19 +441,32 @@ export function isOperationFaultLike(value: unknown): value is OperationFault {
 /**
  * Lazily initialized discovery registry used when callers supply neither a
  * custom registry nor live worker infrastructure. The discovery registry is
- * stateless and shared; injected worker state gets a live registry bound to
- * those instances.
+ * stateless and shared; injected worker state gets a live registry cached for
+ * the supplied worker-registry/task-queue pair.
  */
 let defaultOperationRegistryCache: OperationRegistry | undefined;
+const missingWorkerRegistryCacheKey = {};
+const missingTaskQueueCacheKey = {};
+const liveOperationRegistryCache = new WeakMap<object, WeakMap<object, OperationRegistry>>();
 
 export function defaultOperationRegistry(
   options?: Pick<HandlerOptions, 'workerRegistry' | 'taskQueue'>,
 ): OperationRegistry {
   if (options?.workerRegistry !== undefined || options?.taskQueue !== undefined) {
-    return createLiveOperationRegistry({
-      ...(options.workerRegistry !== undefined ? { workerRegistry: options.workerRegistry } : {}),
-      ...(options.taskQueue !== undefined ? { taskQueue: options.taskQueue } : {}),
-    });
+    const workerRegistryCacheKey = options.workerRegistry ?? missingWorkerRegistryCacheKey;
+    const taskQueueCacheKey = options.taskQueue ?? missingTaskQueueCacheKey;
+    let registriesByTaskQueue = liveOperationRegistryCache.get(workerRegistryCacheKey);
+    if (registriesByTaskQueue === undefined) {
+      registriesByTaskQueue = new WeakMap<object, OperationRegistry>();
+      liveOperationRegistryCache.set(workerRegistryCacheKey, registriesByTaskQueue);
+    }
+
+    let registry = registriesByTaskQueue.get(taskQueueCacheKey);
+    if (registry === undefined) {
+      registry = createLiveOperationRegistry(options);
+      registriesByTaskQueue.set(taskQueueCacheKey, registry);
+    }
+    return registry;
   }
   if (defaultOperationRegistryCache === undefined) {
     defaultOperationRegistryCache = createLiveOperationRegistry();
