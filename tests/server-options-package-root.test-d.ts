@@ -14,7 +14,19 @@ import {
   type TaskQueue,
   type WeftServer,
 } from '@lostgradient/weft/server';
-import { handleRequest, type HandlerOptions } from '@lostgradient/weft/server/handler';
+import {
+  createEngineEventFeedBackend,
+  createFleetEventFeed,
+  createWorkflowEventFeed,
+  handleRequest,
+  type Cursor,
+  type EventEnvelope,
+  type FleetEventEnvelope,
+  type FleetEventFeed,
+  type HandlerOptions,
+  type WorkflowEventFeed,
+  type WorkflowEventFeedBackend,
+} from '@lostgradient/weft/server/handler';
 
 const packageRootEngine = new Engine();
 const packageRootPrometheusExporter = createMetricsCollectorExporter(undefined);
@@ -138,3 +150,29 @@ async function verifyPackageRootConcreteWorkflowRegistryEngineAcceptedByServe():
   void handleRequest(new Request('http://localhost/v1/health'), concreteEngine);
 }
 void verifyPackageRootConcreteWorkflowRegistryEngineAcceptedByServe;
+
+// #714: the constructors for `HandlerOptions.workflowEventFeed` /
+// `HandlerOptions.fleetEventFeed` are constructable — not merely nameable as
+// types — from the published '@lostgradient/weft/server/handler' subpath.
+const packageRootEventFeedBackend: WorkflowEventFeedBackend =
+  createEngineEventFeedBackend(packageRootEngine);
+const packageRootWorkflowEventFeed: WorkflowEventFeed = createWorkflowEventFeed(
+  packageRootEventFeedBackend,
+);
+const packageRootFleetEventFeed: FleetEventFeed = createFleetEventFeed(
+  packageRootEngine.storage,
+);
+void packageRootWorkflowEventFeed;
+void packageRootFleetEventFeed;
+
+declare const packageRootEventEnvelope: EventEnvelope;
+declare const packageRootFleetEventEnvelope: FleetEventEnvelope;
+const packageRootCursor: Cursor = packageRootEventEnvelope.cursor;
+void packageRootCursor;
+void packageRootFleetEventEnvelope;
+
+const packageRootFeedHandlerOptions: HandlerOptions = {
+  workflowEventFeed: packageRootWorkflowEventFeed,
+  fleetEventFeed: packageRootFleetEventFeed,
+};
+void packageRootFeedHandlerOptions;

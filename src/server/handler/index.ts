@@ -29,6 +29,27 @@ export { authContextToPrincipal } from './auth-context-principal.ts';
 export { isOperationFaultLike, type HandlerOptions } from './route-dispatch.ts';
 export { extractRouteParameters, getRequiredRouteParameter } from './route-matching.ts';
 
+// `HandlerOptions.workflowEventFeed` / `HandlerOptions.fleetEventFeed` are the
+// supported way to drive `/v1/workflows/:id/events/sse` and `/v1/events/sse`
+// through `handleRequest()` directly, without `serve()`. These constructors
+// build real, `Engine`-backed feeds for those options — co-located here since
+// this is where the feeds are consumed. Each constructor only calls `Engine`'s
+// public instance methods (`replayWorkflowFeed`, `snapshotWorkflowFeedTail`,
+// `subscribeWorkflowFeedCommits`, `.storage`), never module-scope internals.
+export { createEngineEventFeedBackend } from '../engine-event-feed-backend.ts';
+export {
+  createFleetEventFeed,
+  type FleetEventEnvelope,
+  type FleetEventFeed,
+} from '../fleet-event-feed.ts';
+export {
+  createWorkflowEventFeed,
+  type Cursor,
+  type EventEnvelope,
+  type WorkflowEventFeed,
+  type WorkflowEventFeedBackend,
+} from '../workflow-event-feed.ts';
+
 type RouteLookup<T> = { kind: 'matched'; value: T } | { kind: 'malformed'; response: Response };
 
 function matchRouteBoundary<T>(matcher: () => T): RouteLookup<T> {
