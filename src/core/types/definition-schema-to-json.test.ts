@@ -2,7 +2,12 @@ import { describe, expect, it } from 'bun:test';
 import * as v from 'valibot';
 import { z } from 'zod';
 
-import { definitionSchemaToJsonSchema, loadValibotConverter } from './definition-schema-to-json.ts';
+import { setPortableRuntimeTestOverridesForTesting } from '../../runtime/portable.ts';
+import {
+  definitionSchemaToJsonSchema,
+  loadValibotConverter,
+  resetValibotConverterCacheForTesting,
+} from './definition-schema-to-json.ts';
 import type { DefinitionSchema, StandardJSONSchemaV1 } from './definition-schema.ts';
 
 describe('definitionSchemaToJsonSchema', () => {
@@ -175,6 +180,19 @@ describe('definitionSchemaToJsonSchema', () => {
       const toJsonSchema = () => ({ type: 'object' });
 
       expect(loadValibotConverter(() => ({ toJsonSchema }))).toBe(toJsonSchema);
+    });
+
+    it('throws an actionable error when process.getBuiltinModule is unavailable (browser/edge)', () => {
+      resetValibotConverterCacheForTesting();
+      setPortableRuntimeTestOverridesForTesting({ process: undefined });
+      try {
+        expect(() => loadValibotConverter()).toThrow(
+          /requires Bun or Node 22\.5\+ \(process\.getBuiltinModule\)/,
+        );
+      } finally {
+        setPortableRuntimeTestOverridesForTesting(undefined);
+        resetValibotConverterCacheForTesting();
+      }
     });
   });
 });

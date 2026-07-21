@@ -1,13 +1,16 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
   ConnectionConfigurationError,
   DEFAULT_WEFT_ADDRESS,
+  removeRunLockfile,
   resolveConnection,
+  writeRunLockfile,
 } from './connection.ts';
+import { setPortableRuntimeTestOverridesForTesting } from './runtime/portable.ts';
 
 const created: string[] = [];
 
@@ -295,6 +298,82 @@ describe('resolveConnection', () => {
     try {
       expect(() => resolveConnection()).toThrow(/Invalid server URL 'http:\/\/\[::bad'/);
     } finally {
+      restoreEnv(snapshot);
+    }
+  });
+});
+
+describe('writeRunLockfile / removeRunLockfile', () => {
+  it('round-trips through Bun.write: a written lockfile is picked up by resolveConnection, and removal drops it', async () => {
+    const snapshot = snapshotEnv('WEFT_ADDR', 'WEFT_TOKEN', 'WEFT_PROFILE', 'WEFT_HOME');
+    const home = makeHome();
+    Bun.env['WEFT_HOME'] = home;
+    delete Bun.env['WEFT_ADDR'];
+    delete Bun.env['WEFT_TOKEN'];
+    delete Bun.env['WEFT_PROFILE'];
+    try {
+      await writeRunLockfile('http://127.0.0.1:9999');
+      const withLockfile = resolveConnection();
+      expect(withLockfile.server.toString()).toBe('http://127.0.0.1:9999/');
+
+      await removeRunLockfile('http://127.0.0.1:9999');
+      const withoutLockfile = resolveConnection();
+      expect(withoutLockfile.server.toString()).toBe(`${DEFAULT_WEFT_ADDRESS}/`);
+    } finally {
+      restoreEnv(snapshot);
+    }
+  });
+
+  it('falls back to fsPromises.writeFile when Bun is unavailable (Node-only runtime)', async () => {
+    const snapshot = snapshotEnv('WEFT_HOME');
+    const home = makeHome();
+    Bun.env['WEFT_HOME'] = home;
+    setPortableRuntimeTestOverridesForTesting({ bun: undefined });
+    try {
+      await writeRunLockfile('http://127.0.0.1:8888');
+      const lockfilePath = join(home, 'run');
+      expect(existsSync(lockfilePath)).toBe(true);
+      expect(JSON.parse(readFileSync(lockfilePath, 'utf8'))).toEqual({
+        server: 'http://127.0.0.1:8888',
+      });
+    } finally {
+      setPortableRuntimeTestOverridesForTesting(undefined);
+      restoreEnv(snapshot);
+    }
+  });
+
+  it('throws when neither Bun nor Node process.getBuiltinModule is available (browser/edge)', async () => {
+    setPortableRuntimeTestOverridesForTesting({ process: undefined });
+    try {
+      await expect(writeRunLockfile('http://127.0.0.1:8888')).rejects.toThrow(
+        /requires Bun or Node 22\.5\+ \(process\.getBuiltinModule\)/,
+      );
+    } finally {
+      setPortableRuntimeTestOverridesForTesting(undefined);
+    }
+  });
+});
+
+describe('~/.weft/config resolution outside Bun', () => {
+  it('ignores an on-disk config file when Bun is unavailable, because Bun.TOML cannot parse it', () => {
+    const snapshot = snapshotEnv('WEFT_ADDR', 'WEFT_TOKEN', 'WEFT_PROFILE', 'WEFT_HOME');
+    const home = makeHome();
+    Bun.env['WEFT_HOME'] = home;
+    delete Bun.env['WEFT_ADDR'];
+    delete Bun.env['WEFT_TOKEN'];
+    delete Bun.env['WEFT_PROFILE'];
+    writeConfig(
+      home,
+      ['default_profile = "main"', '', '[profiles.main]', 'server = "https://profile.example.com"'].join(
+        '\n',
+      ),
+    );
+    setPortableRuntimeTestOverridesForTesting({ bun: undefined });
+    try {
+      const connection = resolveConnection();
+      expect(connection.server.toString()).toBe(`${DEFAULT_WEFT_ADDRESS}/`);
+    } finally {
+      setPortableRuntimeTestOverridesForTesting(undefined);
       restoreEnv(snapshot);
     }
   });

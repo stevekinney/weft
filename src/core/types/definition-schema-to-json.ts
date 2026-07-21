@@ -9,6 +9,20 @@ import type {
 
 let cachedValibotConverter: ((schema: unknown, options?: unknown) => unknown) | undefined;
 
+/**
+ * Reset the module-level cached Valibot `toJsonSchema` converter.
+ *
+ * `cachedValibotConverter` is a process-global singleton shared by every test
+ * file that imports this module in the same `bun test` run, so whether it is
+ * already warm when a given test executes depends on unrelated test order.
+ * Tests that need to exercise the cache-miss path deterministically (e.g. the
+ * "no `process.getBuiltinModule`" error) must reset it first.
+ * @internal Test-only.
+ */
+export function resetValibotConverterCacheForTesting(): void {
+  cachedValibotConverter = undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------

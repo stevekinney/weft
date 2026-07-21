@@ -36,7 +36,15 @@ function getBunGlobal(): typeof globalThis.Bun | undefined {
   return globalThis.Bun;
 }
 
-function isBunRuntime(): boolean {
+/**
+ * Whether the current runtime is Bun. Honors
+ * {@link setPortableRuntimeTestOverridesForTesting}, unlike a bare
+ * `typeof Bun !== 'undefined'` check, so callers that need to simulate a
+ * non-Bun runtime in tests (e.g. to exercise a Node or browser fallback
+ * branch) can do so without a real environment change.
+ * @internal
+ */
+export function isBunRuntime(): boolean {
   return typeof getBunGlobal() !== 'undefined';
 }
 
@@ -106,14 +114,7 @@ export function detectRuntime(): RuntimeKind {
  * returns `undefined` anywhere else (browsers, edge runtimes) — where
  * neither global exists and a bare `Bun.env[...]` or `process.env[...]`
  * reference would throw a `ReferenceError`.
- *
- * @example
- * ```ts
- * import { readEnvironmentVariable } from '@lostgradient/weft/runtime/portable';
- *
- * const token = readEnvironmentVariable('WEFT_TOKEN');
- * console.log(typeof token); // 'string' or 'undefined'
- * ```
+ * @internal
  */
 export function readEnvironmentVariable(name: string): string | undefined {
   const bun = getBunGlobal();
@@ -239,14 +240,7 @@ type ProcessWithBuiltinModule = NodeJS.Process & {
  * try to resolve or stub. Returns `undefined` in the browser or any runtime
  * lacking `process.getBuiltinModule`, so callers on a browser-reachable path
  * must treat the result as optional rather than throwing at import time.
- *
- * @example
- * ```ts
- * import { tryLoadNodeBuiltin } from '@lostgradient/weft/runtime/portable';
- *
- * const fs = tryLoadNodeBuiltin<typeof import('node:fs')>('node:fs');
- * console.log(fs === undefined || typeof fs.existsSync === 'function'); // true
- * ```
+ * @internal
  */
 export function tryLoadNodeBuiltin<T>(id: string): T | undefined {
   const nodeProcess = getProcess() as ProcessWithBuiltinModule | undefined;

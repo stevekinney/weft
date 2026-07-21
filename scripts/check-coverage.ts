@@ -1204,7 +1204,14 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
     ['src/core/engine/validation.ts', { lines: new Set([291]) }],
     ['src/core/engine/workflow-indexes.ts', { functions: 1, lines: new Set([43, 44, 45, 46, 47]) }],
     ['src/core/engine/workflow-state-stream.ts', { lines: new Set([114]) }],
-    ['src/core/types/definition-schema-to-json.ts', { lines: new Set([135, 136, 137, 140, 141]) }],
+    [
+      'src/core/types/definition-schema-to-json.ts',
+      // The `@valibot/to-json-schema` "not installed" catch branch requires
+      // actually uninstalling the optional dependency to exercise; every
+      // other branch (missing process.getBuiltinModule, missing
+      // toJsonSchema export, successful resolution) is covered.
+      { lines: new Set([172, 173, 174, 177, 178]) },
+    ],
     ['src/core/worker-checkpoint-resume-state.ts', { functions: 1 }],
     ['src/core/worker-execution-strategy.ts', { functions: 2 }],
     [
@@ -1822,7 +1829,15 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
     ['src/client/local.ts', { functions: 1, lines: new Set([153]) }],
     ['src/client/open-event-subscription.ts', { lines: new Set([51]) }],
     ['src/client/start-body.ts', { lines: new Set([15, 16, 17, 18]) }],
-    ['src/connection.ts', { functions: 2, lines: new Set([211, 250, 251, 256, 257, 258, 259]) }],
+    [
+      'src/connection.ts',
+      // `sameDestination`'s malformed-URL fallback (`return a === b`) requires
+      // both `server`/profile-server strings to fail `new URL()` parsing while
+      // still needing a same-vs-different-destination comparison — an edge
+      // case already covered by the malformed-URL tests that assert the
+      // thrown error instead of reaching this fallback.
+      { lines: new Set([220]) },
+    ],
     [
       'src/core/context/durable-operations.ts',
       {

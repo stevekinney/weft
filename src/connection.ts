@@ -25,7 +25,7 @@
  * @module connection
  */
 
-import { readEnvironmentVariable, tryLoadNodeBuiltin } from './runtime/portable.ts';
+import { isBunRuntime, readEnvironmentVariable, tryLoadNodeBuiltin } from './runtime/portable.ts';
 
 /**
  * Inputs accepted by {@link resolveConnection}.
@@ -283,7 +283,7 @@ export async function writeRunLockfile(server: string): Promise<void> {
   }
   await fsPromises.mkdir(weftHome(), { recursive: true });
   const contents = `${JSON.stringify({ server }, null, 2)}\n`;
-  if (typeof Bun !== 'undefined') {
+  if (isBunRuntime()) {
     await Bun.write(runLockfilePath(), contents);
     return;
   }
@@ -303,7 +303,7 @@ export async function removeRunLockfile(server: string): Promise<void> {
 function readWeftConfiguration(): WeftConfiguration {
   // `Bun.TOML` is Bun-only, so config-file resolution additionally requires
   // Bun (not just any runtime `node:fs` happens to be reachable from).
-  if (typeof Bun === 'undefined') return {};
+  if (!isBunRuntime()) return {};
   const fs = loadFsModule();
   if (fs === undefined) return {};
   const path = configurationPath();
