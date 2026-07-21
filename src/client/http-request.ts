@@ -140,6 +140,13 @@ export class HttpClientError extends WeftError<'HttpClientError'> {
    * `InvalidParams.data.issues`, `NotFound.data.resource`). `undefined` for
    * plain-string error bodies, bodies with no `data` field, or a `data` field
    * that is not a JSON object.
+   *
+   * Over JSON-RPC-over-HTTP this is the raw envelope `error.data` verbatim
+   * (see `httpClientCatalogTransport` in `http-operations.ts`), so it also
+   * carries the envelope's own `weftCode` (the coarse {@link FaultCode}, not
+   * a fine-grained {@link WeftErrorCode}) and `httpStatus` keys alongside the
+   * per-code payload — those two are not part of the `OperationFault` data
+   * union.
    */
   readonly data?: Readonly<Record<string, unknown>> | undefined;
 
