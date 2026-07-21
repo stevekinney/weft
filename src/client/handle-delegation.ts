@@ -213,9 +213,7 @@ export abstract class ScheduleHandleDelegation<
   }
 
   async update(newSpec: string | ScheduleSpec, options?: ScheduleUpdateOptions): Promise<void> {
-    return options === undefined
-      ? this.client.updateSchedule(this.id, newSpec)
-      : this.client.updateSchedule(this.id, newSpec, options);
+    return this.client.updateSchedule(this.id, newSpec, options);
   }
 
   async describe(): Promise<ScheduleSummary | null> {

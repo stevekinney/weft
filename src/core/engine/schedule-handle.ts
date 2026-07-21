@@ -61,10 +61,6 @@ export class ScheduleHandle {
   }
 
   async update(newSpec: string | ScheduleSpec, options?: ScheduleUpdateOptions): Promise<void> {
-    if (options === undefined) {
-      await this.#engine.updateSchedule(this.id, newSpec);
-      return;
-    }
     await this.#engine.updateSchedule(this.id, newSpec, options);
   }
 

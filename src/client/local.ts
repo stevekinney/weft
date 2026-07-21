@@ -274,9 +274,7 @@ export class LocalClient<
     newSpec: string | ScheduleSpec,
     options?: ScheduleUpdateOptions,
   ): Promise<void> {
-    return options === undefined
-      ? this.#engine.updateSchedule(id, newSpec)
-      : this.#engine.updateSchedule(id, newSpec, options);
+    return this.#engine.updateSchedule(id, newSpec, options);
   }
 
   async signal(id: string, name: SignalDefinition): Promise<void>;
