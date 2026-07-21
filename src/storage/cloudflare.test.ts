@@ -505,7 +505,7 @@ describe('CloudflareDurableObjectSQLiteStorage valueEncoding', () => {
 
     const blobStorage = new CloudflareDurableObjectSQLiteStorage({ sql, valueEncoding: 'blob' });
     await expect(blobStorage.get('shared-key')).rejects.toThrow(
-      /valueEncoding: 'blob'.*different valueEncoding/s,
+      /valueEncoding: 'blob'.*per-table storage-format decision.*different valueEncoding.*same valueEncoding.*different table name/s,
     );
   });
 
@@ -516,7 +516,7 @@ describe('CloudflareDurableObjectSQLiteStorage valueEncoding', () => {
 
     const base64Storage = new CloudflareDurableObjectSQLiteStorage({ sql });
     await expect(base64Storage.get('shared-key')).rejects.toThrow(
-      /valueEncoding: 'base64'.*different valueEncoding/s,
+      /valueEncoding: 'base64'.*per-table storage-format decision.*different valueEncoding.*same valueEncoding.*different table name/s,
     );
   });
 

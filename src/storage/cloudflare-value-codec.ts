@@ -44,9 +44,11 @@ export type CloudflareValueEncoding = 'base64' | 'blob';
  * throws immediately, instead of silently misinterpreting the bytes.
  *
  * This is the cross-mode contract for
- * {@link CloudflareDurableObjectSQLiteStorageOptions.valueEncoding}: a table
- * must use a single `valueEncoding` for its lifetime. There is no dual-read
- * fallback and no migration path between encodings — pick one per table.
+ * {@link CloudflareDurableObjectSQLiteStorageOptions.valueEncoding}:
+ * `valueEncoding` is a per-table storage-format decision, and every row in a
+ * table must use the same encoding. Each codec accepts only values written in
+ * its storage class, so cross-mode reads fail fast. Configure a distinct table
+ * name when one Durable Object needs both encodings.
  */
 type CloudflareValueCodec = {
   readonly sqlColumnType: 'TEXT' | 'BLOB';
@@ -85,10 +87,10 @@ function unexpectedValueTypeError(
 ): Error {
   return new Error(
     `Cloudflare Durable Object SQLite storage: key "${key}" holds a value of type ${actualType}, but ` +
-      `this instance is configured for valueEncoding: '${expectedEncoding}'. A table must use a single, ` +
-      `consistent valueEncoding for its lifetime — this row was written by an instance configured ` +
-      `with a different valueEncoding. Pick one encoding per table (or per-instance configured table ` +
-      `name) and do not change it; there is no automatic migration between encodings.`,
+      `this instance is configured for valueEncoding: '${expectedEncoding}'. valueEncoding is a ` +
+      `per-table storage-format decision, and this row was written with a different valueEncoding. ` +
+      `Configure every instance that accesses this table with the same valueEncoding, or use a ` +
+      `different table name for a different encoding.`,
   );
 }
 

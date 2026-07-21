@@ -471,14 +471,13 @@ This avoids base64's ~4/3 size expansion entirely, at the cost of a wider SQL bi
 > toggle. `CREATE TABLE IF NOT EXISTS` only sets the `value` column's
 > declared type for a table that does not yet exist — an existing table
 > keeps storing whichever type (`TEXT` or `BLOB`) each row was actually
-> written with, regardless of the declared column type. There is no
-> automatic migration and no dual-read fallback between encodings: if a
-> `CloudflareDurableObjectSQLiteStorage` instance reads a row that a
-> differently-configured instance wrote (`'blob'` reading a `'base64'` row,
-> or vice versa), it throws immediately with a descriptive error rather than
-> silently misinterpreting the bytes. Configure every instance pointed at
-> the same table with the same `valueEncoding`, or use a distinct `table`
-> name per encoding if a single Durable Object needs both.
+> written with, regardless of the declared column type. Each storage instance
+> reads only rows written with its configured encoding. If an instance reads a
+> row written under the other encoding (`'blob'` reading a `'base64'` row, or
+> vice versa), it throws immediately with a descriptive error rather than
+> silently misinterpreting the bytes. Configure every instance pointed at the
+> same table with the same `valueEncoding`, or use a distinct `table` name per
+> encoding if a single Durable Object needs both.
 
 > [!NOTE] `ctx.storage.sql` requires the SQLite-backed Durable Object class
 > `ctx.storage.sql` is only present on Durable Object classes configured for
