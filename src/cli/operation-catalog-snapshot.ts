@@ -48,9 +48,10 @@ export type CatalogSnapshot = {
   readonly operations: ReadonlyArray<CatalogOperationSnapshot>;
 };
 
-export function createCatalogSnapshot(): CatalogSnapshot {
-  const operations = createLiveOperationRegistry()
-    .list()
+export function createCatalogSnapshot(
+  sourceOperations: ReadonlyArray<ErasedOperation> = createLiveOperationRegistry().list(),
+): CatalogSnapshot {
+  const operations = sourceOperations
     .map(operationToSnapshot)
     .toSorted((left, right) => compareStrings(left.name, right.name));
 

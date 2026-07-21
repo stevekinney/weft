@@ -1272,6 +1272,21 @@ describe('HttpClient request surface', () => {
     assertBulkWorkflowRequestCalls(fetchCalls);
   });
 
+  it('rejects an empty bulk signal name before making a request', async () => {
+    const fetchCalls: FetchCall[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      fetchCalls.push({ url: requestInputToUrl(input), init });
+      return jsonResponse({ signalled: 0, failed: 0 });
+    }) as unknown as typeof fetch;
+
+    const httpClient = new HttpClient({ baseUrl: 'http://example.test' });
+
+    await expect(httpClient.signalAll({ tags: ['nightly'] }, '')).rejects.toThrow(
+      'Field "name" must be a non-empty string',
+    );
+    expect(fetchCalls).toEqual([]);
+  });
+
   it('serializes startAt in the workflow start payload', async () => {
     const fetchCalls: Array<{ url: string; init: RequestInit | undefined }> = [];
 

@@ -544,7 +544,25 @@ describe('generateOpenRpcDocument — rpc.discover', () => {
       transports: ['http'],
     });
     const methods = document['methods'] as Array<Record<string, unknown>>;
-    expect(methods.find((m) => m['name'] === 'rpc.discover')).toBeDefined();
+    const discoverMethod = methods.find((m) => m['name'] === 'rpc.discover');
+    expect(discoverMethod).toBeDefined();
+    expect(discoverMethod?.['x-weft-access']).toEqual({ kind: 'public' });
+  });
+
+  it('requires access metadata in the generated OpenRPC method JSON Schema', () => {
+    const document = generateOpenRpcDocument({
+      registry: createOperationRegistry([]),
+      transports: ['http'],
+    });
+    const methods = document['methods'] as Array<Record<string, unknown>>;
+    const discoverMethod = methods.find((method) => method['name'] === 'rpc.discover')!;
+    const result = discoverMethod['result'] as Record<string, unknown>;
+    const schema = result['schema'] as Record<string, unknown>;
+    const properties = schema['properties'] as Record<string, unknown>;
+    const methodsSchema = properties['methods'] as Record<string, unknown>;
+    const methodItems = methodsSchema['items'] as Record<string, unknown>;
+
+    expect(methodItems['required']).toContain('x-weft-access');
   });
 
   it('rpc.discover is listed even when no domain operations are registered', () => {

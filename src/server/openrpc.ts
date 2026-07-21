@@ -18,7 +18,8 @@
  *     from it by the "names match" invariant enforced in tests.
  *   - Every operation-catalog method carries the canonical `x-weft-access`
  *     metadata and, when applicable, `x-weft-parameterizedAccess`. The
- *     synthetic `rpc.discover` method is not an operation-catalog entry.
+ *     synthetic `rpc.discover` method is not an operation-catalog entry,
+ *     but advertises its dispatcher-enforced public access posture explicitly.
  *   - `rpc.discover` is itself emitted as a method so clients can
  *     locate the document via JSON-RPC.
  *
@@ -89,7 +90,7 @@ type OpenRpcMethod = {
   result: ContentDescriptor;
   errors?: Array<{ $ref: string }>;
   'x-weft-paramsSchema': Record<string, unknown>;
-  'x-weft-access'?: AccessPolicyMetadata;
+  'x-weft-access': AccessPolicyMetadata;
   'x-weft-parameterizedAccess'?: ParameterizedAccessMetadata;
   'x-weft-mcp'?: OpenRpcMcpMethodMetadata;
 };
@@ -308,6 +309,7 @@ function buildDiscoverMethod(): OpenRpcMethod {
       required: [],
       additionalProperties: false,
     },
+    'x-weft-access': { kind: 'public' },
   };
 }
 

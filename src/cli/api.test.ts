@@ -6,11 +6,30 @@ import { join } from 'node:path';
 import { resolveConnection } from '../connection.ts';
 import { Engine } from '../core/engine.ts';
 import { serve } from '../server/index.ts';
-import { executeApi, normalizeValidatedInput } from './api.ts';
+import { executeApi, formatAccess, normalizeValidatedInput } from './api.ts';
 import { createWeftClient } from './generated/operation-client.generated.ts';
 import { jsonRpcEndpoint } from './json-rpc-client.ts';
 import { parseCliArguments } from './parse-arguments.ts';
 import { findCliSubcommandName } from './subcommand-detection.ts';
+
+describe('api access formatting', () => {
+  it('formats every catalog access shape', () => {
+    expect(formatAccess({ kind: 'public' })).toBe('public');
+    expect(formatAccess({ kind: 'authenticated' })).toBe('authenticated');
+    expect(formatAccess({ kind: 'scoped', scopes: ['events:read', 'workflows:read'] })).toBe(
+      'events:read,workflows:read',
+    );
+    expect(formatAccess({ kind: 'optionalAuth', scopes: ['events:read'] })).toBe(
+      'optional:events:read',
+    );
+    expect(
+      formatAccess({
+        kind: 'scopedAlternatives',
+        alternatives: [['events:read', 'workflows:read'], ['streams:read']],
+      }),
+    ).toBe('events:read&workflows:read|streams:read');
+  });
+});
 
 describe('api argument parser', () => {
   it('parses list, describe, input, and confirmation flags', () => {

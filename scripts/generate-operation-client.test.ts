@@ -2,12 +2,15 @@ import { describe, expect, it } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { z } from 'zod';
 
 import type { CatalogOperationTypes } from '../src/cli/generated/operation-client.generated.ts';
 import {
   createCatalogSnapshot,
   stringifyCatalogSnapshot,
 } from '../src/cli/operation-catalog-snapshot.ts';
+import type { AccessPolicy } from '../src/server/authorization.ts';
+import { defineOperation } from '../src/server/operation-registry.ts';
 import { MAX_BATCH_OPERATIONS, MAX_SCAN_LIMIT } from '../src/storage/interface.ts';
 import {
   aliasNameFor,
@@ -23,6 +26,26 @@ import {
 } from './generate-operation-client.ts';
 
 const NO_ALIASES = new Map<string, string>();
+
+function snapshotTestOperation(name: string, access: AccessPolicy) {
+  return defineOperation({
+    name,
+    mcpExposable: false,
+    summary: 'Snapshot access test operation',
+    destructive: false,
+    inputSchema: z.object({}),
+    outputSchema: z.null(),
+    access,
+    transports: {
+      http: true,
+      jsonRpcHttp: true,
+      jsonRpcStdio: true,
+      jsonRpcWebSocket: true,
+    },
+    unknownKeyPolicy: { http: 'reject', jsonRpc: 'reject' },
+    invoke: async () => null,
+  });
+}
 
 function snapshotOperation(name: string) {
   const operation = createCatalogSnapshot().operations.find((candidate) => candidate.name === name);
@@ -183,6 +206,44 @@ describe('createOperationClientSource — generated output', () => {
         { value: 'tokens', access: { kind: 'scoped', scopes: ['streams:read'] } },
       ],
     });
+  });
+
+  it('serializes and sorts every scope-bearing catalog access shape', () => {
+    const snapshot = createCatalogSnapshot([
+      snapshotTestOperation('weft.test.scoped', {
+        kind: 'scoped',
+        scopes: { kind: 'allOf', scopes: ['workflows:read', 'events:read'] },
+      }),
+      snapshotTestOperation('weft.test.optional', {
+        kind: 'optionalAuth',
+        authenticatedScopes: { kind: 'anyOf', scopes: ['workflows:read', 'events:read'] },
+      }),
+      snapshotTestOperation('weft.test.alternatives', {
+        kind: 'scopedAlternatives',
+        alternatives: [
+          { kind: 'allOf', scopes: ['workflows:read', 'events:read'] },
+          { kind: 'anyOf', scopes: ['streams:read'] },
+        ],
+      }),
+    ]);
+
+    expect(snapshot.operations.map(({ name, access }) => ({ name, access }))).toEqual([
+      {
+        name: 'weft.test.alternatives',
+        access: {
+          kind: 'scopedAlternatives',
+          alternatives: [['events:read', 'workflows:read'], ['streams:read']],
+        },
+      },
+      {
+        name: 'weft.test.optional',
+        access: { kind: 'optionalAuth', scopes: ['events:read', 'workflows:read'] },
+      },
+      {
+        name: 'weft.test.scoped',
+        access: { kind: 'scoped', scopes: ['events:read', 'workflows:read'] },
+      },
+    ]);
   });
 
   it('is deterministic across runs', async () => {

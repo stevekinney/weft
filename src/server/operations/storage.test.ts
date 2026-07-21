@@ -4,8 +4,9 @@ import { Engine } from '../../core/engine.ts';
 import { MAX_BATCH_OPERATIONS, MAX_SCAN_LIMIT } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
-import { principalFromApiKey } from '../principal.ts';
+import { anonymousPrincipal, principalFromApiKey } from '../principal.ts';
 import { createLiveOperationRegistry } from '../rest-bindings.ts';
+import { storageGetOperation } from './storage.ts';
 
 function encode(value: string): Uint8Array {
   return new TextEncoder().encode(value);
@@ -42,6 +43,18 @@ class TrackingScanStorage extends MemoryStorage {
           done: true,
           value: undefined,
         }),
+      }),
+    };
+  }
+}
+
+class ThrowingScanStorage extends MemoryStorage {
+  override scan(): AsyncIterable<[string, Uint8Array]> {
+    return {
+      [Symbol.asyncIterator]: (): AsyncIterator<[string, Uint8Array]> => ({
+        next: async (): Promise<IteratorResult<[string, Uint8Array]>> => {
+          throw new Error('scan failed');
+        },
       }),
     };
   }
@@ -88,6 +101,39 @@ function adminStorageOptions() {
 }
 
 describe('storage REST operations', () => {
+  it('defensively authorizes direct operation invocation', async () => {
+    const rawStorage = new MemoryStorage();
+    await rawStorage.put('workflow-key', encode('stored value'));
+    using engine = new Engine({ storage: rawStorage });
+
+    await expect(
+      storageGetOperation.invoke({
+        input: { key: 'workflow-key' },
+        engine,
+        principal: anonymousPrincipal(),
+        transport: 'http-rest',
+      }),
+    ).rejects.toMatchObject({ code: 'Unauthorized' });
+
+    await expect(
+      storageGetOperation.invoke({
+        input: { key: 'workflow-key' },
+        engine,
+        principal: principalFromApiKey({ subject: 'unscoped', scopes: ['storage:read'] }),
+        transport: 'http-rest',
+      }),
+    ).rejects.toMatchObject({ code: 'Forbidden' });
+
+    await expect(
+      storageGetOperation.invoke({
+        input: { key: 'workflow-key' },
+        engine,
+        principal: principalFromApiKey({ subject: 'admin', scopes: ['storage:admin'] }),
+        transport: 'http-rest',
+      }),
+    ).resolves.toEqual(encode('stored value'));
+  });
+
   it('returns a 501 NotImplemented when the backend lacks conditionalBatch', async () => {
     const inner = new MemoryStorage();
     // A backend that has the bound conditionalBatch method but honestly reports
@@ -209,6 +255,21 @@ describe('storage REST operations', () => {
     expect(decode(new Uint8Array(await getResponse.arrayBuffer()))).toBe('stored value');
   });
 
+  it('deletes bytes through admin storage', async () => {
+    const rawStorage = new MemoryStorage();
+    await rawStorage.put('workflow-key', encode('stored value'));
+    using engine = new Engine({ storage: rawStorage });
+
+    const response = await handleRequest(
+      request('/v1/storage/workflow-key', { method: 'DELETE' }),
+      engine,
+      adminStorageOptions(),
+    );
+
+    expect(response.status).toBe(204);
+    expect(await rawStorage.get('workflow-key')).toBeNull();
+  });
+
   it('requires storage admin scope for raw access', async () => {
     const engine = new Engine({ storage: new MemoryStorage() });
     const response = await handleRequest(
@@ -266,6 +327,60 @@ describe('storage REST operations', () => {
       { key: 'wf:a', value: btoa('a') },
       { key: 'wf:b', value: btoa('b') },
     ]);
+  });
+
+  it('accepts an explicit false reverse query', async () => {
+    const rawStorage = new MemoryStorage();
+    await rawStorage.put('wf:a', encode('a'));
+    await rawStorage.put('wf:b', encode('b'));
+    using engine = new Engine({ storage: rawStorage });
+
+    const response = await handleRequest(
+      request('/v1/storage?prefix=wf:&reverse=false', { method: 'GET' }),
+      engine,
+      adminStorageOptions(),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe(
+      `${JSON.stringify({ key: 'wf:a', value: btoa('a') })}\n${JSON.stringify({ key: 'wf:b', value: btoa('b') })}\n`,
+    );
+  });
+
+  it('rejects malformed storage scan query values', async () => {
+    using engine = new Engine({ storage: new MemoryStorage() });
+
+    const cases = [
+      {
+        query: 'reverse=maybe',
+        error: 'Query parameter "reverse" must be "true" or "false".',
+      },
+      { query: 'limit=0', error: 'Query parameter "limit" must be a positive integer.' },
+      { query: 'limit=1.5', error: 'Query parameter "limit" must be a positive integer.' },
+    ];
+
+    for (const { query, error } of cases) {
+      const response = await handleRequest(
+        request(`/v1/storage?${query}`, { method: 'GET' }),
+        engine,
+        adminStorageOptions(),
+      );
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error });
+    }
+  });
+
+  it('propagates storage scan failures through the response stream', async () => {
+    using engine = new Engine({ storage: new ThrowingScanStorage() });
+    const response = await handleRequest(
+      request('/v1/storage?prefix=wf:', { method: 'GET' }),
+      engine,
+      adminStorageOptions(),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.text()).rejects.toThrow('scan failed');
   });
 
   it('rejects raw storage scans above MAX_SCAN_LIMIT', async () => {
@@ -377,6 +492,23 @@ describe('storage REST operations', () => {
     expect(response.status).toBe(204);
     expect(decode(await rawStorage.get('wf:new'))).toBe('new');
     expect(await rawStorage.get('wf:delete')).toBeNull();
+  });
+
+  it('rejects malformed JSON storage batch bodies', async () => {
+    using engine = new Engine({ storage: new MemoryStorage() });
+
+    const response = await handleRequest(
+      request('/v1/storage/-/batch', {
+        method: 'POST',
+        body: '{',
+        headers: { 'content-type': 'application/json' },
+      }),
+      engine,
+      adminStorageOptions(),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'Request body must be valid JSON.' });
   });
 
   it('rejects raw storage batches above MAX_BATCH_OPERATIONS before applying writes', async () => {

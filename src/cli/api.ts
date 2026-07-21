@@ -2,7 +2,11 @@ import { createLiveOperationRegistry } from '../server/rest-bindings.ts';
 import { findNearestCandidate } from './command-suggestions.ts';
 import snapshotData from './generated/operation-catalog.snapshot.json';
 import { sendJsonRpcRequest } from './json-rpc-client.ts';
-import type { CatalogOperationSnapshot, CatalogSnapshot } from './operation-catalog-snapshot.ts';
+import type {
+  CatalogAccessSnapshot,
+  CatalogOperationSnapshot,
+  CatalogSnapshot,
+} from './operation-catalog-snapshot.ts';
 import type { CliCommand, CommandOutput } from './types.ts';
 
 type ApiCommand = Extract<CliCommand, { command: 'api' }>;
@@ -79,7 +83,7 @@ function listOperations(command: ApiCommand): CommandOutput {
   const operations = snapshot.operations.map((operation) => ({
     name: operation.name,
     kind: operation.kind,
-    scope: formatAccess(operation),
+    scope: formatAccess(operation.access),
     transport: operation.transports.jsonRpcHttp ? 'json-rpc-http' : 'unsupported',
     destructive: operation.destructive,
     summary: operation.summary,
@@ -127,7 +131,7 @@ function formatOperationDescription(operation: CatalogOperationSnapshot): string
     // summary stands in so `--describe` always shows a Description line.
     `Description: ${operation.description ?? operation.summary}`,
     `Kind: ${operation.kind}`,
-    `Scope: ${formatAccess(operation)}`,
+    `Scope: ${formatAccess(operation.access)}`,
     `Transport: ${operation.transports.jsonRpcHttp ? 'json-rpc-http' : 'unsupported'}`,
     `Safety: ${operation.destructive ? 'destructive' : 'safe'}`,
     `Input schema: ${JSON.stringify(operation.inputSchema, null, 2)}`,
@@ -230,8 +234,7 @@ async function callOperation(
   };
 }
 
-function formatAccess(operation: CatalogOperationSnapshot): string {
-  const access = operation.access;
+export function formatAccess(access: CatalogAccessSnapshot): string {
   if (access.kind === 'public' || access.kind === 'authenticated') return access.kind;
   if (access.kind === 'scoped') return access.scopes.join(',');
   if (access.kind === 'optionalAuth') return `optional:${access.scopes.join(',')}`;
