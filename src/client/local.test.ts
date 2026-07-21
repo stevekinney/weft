@@ -634,7 +634,7 @@ describe('LocalClient delegation surface', () => {
       updatedAt: 1,
       nextFireAt: 2,
       missedFireCount: 0,
-      queuedRuns: 0,
+      queuedRuns: [],
     };
 
     const scheduleClient = {
@@ -718,7 +718,7 @@ describe('LocalClient delegation surface', () => {
           createdAt: 1,
           updatedAt: 1,
           nextFireAt: 2,
-          queuedRuns: 0,
+          queuedRuns: [],
         }),
       })),
       get: mock(async () => ({ id: 'delegated-workflow', status: 'running' })),
@@ -732,7 +732,7 @@ describe('LocalClient delegation surface', () => {
         createdAt: 1,
         updatedAt: 1,
         nextFireAt: 2,
-        queuedRuns: 0,
+        queuedRuns: [],
       })),
       list: mock(async () => ({ items: [{ id: 'delegated-workflow' }], total: 1 })),
       listSchedules: mock(async () => ({
@@ -747,7 +747,7 @@ describe('LocalClient delegation surface', () => {
             createdAt: 1,
             updatedAt: 1,
             nextFireAt: 2,
-            queuedRuns: 0,
+            queuedRuns: [],
           },
         ],
         total: 1,

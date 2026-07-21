@@ -62,6 +62,7 @@ export type BulkOperationPrincipal = {
 export type BulkOperationFilterSummary = {
   status?: WorkflowStatus | WorkflowStatus[];
   type?: string;
+  scheduleId?: string;
   tags?: string[];
   attributes?: Array<{
     key: string;

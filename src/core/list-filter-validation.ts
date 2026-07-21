@@ -82,6 +82,7 @@ export const listFilterObjectSchema = z
   .object({
     status: z.union([workflowStatusSchema, z.array(workflowStatusSchema)]).optional(),
     type: z.string().min(1).optional(),
+    scheduleId: z.string().min(1).optional(),
     tags: z.array(z.string()).optional(),
     attributes: z.array(attributeFilterSchema).optional(),
     limit: z.number().int().min(1).max(1000).optional(),

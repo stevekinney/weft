@@ -21,6 +21,7 @@ import { forgetCommittedCheckpointBytes } from './checkpoint-commit-snapshots.ts
 import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
 import { streamWorkflowStates } from './listing.ts';
+import { decodeScheduleRunMetadata } from './schedule-run-metadata.ts';
 import { createTerminalCleanupTimerId } from './state-utilities.ts';
 import {
   decodeWorkflowState,
@@ -323,9 +324,26 @@ async function collectWorkflowPurgeDeleteKeys(
   const deleteKeys = buildBaseWorkflowDeleteKeys(state);
   addExecutionDeadlineDeleteKeys(deleteKeys, state);
   addTerminalCleanupDeleteKey(deleteKeys, state);
+  await addScheduleRunHistoryDeleteKeys(internals.storage, deleteKeys, workflowId);
   await addUpdateRequestDeleteKeys(internals.storage, deleteKeys, workflowId);
   await addWorkflowPrefixDeleteKeys(internals.storage, deleteKeys, workflowId);
   return deleteKeys;
+}
+
+async function addScheduleRunHistoryDeleteKeys(
+  storage: WeftStorage,
+  deleteKeys: Set<string>,
+  workflowId: string,
+): Promise<void> {
+  const linkKey = KEYS.scheduleRunLink(workflowId);
+  const linkBytes = await storage.get(linkKey);
+  deleteKeys.add(linkKey);
+  if (linkBytes === null) return;
+
+  const metadata = decodeScheduleRunMetadata(linkBytes);
+  if (metadata !== null) {
+    deleteKeys.add(KEYS.scheduleRunBySchedule(metadata.id, workflowId));
+  }
 }
 
 function buildBaseWorkflowDeleteKeys(state: WorkflowState): Set<string> {

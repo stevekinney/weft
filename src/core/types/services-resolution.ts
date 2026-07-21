@@ -48,11 +48,11 @@ export interface WorkflowServicesResolverLaunchOptions {
 
 /**
  * Schedule context passed to {@link EngineOptions.resolveWorkflowServices} for
- * scheduled occurrences. New scheduled runs persist this context with the
- * workflow record, so a fresh-process recovery receives the same schedule id and
- * known occurrence timestamp as the live launch path. Runs from older stores
- * that predate the metadata may omit it, and queue-drained runs may omit
- * `occurrence` because their original grid timestamp was not retained.
+ * scheduled occurrences. Scheduled runs persist this context with the workflow
+ * record, so a fresh-process recovery receives the same schedule id and known
+ * occurrence timestamp as the live launch path. Queue entries retain the
+ * occurrence timestamp through drain; runs from older stores that predate this
+ * metadata may omit the context or occurrence.
  *
  * @example
  * ```ts

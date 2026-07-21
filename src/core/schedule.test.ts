@@ -28,6 +28,7 @@ import {
 } from './engine/validation/schedule.ts';
 import {
   CleanupWarningEvent,
+  ScheduleFiredEvent,
   ScheduleMissedFireEvent,
   WorkflowCancelledEvent,
   WorkflowCompletedEvent,
@@ -209,6 +210,10 @@ function expectQueuedScheduleStartWarning(
 async function createQueuedScheduleStartFailureFixture(): Promise<{
   engine: Engine;
   firstWorkflowId: string;
+  queuedWorkflowId: string;
+  schedule: Awaited<ReturnType<Engine['schedule']>>;
+  storage: ScheduleRunStartFailureStorage;
+  clock: Clock;
 }> {
   const storage = new ScheduleRunStartFailureStorage();
   const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
@@ -236,11 +241,19 @@ async function createQueuedScheduleStartFailureFixture(): Promise<{
   await tickEngine(engine, clock, requireNextFireAt(secondDescription));
 
   const queuedDescription = await schedule.describe();
-  expect(queuedDescription.queuedRuns).toBe(1);
+  expect(queuedDescription.queuedRuns).toHaveLength(1);
+  const queuedWorkflowId = queuedDescription.queuedRuns[0]!.workflowId;
 
   storage.failQueuedScheduleRunStart = true;
 
-  return { engine, firstWorkflowId: firstWorkflowId! };
+  return {
+    engine,
+    firstWorkflowId: firstWorkflowId!,
+    queuedWorkflowId,
+    schedule,
+    storage,
+    clock,
+  };
 }
 
 function createScheduleState(overrides: Partial<ScheduleState> = {}): ScheduleState {
@@ -254,7 +267,7 @@ function createScheduleState(overrides: Partial<ScheduleState> = {}): ScheduleSt
     overlap: 'skip',
     backfill: false,
     missedFireCount: 0,
-    queuedRuns: 0,
+    queuedRuns: [],
     updatedAt: 1,
     workflowType: 'workflow',
     ...overrides,
@@ -1201,27 +1214,29 @@ describe('recurring schedules', () => {
     expect(firstWorkflowId).toBeDefined();
 
     await tickEngine(engine, clock, requireNextFireAt(await schedule.describe()));
-    expect(await schedule.describe()).toMatchObject({
+    const queuedBeforeUpdate = await schedule.describe();
+    expect(queuedBeforeUpdate).toMatchObject({
       currentWorkflowId: firstWorkflowId,
-      queuedRuns: 1,
     });
+    expect(queuedBeforeUpdate.queuedRuns).toHaveLength(1);
+    const reservedWorkflowId = queuedBeforeUpdate.queuedRuns[0]!.workflowId;
 
     await schedule.update('* * * * *', { overlap: 'skip' });
-    expect(await schedule.describe()).toMatchObject({
+    const queuedAfterUpdate = await schedule.describe();
+    expect(queuedAfterUpdate).toMatchObject({
       currentWorkflowId: firstWorkflowId,
       overlap: 'skip',
-      queuedRuns: 1,
     });
+    expect(queuedAfterUpdate.queuedRuns).toEqual(queuedBeforeUpdate.queuedRuns);
 
     await engine.signal(firstWorkflowId!, 'release');
     await drainEngine();
 
     const [queuedWorkflowId] = await listRunningWorkflowIds(engine);
-    expect(queuedWorkflowId).toBeDefined();
-    expect(queuedWorkflowId).not.toBe(firstWorkflowId);
+    expect(queuedWorkflowId).toBe(reservedWorkflowId);
     expect(await schedule.describe()).toMatchObject({
       currentWorkflowId: queuedWorkflowId,
-      queuedRuns: 0,
+      queuedRuns: [],
     });
 
     await engine.signal(queuedWorkflowId!, 'release');
@@ -1630,6 +1645,8 @@ describe('recurring schedules', () => {
   it("Overlap policy is configurable. { overlap: 'queue' } waits for the previous run to complete before starting the queued run.", async () => {
     const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
     const engine = createEngine(clock);
+    const firedEvents: ScheduleFiredEvent[] = [];
+    engine.addEventListener(ScheduleFiredEvent.type, (event) => firedEvents.push(event));
 
     registerWorkflow(engine, 'overlap-queue', async function* (ctx: WorkflowContext) {
       yield* ctx.waitForSignal('release');
@@ -1646,18 +1663,159 @@ describe('recurring schedules', () => {
     expect(firstWorkflowId).toBeDefined();
 
     const secondDescription = await schedule.describe();
-    await tickEngine(engine, clock, requireNextFireAt(secondDescription));
+    const queuedOccurrence = requireNextFireAt(secondDescription);
+    await tickEngine(engine, clock, queuedOccurrence);
     expect(await listRunningWorkflowIds(engine)).toHaveLength(1);
+
+    const queuedDescription = await schedule.describe();
+    expect(queuedDescription.queuedRuns).toHaveLength(1);
+    expect(queuedDescription.queuedRuns[0]).toMatchObject({
+      queuedAt: queuedOccurrence,
+      occurrence: queuedOccurrence,
+    });
+    const queuedWorkflowId = queuedDescription.queuedRuns[0]!.workflowId;
+    expect(await engine.get(queuedWorkflowId)).toBeNull();
 
     await engine.signal(firstWorkflowId!, 'release');
     await drainEngine();
 
     const runningAfterRelease = await listRunningWorkflowIds(engine);
     expect(runningAfterRelease).toHaveLength(1);
-    expect(runningAfterRelease[0]).not.toBe(firstWorkflowId);
+    expect(runningAfterRelease[0]).toBe(queuedWorkflowId);
+
+    const drainedDescription = await schedule.describe();
+    expect(drainedDescription.currentWorkflowId).toBe(queuedWorkflowId);
+    expect(drainedDescription.queuedRuns).toEqual([]);
+    expect(firedEvents.at(-1)).toMatchObject({
+      workflowId: queuedWorkflowId,
+      occurrence: queuedOccurrence,
+    });
 
     await releaseRunningWorkflows(engine);
     engine[Symbol.dispose]();
+  });
+
+  it('retries a failed queue drain with the same reserved workflow id on the next occurrence', async () => {
+    const { engine, firstWorkflowId, queuedWorkflowId, schedule, storage, clock } =
+      await createQueuedScheduleStartFailureFixture();
+
+    try {
+      await engine.cancel(firstWorkflowId);
+      await drainEngine();
+
+      const afterFailure = await schedule.describe();
+      expect(afterFailure.queuedRuns[0]?.workflowId).toBe(queuedWorkflowId);
+      expect(await engine.get(queuedWorkflowId)).toBeNull();
+
+      storage.failQueuedScheduleRunStart = false;
+      await tickEngine(engine, clock, requireNextFireAt(afterFailure));
+
+      const afterRetry = await schedule.describe();
+      expect(afterRetry.currentWorkflowId).toBe(queuedWorkflowId);
+      expect(await engine.get(queuedWorkflowId)).toMatchObject({ status: 'running' });
+      expect(afterRetry.queuedRuns).toHaveLength(1);
+      expect(afterRetry.queuedRuns[0]!.workflowId).not.toBe(queuedWorkflowId);
+    } finally {
+      engine[Symbol.dispose]();
+    }
+  });
+
+  it('recovers a durable queue and drains the reserved workflow id after restart', async () => {
+    const storage = new MemoryStorage();
+    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+    const definition = defineWorkflow({ name: 'recover-queue' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      yield* ctx.waitForSignal('release');
+      return 'released';
+    });
+
+    const firstEngine = createEngine(clock, storage);
+    firstEngine.register(definition);
+    const schedule = await firstEngine.schedule('recover-queue', null, '* * * * *', {
+      id: 'recover-queue-schedule',
+      overlap: 'queue',
+    });
+    await tickEngine(firstEngine, clock, requireNextFireAt(await schedule.describe()));
+    const activeSchedule = await schedule.describe();
+    const activeWorkflowId = activeSchedule.currentWorkflowId!;
+    await tickEngine(firstEngine, clock, requireNextFireAt(await schedule.describe()));
+    const queuedSchedule = await schedule.describe();
+    const queuedBeforeRestart = queuedSchedule.queuedRuns[0]!;
+    await firstEngine[Symbol.asyncDispose]();
+
+    const recoveredEngine = createEngine(clock, storage);
+    recoveredEngine.register(definition);
+    await recoveredEngine.recoverAll();
+    await recoveredEngine.signal(activeWorkflowId, 'release');
+    await drainEngine();
+
+    const recoveredSchedule = await recoveredEngine.getSchedule('recover-queue-schedule');
+    expect(recoveredSchedule).toMatchObject({
+      currentWorkflowId: queuedBeforeRestart.workflowId,
+      queuedRuns: [],
+    });
+    expect(await recoveredEngine.get(queuedBeforeRestart.workflowId)).toMatchObject({
+      status: 'running',
+    });
+
+    await recoveredEngine.signal(queuedBeforeRestart.workflowId, 'release');
+    await recoveredEngine[Symbol.asyncDispose]();
+  });
+
+  it('discards reserved queue entries when a schedule is paused or cancelled', async () => {
+    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+    const engine = createEngine(clock);
+    registerWorkflow(engine, 'queue-discard', async function* (ctx: WorkflowContext) {
+      yield* ctx.waitForSignal('release');
+      return 'released';
+    });
+
+    const schedule = await engine.schedule('queue-discard', null, '* * * * *', {
+      overlap: 'queue',
+    });
+    await tickEngine(engine, clock, requireNextFireAt(await schedule.describe()));
+    await tickEngine(engine, clock, requireNextFireAt(await schedule.describe()));
+    const queuedBeforePause = await schedule.describe();
+    expect(queuedBeforePause.queuedRuns).toHaveLength(1);
+
+    await schedule.pause();
+    expect(await schedule.describe()).toMatchObject({ status: 'paused', queuedRuns: [] });
+
+    await schedule.resume();
+    await tickEngine(engine, clock, requireNextFireAt(await schedule.describe()));
+    const queuedBeforeCancel = await schedule.describe();
+    expect(queuedBeforeCancel.queuedRuns).toHaveLength(1);
+
+    await schedule.cancel();
+    expect(await schedule.describe()).toMatchObject({ status: 'cancelled', queuedRuns: [] });
+    await releaseRunningWorkflows(engine);
+    await engine[Symbol.asyncDispose]();
+  });
+
+  it('preserves queued occurrence identities across a cadence update', async () => {
+    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+    const engine = createEngine(clock);
+    registerWorkflow(engine, 'queue-cadence-update', async function* (ctx: WorkflowContext) {
+      yield* ctx.waitForSignal('release');
+      return 'released';
+    });
+
+    const schedule = await engine.schedule('queue-cadence-update', null, '* * * * *', {
+      overlap: 'queue',
+    });
+    await tickEngine(engine, clock, requireNextFireAt(await schedule.describe()));
+    await tickEngine(engine, clock, requireNextFireAt(await schedule.describe()));
+    const scheduleBeforeUpdate = await schedule.describe();
+    const queuedBeforeUpdate = scheduleBeforeUpdate.queuedRuns;
+
+    await schedule.update('*/5 * * * *');
+    const scheduleAfterUpdate = await schedule.describe();
+    expect(scheduleAfterUpdate.queuedRuns).toEqual(queuedBeforeUpdate);
+
+    await releaseRunningWorkflows(engine);
+    await releaseRunningWorkflows(engine);
+    await engine[Symbol.asyncDispose]();
   });
 
   it('queue overlap still dispatches WorkflowCancelledEvent when starting the queued run fails', async () => {
@@ -2136,7 +2294,7 @@ describe('recurring schedules', () => {
     engine[Symbol.dispose]();
   });
 
-  it('Persists the schedule-run mapping in the same batch that starts a queued schedule workflow.', async () => {
+  it('atomically starts a queued occurrence under its reserved id and updates schedule state', async () => {
     const storage = new MemoryStorage();
     const recordedBatchKeys: string[][] = [];
     const originalBatch = storage.batch.bind(storage);
@@ -2170,17 +2328,32 @@ describe('recurring schedules', () => {
     await tickEngine(engine, clock, requireNextFireAt(description));
 
     const startedSchedule = await schedule.describe();
-    const currentWorkflowId = startedSchedule.currentWorkflowId;
+    const firstWorkflowId = startedSchedule.currentWorkflowId;
+    expect(firstWorkflowId).toBeDefined();
 
-    expect(currentWorkflowId).toBeDefined();
+    await tickEngine(engine, clock, requireNextFireAt(startedSchedule));
+    const queuedSchedule = await schedule.describe();
+    const queuedWorkflowId = queuedSchedule.queuedRuns[0]?.workflowId;
+    expect(queuedWorkflowId).toBeDefined();
+
+    await engine.signal(firstWorkflowId!, 'release');
+    await drainEngine();
+
     expect(recordedBatchKeys).toEqual(
       expect.arrayContaining([
         expect.arrayContaining([
-          KEYS.workflow(currentWorkflowId!),
-          KEYS.scheduleRun(currentWorkflowId!),
+          KEYS.workflow(queuedWorkflowId!),
+          KEYS.scheduleRun(queuedWorkflowId!),
+          KEYS.scheduleRunLink(queuedWorkflowId!),
+          KEYS.scheduleRunBySchedule('batched-schedule-run', queuedWorkflowId!),
+          KEYS.schedule('batched-schedule-run'),
         ]),
       ]),
     );
+    expect(await schedule.describe()).toMatchObject({
+      currentWorkflowId: queuedWorkflowId,
+      queuedRuns: [],
+    });
 
     await releaseRunningWorkflows(engine);
     engine[Symbol.dispose]();
@@ -2246,6 +2419,57 @@ describe('recurring schedules', () => {
     expect(await engine.getSchedule('paused-schedule')).toMatchObject({ status: 'cancelled' });
 
     engine[Symbol.dispose]();
+  });
+
+  it('lists schedule-launched workflows from the durable reverse index with stable pagination', async () => {
+    const storage = new MemoryStorage();
+    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+    const engine = createEngine(clock, storage);
+    const firedWorkflowIds: string[] = [];
+    engine.addEventListener(ScheduleFiredEvent.type, (event) => {
+      if (event.scheduleId === 'history-schedule') firedWorkflowIds.push(event.workflowId);
+    });
+
+    registerWorkflow(engine, 'history-workflow', async function* () {
+      return 'done';
+    });
+
+    const unrelated = await engine.start('history-workflow', null, { id: 'unrelated-run' });
+    await unrelated.result();
+    const schedule = await engine.schedule('history-workflow', null, '* * * * *', {
+      id: 'history-schedule',
+    });
+
+    for (let index = 0; index < 3; index += 1) {
+      const description = await schedule.describe();
+      await tickEngine(engine, clock, requireNextFireAt(description));
+    }
+
+    expect(firedWorkflowIds).toHaveLength(3);
+    await Promise.all(firedWorkflowIds.map((workflowId) => engine.getHandle(workflowId).result()));
+    const expectedNewestFirst = firedWorkflowIds.toReversed();
+    const firstPage = await engine.list({ scheduleId: 'history-schedule', limit: 2 });
+    expect(firstPage).toMatchObject({ total: 3, offset: 0, limit: 2 });
+    expect(firstPage.items.map((item) => item.id)).toEqual(expectedNewestFirst.slice(0, 2));
+
+    const secondPage = await engine.list({
+      scheduleId: 'history-schedule',
+      status: 'completed',
+      limit: 2,
+      offset: 2,
+    });
+    expect(secondPage).toMatchObject({ total: 3, offset: 2, limit: 2 });
+    expect(secondPage.items.map((item) => item.id)).toEqual(expectedNewestFirst.slice(2));
+
+    const oldestWorkflowId = firedWorkflowIds[0]!;
+    await engine.purge({ scheduleId: 'history-schedule', idPrefix: oldestWorkflowId });
+    expect(await storage.get(KEYS.scheduleRunLink(oldestWorkflowId))).toBeNull();
+    expect(
+      await storage.get(KEYS.scheduleRunBySchedule('history-schedule', oldestWorkflowId)),
+    ).toBeNull();
+    expect(await engine.list({ scheduleId: 'history-schedule' })).toMatchObject({ total: 2 });
+
+    await engine[Symbol.asyncDispose]();
   });
 
   it('listSchedules sorts deterministically before applying pagination.', async () => {
@@ -2361,7 +2585,7 @@ describe('recurring schedules', () => {
         updatedAt: clock.now,
         nextFireAt: clock.now + 60_000,
         missedFireCount: 0,
-        queuedRuns: 0,
+        queuedRuns: [],
       }),
     );
     await expect(engine.getSchedule('old-descriptionless-schedule')).resolves.toMatchObject({

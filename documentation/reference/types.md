@@ -856,6 +856,7 @@ type SearchAttributeDefinition =
 interface ListFilter {
   status?: WorkflowStatus | WorkflowStatus[];
   type?: string;
+  scheduleId?: string;
   attributes?: AttributeFilter[];
   limit?: number;
   offset?: number;

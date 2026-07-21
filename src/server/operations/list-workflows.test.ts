@@ -138,6 +138,27 @@ describe('weft.workflows.list', () => {
     expect(await response.json()).toEqual(expected);
   });
 
+  it('filters workflow history by originating schedule over REST', async () => {
+    const storage = new MemoryStorage();
+    const engine = createEngine(storage);
+    const scheduled = await engine.start('echo', null, { id: 'scheduled-run' });
+    const unrelated = await engine.start('echo', null, { id: 'unrelated-run' });
+    await Promise.all([scheduled.result(), unrelated.result()]);
+    const metadata = encode({ id: 'daily-report', occurrence: 1_000 });
+    await storage.put(KEYS.scheduleRunLink(scheduled.id), metadata);
+    await storage.put(KEYS.scheduleRunBySchedule('daily-report', scheduled.id), new Uint8Array(0));
+
+    const response = await handleRequest(
+      new Request('http://localhost/v1/workflows?schedule_id=daily-report', { method: 'GET' }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as ListWorkflowsOutput;
+    expect(body.items.map((item) => item.id)).toEqual(['scheduled-run']);
+  });
+
   it('includes failureCategory from search attributes only when requested over REST', async () => {
     const storage = new MemoryStorage();
     const engine = createEngine(storage);

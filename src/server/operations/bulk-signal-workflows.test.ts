@@ -150,7 +150,7 @@ describe('weft.workflows.bulk.signal', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       error:
-        'Field "filter" must include at least one of status, type, tags, attributes, idPrefix (≥3 chars), or failureCategory paired with status',
+        'Field "filter" must include at least one of status, type, scheduleId, tags, attributes, idPrefix (≥3 chars), or failureCategory paired with status',
     });
 
     response = await handleRequest(

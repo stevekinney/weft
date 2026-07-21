@@ -298,7 +298,7 @@ describe('handleRequest', () => {
           overlap: string;
           backfill: boolean;
           nextFireAt: number | null;
-          queuedRuns: number;
+          queuedRuns: Array<{ workflowId: string; queuedAt: number; occurrence?: number }>;
         }>;
         total: number;
       };
@@ -311,7 +311,7 @@ describe('handleRequest', () => {
           status: 'active',
           overlap: 'queue',
           backfill: true,
-          queuedRuns: 0,
+          queuedRuns: [],
         }),
       );
       expect(listed.items[0]?.nextFireAt).toEqual(expect.any(Number));
@@ -1279,7 +1279,7 @@ describe('handleRequest', () => {
       expect(missingFilterResponse.status).toBe(400);
       expect(await json(missingFilterResponse)).toEqual({
         error:
-          'Field "filter" must include at least one of status, type, tags, attributes, idPrefix (≥3 chars), or failureCategory paired with status',
+          'Field "filter" must include at least one of status, type, scheduleId, tags, attributes, idPrefix (≥3 chars), or failureCategory paired with status',
       });
 
       const emptyTagsResponse = await handleRequest(
@@ -1293,7 +1293,7 @@ describe('handleRequest', () => {
       expect(emptyTagsResponse.status).toBe(400);
       expect(await json(emptyTagsResponse)).toEqual({
         error:
-          'Field "filter" must include at least one of status, type, tags, attributes, idPrefix (≥3 chars), or failureCategory paired with status',
+          'Field "filter" must include at least one of status, type, scheduleId, tags, attributes, idPrefix (≥3 chars), or failureCategory paired with status',
       });
 
       const emptyAttributesResponse = await handleRequest(
@@ -1307,7 +1307,7 @@ describe('handleRequest', () => {
       expect(emptyAttributesResponse.status).toBe(400);
       expect(await json(emptyAttributesResponse)).toEqual({
         error:
-          'Field "filter" must include at least one of status, type, tags, attributes, idPrefix (≥3 chars), or failureCategory paired with status',
+          'Field "filter" must include at least one of status, type, scheduleId, tags, attributes, idPrefix (≥3 chars), or failureCategory paired with status',
       });
 
       const blankAttributeKeyResponse = await handleRequest(
@@ -1321,7 +1321,7 @@ describe('handleRequest', () => {
       expect(blankAttributeKeyResponse.status).toBe(400);
       expect(await json(blankAttributeKeyResponse)).toEqual({
         error:
-          'Field "filter" must include at least one of status, type, tags, attributes, idPrefix (≥3 chars), or failureCategory paired with status',
+          'Field "filter" must include at least one of status, type, scheduleId, tags, attributes, idPrefix (≥3 chars), or failureCategory paired with status',
       });
     });
   });

@@ -24,6 +24,7 @@ import { parseAttributeFilters } from '../attribute-filters.ts';
 type ListFilterDimension =
   | 'status'
   | 'type'
+  | 'scheduleId'
   | 'tags'
   | 'attributes'
   | 'idPrefix'
@@ -47,6 +48,11 @@ function parseStatus(params: URLSearchParams): ListFilter['status'] | undefined 
 function parseType(params: URLSearchParams): ListFilter['type'] | undefined {
   const type = params.get('type');
   return type === null ? undefined : type;
+}
+
+function parseScheduleId(params: URLSearchParams): ListFilter['scheduleId'] | undefined {
+  const scheduleId = params.get('schedule_id');
+  return scheduleId === null ? undefined : scheduleId;
 }
 
 function parseTags(params: URLSearchParams): ListFilter['tags'] | undefined {
@@ -100,6 +106,7 @@ function parseExecutionDeadline(params: URLSearchParams): TimeRange | undefined 
 const LIST_FILTER_QUERY_PARSERS = {
   status: parseStatus,
   type: parseType,
+  scheduleId: parseScheduleId,
   tags: parseTags,
   attributes: parseAttributes,
   idPrefix: parseIdPrefix,

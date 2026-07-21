@@ -534,6 +534,17 @@ export const KEYS = {
   scheduleTick: (fireAt: number, id: string) =>
     `schedule-due:${String(fireAt).padStart(16, '0')}:${encodeStorageKeyComponent(id)}`,
   scheduleRun: (workflowId: string) => `schedule-run:${encodeStorageKeyComponent(workflowId)}`,
+  /**
+   * Durable per-workflow manifest for the schedule that launched a run. Unlike
+   * `scheduleRun`, this link survives terminal cleanup so schedule history can
+   * be queried until the workflow itself is purged.
+   */
+  scheduleRunLink: (workflowId: string) =>
+    `schedule-run-link:${encodeStorageKeyComponent(workflowId)}`,
+  scheduleRunBySchedulePrefix: (scheduleId: string) =>
+    `schedule-run-by-schedule:${encodeStorageKeyComponent(scheduleId)}:`,
+  scheduleRunBySchedule: (scheduleId: string, workflowId: string) =>
+    `schedule-run-by-schedule:${encodeStorageKeyComponent(scheduleId)}:${encodeStorageKeyComponent(workflowId)}`,
   operation: (queue: string, scheduledAt: number, id: string) =>
     `op:${queue}:${formatSortableTimestamp(scheduledAt)}:${id}`,
   operationInflight: (id: string) => `op:inflight:${id}`,

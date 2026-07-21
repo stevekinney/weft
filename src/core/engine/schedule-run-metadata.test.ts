@@ -15,7 +15,7 @@ describe('schedule-run metadata', () => {
     });
   });
 
-  it('round-trips current queued-drain metadata without an occurrence', () => {
+  it('round-trips metadata with an omitted occurrence', () => {
     const metadata = decodeScheduleRunMetadata(
       encodeScheduleRunMetadata('queued-schedule', undefined),
     );

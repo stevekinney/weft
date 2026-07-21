@@ -2545,6 +2545,10 @@
             "minimum": 1,
             "type": "integer"
           },
+          "scheduleId": {
+            "minLength": 1,
+            "type": "string"
+          },
           "status": {
             "anyOf": [
               {
@@ -2833,6 +2837,10 @@
             "minLength": 1,
             "type": "string"
           },
+          "scheduleId": {
+            "minLength": 1,
+            "type": "string"
+          },
           "status": {
             "anyOf": [
               {},
@@ -2989,6 +2997,10 @@
             "minLength": 1,
             "type": "string"
           },
+          "scheduleId": {
+            "minLength": 1,
+            "type": "string"
+          },
           "status": {
             "anyOf": [
               {},
@@ -3142,6 +3154,10 @@
           },
           "requestId": {
             "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "scheduleId": {
             "minLength": 1,
             "type": "string"
           },
@@ -3306,6 +3322,10 @@
             "minLength": 1,
             "type": "string"
           },
+          "scheduleId": {
+            "minLength": 1,
+            "type": "string"
+          },
           "status": {
             "anyOf": [
               {},
@@ -3460,6 +3480,10 @@
                 "maximum": 9007199254740991,
                 "minimum": 0,
                 "type": "integer"
+              },
+              "scheduleId": {
+                "minLength": 1,
+                "type": "string"
               },
               "status": {
                 "anyOf": [
@@ -3917,7 +3941,7 @@
       "name": "weft.workflows.list",
       "kind": "unary",
       "summary": "List workflows",
-      "description": "List workflows visible to the caller, optionally filtered by status, type, tags, id prefix, failure category, and time range, with pagination via `limit`/`offset`. Read-only. Returns the matching workflow summaries in the engine default ordering.",
+      "description": "List workflows visible to the caller, optionally filtered by status, type, originating schedule, tags, id prefix, failure category, and time range, with pagination via `limit`/`offset`. Read-only. Returns the matching workflow summaries in the engine default ordering.",
       "tags": ["Workflows"],
       "destructive": false,
       "access": {
@@ -4023,6 +4047,10 @@
             "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
+          },
+          "scheduleId": {
+            "minLength": 1,
+            "type": "string"
           },
           "status": {
             "anyOf": [
@@ -4160,6 +4188,10 @@
             "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
+          },
+          "scheduleId": {
+            "minLength": 1,
+            "type": "string"
           },
           "status": {
             "anyOf": [

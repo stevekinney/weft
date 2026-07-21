@@ -154,6 +154,9 @@ function summarizeBulkFilter(filter: ListFilter): BulkOperationFilterSummary {
   if (filter.type !== undefined) {
     summary.type = filter.type;
   }
+  if (filter.scheduleId !== undefined) {
+    summary.scheduleId = filter.scheduleId;
+  }
   const normalizedTags = normalizeWorkflowTags(filter.tags);
   if (normalizedTags !== undefined) {
     summary.tags = normalizedTags;

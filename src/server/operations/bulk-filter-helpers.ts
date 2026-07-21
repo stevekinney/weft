@@ -63,6 +63,7 @@ const timeRangeSchema = z.object({
 export const bulkListFilterInputSchema = z.object({
   status: z.union([workflowStatusSchema, z.array(workflowStatusSchema)]).optional(),
   type: z.string().optional(),
+  scheduleId: z.string().min(1).optional(),
   tags: z.array(z.string()).optional(),
   attributes: z.array(attributeFilterSchema).optional(),
   limit: z.number().int().min(0).optional(),
@@ -198,7 +199,10 @@ function parseFilterStatus(value: unknown): ListFilter['status'] {
   throw new Error('Field "filter.status" must be a string or an array of strings');
 }
 
-function parseOptionalFilterType(value: unknown): string | undefined {
+function parseOptionalFilterString(
+  value: unknown,
+  fieldName: 'type' | 'scheduleId',
+): string | undefined {
   if (value === undefined) {
     return undefined;
   }
@@ -207,7 +211,7 @@ function parseOptionalFilterType(value: unknown): string | undefined {
     return value;
   }
 
-  throw new Error('Field "filter.type" must be a string');
+  throw new Error(`Field "filter.${fieldName}" must be a string`);
 }
 
 function parseOptionalFilterTags(value: unknown): string[] | undefined {
@@ -247,8 +251,12 @@ const BULK_FILTER_DIMENSION_PARSERS: ReadonlyArray<
     if (status !== undefined) filter.status = status;
   },
   (filter, record) => {
-    const type = parseOptionalFilterType(record['type']);
+    const type = parseOptionalFilterString(record['type'], 'type');
     if (type !== undefined) filter.type = type;
+  },
+  (filter, record) => {
+    const scheduleId = parseOptionalFilterString(record['scheduleId'], 'scheduleId');
+    if (scheduleId !== undefined) filter.scheduleId = scheduleId;
   },
   (filter, record) => {
     const tags = parseOptionalFilterTags(record['tags']);
@@ -406,6 +414,9 @@ function copyAttributeRangeBound(
 }
 
 function applyExtendedBulkFilterFields(filter: ListFilter, input: BulkListFilterInput): void {
+  if (input.scheduleId !== undefined) {
+    filter.scheduleId = input.scheduleId;
+  }
   if (input.idPrefix !== undefined) {
     filter.idPrefix = input.idPrefix;
   }

@@ -12,11 +12,14 @@ import type {
   WorkflowState,
 } from '../types.ts';
 import { WorkflowNotRegisteredError } from './errors.ts';
+import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
 import { ScheduleHandle } from './schedule-handle.ts';
 import { resolveEffectiveScheduleFireAt } from './schedule-jitter.ts';
 import { getNextScheduleOccurrence } from './schedule-occurrence.ts';
+import { applyBlockedScheduleOccurrence, drainQueuedScheduleRun } from './schedule-overlap.ts';
 import { decodeScheduleRunMetadata } from './schedule-run-metadata.ts';
+import type { ScheduledRunStartOptions } from './schedule-run.ts';
 import {
   clearScheduleCurrentWorkflow,
   createScheduleTimerId,
@@ -58,7 +61,7 @@ export type ScheduleCallbacks = {
   cancelWorkflow: (workflowId: string) => Promise<void>;
   getWorkflowResult: (workflowId: string) => Promise<unknown>;
   refreshScheduledWorkflowState: (state: ScheduleState) => Promise<RefreshedScheduleState>;
-  startScheduledRun: (state: ScheduleState, occurrence?: number) => Promise<string>;
+  startScheduledRun: (state: ScheduleState, options?: ScheduledRunStartOptions) => Promise<string>;
   applyScheduleOccurrence: (state: ScheduleState, occurrence?: number) => Promise<ScheduleState>;
   settleBackfillScheduleState: (state: ScheduleState) => Promise<ScheduleState>;
   flushQueuedInlineWorkflowStartsDirectly: () => Promise<void>;
@@ -108,7 +111,7 @@ export async function schedule(
       updatedAt: now,
       nextFireAt: getNextScheduleOccurrence({ ...cadenceFields, createdAt: now }, now),
       missedFireCount: 0,
-      queuedRuns: 0,
+      queuedRuns: [],
     };
     await writeScheduleState(internals, state);
     return new ScheduleHandle(scheduleId, internals.engine);
@@ -128,8 +131,7 @@ export async function listSchedules(
     if (scheduleKeySuffix.includes(':')) continue;
     const state = decodeScheduleState(value);
     if (!state || !matchesScheduleFilter(state, normalizedFilter)) continue;
-    const { input: _input, ...summary } = state;
-    items.push(summary);
+    items.push(toScheduleSummary(state));
   }
 
   return paginateScheduleSummaries(items, normalizedFilter);
@@ -176,7 +178,7 @@ async function hasCurrentScheduleTimer(
 
 export function toScheduleSummary(state: ScheduleState): ScheduleSummary {
   const { input: _input, ...summary } = state;
-  return summary;
+  return { ...summary, queuedRuns: summary.queuedRuns.map((queuedRun) => ({ ...queuedRun })) };
 }
 
 export async function pauseSchedule(internals: EngineInternals, scheduleId: string): Promise<void> {
@@ -193,7 +195,7 @@ export async function pauseSchedule(internals: EngineInternals, scheduleId: stri
     status: 'paused',
     updatedAt: now,
     nextFireAt: getNextScheduleOccurrence(state, now),
-    queuedRuns: 0,
+    queuedRuns: [],
   };
   await writeScheduleState(internals, updatedState, { includeTimer: false });
 }
@@ -235,7 +237,7 @@ export async function cancelSchedule(
     status: 'cancelled',
     updatedAt: internals.options.getNow(),
     nextFireAt: null,
-    queuedRuns: 0,
+    queuedRuns: [],
   };
   await writeScheduleState(internals, updatedState, { includeTimer: false });
 }
@@ -332,51 +334,36 @@ function hasActiveScheduledWorkflow(
   return scheduledRunOccupiesSlot(currentWorkflowState);
 }
 
-async function applyBlockedScheduleOccurrence(
-  state: ScheduleState,
-  hasActiveWorkflow: boolean,
-  callbacks: Pick<ScheduleCallbacks, 'cancelWorkflow' | 'getWorkflowResult' | 'startScheduledRun'>,
-  occurrence?: number,
-): Promise<ScheduleState> {
-  if (!hasActiveWorkflow) {
-    return { ...state, currentWorkflowId: await callbacks.startScheduledRun(state, occurrence) };
-  }
-
-  if (state.overlap === 'cancel-running') {
-    if (state.currentWorkflowId) {
-      void callbacks.getWorkflowResult(state.currentWorkflowId).catch(() => {});
-      await callbacks.cancelWorkflow(state.currentWorkflowId);
-    }
-    const stateForStart = clearScheduleCurrentWorkflow(state);
-    return {
-      ...state,
-      currentWorkflowId: await callbacks.startScheduledRun(stateForStart, occurrence),
-    };
-  }
-
-  if (state.overlap === 'queue') {
-    return { ...state, queuedRuns: state.queuedRuns + 1 };
-  }
-
-  return state;
-}
-
 export async function applyScheduleOccurrence(
-  _internals: EngineInternals,
+  internals: EngineInternals,
   state: ScheduleState,
   callbacks: ScheduleCallbacks,
   occurrence?: number,
 ): Promise<ScheduleState> {
   const { state: refreshedState, currentWorkflowState } =
     await callbacks.refreshScheduledWorkflowState(state);
-  const hasActiveWorkflow = hasActiveScheduledWorkflow(currentWorkflowState);
+  let stateForOccurrence = refreshedState;
+  let hasActiveWorkflow = hasActiveScheduledWorkflow(currentWorkflowState);
 
-  if (refreshedState.overlap === 'allow') {
-    await callbacks.startScheduledRun(refreshedState, occurrence);
-    return refreshedState;
+  if (!hasActiveWorkflow && stateForOccurrence.queuedRuns.length > 0) {
+    stateForOccurrence = await drainQueuedScheduleRun(stateForOccurrence, callbacks);
+    hasActiveWorkflow = true;
   }
 
-  return applyBlockedScheduleOccurrence(refreshedState, hasActiveWorkflow, callbacks, occurrence);
+  if (stateForOccurrence.overlap === 'allow') {
+    await callbacks.startScheduledRun(stateForOccurrence, {
+      ...(occurrence !== undefined && { occurrence }),
+    });
+    return stateForOccurrence;
+  }
+
+  return applyBlockedScheduleOccurrence(
+    internals,
+    stateForOccurrence,
+    hasActiveWorkflow,
+    callbacks,
+    occurrence,
+  );
 }
 
 export async function settleBackfillScheduleState(
@@ -411,14 +398,15 @@ export async function handleScheduledWorkflowTerminal(
   if (!scheduleRunBytes) {
     return;
   }
-  await internals.storage.delete(KEYS.scheduleRun(workflowId));
   const metadata = decodeScheduleRunMetadata(scheduleRunBytes);
   if (metadata === null || !isValidScheduleIdentifier(metadata.id)) {
+    await deleteTransientScheduleRunMetadata(internals, workflowId);
     return;
   }
   const scheduleId = metadata.id;
   const state = await loadScheduleState(internals, scheduleId);
   if (!state || state.currentWorkflowId !== workflowId) {
+    await deleteTransientScheduleRunMetadata(internals, workflowId);
     return;
   }
   const now = internals.options.getNow();
@@ -426,22 +414,26 @@ export async function handleScheduledWorkflowTerminal(
     ...clearScheduleCurrentWorkflow(state),
     updatedAt: now,
   };
-  // A queued occurrence was accepted under the overlap policy active at that
-  // tick. Keep draining that durable obligation even if a later schedule update
-  // changes the policy; the new policy governs future occurrences.
-  if (clearedState.status === 'active' && clearedState.queuedRuns > 0) {
-    const nextWorkflowId = await callbacks.startScheduledRun(clearedState);
-    await writeScheduleState(
-      internals,
-      {
-        ...clearedState,
-        currentWorkflowId: nextWorkflowId,
-        queuedRuns: clearedState.queuedRuns - 1,
-        updatedAt: now,
-      },
-      { includeTimer: false },
-    );
+  // Queue entries are accepted work. Keep draining them even if a later update
+  // changes overlap; the new policy governs only future occurrences.
+  if (clearedState.status === 'active' && clearedState.queuedRuns.length > 0) {
+    await drainQueuedScheduleRun({ ...clearedState, updatedAt: now }, callbacks, workflowId);
     return;
   }
-  await writeScheduleState(internals, clearedState, { includeTimer: false });
+  await writeScheduleState(internals, clearedState, {
+    includeTimer: false,
+    additionalOperations: [{ type: 'delete', key: KEYS.scheduleRun(workflowId) }],
+  });
+}
+
+async function deleteTransientScheduleRunMetadata(
+  internals: EngineInternals,
+  workflowId: string,
+): Promise<void> {
+  await commitFencedEngineWrite(
+    internals,
+    [{ type: 'delete', key: KEYS.scheduleRun(workflowId) }],
+    [],
+    () => new Error(`Schedule-run cleanup for workflow "${workflowId}" lost its precondition.`),
+  );
 }

@@ -158,6 +158,7 @@ export const aggregateWorkflowsRestBinding: UnknownRestBinding = {
   inputSources: {
     status: { kind: 'query', queryParam: 'status', repeating: true },
     type: { kind: 'query', queryParam: 'type' },
+    scheduleId: { kind: 'query', queryParam: 'schedule_id' },
     tags: { kind: 'query', queryParam: 'tag', repeating: true },
     idPrefix: { kind: 'query', queryParam: 'id_prefix' },
     limit: { kind: 'query', queryParam: 'limit' },

@@ -10,6 +10,7 @@ import { flushQueuedInlineWorkflowStartsDirectly } from './inline-launch-queue.t
 import { getInternals } from './internals.ts';
 import { startWorkflow } from './lifecycle.ts';
 import type { ReviewOperationCallbacks, SubmitReviewCallbacks } from './reviews.ts';
+import type { ScheduledRunStartOptions } from './schedule-run.ts';
 import {
   applyScheduleOccurrence,
   handleScheduleTimer,
@@ -42,7 +43,7 @@ export function createScheduleCallbacks<TWorkflows extends object, TActivities e
     cancelWorkflow: (workflowId) => engine.cancel(workflowId),
     getWorkflowResult: (workflowId) => engine.getHandle(workflowId).result(),
     refreshScheduledWorkflowState: (state) => refreshScheduledWorkflowStateForEngine(engine, state),
-    startScheduledRun: (state, occurrence) => startScheduledRunForEngine(engine, state, occurrence),
+    startScheduledRun: (state, options) => startScheduledRunForEngine(engine, state, options),
     applyScheduleOccurrence: (state, occurrence) =>
       applyScheduleOccurrenceForEngine(engine, state, occurrence),
     settleBackfillScheduleState: (state) => settleBackfillScheduleStateForEngine(engine, state),
@@ -97,14 +98,9 @@ export async function startScheduledRunForEngine<
 >(
   engine: Engine<TWorkflows, TActivities>,
   state: ScheduleState,
-  occurrence?: number,
+  options?: ScheduledRunStartOptions,
 ): Promise<string> {
-  return startScheduledRun(
-    getInternals(engine),
-    state,
-    createScheduleCallbacks(engine),
-    occurrence,
-  );
+  return startScheduledRun(getInternals(engine), state, createScheduleCallbacks(engine), options);
 }
 export async function applyScheduleOccurrenceForEngine<
   TWorkflows extends object,

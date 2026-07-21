@@ -33,6 +33,10 @@ describe('hasScopedBulkWorkflowFilter — current scope keys', () => {
       hasScopedBulkWorkflowFilter({ attributes: [{ key: 'customerId', value: 'acme' }] }),
     ).toBe(true);
   });
+
+  it('accepts a schedule ID filter', () => {
+    expect(hasScopedBulkWorkflowFilter({ scheduleId: 'nightly-orders' })).toBe(true);
+  });
 });
 
 describe('hasScopedBulkWorkflowFilter — idPrefix', () => {

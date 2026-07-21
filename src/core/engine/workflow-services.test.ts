@@ -739,10 +739,24 @@ describe('ctx.services — terminal cleanup', () => {
       KEYS.scheduleRun('purge-schedule-metadata-run'),
       encode({ id: 'purge-schedule-metadata', occurrence: 1_767_225_600_000 }),
     );
+    await storage.put(
+      KEYS.scheduleRunLink('purge-schedule-metadata-run'),
+      encode({ id: 'purge-schedule-metadata', occurrence: 1_767_225_600_000 }),
+    );
+    await storage.put(
+      KEYS.scheduleRunBySchedule('purge-schedule-metadata', 'purge-schedule-metadata-run'),
+      new Uint8Array(0),
+    );
 
     const purged = await engine.purge();
     expect(purged.deleted).toBeGreaterThanOrEqual(1);
     expect(await storage.get(KEYS.scheduleRun('purge-schedule-metadata-run'))).toBeNull();
+    expect(await storage.get(KEYS.scheduleRunLink('purge-schedule-metadata-run'))).toBeNull();
+    expect(
+      await storage.get(
+        KEYS.scheduleRunBySchedule('purge-schedule-metadata', 'purge-schedule-metadata-run'),
+      ),
+    ).toBeNull();
     await engine[Symbol.asyncDispose]();
   });
 
@@ -763,6 +777,14 @@ describe('ctx.services — terminal cleanup', () => {
       KEYS.scheduleRun('retention-schedule-metadata-run'),
       encode({ id: 'retention-schedule-metadata', occurrence: 1_767_225_600_000 }),
     );
+    await storage.put(
+      KEYS.scheduleRunLink('retention-schedule-metadata-run'),
+      encode({ id: 'retention-schedule-metadata', occurrence: 1_767_225_600_000 }),
+    );
+    await storage.put(
+      KEYS.scheduleRunBySchedule('retention-schedule-metadata', 'retention-schedule-metadata-run'),
+      new Uint8Array(0),
+    );
 
     await runRetentionSweep(
       getInternals(engine),
@@ -771,6 +793,15 @@ describe('ctx.services — terminal cleanup', () => {
     );
 
     expect(await storage.get(KEYS.scheduleRun('retention-schedule-metadata-run'))).toBeNull();
+    expect(await storage.get(KEYS.scheduleRunLink('retention-schedule-metadata-run'))).toBeNull();
+    expect(
+      await storage.get(
+        KEYS.scheduleRunBySchedule(
+          'retention-schedule-metadata',
+          'retention-schedule-metadata-run',
+        ),
+      ),
+    ).toBeNull();
     await engine[Symbol.asyncDispose]();
   });
 });
@@ -895,7 +926,7 @@ describe('ctx.services — scheduled workflow (engine.schedule)', () => {
     });
   }
 
-  it('re-provides queued-drain schedule context with no occurrence across recovery', async () => {
+  it('re-provides queued-drain schedule context with its occurrence across recovery', async () => {
     const storage = new MemoryStorage();
     const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
     const liveScheduleContexts: unknown[] = [];
@@ -928,7 +959,8 @@ describe('ctx.services — scheduled workflow (engine.schedule)', () => {
     const firstDescription = await schedule.describe();
     await tickEngine(firstEngine, clock, firstDescription.nextFireAt!);
     const secondDescription = await schedule.describe();
-    await tickEngine(firstEngine, clock, secondDescription.nextFireAt!);
+    const queuedOccurrence = secondDescription.nextFireAt!;
+    await tickEngine(firstEngine, clock, queuedOccurrence);
 
     const runningRuns = await firstEngine.list({ status: 'running' });
     const firstRun = runningRuns.items[0]!;
@@ -936,7 +968,10 @@ describe('ctx.services — scheduled workflow (engine.schedule)', () => {
     await waitForCondition(() => liveScheduleContexts.length === 2, {
       label: 'queued scheduled run drains',
     });
-    expect(liveScheduleContexts[1]).toEqual({ id: 'scheduled-queue-drain-recovery-schedule' });
+    expect(liveScheduleContexts[1]).toEqual({
+      id: 'scheduled-queue-drain-recovery-schedule',
+      occurrence: queuedOccurrence,
+    });
     await firstEngine[Symbol.asyncDispose]();
 
     const recoveredScheduleContexts: unknown[] = [];
@@ -953,7 +988,9 @@ describe('ctx.services — scheduled workflow (engine.schedule)', () => {
 
     const handles = await secondEngine.recoverAll();
     expect(handles).toHaveLength(1);
-    expect(recoveredScheduleContexts).toEqual([{ id: 'scheduled-queue-drain-recovery-schedule' }]);
+    expect(recoveredScheduleContexts).toEqual([
+      { id: 'scheduled-queue-drain-recovery-schedule', occurrence: queuedOccurrence },
+    ]);
     await handles[0]!.signal('release');
     expect(await handles[0]!.result()).toBe('second-engine');
     await secondEngine[Symbol.asyncDispose]();
@@ -1248,6 +1285,10 @@ describe('ctx.services — scheduled workflow (engine.schedule)', () => {
     expect(executions).toEqual(['ran']);
     expect(firedWorkflowIds).toHaveLength(1);
     expect(await storage.get(KEYS.terminalCleanupNeeded(firedWorkflowIds[0]!))).not.toBeNull();
+    expect(await storage.get(KEYS.scheduleRunLink(firedWorkflowIds[0]!))).not.toBeNull();
+    expect(
+      await storage.get(KEYS.scheduleRunBySchedule(description.id, firedWorkflowIds[0]!)),
+    ).not.toBeNull();
     await storage.put(
       KEYS.scheduleRun(firedWorkflowIds[0]!),
       encode({ id: description.id, occurrence: description.nextFireAt! }),
@@ -1258,6 +1299,10 @@ describe('ctx.services — scheduled workflow (engine.schedule)', () => {
     await engine.scheduler.tick(clock.now + 90_000);
     expect(await storage.get(KEYS.terminalCleanupNeeded(firedWorkflowIds[0]!))).toBeNull();
     expect(await storage.get(KEYS.scheduleRun(firedWorkflowIds[0]!))).toBeNull();
+    expect(await storage.get(KEYS.scheduleRunLink(firedWorkflowIds[0]!))).not.toBeNull();
+    expect(
+      await storage.get(KEYS.scheduleRunBySchedule(description.id, firedWorkflowIds[0]!)),
+    ).not.toBeNull();
     await engine[Symbol.asyncDispose]();
   });
 

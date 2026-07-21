@@ -160,6 +160,8 @@ describe('WEFT_RESERVED_KEY_PREFIXES', () => {
       KEYS.schedule('schedule-id'),
       KEYS.scheduleTick(1, 'schedule-id'),
       KEYS.scheduleRun('workflow-id'),
+      KEYS.scheduleRunLink('workflow-id'),
+      KEYS.scheduleRunBySchedule('schedule-id', 'workflow-id'),
       KEYS.operation('default', 1, 'operation-id'),
       KEYS.operationInflight('operation-id'),
       KEYS.operationQueued('operation-id'),
@@ -853,5 +855,15 @@ describe('KEYS', () => {
     expect(KEYS.workflowVisibilityMetaVersion()).toBe('wf-idx-meta:version');
     expect(KEYS.workflowVisibilityMetaBuiltAt()).toBe('wf-idx-meta:built-at');
     expect(KEYS.workflowVisibilityMetaCursor()).toBe('wf-idx-meta:cursor');
+  });
+
+  it('encodes both dimensions of the schedule-run reverse index', () => {
+    expect(KEYS.scheduleRunLink('workflow:id')).toBe('schedule-run-link:workflow%3Aid');
+    expect(KEYS.scheduleRunBySchedulePrefix('schedule:id')).toBe(
+      'schedule-run-by-schedule:schedule%3Aid:',
+    );
+    expect(KEYS.scheduleRunBySchedule('schedule:id', 'workflow:id')).toBe(
+      'schedule-run-by-schedule:schedule%3Aid:workflow%3Aid',
+    );
   });
 });

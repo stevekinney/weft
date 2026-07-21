@@ -15,10 +15,11 @@ describe('normalizeListFilter', () => {
       expect(normalizeListFilter(undefined)).toEqual({});
     });
 
-    it('accepts the full filter shape (status/type/tags/attributes/limit/offset)', () => {
+    it('accepts the full filter shape', () => {
       const filter: ListFilter = {
         status: ['running', 'pending'],
         type: 'order',
+        scheduleId: 'daily-report',
         tags: ['nightly'],
         attributes: [{ key: 'customerId', value: 'acme' }],
         limit: 20,
@@ -29,6 +30,10 @@ describe('normalizeListFilter', () => {
 
     it('rejects unknown top-level keys', () => {
       expect(() => normalizeListFilter({ unknown: 1 })).toThrow(ListFilterValidationError);
+    });
+
+    it('rejects an empty schedule id', () => {
+      expect(() => normalizeListFilter({ scheduleId: '' })).toThrow(ListFilterValidationError);
     });
   });
 

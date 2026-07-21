@@ -355,13 +355,38 @@ function decodeScheduleCurrentWorkflowId(
 function decodeScheduleQueuedRuns(
   decoded: Record<string, unknown>,
   scheduleId: string,
-): number | null {
+): ScheduleState['queuedRuns'] | null {
   const queuedRuns = decoded['queuedRuns'];
-  if (typeof queuedRuns !== 'number' || !Number.isSafeInteger(queuedRuns) || queuedRuns < 0) {
+  if (!Array.isArray(queuedRuns)) {
     rejectInvalidScheduleRecord(scheduleId, 'with invalid queuedRuns');
     return null;
   }
-  return queuedRuns;
+
+  const result: ScheduleState['queuedRuns'] = [];
+  const workflowIds = new Set<string>();
+  for (const queuedRun of queuedRuns) {
+    if (!isRecord(queuedRun)) {
+      rejectInvalidScheduleRecord(scheduleId, 'with invalid queuedRuns');
+      return null;
+    }
+    const { workflowId, queuedAt, occurrence } = queuedRun;
+    if (
+      !isValidScheduleIdentifier(workflowId) ||
+      !isValidScheduleTimestamp(queuedAt) ||
+      (occurrence !== undefined && !isValidScheduleTimestamp(occurrence))
+    ) {
+      rejectInvalidScheduleRecord(scheduleId, 'with invalid queuedRuns');
+      return null;
+    }
+    if (workflowIds.has(workflowId)) {
+      rejectInvalidScheduleRecord(scheduleId, 'with duplicate queued workflow ids');
+      return null;
+    }
+    workflowIds.add(workflowId);
+
+    result.push({ workflowId, queuedAt, ...(occurrence !== undefined && { occurrence }) });
+  }
+  return result;
 }
 
 function decodeScheduleMissedFireCount(
@@ -434,6 +459,12 @@ export function decodeScheduleRuntimeFields(
 
   const queueFields = decodeScheduleQueueFields(decoded, scheduleId);
   if (queueFields === null) return null;
+  if (
+    currentWorkflow.value !== undefined &&
+    queueFields.queuedRuns.some((queuedRun) => queuedRun.workflowId === currentWorkflow.value)
+  ) {
+    return rejectInvalidScheduleRecord(scheduleId, 'whose current workflow is also queued');
+  }
 
   return {
     ...optionFields,

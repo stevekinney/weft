@@ -38,10 +38,9 @@ export class ScheduleFiredEvent extends Event {
   /** Wall-clock time the run was launched, from the engine's injected clock. */
   readonly firedAt: number;
   /**
-   * The scheduled grid timestamp the occurrence was due. `undefined` for a run
-   * that drained from the `queue` overlap policy: a queued occurrence is tracked
-   * only as a count (`queuedRuns`), so its original due timestamp is not retained
-   * and cannot be reported when the run finally launches.
+   * The scheduled grid timestamp the occurrence was due. Queue overlap retains
+   * this timestamp on the durable queue entry and reports it when the run drains.
+   * It is undefined only when an internal caller did not supply an occurrence.
    */
   readonly occurrence: number | undefined;
 

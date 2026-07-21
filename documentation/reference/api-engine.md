@@ -322,10 +322,16 @@ Registered `ctx.onCancel()` handlers run after the cancelled terminal state is d
 async list(filter?: ListFilter): Promise<PaginatedResult<WorkflowSummary>>
 ```
 
-List workflows with optional filtering and pagination. Scans all persisted workflow state and applies filters in memory.
+List workflows with optional filtering and pagination. Indexed filters narrow the
+candidate set before the engine loads and verifies workflow state. `scheduleId`
+uses the durable schedule-run reverse index and returns both active and terminal
+runs until retention or purge removes each workflow. Results keep the canonical
+`createdAt` descending, `id` ascending tie-break ordering before `limit`/`offset`
+pagination.
 
 ```ts partial
 const running = await engine.list({ status: 'running', limit: 20 });
+const recentScheduleRuns = await engine.list({ scheduleId: 'daily-report', limit: 20 });
 ```
 
 ### `getHandle()`
@@ -421,7 +427,16 @@ Replace a schedule's cron or interval cadence and optionally update `description
 
 `description` accepts strings, including an empty string; `null` is invalid. Passing `undefined` or omitting a property leaves the stored value unchanged. Jitter likewise remains unchanged when omitted. Updating an active schedule replaces its next timer using the new cadence and jitter; updating a paused schedule keeps it paused and does not arm a timer. A new overlap policy applies to future ticks, while occurrences already accepted under `overlap: 'queue'` still drain after the current run finishes.
 
-When inline `resolveWorkflowServices` is configured, each scheduled occurrence resolves services before its workflow body can run. An available result is installed as `ctx.services`; an unavailable result or resolver throw fails only that occurrence and does not pause the schedule. New scheduled runs persist `info.schedule`, so recovery receives the same schedule id and known occurrence timestamp as the live launch path. Queue-drained runs expose `schedule.id` with `schedule.occurrence === undefined` because the original grid timestamp is not retained, and older persisted runs that predate this metadata may omit `info.schedule`.
+For `overlap: 'queue'`, `ScheduleSummary.queuedRuns` is an ordered array of
+`{ workflowId, queuedAt, occurrence? }`. The workflow ID is reserved when the
+occurrence enters the durable queue and is used when it eventually starts; no
+workflow record exists for that ID while it is waiting. Pausing or cancelling a
+schedule discards its pending queue. Cadence and overlap updates preserve
+already-accepted queued occurrences; a new overlap policy governs future ticks
+while the existing queue continues to drain. Schedule records use this array
+shape exactly; numeric queue-count records are not accepted.
+
+When inline `resolveWorkflowServices` is configured, each scheduled occurrence resolves services before its workflow body can run. An available result is installed as `ctx.services`; an unavailable result or resolver throw fails only that occurrence and does not pause the schedule. Scheduled runs persist `info.schedule`, so recovery receives the same schedule id and occurrence timestamp as the live launch path, including after a queued occurrence drains. Runs from older stores that predate this metadata may omit `info.schedule` or its occurrence.
 
 ### `scheduler` (getter)
 
@@ -615,7 +630,7 @@ interface EngineOptions {
 }
 ```
 
-See [Configuration](./configuration.md) for defaults and Worker execution hardening options. `interceptors` is equivalent to registering each entry with `addInterceptor()` during construction. Explicit `workflowExecutionMode: 'worker'` is the untrusted workflow posture; inline execution remains available for trusted deployments. `resolveWorkflowServices` rebuilds services for recovered inline runs that were launched with `StartOptions.services`; its `info.launchOptions` includes the workflow id and current tags when present. When configured, it is also consulted for scheduled inline occurrences before their workflow bodies run, with `info.schedule` carrying the schedule id and occurrence timestamp when available. Newly launched scheduled runs preserve that schedule context across recovery; queue-drained runs and older persisted runs may omit `schedule.occurrence` or `info.schedule` as described under [`schedule()`](#schedule).
+See [Configuration](./configuration.md) for defaults and Worker execution hardening options. `interceptors` is equivalent to registering each entry with `addInterceptor()` during construction. Explicit `workflowExecutionMode: 'worker'` is the untrusted workflow posture; inline execution remains available for trusted deployments. `resolveWorkflowServices` rebuilds services for recovered inline runs that were launched with `StartOptions.services`; its `info.launchOptions` includes the workflow id and current tags when present. When configured, it is also consulted for scheduled inline occurrences before their workflow bodies run, with `info.schedule` carrying the schedule id and occurrence timestamp when available. New scheduled runs preserve that schedule context across recovery, including queue-drained runs, as described under [`schedule()`](#schedule).
 
 ### `StartOptions`
 
@@ -649,6 +664,7 @@ interface StartOptions {
 interface ListFilter {
   status?: WorkflowStatus | WorkflowStatus[];
   type?: string;
+  scheduleId?: string;
   attributes?: AttributeFilter[];
   limit?: number;
   offset?: number;

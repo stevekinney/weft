@@ -42,7 +42,7 @@ function createScheduleRecord(overrides: Record<string, unknown> = {}): Record<s
     createdAt: 1,
     updatedAt: 2,
     nextFireAt: 3,
-    queuedRuns: 0,
+    queuedRuns: [],
     ...overrides,
   };
 }
@@ -390,6 +390,41 @@ describe('engine validation helpers', () => {
         decodeScheduleRuntimeFields(createScheduleRecord({ queuedRuns: -1 }), 'schedule-id'),
       ).toBeNull();
       expect(
+        decodeScheduleRuntimeFields(createScheduleRecord({ queuedRuns: 1 }), 'schedule-id'),
+      ).toBeNull();
+      expect(
+        decodeScheduleRuntimeFields(
+          createScheduleRecord({ queuedRuns: [{ workflowId: '', queuedAt: 3 }] }),
+          'schedule-id',
+        ),
+      ).toBeNull();
+      expect(
+        decodeScheduleRuntimeFields(
+          createScheduleRecord({ queuedRuns: [{ workflowId: 'queued-run', queuedAt: -1 }] }),
+          'schedule-id',
+        ),
+      ).toBeNull();
+      expect(
+        decodeScheduleRuntimeFields(
+          createScheduleRecord({
+            queuedRuns: [
+              { workflowId: 'queued-run', queuedAt: 1 },
+              { workflowId: 'queued-run', queuedAt: 2 },
+            ],
+          }),
+          'schedule-id',
+        ),
+      ).toBeNull();
+      expect(
+        decodeScheduleRuntimeFields(
+          createScheduleRecord({
+            currentWorkflowId: 'queued-run',
+            queuedRuns: [{ workflowId: 'queued-run', queuedAt: 1 }],
+          }),
+          'schedule-id',
+        ),
+      ).toBeNull();
+      expect(
         decodeScheduleRuntimeFields(createScheduleRecord({ lastMissedFireAt: -1 }), 'schedule-id'),
       ).toBeNull();
       expect(
@@ -406,6 +441,7 @@ describe('engine validation helpers', () => {
             currentWorkflowId: 'child-workflow',
             missedFireCount: 4,
             jitterMs: 30_000,
+            queuedRuns: [{ workflowId: 'queued-run', queuedAt: 2, occurrence: 3 }],
           }),
           'schedule-id',
         ),
@@ -418,7 +454,7 @@ describe('engine validation helpers', () => {
         nextFireAt: 3,
         currentWorkflowId: 'child-workflow',
         missedFireCount: 4,
-        queuedRuns: 0,
+        queuedRuns: [{ workflowId: 'queued-run', queuedAt: 2, occurrence: 3 }],
         jitterMs: 30_000,
       } satisfies Pick<
         ScheduleState,

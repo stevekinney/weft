@@ -89,7 +89,7 @@ function createFullSurfaceResponses(
       createdAt: 1,
       updatedAt: 1,
       nextFireAt: 2,
-      queuedRuns: 0,
+      queuedRuns: [],
     }),
     new Response(null, { status: 204 }),
     new Response(null, { status: 204 }),
@@ -106,7 +106,7 @@ function createFullSurfaceResponses(
       createdAt: 1,
       updatedAt: 1,
       nextFireAt: 2,
-      queuedRuns: 0,
+      queuedRuns: [],
     }),
     jsonResponse({ priority: 'high' }),
     new Response(null, { status: 204 }),
@@ -123,7 +123,7 @@ function createFullSurfaceResponses(
           createdAt: 1,
           updatedAt: 1,
           nextFireAt: 2,
-          queuedRuns: 0,
+          queuedRuns: [],
         },
       ],
       total: 1,
@@ -231,6 +231,7 @@ async function exerciseWorkflowClientRequests(httpClient: HttpClient): Promise<v
   await httpClient.list({
     status: ['running', 'completed'],
     type: 'echo',
+    scheduleId: 'daily-report',
     limit: 5,
     offset: 2,
     attributes: [
@@ -437,6 +438,7 @@ function assertFilterAndFollowupCalls(fetchCalls: FetchCall[]): void {
   const listUrl = new URL(listCall.url);
   expect(listUrl.searchParams.getAll('status')).toEqual(['running', 'completed']);
   expect(listUrl.searchParams.get('type')).toBe('echo');
+  expect(listUrl.searchParams.get('schedule_id')).toBe('daily-report');
   expect(listUrl.searchParams.get('limit')).toBe('5');
   expect(listUrl.searchParams.get('offset')).toBe('2');
   expect(listUrl.searchParams.get('attr.priority')).toBe('high');
@@ -1650,7 +1652,7 @@ describe('HttpClient request surface', () => {
           createdAt: 1,
           updatedAt: 2,
           nextFireAt: 3,
-          queuedRuns: 0,
+          queuedRuns: [],
         });
       }) as typeof fetch;
 

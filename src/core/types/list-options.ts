@@ -49,6 +49,8 @@ export interface ListFilter {
    * ```
    */
   type?: string;
+  /** Match workflow runs launched by this recurring schedule. */
+  scheduleId?: string;
   /** Match workflows that carry every listed tag. */
   tags?: string[];
   /** Filter on indexed search attributes (equality, string any-of, or range). */

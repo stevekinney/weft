@@ -24,6 +24,7 @@ import {
   matchesListFilter,
 } from './state-utilities.ts';
 import { decodeWorkflowState } from './validation.ts';
+import { MAX_LIST_SCAN_ROWS, WorkflowListScanCapExceededError } from './workflow-indexes.ts';
 
 const ATTRIBUTE_SCAN_CONCURRENCY = 8;
 
@@ -98,7 +99,7 @@ async function readSearchAttributesForFilter(
   return decodeSearchAttributeRecord(await internals.storage.get(KEYS.attribute(workflowId)));
 }
 
-/** Resolve the indexed workflow IDs implied by tag and search-attribute filters. */
+/** Resolve indexed workflow IDs implied by schedule, tag, and search-attribute filters. */
 export async function resolveConstrainedIds(
   internals: EngineInternals,
   filter: ListFilter | undefined,
@@ -107,12 +108,18 @@ export async function resolveConstrainedIds(
   const attributeFilters = filter?.attributes;
   const hasAttributeFilters = attributeFilters !== undefined && attributeFilters.length > 0;
   const hasTagFilters = normalizedTagFilters !== undefined && normalizedTagFilters.length > 0;
+  const hasScheduleFilter = filter?.scheduleId !== undefined;
 
-  if (!hasAttributeFilters && !hasTagFilters) {
+  if (!hasAttributeFilters && !hasTagFilters && !hasScheduleFilter) {
     return null;
   }
 
-  const queries = buildConstrainedIdQueries(internals, normalizedTagFilters, attributeFilters);
+  const queries = buildConstrainedIdQueries(
+    internals,
+    normalizedTagFilters,
+    attributeFilters,
+    filter?.scheduleId,
+  );
   return intersectIdentifierSets(await runConstrainedIdQueries(queries));
 }
 
@@ -138,13 +145,33 @@ function buildConstrainedIdQueries(
   internals: EngineInternals,
   normalizedTagFilters: readonly string[] | undefined,
   attributeFilters: readonly AttributeFilter[] | undefined,
+  scheduleId: string | undefined,
 ): Array<() => Promise<Set<string>>> {
   return [
+    ...(scheduleId === undefined ? [] : [() => queryScheduleRunIndex(internals, scheduleId)]),
     ...(normalizedTagFilters?.map((tag) => () => queryTagIndex(internals, tag)) ?? []),
     ...(attributeFilters?.map(
       (attributeFilter) => () => queryAttributeIndex(internals, attributeFilter),
     ) ?? []),
   ];
+}
+
+/** Resolve the durable reverse index from a schedule id to launched workflow ids. */
+export async function queryScheduleRunIndex(
+  internals: EngineInternals,
+  scheduleId: string,
+): Promise<Set<string>> {
+  const workflowIds = new Set<string>();
+  const prefix = KEYS.scheduleRunBySchedulePrefix(scheduleId);
+  for await (const [key] of internals.storage.scan(prefix)) {
+    if (workflowIds.size >= MAX_LIST_SCAN_ROWS) {
+      throw new WorkflowListScanCapExceededError(MAX_LIST_SCAN_ROWS);
+    }
+    const encodedWorkflowId = key.slice(prefix.length);
+    const workflowId = tryDecodeStorageKeyComponent(encodedWorkflowId);
+    if (workflowId !== null) workflowIds.add(workflowId);
+  }
+  return workflowIds;
 }
 
 async function runConstrainedIdQueries(

@@ -70,7 +70,7 @@ _Signal and update events:_
 
 _Schedule events:_
 
-- `ScheduleFiredEvent` (`'schedule:fired'`) -- carries `scheduleId`, `workflowId`, `firedAt`, and `occurrence`. Dispatched each time a schedule launches an occurrence — a fresh cadence tick, a `cancel-running` replacement, or a `queue`d run draining after the previous one finished. A fire means a run actually started, so the blocked policies (`skip`, and `queue` while a run is already active) do **not** emit. `occurrence` is the scheduled grid timestamp the run was due, or `undefined` for a `queue`-drained run whose original timestamp is not retained. Delivery is process-local and best-effort after the durable start commit: a crash after the run is committed but before synchronous event dispatch can drop the notification without affecting the run. This lets a consumer react to a firing without polling `engine.list()` or `getSchedule()`.
+- `ScheduleFiredEvent` (`'schedule:fired'`) -- carries `scheduleId`, `workflowId`, `firedAt`, and `occurrence`. Dispatched each time a schedule launches an occurrence — a fresh cadence tick, a `cancel-running` replacement, or a `queue`d run draining after the previous one finished. A fire means a run actually started, so the blocked policies (`skip`, and `queue` while a run is already active) do **not** emit. `occurrence` is the scheduled grid timestamp the run was due, including for queue-drained runs because their durable queue entries retain it. Delivery is process-local and best-effort after the durable start commit: a crash after the run is committed but before synchronous event dispatch can drop the notification without affecting the run. This lets a consumer react to a firing without polling `engine.list()` or `getSchedule()`.
 
 _Operational events:_
 

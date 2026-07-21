@@ -5,7 +5,7 @@ import { normalizeWorkflowTags } from './workflow-tags.ts';
 const ID_PREFIX_MIN_LENGTH = 3;
 
 export const BULK_WORKFLOW_FILTER_ERROR_MESSAGE =
-  'Field "filter" must include at least one of status, type, tags, attributes, idPrefix (≥3 chars), or failureCategory paired with status';
+  'Field "filter" must include at least one of status, type, scheduleId, tags, attributes, idPrefix (≥3 chars), or failureCategory paired with status';
 
 /**
  * Discriminant for the closed set of `ListFilter` dimensions that, on
@@ -13,7 +13,7 @@ export const BULK_WORKFLOW_FILTER_ERROR_MESSAGE =
  * and the three time-range fields are intentionally absent — they require
  * pairing with one of these scopes.
  */
-type BulkFilterDimension = 'status' | 'type' | 'tags' | 'attributes' | 'idPrefix';
+type BulkFilterDimension = 'status' | 'type' | 'scheduleId' | 'tags' | 'attributes' | 'idPrefix';
 
 type BulkFilterDimensionCheck = (filter: ListFilter) => boolean;
 
@@ -25,6 +25,10 @@ function hasScopedStatusFilter(filter: ListFilter): boolean {
 
 function hasScopedTypeFilter(filter: ListFilter): boolean {
   return filter.type !== undefined && filter.type.trim().length > 0;
+}
+
+function hasScopedScheduleFilter(filter: ListFilter): boolean {
+  return filter.scheduleId !== undefined && filter.scheduleId.trim().length > 0;
 }
 
 function hasScopedTagsFilter(filter: ListFilter): boolean {
@@ -58,6 +62,7 @@ function hasScopedIdPrefix(filter: ListFilter): boolean {
 const BULK_FILTER_DIMENSION_CHECKS = {
   status: hasScopedStatusFilter,
   type: hasScopedTypeFilter,
+  scheduleId: hasScopedScheduleFilter,
   tags: hasScopedTagsFilter,
   attributes: hasScopedAttributesFilter,
   idPrefix: hasScopedIdPrefix,
@@ -70,6 +75,7 @@ const BULK_FILTER_DIMENSION_CHECKS = {
  * Valid scopes:
  * - `status` (non-empty after normalization).
  * - `type` (non-empty after trim).
+ * - `scheduleId` (non-empty after trim).
  * - `tags` (at least one tag after normalization).
  * - `attributes` (at least one attribute predicate with a non-empty key).
  * - `idPrefix` (length ≥ 3 — short prefixes match too much to be a safe scope).

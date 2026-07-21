@@ -189,13 +189,5 @@ async function scheduleFromWorkflowState(
     return metadata;
   }
 
-  if (
-    metadata.occurrence === undefined &&
-    scheduleState.overlap === 'queue' &&
-    scheduleState.queuedRuns > 0
-  ) {
-    return metadata;
-  }
-
   return null;
 }

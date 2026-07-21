@@ -131,7 +131,7 @@ describe('schedule:fired event', () => {
     await releaseRunningWorkflows(engine);
   });
 
-  it('does NOT fire at queue-time under queue, but fires the queued run at drain with occurrence undefined', async () => {
+  it('does NOT fire at queue-time under queue, but preserves the occurrence when the run drains', async () => {
     const clock = { now: START };
     engine = createEngine(clock);
     const fired = recordFiredEvents(engine);
@@ -159,8 +159,7 @@ describe('schedule:fired event', () => {
     // Release the active run; the queued occurrence now drains and launches.
     await releaseRunningWorkflows(engine);
     expect(fired).toHaveLength(2);
-    // The queued run's original grid timestamp is not retained.
-    expect(fired[1]!.occurrence).toBeUndefined();
+    expect(fired[1]!.occurrence).toBe(START + 2 * MINUTE);
     expect(fired[1]!.workflowId).not.toBe(fired[0]!.workflowId);
 
     await releaseRunningWorkflows(engine);

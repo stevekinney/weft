@@ -202,6 +202,42 @@ describe('serve() — POST /jsonrpc', () => {
     }
   });
 
+  it('dispatches the originating schedule filter over JSON-RPC', async () => {
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+    createdEngines.push(engine);
+    engine.register(holdWorkflow);
+    const scheduled = await engine.start('hold', null, { id: 'json-rpc-scheduled-run' });
+    await engine.start('hold', null, { id: 'json-rpc-unrelated-run' });
+    await storage.put(
+      KEYS.scheduleRunLink(scheduled.id),
+      encode({ id: 'json-rpc-schedule', occurrence: 1_000 }),
+    );
+    await storage.put(
+      KEYS.scheduleRunBySchedule('json-rpc-schedule', scheduled.id),
+      new Uint8Array(0),
+    );
+    server = serve({ engine, port: 0 });
+
+    const response = await fetch(`${server.url}/jsonrpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 13,
+        method: 'weft.workflows.list',
+        params: { scheduleId: 'json-rpc-schedule' },
+      }),
+    });
+    const body = (await response.json()) as {
+      result?: { items: Array<{ id: string }> };
+      error?: unknown;
+    };
+
+    expect(body.error).toBeUndefined();
+    expect(body.result?.items.map((item) => item.id)).toEqual(['json-rpc-scheduled-run']);
+  });
+
   it('rejects weft.workflows.list unsupported include parameters', async () => {
     const engine = createHoldEngine();
     server = serve({ engine, port: 0 });

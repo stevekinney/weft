@@ -57,6 +57,7 @@ const listIncludeSchema = z
 const listWorkflowsInput = z.object({
   status: z.union([workflowStatusSchema, z.array(workflowStatusSchema)]).optional(),
   type: z.string().optional(),
+  scheduleId: z.string().min(1).optional(),
   tags: z.array(z.string()).optional(),
   attributes: z.array(attributeFilterSchema).optional(),
   limit: z.number().int().min(1).max(1000).optional(),
@@ -78,8 +79,9 @@ export const listWorkflowsOperation = defineOperation<ListWorkflowsInput, ListWo
   mcpExposable: false,
   summary: 'List workflows',
   description:
-    'List workflows visible to the caller, optionally filtered by status, type, tags, id ' +
-    'prefix, failure category, and time range, with pagination via `limit`/`offset`. ' +
+    'List workflows visible to the caller, optionally filtered by status, type, originating ' +
+    'schedule, tags, id prefix, failure category, and time range, with pagination via ' +
+    '`limit`/`offset`. ' +
     'Read-only. Returns the matching workflow summaries in the engine default ordering.',
   destructive: false,
   tags: ['Workflows'],
@@ -192,6 +194,7 @@ export const listWorkflowsRestBinding: UnknownRestBinding = {
   inputSources: {
     status: { kind: 'query', queryParam: 'status', repeating: true },
     type: { kind: 'query', queryParam: 'type' },
+    scheduleId: { kind: 'query', queryParam: 'schedule_id' },
     tags: { kind: 'query', queryParam: 'tag', repeating: true },
     limit: { kind: 'query', queryParam: 'limit' },
     offset: { kind: 'query', queryParam: 'offset' },

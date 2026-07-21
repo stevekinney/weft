@@ -38,7 +38,7 @@ function createScheduleState(overrides: Partial<ScheduleState> = {}): ScheduleSt
     missedFireCount: 0,
     nextFireAt: 2_000,
     overlap: 'skip',
-    queuedRuns: 0,
+    queuedRuns: [],
     status: 'active',
     updatedAt: 1_000,
     workflowType: 'workflow',

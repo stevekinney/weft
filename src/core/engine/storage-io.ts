@@ -247,7 +247,11 @@ function buildScheduleTimerReplacementOperations(
 export async function writeScheduleState(
   internals: EngineInternals,
   state: ScheduleState,
-  options?: { includeTimer?: boolean; replaceTimerFrom?: ScheduleState },
+  options?: {
+    includeTimer?: boolean;
+    replaceTimerFrom?: ScheduleState;
+    additionalOperations?: BatchOperation[];
+  },
 ): Promise<void> {
   const operations: BatchOperation[] = [
     { type: 'put', key: KEYS.schedule(state.id), value: encode(state) },
@@ -257,6 +261,8 @@ export async function writeScheduleState(
   operations.push(
     ...buildScheduleTimerReplacementOperations(state, includeTimer, options?.replaceTimerFrom),
   );
+
+  operations.push(...(options?.additionalOperations ?? []));
 
   await commitFencedEngineWrite(
     internals,

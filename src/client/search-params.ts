@@ -50,20 +50,23 @@ function appendAttributeFilters(
   }
 }
 
+function appendOptionalSearchParameter(
+  params: URLSearchParams,
+  key: 'type' | 'schedule_id' | 'limit' | 'offset',
+  value: string | number | undefined,
+): void {
+  if (value !== undefined) params.set(key, String(value));
+}
+
 export function buildWorkflowListSearchParams(filter?: ListFilter): URLSearchParams {
   const params = new URLSearchParams();
 
   appendStatusFilters(params, filter?.status);
-  if (filter?.type !== undefined) {
-    params.set('type', filter.type);
-  }
+  appendOptionalSearchParameter(params, 'type', filter?.type);
+  appendOptionalSearchParameter(params, 'schedule_id', filter?.scheduleId);
   appendTagFilters(params, filter?.tags);
-  if (filter?.limit !== undefined) {
-    params.set('limit', String(filter.limit));
-  }
-  if (filter?.offset !== undefined) {
-    params.set('offset', String(filter.offset));
-  }
+  appendOptionalSearchParameter(params, 'limit', filter?.limit);
+  appendOptionalSearchParameter(params, 'offset', filter?.offset);
   appendAttributeFilters(params, filter?.attributes);
 
   return params;

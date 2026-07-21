@@ -38,7 +38,7 @@ function makeScheduleState(
     overlap?: ScheduleState['overlap'];
     workflowType?: string;
     nextFireAt?: number;
-    queuedRuns?: number;
+    queuedRuns?: ScheduleState['queuedRuns'];
   } = {},
 ): ScheduleState {
   return {
@@ -53,7 +53,7 @@ function makeScheduleState(
     updatedAt: 1,
     nextFireAt: options.nextFireAt ?? 60_001,
     missedFireCount: 0,
-    queuedRuns: options.queuedRuns ?? 0,
+    queuedRuns: options.queuedRuns ?? [],
     ...(options.currentWorkflowId !== undefined
       ? { currentWorkflowId: options.currentWorkflowId }
       : {}),
@@ -236,31 +236,6 @@ describe('reprovideRecoveredServices', () => {
     await reprovideRecoveredServices(internals, makeState(), async () => {}, noopCommitError);
 
     expect(seenSchedule).toBeUndefined();
-  });
-
-  it('passes queued-drain schedule context during the post-start schedule-state crash window', async () => {
-    let seenSchedule: unknown = 'not-called';
-    const { internals, storage } = makeInternals({
-      resolver: (info) => {
-        seenSchedule = info.schedule;
-        return { status: 'available', services: {} };
-      },
-    });
-    await storage.put(KEYS.scheduleRun('run-1'), encode({ id: 'queued-crash-window' }));
-    await storage.put(
-      KEYS.schedule('queued-crash-window'),
-      encode(
-        makeScheduleState('queued-crash-window', {
-          currentWorkflowId: 'terminal-previous-run',
-          overlap: 'queue',
-          queuedRuns: 1,
-        }),
-      ),
-    );
-
-    await reprovideRecoveredServices(internals, makeState(), async () => {}, noopCommitError);
-
-    expect(seenSchedule).toEqual({ id: 'queued-crash-window' });
   });
 
   it('ignores malformed schedule-run metadata during services recovery', async () => {

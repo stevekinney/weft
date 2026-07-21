@@ -7,6 +7,7 @@ import { describe, expect, it } from 'bun:test';
 import type { Engine } from '../../core/engine.ts';
 import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
+import { KEYS } from '../../storage/interface.ts';
 import { handleRequest } from '../handler.ts';
 import { createJsonRequest } from '../http-request.test-support.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
@@ -60,6 +61,36 @@ function bulkAdminHandlerOptions(customRegistry = registry) {
 }
 
 describe('weft.workflows.bulk.cancel', () => {
+  it('previews only workflows launched by the selected schedule', async () => {
+    using engine = createEngine();
+    const selectedWorkflowId = 'bulk-cancel-scheduled';
+    const unrelatedWorkflowId = 'bulk-cancel-unscheduled';
+    await engine.start('waiting', undefined, { id: selectedWorkflowId });
+    await engine.start('waiting', undefined, { id: unrelatedWorkflowId });
+    await Promise.all([
+      waitForStatus(engine, selectedWorkflowId, 'running'),
+      waitForStatus(engine, unrelatedWorkflowId, 'running'),
+    ]);
+    await engine.storage.put(
+      KEYS.scheduleRunBySchedule('nightly-orders', selectedWorkflowId),
+      new Uint8Array(),
+    );
+
+    const previewResponse = await handleRequest(
+      request('/v1/workflows/bulk/cancel', {
+        filter: { scheduleId: 'nightly-orders' },
+        dryRun: true,
+      }),
+      engine,
+      bulkAdminHandlerOptions(),
+    );
+
+    expect(previewResponse.status).toBe(200);
+    expect(await previewResponse.json()).toEqual(
+      expect.objectContaining({ dryRun: true, action: 'cancel', matched: 1 }),
+    );
+  });
+
   it('returns cancellation counts and cancels matching workflows', async () => {
     using engine = createEngine();
 
@@ -201,7 +232,7 @@ describe('weft.workflows.bulk.cancel', () => {
     expect(response.headers.get('content-type')).toBe('application/json');
     expect(await response.json()).toEqual({
       error:
-        'Field "filter" must include at least one of status, type, tags, attributes, idPrefix (≥3 chars), or failureCategory paired with status',
+        'Field "filter" must include at least one of status, type, scheduleId, tags, attributes, idPrefix (≥3 chars), or failureCategory paired with status',
     });
   });
 

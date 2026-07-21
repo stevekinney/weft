@@ -15,6 +15,28 @@ const registry = createOperationRegistry([aggregateWorkflowsOperation]);
 const bindings = [aggregateWorkflowsRestBinding];
 
 describe('weft.workflows.aggregate', () => {
+  it('passes the REST schedule filter to engine.aggregate', async () => {
+    const engine = new Engine({ storage: new MemoryStorage() });
+    engine.aggregate = async (filter, options) => {
+      expect(filter).toMatchObject({ scheduleId: 'nightly-orders' });
+      expect(options.groupBy).toBe('status');
+      return { total: 0, groups: [], truncated: false };
+    };
+
+    const response = await handleRequest(
+      new Request(
+        'http://localhost/v1/workflows/aggregate?group_by=status&schedule_id=nightly-orders',
+        { method: 'GET' },
+      ),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ total: 0, groups: [], truncated: false });
+    engine[Symbol.dispose]();
+  });
+
   it('maps unknown aggregate attributes to Unprocessable instead of EngineFailure', async () => {
     const engine = new Engine({ storage: new MemoryStorage() });
     engine.register(

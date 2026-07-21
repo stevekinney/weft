@@ -31,6 +31,30 @@ export type ScheduleStatus = 'active' | 'paused' | 'cancelled';
 export type ScheduleOverlapPolicy = 'skip' | 'queue' | 'cancel-running' | 'allow';
 
 /**
+ * One occurrence waiting behind the active run of a `queue` overlap schedule.
+ * `workflowId` is reserved when the occurrence enters the durable queue and is
+ * used when it eventually starts. No workflow record exists for that id until
+ * the queue drains, so `engine.get(workflowId)` returns `null` while it waits.
+ *
+ * @example
+ * ```ts
+ * import type { ScheduleQueuedRun } from '@lostgradient/weft';
+ *
+ * const queuedRun: ScheduleQueuedRun = {
+ *   workflowId: 'daily-report-queued-1',
+ *   queuedAt: Date.now(),
+ * };
+ * void queuedRun;
+ * ```
+ */
+export interface ScheduleQueuedRun {
+  workflowId: string;
+  queuedAt: number;
+  /** Nominal cadence timestamp retained from the occurrence that was queued. */
+  occurrence?: number;
+}
+
+/**
  * Recurrence specification for a schedule. A schedule fires either on a cron
  * cadence (`{ cron: '0 9 * * *' }`) or at a fixed interval
  * (`{ every: '1h' }`). Exactly one of `cron` or `every` must be supplied.
@@ -207,7 +231,8 @@ export interface ScheduleState {
   missedFireCount: number;
   nextFireAt: number | null;
   currentWorkflowId?: string;
-  queuedRuns: number;
+  /** Ordered durable occurrences waiting behind `currentWorkflowId`. */
+  queuedRuns: ScheduleQueuedRun[];
 }
 
 /**
@@ -240,7 +265,8 @@ export interface ScheduleSummary {
   missedFireCount: number;
   nextFireAt: number | null;
   currentWorkflowId?: string;
-  queuedRuns: number;
+  /** Ordered durable occurrences waiting behind `currentWorkflowId`. */
+  queuedRuns: ScheduleQueuedRun[];
 }
 
 /**

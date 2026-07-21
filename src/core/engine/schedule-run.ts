@@ -1,5 +1,6 @@
 import type { BatchOperation } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
+import { encode } from '../codec.ts';
 import { ScheduleFiredEvent } from '../events.ts';
 import type { ScheduleState } from '../types.ts';
 import type { EngineInternals } from './internals.ts';
@@ -7,6 +8,16 @@ import { unavailableServicesError } from './lifecycle/recovered-services.ts';
 import { EMPTY_STORAGE_VALUE } from './lifecycle/shared.ts';
 import { encodeScheduleRunMetadata } from './schedule-run-metadata.ts';
 import type { ScheduleCallbacks } from './schedules.ts';
+
+export type ScheduledRunStartOptions = {
+  occurrence?: number;
+  /** Reserved queue identity. A fresh id is minted when omitted. */
+  workflowId?: string;
+  /** Schedule state committed atomically with the workflow start. */
+  scheduleStateAfterStart?: ScheduleState;
+  /** Prior terminal run whose transient schedule metadata is now settled. */
+  completedWorkflowId?: string;
+};
 
 /**
  * Launch one scheduled occurrence's workflow run and emit `schedule:fired`.
@@ -18,21 +29,32 @@ import type { ScheduleCallbacks } from './schedules.ts';
  * active) never reach here, so they correctly do not fire.
  *
  * `occurrence` is the scheduled grid timestamp the run was due, threaded from the
- * timer loop. It is `undefined` for a `queue`-drained run, whose grid slot was
- * tracked only as a count and whose original timestamp is therefore gone.
+ * timer loop or retained on its durable queue entry until drain.
  */
 export async function startScheduledRun(
   internals: EngineInternals,
   state: ScheduleState,
   callbacks: Pick<ScheduleCallbacks, 'startWorkflow' | 'failWorkflow' | 'handleCleanupError'>,
-  occurrence?: number,
+  options: ScheduledRunStartOptions = {},
 ): Promise<string> {
-  const workflowId = crypto.randomUUID();
+  const workflowId = options.workflowId ?? crypto.randomUUID();
+  const occurrence = options.occurrence;
+  const metadata = encodeScheduleRunMetadata(state.id, occurrence);
   const scheduleRunOperations: BatchOperation[] = [
     {
       type: 'put',
       key: KEYS.scheduleRun(workflowId),
-      value: encodeScheduleRunMetadata(state.id, occurrence),
+      value: metadata,
+    },
+    {
+      type: 'put',
+      key: KEYS.scheduleRunLink(workflowId),
+      value: metadata,
+    },
+    {
+      type: 'put',
+      key: KEYS.scheduleRunBySchedule(state.id, workflowId),
+      value: EMPTY_STORAGE_VALUE,
     },
     {
       type: 'put',
@@ -40,6 +62,20 @@ export async function startScheduledRun(
       value: EMPTY_STORAGE_VALUE,
     },
   ];
+
+  if (options.scheduleStateAfterStart !== undefined) {
+    scheduleRunOperations.push({
+      type: 'put',
+      key: KEYS.schedule(options.scheduleStateAfterStart.id),
+      value: encode(options.scheduleStateAfterStart),
+    });
+  }
+  if (options.completedWorkflowId !== undefined) {
+    scheduleRunOperations.push({
+      type: 'delete',
+      key: KEYS.scheduleRun(options.completedWorkflowId),
+    });
+  }
 
   const resolution = await resolveScheduledRunServices(internals, workflowId, state, occurrence);
 
@@ -79,8 +115,7 @@ export async function startScheduledRun(
   // The run launched, so the occurrence fired. Emit before the unavailable
   // check: a services failure becomes a separate `workflow:failed`, and the
   // natural causal order is fired -> failed. A `startWorkflow` throw skips this
-  // (nothing launched). `occurrence` is undefined for a `queue`-drained run,
-  // whose original grid timestamp is not retained (see ScheduleFiredEvent).
+  // (nothing launched).
   internals.engine.dispatchEvent(
     new ScheduleFiredEvent(state.id, workflowId, internals.options.getNow(), occurrence),
   );

@@ -37,6 +37,8 @@ export const WEFT_RESERVED_KEY_PREFIXES = [
   'review:',
   'schedule:',
   'schedule-due:',
+  'schedule-run-by-schedule:',
+  'schedule-run-link:',
   'schedule-run:',
   'sig:',
   'sigres:',
