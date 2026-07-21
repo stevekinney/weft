@@ -177,6 +177,16 @@ describe('weft.schedules.update', () => {
         error:
           'Field "jitter" is invalid: Duration must resolve to a finite, non-negative number of milliseconds, got: -1',
       },
+      {
+        field: 'jitter',
+        value: 0,
+        error: 'Field "jitter" must resolve to a positive number of milliseconds',
+      },
+      {
+        field: 'jitter',
+        value: '0s',
+        error: 'Field "jitter" must resolve to a positive number of milliseconds',
+      },
     ];
 
     for (const invalidOption of invalidOptions) {
@@ -232,6 +242,43 @@ describe('weft.schedules.update', () => {
           'Field "jitter" is invalid: Invalid duration string: "soon". Expected a number or a string like "30s", "5 minutes", "1 hour", etc.',
       }),
     });
+  });
+
+  it('uses the wire field name for zero jitter over JSON-RPC', async () => {
+    engine = createEngine();
+    await engine.schedule('echo', null, '0 * * * *', {
+      id: 'schedule-update-zero-json-rpc-jitter',
+    });
+
+    for (const jitter of [0, '0s']) {
+      const response = await handleJsonRpcHttpRequest(
+        new Request('http://localhost/jsonrpc', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'weft.schedules.update',
+            params: {
+              scheduleId: 'schedule-update-zero-json-rpc-jitter',
+              cronExpression: '30 * * * *',
+              jitter,
+            },
+          }),
+        }),
+        { registry, engine, principal: anonymousPrincipal() },
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        jsonrpc: '2.0',
+        id: 1,
+        error: expect.objectContaining({
+          code: -32602,
+          message: 'Field "jitter" must resolve to a positive number of milliseconds',
+        }),
+      });
+    }
   });
 
   it('returns 400 when the request body is invalid JSON', async () => {

@@ -70,6 +70,14 @@ function validateBackfill(value: unknown): boolean | undefined {
   return value;
 }
 
+function formatJitterValidationMessage(message: string): string {
+  const enginePrefix = 'Invalid options.jitter: ';
+  const hasEnginePrefix = message.startsWith(enginePrefix);
+  const detail = hasEnginePrefix ? message.slice(enginePrefix.length) : message;
+  const wireDetail = detail.replaceAll('options.jitter', 'Field "jitter"');
+  return hasEnginePrefix ? `Field "jitter" is invalid: ${wireDetail}` : wireDetail;
+}
+
 function validateJitter(value: unknown): ScheduleUpdateOptions['jitter'] {
   if (value === undefined) return undefined;
   if (typeof value !== 'string' && typeof value !== 'number') {
@@ -81,9 +89,7 @@ function validateJitter(value: unknown): ScheduleUpdateOptions['jitter'] {
     normalizeScheduleUpdateOptions({ jitter: value });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw invalidParamsFault(
-      `Field "jitter" is invalid: ${message.replace(/^Invalid options\.jitter: /, '')}`,
-    );
+    throw invalidParamsFault(formatJitterValidationMessage(message));
   }
   return value;
 }
