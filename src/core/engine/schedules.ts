@@ -8,6 +8,7 @@ import type {
   ScheduleSpec,
   ScheduleState,
   ScheduleSummary,
+  ScheduleUpdateOptions,
   WorkflowState,
 } from '../types.ts';
 import { WorkflowNotRegisteredError } from './errors.ts';
@@ -30,6 +31,7 @@ import {
   normalizeScheduleFilter,
   normalizeScheduleOptions,
   normalizeScheduleSpec,
+  normalizeScheduleUpdateOptions,
 } from './validation/schedule.ts';
 
 export { startScheduledRun } from './schedule-run.ts';
@@ -237,9 +239,11 @@ export async function updateSchedule(
   internals: EngineInternals,
   scheduleId: string,
   newSpec: string | ScheduleSpec,
+  options?: ScheduleUpdateOptions,
 ): Promise<void> {
   const normalizedScheduleId = coerceScheduleId(scheduleId, 'scheduleId');
   const normalizedSpec = normalizeScheduleSpec(newSpec);
+  const normalizedOptions = normalizeScheduleUpdateOptions(options);
   const state = await requireScheduleState(internals, normalizedScheduleId);
   const now = internals.options.getNow();
   // Replace the cadence wholesale so switching kinds (cron <-> interval) never
@@ -264,6 +268,7 @@ export async function updateSchedule(
   const anchorFields = normalizedSpec.kind === 'interval' ? { createdAt: now } : {};
   const updatedState: ScheduleState = {
     ...stateWithoutCadence,
+    ...normalizedOptions,
     ...cadenceFields,
     ...anchorFields,
     updatedAt: now,
@@ -272,7 +277,10 @@ export async function updateSchedule(
         ? null
         : getNextScheduleOccurrence({ ...cadenceFields, createdAt: now }, now),
   };
-  await writeScheduleState(internals, updatedState, { includeTimer: state.status === 'active' });
+  await writeScheduleState(internals, updatedState, {
+    includeTimer: state.status === 'active',
+    replaceTimerFrom: state,
+  });
 }
 
 /**
@@ -411,11 +419,10 @@ export async function handleScheduledWorkflowTerminal(
     ...clearScheduleCurrentWorkflow(state),
     updatedAt: now,
   };
-  if (
-    clearedState.status === 'active' &&
-    clearedState.overlap === 'queue' &&
-    clearedState.queuedRuns > 0
-  ) {
+  // A queued occurrence was accepted under the overlap policy active at that
+  // tick. Keep draining that durable obligation even if a later schedule update
+  // changes the policy; the new policy governs future occurrences.
+  if (clearedState.status === 'active' && clearedState.queuedRuns > 0) {
     const nextWorkflowId = await callbacks.startScheduledRun(clearedState);
     await writeScheduleState(
       internals,

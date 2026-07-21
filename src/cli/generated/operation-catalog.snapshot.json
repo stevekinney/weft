@@ -811,7 +811,7 @@
       "name": "weft.schedules.update",
       "kind": "unary",
       "summary": "Update a recurring schedule",
-      "description": "Update an existing recurring schedule by `id`, replacing its recurrence specification, target workflow input, or start options. Returns null on success. Faults with NotFound when no schedule with the given id exists and InvalidParams for a malformed recurrence specification.",
+      "description": "Update an existing recurring schedule by `id`, replacing its recurrence specification and optionally changing description, overlap, backfill, or jitter. Omitted options retain their persisted values; schedule id, workflow type, and input remain unchanged. Returns null on success. Faults with NotFound when no schedule with the given id exists and InvalidParams for malformed fields.",
       "tags": ["Schedules"],
       "destructive": false,
       "access": {
@@ -827,12 +827,18 @@
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
+          "backfill": {},
           "cronExpression": {
             "description": "Cron expression. Supply exactly one of cronExpression or every; runtime validation requires a non-empty string."
+          },
+          "description": {
+            "description": "Operator-facing schedule description. Runtime validation requires a string."
           },
           "every": {
             "description": "Interval period (duration string or milliseconds). Supply exactly one of cronExpression or every."
           },
+          "jitter": {},
+          "overlap": {},
           "scheduleId": {
             "minLength": 1,
             "type": "string"

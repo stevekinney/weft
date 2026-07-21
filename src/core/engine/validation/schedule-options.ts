@@ -1,6 +1,6 @@
 import { parseDuration } from '../../scheduler.ts';
 import { coerceStartWorkflowId } from '../../start-workflow-validation.ts';
-import type { ScheduleOptions, ScheduleOverlapPolicy } from '../../types.ts';
+import type { ScheduleOptions, ScheduleOverlapPolicy, ScheduleUpdateOptions } from '../../types.ts';
 
 export const SCHEDULE_OVERLAP_POLICIES = new Set<ScheduleOverlapPolicy>([
   'skip',
@@ -12,6 +12,13 @@ export const SCHEDULE_OVERLAP_POLICIES = new Set<ScheduleOverlapPolicy>([
 type NormalizedScheduleOptions = Required<Pick<ScheduleOptions, 'overlap' | 'backfill'>> & {
   id?: string;
   description?: string;
+  jitterMs?: number;
+};
+
+type NormalizedScheduleUpdateOptions = {
+  description?: string;
+  overlap?: ScheduleOverlapPolicy;
+  backfill?: boolean;
   jitterMs?: number;
 };
 
@@ -29,6 +36,28 @@ export function normalizeScheduleOptions(
     ...(options.id !== undefined && { id: coerceStartWorkflowId(options.id, 'options.id') }),
     ...(options.description !== undefined && {
       description: normalizeScheduleDescription(options.description),
+    }),
+    ...(options.jitter !== undefined && {
+      jitterMs: normalizeScheduleJitter(options.jitter, 'options.jitter'),
+    }),
+  };
+}
+
+export function normalizeScheduleUpdateOptions(
+  options: ScheduleUpdateOptions | undefined,
+): NormalizedScheduleUpdateOptions {
+  if (options === undefined) return {};
+  if (typeof options !== 'object' || options === null) {
+    throw new Error('options must be an object when provided');
+  }
+
+  return {
+    ...(options.description !== undefined && {
+      description: normalizeScheduleDescription(options.description),
+    }),
+    ...(options.overlap !== undefined && { overlap: normalizeScheduleOverlap(options.overlap) }),
+    ...(options.backfill !== undefined && {
+      backfill: normalizeScheduleBackfill(options.backfill),
     }),
     ...(options.jitter !== undefined && {
       jitterMs: normalizeScheduleJitter(options.jitter, 'options.jitter'),

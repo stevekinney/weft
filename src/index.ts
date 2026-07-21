@@ -173,6 +173,7 @@ export type {
   ScheduleState,
   ScheduleStatus,
   ScheduleSummary,
+  ScheduleUpdateOptions,
   SearchAttributeDefinition,
   SearchAttributeHandle,
   SearchAttributeSchema,

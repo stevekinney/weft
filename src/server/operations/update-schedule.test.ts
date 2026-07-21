@@ -5,7 +5,9 @@ import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
+import { handleJsonRpcHttpRequest } from '../json-rpc-http.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
+import { anonymousPrincipal } from '../principal.ts';
 import { invalidJsonRequest, jsonRequest } from './operation-test-helpers.test-support.ts';
 import { updateScheduleOperation, updateScheduleRestBinding } from './update-schedule.ts';
 
@@ -35,10 +37,20 @@ describe('weft.schedules.update', () => {
 
   it('returns 204 and updates the cron expression on the happy path', async () => {
     engine = createEngine();
-    await engine.schedule('echo', null, '0 * * * *', { id: 'schedule-update' });
+    await engine.schedule('echo', { immutable: true }, '0 * * * *', {
+      id: 'schedule-update',
+      description: 'Original description',
+      overlap: 'queue',
+      backfill: true,
+      jitter: '10s',
+    });
 
     const response = await handleRequest(
-      jsonRequest('PATCH', '/v1/schedules/schedule-update', { cronExpression: '30 * * * *' }),
+      jsonRequest('PATCH', '/v1/schedules/schedule-update', {
+        cronExpression: '30 * * * *',
+        description: 'Updated description',
+        overlap: 'allow',
+      }),
       engine,
       { operationRegistry: registry, restBindings: bindings },
     );
@@ -46,7 +58,131 @@ describe('weft.schedules.update', () => {
     expect(response.status).toBe(204);
     expect(await response.text()).toBe('');
     expect(await engine.getSchedule('schedule-update')).toEqual(
-      expect.objectContaining({ cronExpression: '30 * * * *' }),
+      expect.objectContaining({
+        id: 'schedule-update',
+        workflowType: 'echo',
+        cronExpression: '30 * * * *',
+        description: 'Updated description',
+        overlap: 'allow',
+        backfill: true,
+        jitterMs: 10_000,
+      }),
+    );
+  });
+
+  it('updates mutable options over JSON-RPC with the same contract as REST', async () => {
+    engine = createEngine();
+    await engine.schedule('echo', null, '0 * * * *', {
+      id: 'schedule-update-json-rpc',
+      description: 'Original description',
+      overlap: 'skip',
+      backfill: false,
+    });
+
+    const response = await handleJsonRpcHttpRequest(
+      new Request('http://localhost/jsonrpc', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'weft.schedules.update',
+          params: {
+            scheduleId: 'schedule-update-json-rpc',
+            every: '5m',
+            description: 'Updated over JSON-RPC',
+            overlap: 'cancel-running',
+            backfill: true,
+            jitter: '30s',
+          },
+        }),
+      }),
+      { registry, engine, principal: anonymousPrincipal() },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ jsonrpc: '2.0', id: 1, result: null });
+    expect(await engine.getSchedule('schedule-update-json-rpc')).toEqual(
+      expect.objectContaining({
+        intervalMs: 300_000,
+        description: 'Updated over JSON-RPC',
+        overlap: 'cancel-running',
+        backfill: true,
+        jitterMs: 30_000,
+      }),
+    );
+  });
+
+  it('returns 400 when description is null instead of treating it as omitted', async () => {
+    engine = createEngine();
+    await engine.schedule('echo', null, '0 * * * *', {
+      id: 'schedule-update-null-description',
+      description: 'Keep me',
+    });
+
+    const response = await handleRequest(
+      jsonRequest('PATCH', '/v1/schedules/schedule-update-null-description', {
+        cronExpression: '30 * * * *',
+        description: null,
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: 'options.description must be a string when provided',
+    });
+    expect(await engine.getSchedule('schedule-update-null-description')).toEqual(
+      expect.objectContaining({
+        cronExpression: '0 * * * *',
+        description: 'Keep me',
+      }),
+    );
+  });
+
+  it('returns 400 for invalid mutable schedule options', async () => {
+    engine = createEngine();
+    await engine.schedule('echo', null, '0 * * * *', { id: 'schedule-update-invalid-options' });
+
+    const invalidOptions: ReadonlyArray<{
+      field: string;
+      value: unknown;
+      error: string;
+    }> = [
+      {
+        field: 'overlap',
+        value: 'parallel',
+        error: 'options.overlap must be one of skip, queue, cancel-running, allow',
+      },
+      {
+        field: 'backfill',
+        value: 'yes',
+        error: 'options.backfill must be a boolean when provided',
+      },
+      {
+        field: 'jitter',
+        value: null,
+        error: 'options.jitter must be a duration string or a number of milliseconds',
+      },
+    ];
+
+    for (const invalidOption of invalidOptions) {
+      const response = await handleRequest(
+        jsonRequest('PATCH', '/v1/schedules/schedule-update-invalid-options', {
+          cronExpression: '30 * * * *',
+          [invalidOption.field]: invalidOption.value,
+        }),
+        engine,
+        { operationRegistry: registry, restBindings: bindings },
+      );
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: invalidOption.error });
+    }
+
+    expect(await engine.getSchedule('schedule-update-invalid-options')).toEqual(
+      expect.objectContaining({ cronExpression: '0 * * * *' }),
     );
   });
 

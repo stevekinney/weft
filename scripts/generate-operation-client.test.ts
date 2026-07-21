@@ -116,6 +116,20 @@ describe('schemaToNode + renderNode — emitted text contract', () => {
   });
 });
 
+describe('schedule update operation generation', () => {
+  it('emits every mutable schedule option in the generated input type', async () => {
+    const source = await createOperationClientSource(createCatalogSnapshot());
+    const updateScheduleEntry = source.match(
+      /'weft\.schedules\.update': \{[\s\S]*?readonly output: null;/,
+    )?.[0];
+
+    expect(updateScheduleEntry).toContain('readonly backfill?: unknown;');
+    expect(updateScheduleEntry).toContain('readonly description?: unknown;');
+    expect(updateScheduleEntry).toContain('readonly jitter?: unknown;');
+    expect(updateScheduleEntry).toContain('readonly overlap?: unknown;');
+  });
+});
+
 describe('generated catalog — string enums tighten to literal unions (#466)', () => {
   // Pin the regression: the generated client must surface the startOrSignal
   // discriminant as a literal union, not a widened `string`. Imported from the

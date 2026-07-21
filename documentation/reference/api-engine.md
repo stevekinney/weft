@@ -384,6 +384,20 @@ By default, `ScheduleOptions.backfill` is `false`: when a schedule timer is more
 
 Set `ScheduleOptions.jitter` to a duration string or millisecond count when many schedules share the same cadence and should spread their effective dispatch times. Weft keeps `ScheduleState.nextFireAt` as the nominal pre-jitter occurrence timestamp, then derives a deterministic offset in `[0, jitter)` from the schedule ID and that nominal timestamp when writing the timer. The same schedule occurrence gets the same offset after recovery or replay without storing extra per-occurrence state.
 
+### `updateSchedule()`
+
+```ts partial
+updateSchedule(
+  scheduleId: string,
+  newSpec: string | ScheduleSpec,
+  options?: ScheduleUpdateOptions,
+): Promise<void>;
+```
+
+Replace a schedule's cron or interval cadence and optionally update `description`, `overlap`, `backfill`, or `jitter`. Each omitted option retains its current persisted value. `scheduleId`, the target workflow type, and the workflow input are immutable. The same options are available through `ScheduleHandle.update(newSpec, options?)`, `LocalClient.updateSchedule()`, and `HttpClient.updateSchedule()`.
+
+`description` accepts strings, including an empty string; `null` is invalid. Passing `undefined` or omitting a property leaves the stored value unchanged. Jitter likewise remains unchanged when omitted. Updating an active schedule replaces its next timer using the new cadence and jitter; updating a paused schedule keeps it paused and does not arm a timer. A new overlap policy applies to future ticks, while occurrences already accepted under `overlap: 'queue'` still drain after the current run finishes.
+
 When inline `resolveWorkflowServices` is configured, each scheduled occurrence resolves services before its workflow body can run. An available result is installed as `ctx.services`; an unavailable result or resolver throw fails only that occurrence and does not pause the schedule. New scheduled runs persist `info.schedule`, so recovery receives the same schedule id and known occurrence timestamp as the live launch path. Queue-drained runs expose `schedule.id` with `schedule.occurrence === undefined` because the original grid timestamp is not retained, and older persisted runs that predate this metadata may omit `info.schedule`.
 
 ### `scheduler` (getter)

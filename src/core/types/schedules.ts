@@ -99,6 +99,28 @@ export interface ScheduleOptions {
 }
 
 /**
+ * Mutable options accepted when updating an existing schedule. Omitted fields
+ * retain their persisted values. Schedule identity, workflow type, and input
+ * are intentionally excluded.
+ *
+ * @example
+ * ```ts
+ * import { Engine, workflow, type ScheduleUpdateOptions } from '@lostgradient/weft';
+ *
+ * const engine = new Engine();
+ * engine.register(workflow({ name: 'report' }).execute(async function* () { return 'done'; }));
+ * await engine.schedule('report', null, '0 9 * * *', { id: 'daily-report' });
+ * const options: ScheduleUpdateOptions = { overlap: 'queue', jitter: '30s' };
+ * await engine.updateSchedule('daily-report', '30 9 * * *', options);
+ * engine[Symbol.dispose]();
+ * ```
+ */
+export type ScheduleUpdateOptions = Pick<
+  ScheduleOptions,
+  'description' | 'overlap' | 'backfill' | 'jitter'
+>;
+
+/**
  * Declarative recurring schedule definition returned by {@link schedule}. Supply
  * exactly one of `cron` (cron cadence) or `every` (fixed interval).
  *

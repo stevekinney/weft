@@ -569,7 +569,9 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
         '0 * * * *',
         {
           backfill: true,
+          description: 'Hourly schedule',
           id: `${idPrefix}-schedule`,
+          jitter: '10s',
           overlap: 'queue',
         },
       );
@@ -579,7 +581,9 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
         expect.objectContaining({
           backfill: true,
           cronExpression: '0 * * * *',
+          description: 'Hourly schedule',
           id: `${idPrefix}-schedule`,
+          jitterMs: 10_000,
           overlap: 'queue',
           status: 'active',
           workflowType: workflowTypes.echo,
@@ -599,9 +603,20 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
         expect.objectContaining({ status: 'paused' }),
       );
 
-      await schedule.update('30 * * * *');
+      await schedule.update('30 * * * *', {
+        description: 'Twice-hourly schedule',
+        jitter: '30s',
+        overlap: 'allow',
+      });
       await expect(schedule.describe()).resolves.toEqual(
-        expect.objectContaining({ cronExpression: '30 * * * *' }),
+        expect.objectContaining({
+          backfill: true,
+          cronExpression: '30 * * * *',
+          description: 'Twice-hourly schedule',
+          jitterMs: 30_000,
+          overlap: 'allow',
+          status: 'paused',
+        }),
       );
 
       await client.resumeSchedule(schedule.id);

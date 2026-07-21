@@ -27,6 +27,7 @@ import type {
   ScheduleOptions,
   ScheduleSpec,
   ScheduleSummary,
+  ScheduleUpdateOptions,
   SearchAttributeValue,
   SignalDefinition,
   SignalDeliveryOptions,
@@ -261,10 +262,8 @@ export class HttpClient implements WeftClient {
       type,
       input,
       ...scheduleSpecToWireFields(spec),
+      ...options,
     };
-    if (options?.id !== undefined) body['id'] = options.id;
-    if (options?.overlap !== undefined) body['overlap'] = options.overlap;
-    if (options?.backfill !== undefined) body['backfill'] = options.backfill;
 
     const response = await request<{ id: string }>(this.baseUrl, '/schedules', this.headers, {
       method: 'POST',
@@ -333,8 +332,12 @@ export class HttpClient implements WeftClient {
     return cancelScheduleRequest(this, id);
   }
 
-  async updateSchedule(id: string, newSpec: string | ScheduleSpec): Promise<void> {
-    return updateScheduleRequest(this, id, newSpec);
+  async updateSchedule(
+    id: string,
+    newSpec: string | ScheduleSpec,
+    options?: ScheduleUpdateOptions,
+  ): Promise<void> {
+    return updateScheduleRequest(this, id, newSpec, options);
   }
 
   async signal(id: string, name: SignalDefinition): Promise<void>;

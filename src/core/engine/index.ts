@@ -59,6 +59,7 @@ import {
   type ScheduleOptions,
   type ScheduleSpec,
   type ScheduleSummary,
+  type ScheduleUpdateOptions,
   type SearchAttributeValue,
   type SignalDefinition,
   type SignalDeliveryOptions,
@@ -1499,8 +1500,12 @@ export class Engine<
   async cancelSchedule(scheduleId: string): Promise<void> {
     return cancelScheduleFromInternals(getInternals(this), scheduleId);
   }
-  async updateSchedule(scheduleId: string, newSpec: string | ScheduleSpec): Promise<void> {
-    return updateScheduleFromInternals(getInternals(this), scheduleId, newSpec);
+  async updateSchedule(
+    scheduleId: string,
+    newSpec: string | ScheduleSpec,
+    options?: ScheduleUpdateOptions,
+  ): Promise<void> {
+    return updateScheduleFromInternals(getInternals(this), scheduleId, newSpec, options);
   }
   [HANDLE_RESULT_PROMISE](workflowId: string): Promise<unknown> {
     return getWorkflowResultPromiseFromInternals(getInternals(this), workflowId);

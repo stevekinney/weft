@@ -1,4 +1,4 @@
-import type { ScheduleSpec, ScheduleSummary } from '../types.ts';
+import type { ScheduleSpec, ScheduleSummary, ScheduleUpdateOptions } from '../types.ts';
 
 /**
  * Narrow engine view a {@link ScheduleHandle} delegates to. The full
@@ -9,14 +9,18 @@ export interface ScheduleHandleEngine {
   pauseSchedule(scheduleId: string): Promise<void>;
   resumeSchedule(scheduleId: string): Promise<void>;
   cancelSchedule(scheduleId: string): Promise<void>;
-  updateSchedule(scheduleId: string, newSpec: string | ScheduleSpec): Promise<void>;
+  updateSchedule(
+    scheduleId: string,
+    newSpec: string | ScheduleSpec,
+    options?: ScheduleUpdateOptions,
+  ): Promise<void>;
   getSchedule(scheduleId: string): Promise<ScheduleSummary | null>;
 }
 
 /**
  * Handle to a recurring schedule created by {@link Engine.schedule}. Use
  * `handle.pause()`, `handle.resume()`, `handle.cancel()`, or
- * `handle.update(cronExpression)` to manage the schedule lifecycle.
+ * `handle.update(spec, options?)` to manage the schedule lifecycle.
  * `handle.describe()` returns the current {@link ScheduleSummary}.
  *
  * @example
@@ -56,8 +60,12 @@ export class ScheduleHandle {
     await this.#engine.cancelSchedule(this.id);
   }
 
-  async update(newSpec: string | ScheduleSpec): Promise<void> {
-    await this.#engine.updateSchedule(this.id, newSpec);
+  async update(newSpec: string | ScheduleSpec, options?: ScheduleUpdateOptions): Promise<void> {
+    if (options === undefined) {
+      await this.#engine.updateSchedule(this.id, newSpec);
+      return;
+    }
+    await this.#engine.updateSchedule(this.id, newSpec, options);
   }
 
   async describe(): Promise<ScheduleSummary> {

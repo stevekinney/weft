@@ -1266,13 +1266,28 @@ describe('bulk workflow operations', () => {
   it('skips workflows deleted after the bulk tag snapshot instead of aborting the whole operation', async () => {
     const storage = new BulkTagDeletionDuringMutationStorage();
     const engine = new Engine({ storage });
-    const echoWorkflow12 = workflow({ name: 'echo' }).execute(echoWorkflow);
-    engine.register(echoWorkflow12);
 
     try {
-      await createCompletedWorkflow(engine, 'bulk-tags-delete-first');
-      await createCompletedWorkflow(engine, 'bulk-tags-delete-second');
-      await createCompletedWorkflow(engine, 'bulk-tags-delete-third');
+      for (const workflowId of [
+        'bulk-tags-delete-first',
+        'bulk-tags-delete-second',
+        'bulk-tags-delete-third',
+      ]) {
+        await storage.put(
+          KEYS.workflow(workflowId),
+          encode({
+            createdAt: 1,
+            id: workflowId,
+            input: null,
+            result: workflowId,
+            startedAt: 1,
+            status: 'completed',
+            type: 'echo',
+            updatedAt: 1,
+            versionTuple: { workflowVersion: '1' },
+          } satisfies WorkflowState),
+        );
+      }
       storage.workflowIdToDeleteOnNextMutation = 'bulk-tags-delete-second';
 
       const result = await engine.tagAll({ status: 'completed' }, ['bulk']);

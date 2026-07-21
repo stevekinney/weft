@@ -12,7 +12,11 @@ import type {
 } from '../../types.ts';
 import { SCHEDULE_OVERLAP_POLICIES } from './schedule-options.ts';
 
-export { normalizeScheduleOptions, SCHEDULE_OVERLAP_POLICIES } from './schedule-options.ts';
+export {
+  normalizeScheduleOptions,
+  normalizeScheduleUpdateOptions,
+  SCHEDULE_OVERLAP_POLICIES,
+} from './schedule-options.ts';
 
 export const SCHEDULE_STATUSES = new Set<ScheduleStatus>(['active', 'paused', 'cancelled']);
 

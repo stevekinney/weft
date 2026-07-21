@@ -4,6 +4,7 @@ import type {
   QueryDefinition,
   ScheduleSpec,
   ScheduleSummary,
+  ScheduleUpdateOptions,
   SearchAttributeValue,
   SignalDefinition,
   SignalDeliveryOptions,
@@ -180,7 +181,11 @@ export interface ScheduleHandleDelegationClient {
   pauseSchedule(id: string): Promise<void>;
   resumeSchedule(id: string): Promise<void>;
   cancelSchedule(id: string): Promise<void>;
-  updateSchedule(id: string, newSpec: string | ScheduleSpec): Promise<void>;
+  updateSchedule(
+    id: string,
+    newSpec: string | ScheduleSpec,
+    options?: ScheduleUpdateOptions,
+  ): Promise<void>;
   getSchedule(id: string): Promise<ScheduleSummary | null>;
 }
 
@@ -207,8 +212,10 @@ export abstract class ScheduleHandleDelegation<
     return this.client.cancelSchedule(this.id);
   }
 
-  async update(newSpec: string | ScheduleSpec): Promise<void> {
-    return this.client.updateSchedule(this.id, newSpec);
+  async update(newSpec: string | ScheduleSpec, options?: ScheduleUpdateOptions): Promise<void> {
+    return options === undefined
+      ? this.client.updateSchedule(this.id, newSpec)
+      : this.client.updateSchedule(this.id, newSpec, options);
   }
 
   async describe(): Promise<ScheduleSummary | null> {

@@ -850,7 +850,10 @@ describe('LocalClient delegation surface', () => {
     await client.cancel('delegated-workflow');
     await client.pauseSchedule('delegated-schedule');
     await client.resumeSchedule('delegated-schedule');
-    await client.updateSchedule('delegated-schedule', '15 * * * *');
+    await client.updateSchedule('delegated-schedule', '15 * * * *', {
+      overlap: 'queue',
+      backfill: true,
+    });
     await client.cancelSchedule('delegated-schedule');
     await client.signal('delegated-workflow', 'status', { ok: true });
     expect(await client.query('delegated-workflow', 'status')).toBe('query-result');
@@ -936,7 +939,10 @@ describe('LocalClient delegation surface', () => {
     });
     expect(engine.pauseSchedule).toHaveBeenCalledWith('delegated-schedule');
     expect(engine.resumeSchedule).toHaveBeenCalledWith('delegated-schedule');
-    expect(engine.updateSchedule).toHaveBeenCalledWith('delegated-schedule', '15 * * * *');
+    expect(engine.updateSchedule).toHaveBeenCalledWith('delegated-schedule', '15 * * * *', {
+      overlap: 'queue',
+      backfill: true,
+    });
     expect(engine.cancelSchedule).toHaveBeenCalledWith('delegated-schedule');
     expect(engine.fork).toHaveBeenCalledWith('delegated-workflow', { fromStep: 2 });
     expect(engine.cancelAll).toHaveBeenCalledWith({ status: 'running' });

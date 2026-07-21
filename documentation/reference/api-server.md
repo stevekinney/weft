@@ -279,6 +279,13 @@ PATCH body: `{ "attributes": { "key": "value" } }`.
 Use `POST /api/v1/schedules/:id/resume` to resume a paused schedule. There is no
 `/unpause` alias.
 
+`PATCH /api/v1/schedules/:id` requires exactly one cadence field —
+`cronExpression` or `every` — and also accepts `description`, `overlap`,
+`backfill`, and `jitter`. Omitted options retain their persisted values; the
+schedule id, workflow type, and input cannot be changed. `description: null` is
+invalid, while an omitted `description` leaves it unchanged. Active schedules
+replace their next timer; paused schedules remain paused.
+
 Schedule read and mutation operations are also available over JSON-RPC as
 `weft.schedules.get`, `weft.schedules.update`, `weft.schedules.cancel`,
 `weft.schedules.pause`, and `weft.schedules.resume`. Schedule operations use

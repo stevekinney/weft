@@ -179,8 +179,10 @@ async function exerciseWorkflowHandleAndSchedule(httpClient: HttpClient): Promis
 
   const scheduleHandle = await httpClient.schedule('echo', 'hourly', '0 * * * *', {
     id: 'schedule-1',
+    description: 'Hourly schedule',
     overlap: 'queue',
     backfill: true,
+    jitter: '10s',
   });
   expect(scheduleHandle.id).toBe('schedule-1');
 
@@ -230,7 +232,12 @@ async function exerciseWorkflowClientRequests(httpClient: HttpClient): Promise<v
   await httpClient.cancel('wf/1');
   await httpClient.pauseSchedule('schedule-1');
   await httpClient.resumeSchedule('schedule-1');
-  await httpClient.updateSchedule('schedule-1', '15 * * * *');
+  await httpClient.updateSchedule('schedule-1', '15 * * * *', {
+    description: 'Updated schedule',
+    overlap: 'queue',
+    backfill: true,
+    jitter: '30s',
+  });
   await httpClient.cancelSchedule('schedule-1');
   await httpClient.signal('wf/1', 'status', { ok: true });
   expect(await httpClient.query('wf/1', 'status')).toBe('client-query');
@@ -402,8 +409,10 @@ function assertScheduleCalls(fetchCalls: FetchCall[]): void {
     input: 'hourly',
     cronExpression: '0 * * * *',
     id: 'schedule-1',
+    description: 'Hourly schedule',
     overlap: 'queue',
     backfill: true,
+    jitter: '10s',
   });
 
   const scheduleListCall = fetchCalls[16]!;
@@ -430,6 +439,19 @@ function assertFilterAndFollowupCalls(fetchCalls: FetchCall[]): void {
   expect(fetchCalls[3]?.url).toContain('/schedules/schedule-1/pause');
   expect(fetchCalls[4]?.url).toContain('/schedules/schedule-1/resume');
   expect(fetchCalls[5]?.init?.method).toBe('PATCH');
+  expect(fetchCalls[21]?.init?.method).toBe('PATCH');
+  const updateScheduleBody = fetchCalls[21]?.init?.body;
+  expect(typeof updateScheduleBody).toBe('string');
+  if (typeof updateScheduleBody !== 'string') {
+    throw new Error('Expected update schedule request body to be a string');
+  }
+  expect(JSON.parse(updateScheduleBody)).toEqual({
+    cronExpression: '15 * * * *',
+    description: 'Updated schedule',
+    overlap: 'queue',
+    backfill: true,
+    jitter: '30s',
+  });
   expect(fetchCalls[7]?.init?.method).toBe('DELETE');
   expect(fetchCalls[8]?.init?.method).toBe('DELETE');
   expect(fetchCalls[9]?.url).toContain('/signal/status');

@@ -15,6 +15,7 @@ import type {
   ReviewListFilter,
   ScheduleSpec,
   ScheduleSummary,
+  ScheduleUpdateOptions,
   SearchAttributeValue,
   SignalDeliveryOptions,
   SubmitReviewOptions,
@@ -469,15 +470,22 @@ export function cancelScheduleRequest(
   });
 }
 
-/** Update a schedule's recurrence specification (`PATCH /v1/schedules/:id`). */
+/** Update a schedule's cadence and mutable options (`PATCH /v1/schedules/:id`). */
 export function updateScheduleRequest(
   context: HttpClientRequestContext,
   id: string,
   newSpec: string | ScheduleSpec,
+  options?: ScheduleUpdateOptions,
 ): Promise<void> {
+  const body = scheduleSpecToWireFields(newSpec);
+  if (options?.description !== undefined) body['description'] = options.description;
+  if (options?.overlap !== undefined) body['overlap'] = options.overlap;
+  if (options?.backfill !== undefined) body['backfill'] = options.backfill;
+  if (options?.jitter !== undefined) body['jitter'] = options.jitter;
+
   return request<void>(context.baseUrl, `/schedules/${encodeURIComponent(id)}`, context.headers, {
     method: 'PATCH',
-    body: JSON.stringify(scheduleSpecToWireFields(newSpec)),
+    body: JSON.stringify(body),
   });
 }
 

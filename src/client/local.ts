@@ -43,6 +43,7 @@ import type {
   ScheduleOptions,
   ScheduleSpec,
   ScheduleSummary,
+  ScheduleUpdateOptions,
   SearchAttributeValue,
   SignalDefinition,
   SignalDeliveryOptions,
@@ -268,8 +269,14 @@ export class LocalClient<
     return this.#engine.cancelSchedule(id);
   }
 
-  async updateSchedule(id: string, newSpec: string | ScheduleSpec): Promise<void> {
-    return this.#engine.updateSchedule(id, newSpec);
+  async updateSchedule(
+    id: string,
+    newSpec: string | ScheduleSpec,
+    options?: ScheduleUpdateOptions,
+  ): Promise<void> {
+    return options === undefined
+      ? this.#engine.updateSchedule(id, newSpec)
+      : this.#engine.updateSchedule(id, newSpec, options);
   }
 
   async signal(id: string, name: SignalDefinition): Promise<void>;

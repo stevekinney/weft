@@ -34,6 +34,7 @@ import type {
   ScheduleOptions,
   ScheduleSpec,
   ScheduleSummary,
+  ScheduleUpdateOptions,
   SearchAttributeValue,
   SignalDefinition,
   SignalDeliveryOptions,
@@ -270,8 +271,8 @@ export interface ClientScheduleHandle extends Disposable {
   /** Cancel this schedule. */
   cancel(): Promise<void>;
 
-  /** Update the schedule's recurrence specification (cron string or interval spec). */
-  update(newSpec: string | ScheduleSpec): Promise<void>;
+  /** Update the schedule cadence and optional mutable schedule settings. */
+  update(newSpec: string | ScheduleSpec, options?: ScheduleUpdateOptions): Promise<void>;
 
   /** Read the latest persisted summary for this schedule. */
   describe(): Promise<ScheduleSummary | null>;
@@ -463,13 +464,14 @@ export interface WeftClient {
 
   /** Resume a recurring schedule. */
   resumeSchedule(id: string): Promise<void>;
-
   /** Cancel a recurring schedule. */
   cancelSchedule(id: string): Promise<void>;
-
-  /** Update a recurring schedule's recurrence specification (cron string or interval spec). */
-  updateSchedule(id: string, newSpec: string | ScheduleSpec): Promise<void>;
-
+  /** Update a recurring schedule's cadence and optional mutable schedule settings. */
+  updateSchedule(
+    id: string,
+    newSpec: string | ScheduleSpec,
+    options?: ScheduleUpdateOptions,
+  ): Promise<void>;
   /** Send a named signal to a workflow. */
   signal(id: string, name: SignalDefinition): Promise<void>;
   signal<TInput>(
