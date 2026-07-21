@@ -482,7 +482,7 @@ Invalid JSON, a missing token, or a mismatched token returns JSON-RPC error code
 > [!NOTE]
 > The raw key-value routes are HTTP-only — they're not exposed over JSON-RPC, WebSocket, or stdio. Their operation names (`weft.storage.get`, `weft.storage.put`, etc.) appear in `/openapi.json` but not in `/openrpc.json`. Capability discovery is read-only and is available through every REST and JSON-RPC transport as `weft.storage.capabilities`.
 
-Raw key-value access to the engine's storage layer, used by `HTTPStorage` and any client that wants to treat a Weft server as a remote storage backend. The capability discovery route (`GET /api/v1/storage/-/capabilities`) reports adapter metadata and requires only `storage:read`. All other routes operate directly on the unscoped keyspace and require the `storage:admin` scope.
+Raw key-value access to the engine's storage layer, used by `HTTPStorage` and any client that wants to treat a Weft server as a remote storage backend. The capability discovery route (`GET /api/v1/storage/-/capabilities`) reports adapter metadata and accepts either `storage:read` or `storage:admin`. All other routes operate directly on the unscoped keyspace and require the `storage:admin` scope.
 
 | Method   | Path                                  | Description                             |
 | -------- | ------------------------------------- | --------------------------------------- |
@@ -498,10 +498,10 @@ Raw key-value access to the engine's storage layer, used by `HTTPStorage` and an
 
 Every storage route requires authentication. Required scopes:
 
-| Routes                                      | Required scope  |
-| ------------------------------------------- | --------------- |
-| `GET /api/v1/storage/-/capabilities`        | `storage:read`  |
-| Every endpoint that reads or mutates raw KV | `storage:admin` |
+| Routes                                      | Required scope                    |
+| ------------------------------------------- | --------------------------------- |
+| `GET /api/v1/storage/-/capabilities`        | `storage:read` or `storage:admin` |
+| Every endpoint that reads or mutates raw KV | `storage:admin`                   |
 
 #### Keyspace access
 
@@ -509,9 +509,9 @@ Raw storage routes operate on the unscoped keyspace, so narrower `storage:read` 
 
 #### `GET /api/v1/storage/-/capabilities`
 
-Report the exact `StorageCapabilities` profile returned by the engine's connected storage adapter. This endpoint exposes deployment metadata, not raw keys or values, so it requires the narrower `storage:read` scope. The equivalent `weft.storage.capabilities` operation is also available through JSON-RPC over HTTP, WebSocket, and stdio, including `LocalClient.operations`, `HttpClient.operations`, and `client.call()`.
+Report the exact `StorageCapabilities` profile returned by the engine's connected storage adapter. This endpoint exposes deployment metadata, not raw keys or values, so the narrower `storage:read` scope is sufficient; existing storage-administrator credentials are also accepted. The equivalent `weft.storage.capabilities` operation is available through JSON-RPC over HTTP, WebSocket, and stdio, including `LocalClient.operations`, `HttpClient.operations`, and `client.call()`.
 
-- **Required scope** — `storage:read`.
+- **Required scope** — `storage:read` or `storage:admin`.
 - **Success response** — `200 OK`, `Content-Type: application/json`.
 
 ```json

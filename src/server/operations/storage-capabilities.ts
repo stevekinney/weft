@@ -8,7 +8,7 @@ import { shapeRestFault } from './operation-helpers.ts';
 const storageCapabilitiesInput = z.object({});
 const storageCapabilitiesOutput = z
   .object({
-    persistence: z.enum(['ephemeral', 'local', 'remote']).optional(),
+    persistence: z.enum(['ephemeral', 'local', 'remote']),
     readAfterWrite: z.enum(['linearizable', 'session', 'eventual']),
     scanConsistency: z.enum(['snapshot', 'best-effort']),
     atomicBatch: z.boolean(),
@@ -33,7 +33,7 @@ export const storageCapabilitiesOperation = defineOperation<
   outputSchema: storageCapabilitiesOutput,
   access: {
     kind: 'scoped',
-    scopes: { kind: 'anyOf', scopes: ['storage:read'] },
+    scopes: { kind: 'anyOf', scopes: ['storage:read', 'storage:admin'] },
   },
   discoverable: true,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },

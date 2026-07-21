@@ -83,7 +83,7 @@ export class CompressedStorage implements Storage {
     // enforced at the type level.
     const inner = this.#inner.capabilities();
     return {
-      ...(inner.persistence === undefined ? {} : { persistence: inner.persistence }),
+      persistence: inner.persistence,
       readAfterWrite: inner.readAfterWrite,
       scanConsistency: inner.scanConsistency,
       atomicBatch: inner.atomicBatch,

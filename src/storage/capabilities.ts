@@ -74,7 +74,7 @@ export type StorageCapabilities = {
    * - `remote`: data is owned by a remote service or synchronized storage area
    *   whose durability and freshness depend on that service.
    */
-  persistence?: 'ephemeral' | 'local' | 'remote';
+  persistence: 'ephemeral' | 'local' | 'remote';
   /**
    * Visibility of a completed write to a later read, scoped to one `Storage`
    * instance.

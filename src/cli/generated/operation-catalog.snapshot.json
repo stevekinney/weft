@@ -928,7 +928,7 @@
       "destructive": false,
       "access": {
         "kind": "scoped",
-        "scopes": ["storage:read"]
+        "scopes": ["storage:admin", "storage:read"]
       },
       "transports": {
         "http": true,
@@ -968,6 +968,7 @@
           }
         },
         "required": [
+          "persistence",
           "readAfterWrite",
           "scanConsistency",
           "atomicBatch",

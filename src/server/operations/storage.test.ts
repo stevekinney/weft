@@ -6,6 +6,7 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { anonymousPrincipal, principalFromApiKey } from '../principal.ts';
 import { createLiveOperationRegistry } from '../rest-bindings.ts';
+import { storageCapabilitiesOperation } from './storage-capabilities.ts';
 import { storageGetOperation } from './storage.ts';
 
 function encode(value: string): Uint8Array {
@@ -101,6 +102,18 @@ function readWriteStorageOptions() {
   };
 }
 
+function adminOnlyStorageOptions() {
+  return {
+    authContext: {
+      method: 'api-key' as const,
+      principal: principalFromApiKey({
+        subject: 'admin-only-caller',
+        scopes: ['storage:admin'],
+      }),
+    },
+  };
+}
+
 function adminStorageOptions() {
   return {
     authContext: {
@@ -161,8 +174,15 @@ describe('storage REST operations', () => {
     expect(await response.json()).toEqual(storage.capabilities());
   });
 
-  it('requires storage read scope to inspect backend capabilities', async () => {
+  it('allows storage readers and administrators to inspect backend capabilities', async () => {
     using engine = new Engine({ storage: new MemoryStorage() });
+
+    const adminResponse = await handleRequest(
+      request('/v1/storage/-/capabilities'),
+      engine,
+      adminOnlyStorageOptions(),
+    );
+    expect(adminResponse.status).toBe(200);
 
     const writeOnlyResponse = await handleRequest(
       request('/v1/storage/-/capabilities'),
@@ -175,6 +195,18 @@ describe('storage REST operations', () => {
     expect(anonymousResponse.status).toBe(401);
   });
 
+  it('requires every advertised capability profile to declare persistence', () => {
+    expect(
+      storageCapabilitiesOperation.outputSchema.safeParse({
+        readAfterWrite: 'linearizable',
+        scanConsistency: 'snapshot',
+        atomicBatch: true,
+        conditionalBatch: true,
+        boundedRangeDelete: true,
+      }).success,
+    ).toBe(false);
+  });
+
   it('advertises capability discovery on REST and every JSON-RPC transport', () => {
     const operation = createLiveOperationRegistry().get('weft.storage.capabilities');
 
@@ -182,7 +214,7 @@ describe('storage REST operations', () => {
       destructive: false,
       access: {
         kind: 'scoped',
-        scopes: { kind: 'anyOf', scopes: ['storage:read'] },
+        scopes: { kind: 'anyOf', scopes: ['storage:read', 'storage:admin'] },
       },
       transports: {
         http: true,
