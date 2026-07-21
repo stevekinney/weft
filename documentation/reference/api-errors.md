@@ -126,12 +126,12 @@ void normalizeCode;
 void sameRealmMessage;
 ```
 
-Use `isWeftFault(error, code)` to branch on a specific `WeftErrorCode` without caring whether the error came from `LocalClient` (an in-process typed error) or `HttpClient` (an `HttpClientError` carrying `weftCode`):
+Use `isWeftFault(error, code)` to branch on a specific `WeftErrorCode` without caring whether the error came from `LocalClient` (an in-process typed error) or `HttpClient`'s REST-backed methods (`start`, `get`, `signal`, `update`, and the other ergonomic methods in `src/client/http-client.ts`, which throw an `HttpClientError` carrying `weftCode` whenever the fault's `data.weftCode` was populated server-side):
 
 ```ts
 import { isWeftFault } from '@lostgradient/weft/client';
 
-// The same branch holds whether `error` came from LocalClient or HttpClient.
+// The same branch holds for LocalClient and HttpClient's REST-backed methods.
 function rethrowUnlessMissing(error: unknown): void {
   if (!isWeftFault(error, 'WorkflowNotFoundError')) {
     throw error;
@@ -140,6 +140,11 @@ function rethrowUnlessMissing(error: unknown): void {
 
 void rethrowUnlessMissing;
 ```
+
+> [!WARNING] `HttpClient.call()` / `client.operations.*` — JSON-RPC-over-HTTP — do not currently carry `weftCode`
+> `HttpClient`'s catalog transport (`HttpClient.call()` and every `client.operations.*` method, implemented in `src/client/http-operations.ts`) sends requests over JSON-RPC. The JSON-RPC error envelope's `data.weftCode` carries the coarse `FaultCode` (e.g. `NotFound`, `Conflict`), not the fine-grained `WeftErrorCode` — a pre-existing gap, not something this PR changes. `HttpClientError.weftCode` therefore stays `undefined` for errors thrown by that path, so `isWeftFault(error, code)` returns `false` even for a genuine match. Branch on `HttpClientError.faultCode` (a `FaultCode`) instead when working with `client.operations.*`.
+>
+> REST responses are also not guaranteed to carry `weftCode`: `shapeRestFault` only writes it when the underlying fault's `data.weftCode` was set, which not every fault code does. See [issue #720](https://github.com/stevekinney/weft/issues/720) for the REST wire-contract gap that leaves most fault `data` (beyond `weftCode`) undelivered today.
 
 `HttpClientError` carries the server-side `FaultCode` when the response includes a recognized structured fault:
 
