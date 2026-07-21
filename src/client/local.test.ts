@@ -660,7 +660,11 @@ describe('LocalClient delegation surface', () => {
 
     expect(scheduleClient.pauseSchedule).toHaveBeenCalledWith('shared-schedule');
     expect(scheduleClient.resumeSchedule).toHaveBeenCalledWith('shared-schedule');
-    expect(scheduleClient.updateSchedule).toHaveBeenCalledWith('shared-schedule', '30 * * * *', undefined);
+    expect(scheduleClient.updateSchedule).toHaveBeenCalledWith(
+      'shared-schedule',
+      '30 * * * *',
+      undefined,
+    );
     expect(scheduleClient.getSchedule).toHaveBeenCalledWith('shared-schedule');
     expect(scheduleClient.cancelSchedule).toHaveBeenCalledWith('shared-schedule');
   });
