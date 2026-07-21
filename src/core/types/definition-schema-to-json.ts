@@ -1,7 +1,6 @@
-import { createRequire } from 'node:module';
-
 import { z } from 'zod';
 
+import { tryLoadNodeBuiltin } from '../../runtime/portable.ts';
 import type {
   DefinitionSchema,
   StandardJSONSchemaV1Options,
@@ -115,18 +114,42 @@ function convertValibot(schema: DefinitionSchema): Record<string, unknown> {
   return stripDialect(requirePlainObject(result, 'valibot'));
 }
 
+/**
+ * Build a `require()` rooted at this module's location, without a static
+ * `import { createRequire } from 'node:module'`. Returns `undefined` outside
+ * Bun/Node (where `process.getBuiltinModule` does not exist), which
+ * {@link loadValibotConverter} turns into an actionable error rather than a
+ * `ReferenceError`/`TypeError` from calling a stubbed browser bundle export.
+ */
+function loadNodeRequire(): ((specifier: string) => unknown) | undefined {
+  const nodeModule = tryLoadNodeBuiltin<typeof import('node:module')>('node:module');
+  return nodeModule?.createRequire(import.meta.url);
+}
+
 export function loadValibotConverter(
   requireModule?: (specifier: string) => unknown,
 ): (schema: unknown, options?: unknown) => unknown {
   const shouldUseCache = requireModule === undefined;
-  const resolver = requireModule ?? createRequire(import.meta.url);
   if (shouldUseCache && cachedValibotConverter !== undefined) return cachedValibotConverter;
   // We let the runtime's package-resolution algorithm handle the `node_modules`
   // walk by passing the package name directly, rather than feeding `require`
   // an absolute path (which Bun's test runner can refuse mid-suite as an
   // "Unexpected require target"). Resolution is rooted at this module's
   // location via `createRequire(import.meta.url)`, which is what we want when
-  // Weft is installed as a dependency.
+  // Weft is installed as a dependency. `node:module` is loaded through
+  // `tryLoadNodeBuiltin` (process.getBuiltinModule) rather than a static
+  // `import { createRequire } from 'node:module'`, so this module — reachable
+  // from the browser-facing `@lostgradient/weft/client` bundle via the
+  // catalog's Valibot schema adapter — carries no static Node built-in import.
+  const resolver = requireModule ?? loadNodeRequire();
+  if (resolver === undefined) {
+    throw new Error(
+      'definitionSchemaToJsonSchema: converting a Valibot schema requires Bun or ' +
+        'Node 22.5+ (process.getBuiltinModule) to resolve `@valibot/to-json-schema`. ' +
+        'Not available in browser or edge runtimes; attach a `~standard.jsonSchema` ' +
+        'converter to the schema instead.',
+    );
+  }
   let valibotModule: { toJsonSchema?: (schema: unknown, options?: unknown) => unknown };
   try {
     valibotModule = resolver('@valibot/to-json-schema') as {

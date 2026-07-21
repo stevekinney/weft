@@ -14,12 +14,18 @@
  * A profile token is only applied when neither an explicit `server` option nor
  * `WEFT_ADDR` redirected the request to a different destination.
  *
+ * This module is imported from `@lostgradient/weft/client` (browser-reachable),
+ * so it must stay statically free of `node:*` and Bun-only imports. Environment
+ * variables go through {@link readEnvironmentVariable}; `~/.weft/config` and the
+ * run lockfile are read through {@link tryLoadNodeBuiltin}, which resolves
+ * `node:fs`/`node:fs/promises` via `process.getBuiltinModule` instead of a
+ * static import. Both return `undefined` outside Bun/Node, so a browser caller
+ * that supplies explicit `server`/`token` never touches either.
+ *
  * @module connection
  */
 
-import { existsSync, readFileSync } from 'node:fs';
-
-import { mkdir, rm } from 'node:fs/promises';
+import { readEnvironmentVariable, tryLoadNodeBuiltin } from './runtime/portable.ts';
 
 /**
  * Inputs accepted by {@link resolveConnection}.
@@ -146,7 +152,10 @@ export function resolveConnection(options: ConnectionOptions = {}): ResolvedConn
   const context = resolveConnectionContext(options);
   const server = resolveServerString(context);
   const fallbackProfile = profileForToken(context, server);
-  const token = resolveToken(options.token ?? Bun.env['WEFT_TOKEN'], fallbackProfile);
+  const token = resolveToken(
+    options.token ?? readEnvironmentVariable('WEFT_TOKEN'),
+    fallbackProfile,
+  );
 
   return {
     server: parseServerUrl(server),
@@ -189,7 +198,7 @@ function profileForToken(
 ): WeftProfile | undefined {
   if (context.profile === undefined) return undefined;
   const serverIsOverridden =
-    context.options.server !== undefined || Bun.env['WEFT_ADDR'] !== undefined;
+    context.options.server !== undefined || readEnvironmentVariable('WEFT_ADDR') !== undefined;
   if (!serverIsOverridden) return context.profile;
   const profileServer = context.profile.server;
   if (profileServer === undefined) return undefined;
@@ -225,7 +234,8 @@ type ConnectionContext = {
 
 function resolveConnectionContext(options: ConnectionOptions): ConnectionContext {
   const configuration = readWeftConfiguration();
-  const profileName = options.profile ?? Bun.env['WEFT_PROFILE'] ?? configuration.defaultProfile;
+  const profileName =
+    options.profile ?? readEnvironmentVariable('WEFT_PROFILE') ?? configuration.defaultProfile;
   const profile = profileName === undefined ? undefined : configuration.profiles?.[profileName];
   const runLockfile = options.includeRunLockfile === false ? undefined : readRunLockfile();
   return {
@@ -238,7 +248,7 @@ function resolveConnectionContext(options: ConnectionOptions): ConnectionContext
 function resolveServerString(context: ConnectionContext): string {
   return (
     context.options.server ??
-    Bun.env['WEFT_ADDR'] ??
+    readEnvironmentVariable('WEFT_ADDR') ??
     context.profile?.server ??
     context.runLockfile?.server ??
     context.runLockfile?.url ??
@@ -246,10 +256,38 @@ function resolveServerString(context: ConnectionContext): string {
   );
 }
 
+/**
+ * `~/.weft/config`, the run lockfile, and `writeRunLockfile`/`removeRunLockfile`
+ * are a Bun/Node CLI-and-server convenience with no browser equivalent.
+ * {@link tryLoadNodeBuiltin} resolves `node:fs`/`node:fs/promises` via
+ * `process.getBuiltinModule` rather than a static import, so calling these in
+ * a runtime without it (the browser) degrades to "no config/lockfile found"
+ * instead of throwing.
+ */
+function loadFsModule(): typeof import('node:fs') | undefined {
+  return tryLoadNodeBuiltin<typeof import('node:fs')>('node:fs');
+}
+
+function loadFsPromisesModule(): typeof import('node:fs/promises') | undefined {
+  return tryLoadNodeBuiltin<typeof import('node:fs/promises')>('node:fs/promises');
+}
+
 /** Record the address of a running server so later CLI commands can find it. */
 export async function writeRunLockfile(server: string): Promise<void> {
-  await mkdir(weftHome(), { recursive: true });
-  await Bun.write(runLockfilePath(), `${JSON.stringify({ server }, null, 2)}\n`);
+  const fsPromises = loadFsPromisesModule();
+  if (fsPromises === undefined) {
+    throw new Error(
+      'writeRunLockfile requires Bun or Node 22.5+ (process.getBuiltinModule); ' +
+        'not available in this runtime.',
+    );
+  }
+  await fsPromises.mkdir(weftHome(), { recursive: true });
+  const contents = `${JSON.stringify({ server }, null, 2)}\n`;
+  if (typeof Bun !== 'undefined') {
+    await Bun.write(runLockfilePath(), contents);
+    return;
+  }
+  await fsPromises.writeFile(runLockfilePath(), contents, 'utf8');
 }
 
 /** Remove the run lockfile when the recorded server shuts down. */
@@ -257,15 +295,22 @@ export async function removeRunLockfile(server: string): Promise<void> {
   const lockfile = readRunLockfile();
   if (lockfile === undefined) return;
   if ((lockfile.server ?? lockfile.url) !== server) return;
-  await rm(runLockfilePath(), { force: true });
+  const fsPromises = loadFsPromisesModule();
+  if (fsPromises === undefined) return;
+  await fsPromises.rm(runLockfilePath(), { force: true });
 }
 
 function readWeftConfiguration(): WeftConfiguration {
+  // `Bun.TOML` is Bun-only, so config-file resolution additionally requires
+  // Bun (not just any runtime `node:fs` happens to be reachable from).
+  if (typeof Bun === 'undefined') return {};
+  const fs = loadFsModule();
+  if (fs === undefined) return {};
   const path = configurationPath();
-  if (!existsSync(path)) return {};
+  if (!fs.existsSync(path)) return {};
   let parsed: unknown;
   try {
-    parsed = Bun.TOML.parse(readFileSync(path, 'utf8'));
+    parsed = Bun.TOML.parse(fs.readFileSync(path, 'utf8'));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new ConnectionConfigurationError(
@@ -276,9 +321,11 @@ function readWeftConfiguration(): WeftConfiguration {
 }
 
 function readRunLockfile(): WeftRunLockfile | undefined {
+  const fs = loadFsModule();
+  if (fs === undefined) return undefined;
   const path = runLockfilePath();
-  if (!existsSync(path)) return undefined;
-  const text = readFileSync(path, 'utf8').trim();
+  if (!fs.existsSync(path)) return undefined;
+  const text = fs.readFileSync(path, 'utf8').trim();
   if (text === '') return undefined;
   try {
     return normalizeRunLockfile(JSON.parse(text) as unknown);
@@ -335,9 +382,11 @@ function resolveToken(
   profile: WeftProfile | undefined,
 ): string | undefined {
   const directToken = token ?? profile?.token;
-  if (directToken?.startsWith('env:')) return Bun.env[directToken.slice('env:'.length)];
+  if (directToken?.startsWith('env:')) {
+    return readEnvironmentVariable(directToken.slice('env:'.length));
+  }
   if (directToken !== undefined) return directToken;
-  if (profile?.tokenEnv !== undefined) return Bun.env[profile.tokenEnv];
+  if (profile?.tokenEnv !== undefined) return readEnvironmentVariable(profile.tokenEnv);
   return undefined;
 }
 
@@ -350,7 +399,7 @@ function runLockfilePath(): string {
 }
 
 function weftHome(): string {
-  return Bun.env['WEFT_HOME'] ?? `${Bun.env['HOME'] ?? '.'}/.weft`;
+  return readEnvironmentVariable('WEFT_HOME') ?? `${readEnvironmentVariable('HOME') ?? '.'}/.weft`;
 }
 
 function stringValue(value: unknown): string | undefined {
