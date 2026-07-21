@@ -25,6 +25,14 @@ export type OversizedImplementationFile = {
 
 export const CLASSIFIED_OVERSIZED_IMPLEMENTATION_FILES = [
   {
+    path: 'scripts/validate-package-consumers.ts',
+    classification: 'justified-exception',
+    rationale:
+      'The packed-consumer regression suite `bun run prepack` drives is deliberately one script ' +
+      'so every "install the built tarball and exercise a real consumer scenario" check shares ' +
+      'one pack/install/cleanup lifecycle; splitting it would scatter that lifecycle across files.',
+  },
+  {
     path: 'scripts/check-coverage.ts',
     classification: 'justified-exception',
     rationale:

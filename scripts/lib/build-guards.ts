@@ -173,25 +173,18 @@ export const SINGLETON_MODULE_MARKERS: { canonicalFile: string; marker: string }
  * explicit reason. Add an entry here only when the duplicate genuinely cannot
  * cause the #710 bug class — i.e. no live object or process-wide registry
  * from a root-constructed `Engine` can ever cross into this file's execution
- * context, regardless of bundling. Every other bundled entry point runs in
- * the same realm/process as root and must stay on the unbundled path
- * instead.
+ * context, regardless of bundling. This is deliberately empty: every current
+ * public entry point either stays unbundled (sharing state with root) or is
+ * bin-only with no importable export AND unbundled itself (`cli-main.ts`/
+ * `mcp/cli.ts` — see the comment above their entrypoints list in
+ * scripts/build.ts for why even those two stay off the bundled path). Before
+ * adding an entry here, confirm the file cannot end up in the same process
+ * as root-registered singleton state via ANY path, including a dynamically
+ * `import()`ed module the file itself loads at runtime — that's exactly how
+ * an earlier version of this allowlist (for the CLI bins) turned out to be
+ * unsound.
  */
-const KNOWN_SAFE_DUPLICATE_FILES: { readonly file: string; readonly reason: string }[] = [
-  {
-    file: 'dist/cli-main.js',
-    reason:
-      'The `weft` bin. Not exported as an importable module in package.json — it only runs ' +
-      'as a separate OS process spawned via the installed binary, never `import`ed alongside ' +
-      'a root-constructed Engine in the same process. Bun.build() also preserves the ' +
-      "entrypoint's `#!/usr/bin/env bun` shebang, which the unbundled Bun.Transpiler path " +
-      'does not — bundling this file is required for the published binary to be executable.',
-  },
-  {
-    file: 'dist/mcp/cli.js',
-    reason: 'The `weft-mcp` bin. Same reasoning as dist/cli-main.js above.',
-  },
-];
+const KNOWN_SAFE_DUPLICATE_FILES: { readonly file: string; readonly reason: string }[] = [];
 
 export async function assertSingletonModulesNotDuplicated(): Promise<void> {
   const knownSafeDuplicateFiles = new Set(KNOWN_SAFE_DUPLICATE_FILES.map((entry) => entry.file));

@@ -63,8 +63,33 @@ async function writeUnbundledRuntimeModules(): Promise<void> {
     }
 
     const outputPath = sourcePath.replace(/^src\//, 'dist/').replace(/\.ts$/, '.js');
-    const transformed = typescriptTranspiler.transformSync(await Bun.file(sourcePath).text());
-    await Bun.write(outputPath, rewriteRelativeJavaScriptSpecifiers(sourcePath, transformed));
+    const sourceText = await Bun.file(sourcePath).text();
+    const transformed = typescriptTranspiler.transformSync(sourceText);
+    const rewritten = rewriteRelativeJavaScriptSpecifiers(sourcePath, transformed);
+    // `Bun.Transpiler` strips a leading shebang line (verified: `#!/usr/bin/env
+    // bun\n\nconsole.log(1)` transpiles to just `console.log(1)`), which would
+    // silently ship non-executable `bin` entries like cli-main.ts/mcp/cli.ts.
+    // Restore it so those files stay both executable AND on this unbundled
+    // path — required so they resolve the same on-disk singleton modules
+    // (core/engine/internals.ts, core/codec/serializer-registry.ts,
+    // core/context/internals.ts) as everything else the process might load,
+    // including a dynamically `import()`ed user workflow module that pulls in
+    // the root `@lostgradient/weft` package itself (see #710).
+    const shebangMatch = /^#!.*\n/.exec(sourceText);
+    await Bun.write(outputPath, shebangMatch ? shebangMatch[0] + rewritten : rewritten);
+  }
+
+  // A `.ts` file can `import` a sibling `.json` file directly (e.g.
+  // src/cli/api.ts's generated operation-catalog snapshot). Bundled entry
+  // points inline that data at build time, so this only matters for the
+  // unbundled tree: copy the JSON verbatim alongside its transpiled `.js`
+  // siblings so the real relative import above resolves at runtime instead
+  // of throwing "Cannot find module" for a file that was never copied.
+  const jsonGlob = new Bun.Glob('src/**/*.json');
+  for await (const sourcePath of jsonGlob.scan('.')) {
+    if (sourcePath.includes('/__tests__/') || sourcePath.includes('/__fixtures__/')) continue;
+    const outputPath = sourcePath.replace(/^src\//, 'dist/');
+    await Bun.write(outputPath, Bun.file(sourcePath));
   }
 }
 
@@ -73,38 +98,39 @@ async function writeUnbundledRuntimeModules(): Promise<void> {
 // name preservation.
 await writeUnbundledRuntimeModules();
 
-// Node/Bun target — per-backend storage and integration submodules, plus the
-// `weft`/`weft-mcp` CLI bins.
+// Node/Bun target — per-backend storage and integration submodules.
 // Heavy backends (lmdb, @libsql/client, @neondatabase/serverless) are
 // externalized so consumers only pay for what they actually import.
 //
 // Entrypoints that transitively reach a module-scope singleton registry
 // (currently `core/engine/internals.ts`, `core/codec/serializer-registry.ts`,
 // and `core/context/internals.ts` — see SINGLETON_MODULE_MARKERS in
-// scripts/lib/build-guards.ts) are deliberately EXCLUDED from this bundle
-// UNLESS they are also known-safe to duplicate (see
-// KNOWN_SAFE_DUPLICATE_FILES in that same file — currently `cli-main.ts` and
-// `mcp/cli.ts`, whose bins always run as a separate OS process and are never
-// imported as a library alongside a root-constructed `Engine`). Bundling
-// inlines its own private copy of every module an entrypoint imports,
-// including those registries, so a bundled entrypoint ends up with its own
-// disconnected `WeakMap`/`Map` instance instead of sharing the one the
-// unbundled root tree writes via `writeUnbundledRuntimeModules()` above. A
-// consumer that constructs an `Engine` via the root import and hands it to a
-// bundled `serve()` (or registers a serializer via the root import and
+// scripts/lib/build-guards.ts) are deliberately EXCLUDED from this bundle.
+// Bundling inlines its own private copy of every module an entrypoint
+// imports, including those registries, so a bundled entrypoint ends up with
+// its own disconnected `WeakMap`/`Map` instance instead of sharing the one
+// the unbundled root tree writes via `writeUnbundledRuntimeModules()` above.
+// A consumer that constructs an `Engine` via the root import and hands it to
+// a bundled `serve()` (or registers a serializer via the root import and
 // encodes through a bundled storage codec) would then hit "internals not
 // initialized" or a silently-unregistered serializer — see #710. Leaving
 // `server/index.ts`, `testing/index.ts`, and `storage/typed-storage.ts` on
 // the unbundled path (already emitted above) means they resolve the exact
 // same on-disk singleton modules as root.
 //
-// `cli-main.ts` and `mcp/cli.ts` additionally MUST stay bundled here rather
-// than moving to the unbundled path: both start with a `#!/usr/bin/env bun`
-// shebang (they are the `weft`/`weft-mcp` package.json `bin` entries), and
-// `Bun.build()` preserves an entrypoint's shebang banner while the raw
-// `Bun.Transpiler` path `writeUnbundledRuntimeModules()` uses does not. An
-// unbundled `dist/cli-main.js` would ship without a shebang, so the OS could
-// not execute the installed binary directly.
+// `cli-main.ts` and `mcp/cli.ts` (the `weft`/`weft-mcp` bins) are NOT in this
+// bundle either, for a second, sharper reason than the entries above: `weft
+// serve --workflows <path>` dynamically `import()`s the caller's own
+// workflow module in the SAME process, and that module typically imports
+// `workflow`/`registerSerializer` from the root `@lostgradient/weft` package
+// itself (resolved via node_modules, a genuinely separate module instance
+// from anything a bundle would inline). A bundled CLI would leave that
+// dynamically-imported module talking to root's singleton registries while
+// the CLI's own `Engine`/codec use a disconnected inlined copy — the same
+// #710 bug, just inside one process instead of across a library boundary.
+// `writeUnbundledRuntimeModules()` restores each file's stripped shebang
+// (see above) specifically so these two bins can stay both executable and
+// unbundled.
 await Bun.build({
   entrypoints: [
     // Storage submodule entry points (one per subpath export)
@@ -123,8 +149,6 @@ await Bun.build({
     './src/worker/protocol.ts',
     './src/observability/index.ts',
     './src/json-schema.ts',
-    './src/cli-main.ts',
-    './src/mcp/cli.ts',
   ],
   outdir: './dist',
   target: 'bun',

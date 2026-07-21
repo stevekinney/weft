@@ -190,6 +190,181 @@ async function runServeEngineSmoke(consumerDirectory: string): Promise<void> {
   );
 }
 
+// Regression test for the CLI-specific instance of the #710 bug class
+// (Codex review on PR #716, "Keep CLI bins on the shared singleton graph").
+// `weft serve --workflows <path>` constructs its own `Engine`, then
+// dynamically `import()`s the caller's own workflow module — and that
+// module, in real usage, imports `workflow`/`registerSerializer` from the
+// root `@lostgradient/weft` package, a genuinely separate module resolution
+// (via node_modules) from wherever the CLI binary's own code lives. If
+// `dist/cli-main.js` were bundled, it would carry its own disconnected copy
+// of `core/codec/serializer-registry.ts`'s registries: a serializer the
+// dynamically-imported workflow module registers via the root import would
+// be invisible to the CLI's own Engine when it encodes/decodes checkpoints —
+// the same #710 bug, reproduced inside one process instead of across a
+// library import boundary.
+//
+// The primary, deterministic proof that this cannot happen is structural:
+// `bun run build`'s `assertSingletonModulesNotDuplicated()` guard fails if
+// dist/cli-main.js or dist/mcp/cli.js contain their own copy of any
+// singleton marker at all (they no longer do — see scripts/build.ts and
+// scripts/lib/build-guards.ts). This test is a complementary, live
+// end-to-end check: it runs the actual packed `weft` bin against a real
+// dynamically-loaded workflow module that imports `registerSerializer` from
+// the packed root export, starts a workflow, and confirms the whole
+// pipeline — dynamic import, engine construction, workflow registration,
+// serve() — completes without error. (A silent registry mismatch degrades
+// custom-serialized data rather than throwing, per `registerSerializer`'s
+// own docs on the generic Error/structured-clone fallback, so this
+// integration run is a real-world smoke check on top of the structural
+// guard above, not a substitute for it. It already caught two genuine
+// defects during development: a stripped shebang and a missing packaged
+// JSON asset, both only reachable by actually executing the built binary.)
+async function runCliServeSharesRootSingletonsWithDynamicWorkflowModuleSmoke(
+  consumerDirectory: string,
+): Promise<void> {
+  const workflowModulePath = join(consumerDirectory, 'cli-singleton-workflow.ts');
+  await Bun.write(
+    workflowModulePath,
+    [
+      `import { registerSerializer, workflow } from '${packageName}';`,
+      '',
+      'class TaggedFailure extends Error {',
+      '  constructor(readonly proofTag: string) {',
+      "    super('tagged failure');",
+      "    this.name = 'TaggedFailure';",
+      '  }',
+      '}',
+      '',
+      'registerSerializer(',
+      '  TaggedFailure,',
+      '  {',
+      '    toJSON: (error) => ({ proofTag: error.proofTag }),',
+      '    fromJSON: (data) => new TaggedFailure((data as { proofTag: string }).proofTag),',
+      '  },',
+      "  { tag: 'TaggedFailure' },",
+      ');',
+      '',
+      "export const cliSingletonProof = workflow({ name: 'cli-singleton-proof' }).execute(",
+      '  async function* () {',
+      "    return 'ok';",
+      '  },',
+      ');',
+    ].join('\n'),
+  );
+
+  const cliBinaryPath = join(consumerDirectory, 'node_modules', '.bin', 'weft');
+  const server = Bun.spawn({
+    cmd: [cliBinaryPath, 'serve', '--workflows', workflowModulePath, '--port', '0'],
+    cwd: consumerDirectory,
+    stdout: 'pipe',
+    stderr: 'pipe',
+    env: createSubprocessEnvironment(),
+  });
+
+  const STARTUP_TIMEOUT_MS = 15_000;
+  const stderrDrain = new Response(server.stderr as ReadableStream<Uint8Array>).text();
+
+  try {
+    const reader = (server.stdout as ReadableStream<Uint8Array>).getReader();
+    const decoder = new TextDecoder();
+    let buffered = '';
+    let baseUrl: string | undefined;
+    const deadline = Date.now() + STARTUP_TIMEOUT_MS;
+
+    try {
+      while (baseUrl === undefined) {
+        const remainingMs = Math.max(0, deadline - Date.now());
+        if (remainingMs === 0) break;
+        const readResult = await Promise.race([
+          reader.read(),
+          Bun.sleep(remainingMs).then(() => 'timeout' as const),
+        ]);
+        if (readResult === 'timeout' || readResult.done) break;
+        buffered += decoder.decode(readResult.value, { stream: true });
+        const match = /Weft API running at (\S+)\/api\/v1/.exec(buffered);
+        if (match?.[1] !== undefined) baseUrl = match[1];
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    if (baseUrl === undefined) {
+      throw new Error(
+        `weft serve (with a dynamically-imported registerSerializer workflow module) did not ` +
+          `announce readiness within ${STARTUP_TIMEOUT_MS}ms.\nstdout:\n${buffered}`,
+      );
+    }
+
+    const startResponse = await fetch(`${baseUrl}/jsonrpc`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'weft.workflows.start',
+        params: { type: 'cliSingletonProof', input: undefined },
+      }),
+    });
+    const startBody = (await startResponse.json()) as {
+      result?: { id?: string };
+      error?: unknown;
+    };
+    if (startBody.error !== undefined || typeof startBody.result?.id !== 'string') {
+      throw new Error(`weft.workflows.start failed: ${JSON.stringify(startBody)}`);
+    }
+    const workflowId = startBody.result.id;
+
+    const resultDeadline = Date.now() + 10_000;
+    let finalStatus: string | undefined;
+    while (Date.now() < resultDeadline) {
+      const getResponse = await fetch(`${baseUrl}/jsonrpc`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 2,
+          method: 'weft.workflows.get',
+          params: { workflowId },
+        }),
+      });
+      const getBody = (await getResponse.json()) as {
+        result?: { status?: string };
+        error?: unknown;
+      };
+      if (getBody.error !== undefined) {
+        throw new Error(`weft.workflows.get failed: ${JSON.stringify(getBody)}`);
+      }
+      if (getBody.result?.status === 'completed' || getBody.result?.status === 'failed') {
+        finalStatus = getBody.result.status;
+        break;
+      }
+      await Bun.sleep(150);
+    }
+
+    if (finalStatus !== 'completed') {
+      throw new Error(
+        `Workflow did not reach 'completed' within 10s (last status: ${finalStatus ?? 'unknown'})`,
+      );
+    }
+  } finally {
+    server.kill('SIGTERM');
+    await Promise.race([server.exited, Bun.sleep(5_000)]);
+  }
+
+  // Checked after the `finally` cleanup (rather than inside it) so this
+  // assertion can never mask an exception already in flight from the `try`
+  // block above.
+  const stderrText = await stderrDrain.catch(() => '');
+  if (/internals not initialized/i.test(stderrText)) {
+    throw new Error(`weft serve crashed with the #710 error class:\n${stderrText}`);
+  }
+
+  console.log(
+    '✓ weft serve CLI + dynamically-imported workflow module share root singleton state (#710 CLI regression)',
+  );
+}
+
 async function runNodeConsumerSmoke(consumerDirectory: string): Promise<void> {
   const nodeExecutable = resolveRealNodeExecutable();
   const script = [
@@ -288,7 +463,7 @@ async function runEventFeedIntegrationSmoke(consumerDirectory: string): Promise<
     '',
     '// `Engine` starts background timers (scheduler polling, retention) that',
     '// keep this `--eval` child process alive, so `Bun.spawnSync` on the parent',
-    "// side would otherwise hang forever after `main()` returns — dispose it in",
+    '// side would otherwise hang forever after `main()` returns — dispose it in',
     '// a `finally` block on every exit path.',
     'const READ_TIMEOUT_MS = 10_000;',
     '',
@@ -296,7 +471,7 @@ async function runEventFeedIntegrationSmoke(consumerDirectory: string): Promise<
     '  let timer;',
     '  const timeout = new Promise((_, reject) => {',
     '    timer = setTimeout(',
-    "      () => reject(new Error(`SSE read timed out after ${timeoutMs}ms`)),",
+    '      () => reject(new Error(`SSE read timed out after ${timeoutMs}ms`)),',
     '      timeoutMs,',
     '    );',
     '  });',
@@ -459,6 +634,7 @@ async function main(): Promise<void> {
     await createConsumerProject(consumerDirectory, tarballPath);
     await runBunConsumerSmoke(consumerDirectory);
     await runServeEngineSmoke(consumerDirectory);
+    await runCliServeSharesRootSingletonsWithDynamicWorkflowModuleSmoke(consumerDirectory);
     await runNodeConsumerSmoke(consumerDirectory);
     await runBrowserBundleSmoke(consumerDirectory);
     await runTypeScriptConsumerSmoke(consumerDirectory);
