@@ -1,5 +1,5 @@
-import { workflow } from '../types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { workflow } from '../types.ts';
 import { Engine, type RegistryAgnosticEngine } from './index.ts';
 
 const greet = workflow({ name: 'greet' }).execute(async function* (_ctx, input: { a: number }) {
@@ -45,7 +45,8 @@ declare const engineSubstituteMissingStartOrSignal: Omit<
   'register' | 'registerWorkflows' | 'startOrSignal'
 >;
 // @ts-expect-error a substitute missing `startOrSignal` must not satisfy RegistryAgnosticEngine.
-const rejectedForMissingStartOrSignal: RegistryAgnosticEngine = engineSubstituteMissingStartOrSignal;
+const rejectedForMissingStartOrSignal: RegistryAgnosticEngine =
+  engineSubstituteMissingStartOrSignal;
 void rejectedForMissingStartOrSignal;
 
 // `register` and `registerWorkflows` remain intentionally excluded — no

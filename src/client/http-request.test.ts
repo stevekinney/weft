@@ -52,6 +52,21 @@ describe('HttpClientError', () => {
     const error = new HttpClientError(404, 'not found', { weftCode: 'WorkflowNotFoundError' });
     expect(error.weftCode).toBe('WorkflowNotFoundError');
   });
+
+  it('carries a provided data payload (#711)', () => {
+    const error = new HttpClientError(400, 'invalid input', {
+      faultCode: 'InvalidParams',
+      data: { issues: [{ path: ['name'], message: 'Required', code: 'invalid_type' }] },
+    });
+    expect(error.data).toEqual({
+      issues: [{ path: ['name'], message: 'Required', code: 'invalid_type' }],
+    });
+  });
+
+  it('leaves data undefined when constructed without options', () => {
+    const error = new HttpClientError(404, 'not found');
+    expect(error.data).toBeUndefined();
+  });
 });
 
 describe('request() error-body parsing', () => {
@@ -130,7 +145,7 @@ describe('request() error-body parsing', () => {
     expect(error.message).toBe('short and stout');
   });
 
-  it('ignores the structured data field but not its weftCode', async () => {
+  it('surfaces the structured data field alongside faultCode and weftCode (#711)', async () => {
     const error = await captureError(
       new Response(
         JSON.stringify({ error: { code: 'NotFound', message: 'gone', data: { resource: 'wf' } } }),
@@ -139,8 +154,108 @@ describe('request() error-body parsing', () => {
     );
     expect(error.faultCode).toBe('NotFound');
     expect(error.message).toBe('gone');
-    expect('data' in error).toBe(false);
+    expect(error.data).toEqual({ resource: 'wf' });
     expect(error.weftCode).toBeUndefined();
+  });
+
+  it('round-trips InvalidParams field issues through error.data.issues (#711)', async () => {
+    const issues = [
+      { path: ['input', 'name'], message: 'Required', code: 'invalid_type' },
+      { path: ['input', 'age'], message: 'Expected number', code: 'invalid_type' },
+    ];
+    const error = await captureError(
+      new Response(
+        JSON.stringify({
+          error: { code: 'InvalidParams', message: 'invalid input', data: { issues } },
+        }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    expect(error.faultCode).toBe('InvalidParams');
+    expect(error.data?.['issues']).toEqual(issues);
+  });
+
+  it('round-trips Conflict resource/identifier and bulk sub-detail through error.data (#711)', async () => {
+    const error = await captureError(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: 'Conflict',
+            message: 'already exists',
+            data: {
+              reason: 'duplicate',
+              missingTypes: ['a', 'b'],
+              missingWorkflowCount: 3,
+              samplesTruncated: true,
+            },
+          },
+        }),
+        { status: 409, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    expect(error.faultCode).toBe('Conflict');
+    expect(error.data).toEqual({
+      reason: 'duplicate',
+      missingTypes: ['a', 'b'],
+      missingWorkflowCount: 3,
+      samplesTruncated: true,
+    });
+  });
+
+  it('leaves data undefined for a flat string body (no structured data on the wire)', async () => {
+    const error = await captureError(
+      new Response(JSON.stringify({ error: 'plain message' }), {
+        status: 422,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    expect(error.data).toBeUndefined();
+  });
+
+  it('leaves data undefined when the structured body carries no data field', async () => {
+    const error = await captureError(
+      new Response(JSON.stringify({ error: { code: 'NotFound', message: 'gone' } }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    expect(error.data).toBeUndefined();
+  });
+
+  it('ignores a non-object data field (defensive parsing of untrusted wire input)', async () => {
+    const error = await captureError(
+      new Response(
+        JSON.stringify({ error: { code: 'NotFound', message: 'gone', data: 'not-an-object' } }),
+        { status: 404, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    expect(error.data).toBeUndefined();
+  });
+
+  it('ignores an array data field (defensive parsing of untrusted wire input)', async () => {
+    const error = await captureError(
+      new Response(
+        JSON.stringify({ error: { code: 'NotFound', message: 'gone', data: [1, 2, 3] } }),
+        { status: 404, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    expect(error.data).toBeUndefined();
+  });
+
+  it('never surfaces data for a masked EngineFailure REST response (#711)', async () => {
+    // shapeRestFault masks EngineFailure to a flat `{ error: "Internal server
+    // error" }` body with no `data` at all — this pins that masking so a
+    // future refactor cannot leak internal fault detail through `error.data`.
+    const error = await captureError(
+      new Response(JSON.stringify({ error: 'Internal server error' }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    expect(error.message).toBe('Internal server error');
+    expect(error.faultCode).toBeUndefined();
+    expect(error.weftCode).toBeUndefined();
+    expect(error.data).toBeUndefined();
   });
 
   it('surfaces a fine-grained weftCode from a structured body data field (#465)', async () => {

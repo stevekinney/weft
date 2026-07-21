@@ -45,6 +45,16 @@ function isJsonRpcSuccess(value: unknown): value is JsonRpcSuccess {
 }
 
 /**
+ * Narrow an untrusted JSON-RPC `error.data` value to a plain object so it can
+ * be surfaced on {@link HttpClientError.data}. The envelope is server-
+ * controlled but crosses a network boundary, so it is shape-checked rather
+ * than trusted as-is.
+ */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
  * Build a {@link CatalogTransport} that dispatches catalog operations as
  * JSON-RPC requests to a remote Weft server at `${baseUrl}/jsonrpc`.
  *
@@ -95,7 +105,18 @@ export function httpClientCatalogTransport(
       // to response.status (which will be 200) only if the envelope omits it.
       const httpStatus = typeof data?.httpStatus === 'number' ? data.httpStatus : response.status;
       const faultCode = isFaultCode(data?.weftCode) ? data.weftCode : undefined;
-      throw new HttpClientError(httpStatus, message, { faultCode });
+      // Surface the full envelope `data` object verbatim on HttpClientError.data
+      // (#711) — it carries the fault-specific payload (e.g. InvalidParams'
+      // `issues`, NotFound's `resource`/`identifier`) alongside the envelope's
+      // own `weftCode`/`httpStatus` keys. `data.weftCode` here is the coarse
+      // `FaultCode` the envelope writes last (`faultToJsonRpcError`), not a
+      // fine-grained `WeftErrorCode` — JSON-RPC does not currently carry the
+      // fine-grained code at all, so `HttpClientError.weftCode` stays
+      // undefined for this transport (a pre-existing gap, not addressed here).
+      throw new HttpClientError(httpStatus, message, {
+        faultCode,
+        data: isRecord(data) ? data : undefined,
+      });
     }
 
     if (isJsonRpcSuccess(body)) return body.result;

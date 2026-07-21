@@ -116,7 +116,12 @@ describe('HttpClient catalog operations', () => {
       port: 0,
       auth: {
         apiKeys: ['catalog-ops-secret'],
-        defaultApiKeyScopes: ['system:read', 'workflows:read', 'workflows:write'],
+        defaultApiKeyScopes: [
+          'system:read',
+          'workflows:read',
+          'workflows:write',
+          'workflows:admin',
+        ],
       },
     });
     client = new HttpClient({
@@ -189,5 +194,83 @@ describe('HttpClient catalog operations', () => {
     });
     const err = await nonJsonTransport('weft.system.metrics', {}).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(HttpClientError);
+  });
+
+  // #711: HttpClientError.data must round-trip the fault's typed wire payload
+  // over JSON-RPC-over-HTTP so weft-console can build field-level and
+  // resource-linked fault UI without hand-parsing.
+  //
+  // REST is deliberately NOT covered here with a live round trip. Every
+  // production REST binding supplies `shapeFault: shapeRestFault` (or a
+  // shaper that delegates to it), and `shapeRestFault` emits a flat
+  // `{ error, weftCode? }` body — it never puts a `data` object on the wire
+  // for ANY fault code, not just the masked `EngineFailure`. `faultCode` does
+  // not even survive the REST trip today (only the human `message` and, when
+  // set, a fine-grained `weftCode` sibling do). `HttpClientError.data`'s REST
+  // parsing path is proven correct against the nested `{ error: { data } }`
+  // shape in `http-request.test.ts` — that shape is real (it is what
+  // `faultToHttpResponse` emits, and the type guards in `http-request.ts`
+  // handle it defensively for forward compatibility) but is not the shape any
+  // current production REST binding sends. Delivering `data` over REST
+  // requires changing `shapeRestFault`'s wire contract across ~30 operations
+  // and re-auditing what each fault discloses — out of scope here; tracked in
+  // https://github.com/stevekinney/weft/issues/720.
+  describe('HttpClientError.data (#711)', () => {
+    it('round-trips InvalidParams field issues from a real Zod schema failure over JSON-RPC', async () => {
+      const { HttpClientError } = await import('./http-request.ts');
+      // `operation` fails the top-level `z.enum(['add', 'remove'])` schema
+      // check before `invoke()` runs, so the server emits a REAL flattened
+      // Zod issue (not the empty-array shape hand-thrown faults use).
+      const caught = await client
+        .call('weft.workflows.bulk.tags', { tags: ['a'], operation: 'bogus' } as never)
+        .catch((error: unknown) => error);
+
+      expect(caught).toBeInstanceOf(HttpClientError);
+      if (!(caught instanceof HttpClientError)) throw new Error('unreachable');
+      expect(caught.faultCode).toBe('InvalidParams');
+      const issues = caught.data?.['issues'];
+      expect(Array.isArray(issues)).toBe(true);
+      const issueArray = issues as Array<{ path: unknown[]; message: string; code: string }>;
+      expect(issueArray.length).toBeGreaterThan(0);
+      expect(issueArray[0]).toMatchObject({
+        path: ['operation'],
+        message: expect.any(String),
+        code: expect.any(String),
+      });
+    });
+
+    it('round-trips NotFound resource/identifier over JSON-RPC', async () => {
+      const { HttpClientError } = await import('./http-request.ts');
+      const caught = await client.operations['weft.workflows.get']({
+        workflowId: 'catalog-ops-data-notfound-jsonrpc',
+      }).catch((error: unknown) => error);
+
+      expect(caught).toBeInstanceOf(HttpClientError);
+      if (!(caught instanceof HttpClientError)) throw new Error('unreachable');
+      expect(caught.faultCode).toBe('NotFound');
+      expect(caught.data).toMatchObject({
+        resource: 'workflow',
+        identifier: 'catalog-ops-data-notfound-jsonrpc',
+      });
+    });
+
+    it('leaves data (and faultCode) undefined over a live REST fault response', async () => {
+      // A live `shapeRestFault` response — here, a real 401 from an
+      // unauthenticated request — never carries `data` (or even `faultCode`)
+      // over REST today, confirming the boundary documented above holds
+      // against the real server, not just the mocked bodies in
+      // `http-request.test.ts`.
+      const { HttpClientError } = await import('./http-request.ts');
+      const unauthenticatedClient = new HttpClient({ baseUrl: server.url, headers: {} });
+      const caught = await unauthenticatedClient
+        .cancel('catalog-ops-unauthenticated')
+        .catch((error: unknown) => error);
+
+      expect(caught).toBeInstanceOf(HttpClientError);
+      if (!(caught instanceof HttpClientError)) throw new Error('unreachable');
+      expect(caught.status).toBe(401);
+      expect(caught.faultCode).toBeUndefined();
+      expect(caught.data).toBeUndefined();
+    });
   });
 });
