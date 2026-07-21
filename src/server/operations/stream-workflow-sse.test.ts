@@ -91,7 +91,10 @@ describe('weft.workflows.streams.sse', () => {
     );
 
     expect(response.status).toBe(404);
-    expect(await response.json()).toEqual({ error: 'Workflow "missing-wf" not found' });
+    expect(await response.json()).toEqual({
+      error: 'Workflow "missing-wf" not found',
+      data: { resource: 'workflow', identifier: 'missing-wf' },
+    });
   });
 
   it('forwards a Last-Event-ID cursor to engine.getStreamChunks', async () => {
@@ -136,7 +139,10 @@ describe('weft.workflows.streams.sse', () => {
     );
 
     expect(response.status).toBe(404);
-    expect(await response.json()).toEqual({ error: 'Workflow "missing-wf" not found' });
+    expect(await response.json()).toEqual({
+      error: 'Workflow "missing-wf" not found',
+      data: { resource: 'workflow', identifier: 'missing-wf' },
+    });
   });
 
   it('returns 400 for an invalid Last-Event-ID header', async () => {

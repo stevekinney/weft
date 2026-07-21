@@ -40,7 +40,7 @@
 // re-exported so existing server call sites importing it from here are
 // unaffected.
 import type { FaultCode } from '../core/fault-code.ts';
-import type { WeftErrorCode } from '../core/weft-error.ts';
+import { isWeftErrorCode, type WeftErrorCode } from '../core/weft-error.ts';
 
 export type { FaultCode };
 
@@ -153,30 +153,146 @@ export function formatInvalidParamsMessage(
     .join('; ');
 }
 
+export type RestFaultResponseOptions = {
+  /** REST-only status override for a binding with an established non-canonical status. */
+  readonly status?: number;
+  /** REST-only public message override for a binding with an established response message. */
+  readonly message?: string;
+};
+
+export type RestFaultBody = {
+  readonly error: string;
+  readonly weftCode?: WeftErrorCode;
+  readonly data?: Readonly<Record<string, unknown>>;
+};
+
+type RestFaultDataExtractor<Code extends OperationFault['code']> = (
+  data: Extract<OperationFault, { code: Code }>['data'],
+) => Readonly<Record<string, unknown>>;
+
+type RestFaultDataExtractors = {
+  [Code in OperationFault['code']]: RestFaultDataExtractor<Code>;
+};
+
+const NO_REST_FAULT_DATA: Readonly<Record<string, unknown>> = Object.freeze({});
+
 /**
- * Map an `OperationFault` to a JSON `Response` with an `{ error }` body.
- * Treats `InvalidParams` as 400 with a flattened issues message, masks
- * `EngineFailure` as `Internal server error` at 500, and uses
- * {@link FAULT_CODE_TO_HTTP_STATUS} for every other code. Used by REST
- * bindings that serve a single resource and want a uniform error shape.
+ * REST is a deliberately smaller disclosure boundary than JSON-RPC. This
+ * exhaustive table is deny-by-default: adding a new `FaultCode` cannot compile
+ * until its REST-visible fields are reviewed explicitly.
  */
-export function shapeOperationFaultAsJson(fault: OperationFault): Response {
-  if (fault.code === 'InvalidParams') {
-    return new Response(JSON.stringify({ error: formatInvalidParamsMessage(fault) }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-  if (fault.code === 'EngineFailure') {
-    return new Response(JSON.stringify({ error: 'Internal server error' }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-  return new Response(JSON.stringify({ error: fault.message }), {
-    status: FAULT_CODE_TO_HTTP_STATUS[fault.code],
+const REST_FAULT_DATA_EXTRACTORS: RestFaultDataExtractors = {
+  Unauthorized: () => NO_REST_FAULT_DATA,
+  Forbidden: () => NO_REST_FAULT_DATA,
+  NotFound: (data) =>
+    filterDefined({
+      resource: data.resource,
+      identifier:
+        data.identifier === undefined || data.identifier.length === 0 ? undefined : data.identifier,
+    }),
+  Conflict: (data) =>
+    filterDefined({
+      missingTypes: data.missingTypes === undefined ? undefined : [...data.missingTypes],
+      missingWorkflowCount: data.missingWorkflowCount,
+      samplesTruncated: data.samplesTruncated,
+    }),
+  Unprocessable: () => NO_REST_FAULT_DATA,
+  PayloadTooLarge: (data) => ({ maxBytes: data.maxBytes }),
+  Timeout: (data) => filterDefined({ operationName: data.operationName }),
+  NotImplemented: () => NO_REST_FAULT_DATA,
+  UnsupportedTransport: (data) => ({
+    transport: data.transport,
+    supported: [...data.supported],
+  }),
+  SubscriptionOverflow: (data) => ({ droppedCount: data.droppedCount }),
+  InvalidParams: (data) =>
+    data.issues.length === 0
+      ? NO_REST_FAULT_DATA
+      : {
+          issues: data.issues.map((issue) => ({
+            path: [...issue.path],
+            message: issue.message,
+            code: issue.code,
+          })),
+        },
+  MethodNotFound: (data) => ({ method: data.method }),
+  EngineFailure: () => NO_REST_FAULT_DATA,
+};
+
+/**
+ * Map an `OperationFault` to the canonical additive REST body:
+ * `{ error, weftCode?, data? }`. The existing string `error` and optional
+ * fine-grained `weftCode` remain unchanged; `data` contains only fields from
+ * the audited allowlist above. JSON-RPC uses its own broader projection.
+ *
+ * `EngineFailure` is a hard exception: its exact body remains
+ * `{ "error": "Internal server error" }`, regardless of response overrides.
+ */
+export function shapeOperationFaultAsJson(
+  fault: OperationFault,
+  options: RestFaultResponseOptions = {},
+): Response {
+  const message =
+    options.message ??
+    (fault.code === 'InvalidParams' ? formatInvalidParamsMessage(fault) : undefined);
+  return shapeRestFaultAsJson(fault, { ...options, ...(message === undefined ? {} : { message }) });
+}
+
+/** Canonical flat REST response used by bindings and route-dispatch fallback. */
+export function shapeRestFaultAsJson(
+  fault: OperationFault,
+  options: RestFaultResponseOptions = {},
+): Response {
+  const body = shapeRestFaultBody(fault, options.message);
+  const status =
+    fault.code === 'EngineFailure'
+      ? 500
+      : (options.status ?? FAULT_CODE_TO_HTTP_STATUS[fault.code]);
+
+  return new Response(JSON.stringify(body), {
+    status,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+/** Build the audited body for bespoke REST shapers that retain extra legacy fields. */
+export function shapeRestFaultBody(fault: OperationFault, message?: string): RestFaultBody {
+  if (fault.code === 'EngineFailure') return { error: 'Internal server error' };
+
+  const error = message ?? fault.message;
+  const weftCode = weftCodeFromFaultData(fault.data);
+  const data = restDataFromFault(fault);
+  const body: {
+    error: string;
+    weftCode?: WeftErrorCode;
+    data?: Readonly<Record<string, unknown>>;
+  } = { error };
+  if (weftCode !== undefined) body.weftCode = weftCode;
+  if (Object.keys(data).length > 0) body.data = data;
+  return body;
+}
+
+function restDataFromFault(fault: OperationFault): Readonly<Record<string, unknown>> {
+  // The table maps every discriminant to the matching data extractor. TypeScript
+  // cannot preserve that correlation through a dynamic lookup, so this narrow
+  // assertion reconnects the already-exhaustive key/value relationship.
+  const extractor = REST_FAULT_DATA_EXTRACTORS[fault.code] as RestFaultDataExtractor<
+    typeof fault.code
+  >;
+  return extractor(fault.data);
+}
+
+function weftCodeFromFaultData(data: OperationFault['data']): WeftErrorCode | undefined {
+  if (typeof data !== 'object' || data === null || !('weftCode' in data)) return undefined;
+  return isWeftErrorCode(data.weftCode) ? data.weftCode : undefined;
+}
+
+function filterDefined(input: Record<string, unknown>): Record<string, unknown> {
+  const output: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (value !== undefined) output[key] = value;
+  }
+  return output;
 }
 
 /**

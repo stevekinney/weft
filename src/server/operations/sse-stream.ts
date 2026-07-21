@@ -1,12 +1,7 @@
 import type { StoredStreamChunk } from '../../core/context.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { decodeCursor, type Cursor } from '../workflow-event-feed.ts';
-import {
-  invalidParamsFault,
-  isOperationFault,
-  jsonErrorResponse,
-  shapeRestFault,
-} from './operation-helpers.ts';
+import { invalidParamsFault, isOperationFault, shapeRestFault } from './operation-helpers.ts';
 
 const textEncoder = new TextEncoder();
 
@@ -71,7 +66,7 @@ export function readServerSentEventsCursor(value: string | null): Cursor | undef
 
 export function shapeServerSentEventsFault(fault: OperationFault): Response {
   if (fault.code === 'InvalidParams' && fault.message === SSE_ACCEPT_REQUIRED_MESSAGE) {
-    return jsonErrorResponse(fault.message, 406);
+    return shapeRestFault(fault, { status: 406 });
   }
   return shapeRestFault(fault);
 }

@@ -1,5 +1,9 @@
-import { isWeftErrorCode, type WeftErrorCode } from '../../core/weft-error.ts';
-import { FAULT_CODE_TO_HTTP_STATUS, type OperationFault } from '../operation-fault.ts';
+import type { WeftErrorCode } from '../../core/weft-error.ts';
+import {
+  shapeRestFaultAsJson,
+  type OperationFault,
+  type RestFaultResponseOptions,
+} from '../operation-fault.ts';
 
 /** Type guard distinguishing an `OperationFault` from a value type. */
 export function isOperationFault(value: unknown): value is OperationFault {
@@ -44,37 +48,18 @@ export function invalidParamsFault(message: string, weftCode?: WeftErrorCode): O
 }
 
 /**
- * Default REST fault shaper: masks `EngineFailure` to a generic
- * `"Internal server error"` 500; other faults map by `FAULT_CODE_TO_HTTP_STATUS`.
- * REST-only — JSON-RPC transports receive unmasked faults.
+ * Default REST fault shaper. Delegates to the centralized, exhaustively
+ * audited REST projection so direct and per-operation bindings cannot drift.
+ * REST-only — JSON-RPC transports receive their distinct operation fault data.
  *
  * When the fault carries a fine-grained `data.weftCode` (set only at sites that
- * hold a typed `WeftError`, e.g. `WorkflowNotFoundError` /
- * `WorkflowNotRegisteredError`), it is emitted as a top-level `weftCode` sibling
- * of the flat `{ error }` body so REST clients can branch transport-uniformly
- * via `isWeftFault`. The body's `error` stays a plain string, so the new field
- * is a sibling rather than nested. Faults without a `weftCode` keep their exact
- * `{ error }` shape, and `EngineFailure` stays masked (it carries no weftCode).
+ * hold a typed `WeftError`), it remains a top-level `weftCode` sibling. Safe
+ * structured fields are added under `data`; fields outside the per-code
+ * allowlist are withheld. `EngineFailure` stays byte-identically masked.
  */
-export function shapeRestFault(fault: OperationFault): Response {
-  if (fault.code === 'EngineFailure') {
-    return jsonErrorResponse('Internal server error', 500);
-  }
-  const status = FAULT_CODE_TO_HTTP_STATUS[fault.code];
-  const weftCode = weftCodeFromFaultData(fault.data);
-  if (weftCode === undefined) {
-    return jsonErrorResponse(fault.message, status);
-  }
-  return new Response(JSON.stringify({ error: fault.message, weftCode }), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  });
-}
-
-/** Read a fine-grained `weftCode` off a fault's `data`, when present. */
-function weftCodeFromFaultData(data: OperationFault['data']): WeftErrorCode | undefined {
-  if (typeof data !== 'object' || data === null || !('weftCode' in data)) {
-    return undefined;
-  }
-  return isWeftErrorCode(data.weftCode) ? data.weftCode : undefined;
+export function shapeRestFault(
+  fault: OperationFault,
+  options?: RestFaultResponseOptions,
+): Response {
+  return shapeRestFaultAsJson(fault, options);
 }

@@ -69,6 +69,7 @@ describe('weft.reviews.get', () => {
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({
       error: 'Review "rev-missing" not found for workflow "wf-1"',
+      data: { resource: 'review', identifier: 'rev-missing' },
     });
   });
 

@@ -69,6 +69,7 @@ describe('weft.workflows.resume', () => {
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({
       error: 'Workflow "missing-workflow" not found in storage',
+      data: { resource: 'workflow', identifier: 'missing-workflow' },
     });
   });
 

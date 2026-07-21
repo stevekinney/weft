@@ -72,7 +72,10 @@ describe('weft.workflows.timeout', () => {
       );
 
       expect(response.status).toBe(404);
-      expect(await response.json()).toEqual({ error: 'Workflow "missing-workflow" not found' });
+      expect(await response.json()).toEqual({
+        error: 'Workflow "missing-workflow" not found',
+        data: { resource: 'workflow', identifier: 'missing-workflow' },
+      });
     } finally {
       engine.timeout = originalTimeout;
     }

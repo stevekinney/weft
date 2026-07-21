@@ -560,6 +560,33 @@ describe('HttpClient', () => {
     expectSharedWeftClientMethodSurface(client);
   });
 
+  describe('REST fault data', () => {
+    it('round-trips InvalidParams Zod issues through HttpClientError.data (#720)', async () => {
+      const caught = await client.activity.complete(42 as never).catch((error: unknown) => error);
+
+      expect(caught).toBeInstanceOf(HttpClientError);
+      if (!(caught instanceof HttpClientError)) throw new Error('unreachable');
+      expect(caught.status).toBe(400);
+      expect(caught.data?.['issues']).toEqual([
+        expect.objectContaining({
+          path: ['token'],
+          message: expect.any(String),
+          code: expect.any(String),
+        }),
+      ]);
+    });
+
+    it('round-trips NotFound resource and identifier through HttpClientError.data (#720)', async () => {
+      const workflowId = 'http-client-rest-fault-data-missing';
+      const caught = await client.resume(workflowId).catch((error: unknown) => error);
+
+      expect(caught).toBeInstanceOf(HttpClientError);
+      if (!(caught instanceof HttpClientError)) throw new Error('unreachable');
+      expect(caught.status).toBe(404);
+      expect(caught.data).toEqual({ resource: 'workflow', identifier: workflowId });
+    });
+  });
+
   describe('start', () => {
     it('starts a workflow and returns a handle with a workflow id', async () => {
       const handle = await client.start('echo', 'hello');

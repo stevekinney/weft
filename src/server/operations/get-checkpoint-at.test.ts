@@ -102,7 +102,18 @@ describe('weft.workflows.checkpoints.get', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Invalid step: not-a-number' });
+    expect(await response.json()).toEqual({
+      error: 'Invalid step: not-a-number',
+      data: {
+        issues: [
+          {
+            path: ['step'],
+            message: 'Invalid step: not-a-number',
+            code: 'custom',
+          },
+        ],
+      },
+    });
   });
 
   it('returns 404 with the canonical error body when the checkpoint does not exist', async () => {
@@ -124,6 +135,7 @@ describe('weft.workflows.checkpoints.get', () => {
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({
       error: `Checkpoint not found at step 99 for workflow ${handle.id}`,
+      data: { resource: 'checkpoint', identifier: `${handle.id}:99` },
     });
   });
 

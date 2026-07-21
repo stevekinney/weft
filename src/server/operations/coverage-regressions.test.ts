@@ -66,10 +66,15 @@ function jsonRequest(method: string, path: string, body: unknown): Request {
   });
 }
 
-async function expectJsonError(response: Response, status: number, error: string): Promise<void> {
+async function expectJsonError(
+  response: Response,
+  status: number,
+  error: string,
+  data?: Readonly<Record<string, unknown>>,
+): Promise<void> {
   expect(response.status).toBe(status);
   expect(response.headers.get('content-type')).toBe('application/json');
-  await expect(response.json()).resolves.toEqual({ error });
+  await expect(response.json()).resolves.toEqual(data === undefined ? { error } : { error, data });
 }
 
 describe('operation coverage regressions', () => {
@@ -347,23 +352,22 @@ describe('operation coverage regressions', () => {
     ] as const;
 
     for (const binding of bindings) {
+      const usesConflictFault =
+        binding === getStreamChunksRestBinding || binding === streamWorkflowSseRestBinding;
       const response = binding.shapeFault?.(
-        binding === getStreamChunksRestBinding || binding === streamWorkflowSseRestBinding
-          ? workflowConflictFault
-          : fallbackFault,
+        usesConflictFault ? workflowConflictFault : fallbackFault,
       );
       expect(response).toBeDefined();
 
-      const expectedStatus =
-        binding === getStreamChunksRestBinding || binding === streamWorkflowSseRestBinding
-          ? 409
-          : 404;
-      const expectedMessage =
-        binding === getStreamChunksRestBinding || binding === streamWorkflowSseRestBinding
-          ? 'workflow is busy'
-          : 'missing resource';
+      const expectedStatus = usesConflictFault ? 409 : 404;
+      const expectedMessage = usesConflictFault ? 'workflow is busy' : 'missing resource';
 
-      await expectJsonError(response!, expectedStatus, expectedMessage);
+      await expectJsonError(
+        response!,
+        expectedStatus,
+        expectedMessage,
+        usesConflictFault ? undefined : { resource: 'workflow', identifier: 'wf-missing' },
+      );
     }
   });
 });

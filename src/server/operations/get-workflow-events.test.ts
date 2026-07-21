@@ -70,7 +70,10 @@ describe('weft.workflows.events.list', () => {
 
     expect(response.status).toBe(404);
     expect(response.headers.get('content-type')).toBe('application/json');
-    expect(await response.json()).toEqual({ error: 'Workflow "does-not-exist" not found' });
+    expect(await response.json()).toEqual({
+      error: 'Workflow "does-not-exist" not found',
+      data: { resource: 'workflow', identifier: 'does-not-exist' },
+    });
   });
 
   it('masks EngineFailure faults to a 500 with a generic error body', async () => {

@@ -114,6 +114,11 @@ describe('weft.recover.all', () => {
       const body = await response.json();
       expect(body).toEqual({
         error: 'workflow_type_not_registered_for_recovery',
+        data: {
+          missingTypes: ['missingAlpha', 'missingBeta'],
+          missingWorkflowCount: 2,
+          samplesTruncated: false,
+        },
         missingTypes: ['missingAlpha', 'missingBeta'],
         missingWorkflowCount: 2,
         samplesTruncated: false,

@@ -354,7 +354,18 @@ describe('weft.workflows.startorsignal', () => {
     });
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'invalid params' });
+    expect(await response.json()).toEqual({
+      error: 'invalid params',
+      data: {
+        issues: [
+          {
+            path: ['signalName'],
+            message: 'Invalid input: expected string, received undefined',
+            code: 'invalid_type',
+          },
+        ],
+      },
+    });
   });
 
   it('returns 400 when engine.startOrSignal throws StartWorkflowValidationError', async () => {
@@ -515,7 +526,18 @@ describe('weft.workflows.startorsignal', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'invalid params' });
+    expect(await response.json()).toEqual({
+      error: 'invalid params',
+      data: {
+        issues: [
+          {
+            path: ['signalName'],
+            message: 'Invalid input: expected string, received undefined',
+            code: 'invalid_type',
+          },
+        ],
+      },
+    });
   });
 
   it('returns 400 when the signalName is an empty string (rejected by the schema)', async () => {
@@ -528,7 +550,18 @@ describe('weft.workflows.startorsignal', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'invalid params' });
+    expect(await response.json()).toEqual({
+      error: 'invalid params',
+      data: {
+        issues: [
+          {
+            path: ['signalName'],
+            message: 'Too small: expected string to have >=1 characters',
+            code: 'too_small',
+          },
+        ],
+      },
+    });
   });
 
   it('enforces idempotencyKey: a duplicate key returns the same id', async () => {

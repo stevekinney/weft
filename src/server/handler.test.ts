@@ -3823,7 +3823,12 @@ describe('handleRequest', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await json(response)).toEqual({ error: 'Invalid step: abc' });
+    expect(await json(response)).toEqual({
+      error: 'Invalid step: abc',
+      data: {
+        issues: [{ path: ['step'], message: 'Invalid step: abc', code: 'custom' }],
+      },
+    });
   });
 
   it('returns 400 for malformed percent-encoding in route parameters', async () => {
@@ -3967,6 +3972,15 @@ describe('handleRequest', () => {
     expect(response.status).toBe(400);
     expect(await json(response)).toEqual({
       error: 'Invalid step: 9007199254740992',
+      data: {
+        issues: [
+          {
+            path: ['step'],
+            message: 'Invalid step: 9007199254740992',
+            code: 'custom',
+          },
+        ],
+      },
     });
   });
 
@@ -4055,6 +4069,7 @@ describe('handleRequest', () => {
     expect(response.status).toBe(404);
     expect(await json(response)).toEqual({
       error: 'Workflow "missing" not found',
+      data: { resource: 'workflow' },
     });
   });
 
@@ -4071,6 +4086,7 @@ describe('handleRequest', () => {
     expect(response.status).toBe(404);
     expect(await json(response)).toEqual({
       error: 'Checkpoint not found for workflow "wf-source"',
+      data: { resource: 'checkpoint' },
     });
 
     engine.fork = originalFork;

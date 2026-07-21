@@ -81,14 +81,14 @@ export function resolveHttpClientConnection(options: HttpClientOptions): {
 /**
  * Error thrown when the server returns a non-2xx response.
  *
- * When the server sends a structured fault body (`{ error: { code, message } }`),
- * the wire fault `code` is surfaced as {@link HttpClientError.faultCode} and a
- * derived {@link HttpClientError.category} so callers can branch programmatically
- * instead of string-matching `message`. Both are `undefined` when the body is a
- * plain `{ error: string }` or carries no recognized code. The fault's typed
+ * When the server sends a fault body with a recognized coarse `code`, the wire
+ * value is surfaced as {@link HttpClientError.faultCode} with a derived
+ * {@link HttpClientError.category}, so callers can branch without
+ * string-matching `message`. Both are `undefined` for the production flat REST
+ * body, which carries no coarse code. The fault's typed
  * `data` payload (e.g. `InvalidParams`'s `issues`, `NotFound`/`Conflict`'s
  * `resource`/`identifier`) is surfaced verbatim as {@link HttpClientError.data}
- * when the body carries a structured `data` object; `undefined` otherwise —
+ * when the body carries an audited `data` object; `undefined` otherwise —
  * including for a masked `EngineFailure`, whose flat body carries no `data`.
  *
  * @example
@@ -100,7 +100,7 @@ export function resolveHttpClientConnection(options: HttpClientOptions): {
  *   await client.cancel('nonexistent-id');
  * } catch (err) {
  *   if (err instanceof HttpClientError) {
- *     if (err.faultCode === 'NotFound') {
+ *     if (err.status === 404 && err.data?.['resource'] === 'workflow') {
  *       // handle a missing resource specifically
  *     } else if (err.category === 'resource') {
  *       // back off on rate limits and capacity faults
@@ -134,7 +134,8 @@ export class HttpClientError extends WeftError<'HttpClientError'> {
   readonly weftCode?: WeftErrorCode | undefined;
   /**
    * The fault's wire `data` payload, when the response carried a structured
-   * body (`{ error: { data } }` for REST, `error.data` for JSON-RPC). Shape is
+   * body (`{ error, data }` for production REST, nested `{ error: { data } }`
+   * for structured REST responses, or `error.data` for JSON-RPC). Shape is
    * fault-code-dependent — see {@link FaultCode} and the server's
    * `OperationFault` per-code `data` union for what each code carries (e.g.
    * `InvalidParams.data.issues`, `NotFound.data.resource`). `undefined` for
@@ -188,10 +189,11 @@ function buildRequestHeaders(
 
 /**
  * Flat error body shape from `shapeRestFault`: `{ error: string }`, optionally
- * with a top-level `weftCode` sibling when the fault carried a fine-grained
- * public code. `error` is always a string, so `weftCode` sits beside it.
+ * with top-level `weftCode` and audited `data` siblings.
  */
-function isFlatErrorBody(value: unknown): value is { error: string; weftCode?: unknown } {
+function isFlatErrorBody(
+  value: unknown,
+): value is { error: string; weftCode?: unknown; data?: unknown } {
   return (
     value !== null &&
     typeof value === 'object' &&
@@ -199,12 +201,26 @@ function isFlatErrorBody(value: unknown): value is { error: string; weftCode?: u
   );
 }
 
+function parseFlatErrorBody(body: { error: string; weftCode?: unknown; data?: unknown }): {
+  message: string;
+  weftCode?: WeftErrorCode;
+  data?: Readonly<Record<string, unknown>>;
+} {
+  const weftCode = isWeftErrorCode(body.weftCode) ? body.weftCode : undefined;
+  const data = isRecord(body.data) ? body.data : undefined;
+  return {
+    message: body.error,
+    ...(weftCode === undefined ? {} : { weftCode }),
+    ...(data === undefined ? {} : { data }),
+  };
+}
+
 /**
- * Structured error body from `faultToHttpResponse`:
- * `{ error: { code, message, data? } }`. The human `message` is required; the
- * `code` and `data` are validated separately so an unrecognized (e.g. future)
- * fault code still surfaces its message — only the typed {@link FaultCode} is
- * withheld.
+ * Structured error body accepted from older or alternate servers:
+ * `{ error: { code, message, data? } }`. Current Weft REST responses use the
+ * flat shape above. The human `message` is required; `code` and `data` are
+ * validated separately so an unrecognized (e.g. future) fault code still
+ * surfaces its message — only the typed {@link FaultCode} is withheld.
  */
 function isStructuredErrorBody(
   value: unknown,
@@ -265,11 +281,9 @@ async function parseErrorBody(response: Response): Promise<{
       return isFaultCode(code) ? { ...base, faultCode: code } : base;
     }
     if (isFlatErrorBody(body) && body.error) {
-      // `shapeRestFault` flat body, optionally with a top-level `weftCode`.
-      // Flat bodies carry no `data` — this is also the masked `EngineFailure`
-      // shape, so `HttpClientError.data` must stay `undefined` here.
-      const weftCode = isWeftErrorCode(body.weftCode) ? body.weftCode : undefined;
-      return weftCode === undefined ? { message: body.error } : { message: body.error, weftCode };
+      // `shapeRestFault` flat body, optionally with top-level `weftCode` and
+      // audited `data` siblings. The masked EngineFailure body has neither.
+      return parseFlatErrorBody(body);
     }
     return { message: response.statusText };
   } catch {

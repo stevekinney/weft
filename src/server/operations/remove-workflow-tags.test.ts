@@ -91,7 +91,10 @@ describe('weft.workflows.tags.remove', () => {
       );
 
       expect(response.status).toBe(404);
-      expect(await response.json()).toEqual({ error: 'workflow not found' });
+      expect(await response.json()).toEqual({
+        error: 'workflow not found',
+        data: { resource: 'workflow', identifier: 'missing' },
+      });
     } finally {
       engine.removeTags = originalRemoveTags;
     }

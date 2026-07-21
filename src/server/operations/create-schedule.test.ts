@@ -181,7 +181,10 @@ describe('weft.schedules.create', () => {
       );
 
       expect(response.status).toBe(404);
-      expect(await response.json()).toEqual({ error: 'Schedule "missing-schedule" not found' });
+      expect(await response.json()).toEqual({
+        error: 'Schedule "missing-schedule" not found',
+        data: { resource: 'schedule' },
+      });
     } finally {
       engine.schedule = originalSchedule;
     }

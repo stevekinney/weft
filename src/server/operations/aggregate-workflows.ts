@@ -21,7 +21,7 @@ import { type OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { extractListFilterFromQuery } from './list-filter-query-extractor.ts';
-import { jsonErrorResponse, shapeRestFault } from './operation-helpers.ts';
+import { shapeRestFault } from './operation-helpers.ts';
 
 const aggregateWorkflowsInput = listFilterObjectSchema
   .omit({ limit: true, offset: true })
@@ -145,7 +145,7 @@ function shapeAggregateWorkflowsFault(fault: OperationFault): Response {
   // transport-neutral fault is `Unprocessable`, but the REST contract
   // documents invalid aggregate query input as HTTP 400.
   if (fault.code === 'Unprocessable') {
-    return jsonErrorResponse(fault.message, 400);
+    return shapeRestFault(fault, { status: 400 });
   }
   return shapeRestFault(fault);
 }

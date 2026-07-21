@@ -2,11 +2,11 @@ import { z } from 'zod';
 
 import type { StoredStreamChunk } from '../../core/context.ts';
 import type { Engine } from '../../core/engine.ts';
-import { FAULT_CODE_TO_HTTP_STATUS, type OperationFault } from '../operation-fault.ts';
+import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { parseOptionalSequenceCursor } from '../sequence-cursor.ts';
-import { invalidParamsFault, jsonErrorResponse } from './operation-helpers.ts';
+import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
 import { createStoredChunkSSEStream, SSE_RESPONSE_HEADERS } from './sse-stream.ts';
 
 // `after` is permissive at the schema boundary so REST and JSON-RPC clients
@@ -72,15 +72,7 @@ export const getStreamChunksOperation = defineOperation<
 });
 
 function shapeGetStreamChunksFault(fault: OperationFault): Response {
-  if (fault.code === 'InvalidParams') {
-    return jsonErrorResponse(fault.message, 400);
-  }
-  if (fault.code === 'EngineFailure') {
-    // Mask engine errors to a generic 500 so raw engine messages never
-    // reach clients.
-    return jsonErrorResponse('Internal server error', 500);
-  }
-  return jsonErrorResponse(fault.message, FAULT_CODE_TO_HTTP_STATUS[fault.code]);
+  return shapeRestFault(fault);
 }
 
 /**

@@ -276,16 +276,35 @@ describe('request() error-body parsing', () => {
   });
 
   it('surfaces a top-level weftCode sibling from a flat string body (#465)', async () => {
-    // The `shapeRestFault` shape: flat `{ error }` plus a top-level `weftCode`.
+    // The `shapeRestFault` shape: flat `{ error }` plus optional top-level
+    // `weftCode` and audited `data` siblings.
     const error = await captureError(
       new Response(
-        JSON.stringify({ error: 'No workflow registered', weftCode: 'WorkflowNotRegisteredError' }),
+        JSON.stringify({
+          error: 'No workflow registered',
+          weftCode: 'WorkflowNotRegisteredError',
+          data: { issues: [{ path: ['type'], message: 'Unknown workflow', code: 'custom' }] },
+        }),
         { status: 400, headers: { 'Content-Type': 'application/json' } },
       ),
     );
     expect(error.message).toBe('No workflow registered');
     expect(error.faultCode).toBeUndefined();
     expect(error.weftCode).toBe('WorkflowNotRegisteredError');
+    expect(error.data).toEqual({
+      issues: [{ path: ['type'], message: 'Unknown workflow', code: 'custom' }],
+    });
+  });
+
+  it('rejects a non-object data sibling from a flat string body (#720)', async () => {
+    const error = await captureError(
+      new Response(JSON.stringify({ error: 'Invalid input', data: ['not', 'an', 'object'] }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    expect(error.message).toBe('Invalid input');
+    expect(error.data).toBeUndefined();
   });
 
   it('ignores an unrecognized weftCode sibling (#465)', async () => {

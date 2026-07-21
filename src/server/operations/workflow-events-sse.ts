@@ -14,7 +14,7 @@ import {
   type ReplayLiveSubscribeOptions,
   type WorkflowEventFeed,
 } from '../workflow-event-feed.ts';
-import { invalidParamsFault, jsonErrorResponse } from './operation-helpers.ts';
+import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
 import {
   createEventEnvelopeSSEStream,
   readServerSentEventsCursor,
@@ -255,7 +255,7 @@ function shapeWorkflowEventsSseSuccess(
 
 function shapeWorkflowEventsSseFault(fault: OperationFault): Response {
   if (fault.code === 'InvalidParams' && fault.message === MAXIMUM_WORKFLOW_STREAMS_MESSAGE) {
-    return jsonErrorResponse(fault.message, 429);
+    return shapeRestFault(fault, { status: 429 });
   }
   return shapeServerSentEventsFault(fault);
 }

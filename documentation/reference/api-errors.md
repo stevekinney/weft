@@ -53,7 +53,44 @@ Use codes instead of parsing human-readable messages. Messages are for people; c
 
 ## FaultCode
 
-REST operation handlers map each `FaultCode` to the HTTP status below. Most REST operation faults return `{ "error": "<message>" }`; `EngineFailure` is masked to `{ "error": "Internal server error" }`. JSON-RPC transports always return HTTP 200 for a valid JSON-RPC envelope and put the HTTP-equivalent status plus the symbolic code in `error.data`.
+REST operation handlers map each `FaultCode` to the HTTP status below. The additive REST body is `{ "error": "<message>", "weftCode": "<optional fine-grained code>", "data": { ... } }`; `weftCode` and `data` are omitted when unavailable. `EngineFailure` remains byte-identically masked to `{ "error": "Internal server error" }`. JSON-RPC transports always return HTTP 200 for a valid JSON-RPC envelope and put the HTTP-equivalent status plus the symbolic code in `error.data`.
+
+REST fault example:
+
+```json
+{
+  "error": "Workflow \"checkout-42\" not found",
+  "weftCode": "WorkflowNotFoundError",
+  "data": {
+    "resource": "workflow",
+    "identifier": "checkout-42"
+  }
+}
+```
+
+REST exposes a smaller, audited data projection than JSON-RPC:
+
+| FaultCode              | REST `data` fields                                                                  |
+| ---------------------- | ----------------------------------------------------------------------------------- |
+| `Unauthorized`         | omitted                                                                             |
+| `Forbidden`            | omitted                                                                             |
+| `NotFound`             | `{ resource, identifier? }`                                                         |
+| `Conflict`             | `{ missingTypes?, missingWorkflowCount?, samplesTruncated? }`                       |
+| `Unprocessable`        | omitted                                                                             |
+| `Timeout`              | `{ operationName? }`, omitted when absent                                           |
+| `PayloadTooLarge`      | `{ maxBytes }`                                                                      |
+| `NotImplemented`       | omitted                                                                             |
+| `UnsupportedTransport` | `{ transport, supported }`                                                          |
+| `SubscriptionOverflow` | `{ droppedCount }`                                                                  |
+| `InvalidParams`        | `{ issues }` when non-empty; each issue is limited to `path`, `message`, and `code` |
+| `MethodNotFound`       | `{ method }`                                                                        |
+| `EngineFailure`        | omitted; the whole response remains the fixed masked body shown above               |
+
+The projection deliberately withholds authentication and authorization reasons, generic internal reasons, subscription identifiers, raw causes, stack traces, credentials, storage details, file paths, and workflow identifiers beyond the caller-supplied `NotFound.identifier`. Recovery conflicts may expose registered workflow type names and counts, but never the affected workflow IDs.
+
+`POST /v1/recover` retains its established top-level `missingTypes`, `missingWorkflowCount`, and `samplesTruncated` fields and now also places the same audited values under `data` for uniform `HttpClientError.data` handling.
+
+The flat REST body does not add the coarse `FaultCode`; use the HTTP status plus the documented `data` shape, and use top-level `weftCode` only when present. JSON-RPC continues to carry the coarse code in `error.data.weftCode`.
 
 JSON-RPC error envelope:
 
@@ -144,7 +181,7 @@ void rethrowUnlessMissing;
 > [!WARNING] `HttpClient.call()` / `client.operations.*` — JSON-RPC-over-HTTP — do not currently carry `weftCode`
 > `HttpClient`'s catalog transport (`HttpClient.call()` and every `client.operations.*` method, implemented in `src/client/http-operations.ts`) sends requests over JSON-RPC. The JSON-RPC error envelope's `data.weftCode` carries the coarse `FaultCode` (e.g. `NotFound`, `Conflict`), not the fine-grained `WeftErrorCode` — a pre-existing gap, not something this PR changes. `HttpClientError.weftCode` therefore stays `undefined` for errors thrown by that path, so `isWeftFault(error, code)` returns `false` even for a genuine match. Branch on `HttpClientError.faultCode` (a `FaultCode`) instead when working with `client.operations.*`.
 >
-> REST responses are also not guaranteed to carry `weftCode`: `shapeRestFault` only writes it when the underlying fault's `data.weftCode` was set, which not every fault code does. See [issue #720](https://github.com/stevekinney/weft/issues/720) for the REST wire-contract gap that leaves most fault `data` (beyond `weftCode`) undelivered today.
+> REST responses are not guaranteed to carry `weftCode`: `shapeRestFault` writes it only when the underlying fault has a fine-grained public code. Audited REST `data` is independent of that field, so callers can still use `HttpClientError.data` for validation and resource context when `HttpClientError.weftCode` is `undefined`.
 
 `HttpClientError` carries the server-side `FaultCode` when the response includes a recognized structured fault:
 

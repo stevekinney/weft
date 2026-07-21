@@ -247,6 +247,7 @@ describe('weft.workflows.events.sse', () => {
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({
       error: 'unknown operation: weft.workflows.events.sse',
+      data: { method: 'weft.workflows.events.sse' },
     });
     expect(feed.subscribeCalls).toEqual([]);
   });

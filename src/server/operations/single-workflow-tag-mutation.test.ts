@@ -100,7 +100,10 @@ describe('single-workflow tag mutation helper', () => {
     );
 
     expect(response.status).toBe(404);
-    expect(await response.json()).toEqual({ error: 'workflow not found' });
+    expect(await response.json()).toEqual({
+      error: 'workflow not found',
+      data: { resource: 'workflow', identifier: 'missing' },
+    });
   });
 
   it('masks unexpected engine failures to a 500 generic error body', async () => {

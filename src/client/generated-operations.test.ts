@@ -260,21 +260,11 @@ describe('HttpClient catalog operations', () => {
   // over JSON-RPC-over-HTTP so weft-console can build field-level and
   // resource-linked fault UI without hand-parsing.
   //
-  // REST is deliberately NOT covered here with a live round trip. Every
-  // production REST binding supplies `shapeFault: shapeRestFault` (or a
-  // shaper that delegates to it), and `shapeRestFault` emits a flat
-  // `{ error, weftCode? }` body — it never puts a `data` object on the wire
-  // for ANY fault code, not just the masked `EngineFailure`. `faultCode` does
-  // not even survive the REST trip today (only the human `message` and, when
-  // set, a fine-grained `weftCode` sibling do). `HttpClientError.data`'s REST
-  // parsing path is proven correct against the nested `{ error: { data } }`
-  // shape in `http-request.test.ts` — that shape is real (it is what
-  // `faultToHttpResponse` emits, and the type guards in `http-request.ts`
-  // handle it defensively for forward compatibility) but is not the shape any
-  // current production REST binding sends. Delivering `data` over REST
-  // requires changing `shapeRestFault`'s wire contract across ~30 operations
-  // and re-auditing what each fault discloses — out of scope here; tracked in
-  // https://github.com/stevekinney/weft/issues/720.
+  // Production REST bindings use a separate additive flat
+  // `{ error, weftCode?, data? }` projection. Its live HttpClient round trips
+  // and stricter disclosure allowlist are covered in `index.test.ts` and the
+  // REST fault-shaper regression suite; these tests pin JSON-RPC's broader
+  // envelope without conflating the two contracts.
   describe('HttpClientError.data (#711)', () => {
     it('round-trips InvalidParams field issues from a real Zod schema failure over JSON-RPC', async () => {
       const { HttpClientError } = await import('./http-request.ts');
@@ -314,12 +304,9 @@ describe('HttpClient catalog operations', () => {
       });
     });
 
-    it('leaves data (and faultCode) undefined over a live REST fault response', async () => {
-      // A live `shapeRestFault` response — here, a real 401 from an
-      // unauthenticated request — never carries `data` (or even `faultCode`)
-      // over REST today, confirming the boundary documented above holds
-      // against the real server, not just the mocked bodies in
-      // `http-request.test.ts`.
+    it('withholds data for an unauthenticated live REST fault response', async () => {
+      // Authentication reasons are intentionally excluded from REST's audited
+      // data projection. The flat body also carries no coarse FaultCode.
       const { HttpClientError } = await import('./http-request.ts');
       const unauthenticatedClient = new HttpClient({ baseUrl: server.url, headers: {} });
       const caught = await unauthenticatedClient

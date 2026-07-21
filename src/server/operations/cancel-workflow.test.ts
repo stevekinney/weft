@@ -62,7 +62,10 @@ describe('weft.workflows.cancel', () => {
       );
 
       expect(response.status).toBe(404);
-      expect(await response.json()).toEqual({ error: 'workflow not found' });
+      expect(await response.json()).toEqual({
+        error: 'workflow not found',
+        data: { resource: 'workflow', identifier: 'missing' },
+      });
     } finally {
       engine.cancel = originalCancel;
     }

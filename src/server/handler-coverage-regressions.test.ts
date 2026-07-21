@@ -148,12 +148,7 @@ describe('handleRequest coverage regressions', () => {
     });
 
     expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({
-      error: {
-        code: 'EngineFailure',
-        message: 'internal error',
-      },
-    });
+    await expect(response.text()).resolves.toBe('{"error":"Internal server error"}');
   });
 
   it('maps schedule error messages to their canonical HTTP fault statuses', async () => {

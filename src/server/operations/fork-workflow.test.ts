@@ -138,6 +138,7 @@ describe('weft.workflows.fork', () => {
       expect(response.status).toBe(404);
       expect(await response.json()).toEqual({
         error: 'Checkpoint not found for workflow "workflow-123"',
+        data: { resource: 'checkpoint' },
       });
     } finally {
       engine.fork = originalFork;
@@ -154,7 +155,10 @@ describe('weft.workflows.fork', () => {
     );
 
     expect(response.status).toBe(404);
-    expect(await response.json()).toEqual({ error: 'Workflow "missing-workflow" not found' });
+    expect(await response.json()).toEqual({
+      error: 'Workflow "missing-workflow" not found',
+      data: { resource: 'workflow' },
+    });
   });
 
   it('masks unexpected engine failures to a generic 500 (no raw message leak)', async () => {

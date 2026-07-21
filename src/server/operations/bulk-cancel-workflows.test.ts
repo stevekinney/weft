@@ -184,7 +184,10 @@ describe('weft.workflows.bulk.cancel', () => {
     );
 
     expect(response.status).toBe(413);
-    expect(await response.json()).toEqual({ error: 'Payload Too Large' });
+    expect(await response.json()).toEqual({
+      error: 'Payload Too Large',
+      data: { maxBytes: 8 },
+    });
   });
 
   it('returns 400 when the bulk filter is unscoped', async () => {

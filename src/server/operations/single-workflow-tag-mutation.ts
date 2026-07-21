@@ -11,7 +11,7 @@ import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { RestBinding } from '../rest-binding.ts';
 import { readRestJsonBody } from '../rest-body.ts';
-import { isOperationFault, jsonErrorResponse, shapeRestFault } from './operation-helpers.ts';
+import { isOperationFault, shapeRestFault } from './operation-helpers.ts';
 
 const singleWorkflowTagMutationInput = z.object({
   workflowId: z.string().min(1),
@@ -122,7 +122,7 @@ function shapeSingleWorkflowTagMutationFault(fault: OperationFault): Response {
   // explicit here. Every other fault, including the masked EngineFailure
   // 500, goes through the canonical `shapeRestFault`.
   if (fault.code === 'Unprocessable') {
-    return jsonErrorResponse(fault.message, 400);
+    return shapeRestFault(fault, { status: 400 });
   }
 
   return shapeRestFault(fault);

@@ -207,7 +207,10 @@ describe('weft.reviews.decision.submit', () => {
       );
 
       expect(response.status).toBe(404);
-      expect(await response.json()).toEqual({ error: 'review not found' });
+      expect(await response.json()).toEqual({
+        error: 'review not found',
+        data: { resource: 'review', identifier: 'rev-missing' },
+      });
     } finally {
       engine.submitReview = originalSubmitReview;
     }

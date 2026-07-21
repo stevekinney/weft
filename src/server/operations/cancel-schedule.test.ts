@@ -67,7 +67,10 @@ describe('weft.schedules.cancel', () => {
     );
 
     expect(response.status).toBe(404);
-    expect(await response.json()).toEqual({ error: 'Schedule "does-not-exist" not found' });
+    expect(await response.json()).toEqual({
+      error: 'Schedule "does-not-exist" not found',
+      data: { resource: 'schedule', identifier: 'does-not-exist' },
+    });
   });
 
   it('masks unexpected engine failures to a 500 generic error body', async () => {

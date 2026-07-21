@@ -92,7 +92,10 @@ describe('weft.schedules.get', () => {
     );
 
     expect(response.status).toBe(404);
-    expect(await response.json()).toEqual({ error: 'Schedule "does-not-exist" not found' });
+    expect(await response.json()).toEqual({
+      error: 'Schedule "does-not-exist" not found',
+      data: { resource: 'schedule', identifier: 'does-not-exist' },
+    });
   });
 
   it('allows an authenticated principal (api-key) to access the schedule', async () => {

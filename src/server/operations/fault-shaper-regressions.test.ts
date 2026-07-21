@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import type { OperationFault } from '../operation-fault.ts';
+import { shapeOperationFaultAsJson, type OperationFault } from '../operation-fault.ts';
 import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
 
 const operationsDirectory = new URL('.', import.meta.url);
@@ -9,10 +9,15 @@ async function expectJsonErrorResponse(
   response: Response,
   expectedStatus: number,
   expectedMessage: string,
+  expectedData?: Readonly<Record<string, unknown>>,
 ): Promise<void> {
   expect(response.status).toBe(expectedStatus);
   expect(response.headers.get('Content-Type')).toBe('application/json');
-  expect(await response.json()).toEqual({ error: expectedMessage });
+  expect(await response.json()).toEqual(
+    expectedData === undefined
+      ? { error: expectedMessage }
+      : { error: expectedMessage, data: expectedData },
+  );
 }
 
 async function operationSourceFiles(): Promise<string[]> {
@@ -51,7 +56,10 @@ describe('REST fault shaper regressions', () => {
       400,
       invalidParamsFaultValue.message,
     );
-    await expectJsonErrorResponse(shapeRestFault(notFoundFault), 404, notFoundFault.message);
+    await expectJsonErrorResponse(shapeRestFault(notFoundFault), 404, notFoundFault.message, {
+      resource: 'workflow',
+      identifier: 'workflow-1',
+    });
   });
 
   it('emits a top-level weftCode sibling when the fault carries one (#465)', async () => {
@@ -70,6 +78,7 @@ describe('REST fault shaper regressions', () => {
     expect(await notFoundResponse.json()).toEqual({
       error: 'Workflow "wf-1" not found',
       weftCode: 'WorkflowNotFoundError',
+      data: { resource: 'workflow', identifier: 'wf-1' },
     });
 
     const invalidParamsResponse = shapeRestFault(invalidParamsWithCode);
@@ -88,9 +97,113 @@ describe('REST fault shaper regressions', () => {
       message: 'internal detail',
       data: {},
     };
-    expect(await shapeRestFault(engineFailureFault).json()).toEqual({
-      error: 'Internal server error',
+    const response = shapeRestFault(engineFailureFault, {
+      message: 'override must not leak',
+      status: 418,
     });
+    expect(response.status).toBe(500);
+    expect(await response.text()).toBe('{"error":"Internal server error"}');
+  });
+
+  it('projects only the audited per-code data allowlist over REST (#720)', async () => {
+    const validationIssueWithInternalDetail = {
+      path: ['operation'],
+      message: 'Invalid option',
+      code: 'invalid_value',
+      internalDetail: 'must not cross the REST boundary',
+    };
+    const faults: OperationFault[] = [
+      { code: 'Unauthorized', message: 'Unauthorized', data: { reason: 'credential detail' } },
+      { code: 'Forbidden', message: 'Forbidden', data: { reason: 'scope detail' } },
+      {
+        code: 'NotFound',
+        message: 'Workflow not found',
+        data: {
+          resource: 'workflow',
+          identifier: 'workflow-1',
+          weftCode: 'WorkflowNotFoundError',
+        },
+      },
+      {
+        code: 'Conflict',
+        message: 'Recovery conflict',
+        data: {
+          reason: 'internal duplicate of the public message',
+          missingTypes: ['payments'],
+          missingWorkflowCount: 2,
+          samplesTruncated: true,
+        },
+      },
+      { code: 'Unprocessable', message: 'Unprocessable', data: { reason: 'engine detail' } },
+      { code: 'PayloadTooLarge', message: 'Too large', data: { maxBytes: 1024 } },
+      { code: 'Timeout', message: 'Timed out', data: { operationName: 'weft.workflows.update' } },
+      { code: 'NotImplemented', message: 'Not implemented', data: {} },
+      {
+        code: 'UnsupportedTransport',
+        message: 'Unsupported transport',
+        data: { transport: 'http-rest', supported: ['jsonRpcHttp'] },
+      },
+      {
+        code: 'SubscriptionOverflow',
+        message: 'Subscription overflow',
+        data: { subscriptionId: 'private-subscription-id', droppedCount: 3 },
+      },
+      {
+        code: 'InvalidParams',
+        message: 'Invalid parameters',
+        data: { issues: [validationIssueWithInternalDetail] },
+      },
+      { code: 'MethodNotFound', message: 'Unknown method', data: { method: 'weft.unknown' } },
+    ];
+
+    const bodies = await Promise.all(faults.map(async (fault) => shapeRestFault(fault).json()));
+    expect(bodies).toEqual([
+      { error: 'Unauthorized' },
+      { error: 'Forbidden' },
+      {
+        error: 'Workflow not found',
+        weftCode: 'WorkflowNotFoundError',
+        data: { resource: 'workflow', identifier: 'workflow-1' },
+      },
+      {
+        error: 'Recovery conflict',
+        data: {
+          missingTypes: ['payments'],
+          missingWorkflowCount: 2,
+          samplesTruncated: true,
+        },
+      },
+      { error: 'Unprocessable' },
+      { error: 'Too large', data: { maxBytes: 1024 } },
+      { error: 'Timed out', data: { operationName: 'weft.workflows.update' } },
+      { error: 'Not implemented' },
+      {
+        error: 'Unsupported transport',
+        data: { transport: 'http-rest', supported: ['jsonRpcHttp'] },
+      },
+      { error: 'Subscription overflow', data: { droppedCount: 3 } },
+      {
+        error: 'Invalid parameters',
+        data: {
+          issues: [{ path: ['operation'], message: 'Invalid option', code: 'invalid_value' }],
+        },
+      },
+      { error: 'Unknown method', data: { method: 'weft.unknown' } },
+    ]);
+  });
+
+  it('keeps shapeOperationFaultAsJson on the canonical REST projection (#720)', async () => {
+    const fault: OperationFault = {
+      code: 'NotFound',
+      message: 'Workflow not found',
+      data: { resource: 'workflow', identifier: 'workflow-1' },
+    };
+
+    const [canonical, operationSpecific] = await Promise.all([
+      shapeRestFault(fault).text(),
+      shapeOperationFaultAsJson(fault).text(),
+    ]);
+    expect(operationSpecific).toBe(canonical);
   });
 
   it('omits weftCode entirely for invalidParamsFault without a code (#465)', () => {

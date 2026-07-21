@@ -386,6 +386,7 @@ describe('weft.workflows.replay REST shaping', () => {
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({
       error: `Replay not found at step 99 for workflow ${workflowId}`,
+      data: { resource: 'replay', identifier: `${workflowId}@99` },
     });
   });
 

@@ -203,7 +203,10 @@ describe('weft.workflows.signal', () => {
       );
 
       expect(response.status).toBe(404);
-      expect(await response.json()).toEqual({ error: 'Workflow not found' });
+      expect(await response.json()).toEqual({
+        error: 'Workflow not found',
+        data: { resource: 'workflow', identifier: 'missing' },
+      });
     } finally {
       engine.signal = originalSignal;
     }

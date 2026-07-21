@@ -67,7 +67,10 @@ describe('weft.schedules.pause', () => {
     );
 
     expect(response.status).toBe(404);
-    expect(await response.json()).toEqual({ error: 'Schedule "does-not-exist" not found' });
+    expect(await response.json()).toEqual({
+      error: 'Schedule "does-not-exist" not found',
+      data: { resource: 'schedule', identifier: 'does-not-exist' },
+    });
   });
 
   it('maps schedule validation messages to 400', async () => {

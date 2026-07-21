@@ -2,11 +2,11 @@ import { z } from 'zod';
 
 import type { StoredStreamChunk } from '../../core/context.ts';
 import type { Engine } from '../../core/engine.ts';
-import { FAULT_CODE_TO_HTTP_STATUS, type OperationFault } from '../operation-fault.ts';
+import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { parseOptionalSequenceCursor } from '../sequence-cursor.ts';
-import { invalidParamsFault, jsonErrorResponse } from './operation-helpers.ts';
+import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
 import { createStoredChunkSSEStream, SSE_RESPONSE_HEADERS } from './sse-stream.ts';
 
 const TOKENS_STREAM_KEY = 'tokens';
@@ -92,23 +92,14 @@ export const streamWorkflowSseOperation = defineOperation<
 const ACCEPT_HEADER_MUST_INCLUDE_SSE = 'Accept header must include text/event-stream';
 
 function shapeStreamWorkflowSseFault(fault: OperationFault): Response {
-  if (fault.code === 'NotFound') {
-    return jsonErrorResponse(fault.message, 404);
-  }
   if (fault.code === 'InvalidParams') {
     // 406 is returned for the Accept-header mismatch
     // (a REST-only check). All other InvalidParams paths use 400.
     if (fault.message === ACCEPT_HEADER_MUST_INCLUDE_SSE) {
-      return jsonErrorResponse(fault.message, 406);
+      return shapeRestFault(fault, { status: 406 });
     }
-    return jsonErrorResponse(fault.message, 400);
   }
-  if (fault.code === 'EngineFailure') {
-    // Mask engine errors to a generic 500 so raw engine messages never
-    // reach clients.
-    return jsonErrorResponse('Internal server error', 500);
-  }
-  return jsonErrorResponse(fault.message, FAULT_CODE_TO_HTTP_STATUS[fault.code]);
+  return shapeRestFault(fault);
 }
 
 /**

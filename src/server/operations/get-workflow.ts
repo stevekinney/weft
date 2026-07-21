@@ -2,8 +2,8 @@
  * `weft.workflows.get` operation + REST binding.
  *
  * Returns a workflow's state by id. REST response shape preserves the
- * historical format: 200 with the serialized `WorkflowState`, or a
- * 4xx/5xx with `{ error: <message> }` (a bare string), as emitted by
+ * historical format: 200 with the serialized `WorkflowState`, or a 4xx/5xx
+ * with the string `error` plus audited structured `data`, as emitted by
  * `shapeFault` below.
  *
  * @module server/operations/get-workflow

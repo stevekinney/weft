@@ -68,7 +68,10 @@ describe('weft.schedules.resume', () => {
     );
 
     expect(response.status).toBe(404);
-    expect(await response.json()).toEqual({ error: 'Schedule "does-not-exist" not found' });
+    expect(await response.json()).toEqual({
+      error: 'Schedule "does-not-exist" not found',
+      data: { resource: 'schedule', identifier: 'does-not-exist' },
+    });
   });
 
   it('maps resumability conflicts to 409', async () => {

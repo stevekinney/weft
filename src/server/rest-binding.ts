@@ -115,16 +115,17 @@ export type RestBinding<Input, Output> = {
   /**
    * Optional override for fault → HTTP response mapping. When absent,
    * the transport adapter falls back to `faultToHttpResponse`, which emits
-   * the REST fault body `{ error: { code, message, data? } }`. This is
-   * distinct from the JSON-RPC fault object (`faultToJsonRpcError`): JSON-RPC
-   * uses a flat `{ code, message, data }` with a numeric `code` and the
-   * symbolic name relocated to `data.weftCode`. REST and JSON-RPC deliberately
-   * differ in fault shape, so each transport owns its own projection.
+   * the same flat audited `{ error, weftCode?, data? }` body as
+   * `shapeRestFault`. This is distinct from the JSON-RPC fault object
+   * (`faultToJsonRpcError`), which uses `{ code, message, data }` with a numeric
+   * `code` and a broader data projection. REST and JSON-RPC deliberately differ
+   * in fault shape, so each transport owns its own projection.
    *
    * REST operations provide this to shape faults the way a REST client
    * expects: most use `shapeRestFault`, which masks an `EngineFailure` to a
    * flat `{ error: "Internal server error" }` with status `500` (never
-   * leaking internal detail over REST) and maps the remaining fault codes to
+   * leaking internal detail over REST), adds audited safe context under a
+   * `data` sibling for other faults, and maps the remaining fault codes to
    * their HTTP statuses. A few operations supply a bespoke shaper to special-case
    * a particular fault — typically to override its message or to handle one code
    * explicitly — while delegating the rest. The status often matches what the

@@ -692,7 +692,10 @@ JSON-RPC over HTTP remains request/response only. JSON-RPC clients can subscribe
 Most REST operation faults return JSON with an `error` field:
 
 ```json
-{ "error": "Workflow with id \"abc\" already exists" }
+{
+  "error": "Workflow \"abc\" not found",
+  "data": { "resource": "workflow", "identifier": "abc" }
+}
 ```
 
 | Status | Meaning                                                           |
@@ -708,10 +711,13 @@ REST operation handlers mask unexpected `EngineFailure` faults to
 `{ "error": "Internal server error" }` with status `500`, so raw engine
 messages, storage details, stack traces, and file paths do not cross the HTTP
 boundary. Declared client faults keep their mapped status and public message.
-JSON-RPC transports receive the operation fault object instead of the REST
-body shape. The [Error Codes](./api-errors.md#faultcode) reference documents the
-source-complete `FaultCode` vocabulary, HTTP status mapping, and JSON-RPC error
-data shape.
+REST includes only audited structured fields under `data`; authentication
+reasons, generic internal reasons, subscription identifiers, raw causes, and
+workflow identifiers outside the caller-supplied not-found identifier remain
+withheld. JSON-RPC transports receive their distinct operation fault projection
+instead of the REST body shape. The [Error Codes](./api-errors.md#faultcode)
+reference documents the source-complete `FaultCode` vocabulary, HTTP status
+mapping, and both data projections.
 
 ---
 

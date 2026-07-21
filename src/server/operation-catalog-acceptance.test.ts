@@ -390,12 +390,14 @@ describe('Operation-catalog acceptance coverage', () => {
     const httpResponse = faultToHttpResponse(fault);
     const jsonRpcError = faultToJsonRpcError(fault);
     const httpBody = (await httpResponse.json()) as {
-      error: { code: string; data?: { resource?: string } };
+      error: string;
+      data?: { resource?: string };
     };
 
     expect(httpResponse.status).toBe(404);
     expect(jsonRpcError.code).toBe(-32020);
-    expect(httpBody.error.code).toBe('NotFound');
+    expect(httpBody.error).toBe('workflow not found');
+    expect(httpBody.data?.resource).toBe('workflow');
     expect(jsonRpcError.data['weftCode']).toBe('NotFound');
   });
 

@@ -24,6 +24,7 @@ describe('FaultCode mapping tables', () => {
       'Conflict',
       'Unprocessable',
       'Timeout',
+      'PayloadTooLarge',
       'NotImplemented',
       'UnsupportedTransport',
       'SubscriptionOverflow',
@@ -44,6 +45,7 @@ describe('FaultCode mapping tables', () => {
     expect(FAULT_CODE_TO_HTTP_STATUS.Conflict).toBe(409);
     expect(FAULT_CODE_TO_HTTP_STATUS.Unprocessable).toBe(422);
     expect(FAULT_CODE_TO_HTTP_STATUS.Timeout).toBe(408);
+    expect(FAULT_CODE_TO_HTTP_STATUS.PayloadTooLarge).toBe(413);
     expect(FAULT_CODE_TO_HTTP_STATUS.NotImplemented).toBe(501);
     expect(FAULT_CODE_TO_HTTP_STATUS.UnsupportedTransport).toBe(501);
     expect(FAULT_CODE_TO_HTTP_STATUS.SubscriptionOverflow).toBe(500);
@@ -59,6 +61,7 @@ describe('FaultCode mapping tables', () => {
     expect(FAULT_CODE_TO_JSON_RPC_CODE.Conflict).toBe(-32021);
     expect(FAULT_CODE_TO_JSON_RPC_CODE.Unprocessable).toBe(-32022);
     expect(FAULT_CODE_TO_JSON_RPC_CODE.Timeout).toBe(-32023);
+    expect(FAULT_CODE_TO_JSON_RPC_CODE.PayloadTooLarge).toBe(-32024);
     expect(FAULT_CODE_TO_JSON_RPC_CODE.NotImplemented).toBe(-32025);
     expect(FAULT_CODE_TO_JSON_RPC_CODE.UnsupportedTransport).toBe(-32030);
     expect(FAULT_CODE_TO_JSON_RPC_CODE.SubscriptionOverflow).toBe(-32031);

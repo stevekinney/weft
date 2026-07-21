@@ -4,7 +4,7 @@ import type { Engine } from '../../core/engine.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { jsonErrorResponse, shapeRestFault } from './operation-helpers.ts';
+import { shapeRestFault } from './operation-helpers.ts';
 
 const getWorkflowResultInput = z.object({
   workflowId: z.string().min(1),
@@ -120,7 +120,7 @@ function shapeGetWorkflowResultSuccess(result: GetWorkflowResultOutput): Respons
 
 function shapeGetWorkflowResultFault(fault: OperationFault): Response {
   if (fault.code === 'Timeout') {
-    return jsonErrorResponse('Timeout waiting for workflow result', 408);
+    return shapeRestFault(fault, { message: 'Timeout waiting for workflow result', status: 408 });
   }
   // Every other fault goes through the canonical `shapeRestFault`, which
   // masks EngineFailure to a generic "Internal server error" 500 and maps

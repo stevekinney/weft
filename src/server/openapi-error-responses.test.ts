@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
-import { buildErrorResponses } from './openapi-error-responses.ts';
+import { buildErrorResponses, ERROR_SCHEMA } from './openapi-error-responses.ts';
 import type { ErasedOperation } from './operation-catalog.ts';
 import type { FaultCode } from './operation-fault.ts';
 
@@ -33,6 +33,69 @@ function responseSchema(response: unknown): unknown {
 }
 
 describe('buildErrorResponses', () => {
+  it('documents the additive flat REST fault body and audited data fields (#720)', () => {
+    expect(ERROR_SCHEMA).toEqual({
+      type: 'object',
+      required: ['error'],
+      additionalProperties: false,
+      properties: {
+        error: { type: 'string', description: 'Human-readable error description' },
+        weftCode: {
+          type: 'string',
+          description: 'Fine-grained public Weft error code when one is available',
+        },
+        missingTypes: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Established recovery-conflict field; also present under data',
+        },
+        missingWorkflowCount: {
+          type: 'integer',
+          minimum: 0,
+          description: 'Established recovery-conflict field; also present under data',
+        },
+        samplesTruncated: {
+          type: 'boolean',
+          description: 'Established recovery-conflict field; also present under data',
+        },
+        data: {
+          type: 'object',
+          description: 'Audited fault-specific context; omitted when no fields are safe to expose',
+          additionalProperties: false,
+          properties: {
+            resource: { type: 'string' },
+            identifier: { type: 'string' },
+            missingTypes: { type: 'array', items: { type: 'string' } },
+            missingWorkflowCount: { type: 'integer', minimum: 0 },
+            samplesTruncated: { type: 'boolean' },
+            maxBytes: { type: 'integer', minimum: 0 },
+            operationName: { type: 'string' },
+            transport: { type: 'string' },
+            supported: { type: 'array', items: { type: 'string' } },
+            droppedCount: { type: 'integer', minimum: 0 },
+            issues: {
+              type: 'array',
+              items: {
+                type: 'object',
+                required: ['path', 'message', 'code'],
+                additionalProperties: false,
+                properties: {
+                  path: {
+                    type: 'array',
+                    items: { oneOf: [{ type: 'string' }, { type: 'number' }] },
+                  },
+                  message: { type: 'string' },
+                  code: { type: 'string' },
+                },
+              },
+            },
+            method: { type: 'string' },
+          },
+        },
+      },
+    });
+  });
+
   it('includes only universal-default statuses when an operation has no producibleFaults', () => {
     expect(Object.keys(buildErrorResponses(operation())).toSorted()).toEqual([
       '400',

@@ -73,6 +73,7 @@ describe('weft.workflows.attributes.get', () => {
     expect(response.headers.get('content-type')).toBe('application/json');
     expect(await response.json()).toEqual({
       error: 'Attributes for workflow "does-not-exist" not found',
+      data: { resource: 'attributes', identifier: 'does-not-exist' },
     });
   });
 

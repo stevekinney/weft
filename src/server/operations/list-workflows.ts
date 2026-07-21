@@ -19,7 +19,7 @@ import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { extractListFilterFromQuery } from './list-filter-query-extractor.ts';
-import { jsonErrorResponse, shapeRestFault } from './operation-helpers.ts';
+import { shapeRestFault } from './operation-helpers.ts';
 
 const workflowStatusSchema = z.custom<WorkflowStatus>((value) => typeof value === 'string');
 const failureCategorySchema = z.custom<FailureCategory>((value) => typeof value === 'string');
@@ -179,7 +179,7 @@ function shapeListWorkflowsFault(fault: OperationFault): Response {
   // Workflow listing reports invalid filter values as 400 even when
   // the transport-neutral fault is `Unprocessable`.
   if (fault.code === 'Unprocessable') {
-    return jsonErrorResponse(fault.message, 400);
+    return shapeRestFault(fault, { status: 400 });
   }
   return shapeRestFault(fault);
 }

@@ -336,7 +336,10 @@ describe('weft.schedules.update', () => {
     );
 
     expect(response.status).toBe(404);
-    expect(await response.json()).toEqual({ error: 'Schedule "missing-schedule" not found' });
+    expect(await response.json()).toEqual({
+      error: 'Schedule "missing-schedule" not found',
+      data: { resource: 'schedule', identifier: 'missing-schedule' },
+    });
   });
 
   it('returns 409 when the engine reports a conflict', async () => {

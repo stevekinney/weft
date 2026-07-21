@@ -13,11 +13,62 @@ import { FAULT_CODE_TO_HTTP_STATUS, type FaultCode } from './operation-fault.ts'
  */
 export const ERROR_SCHEMA: Record<string, unknown> = {
   type: 'object',
-  required: ['code', 'message'],
+  required: ['error'],
+  additionalProperties: false,
   properties: {
-    code: { type: 'string', description: 'Machine-readable error code' },
-    message: { type: 'string', description: 'Human-readable error description' },
-    data: { description: 'Additional fault-specific context' },
+    error: { type: 'string', description: 'Human-readable error description' },
+    weftCode: {
+      type: 'string',
+      description: 'Fine-grained public Weft error code when one is available',
+    },
+    missingTypes: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Established recovery-conflict field; also present under data',
+    },
+    missingWorkflowCount: {
+      type: 'integer',
+      minimum: 0,
+      description: 'Established recovery-conflict field; also present under data',
+    },
+    samplesTruncated: {
+      type: 'boolean',
+      description: 'Established recovery-conflict field; also present under data',
+    },
+    data: {
+      type: 'object',
+      description: 'Audited fault-specific context; omitted when no fields are safe to expose',
+      additionalProperties: false,
+      properties: {
+        resource: { type: 'string' },
+        identifier: { type: 'string' },
+        missingTypes: { type: 'array', items: { type: 'string' } },
+        missingWorkflowCount: { type: 'integer', minimum: 0 },
+        samplesTruncated: { type: 'boolean' },
+        maxBytes: { type: 'integer', minimum: 0 },
+        operationName: { type: 'string' },
+        transport: { type: 'string' },
+        supported: { type: 'array', items: { type: 'string' } },
+        droppedCount: { type: 'integer', minimum: 0 },
+        issues: {
+          type: 'array',
+          items: {
+            type: 'object',
+            required: ['path', 'message', 'code'],
+            additionalProperties: false,
+            properties: {
+              path: {
+                type: 'array',
+                items: { oneOf: [{ type: 'string' }, { type: 'number' }] },
+              },
+              message: { type: 'string' },
+              code: { type: 'string' },
+            },
+          },
+        },
+        method: { type: 'string' },
+      },
+    },
   },
 };
 

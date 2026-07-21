@@ -301,7 +301,10 @@ describe('storage REST operations', () => {
     );
 
     expect(response.status).toBe(413);
-    expect(await response.json()).toEqual({ error: 'Payload Too Large' });
+    expect(await response.json()).toEqual({
+      error: 'Payload Too Large',
+      data: { maxBytes: 1 },
+    });
     expect(await storage.get('oversized-value')).toBeNull();
   });
 
@@ -485,7 +488,18 @@ describe('storage REST operations', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'invalid params' });
+    expect(await response.json()).toEqual({
+      error: 'invalid params',
+      data: {
+        issues: [
+          {
+            path: ['limit'],
+            message: 'Too big: expected number to be <=10000',
+            code: 'too_big',
+          },
+        ],
+      },
+    });
   });
 
   it('does not pull scan entries until the NDJSON response body is read', async () => {
@@ -621,7 +635,18 @@ describe('storage REST operations', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'invalid params' });
+    expect(await response.json()).toEqual({
+      error: 'invalid params',
+      data: {
+        issues: [
+          {
+            path: ['operations'],
+            message: 'Too big: expected array to have <=10000 items',
+            code: 'too_big',
+          },
+        ],
+      },
+    });
     expect(await rawStorage.get('oversized:0')).toBeNull();
   });
 
@@ -716,7 +741,18 @@ describe('storage REST operations', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'invalid params' });
+    expect(await response.json()).toEqual({
+      error: 'invalid params',
+      data: {
+        issues: [
+          {
+            path: ['conditions'],
+            message: 'Too big: expected array to have <=10000 items',
+            code: 'too_big',
+          },
+        ],
+      },
+    });
     expect(await rawStorage.get('should-not-write')).toBeNull();
   });
 

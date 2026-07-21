@@ -208,7 +208,18 @@ describe('weft.workflows.list', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'invalid params' });
+    expect(await response.json()).toEqual({
+      error: 'invalid params',
+      data: {
+        issues: [
+          {
+            path: ['include'],
+            message: 'include must be "failureCategory"',
+            code: 'custom',
+          },
+        ],
+      },
+    });
 
     const repeatedResponse = await handleRequest(
       new Request('http://localhost/v1/workflows?include=failureCategory&include=input', {
@@ -222,7 +233,18 @@ describe('weft.workflows.list', () => {
     );
 
     expect(repeatedResponse.status).toBe(400);
-    expect(await repeatedResponse.json()).toEqual({ error: 'invalid params' });
+    expect(await repeatedResponse.json()).toEqual({
+      error: 'invalid params',
+      data: {
+        issues: [
+          {
+            path: ['include'],
+            message: 'include must be "failureCategory"',
+            code: 'custom',
+          },
+        ],
+      },
+    });
   });
 
   it('returns 400 when query tags are invalid (validation runs in invoke for parity across transports)', async () => {

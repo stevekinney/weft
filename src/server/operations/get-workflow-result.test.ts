@@ -101,7 +101,10 @@ describe('weft.workflows.result.get', () => {
 
     expect(response.status).toBe(404);
     expect(response.headers.get('content-type')).toBe('application/json');
-    expect(await response.json()).toEqual({ error: 'Workflow "does-not-exist" not found' });
+    expect(await response.json()).toEqual({
+      error: 'Workflow "does-not-exist" not found',
+      data: { resource: 'workflow', identifier: 'does-not-exist' },
+    });
   });
 
   it('returns 422 with the workflow failure message when the workflow failed', async () => {
