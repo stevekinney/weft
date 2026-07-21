@@ -162,36 +162,77 @@ export const SINGLETON_MODULE_MARKERS: { canonicalFile: string; marker: string }
     canonicalFile: 'dist/core/codec/serializer-registry.js',
     marker: 'No serializer registered for tag',
   },
+  {
+    canonicalFile: 'dist/core/context/internals.js',
+    marker: 'Context internals not initialized',
+  },
 ];
 
-// dist/service-worker/index.js is a documented, deliberate exception: a
-// Service Worker always runs in its own JS realm (a separate global scope
-// from the page or any Node/Bun process — see
-// documentation/guides/service-worker.md), so it can never share a module
-// instance, and therefore never share singleton state, with a root-
-// constructed `Engine` regardless of bundling. Its own inlined copy is
-// correct — the singleton it duplicates is only ever read/written by code
-// running inside that same worker's own module graph. Do not add further
-// entries here without the same realm-isolation argument; every other
-// bundled entry point runs in the same realm as root and must stay on the
-// unbundled path instead.
-export const REALM_ISOLATED_DUPLICATE_ALLOWLIST: readonly string[] = [
-  'dist/service-worker/index.js',
+/**
+ * dist/ files that are ALLOWED to duplicate a singleton marker, each with an
+ * explicit reason. Add an entry here only when the duplicate genuinely cannot
+ * cause the #710 bug class — i.e. no live object or process-wide registry
+ * from a root-constructed `Engine` can ever cross into this file's execution
+ * context, regardless of bundling. Every other bundled entry point runs in
+ * the same realm/process as root and must stay on the unbundled path
+ * instead.
+ */
+const KNOWN_SAFE_DUPLICATE_FILES: { readonly file: string; readonly reason: string }[] = [
+  {
+    file: 'dist/cli-main.js',
+    reason:
+      'The `weft` bin. Not exported as an importable module in package.json — it only runs ' +
+      'as a separate OS process spawned via the installed binary, never `import`ed alongside ' +
+      'a root-constructed Engine in the same process. Bun.build() also preserves the ' +
+      "entrypoint's `#!/usr/bin/env bun` shebang, which the unbundled Bun.Transpiler path " +
+      'does not — bundling this file is required for the published binary to be executable.',
+  },
+  {
+    file: 'dist/mcp/cli.js',
+    reason: 'The `weft-mcp` bin. Same reasoning as dist/cli-main.js above.',
+  },
 ];
 
 export async function assertSingletonModulesNotDuplicated(): Promise<void> {
+  const knownSafeDuplicateFiles = new Set(KNOWN_SAFE_DUPLICATE_FILES.map((entry) => entry.file));
+  const canonicalFilesFound = new Set<string>();
   const offenders: { file: string; marker: string; canonicalFile: string }[] = [];
   const distGlob = new Bun.Glob('dist/**/*.js');
 
-  for (const { canonicalFile, marker } of SINGLETON_MODULE_MARKERS) {
-    for await (const distPath of distGlob.scan('.')) {
-      if (distPath.endsWith('.js.map')) continue;
-      if (REALM_ISOLATED_DUPLICATE_ALLOWLIST.includes(distPath)) continue;
-      const contents = await Bun.file(distPath).text();
-      if (contents.includes(marker) && distPath !== canonicalFile) {
-        offenders.push({ file: distPath, marker, canonicalFile });
+  // Single pass over dist/: read each file once and check it against every
+  // marker, rather than re-scanning the whole tree once per marker.
+  for await (const distPath of distGlob.scan('.')) {
+    if (distPath.endsWith('.js.map')) continue;
+    const contents = await Bun.file(distPath).text();
+    for (const { canonicalFile, marker } of SINGLETON_MODULE_MARKERS) {
+      if (!contents.includes(marker)) continue;
+      if (distPath === canonicalFile) {
+        canonicalFilesFound.add(canonicalFile);
+        continue;
       }
+      if (knownSafeDuplicateFiles.has(distPath)) continue;
+      offenders.push({ file: distPath, marker, canonicalFile });
     }
+  }
+
+  // A marker missing from its own canonical file means the throw message was
+  // reworded, or the module was renamed/moved, without updating this guard —
+  // silently passing here would disable the protection entirely, since an
+  // actual duplicate elsewhere would never be compared against anything.
+  const missingCanonicalMarkers = SINGLETON_MODULE_MARKERS.filter(
+    ({ canonicalFile }) => !canonicalFilesFound.has(canonicalFile),
+  );
+
+  if (missingCanonicalMarkers.length > 0) {
+    console.error('Build did not find a singleton marker string in its own canonical dist/ file:');
+    for (const { canonicalFile, marker } of missingCanonicalMarkers) {
+      console.error(`  expected "${marker}" in ${canonicalFile}, but it was not found there`);
+    }
+    console.error(
+      'Update SINGLETON_MODULE_MARKERS in scripts/lib/build-guards.ts to match the current ' +
+        'canonical file path and throw message.',
+    );
+    process.exit(1);
   }
 
   if (offenders.length > 0) {
@@ -203,7 +244,8 @@ export async function assertSingletonModulesNotDuplicated(): Promise<void> {
     }
     console.error(
       'Remove the offending entry point from the bundled Bun.build() call in scripts/build.ts ' +
-        'so it stays on the unbundled path and shares the singleton module with root.',
+        'so it stays on the unbundled path and shares the singleton module with root, or add ' +
+        'it to KNOWN_SAFE_DUPLICATE_FILES with a reason if it genuinely cannot share state.',
     );
     process.exit(1);
   }

@@ -179,7 +179,7 @@ async function runServeEngineSmoke(consumerDirectory: string): Promise<void> {
     "const wf = workflow({ name: 'ping' }).execute(async function* () { return 'pong'; });",
     'const engine = await Engine.create({ workflows: { ping: wf } });',
     'const server = serve({ engine, port: 0 });',
-    'await server.stop(true);',
+    'await server.stop();',
     'await engine.shutdown();',
     'process.exit(0);',
   ].join('\n');

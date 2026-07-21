@@ -73,14 +73,20 @@ async function writeUnbundledRuntimeModules(): Promise<void> {
 // name preservation.
 await writeUnbundledRuntimeModules();
 
-// Node/Bun target — per-backend storage and integration submodules.
+// Node/Bun target — per-backend storage and integration submodules, plus the
+// `weft`/`weft-mcp` CLI bins.
 // Heavy backends (lmdb, @libsql/client, @neondatabase/serverless) are
 // externalized so consumers only pay for what they actually import.
 //
 // Entrypoints that transitively reach a module-scope singleton registry
-// (currently `core/engine/internals.ts` and `core/codec/serializer-registry.ts`
-// — see SINGLETON_MODULE_MARKERS below) are deliberately EXCLUDED from this
-// bundle. Bundling inlines its own private copy of every module it imports,
+// (currently `core/engine/internals.ts`, `core/codec/serializer-registry.ts`,
+// and `core/context/internals.ts` — see SINGLETON_MODULE_MARKERS in
+// scripts/lib/build-guards.ts) are deliberately EXCLUDED from this bundle
+// UNLESS they are also known-safe to duplicate (see
+// KNOWN_SAFE_DUPLICATE_FILES in that same file — currently `cli-main.ts` and
+// `mcp/cli.ts`, whose bins always run as a separate OS process and are never
+// imported as a library alongside a root-constructed `Engine`). Bundling
+// inlines its own private copy of every module an entrypoint imports,
 // including those registries, so a bundled entrypoint ends up with its own
 // disconnected `WeakMap`/`Map` instance instead of sharing the one the
 // unbundled root tree writes via `writeUnbundledRuntimeModules()` above. A
@@ -88,9 +94,17 @@ await writeUnbundledRuntimeModules();
 // bundled `serve()` (or registers a serializer via the root import and
 // encodes through a bundled storage codec) would then hit "internals not
 // initialized" or a silently-unregistered serializer — see #710. Leaving
-// `server/index.ts`, `cli-main.ts`, `mcp/cli.ts`, `testing/index.ts`, and
-// `storage/typed-storage.ts` on the unbundled path (already emitted above)
-// means they resolve the exact same on-disk singleton modules as root.
+// `server/index.ts`, `testing/index.ts`, and `storage/typed-storage.ts` on
+// the unbundled path (already emitted above) means they resolve the exact
+// same on-disk singleton modules as root.
+//
+// `cli-main.ts` and `mcp/cli.ts` additionally MUST stay bundled here rather
+// than moving to the unbundled path: both start with a `#!/usr/bin/env bun`
+// shebang (they are the `weft`/`weft-mcp` package.json `bin` entries), and
+// `Bun.build()` preserves an entrypoint's shebang banner while the raw
+// `Bun.Transpiler` path `writeUnbundledRuntimeModules()` uses does not. An
+// unbundled `dist/cli-main.js` would ship without a shebang, so the OS could
+// not execute the installed binary directly.
 await Bun.build({
   entrypoints: [
     // Storage submodule entry points (one per subpath export)
@@ -109,6 +123,8 @@ await Bun.build({
     './src/worker/protocol.ts',
     './src/observability/index.ts',
     './src/json-schema.ts',
+    './src/cli-main.ts',
+    './src/mcp/cli.ts',
   ],
   outdir: './dist',
   target: 'bun',
@@ -232,41 +248,43 @@ await Bun.build({
   external: ['bun:sqlite', 'better-sqlite3'],
 });
 
-// Browser entrypoints (Service Worker, IndexedDB, web-extension, HTTPStorage).
+// Browser entrypoints (IndexedDB, web-extension, HTTPStorage).
 //
-// `server/handler.ts` is deliberately EXCLUDED here for the same reason
-// `server/index.ts`/`cli-main.ts`/`mcp/cli.ts`/`testing/index.ts`/
-// `storage/typed-storage.ts` are excluded from the Bun bundle above: it
-// transitively reaches `Engine` (and therefore `core/engine/internals.ts`'s
-// singleton WeakMap), its export isn't `bun`-condition-gated in
-// package.json, and it is documented/used as a plain request handler a
+// `service-worker/index.ts` and `server/handler.ts` are deliberately
+// EXCLUDED here for the same reason `server/index.ts`/`testing/index.ts`/
+// `storage/typed-storage.ts` are excluded from the Bun bundle above: both
+// transitively reach `Engine` (and therefore `core/engine/internals.ts`'s
+// singleton WeakMap) and neither export is `bun`-condition-gated in
+// package.json.
+//
+// `server/handler.ts` is documented/used as a plain request handler a
 // Node/Bun HOST PROCESS can import directly alongside a root-constructed
-// `Engine` IN THE SAME REALM (see `runNodeConsumerSmoke` in
-// validate-package-consumers.ts). Bundling it separately would duplicate the
-// singleton (see SINGLETON_MODULE_MARKERS below and #710). It stays on the
-// unbundled path emitted by `writeUnbundledRuntimeModules()` above, which is
-// still browser-bundleable — the browser consumer smoke re-bundles from
-// dist/ with its own `target: 'browser'` pass regardless of whether the
-// source dist file was pre-bundled.
+// `Engine` in the same process (see `runNodeConsumerSmoke` in
+// validate-package-consumers.ts).
 //
-// `service-worker/index.ts` stays BUNDLED here, unlike the entry points
-// above. It transitively reaches the same `Engine`/codec singletons, but a
-// Service Worker always runs in its own JS realm (a separate global scope
-// from the page or any Node/Bun process) — see
-// documentation/guides/service-worker.md ("The Service Worker has to be a
-// separate bundle entry point... it doesn't reach back into the page").
-// Module instances, and therefore module-scope singleton state, are never
-// shared across that realm boundary regardless of bundling: an `Engine` used
-// inside a Service Worker is always constructed inside that same worker's
-// own module graph (see the `service-worker-browser.test.ts` fixtures, which
-// construct `new Engine(...)` in the same entrypoint that wires up the
-// listeners). So the #710 duplication risk this build guards against does
-// not apply here, and bundling it — as before this fix — is both correct and
-// simpler than carving out an unbundled exception with no compensating
-// benefit.
+// `service-worker/index.ts` was reconsidered during review: a Service Worker
+// DOES run in its own JS realm, separate from the page — but that does NOT
+// mean root package imports can never enter that realm. The guide
+// (documentation/guides/service-worker.md, "Use the lower-level handlers
+// when... you already have an Engine instance you want to reuse (for
+// example, a singleton wired up in shared code)") documents exactly the
+// pattern where a consumer's OWN Service Worker file imports BOTH
+// `@lostgradient/weft` (for `Engine`/`registerSerializer`) AND
+// `@lostgradient/weft/service-worker` (for `createFetchHandler` etc.) and
+// combines them — all inside that one worker's single realm. If
+// `service-worker/index.ts` were bundled separately, its inlined copy of the
+// singleton registries would diverge from root's the same way `server/`'s
+// did in #710, just inside the worker instead of a Node/Bun process. So it
+// stays on the unbundled path with the others.
+//
+// Both entry points are still browser-bundleable unbundled — the browser
+// consumer smoke re-bundles from dist/ with its own `target: 'browser'` pass
+// regardless of whether the source dist file was pre-bundled, and a
+// consumer's own bundler (Vite/esbuild/Webpack/etc.) does the same for a
+// real Service Worker file, per the guide ("The Service Worker has to be a
+// separate bundle entry point. Configure your bundler... to emit sw.js").
 await Bun.build({
   entrypoints: [
-    './src/service-worker/index.ts',
     './src/storage/indexeddb.ts',
     './src/storage/web-extension.ts',
     // HTTPStorage is portable and intentionally emitted from the browser build
