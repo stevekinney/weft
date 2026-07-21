@@ -482,7 +482,7 @@ Invalid JSON, a missing token, or a mismatched token returns JSON-RPC error code
 > [!NOTE]
 > The raw key-value routes are HTTP-only — they're not exposed over JSON-RPC, WebSocket, or stdio. Their operation names (`weft.storage.get`, `weft.storage.put`, etc.) appear in `/openapi.json` but not in `/openrpc.json`. Capability discovery is read-only and is available through every REST and JSON-RPC transport as `weft.storage.capabilities`.
 
-Raw key-value access to the engine's storage layer, used by `HTTPStorage` and any client that wants to treat a Weft server as a remote storage backend. Callers operate directly on the unscoped keyspace, so the routes require the `storage:admin` scope.
+Raw key-value access to the engine's storage layer, used by `HTTPStorage` and any client that wants to treat a Weft server as a remote storage backend. The capability discovery route (`GET /api/v1/storage/-/capabilities`) reports adapter metadata and requires only `storage:read`. All other routes operate directly on the unscoped keyspace and require the `storage:admin` scope.
 
 | Method   | Path                                  | Description                             |
 | -------- | ------------------------------------- | --------------------------------------- |
