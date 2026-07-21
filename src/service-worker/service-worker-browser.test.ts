@@ -299,13 +299,16 @@ serviceWorker.addEventListener('message', (event) => {
       // ticks at real Date.now(); driving the returned scheduler directly with
       // an explicit future time keeps the test hermetic.
       await scheduler.tick(Date.now() + 2 * 60 * 60 * 1000);
+      port.postMessage({ ticked: true });
+      return;
+    }
+    if (message.type === 'weft:test:timer-state') {
       let remainingTimerCount = 0;
       for await (const _entry of storage.scan('wf-deadline:')) {
         remainingTimerCount++;
       }
       const workflowState = await engine.get('setup-timer-workflow');
       port.postMessage({
-        ticked: true,
         remainingTimerCount,
         workflowStatus: workflowState?.status ?? null,
       });
@@ -811,14 +814,22 @@ describe('Service Worker browser smoke', () => {
       // Drive a periodic-sync tick with the scheduler clock advanced past the
       // timer deadline. The recovered worker must fire the re-armed timer and
       // let the workflow run to completion.
-      const tickResult = await sendWorkerMessage<{
+      const tickResult = await sendWorkerMessage<{ ticked: boolean }>(page, {
+        type: 'weft:test:periodic-sync',
+      });
+      expect(tickResult).toEqual({ ticked: true });
+
+      // The tick only proves the scheduler accepted the recovered timer. Wait
+      // on the observable terminal state instead of sampling workflow/storage
+      // state immediately after the tick, which is load-sensitive in Chromium.
+      await waitForPageWorkflowStatus(page, timerWorkflow.id, 'completed');
+
+      const timerState = await sendWorkerMessage<{
         remainingTimerCount: number;
-        ticked: boolean;
         workflowStatus: string | null;
-      }>(page, { type: 'weft:test:periodic-sync' });
-      expect(tickResult).toMatchObject({
+      }>(page, { type: 'weft:test:timer-state' });
+      expect(timerState).toEqual({
         remainingTimerCount: 0,
-        ticked: true,
         workflowStatus: 'completed',
       });
 
