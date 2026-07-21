@@ -16,11 +16,12 @@
 import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
+import { createInMemoryEventBackend } from './in-memory-event-feed-backend.ts';
 import { makeOperation as makeOp } from './json-rpc-operation.test-support.ts';
 import { createOperationRegistry, type OperationRegistry } from './operation-catalog.ts';
 import { runStdioSession, type StdioAdmission, type StdioSessionResult } from './stdio-session.ts';
 import { collectingWritable, readableFromLines } from './stdio-stream.test-support.ts';
-import { createInMemoryEventBackend, createWorkflowEventFeed } from './workflow-event-feed.ts';
+import { createWorkflowEventFeed } from './workflow-event-feed.ts';
 
 const fakeEngine = {} as unknown;
 

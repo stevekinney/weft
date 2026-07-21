@@ -1,4 +1,5 @@
 import type { WeftEventMap } from '../core/events.ts';
+import { drainLive, replayUpTo, shouldDeliverEnvelope } from './replay-live-feed-internals.ts';
 
 /** Discriminator string carried on every feed envelope. */
 export type FeedEventKind =
@@ -15,7 +16,20 @@ export type FeedEventKind =
 // Cursor (opaque)
 // ---------------------------------------------------------------------------
 
-/** Opaque cursor. Only `encodeCursor` / `decodeCursor` know the format. */
+/**
+ * Opaque cursor into a workflow or fleet event feed. Only `encodeCursor` /
+ * `decodeCursor` know the format — treat it as an opaque string, pass it back
+ * as `fromCursor` to resume a feed, and never parse it.
+ *
+ * @example
+ * ```ts
+ * import type { Cursor, EventEnvelope } from '@lostgradient/weft/server/handler';
+ *
+ * declare const envelope: EventEnvelope;
+ * const lastCursor: Cursor = envelope.cursor;
+ * void lastCursor;
+ * ```
+ */
 export type Cursor = string;
 
 const CURSOR_PATTERN = /^(?:-1|\d+)$/;
@@ -51,6 +65,22 @@ function decodeCursorOrThrow(cursor: Cursor): number {
 
 export type EventSelector = 'events' | 'tokens';
 
+/**
+ * A single committed record from a workflow's event feed — the `events`
+ * (durable log entries, e.g. `workflow:checkpoint`) or `tokens` (streamed
+ * output chunks) selector, distinguished by `selector`. Returned by
+ * `WorkflowEventFeed.replay()` / `WorkflowEventFeed.subscribe()`, and
+ * consumed directly by the `/v1/workflows/:id/events/sse` REST route.
+ *
+ * @example
+ * ```ts
+ * import type { EventEnvelope } from '@lostgradient/weft/server/handler';
+ *
+ * declare const envelope: EventEnvelope;
+ * console.log(envelope.selector); // 'events' | 'tokens'
+ * console.log(envelope.kind); // e.g. 'workflow:checkpoint'
+ * ```
+ */
 export type EventEnvelope = {
   readonly kind: FeedEventKind;
   readonly workflowId: string;
@@ -65,6 +95,26 @@ export type EventEnvelope = {
 // Backend contract
 // ---------------------------------------------------------------------------
 
+/**
+ * The durable source a `WorkflowEventFeed` replays and subscribes against.
+ * Most callers never implement this directly — `createEngineEventFeedBackend()`
+ * builds the production, `Engine`-backed implementation. Implement it
+ * yourself only to back a feed with a non-`Engine` source (e.g. a test
+ * double).
+ *
+ * @example
+ * ```ts
+ * import { Engine, MemoryStorage } from '@lostgradient/weft';
+ * import {
+ *   createEngineEventFeedBackend,
+ *   type WorkflowEventFeedBackend,
+ * } from '@lostgradient/weft/server/handler';
+ *
+ * const engine = new Engine({ storage: new MemoryStorage() });
+ * const backend: WorkflowEventFeedBackend = createEngineEventFeedBackend(engine);
+ * void backend;
+ * ```
+ */
 export type WorkflowEventFeedBackend = {
   replay(options: {
     workflowId: string;
@@ -85,6 +135,29 @@ export type WorkflowEventFeedBackend = {
 // Feed contract
 // ---------------------------------------------------------------------------
 
+/**
+ * A per-workflow event feed: replay committed history from a cursor, then
+ * subscribe for live delivery. This is the shape of
+ * `HandlerOptions.workflowEventFeed` — build a real one with
+ * `createWorkflowEventFeed()` to drive `/v1/workflows/:id/events/sse`
+ * through `handleRequest()` without `serve()`.
+ *
+ * @example
+ * ```ts
+ * import { Engine, MemoryStorage } from '@lostgradient/weft';
+ * import {
+ *   createEngineEventFeedBackend,
+ *   createWorkflowEventFeed,
+ *   type WorkflowEventFeed,
+ * } from '@lostgradient/weft/server/handler';
+ *
+ * const engine = new Engine({ storage: new MemoryStorage() });
+ * const workflowEventFeed: WorkflowEventFeed = createWorkflowEventFeed(
+ *   createEngineEventFeedBackend(engine),
+ * );
+ * void workflowEventFeed;
+ * ```
+ */
 export type WorkflowEventFeed = {
   replay(options: {
     workflowId: string;
@@ -134,16 +207,6 @@ export type ReplayLiveSubscribeOptions<TEnvelope extends SequencedEventEnvelope>
   createReplayLimitError?: (count: number, limit: number) => unknown;
   onReplayComplete?: () => void;
 };
-
-export class ReplayWindowExceededError extends Error {
-  constructor(
-    readonly count: number,
-    readonly limit: number,
-  ) {
-    super(`Replay window is ${count} events; maximum is ${limit}.`);
-    this.name = 'ReplayWindowExceededError';
-  }
-}
 
 const DEFAULT_LIVE_BUFFER_SIZE = 1000;
 
@@ -245,6 +308,33 @@ export function createReplayLiveFeed<TEnvelope extends SequencedEventEnvelope>(
   };
 }
 
+/**
+ * Build a `WorkflowEventFeed` over the given backend. Pass the result as
+ * `HandlerOptions.workflowEventFeed` to drive `/v1/workflows/:id/events/sse`
+ * through `handleRequest()` directly, without `serve()`. Call once and share
+ * the returned feed across every workflow and transport that needs it —
+ * `createWorkflowEventFeed()` itself holds no per-workflow state.
+ *
+ * @example
+ * ```ts
+ * import { Engine, MemoryStorage } from '@lostgradient/weft';
+ * import {
+ *   createEngineEventFeedBackend,
+ *   createWorkflowEventFeed,
+ *   handleRequest,
+ *   type HandlerOptions,
+ * } from '@lostgradient/weft/server/handler';
+ *
+ * const engine = new Engine({ storage: new MemoryStorage() });
+ * const workflowEventFeed = createWorkflowEventFeed(createEngineEventFeedBackend(engine));
+ * const options: HandlerOptions = { workflowEventFeed };
+ *
+ * async function handleWorkflowEventsSse(request: Request): Promise<Response> {
+ *   return handleRequest(request, engine, options);
+ * }
+ * void handleWorkflowEventsSse;
+ * ```
+ */
 export function createWorkflowEventFeed(
   backend: WorkflowEventFeedBackend,
   options?: WorkflowEventFeedOptions,
@@ -310,191 +400,6 @@ export function createWorkflowEventFeed(
     subscribe,
     dispose() {
       /* in-memory feed holds no feed-level state; no-op. */
-    },
-  };
-}
-
-// ---------------------------------------------------------------------------
-// In-memory backend (for tests + local development)
-// ---------------------------------------------------------------------------
-
-export type InMemoryEventBackend = WorkflowEventFeedBackend & {
-  append(envelope: EventEnvelope): Promise<void>;
-  emitLive(envelope: EventEnvelope): Promise<void>;
-};
-
-async function* replayUpTo<TEnvelope extends SequencedEventEnvelope>(
-  backend: ReplayLiveFeedBackend<TEnvelope>,
-  afterSequence: number,
-  snapshot: number,
-  signal: AbortSignal | undefined,
-  replayOptions: ReplayLiveSubscribeOptions<TEnvelope> | undefined,
-): AsyncIterable<TEnvelope> {
-  let replayCount = 0;
-  for await (const envelope of backend.replay({ afterSequence })) {
-    if (envelope.sequence > snapshot) break;
-    if (signal?.aborted) return;
-    if (!shouldDeliverEnvelope(envelope, replayOptions)) continue;
-    if (shouldCountReplayEnvelope(envelope, replayOptions)) {
-      replayCount += 1;
-      const replayLimit = replayOptions?.replayLimit;
-      if (replayLimit !== undefined && replayCount > replayLimit) {
-        throw createReplayLimitError(replayOptions, replayCount, replayLimit);
-      }
-    }
-    yield envelope;
-  }
-}
-
-function shouldDeliverEnvelope<TEnvelope extends SequencedEventEnvelope>(
-  envelope: TEnvelope,
-  replayOptions: ReplayLiveSubscribeOptions<TEnvelope> | undefined,
-): boolean {
-  return replayOptions?.filterEnvelope?.(envelope) ?? true;
-}
-
-function shouldCountReplayEnvelope<TEnvelope extends SequencedEventEnvelope>(
-  envelope: TEnvelope,
-  replayOptions: ReplayLiveSubscribeOptions<TEnvelope> | undefined,
-): boolean {
-  return replayOptions?.countReplayEnvelope?.(envelope) ?? true;
-}
-
-function createReplayLimitError<TEnvelope extends SequencedEventEnvelope>(
-  replayOptions: ReplayLiveSubscribeOptions<TEnvelope> | undefined,
-  count: number,
-  limit: number,
-): unknown {
-  return (
-    replayOptions?.createReplayLimitError?.(count, limit) ??
-    new ReplayWindowExceededError(count, limit)
-  );
-}
-
-function flushPendingBuffer<TEnvelope extends SequencedEventEnvelope>(
-  buffer: TEnvelope[],
-  watermark: number,
-): { batch: TEnvelope[]; newWatermark: number } {
-  const batch: TEnvelope[] = [];
-  let newWatermark = watermark;
-  let head = buffer.shift();
-  while (head !== undefined) {
-    if (head.sequence > newWatermark) {
-      batch.push(head);
-      newWatermark = head.sequence;
-    }
-    head = buffer.shift();
-  }
-  return { batch, newWatermark };
-}
-
-async function armAndWait<TEnvelope extends SequencedEventEnvelope>(
-  buffer: TEnvelope[],
-  overflowed: () => boolean,
-  signal: AbortSignal | undefined,
-  installWaker: (fn: (() => void) | null) => void,
-): Promise<void> {
-  const armed = new Promise<void>((resolve) => {
-    installWaker(resolve);
-  });
-  if (buffer.length > 0 || overflowed() || signal?.aborted) {
-    installWaker(null);
-    return;
-  }
-  await armed;
-}
-
-async function* drainLive<TEnvelope extends SequencedEventEnvelope>(
-  buffer: TEnvelope[],
-  snapshot: number,
-  signal: AbortSignal | undefined,
-  overflowed: () => boolean,
-  installWaker: (fn: (() => void) | null) => void,
-): AsyncIterable<TEnvelope> {
-  let watermark = snapshot;
-  while (true) {
-    if (signal?.aborted || overflowed()) break;
-    const { batch, newWatermark } = flushPendingBuffer(buffer, watermark);
-    watermark = newWatermark;
-    for (const envelope of batch) {
-      if (signal?.aborted || overflowed()) return;
-      yield envelope;
-    }
-    if (batch.length > 0) continue;
-    await armAndWait(buffer, overflowed, signal, installWaker);
-  }
-}
-
-function bucketKey(workflowId: string, selector: EventSelector): string {
-  return `${workflowId}:${selector}`;
-}
-
-export function createInMemoryEventBackend(): InMemoryEventBackend {
-  const storage = new Map<string, EventEnvelope[]>();
-  const listeners = new Map<string, Set<(envelope: EventEnvelope) => void>>();
-
-  function fireLive(envelope: EventEnvelope): void {
-    const set = listeners.get(bucketKey(envelope.workflowId, envelope.selector));
-    if (!set) return;
-    for (const listener of set) {
-      try {
-        listener(envelope);
-      } catch {
-        // Listener errors must not corrupt the producer.
-      }
-    }
-  }
-
-  return {
-    async *replay(options) {
-      const bucket = storage.get(bucketKey(options.workflowId, options.selector));
-      if (!bucket) return;
-      // Always scan in sequence order, regardless of append order.
-      const sorted = [...bucket].toSorted((a, b) => a.sequence - b.sequence);
-      for (const envelope of sorted) {
-        if (envelope.sequence > options.afterSequence) {
-          yield envelope;
-        }
-      }
-    },
-
-    async snapshotTailSequence(workflowId, selector) {
-      const bucket = storage.get(bucketKey(workflowId, selector));
-      if (!bucket || bucket.length === 0) return -1;
-      let max = -1;
-      for (const envelope of bucket) {
-        if (envelope.sequence > max) max = envelope.sequence;
-      }
-      return max;
-    },
-
-    subscribeLive(workflowId, selector, listener) {
-      const k = bucketKey(workflowId, selector);
-      let set = listeners.get(k);
-      if (!set) {
-        set = new Set();
-        listeners.set(k, set);
-      }
-      set.add(listener);
-      return () => {
-        set?.delete(listener);
-        if (set && set.size === 0) listeners.delete(k);
-      };
-    },
-
-    async append(envelope) {
-      const k = bucketKey(envelope.workflowId, envelope.selector);
-      let bucket = storage.get(k);
-      if (!bucket) {
-        bucket = [];
-        storage.set(k, bucket);
-      }
-      bucket.push(envelope);
-      fireLive(envelope);
-    },
-
-    async emitLive(envelope) {
-      fireLive(envelope);
     },
   };
 }

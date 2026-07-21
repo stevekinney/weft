@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
+import { createInMemoryEventBackend } from './in-memory-event-feed-backend.ts';
 import {
   createJsonRpcWebSocketSession,
   type JsonRpcWebSocketEmitter,
@@ -7,7 +8,6 @@ import {
 import { principalFromApiKey } from './principal.ts';
 import { createLiveOperationRegistry } from './rest-bindings.ts';
 import {
-  createInMemoryEventBackend,
   createWorkflowEventFeed,
   encodeCursor,
   type EventEnvelope,

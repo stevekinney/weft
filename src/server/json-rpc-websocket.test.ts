@@ -17,6 +17,7 @@ import { z } from 'zod';
 
 import { MemoryStorage } from '../storage/memory.ts';
 import { createFleetEventFeed } from './fleet-event-feed.ts';
+import { createInMemoryEventBackend } from './in-memory-event-feed-backend.ts';
 import {
   createJsonRpcWebSocketSession,
   type JsonRpcWebSocketEmitter,
@@ -30,7 +31,6 @@ import { fleetEventsSubscriptionOperation } from './operations/fleet-events-subs
 import { workflowEventsSubscriptionOperation } from './operations/workflow-events-subscription.ts';
 import { anonymousPrincipal, principalFromApiKey } from './principal.ts';
 import {
-  createInMemoryEventBackend,
   createWorkflowEventFeed,
   encodeCursor,
   type WorkflowEventFeed,

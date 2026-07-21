@@ -17,6 +17,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 
+import { createInMemoryEventBackend } from './in-memory-event-feed-backend.ts';
 import {
   createJsonRpcWebSocketSession,
   type JsonRpcWebSocketEmitter,
@@ -29,7 +30,6 @@ import { defineOperation } from './operation-registry.ts';
 import { workflowEventsSubscriptionOperation } from './operations/workflow-events-subscription.ts';
 import { principalFromApiKey } from './principal.ts';
 import {
-  createInMemoryEventBackend,
   createWorkflowEventFeed,
   encodeCursor,
   type WorkflowEventFeed,

@@ -159,9 +159,7 @@ const packageRootEventFeedBackend: WorkflowEventFeedBackend =
 const packageRootWorkflowEventFeed: WorkflowEventFeed = createWorkflowEventFeed(
   packageRootEventFeedBackend,
 );
-const packageRootFleetEventFeed: FleetEventFeed = createFleetEventFeed(
-  packageRootEngine.storage,
-);
+const packageRootFleetEventFeed: FleetEventFeed = createFleetEventFeed(packageRootEngine.storage);
 void packageRootWorkflowEventFeed;
 void packageRootFleetEventFeed;
 

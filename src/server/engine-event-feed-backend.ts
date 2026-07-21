@@ -32,7 +32,21 @@ import {
 /**
  * Build the production `WorkflowEventFeedBackend`. Call once per
  * engine instance and share the returned backend across every
- * transport that needs a feed.
+ * transport that needs a feed. Pass the result to `createWorkflowEventFeed()`
+ * to build a `WorkflowEventFeed` for `HandlerOptions.workflowEventFeed`.
+ *
+ * @example
+ * ```ts
+ * import { Engine, MemoryStorage } from '@lostgradient/weft';
+ * import {
+ *   createEngineEventFeedBackend,
+ *   createWorkflowEventFeed,
+ * } from '@lostgradient/weft/server/handler';
+ *
+ * const engine = new Engine({ storage: new MemoryStorage() });
+ * const workflowEventFeed = createWorkflowEventFeed(createEngineEventFeedBackend(engine));
+ * void workflowEventFeed;
+ * ```
  */
 export function createEngineEventFeedBackend(engine: Engine): WorkflowEventFeedBackend {
   return {

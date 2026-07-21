@@ -18,6 +18,21 @@ import {
   type WorkflowEventFeedOptions,
 } from './workflow-event-feed.ts';
 
+/**
+ * A single committed record from the fleet-wide event feed — cross-workflow
+ * lifecycle and system events, optionally scoped to one `workflowId`.
+ * Returned by `FleetEventFeed.replay()` / `FleetEventFeed.subscribe()`, and
+ * consumed directly by the `/v1/events/sse` REST route.
+ *
+ * @example
+ * ```ts
+ * import type { FleetEventEnvelope } from '@lostgradient/weft/server/handler';
+ *
+ * declare const envelope: FleetEventEnvelope;
+ * console.log(envelope.kind); // e.g. 'workflow:completed'
+ * console.log(envelope.workflowId); // string | undefined
+ * ```
+ */
 export type FleetEventEnvelope = {
   readonly kind: FeedEventKind;
   readonly workflowId?: string | undefined;
@@ -38,6 +53,23 @@ export type FleetWorkflowEventInput = FleetEventInput & {
   readonly workflowId: string;
 };
 
+/**
+ * The fleet-wide event feed: append cross-workflow events, replay committed
+ * history from a cursor, then subscribe for live delivery. This is the shape
+ * of `HandlerOptions.fleetEventFeed` — build a real one with
+ * `createFleetEventFeed()` to drive `/v1/events/sse` through `handleRequest()`
+ * without `serve()`.
+ *
+ * @example
+ * ```ts
+ * import { Engine, MemoryStorage } from '@lostgradient/weft';
+ * import { createFleetEventFeed, type FleetEventFeed } from '@lostgradient/weft/server/handler';
+ *
+ * const engine = new Engine({ storage: new MemoryStorage() });
+ * const fleetEventFeed: FleetEventFeed = createFleetEventFeed(engine.storage);
+ * void fleetEventFeed;
+ * ```
+ */
 export type FleetEventFeed = {
   append(event: FleetEventInput): Promise<FleetEventEnvelope>;
   appendWorkflowEventIfPresent(event: FleetWorkflowEventInput): Promise<FleetEventEnvelope | null>;
@@ -51,6 +83,32 @@ export type FleetEventFeed = {
 
 const MAX_WORKFLOW_OWNED_APPEND_ATTEMPTS = 5;
 
+/**
+ * Build a `FleetEventFeed` backed by the given `Storage` — typically
+ * `engine.storage`. Pass the result as `HandlerOptions.fleetEventFeed` to
+ * drive `/v1/events/sse` through `handleRequest()` directly, without
+ * `serve()`. Call once per storage instance and share the returned feed
+ * across every transport that needs it.
+ *
+ * @example
+ * ```ts
+ * import { Engine, MemoryStorage } from '@lostgradient/weft';
+ * import {
+ *   createFleetEventFeed,
+ *   handleRequest,
+ *   type HandlerOptions,
+ * } from '@lostgradient/weft/server/handler';
+ *
+ * const engine = new Engine({ storage: new MemoryStorage() });
+ * const fleetEventFeed = createFleetEventFeed(engine.storage);
+ * const options: HandlerOptions = { fleetEventFeed };
+ *
+ * async function handleFleetEventsSse(request: Request): Promise<Response> {
+ *   return handleRequest(request, engine, options);
+ * }
+ * void handleFleetEventsSse;
+ * ```
+ */
 export function createFleetEventFeed(
   storage: Storage,
   feedOptions?: WorkflowEventFeedOptions,
