@@ -161,6 +161,7 @@ export type {
   RetentionOverview,
   RetentionPolicy,
   RetryPolicy,
+  ReviewDecision,
   ReviewListEntry,
   ReviewListFilter,
   ReviewStatus,
@@ -495,7 +496,7 @@ export type {
   HumanReviewOptions,
   HumanReviewResult,
   ReviewCoordinatorOptions,
-  ReviewDecision,
+  ReviewDecisionRecord,
   ReviewOptions,
   ReviewRequest,
 } from './core/review/index.ts';

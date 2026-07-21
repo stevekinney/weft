@@ -129,7 +129,7 @@ describe('ReviewCoordinator', () => {
   });
 
   describe('submitDecision', () => {
-    it('returns full ReviewDecision', async () => {
+    it('returns a full ReviewDecisionRecord', async () => {
       const request = await coordinator.createReview('wf-1', {
         artifact: 'document',
         reviewers: ['alice'],

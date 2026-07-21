@@ -1,4 +1,4 @@
-import type { ReviewDecision as CompletedReviewDecision, ReviewRequest } from '../review/index.ts';
+import type { ReviewDecisionRecord, ReviewRequest } from '../review/index.ts';
 
 // ---------------------------------------------------------------------------
 // Review decision types (for engine.submitReview)
@@ -135,7 +135,7 @@ export interface PendingReviewEntry extends ReviewRequest {
  * void entry;
  * ```
  */
-export interface CompletedReviewEntry extends CompletedReviewDecision {
+export interface CompletedReviewEntry extends ReviewDecisionRecord {
   status: 'completed';
   workflowId: string;
   artifact: unknown;

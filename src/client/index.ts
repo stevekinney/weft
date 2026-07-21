@@ -9,11 +9,11 @@
  */
 
 export {
+  WeftError,
   isWeftError,
   isWeftErrorCode,
   isWeftErrorLike,
   isWeftFault,
-  WeftError,
 } from '../core/weft-error.ts';
 export type { WeftErrorCode } from '../core/weft-error.ts';
 export type { WorkflowEventStreamOptions, WorkflowEventTransport } from './event-stream-options.ts';

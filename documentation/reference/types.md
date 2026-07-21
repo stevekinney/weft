@@ -385,6 +385,29 @@ void welcome;
 type ReviewStatus = 'pending' | 'completed';
 ```
 
+### `ReviewDecision`
+
+The decision value accepted by `engine.submitReview()`.
+
+```ts partial
+type ReviewDecision = 'approved' | 'rejected' | 'needs-changes';
+```
+
+### `ReviewDecisionRecord`
+
+The complete persisted decision returned from a human review operation.
+
+```ts partial
+interface ReviewDecisionRecord {
+  reviewId: string;
+  decision: ReviewDecision;
+  reviewer: string;
+  feedback?: string;
+  sectionDecisions?: Record<string, 'approved' | 'rejected'>;
+  timestamp: number;
+}
+```
+
 ### `ReviewListFilter`
 
 Optional filter accepted by `engine.listReviews(filter?)` and the `/api/v1/reviews` transport surface.
@@ -408,7 +431,7 @@ interface PendingReviewEntry extends ReviewRequest {
   status: 'pending';
 }
 
-interface CompletedReviewEntry extends ReviewDecision {
+interface CompletedReviewEntry extends ReviewDecisionRecord {
   status: 'completed';
   workflowId: string;
   artifact: unknown;

@@ -53,7 +53,7 @@ export interface ReviewRequest {
  * The `decision` field is the binary outcome; `sectionDecisions` carries
  * per-section verdicts when `allowPartial` is enabled on the request.
  */
-export interface ReviewDecision {
+export interface ReviewDecisionRecord {
   reviewId: string;
   decision: 'approved' | 'rejected' | 'needs-changes';
   reviewer: string;
@@ -133,7 +133,7 @@ export interface HumanReviewOptions extends ReviewOptions {
 
 /**
  * The decision payload returned to the workflow from `ctx.review()`.
- * Alias for {@link ReviewDecision}.
+ * Alias for {@link ReviewDecisionRecord}.
  *
  * @example
  * ```ts
@@ -148,7 +148,7 @@ export interface HumanReviewOptions extends ReviewOptions {
  * void result;
  * ```
  */
-export type HumanReviewResult = ReviewDecision;
+export type HumanReviewResult = ReviewDecisionRecord;
 
 /**
  * The action returned by {@link ReviewCoordinator.checkEscalations} when an
@@ -325,9 +325,9 @@ export class ReviewCoordinator {
   /** Submit a review decision. */
   async submitDecision(
     reviewId: string,
-    decision: Omit<ReviewDecision, 'reviewId' | 'timestamp'>,
-  ): Promise<ReviewDecision> {
-    const full: ReviewDecision = {
+    decision: Omit<ReviewDecisionRecord, 'reviewId' | 'timestamp'>,
+  ): Promise<ReviewDecisionRecord> {
+    const full: ReviewDecisionRecord = {
       reviewId,
       decision: decision.decision,
       reviewer: decision.reviewer,

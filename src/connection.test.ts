@@ -364,9 +364,12 @@ describe('~/.weft/config resolution outside Bun', () => {
     delete Bun.env['WEFT_PROFILE'];
     writeConfig(
       home,
-      ['default_profile = "main"', '', '[profiles.main]', 'server = "https://profile.example.com"'].join(
-        '\n',
-      ),
+      [
+        'default_profile = "main"',
+        '',
+        '[profiles.main]',
+        'server = "https://profile.example.com"',
+      ].join('\n'),
     );
     setPortableRuntimeTestOverridesForTesting({ bun: undefined });
     try {

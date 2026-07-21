@@ -42,9 +42,7 @@ type ValidatedReviewDecisionInput = {
  * decisions. Returns `undefined` when the field is absent. Throws an
  * `InvalidParams` fault when present but not a record of "approved"/"rejected".
  */
-function parseSectionDecisions(
-  sectionDecisions: unknown,
-): SubmitReviewOptions['sectionDecisions'] {
+function parseSectionDecisions(sectionDecisions: unknown): SubmitReviewOptions['sectionDecisions'] {
   if (sectionDecisions === undefined) return undefined;
 
   const parsed = sectionDecisionsSchema.safeParse(sectionDecisions);
