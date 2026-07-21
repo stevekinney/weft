@@ -2012,19 +2012,27 @@ export class Engine<
 }
 
 /**
- * `Engine` with its workflow/activity-registry-typed members removed —
- * `register`, `registerWorkflows`, `start`, and `startOrSignal`, whose
- * overload signatures vary with the phantom `TWorkflows`/`TActivities`
- * registry generics (see `register()`'s JSDoc: registering returns "this
- * same engine with the definition added to its phantom type registry").
- * Because those chained-builder methods return `Engine<NarrowedRegistry>`,
- * `Engine` is invariant in its registry generics — a concretely narrowed
- * `Engine<Concrete>` (e.g. from `Engine.create({ workflows })`) is not
- * structurally assignable to the plain default `Engine<DefaultWorkflowRegistry>`,
- * even though every *other* member is registry-independent.
+ * `Engine` with its two chained-builder registration methods removed —
+ * `register` and `registerWorkflows`, whose return type is itself
+ * `Engine<NarrowedRegistry>` (see `register()`'s JSDoc: registering returns
+ * "this same engine with the definition added to its phantom type
+ * registry"). That self-reference is what makes `Engine` invariant in its
+ * registry generics: a concretely narrowed `Engine<Concrete>` (e.g. from
+ * `Engine.create({ workflows })`) is not structurally assignable to the
+ * plain default `Engine<DefaultWorkflowRegistry>`, even though every other
+ * member — including `start` and `startOrSignal`, whose *parameter* types
+ * (not return types) reference `TWorkflows` but never produce another
+ * `Engine<T>` — is not part of that recursive comparison.
+ *
+ * `start` and `startOrSignal` are deliberately KEPT (not omitted): hosted
+ * transports genuinely call them at runtime (REST/JSON-RPC workflow starts,
+ * MCP tool invocations) via `runtimeWorkflowEngine()`'s registry-erased
+ * dynamic-name overload, so a value satisfying this type must still provide
+ * them — a duck-typed engine substitute lacking `start` correctly fails to
+ * satisfy `RegistryAgnosticEngine` (see this type's `.test-d.ts` coverage).
  *
  * Host-facing options that accept an already-constructed `Engine` without
- * needing those four registry-typed convenience methods — `serve({ engine })`,
+ * needing the two chained-builder registration methods — `serve({ engine })`,
  * the Service Worker helpers, the MCP session/HTTP/stdio surfaces — use this
  * type instead of the bare default `Engine`, so both `new Engine({ storage })`
  * and `Engine.create({ workflows })` are accepted without a call-site cast.
@@ -2039,7 +2047,4 @@ export class Engine<
  * rather than widening their generic arguments, avoids the recursive
  * comparison altogether.)
  */
-export type RegistryAgnosticEngine = Omit<
-  Engine,
-  'register' | 'registerWorkflows' | 'start' | 'startOrSignal'
->;
+export type RegistryAgnosticEngine = Omit<Engine, 'register' | 'registerWorkflows'>;

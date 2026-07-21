@@ -14,7 +14,7 @@ import {
   type TaskQueue,
   type WeftServer,
 } from '@lostgradient/weft/server';
-import type { HandlerOptions } from '@lostgradient/weft/server/handler';
+import { handleRequest, type HandlerOptions } from '@lostgradient/weft/server/handler';
 
 const packageRootEngine = new Engine();
 const packageRootPrometheusExporter = createMetricsCollectorExporter(undefined);
@@ -132,5 +132,9 @@ async function verifyPackageRootConcreteWorkflowRegistryEngineAcceptedByServe():
 
   await using server = serve({ engine: concreteEngine, port: 0 });
   void server;
+
+  // Copilot review on #708 (PR #715): pin the same invariant for
+  // `handleRequest`, symmetric with `ServeOptions.engine` above.
+  void handleRequest(new Request('http://localhost/v1/health'), concreteEngine);
 }
 void verifyPackageRootConcreteWorkflowRegistryEngineAcceptedByServe;
