@@ -56,7 +56,7 @@ function packageRootOf(specifier: string): string {
     const [scope, name] = specifier.split('/');
     return name ? `${scope}/${name}` : specifier;
   }
-  return specifier.split('/')[0];
+  return specifier.split('/')[0] ?? specifier;
 }
 
 async function writeUnbundledRuntimeModules(): Promise<void> {
@@ -91,6 +91,21 @@ await writeUnbundledRuntimeModules();
 // Node/Bun target — per-backend storage and integration submodules.
 // Heavy backends (lmdb, @libsql/client, @neondatabase/serverless) are
 // externalized so consumers only pay for what they actually import.
+//
+// Entrypoints that transitively reach a module-scope singleton registry
+// (currently `core/engine/internals.ts` and `core/codec/serializer-registry.ts`
+// — see SINGLETON_MODULE_MARKERS below) are deliberately EXCLUDED from this
+// bundle. Bundling inlines its own private copy of every module it imports,
+// including those registries, so a bundled entrypoint ends up with its own
+// disconnected `WeakMap`/`Map` instance instead of sharing the one the
+// unbundled root tree writes via `writeUnbundledRuntimeModules()` above. A
+// consumer that constructs an `Engine` via the root import and hands it to a
+// bundled `serve()` (or registers a serializer via the root import and
+// encodes through a bundled storage codec) would then hit "internals not
+// initialized" or a silently-unregistered serializer — see #710. Leaving
+// `server/index.ts`, `cli-main.ts`, `mcp/cli.ts`, `testing/index.ts`, and
+// `storage/typed-storage.ts` on the unbundled path (already emitted above)
+// means they resolve the exact same on-disk singleton modules as root.
 await Bun.build({
   entrypoints: [
     // Storage submodule entry points (one per subpath export)
@@ -98,7 +113,6 @@ await Bun.build({
     './src/storage/memory.ts',
     './src/storage/compressed-storage.ts',
     './src/storage/scoped-storage.ts',
-    './src/storage/typed-storage.ts',
     './src/storage/testing.ts',
     './src/storage/resolve.ts',
     './src/storage/lmdb.ts',
@@ -107,14 +121,9 @@ await Bun.build({
     './src/storage/postgres.ts',
     './src/storage/node-sqlite.ts',
     './src/storage/auto.ts',
-    './src/testing/index.ts',
     './src/worker/protocol.ts',
-    './src/cli-main.ts',
-    './src/mcp/cli.ts',
     './src/observability/index.ts',
     './src/json-schema.ts',
-    // Bun-only server subpath (@lostgradient/weft/server)
-    './src/server/index.ts',
   ],
   outdir: './dist',
   target: 'bun',
@@ -238,16 +247,29 @@ await Bun.build({
   external: ['bun:sqlite', 'better-sqlite3'],
 });
 
-// Browser entrypoints (Service Worker, IndexedDB, handler)
+// Browser entrypoints (IndexedDB, web-extension, HTTPStorage).
+//
+// `service-worker/index.ts` and `server/handler.ts` are deliberately EXCLUDED
+// here for the same reason `server/index.ts`/`cli-main.ts`/`mcp/cli.ts`/
+// `testing/index.ts`/`storage/typed-storage.ts` are excluded from the Bun
+// bundle above: both transitively reach `Engine` (and therefore
+// `core/engine/internals.ts`'s singleton WeakMap) and neither export is
+// `bun`-condition-gated in package.json, so a Node/Bun consumer can combine
+// a root-constructed `Engine` with `@lostgradient/weft/server/handler` or
+// `@lostgradient/weft/service-worker` in the same process. Bundling them
+// separately would duplicate the singleton (see SINGLETON_MODULE_MARKERS
+// below and #710). They stay on the unbundled path emitted by
+// `writeUnbundledRuntimeModules()` above, which is still browser-bundleable —
+// the browser consumer smoke re-bundles from dist/ with its own
+// `target: 'browser'` pass regardless of whether the source dist file was
+// pre-bundled.
 await Bun.build({
   entrypoints: [
-    './src/service-worker/index.ts',
     './src/storage/indexeddb.ts',
     './src/storage/web-extension.ts',
     // HTTPStorage is portable and intentionally emitted from the browser build
     // so the subpath is produced once without a later overwrite.
     './src/storage/http.ts',
-    './src/server/handler.ts',
   ],
   outdir: './dist',
   target: 'browser',
@@ -320,6 +342,7 @@ async function assertNoTestOnlyDependenciesInDist(): Promise<void> {
   for await (const distPath of distGlob.scan('.')) {
     const contents = stripComments(await Bun.file(distPath).text());
     for (const [, , specifier] of contents.matchAll(specifierPattern)) {
+      if (specifier === undefined) continue;
       if (allowsForbiddenSpecifier(distPath, specifier)) continue;
       if (forbiddenPackageRoots.includes(packageRootOf(specifier))) {
         offenders.push({ file: distPath, specifier });
@@ -361,6 +384,7 @@ async function assertRelativeImportsResolveInDist(): Promise<void> {
     if (distPath.endsWith('.js.map')) continue;
     const contents = stripComments(await Bun.file(distPath).text());
     for (const [, , specifier] of contents.matchAll(relativeSpecifierPattern)) {
+      if (specifier === undefined) continue;
       // Only check JavaScript module specifiers (asset/data files vary).
       if (!specifier.endsWith('.js')) continue;
       const resolved = resolve(dirname(distPath), specifier);
@@ -383,6 +407,66 @@ async function assertRelativeImportsResolveInDist(): Promise<void> {
 }
 
 await assertRelativeImportsResolveInDist();
+
+// Guard: a module-scope singleton registry must resolve to exactly one
+// on-disk module across every public entry point. Bundling an entry point
+// that transitively imports a singleton-bearing module (e.g. `Engine`, which
+// pulls in `core/engine/internals.ts`'s WeakMap) inlines a private copy of
+// that module's state — so an `Engine` built via the unbundled root import
+// registers its internals in ROOT's WeakMap, while a bundled `serve()`
+// checks its OWN, separately-inlined WeakMap, which never saw it. That was
+// #710: `serve({ engine })` unconditionally threw "Engine internals not
+// initialized" for every consumer of the published package.
+//
+// Each singleton module's throw-string literal survives minification (string
+// literals aren't renamed), so we can fingerprint it and assert it appears in
+// dist/ exactly once — in the singleton module's own unbundled output file.
+// A second occurrence means some other entry point re-inlined it and must be
+// moved off the bundled path (see the comment above the storage/CLI/server
+// Bun.build() call). Add an entry here whenever a new module-scope
+// WeakMap/Map/Set registry is introduced that more than one public entry
+// point can reach.
+const SINGLETON_MODULE_MARKERS: { canonicalFile: string; marker: string }[] = [
+  {
+    canonicalFile: 'dist/core/engine/internals.js',
+    marker: 'was not called in the Engine constructor',
+  },
+  {
+    canonicalFile: 'dist/core/codec/serializer-registry.js',
+    marker: 'No serializer registered for tag',
+  },
+];
+
+async function assertSingletonModulesNotDuplicated(): Promise<void> {
+  const offenders: { file: string; marker: string; canonicalFile: string }[] = [];
+  const distGlob = new Bun.Glob('dist/**/*.js');
+
+  for (const { canonicalFile, marker } of SINGLETON_MODULE_MARKERS) {
+    for await (const distPath of distGlob.scan('.')) {
+      if (distPath.endsWith('.js.map')) continue;
+      const contents = await Bun.file(distPath).text();
+      if (contents.includes(marker) && distPath !== canonicalFile) {
+        offenders.push({ file: distPath, marker, canonicalFile });
+      }
+    }
+  }
+
+  if (offenders.length > 0) {
+    console.error(
+      'Build produced dist/ artifacts that duplicate a module-scope singleton registry:',
+    );
+    for (const { file, marker, canonicalFile } of offenders) {
+      console.error(`  ${file} inlines "${marker}" — expected only in ${canonicalFile}`);
+    }
+    console.error(
+      'Remove the offending entry point from the bundled Bun.build() call in scripts/build.ts ' +
+        'so it stays on the unbundled path and shares the singleton module with root.',
+    );
+    process.exit(1);
+  }
+}
+
+await assertSingletonModulesNotDuplicated();
 
 // Summarize what shipped so a build prints something actionable instead of a
 // bare "complete" — file counts by kind and total dist size make a regression

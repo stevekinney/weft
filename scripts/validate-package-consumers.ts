@@ -17,9 +17,19 @@ function commandOutput(output: Uint8Array): string {
 function createSubprocessEnvironment(
   overrides: Record<string, string> = {},
 ): Record<string, string> {
-  const environment = { ...process.env, ...overrides };
-  delete environment.npm_config_dry_run;
-  delete environment.npm_config_dry_run_;
+  // process.env's index signature is `string | undefined` (a key can be
+  // present-but-unset), which is not assignable to Bun.spawnSync's expected
+  // `Record<string, string>` env type. Filter undefined values explicitly
+  // instead of asserting the type away.
+  const environment: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) environment[key] = value;
+  }
+  for (const [key, value] of Object.entries(overrides)) {
+    environment[key] = value;
+  }
+  delete environment['npm_config_dry_run'];
+  delete environment['npm_config_dry_run_'];
   return environment;
 }
 
@@ -52,7 +62,7 @@ function runCommand(label: string, command: string[], cwd: string): void {
 
 function resolveRealNodeExecutable(): string {
   const bunExecutable = realpathSync(process.execPath);
-  for (const directory of (process.env.PATH ?? '').split(delimiter)) {
+  for (const directory of (process.env['PATH'] ?? '').split(delimiter)) {
     if (directory.includes('bun-node-')) continue;
     const candidate = join(directory, 'node');
     try {
@@ -145,6 +155,36 @@ async function runBunConsumerSmoke(consumerDirectory: string): Promise<void> {
   ].join('\n');
   runCommand(
     'Bun consumer imports public package surface',
+    [process.execPath, '--eval', script],
+    consumerDirectory,
+  );
+}
+
+// Regression test for #710: `serve({ engine })` threw "Engine internals not
+// initialized" for every consumer of the published 0.11.0 npm package. The
+// root `.` export was unbundled (each module a real file), while the
+// `./server` subpath was bundled into one minified file that inlined its own
+// private copy of `core/engine/internals.ts`'s module-scope WeakMap — so an
+// `Engine` built via the root import registered its internals in the ROOT's
+// WeakMap, and `serve()` (checking its own, separately-inlined WeakMap) never
+// saw it. This must be exercised through the PACKED package exports, not
+// source-relative `src/` imports: the internal test suite shares one module
+// graph by construction and cannot see a dual-bundle split. `server.stop()`
+// and `engine.shutdown()` are awaited and the process exits explicitly so the
+// scheduler/timers `serve()` starts don't keep this smoke step alive.
+async function runServeEngineSmoke(consumerDirectory: string): Promise<void> {
+  const script = [
+    `import { Engine, workflow } from '${packageName}';`,
+    `import { serve } from '${packageName}/server';`,
+    "const wf = workflow({ name: 'ping' }).execute(async function* () { return 'pong'; });",
+    'const engine = await Engine.create({ workflows: { ping: wf } });',
+    'const server = serve({ engine, port: 0 });',
+    'await server.stop(true);',
+    'await engine.shutdown();',
+    'process.exit(0);',
+  ].join('\n');
+  runCommand(
+    'Bun consumer: serve({ engine }) does not throw (#710 regression)',
     [process.execPath, '--eval', script],
     consumerDirectory,
   );
@@ -418,6 +458,7 @@ async function main(): Promise<void> {
     const consumerDirectory = join(workingDirectory, 'consumer');
     await createConsumerProject(consumerDirectory, tarballPath);
     await runBunConsumerSmoke(consumerDirectory);
+    await runServeEngineSmoke(consumerDirectory);
     await runNodeConsumerSmoke(consumerDirectory);
     await runBrowserBundleSmoke(consumerDirectory);
     await runTypeScriptConsumerSmoke(consumerDirectory);
