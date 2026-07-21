@@ -47,7 +47,7 @@ function isScheduleOverlapPolicy(
 function validateDescription(value: unknown): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== 'string') {
-    throw invalidParamsFault('options.description must be a string when provided');
+    throw invalidParamsFault('Field "description" must be a string');
   }
   return value;
 }
@@ -57,7 +57,7 @@ function validateOverlap(
 ): NonNullable<ScheduleUpdateOptions['overlap']> | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== 'string' || !isScheduleOverlapPolicy(value)) {
-    throw invalidParamsFault('options.overlap must be one of skip, queue, cancel-running, allow');
+    throw invalidParamsFault('Field "overlap" must be one of skip, queue, cancel-running, allow');
   }
   return value;
 }
@@ -65,7 +65,7 @@ function validateOverlap(
 function validateBackfill(value: unknown): boolean | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== 'boolean') {
-    throw invalidParamsFault('options.backfill must be a boolean when provided');
+    throw invalidParamsFault('Field "backfill" must be a boolean');
   }
   return value;
 }
@@ -74,13 +74,16 @@ function validateJitter(value: unknown): ScheduleUpdateOptions['jitter'] {
   if (value === undefined) return undefined;
   if (typeof value !== 'string' && typeof value !== 'number') {
     throw invalidParamsFault(
-      'options.jitter must be a duration string or a number of milliseconds',
+      'Field "jitter" must be a duration string or a number of milliseconds',
     );
   }
   try {
     normalizeScheduleUpdateOptions({ jitter: value });
   } catch (error) {
-    throw invalidParamsFault(error instanceof Error ? error.message : String(error));
+    const message = error instanceof Error ? error.message : String(error);
+    throw invalidParamsFault(
+      `Field "jitter" is invalid: ${message.replace(/^Invalid options\.jitter: /, '')}`,
+    );
   }
   return value;
 }

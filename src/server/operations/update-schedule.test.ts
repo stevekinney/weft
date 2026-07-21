@@ -131,7 +131,7 @@ describe('weft.schedules.update', () => {
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
-      error: 'options.description must be a string when provided',
+      error: 'Field "description" must be a string',
     });
     expect(await engine.getSchedule('schedule-update-null-description')).toEqual(
       expect.objectContaining({
@@ -153,29 +153,29 @@ describe('weft.schedules.update', () => {
       {
         field: 'overlap',
         value: 'parallel',
-        error: 'options.overlap must be one of skip, queue, cancel-running, allow',
+        error: 'Field "overlap" must be one of skip, queue, cancel-running, allow',
       },
       {
         field: 'backfill',
         value: 'yes',
-        error: 'options.backfill must be a boolean when provided',
+        error: 'Field "backfill" must be a boolean',
       },
       {
         field: 'jitter',
         value: null,
-        error: 'options.jitter must be a duration string or a number of milliseconds',
+        error: 'Field "jitter" must be a duration string or a number of milliseconds',
       },
       {
         field: 'jitter',
         value: 'soon',
         error:
-          'Invalid options.jitter: Invalid duration string: "soon". Expected a number or a string like "30s", "5 minutes", "1 hour", etc.',
+          'Field "jitter" is invalid: Invalid duration string: "soon". Expected a number or a string like "30s", "5 minutes", "1 hour", etc.',
       },
       {
         field: 'jitter',
         value: -1,
         error:
-          'Invalid options.jitter: Duration must resolve to a finite, non-negative number of milliseconds, got: -1',
+          'Field "jitter" is invalid: Duration must resolve to a finite, non-negative number of milliseconds, got: -1',
       },
     ];
 
@@ -229,7 +229,7 @@ describe('weft.schedules.update', () => {
       error: expect.objectContaining({
         code: -32602,
         message:
-          'Invalid options.jitter: Invalid duration string: "soon". Expected a number or a string like "30s", "5 minutes", "1 hour", etc.',
+          'Field "jitter" is invalid: Invalid duration string: "soon". Expected a number or a string like "30s", "5 minutes", "1 hour", etc.',
       }),
     });
   });
