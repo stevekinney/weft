@@ -142,6 +142,7 @@ export type CatalogOperationTypes = {
       readonly feedback?: unknown;
       readonly reviewId: string;
       readonly reviewer?: unknown;
+      readonly sectionDecisions?: unknown;
       readonly workflowId?: unknown;
     };
     readonly output: { readonly ok: boolean };

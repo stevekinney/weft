@@ -381,6 +381,7 @@
             "type": "string"
           },
           "reviewer": {},
+          "sectionDecisions": {},
           "workflowId": {}
         },
         "required": ["reviewId"],

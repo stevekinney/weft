@@ -14,11 +14,14 @@ const VALID_DECISIONS = [
   'needs-changes',
 ] as const satisfies ReadonlyArray<ReviewDecision>;
 
+const sectionDecisionsSchema = z.record(z.string(), z.enum(['approved', 'rejected']));
+
 const submitReviewDecisionInput = z.object({
   reviewId: z.string().min(1),
   decision: z.unknown().optional(),
   reviewer: z.unknown().optional(),
   feedback: z.unknown().optional(),
+  sectionDecisions: z.unknown().optional(),
   workflowId: z.unknown().optional(),
 });
 const submitReviewDecisionOutput = z.object({
@@ -35,10 +38,35 @@ type ValidatedReviewDecisionInput = {
 };
 
 /**
+ * Validate and parse the `sectionDecisions` field for partial-approval review
+ * decisions. Returns `undefined` when the field is absent. Throws an
+ * `InvalidParams` fault when present but not a record of "approved"/"rejected".
+ */
+function parseSectionDecisions(
+  sectionDecisions: unknown,
+): SubmitReviewOptions['sectionDecisions'] {
+  if (sectionDecisions === undefined) return undefined;
+
+  const parsed = sectionDecisionsSchema.safeParse(sectionDecisions);
+  if (!parsed.success) {
+    const fault: OperationFault = {
+      code: 'InvalidParams',
+      message:
+        'Field "sectionDecisions" must be a record mapping section names to "approved" or "rejected"',
+      data: { issues: [] },
+    };
+    throw fault;
+  }
+
+  return parsed.data;
+}
+
+/**
  * Validate the review decision input fields in precedence order:
  *   1. decision + reviewer presence  — both must be strings
  *   2. decision value validity        — must be one of the allowed decisions
  *   3. feedback type                  — must be a string when provided
+ *   4. sectionDecisions shape         — must be a record of "approved"|"rejected" when provided
  *
  * Returns the validated decision, reviewer, and the constructed `SubmitReviewOptions`.
  * Throws an `InvalidParams` fault on the first invalid field.
@@ -73,11 +101,16 @@ function validateReviewDecisionInput(
     throw fault;
   }
 
+  const sectionDecisions = parseSectionDecisions(input.sectionDecisions);
+
   const decision = input.decision as ReviewDecision;
   const reviewer = input.reviewer;
   const reviewOptions: SubmitReviewOptions = { decision, reviewer };
   if (typeof input.feedback === 'string') {
     reviewOptions.feedback = input.feedback;
+  }
+  if (sectionDecisions !== undefined) {
+    reviewOptions.sectionDecisions = sectionDecisions;
   }
   if (typeof input.workflowId === 'string') {
     reviewOptions.workflowId = input.workflowId;
@@ -166,6 +199,7 @@ export const submitReviewDecisionRestBinding: UnknownRestBinding = {
     decision: { kind: 'body-field', bodyField: 'decision' },
     reviewer: { kind: 'body-field', bodyField: 'reviewer' },
     feedback: { kind: 'body-field', bodyField: 'feedback' },
+    sectionDecisions: { kind: 'body-field', bodyField: 'sectionDecisions' },
     workflowId: { kind: 'body-field', bodyField: 'workflowId' },
   },
   extractInput: async (request, pathParams, context) => {
@@ -183,6 +217,7 @@ export const submitReviewDecisionRestBinding: UnknownRestBinding = {
       decision: record['decision'],
       reviewer: record['reviewer'],
       feedback: record['feedback'],
+      sectionDecisions: record['sectionDecisions'],
       workflowId: record['workflowId'],
     };
   },

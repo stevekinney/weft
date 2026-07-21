@@ -5,7 +5,8 @@ import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
+import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
+import { anonymousPrincipal } from '../principal.ts';
 import {
   submitReviewDecisionOperation,
   submitReviewDecisionRestBinding,
@@ -66,6 +67,102 @@ describe('weft.reviews.decision.submit', () => {
     } finally {
       engine.submitReview = originalSubmitReview;
     }
+  });
+
+  it('submits sectionDecisions over REST and passes them through to the engine', async () => {
+    const engine = createEngine();
+    let capturedOptions: unknown;
+    const originalSubmitReview = engine.submitReview.bind(engine);
+    engine.submitReview = async (_reviewId, options) => {
+      capturedOptions = options;
+    };
+
+    try {
+      const response = await handleRequest(
+        request('POST', '/v1/reviews/rev-1/decision', {
+          decision: 'needs-changes',
+          reviewer: 'alice',
+          feedback: 'Body needs work',
+          sectionDecisions: { intro: 'approved', body: 'rejected' },
+        }),
+        engine,
+        {
+          operationRegistry: registry,
+          restBindings: bindings,
+        },
+      );
+
+      expect(response.status).toBe(200);
+      expect(capturedOptions).toEqual({
+        decision: 'needs-changes',
+        reviewer: 'alice',
+        feedback: 'Body needs work',
+        sectionDecisions: { intro: 'approved', body: 'rejected' },
+      });
+    } finally {
+      engine.submitReview = originalSubmitReview;
+    }
+  });
+
+  it('submits sectionDecisions over JSON-RPC without being rejected as an unknown key', async () => {
+    const engine = createEngine();
+    let capturedOptions: unknown;
+    const originalSubmitReview = engine.submitReview.bind(engine);
+    engine.submitReview = async (_reviewId, options) => {
+      capturedOptions = options;
+    };
+
+    try {
+      const result = await executeOperation(
+        'weft.reviews.decision.submit',
+        {
+          reviewId: 'rev-1',
+          decision: 'needs-changes',
+          reviewer: 'alice',
+          feedback: 'Body needs work',
+          sectionDecisions: { intro: 'approved', body: 'rejected' },
+        },
+        {
+          principal: anonymousPrincipal(),
+          engine,
+          transport: 'jsonRpcHttp',
+          registry,
+        },
+      );
+
+      expect(result.ok).toBe(true);
+      expect(capturedOptions).toEqual({
+        decision: 'needs-changes',
+        reviewer: 'alice',
+        feedback: 'Body needs work',
+        sectionDecisions: { intro: 'approved', body: 'rejected' },
+      });
+    } finally {
+      engine.submitReview = originalSubmitReview;
+    }
+  });
+
+  it('rejects a malformed sectionDecisions value with InvalidParams', async () => {
+    const engine = createEngine();
+
+    const response = await handleRequest(
+      request('POST', '/v1/reviews/rev-1/decision', {
+        decision: 'approved',
+        reviewer: 'alice',
+        sectionDecisions: { intro: 'maybe' },
+      }),
+      engine,
+      {
+        operationRegistry: registry,
+        restBindings: bindings,
+      },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error:
+        'Field "sectionDecisions" must be a record mapping section names to "approved" or "rejected"',
+    });
   });
 
   it('returns 400 for validation failures', async () => {
