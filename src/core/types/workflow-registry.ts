@@ -1,4 +1,5 @@
 import type { DefinitionSchema } from './definition-schema.ts';
+import type { QueryDefinition, SignalDefinition, UpdateDefinition } from './message-handles.ts';
 import type { SearchAttributeSchema } from './search-attributes.ts';
 import type { WorkflowConcurrencyOptions } from './workflow-concurrency.ts';
 
@@ -28,6 +29,12 @@ export interface RegisteredWorkflowDefinition<TInput = unknown, TOutput = unknow
   inputSchema?: DefinitionSchema<unknown, TInput>;
   /** Optional output schema metadata for introspection; core execution does not validate output against it. */
   outputSchema?: DefinitionSchema<unknown, TOutput>;
+  /** Statically registered signal definitions keyed by their public names. */
+  signals?: Readonly<Record<string, Readonly<SignalDefinition<unknown>>>>;
+  /** Statically registered update definitions keyed by their public names. */
+  updates?: Readonly<Record<string, Readonly<UpdateDefinition<unknown>>>>;
+  /** Statically registered query definitions keyed by their public names. */
+  queries?: Readonly<Record<string, Readonly<QueryDefinition<unknown>>>>;
   /** Optional search attribute schema used for indexing and runtime validation. */
   searchAttributes?: SearchAttributeSchema;
   /** Optional start admission policy for this workflow type. */

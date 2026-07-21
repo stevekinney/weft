@@ -105,6 +105,8 @@ weft codegen --server http://localhost:7233 --out ./src/weft.generated.d.ts --js
 
 The generated file augments the public `weft` module with `WorkflowRegistry` entries — typed workflow names that make `engine.start('name', ...)` infer the right input shape. Activity names are no longer typed via a global module augmentation; they live on the workflow builder's `.activities({...})` step instead. Output is byte-stable: running the command again with the same snapshot reports that the file is up to date and does not rewrite it.
 
+The source registry snapshot also exposes each workflow's statically declared signal, update, and query names with their available input/output JSON Schemas. Activity entries include their registered retry policy and timeout alongside queue and schema metadata. `weft codegen` currently uses the workflow and activity input/output schemas for declaration generation; operator clients can consume the additional metadata directly from `GET /v1/registry`.
+
 When `--server` is used, connection resolution follows the same order as the server-inspection commands: explicit `--server`, `WEFT_ADDR`, selected profile, then the run lockfile written by `weft serve`. If the resolved server URL is malformed, the diagnostic reports the actual offending value regardless of which source supplied it. For example, a bad profile URL now fails as `codegen: invalid server URL '<value>'` rather than reconstructing the message from flags and environment alone.
 
 **Options:**

@@ -4,6 +4,9 @@ import {
   activity,
   validateDefinitionSchemaMetadata,
   type ActivityDefinition,
+  type QueryDefinition,
+  type SignalDefinition,
+  type UpdateDefinition,
   type WorkflowConcurrencyOptions,
   type WorkflowDefinition,
 } from '../types.ts';
@@ -134,6 +137,11 @@ function applyOptionalRegistrationFields(
 function buildRegistrationEntry(name: string, registration: WorkflowDefinition): RegistrationEntry {
   const entry = buildBaseRegistrationEntry(name, registration);
   applyOptionalRegistrationFields(entry, registration);
+  if (isBuilderWorkflowDefinition(registration)) {
+    entry.signals = registration.signals;
+    entry.updates = registration.updates;
+    entry.queries = registration.queries;
+  }
   return entry;
 }
 
@@ -169,9 +177,9 @@ function hasNonNullObjectField(value: object, key: string): boolean {
 
 function isBuilderWorkflowDefinition(value: unknown): value is WorkflowDefinition & {
   readonly activities: Readonly<Record<string, Readonly<ActivityDefinition>>>;
-  readonly signals: Readonly<Record<string, unknown>>;
-  readonly updates: Readonly<Record<string, unknown>>;
-  readonly queries: Readonly<Record<string, unknown>>;
+  readonly signals: Readonly<Record<string, Readonly<SignalDefinition<unknown>>>>;
+  readonly updates: Readonly<Record<string, Readonly<UpdateDefinition<unknown>>>>;
+  readonly queries: Readonly<Record<string, Readonly<QueryDefinition<unknown>>>>;
   readonly searchAttributes: Readonly<Record<string, unknown>>;
 } {
   if (!isWorkflowDefinition(value)) return false;

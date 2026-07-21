@@ -17,7 +17,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
 import { Engine } from '../../core/engine.ts';
-import { activity, workflow } from '../../core/types.ts';
+import { activity, query, signal, update, workflow } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
@@ -55,9 +55,20 @@ describe('GET /v1/registry — successful responses', () => {
         outputSchema: z.object({ greeting: z.string() }),
         description: 'Greets a person.',
         tags: ['greeting'],
-      }).execute(async function* () {
-        return { greeting: 'hi' };
-      }),
+      })
+        .signals({ wave: signal('wave', { inputSchema: z.object({ times: z.number() }) }) })
+        .updates({
+          rename: update('rename', {
+            inputSchema: z.object({ name: z.string() }),
+            outputSchema: z.object({ accepted: z.boolean() }),
+          }),
+        })
+        .queries({
+          status: query('status', { outputSchema: z.object({ state: z.string() }) }),
+        })
+        .execute(async function* () {
+          return { greeting: 'hi' };
+        }),
     );
     engine.register(workflow({ name: 'schemaless' }).execute(async function* () {}));
     engine.register(
@@ -68,6 +79,13 @@ describe('GET /v1/registry — successful responses', () => {
         inputSchema: z.object({ to: z.string() }),
         outputSchema: z.object({ delivered: z.boolean(), recipient: z.string() }),
         description: 'Sends an email.',
+        retry: {
+          maxAttempts: 3,
+          initialBackoff: '200ms',
+          backoffMultiplier: 2,
+          maxBackoff: '5s',
+        },
+        timeout: '30s',
       }),
     );
     engine.register(activity({ name: 'noop', execute: async () => undefined }));
@@ -104,6 +122,42 @@ describe('GET /v1/registry — successful responses', () => {
           },
           description: 'Greets a person.',
           tags: ['greeting'],
+          signals: {
+            wave: {
+              inputSchema: {
+                type: 'object',
+                properties: { times: { type: 'number' } },
+                required: ['times'],
+                additionalProperties: false,
+              },
+            },
+          },
+          updates: {
+            rename: {
+              inputSchema: {
+                type: 'object',
+                properties: { name: { type: 'string' } },
+                required: ['name'],
+                additionalProperties: false,
+              },
+              outputSchema: {
+                type: 'object',
+                properties: { accepted: { type: 'boolean' } },
+                required: ['accepted'],
+                additionalProperties: false,
+              },
+            },
+          },
+          queries: {
+            status: {
+              outputSchema: {
+                type: 'object',
+                properties: { state: { type: 'string' } },
+                required: ['state'],
+                additionalProperties: false,
+              },
+            },
+          },
         },
       },
       activities: {
@@ -126,6 +180,13 @@ describe('GET /v1/registry — successful responses', () => {
             additionalProperties: false,
           },
           description: 'Sends an email.',
+          retry: {
+            maxAttempts: 3,
+            initialBackoff: '200ms',
+            backoffMultiplier: 2,
+            maxBackoff: '5s',
+          },
+          timeout: '30s',
         },
       },
     });

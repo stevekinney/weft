@@ -14,7 +14,7 @@ import {
   RegistrySchemaConversionError,
 } from './registry-snapshot.ts';
 import type { WorkflowDefinition } from './types.ts';
-import { activity, workflow } from './types.ts';
+import { activity, query, signal, update, workflow } from './types.ts';
 
 function createEngine(): Engine {
   return new Engine({ storage: new MemoryStorage() });
@@ -68,6 +68,76 @@ describe('buildRegistrySnapshot', () => {
     });
   });
 
+  it('includes registered signal, update, and query schemas', () => {
+    engine = createEngine();
+    const interactiveWorkflow = workflow({ name: 'interactive' })
+      .signals({
+        ping: signal('ping'),
+        approve: signal('approve', {
+          inputSchema: z.object({ approvedBy: z.string() }),
+        }),
+      })
+      .updates({
+        rename: update('rename', {
+          inputSchema: z.object({ name: z.string() }),
+          outputSchema: z.object({ accepted: z.boolean() }),
+        }),
+      })
+      .queries({
+        status: query('status', {
+          outputSchema: z.object({ state: z.string() }),
+        }),
+      })
+      .execute(async function* () {});
+    engine.register(interactiveWorkflow);
+
+    const snapshot = buildRegistrySnapshot(engine);
+
+    expect(snapshot.workflows['interactive']).toMatchObject({
+      signals: {
+        approve: {
+          inputSchema: {
+            type: 'object',
+            properties: { approvedBy: { type: 'string' } },
+            required: ['approvedBy'],
+            additionalProperties: false,
+          },
+        },
+        ping: {},
+      },
+      updates: {
+        rename: {
+          inputSchema: {
+            type: 'object',
+            properties: { name: { type: 'string' } },
+            required: ['name'],
+            additionalProperties: false,
+          },
+          outputSchema: {
+            type: 'object',
+            properties: { accepted: { type: 'boolean' } },
+            required: ['accepted'],
+            additionalProperties: false,
+          },
+        },
+      },
+      queries: {
+        status: {
+          outputSchema: {
+            type: 'object',
+            properties: { state: { type: 'string' } },
+            required: ['state'],
+            additionalProperties: false,
+          },
+        },
+      },
+    });
+    expect(Object.keys(snapshot.workflows['interactive']?.signals ?? {})).toEqual([
+      'approve',
+      'ping',
+    ]);
+  });
+
   it('omits schema fields that are absent on the workflow registration', () => {
     engine = createEngine();
     const schemalessWorkflow = workflow({ name: 'schemaless' }).execute(async function* () {});
@@ -106,7 +176,7 @@ describe('buildRegistrySnapshot', () => {
     expect(snapshot.workflows['untagged']).not.toHaveProperty('tags');
   });
 
-  it('includes activities with queue, schemas, and description', () => {
+  it('includes activities with queue, schemas, description, retry policy, and timeout', () => {
     engine = createEngine();
     engine.register(
       activity({
@@ -116,6 +186,13 @@ describe('buildRegistrySnapshot', () => {
         inputSchema: z.object({ to: z.string() }),
         outputSchema: z.object({ delivered: z.boolean(), recipient: z.string() }),
         description: 'Sends an email.',
+        retry: {
+          maxAttempts: 3,
+          initialBackoff: '200ms',
+          backoffMultiplier: 2,
+          maxBackoff: '5s',
+        },
+        timeout: '30s',
       }),
     );
 
@@ -138,6 +215,13 @@ describe('buildRegistrySnapshot', () => {
         additionalProperties: false,
       },
       description: 'Sends an email.',
+      retry: {
+        maxAttempts: 3,
+        initialBackoff: '200ms',
+        backoffMultiplier: 2,
+        maxBackoff: '5s',
+      },
+      timeout: '30s',
     });
   });
 

@@ -184,6 +184,9 @@ export function copyWorkflowDefinition(
     ...(registration.description === undefined ? {} : { description: registration.description }),
     ...(registration.inputSchema === undefined ? {} : { inputSchema: registration.inputSchema }),
     ...(registration.outputSchema === undefined ? {} : { outputSchema: registration.outputSchema }),
+    ...(registration.signals === undefined ? {} : { signals: { ...registration.signals } }),
+    ...(registration.updates === undefined ? {} : { updates: { ...registration.updates } }),
+    ...(registration.queries === undefined ? {} : { queries: { ...registration.queries } }),
     ...(registration.searchAttributes === undefined
       ? {}
       : { searchAttributes: registration.searchAttributes }),

@@ -8,11 +8,12 @@
  * exceptions surface as a typed {@link RegistrySchemaConversionError} (see
  * its JSDoc for what reaches the wire vs server logs).
  *
- * **Ordering guarantee.** Builder code inserts keys in alphabetical
- * (codepoint) order. Public workflow and activity names cannot be integer-like
- * because the name grammar requires a leading letter or underscore. Clients
- * that want to protect themselves from future registry sources should still
- * sort `Object.keys(...)` before presenting or diffing snapshot entries.
+ * **Ordering guarantee.** Builder code inserts workflow, activity, signal,
+ * update, and query keys in alphabetical (codepoint) order. Public names cannot
+ * be integer-like because the name grammar requires a leading letter or
+ * underscore. Clients that want to protect themselves from future registry
+ * sources should still sort `Object.keys(...)` before presenting or diffing
+ * snapshot entries.
  *
  * @module core/registry-snapshot
  */
@@ -30,12 +31,21 @@ import { WeftError } from './weft-error.ts';
  */
 export const REGISTRY_VERSION = 1;
 
+/** Schema metadata reported for a statically registered workflow message. */
+export type RegistryMessageEntry = {
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+};
+
 /** Metadata reported per workflow in a registry snapshot. */
 export type RegistryWorkflowEntry = {
   inputSchema?: Record<string, unknown>;
   outputSchema?: Record<string, unknown>;
   description?: string;
   tags?: ReadonlyArray<string>;
+  signals?: Record<string, RegistryMessageEntry>;
+  updates?: Record<string, RegistryMessageEntry>;
+  queries?: Record<string, RegistryMessageEntry>;
 };
 
 /**
@@ -56,6 +66,8 @@ export type RegistryActivityEntry = {
   /** Engine assigns a default queue when none is specified, so this is always populated. */
   queue: string;
   description?: string;
+  retry?: ActivityMetadata['retry'];
+  timeout?: ActivityMetadata['timeout'];
 };
 
 /**
@@ -171,7 +183,59 @@ function buildWorkflowEntry(definition: RegisteredWorkflowDefinition): RegistryW
   if (definition.tags.length > 0) {
     entry.tags = [...definition.tags];
   }
+  addWorkflowMessageEntries(entry, definition);
   return entry;
+}
+
+function addWorkflowMessageEntries(
+  entry: RegistryWorkflowEntry,
+  definition: RegisteredWorkflowDefinition,
+): void {
+  if (definition.signals !== undefined && Object.keys(definition.signals).length > 0) {
+    entry.signals = buildMessageEntries(definition.type, 'signal', definition.signals);
+  }
+  if (definition.updates !== undefined && Object.keys(definition.updates).length > 0) {
+    entry.updates = buildMessageEntries(definition.type, 'update', definition.updates);
+  }
+  if (definition.queries !== undefined && Object.keys(definition.queries).length > 0) {
+    entry.queries = buildMessageEntries(definition.type, 'query', definition.queries);
+  }
+}
+
+type RegisteredMessageDefinition = {
+  readonly inputSchema?: DefinitionSchema;
+  readonly outputSchema?: DefinitionSchema;
+};
+
+function buildMessageEntries(
+  workflowType: string,
+  messageKind: 'signal' | 'update' | 'query',
+  definitions: Readonly<Record<string, RegisteredMessageDefinition>>,
+): Record<string, RegistryMessageEntry> {
+  const entries = Object.create(null) as Record<string, RegistryMessageEntry>;
+  for (const name of Object.keys(definitions).toSorted()) {
+    const definition = definitions[name]!;
+    const entry: RegistryMessageEntry = {};
+    const entityName = `${workflowType}.${messageKind}.${name}`;
+    if (definition.inputSchema !== undefined) {
+      entry.inputSchema = convertSchema(
+        'workflow',
+        entityName,
+        'inputSchema',
+        definition.inputSchema,
+      );
+    }
+    if (definition.outputSchema !== undefined) {
+      entry.outputSchema = convertSchema(
+        'workflow',
+        entityName,
+        'outputSchema',
+        definition.outputSchema,
+      );
+    }
+    entries[name] = entry;
+  }
+  return entries;
 }
 
 function buildActivityEntry(metadata: ActivityMetadata): RegistryActivityEntry {
@@ -194,6 +258,12 @@ function buildActivityEntry(metadata: ActivityMetadata): RegistryActivityEntry {
   }
   if (metadata.description !== undefined) {
     entry.description = metadata.description;
+  }
+  if (metadata.retry !== undefined) {
+    entry.retry = metadata.retry;
+  }
+  if (metadata.timeout !== undefined) {
+    entry.timeout = metadata.timeout;
   }
   return entry;
 }

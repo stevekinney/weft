@@ -11,7 +11,10 @@ import type {
   NormalizedHistoryPolicy,
   NormalizedPayloadSizePolicy,
   NormalizedRetentionPolicy,
+  QueryDefinition,
   SearchAttributeSchema,
+  SignalDefinition,
+  UpdateDefinition,
   WorkflowConcurrencyOptions,
   WorkflowFunction,
   WorkflowTimelineEntry,
@@ -24,6 +27,9 @@ export interface RegistrationEntry {
   tags?: ReadonlyArray<string>;
   inputSchema?: DefinitionSchema;
   outputSchema?: DefinitionSchema;
+  signals?: Readonly<Record<string, Readonly<SignalDefinition<unknown>>>>;
+  updates?: Readonly<Record<string, Readonly<UpdateDefinition<unknown>>>>;
+  queries?: Readonly<Record<string, Readonly<QueryDefinition<unknown>>>>;
   searchAttributes?: SearchAttributeSchema;
   retention?: NormalizedRetentionPolicy;
   concurrency?: WorkflowConcurrencyOptions;
