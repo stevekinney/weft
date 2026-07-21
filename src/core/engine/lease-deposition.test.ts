@@ -379,6 +379,98 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     storage[Symbol.dispose]?.();
   });
 
+  it('rejects every schedule mutator before the lease is held without writing or deposing', async () => {
+    const mutators: ReadonlyArray<{
+      name: string;
+      run: (engine: Engine) => Promise<unknown>;
+    }> = [
+      {
+        name: 'schedule',
+        run: (engine) =>
+          engine.schedule('deposition-waiter', null, '0 * * * *', { id: 'too-early' }),
+      },
+      { name: 'pauseSchedule', run: (engine) => engine.pauseSchedule('too-early') },
+      { name: 'resumeSchedule', run: (engine) => engine.resumeSchedule('too-early') },
+      { name: 'cancelSchedule', run: (engine) => engine.cancelSchedule('too-early') },
+      {
+        name: 'updateSchedule',
+        run: (engine) => engine.updateSchedule('too-early', '30 * * * *'),
+      },
+    ];
+
+    for (const mutator of mutators) {
+      const base = new BunSQLiteStorage(':memory:');
+      const durableWrites: string[] = [];
+      const storage: Storage = {
+        capabilities: () => base.capabilities(),
+        get: (key) => base.get(key),
+        put: (key, value) => {
+          durableWrites.push(`put:${key}`);
+          return base.put(key, value);
+        },
+        delete: (key) => {
+          durableWrites.push(`delete:${key}`);
+          return base.delete(key);
+        },
+        scan: (prefix, options) => base.scan(prefix, options),
+        batch: (operations) => {
+          durableWrites.push(
+            ...operations.map((operation) => `${operation.type}:${operation.key}`),
+          );
+          return base.batch(operations);
+        },
+        conditionalBatch: (conditions, operations) => {
+          durableWrites.push(
+            ...operations.map((operation) => `${operation.type}:${operation.key}`),
+          );
+          return base.conditionalBatch(conditions, operations);
+        },
+        [Symbol.dispose]: () => base[Symbol.dispose](),
+      };
+      const engine = new Engine({ storage, ownership: 'lease' });
+      engine.register(waiterWorkflow);
+      const internals = getInternals(engine);
+      const leaseManagerBefore = internals.leaseManager;
+      const tearDownAfterDepositionBefore = internals.tearDownAfterDeposition;
+
+      await expect(mutator.run(engine), mutator.name).rejects.toBeInstanceOf(
+        EngineLeaseNotHeldError,
+      );
+      expect(durableWrites, mutator.name).toEqual([]);
+      expect(internals.deposed, mutator.name).toBe(false);
+      expect(internals.disposed, mutator.name).toBe(false);
+      expect(internals.leaseManager, mutator.name).toBe(leaseManagerBefore);
+      expect(internals.tearDownAfterDeposition, mutator.name).toBe(tearDownAfterDepositionBefore);
+
+      await engine[Symbol.asyncDispose]();
+      base[Symbol.dispose]?.();
+    }
+  });
+
+  it('keeps schedule mutators available with a held lease and with ownership disabled', async () => {
+    for (const ownership of ['lease', 'none'] as const) {
+      const storage = new BunSQLiteStorage(':memory:');
+      const engine = new Engine({ storage, ownership });
+      engine.register(waiterWorkflow);
+      if (ownership === 'lease') await engine.recoverAll();
+      const scheduleId = `${ownership}-schedule`;
+
+      await engine.schedule('deposition-waiter', null, '0 * * * *', { id: scheduleId });
+      await engine.pauseSchedule(scheduleId);
+      await engine.resumeSchedule(scheduleId);
+      await engine.updateSchedule(scheduleId, '30 * * * *');
+      await engine.cancelSchedule(scheduleId);
+
+      expect(await engine.getSchedule(scheduleId)).toEqual(
+        expect.objectContaining({ status: 'cancelled', cronExpression: '30 * * * *' }),
+      );
+      expect(getInternals(engine).deposed).toBe(false);
+
+      await engine[Symbol.asyncDispose]();
+      storage[Symbol.dispose]?.();
+    }
+  });
+
   it('rejects start() on a deposed engine (no longer a valid writer)', async () => {
     const storage = new BunSQLiteStorage(':memory:');
     const engine = await Engine.create({

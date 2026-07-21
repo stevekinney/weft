@@ -1474,15 +1474,17 @@ export class Engine<
     spec?: string | ScheduleSpec,
     options?: ScheduleOptions,
   ): Promise<ScheduleHandle> {
+    const internals = getInternals(this);
+    assertLeaseHeldForEngineWork(internals);
     if (typeof typeOrDefinition === 'object') {
-      return scheduleDefinitionFromInternals(getInternals(this), typeOrDefinition);
+      return scheduleDefinitionFromInternals(internals, typeOrDefinition);
     }
     if (spec === undefined) {
       throw new Error(
         'A cron string or schedule spec must be provided when scheduling by workflow type.',
       );
     }
-    return scheduleFromInternals(getInternals(this), typeOrDefinition, input, spec, options);
+    return scheduleFromInternals(internals, typeOrDefinition, input, spec, options);
   }
   async getSchedule(scheduleId: string): Promise<ScheduleSummary | null> {
     const normalizedScheduleId = coerceScheduleId(scheduleId, 'scheduleId');
@@ -1493,20 +1495,28 @@ export class Engine<
     return listSchedulesFromInternals(getInternals(this), filter);
   }
   async pauseSchedule(scheduleId: string): Promise<void> {
-    return pauseScheduleFromInternals(getInternals(this), scheduleId);
+    const internals = getInternals(this);
+    assertLeaseHeldForEngineWork(internals);
+    return pauseScheduleFromInternals(internals, scheduleId);
   }
   async resumeSchedule(scheduleId: string): Promise<void> {
-    return resumeScheduleFromInternals(getInternals(this), scheduleId);
+    const internals = getInternals(this);
+    assertLeaseHeldForEngineWork(internals);
+    return resumeScheduleFromInternals(internals, scheduleId);
   }
   async cancelSchedule(scheduleId: string): Promise<void> {
-    return cancelScheduleFromInternals(getInternals(this), scheduleId);
+    const internals = getInternals(this);
+    assertLeaseHeldForEngineWork(internals);
+    return cancelScheduleFromInternals(internals, scheduleId);
   }
   async updateSchedule(
     scheduleId: string,
     newSpec: string | ScheduleSpec,
     options?: ScheduleUpdateOptions,
   ): Promise<void> {
-    return updateScheduleFromInternals(getInternals(this), scheduleId, newSpec, options);
+    const internals = getInternals(this);
+    assertLeaseHeldForEngineWork(internals);
+    return updateScheduleFromInternals(internals, scheduleId, newSpec, options);
   }
   [HANDLE_RESULT_PROMISE](workflowId: string): Promise<unknown> {
     return getWorkflowResultPromiseFromInternals(getInternals(this), workflowId);

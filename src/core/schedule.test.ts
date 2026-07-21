@@ -815,7 +815,7 @@ describe('recurring schedules', () => {
   it('engine.schedule(type, input) rejects missing cron expressions for the positional overload', async () => {
     const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
     const engine = createEngine(clock);
-    const scheduleWithoutCron = engine.schedule as unknown as (
+    const scheduleWithoutCron = engine.schedule.bind(engine) as unknown as (
       type: string,
       input: unknown,
     ) => Promise<unknown>;

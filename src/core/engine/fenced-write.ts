@@ -33,9 +33,11 @@ import { EngineDeposedError, EngineLeaseNotHeldError } from './lease-errors.ts';
  * work before `recoverAll()` would otherwise durably write workflow state without
  * single-writer ownership and without having recovered existing runs. Placed at
  * each public awaited entry so the caller gets a clean {@link EngineLeaseNotHeldError}
- * — without this, fork/resume would reach `resolveFenceEpochOrHalt` with no held
- * epoch and be misreported as a deposition (warn + teardown) rather than the true
- * "lease not held yet" condition. A no-op under `ownership: 'none'`.
+ * — without this, fork, resume, and the schedule mutators (`schedule`,
+ * `pauseSchedule`, `resumeSchedule`, `cancelSchedule`, and `updateSchedule`) would
+ * reach `resolveFenceEpochOrHalt` with no held epoch and be misreported as a
+ * deposition (warn + teardown) rather than the true "lease not held yet"
+ * condition. A no-op under `ownership: 'none'`.
  */
 export function assertLeaseHeldForEngineWork(internals: EngineInternals): void {
   if (internals.options.ownershipMode !== 'lease') return;
