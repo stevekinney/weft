@@ -209,9 +209,11 @@ const BASE_COVERAGE_ALLOWANCES = buildAllowanceLayer('BASE_COVERAGE_ALLOWANCES',
     {
       // The type-generation logic is exercised in-process by the generator test
       // suite. The remaining lines are the `import.meta.main` child-process
-      // entrypoint plus a Bun line-mapping miss on the object-render close
-      // brace after the function's returned string has already been asserted.
-      lines: new Set([117, 118, 119, 120, 121, 122, 262]),
+      // entrypoint (reported as one uncovered function) plus a Bun line-mapping
+      // miss on the object-render close brace after the function's returned
+      // string has already been asserted.
+      functions: 1,
+      lines: new Set([160, 161, 162, 163, 164, 165, 305]),
     },
   ],
   [

@@ -85,6 +85,8 @@ export const CLIENT_OPERATION_NAMES = [
   'weft.schedules.pause',
   'weft.schedules.resume',
   'weft.schedules.update',
+  'weft.storage.capabilities',
+  'weft.system.lease',
   'weft.system.metrics',
   'weft.system.registry',
   'weft.task.queues.list',

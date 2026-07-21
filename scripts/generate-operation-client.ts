@@ -134,12 +134,10 @@ export function createWeftClient(connection: WeftClientConnection = {}): WeftCli
 }
 `;
   const prettierConfiguration = await resolveConfig(OPERATION_CLIENT_PATH);
-  return format(
-    source,
-    prettierConfiguration === null
-      ? { filepath: OPERATION_CLIENT_PATH }
-      : { ...prettierConfiguration, filepath: OPERATION_CLIENT_PATH },
-  );
+  return format(source, {
+    ...prettierConfiguration,
+    filepath: OPERATION_CLIENT_PATH,
+  });
 }
 
 /**
