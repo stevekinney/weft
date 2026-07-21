@@ -732,11 +732,17 @@ describe('serve', () => {
   });
 
   it('defaults to port 7233', () => {
+    // Asserts the actual default by resolving options through the same
+    // function serve() uses, without binding a socket. The previous version
+    // of this test passed `port: 7233` explicitly, so it never exercised the
+    // default at all — it just bound a well-known port for no benefit
+    // (flaky under concurrent local runs when something else holds 7233,
+    // e.g. another dev server) and would have passed even if the real
+    // default drifted to a different value.
     engine = createEngine();
-    // Use the default port; rely on it being available in test environments
-    server = serveTestServer({ engine, port: 7233 });
+    const { port } = resolveNetworkConfig({ engine });
 
-    expect(server.port).toBe(7233);
+    expect(port).toBe(7233);
   });
 
   it('lists workflows through the server', async () => {
