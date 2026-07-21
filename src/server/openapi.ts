@@ -4,13 +4,16 @@
  *
  * Produces a JSON-serializable OpenAPI document for the REST-ish HTTP
  * surface. Both `handleRequest()` and `serve()` expose this at
- * `GET /openapi.json`.
+ * `GET /openapi.json`. Every operation-catalog binding carries the canonical
+ * `x-weft-access` metadata and, when applicable,
+ * `x-weft-parameterizedAccess`; direct infrastructure routes do not.
  *
  * @module server/openapi
  */
 
 import { definitionSchemaToJsonSchema } from '../core/types/definition-schema-to-json.ts';
 import { VERSION } from '../version.ts';
+import { serializeAccessPolicy, serializeParameterizedAccess } from './access-policy-metadata.ts';
 import { isDiscoverable } from './discovery-filter.ts';
 import { applyDiscoveryInfo, type DiscoveryInfo } from './discovery-info.ts';
 import { asPlainObject, compareStrings } from './json-schema-utilities.ts';
@@ -323,11 +326,17 @@ function buildBindingEntry(
     summary: operation.summary,
     operationId: operation.name,
     tags: operation.tags,
+    'x-weft-access': serializeAccessPolicy(operation.access),
     responses: {
       ...successResponse,
       ...buildErrorResponses(operation),
     },
   };
+  if (operation.parameterizedAccess !== undefined) {
+    entry['x-weft-parameterizedAccess'] = serializeParameterizedAccess(
+      operation.parameterizedAccess,
+    );
+  }
   if (operation.description !== undefined) entry['description'] = operation.description;
   if (parameters.length > 0) entry['parameters'] = parameters;
 

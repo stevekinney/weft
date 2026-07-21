@@ -5,6 +5,10 @@
  */
 import { z } from 'zod';
 
+import {
+  AccessPolicyMetadataSchema,
+  ParameterizedAccessMetadataSchema,
+} from './access-policy-metadata.ts';
 import { MCP_DISCOVERY_PATH, MCP_TOOLS_LIST_METHOD } from './mcp-discovery.ts';
 
 export const ContentDescriptorSchema = z.strictObject({
@@ -22,52 +26,30 @@ const OpenRpcMcpMethodMetadataSchema = z.strictObject({
   }),
 });
 
-const OpenRpcScopeRequirementSchema = z.strictObject({
-  kind: z.enum(['anyOf', 'allOf']),
-  scopes: z.array(z.string()),
-});
-
-const OpenRpcAccessPolicySchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('public') }),
-  z.strictObject({ kind: z.literal('authenticated') }),
-  z.strictObject({
-    kind: z.literal('scoped'),
-    scopes: OpenRpcScopeRequirementSchema,
-  }),
-  z.strictObject({
-    kind: z.literal('optionalAuth'),
-    authenticatedScopes: OpenRpcScopeRequirementSchema,
-  }),
-  z.strictObject({
-    kind: z.literal('scopedAlternatives'),
-    alternatives: z.array(OpenRpcScopeRequirementSchema),
-  }),
-]);
-
-const OpenRpcParameterizedAccessSchema = z.strictObject({
-  discriminator: z.string(),
-  defaultValue: z.string().optional(),
-  variants: z.array(
-    z.strictObject({
-      value: z.string(),
-      access: OpenRpcAccessPolicySchema,
-    }),
-  ),
-});
-
-export const OpenRpcMethodSchema = z.strictObject({
-  name: z.string(),
-  summary: z.string().optional(),
-  description: z.string().optional(),
-  tags: z.array(z.strictObject({ name: z.string() })).optional(),
-  paramStructure: z.literal('by-name'),
-  params: z.array(ContentDescriptorSchema),
-  result: ContentDescriptorSchema,
-  errors: z.array(z.strictObject({ $ref: z.string() })).optional(),
-  'x-weft-paramsSchema': z.record(z.string(), z.unknown()),
-  'x-weft-mcp': OpenRpcMcpMethodMetadataSchema.optional(),
-  'x-weft-parameterizedAccess': OpenRpcParameterizedAccessSchema.optional(),
-});
+export const OpenRpcMethodSchema = z
+  .strictObject({
+    name: z.string(),
+    summary: z.string().optional(),
+    description: z.string().optional(),
+    tags: z.array(z.strictObject({ name: z.string() })).optional(),
+    paramStructure: z.literal('by-name'),
+    params: z.array(ContentDescriptorSchema),
+    result: ContentDescriptorSchema,
+    errors: z.array(z.strictObject({ $ref: z.string() })).optional(),
+    'x-weft-paramsSchema': z.record(z.string(), z.unknown()),
+    'x-weft-access': AccessPolicyMetadataSchema.optional(),
+    'x-weft-mcp': OpenRpcMcpMethodMetadataSchema.optional(),
+    'x-weft-parameterizedAccess': ParameterizedAccessMetadataSchema.optional(),
+  })
+  .superRefine((method, context) => {
+    if (method.name !== 'rpc.discover' && method['x-weft-access'] === undefined) {
+      context.addIssue({
+        code: 'custom',
+        path: ['x-weft-access'],
+        message: 'operation-catalog methods must advertise x-weft-access',
+      });
+    }
+  });
 
 const OpenRpcMcpMetadataSchema = z.strictObject({
   discoveryPath: z.literal(MCP_DISCOVERY_PATH),

@@ -420,9 +420,21 @@ The operation catalog is the unified, transport-neutral registry of every operat
 
 **`GET /openrpc.json`** — OpenRPC 1.3.2 document describing every JSON-RPC method. Pair this with `/api/jsonrpc` (WebSocket) or JSON-RPC-over-HTTP for typed RPC clients. The root-level `x-weft-mcp` extension identifies the live MCP discovery surface and marks MCP-exposable operation methods with method-level `x-weft-mcp` metadata.
 
+Every operation-catalog entry in both documents carries `x-weft-access`, a faithful copy of the operation's static access policy. The extension preserves the policy structure instead of flattening it into a scope list:
+
+- `{ "kind": "public" }` means the operation catalog adds no authentication requirement.
+- `{ "kind": "authenticated" }` requires an authenticated principal.
+- `{ "kind": "scoped", "scopes": { "kind": "anyOf" | "allOf", "scopes": [...] } }` preserves whether any listed scope or every listed scope is required.
+- `{ "kind": "optionalAuth", "authenticatedScopes": ... }` permits anonymous callers but applies the nested scope requirement when credentials are present.
+- `{ "kind": "scopedAlternatives", "alternatives": [...] }` preserves each acceptable `anyOf` or `allOf` requirement as a separate alternative.
+
+When authorization varies with an input field, the entry also carries `x-weft-parameterizedAccess`. Its `discriminator` names the input field, optional `defaultValue` records the behavior when that field is omitted, and each `{ "value", "access" }` variant uses the same complete access-policy shape. `x-weft-access` remains the static catalog gate applied to every invocation; `x-weft-parameterizedAccess` describes the additional parameter-aware authorization performed by that operation.
+
+These extensions describe operation authorization, while OpenAPI's standard `security` arrays continue to describe supported credential mechanisms. Weft's bearer and API-key schemes therefore keep their standard empty scope arrays. Direct infrastructure routes such as health and discovery documents are not operation-catalog entries, retain their existing `security` declarations, and do not carry the Weft access extensions. A `public` operation policy also does not override authentication that the surrounding server or deployment requires.
+
 **`GET /.well-known/mcp.json`** — minimal MCP discovery document. It points remote clients at the Streamable HTTP MCP endpoint (`POST`, `GET`, and `DELETE /api/mcp`), names `tools/list` as the canonical live tool introspection method, and includes the `weft-mcp` stdio command for local clients.
 
-The OpenAPI and OpenRPC documents enumerate operations from the unified catalog. To see which transports an operation is bound to, look at the `tags` and binding metadata in the document. To see the input/output schemas for an operation, follow the `$ref` links into `components.schemas`.
+The OpenAPI and OpenRPC documents enumerate operations from the unified catalog. To see which transports an operation is bound to, look at the `tags` and binding metadata in the document. To see the input/output schemas for an operation, follow the `$ref` links into `components.schemas`. To build a scope matrix without guessing from tags or operation names, read `x-weft-access` and any `x-weft-parameterizedAccess` variants.
 
 ### MCP Server
 

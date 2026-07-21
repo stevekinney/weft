@@ -2,11 +2,50 @@ import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
 import { VERSION } from '../version.ts';
+import {
+  accessPolicyMetadataExamples,
+  expectedParameterizedAccessMetadata,
+  parameterizedAccessMetadataExample,
+} from './access-policy-metadata.test-support.ts';
+import type { AccessPolicy } from './authorization.ts';
 import { emitBindings, generateOpenApiDocument } from './openapi.ts';
-import { createOperationRegistry } from './operation-catalog.ts';
+import { createOperationRegistry, type ParameterizedAccessHint } from './operation-catalog.ts';
 import { defineOperation } from './operation-registry.ts';
 import type { UnknownRestBinding } from './rest-bindings.ts';
 import { DIRECT_HTTP_ROUTES, externalApiPath, toOpenApiPath, toRegex } from './route-model.ts';
+
+function discoveryOperation(
+  name: string,
+  access: AccessPolicy,
+  parameterizedAccess?: ParameterizedAccessHint,
+) {
+  return defineOperation({
+    name,
+    mcpExposable: false,
+    destructive: false,
+    summary: 'Discovery access metadata test operation',
+    inputSchema: z.object({ mode: z.string().optional() }),
+    outputSchema: z.object({ ok: z.boolean() }),
+    access,
+    discoverable: true,
+    ...(parameterizedAccess === undefined ? {} : { parameterizedAccess }),
+    transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
+    unknownKeyPolicy: { http: 'reject', jsonRpc: 'reject' },
+    invoke: async () => ({ ok: true }),
+  });
+}
+
+function discoveryBinding(operationName: string, path: string): UnknownRestBinding {
+  return {
+    method: 'GET',
+    path,
+    pathParamNames: [],
+    operationName,
+    inputSources: {},
+    extractInput: async () => ({}),
+    success: { kind: 'json', status: 200 },
+  };
+}
 
 describe('OpenAPI document generation', () => {
   const document = generateOpenApiDocument();
@@ -53,6 +92,48 @@ describe('OpenAPI document generation', () => {
     const info = document['info'] as Record<string, unknown>;
     expect(info['title']).toBe('Weft Workflow Engine');
     expect(info['version']).toBe(VERSION);
+  });
+
+  it('advertises every operation access policy without changing standard security declarations', () => {
+    const operations = [
+      ...accessPolicyMetadataExamples.map(({ segment, access }) =>
+        discoveryOperation(`weft.policy.${segment}`, access),
+      ),
+      discoveryOperation(
+        'weft.policy.parameterized',
+        { kind: 'authenticated' },
+        parameterizedAccessMetadataExample,
+      ),
+    ];
+    const bindings = operations.map((operation) =>
+      discoveryBinding(operation.name, `/v1/policy/${operation.name.split('.').at(-1)}`),
+    );
+
+    const policyDocument = generateOpenApiDocument({
+      registry: createOperationRegistry(operations),
+      restBindings: bindings,
+    });
+    const paths = policyDocument['paths'] as Record<
+      string,
+      Record<string, Record<string, unknown>>
+    >;
+
+    for (const { segment, expected } of accessPolicyMetadataExamples) {
+      const entry = paths[`/api/v1/policy/${segment}`]?.['get'];
+      expect(entry?.['x-weft-access']).toEqual(expected);
+      expect(entry?.['security']).toBeUndefined();
+    }
+    const parameterizedEntry = paths['/api/v1/policy/parameterized']?.['get'];
+    expect(parameterizedEntry?.['x-weft-access']).toEqual({ kind: 'authenticated' });
+    expect(parameterizedEntry?.['x-weft-parameterizedAccess']).toEqual(
+      expectedParameterizedAccessMetadata,
+    );
+
+    expect(policyDocument['security']).toEqual([{ bearerAuth: [] }, { apiKeyAuth: [] }]);
+    const directHealthEntry = paths['/v1/health']?.['get'];
+    expect(directHealthEntry?.['security']).toEqual([]);
+    expect(directHealthEntry?.['x-weft-access']).toBeUndefined();
+    expect(directHealthEntry?.['x-weft-parameterizedAccess']).toBeUndefined();
   });
 
   it('accepts custom options', () => {
