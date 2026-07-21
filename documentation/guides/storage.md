@@ -441,7 +441,7 @@ export class WeftDurableObject extends DurableObject {
 }
 ```
 
-The underlying schema is a single `kv(key TEXT PRIMARY KEY, value ...)` table (name configurable via the `table` option, validated as a strict SQL identifier). By default (`valueEncoding: 'base64'`, the default), values are stored as base64-encoded text rather than `BLOB`, keeping the adapter's binding contract to the TEXT/number/null value types the Durable Object SQL binding guarantees.
+The underlying schema is a single `kv(key TEXT PRIMARY KEY, value ...)` table (name configurable via the `table` option, validated as a strict SQL identifier). By default (`valueEncoding: 'base64'`), values are stored as base64-encoded text rather than `BLOB`, keeping the adapter's binding contract to the TEXT/number/null value types the Durable Object SQL binding guarantees.
 
 > [!WARNING] Base64 encoding inflates value size by roughly 4/3
 > Base64 expands a `Uint8Array` by roughly 4/3 before it is stored, so a value

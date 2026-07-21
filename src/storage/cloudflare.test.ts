@@ -427,6 +427,16 @@ describe('CloudflareDurableObjectSQLiteStorage', () => {
 });
 
 describe('CloudflareDurableObjectSQLiteStorage valueEncoding', () => {
+  it('rejects an unrecognized valueEncoding instead of silently falling back to base64', () => {
+    const sql = createCloudflareSqlTestDouble();
+    // A caller without TypeScript's help (a typo'd string literal, an
+    // untyped config value) must not have that typo silently pick a
+    // different on-disk format than intended.
+    expect(
+      () => new CloudflareDurableObjectSQLiteStorage({ sql, valueEncoding: 'blbo' as any }),
+    ).toThrow(/valueEncoding must be 'base64' or 'blob'/);
+  });
+
   it('defaults to base64-encoded TEXT', async () => {
     const sql = createCloudflareSqlTestDouble();
     const storage = new CloudflareDurableObjectSQLiteStorage({ sql });

@@ -84,8 +84,8 @@ function unexpectedValueTypeError(
   actualType: string,
 ): Error {
   return new Error(
-    `Cloudflare Durable Object SQLite storage: key "${key}" holds a ${actualType} value, but this ` +
-      `instance is configured for valueEncoding: '${expectedEncoding}'. A table must use a single, ` +
+    `Cloudflare Durable Object SQLite storage: key "${key}" holds a value of type ${actualType}, but ` +
+      `this instance is configured for valueEncoding: '${expectedEncoding}'. A table must use a single, ` +
       `consistent valueEncoding for its lifetime — this row was written by an instance configured ` +
       `with a different valueEncoding. Pick one encoding per table (or per-instance configured table ` +
       `name) and do not change it; there is no automatic migration between encodings.`,
@@ -122,9 +122,24 @@ const blobCodec: CloudflareValueCodec = {
   },
 };
 
-/** Resolve a {@link CloudflareValueEncoding} to its {@link CloudflareValueCodec}. */
+/**
+ * Resolve a {@link CloudflareValueEncoding} to its {@link CloudflareValueCodec}.
+ *
+ * `valueEncoding` is a durable, per-table format choice (see
+ * {@link CloudflareValueCodec}'s docs on the cross-mode contract), so an
+ * unrecognized value is rejected outright rather than silently falling back
+ * to `'base64'` — the TypeScript type only guards callers who type-check;
+ * a caller passing an unvalidated string (a config value, a typo'd literal
+ * from plain JavaScript) must not have that typo silently pick the wrong
+ * on-disk format for a table.
+ */
 export function resolveCloudflareValueCodec(
   encoding: CloudflareValueEncoding,
 ): CloudflareValueCodec {
-  return encoding === 'blob' ? blobCodec : base64Codec;
+  if (encoding === 'base64') return base64Codec;
+  if (encoding === 'blob') return blobCodec;
+
+  throw new Error(
+    `Cloudflare Durable Object SQLite storage: valueEncoding must be 'base64' or 'blob', received ${JSON.stringify(encoding)}.`,
+  );
 }
