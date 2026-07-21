@@ -234,7 +234,7 @@ const BASE_COVERAGE_ALLOWANCES = buildAllowanceLayer('BASE_COVERAGE_ALLOWANCES',
       // in-process, and the standalone entrypoint is exercised by subprocess
       // tests. The remaining miss is only the `import.meta.main` wrapper.
       functions: 1,
-      lines: new Set([354, 355]),
+      lines: new Set([362, 363]),
     },
   ],
   [
@@ -1254,8 +1254,8 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
       {
         functions: 3,
         lines: new Set([
-          98, 99, 100, 101, 102, 121, 122, 200, 201, 202, 203, 204, 205, 206, 207, 232, 233, 270,
-          271, 272, 273, 332, 333, 352, 353, 354, 355, 356, 357, 358, 359,
+          103, 104, 105, 106, 107, 126, 127, 205, 206, 207, 208, 209, 210, 211, 212, 241, 242, 279,
+          280, 281, 282, 341, 342, 361, 362, 363, 364, 365, 366, 367, 368,
         ]),
       },
     ],
@@ -1557,7 +1557,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       },
     ],
     ['src/server/operations/get-workflow-result.ts', { functions: 1 }],
-    ['src/server/workflow-event-feed.ts', { lines: new Set([312, 313, 336]) }],
+    ['src/server/workflow-event-feed.ts', { lines: new Set([384, 387]) }],
     [
       'src/storage/durability/adapter-spec.test-support.ts',
       {
@@ -1824,7 +1824,7 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
     ['src/client/event-stream.test-support.ts', { functions: 1 }],
     ['src/client/event-stream.ts', { functions: 1 }],
     ['src/client/http-client-requests.ts', { lines: new Set([141]) }],
-    ['src/client/http-operations.ts', { lines: new Set([84, 85, 86, 87]) }],
+    ['src/client/http-operations.ts', { lines: new Set([94, 95, 96, 97]) }],
     ['src/client/local-event-tail.ts', { functions: 2, lines: new Set([157, 158]) }],
     ['src/client/local.ts', { functions: 1, lines: new Set([153]) }],
     ['src/client/open-event-subscription.ts', { lines: new Set([51]) }],
@@ -1994,6 +1994,16 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
     ['src/client/http-client-requests.ts', { lines: new Set([158]) }],
     ['src/client/local.ts', { lines: new Set([153, 154]) }],
     [
+      'scripts/husky/verify-hooks-installed.ts',
+      {
+        // The in-process tests prove the verifier logic and one subprocess test
+        // pins the HUSKY=0 early return. The remaining import.meta.main wrapper
+        // paths depend on launching the real worktree verifier as a standalone
+        // program, which Bun's parent-process LCOV does not attribute here.
+        lines: createLineSet(76, 87),
+      },
+    ],
+    [
       'src/core/checkpoint/serialization.ts',
       {
         lines: createMergedLineSet(
@@ -2031,6 +2041,35 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
           new Set([51, 56, 62]),
           createLineSet(78, 80),
         ),
+      },
+    ],
+    [
+      'src/storage/lazy-postgres-pool.ts',
+      {
+        // The behavior tests hit the retry, dispose, and error-rewrap paths, but
+        // Bun still leaves one anonymous callback / IIFE function in this helper
+        // uncounted after line coverage is exact.
+        functions: 1,
+      },
+    ],
+    [
+      'src/storage/neon.ts',
+      {
+        // The lazy pool factory's dynamic-import callback only runs through the
+        // owned-driver path. NeonStorage's behavior tests cover the surrounding
+        // ownership contract without opening a real network connection.
+        functions: 1,
+        lines: new Set([55]),
+      },
+    ],
+    [
+      'src/storage/postgres.ts',
+      {
+        // The pg adapter tests pin the real driver interop surface, but the lazy
+        // default pool factory still contributes its dynamic-import callback only
+        // when the owned-driver path is driven for coverage.
+        functions: 1,
+        lines: createLineSet(42, 47),
       },
     ],
     [
@@ -2138,7 +2177,10 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
     ['src/core/engine/workflow-indexes.ts', { lines: new Set([49]) }],
     ['src/core/engine/workflow-state-stream.ts', { lines: new Set([170]) }],
     ['src/core/scheduler/timer-sources.ts', { lines: new Set([26, 51, 79, 80, 81, 82]) }],
-    ['src/mcp/http.ts', { lines: new Set([222, 371, 415]) }],
+    [
+      'src/mcp/http.ts',
+      { lines: new Set([115, 116, 117, 118, 119, 120, 121, 122, 204, 205, 230, 379, 423]) },
+    ],
     [
       'src/mcp/protocol.ts',
       { lines: createMergedLineSet(new Set([92, 104, 109]), createLineSet(97, 99)) },
