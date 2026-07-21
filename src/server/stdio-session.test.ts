@@ -16,7 +16,7 @@
 import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
-import { createInMemoryEventBackend } from './in-memory-event-feed-backend.ts';
+import { createInMemoryEventBackend } from './in-memory-event-feed-backend.test-support.ts';
 import { makeOperation as makeOp } from './json-rpc-operation.test-support.ts';
 import { createOperationRegistry, type OperationRegistry } from './operation-catalog.ts';
 import { runStdioSession, type StdioAdmission, type StdioSessionResult } from './stdio-session.ts';

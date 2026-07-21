@@ -21,7 +21,11 @@
  * @module server/engine-event-feed-backend
  */
 
-import type { Engine, WorkflowFeedRecord, WorkflowFeedSelector } from '../core/engine.ts';
+import type {
+  RegistryAgnosticEngine,
+  WorkflowFeedRecord,
+  WorkflowFeedSelector,
+} from '../core/engine.ts';
 import {
   encodeCursor,
   type EventEnvelope,
@@ -34,6 +38,11 @@ import {
  * engine instance and share the returned backend across every
  * transport that needs a feed. Pass the result to `createWorkflowEventFeed()`
  * to build a `WorkflowEventFeed` for `HandlerOptions.workflowEventFeed`.
+ *
+ * Accepts `RegistryAgnosticEngine` — the same registry-erased engine type
+ * `handleRequest()` and `ServeOptions.engine` accept — so a concretely
+ * narrowed engine from `Engine.create({ workflows })` works here without a
+ * call-site cast.
  *
  * @example
  * ```ts
@@ -48,7 +57,9 @@ import {
  * void workflowEventFeed;
  * ```
  */
-export function createEngineEventFeedBackend(engine: Engine): WorkflowEventFeedBackend {
+export function createEngineEventFeedBackend(
+  engine: RegistryAgnosticEngine,
+): WorkflowEventFeedBackend {
   return {
     async *replay({ workflowId, selector, afterSequence }) {
       const coreSelector = toCoreSelector(selector);

@@ -17,7 +17,7 @@ import { z } from 'zod';
 
 import { MemoryStorage } from '../storage/memory.ts';
 import { createFleetEventFeed } from './fleet-event-feed.ts';
-import { createInMemoryEventBackend } from './in-memory-event-feed-backend.ts';
+import { createInMemoryEventBackend } from './in-memory-event-feed-backend.test-support.ts';
 import {
   createJsonRpcWebSocketSession,
   type JsonRpcWebSocketEmitter,

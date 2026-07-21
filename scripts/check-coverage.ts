@@ -1263,7 +1263,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
       'src/server/api-catalog.ts',
       { lines: new Set([161, 162, 166, 167, 169, 170, 171, 172, 174, 176]) },
     ],
-    ['src/server/handler/index.ts', { lines: new Set([38, 47]) }],
+    ['src/server/handler/index.ts', { lines: new Set([60, 69]) }],
     ['src/server/json-rpc-dispatch.ts', { lines: new Set([188, 189]) }],
     ['src/server/openapi.ts', { lines: new Set([334]) }],
     ['src/server/openrpc.ts', { lines: new Set([178, 179, 180, 199, 200, 201]) }],

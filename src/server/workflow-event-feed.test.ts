@@ -25,7 +25,7 @@ import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 
 import { describe, expect, it } from 'bun:test';
 
-import { createInMemoryEventBackend } from './in-memory-event-feed-backend.ts';
+import { createInMemoryEventBackend } from './in-memory-event-feed-backend.test-support.ts';
 import { ReplayWindowExceededError } from './replay-live-feed-internals.ts';
 import {
   createWorkflowEventFeed,

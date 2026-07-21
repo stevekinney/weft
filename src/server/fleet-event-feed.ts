@@ -90,6 +90,13 @@ const MAX_WORKFLOW_OWNED_APPEND_ATTEMPTS = 5;
  * `serve()`. Call once per storage instance and share the returned feed
  * across every transport that needs it.
  *
+ * **This feed does not subscribe to `Engine` events on its own.** `serve()`
+ * bridges engine lifecycle events into it via `wireEventBroadcasting()`; a
+ * direct `handleRequest()` host that skips `serve()` is responsible for
+ * calling `fleetEventFeed.append()` (or `appendWorkflowEventIfPresent()`)
+ * itself for whatever events it wants `/v1/events/sse` to carry — e.g. from
+ * `engine.addEventListener(...)` handlers wired up separately.
+ *
  * @example
  * ```ts
  * import { Engine, MemoryStorage } from '@lostgradient/weft';

@@ -17,7 +17,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 
-import { createInMemoryEventBackend } from './in-memory-event-feed-backend.ts';
+import { createInMemoryEventBackend } from './in-memory-event-feed-backend.test-support.ts';
 import {
   createJsonRpcWebSocketSession,
   type JsonRpcWebSocketEmitter,
