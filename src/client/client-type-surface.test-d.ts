@@ -1,5 +1,5 @@
 /**
- * Type-level regression tests for issues #583 and #585.
+ * Type-level regression tests for issues #583, #585, and #722.
  *
  * #583: `StartOrSignalOutcome` must be publicly exported from both the package
  * root (`@lostgradient/weft`) and the `/client` barrel
@@ -7,6 +7,12 @@
  *
  * #585: `LocalClient` must accept a branded engine returned by
  * `Engine.create({ workflows })` without requiring a cast.
+ *
+ * #722: `isWeftFault`/`isWeftError`/`isWeftErrorCode`/`isWeftErrorLike`/
+ * `WeftError`/`WeftErrorCode` must be importable from the `/client` barrel
+ * directly, so browser client code never needs to reach through the root
+ * barrel (which also re-exports server-only, Node-dependent code) just to
+ * classify errors.
  */
 
 import { Engine } from '../core/engine.ts';
@@ -15,11 +21,21 @@ import { workflow } from '../core/types.ts';
 import type {
   StartOrSignalOptions as OptionsFromRoot,
   StartOrSignalOutcome as OutcomeFromRoot,
+  WeftErrorCode as WeftErrorCodeFromRoot,
 } from '../index.ts';
+import { isWeftFault as isWeftFaultFromRoot, WeftError as WeftErrorFromRoot } from '../index.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import type {
   ClientStartOrSignalOptions,
   StartOrSignalOutcome as OutcomeFromClientBarrel,
+  WeftErrorCode as WeftErrorCodeFromClientBarrel,
+} from './index.ts';
+import {
+  isWeftError,
+  isWeftErrorCode,
+  isWeftErrorLike,
+  isWeftFault as isWeftFaultFromClientBarrel,
+  WeftError as WeftErrorFromClientBarrel,
 } from './index.ts';
 import { LocalClient } from './local.ts';
 
@@ -109,3 +125,37 @@ async function proveGenericConstructor(): Promise<void> {
   void _typedClient;
 }
 void proveGenericConstructor;
+
+// --- Issue #722: isWeftFault/isWeftError family importable from /client -----
+
+// The client barrel's re-exported guard functions must be callable and
+// narrow the same way as the root barrel's.
+declare const unknownError: unknown;
+if (isWeftError(unknownError)) {
+  const _code: string = unknownError.code;
+  void _code;
+}
+if (isWeftErrorLike(unknownError)) {
+  const _code: WeftErrorCodeFromClientBarrel = unknownError.code;
+  void _code;
+}
+const _isCode: boolean = isWeftErrorCode('WorkflowNotFoundError');
+void _isCode;
+const _isFault: boolean = isWeftFaultFromClientBarrel(unknownError, 'WorkflowNotFoundError');
+void _isFault;
+
+// `WeftError` re-exported from `/client` must be the same class as the root
+// barrel's — an instance of one must be assignable through the other's type.
+declare const errorFromClientBarrel: WeftErrorFromClientBarrel;
+const _clientErrorAsRoot: WeftErrorFromRoot = errorFromClientBarrel;
+void _clientErrorAsRoot;
+
+// `WeftErrorCode` re-exported from `/client` must resolve to the same union
+// as the root barrel's.
+declare const codeFromRoot: WeftErrorCodeFromRoot;
+const _codeAsClientBarrel: WeftErrorCodeFromClientBarrel = codeFromRoot;
+void _codeAsClientBarrel;
+
+// The root barrel's guard must still work identically for comparison.
+const _isFaultFromRoot: boolean = isWeftFaultFromRoot(unknownError, 'WorkflowNotFoundError');
+void _isFaultFromRoot;

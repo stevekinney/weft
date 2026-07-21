@@ -94,6 +94,8 @@ JSON-RPC error envelope:
 
 Use `isWeftError()` when you are catching errors from the same loaded copy of Weft and want class-instance narrowing. Use `isWeftErrorLike()` when the error may cross a realm, worker, RPC boundary, or duplicate-module boundary. Use `isWeftErrorCode()` for a bare unknown code string, not for a caught error object.
 
+The full `isWeftFault`/`isWeftError`/`isWeftErrorCode`/`isWeftErrorLike`/`WeftError`/`WeftErrorCode` family is exported from both `@lostgradient/weft` and `@lostgradient/weft/client`, so browser client code can classify errors without importing the root barrel (which also re-exports server-only, Node-dependent code).
+
 ```ts
 import {
   isWeftError,
@@ -122,6 +124,21 @@ function sameRealmMessage(error: unknown): string | undefined {
 void routeError;
 void normalizeCode;
 void sameRealmMessage;
+```
+
+Use `isWeftFault(error, code)` to branch on a specific `WeftErrorCode` without caring whether the error came from `LocalClient` (an in-process typed error) or `HttpClient` (an `HttpClientError` carrying `weftCode`):
+
+```ts
+import { isWeftFault } from '@lostgradient/weft/client';
+
+// The same branch holds whether `error` came from LocalClient or HttpClient.
+function rethrowUnlessMissing(error: unknown): void {
+  if (!isWeftFault(error, 'WorkflowNotFoundError')) {
+    throw error;
+  }
+}
+
+void rethrowUnlessMissing;
 ```
 
 `HttpClientError` carries the server-side `FaultCode` when the response includes a recognized structured fault:
