@@ -9,6 +9,16 @@
  */
 
 export {
+  WorkflowCancelledEvent,
+  WorkflowCompletedEvent,
+  WorkflowFailedEvent,
+  WorkflowResumedEvent,
+  WorkflowStartedEvent,
+  WorkflowSuspendedEvent,
+  WorkflowTimedOutEvent,
+} from '../core/events/workflow-events.ts';
+export { isFaultCode } from '../core/fault-code.ts';
+export {
   WeftError,
   isWeftError,
   isWeftErrorCode,

@@ -1,5 +1,5 @@
 /**
- * Type-level regression tests for issues #583, #585, and #722.
+ * Type-level regression tests for issues #583, #585, #722, and #751.
  *
  * #583: `StartOrSignalOutcome` must be publicly exported from both the package
  * root (`@lostgradient/weft`) and the `/client` barrel
@@ -13,17 +13,33 @@
  * directly, so browser client code never needs to reach through the root
  * barrel (which also re-exports server-only, Node-dependent code) just to
  * classify errors.
+ *
+ * #751: `isFaultCode` and the workflow lifecycle event classes used to
+ * classify live client event frames must be importable from `/client` without
+ * reaching through the Node-dependent root barrel.
  */
 
 import { Engine } from '../core/engine.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types.ts';
 import type {
+  FaultCode as FaultCodeFromRoot,
   StartOrSignalOptions as OptionsFromRoot,
   StartOrSignalOutcome as OutcomeFromRoot,
   WeftErrorCode as WeftErrorCodeFromRoot,
 } from '../index.ts';
-import { isWeftFault as isWeftFaultFromRoot, WeftError as WeftErrorFromRoot } from '../index.ts';
+import {
+  isFaultCode as isFaultCodeFromRoot,
+  isWeftFault as isWeftFaultFromRoot,
+  WeftError as WeftErrorFromRoot,
+  WorkflowCancelledEvent as WorkflowCancelledEventFromRoot,
+  WorkflowCompletedEvent as WorkflowCompletedEventFromRoot,
+  WorkflowFailedEvent as WorkflowFailedEventFromRoot,
+  WorkflowResumedEvent as WorkflowResumedEventFromRoot,
+  WorkflowStartedEvent as WorkflowStartedEventFromRoot,
+  WorkflowSuspendedEvent as WorkflowSuspendedEventFromRoot,
+  WorkflowTimedOutEvent as WorkflowTimedOutEventFromRoot,
+} from '../index.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import type {
   ClientStartOrSignalOptions,
@@ -31,11 +47,19 @@ import type {
   WeftErrorCode as WeftErrorCodeFromClientBarrel,
 } from './index.ts';
 import {
+  isFaultCode as isFaultCodeFromClientBarrel,
   isWeftError,
   isWeftErrorCode,
   isWeftErrorLike,
   isWeftFault as isWeftFaultFromClientBarrel,
   WeftError as WeftErrorFromClientBarrel,
+  WorkflowCancelledEvent as WorkflowCancelledEventFromClientBarrel,
+  WorkflowCompletedEvent as WorkflowCompletedEventFromClientBarrel,
+  WorkflowFailedEvent as WorkflowFailedEventFromClientBarrel,
+  WorkflowResumedEvent as WorkflowResumedEventFromClientBarrel,
+  WorkflowStartedEvent as WorkflowStartedEventFromClientBarrel,
+  WorkflowSuspendedEvent as WorkflowSuspendedEventFromClientBarrel,
+  WorkflowTimedOutEvent as WorkflowTimedOutEventFromClientBarrel,
 } from './index.ts';
 import { LocalClient } from './local.ts';
 
@@ -159,3 +183,39 @@ void _codeAsClientBarrel;
 // The root barrel's guard must still work identically for comparison.
 const _isFaultFromRoot: boolean = isWeftFaultFromRoot(unknownError, 'WorkflowNotFoundError');
 void _isFaultFromRoot;
+
+// --- Issue #751: browser lifecycle classifiers importable from /client -----
+
+declare const unknownFaultCode: unknown;
+if (isFaultCodeFromClientBarrel(unknownFaultCode)) {
+  const _sameNarrowing: FaultCodeFromRoot = unknownFaultCode;
+  void _sameNarrowing;
+}
+const _rootGuardStillCallable: boolean = isFaultCodeFromRoot(unknownFaultCode);
+void _rootGuardStillCallable;
+
+const _workflowLifecycleTypes = [
+  WorkflowStartedEventFromClientBarrel.type,
+  WorkflowResumedEventFromClientBarrel.type,
+  WorkflowCompletedEventFromClientBarrel.type,
+  WorkflowFailedEventFromClientBarrel.type,
+  WorkflowCancelledEventFromClientBarrel.type,
+  WorkflowTimedOutEventFromClientBarrel.type,
+  WorkflowSuspendedEventFromClientBarrel.type,
+] as const;
+const _expectedWorkflowLifecycleTypes: readonly [
+  typeof WorkflowStartedEventFromRoot.type,
+  typeof WorkflowResumedEventFromRoot.type,
+  typeof WorkflowCompletedEventFromRoot.type,
+  typeof WorkflowFailedEventFromRoot.type,
+  typeof WorkflowCancelledEventFromRoot.type,
+  typeof WorkflowTimedOutEventFromRoot.type,
+  typeof WorkflowSuspendedEventFromRoot.type,
+] = _workflowLifecycleTypes;
+void _expectedWorkflowLifecycleTypes;
+
+// Runtime classes re-exported through `/client` must retain the root classes'
+// constructor and instance types rather than becoming client-only copies.
+declare const startedFromClient: InstanceType<typeof WorkflowStartedEventFromClientBarrel>;
+const _startedAsRoot: InstanceType<typeof WorkflowStartedEventFromRoot> = startedFromClient;
+void _startedAsRoot;
