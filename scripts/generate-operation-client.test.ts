@@ -11,7 +11,11 @@ import {
 } from '../src/cli/operation-catalog-snapshot.ts';
 import type { AccessPolicy } from '../src/server/authorization.ts';
 import { defineOperation } from '../src/server/operation-registry.ts';
-import { MAX_BATCH_OPERATIONS, MAX_SCAN_LIMIT } from '../src/storage/interface.ts';
+import {
+  MAX_BATCH_OPERATIONS,
+  MAX_SCAN_LIMIT,
+  type StorageCapabilities,
+} from '../src/storage/interface.ts';
 import {
   aliasNameFor,
   assignAliasNames,
@@ -166,6 +170,23 @@ describe('generated catalog — string enums tighten to literal unions (#466)', 
     // @ts-expect-error 'string' is too wide; the generated type is the literal union.
     const widened: Outcome = 'not-an-outcome' as string;
     void widened;
+  });
+});
+
+describe('generated catalog — storage capabilities', () => {
+  it('keeps the generated output structurally compatible with StorageCapabilities', () => {
+    const profile = {
+      persistence: 'remote',
+      readAfterWrite: 'eventual',
+      scanConsistency: 'best-effort',
+      atomicBatch: false,
+      conditionalBatch: false,
+      boundedRangeDelete: false,
+    } satisfies StorageCapabilities;
+    const generated: CatalogOperationTypes['weft.storage.capabilities']['output'] = profile;
+    const roundTrip: StorageCapabilities = generated;
+
+    expect(roundTrip).toEqual(profile);
   });
 });
 

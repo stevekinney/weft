@@ -60,6 +60,19 @@ class ThrowingScanStorage extends MemoryStorage {
   }
 }
 
+class DistinctCapabilityStorage extends MemoryStorage {
+  override capabilities(): ReturnType<MemoryStorage['capabilities']> {
+    return {
+      persistence: 'remote',
+      readAfterWrite: 'eventual',
+      scanConsistency: 'best-effort',
+      atomicBatch: false,
+      conditionalBatch: false,
+      boundedRangeDelete: false,
+    };
+  }
+}
+
 function request(path: string, init?: RequestInit): Request {
   return new Request(`http://localhost${path}`, init);
 }
@@ -132,6 +145,52 @@ describe('storage REST operations', () => {
         transport: 'http-rest',
       }),
     ).resolves.toEqual(encode('stored value'));
+  });
+
+  it('reports the backend capability profile to storage readers', async () => {
+    const storage = new DistinctCapabilityStorage();
+    using engine = new Engine({ storage });
+
+    const response = await handleRequest(
+      request('/v1/storage/-/capabilities'),
+      engine,
+      readWriteStorageOptions(),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(storage.capabilities());
+  });
+
+  it('requires storage read scope to inspect backend capabilities', async () => {
+    using engine = new Engine({ storage: new MemoryStorage() });
+
+    const writeOnlyResponse = await handleRequest(
+      request('/v1/storage/-/capabilities'),
+      engine,
+      writeOnlyStorageOptions(),
+    );
+    expect(writeOnlyResponse.status).toBe(403);
+
+    const anonymousResponse = await handleRequest(request('/v1/storage/-/capabilities'), engine);
+    expect(anonymousResponse.status).toBe(401);
+  });
+
+  it('advertises capability discovery on REST and every JSON-RPC transport', () => {
+    const operation = createLiveOperationRegistry().get('weft.storage.capabilities');
+
+    expect(operation).toMatchObject({
+      destructive: false,
+      access: {
+        kind: 'scoped',
+        scopes: { kind: 'anyOf', scopes: ['storage:read'] },
+      },
+      transports: {
+        http: true,
+        jsonRpcHttp: true,
+        jsonRpcWebSocket: true,
+        jsonRpcStdio: true,
+      },
+    });
   });
 
   it('returns a 501 NotImplemented when the backend lacks conditionalBatch', async () => {

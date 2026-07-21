@@ -168,6 +168,7 @@ import {
   startOrSignalWorkflowRestBinding,
 } from './operations/start-or-signal-workflow.ts';
 import { startWorkflowOperation, startWorkflowRestBinding } from './operations/start-workflow.ts';
+import * as storageCapabilities from './operations/storage-capabilities.ts';
 import {
   storageBatchOperation,
   storageBatchRestBinding,
@@ -245,9 +246,8 @@ export type UnknownRestBinding = RestBinding<any, any>;
 
 /**
  * Static REST bindings for all operations that do not need per-server
- * configuration. The `weft.system.metrics` binding is excluded here
- * because it is constructed per-server via `createGetSystemMetricsRestBinding`
- * (to receive the metrics collector without module-level singletons).
+ * configuration. The `weft.system.metrics` binding is excluded because its
+ * factory receives the per-server metrics collector.
  * Use `createLiveRestBindings()` to get the full set for a given server.
  */
 export const REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = [
@@ -304,6 +304,7 @@ export const REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = [
   listSchedulesRestBinding,
   getScheduleRestBinding,
   replayWorkflowRestBinding,
+  storageCapabilities.storageCapabilitiesRestBinding,
   storageGetRestBinding,
   storagePutRestBinding,
   storageDeleteRestBinding,
@@ -481,6 +482,7 @@ export function createLiveOperationRegistry(
     listSchedulesOperation,
     getScheduleOperation,
     replayWorkflowOperation,
+    storageCapabilities.storageCapabilitiesOperation,
     storageGetOperation,
     storagePutOperation,
     storageDeleteOperation,

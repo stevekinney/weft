@@ -921,6 +921,63 @@
       }
     },
     {
+      "name": "weft.storage.capabilities",
+      "kind": "unary",
+      "summary": "Report the connected storage backend's capability profile",
+      "tags": ["Storage"],
+      "destructive": false,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["storage:read"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "atomicBatch": {
+            "type": "boolean"
+          },
+          "boundedRangeDelete": {
+            "type": "boolean"
+          },
+          "conditionalBatch": {
+            "type": "boolean"
+          },
+          "persistence": {
+            "enum": ["ephemeral", "local", "remote"],
+            "type": "string"
+          },
+          "readAfterWrite": {
+            "enum": ["linearizable", "session", "eventual"],
+            "type": "string"
+          },
+          "scanConsistency": {
+            "enum": ["snapshot", "best-effort"],
+            "type": "string"
+          }
+        },
+        "required": [
+          "readAfterWrite",
+          "scanConsistency",
+          "atomicBatch",
+          "conditionalBatch",
+          "boundedRangeDelete"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "weft.storage.conditionalbatch",
       "kind": "unary",
       "summary": "Apply a raw storage conditional batch",

@@ -216,18 +216,28 @@ describe('worker execution signal suspension', () => {
         id: 'worker-infinite-loop-after-resume',
       },
     );
-    const loopingResult = loopingHandle.result();
+    const loopingOutcome = loopingHandle.result().then(
+      (value) => ({ status: 'fulfilled' as const, value }),
+      (error: unknown) => ({ status: 'rejected' as const, error }),
+    );
 
     await waitForSignalWaiter(workerEngine);
     await workerEngine.signal('worker-infinite-loop-after-resume', 'resume', { status: 'go' });
 
-    await expect(
-      withTimeout(
-        loopingResult,
-        LOAD_TOLERANT_WORKER_TIMEOUT_ASSERTION_MS,
-        'infinite-loop-after-resume timeout',
-      ),
-    ).rejects.toThrow('Worker workflow turn timed out');
+    const outcome = await withTimeout(
+      loopingOutcome,
+      LOAD_TOLERANT_WORKER_TIMEOUT_ASSERTION_MS,
+      'infinite-loop-after-resume timeout',
+    );
+    expect(outcome.status).toBe('rejected');
+    if (outcome.status === 'fulfilled') {
+      throw new Error('Expected the resumed Worker turn to time out, but it fulfilled');
+    }
+    expect(outcome.error).toBeInstanceOf(Error);
+    if (!(outcome.error instanceof Error)) {
+      throw new Error('Expected the resumed Worker timeout to reject with an Error');
+    }
+    expect(outcome.error.message).toBe('Worker workflow turn timed out after 100ms');
 
     const simpleHandle = await workerEngine.start(
       'simple',

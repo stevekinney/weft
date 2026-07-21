@@ -480,30 +480,52 @@ Invalid JSON, a missing token, or a mismatched token returns JSON-RPC error code
 ### Storage Operations
 
 > [!NOTE]
-> These routes are HTTP-only — they're not exposed over JSON-RPC, WebSocket, or stdio. The corresponding operation names (`weft.storage.get`, `weft.storage.put`, etc.) appear in `/openapi.json` but not in `/openrpc.json`.
+> The raw key-value routes are HTTP-only — they're not exposed over JSON-RPC, WebSocket, or stdio. Their operation names (`weft.storage.get`, `weft.storage.put`, etc.) appear in `/openapi.json` but not in `/openrpc.json`. Capability discovery is read-only and is available through every REST and JSON-RPC transport as `weft.storage.capabilities`.
 
 Raw key-value access to the engine's storage layer, used by `HTTPStorage` and any client that wants to treat a Weft server as a remote storage backend. Callers operate directly on the unscoped keyspace, so the routes require the `storage:admin` scope.
 
-| Method   | Path                                  | Description                            |
-| -------- | ------------------------------------- | -------------------------------------- |
-| `GET`    | `/api/v1/storage/:key`                | Read a single value                    |
-| `PUT`    | `/api/v1/storage/:key`                | Write a single value                   |
-| `DELETE` | `/api/v1/storage/:key`                | Delete a single value                  |
-| `GET`    | `/api/v1/storage`                     | Scan keys by prefix (NDJSON stream)    |
-| `POST`   | `/api/v1/storage/-/batch`             | Apply a batch of put/delete operations |
-| `POST`   | `/api/v1/storage/-/conditional-batch` | Apply a compare-and-swap batch         |
+| Method   | Path                                  | Description                             |
+| -------- | ------------------------------------- | --------------------------------------- |
+| `GET`    | `/api/v1/storage/-/capabilities`      | Report the backend's capability profile |
+| `GET`    | `/api/v1/storage/:key`                | Read a single value                     |
+| `PUT`    | `/api/v1/storage/:key`                | Write a single value                    |
+| `DELETE` | `/api/v1/storage/:key`                | Delete a single value                   |
+| `GET`    | `/api/v1/storage`                     | Scan keys by prefix (NDJSON stream)     |
+| `POST`   | `/api/v1/storage/-/batch`             | Apply a batch of put/delete operations  |
+| `POST`   | `/api/v1/storage/-/conditional-batch` | Apply a compare-and-swap batch          |
 
 #### Authorization
 
 Every storage route requires authentication. Required scopes:
 
-| Routes                     | Required scope  |
-| -------------------------- | --------------- |
-| Every raw storage endpoint | `storage:admin` |
+| Routes                                      | Required scope  |
+| ------------------------------------------- | --------------- |
+| `GET /api/v1/storage/-/capabilities`        | `storage:read`  |
+| Every endpoint that reads or mutates raw KV | `storage:admin` |
 
 #### Keyspace access
 
 Raw storage routes operate on the unscoped keyspace, so narrower `storage:read` and `storage:write` scopes do not grant access, even when a principal holds both. Without `storage:admin`, the server returns 403 with a `Forbidden` fault.
+
+#### `GET /api/v1/storage/-/capabilities`
+
+Report the exact `StorageCapabilities` profile returned by the engine's connected storage adapter. This endpoint exposes deployment metadata, not raw keys or values, so it requires the narrower `storage:read` scope. The equivalent `weft.storage.capabilities` operation is also available through JSON-RPC over HTTP, WebSocket, and stdio, including `LocalClient.operations`, `HttpClient.operations`, and `client.call()`.
+
+- **Required scope** — `storage:read`.
+- **Success response** — `200 OK`, `Content-Type: application/json`.
+
+```json
+{
+  "persistence": "local",
+  "readAfterWrite": "linearizable",
+  "scanConsistency": "snapshot",
+  "atomicBatch": true,
+  "conditionalBatch": true,
+  "boundedRangeDelete": true
+}
+```
+
+The values are the adapter's honest self-report; the server does not infer or strengthen them. See [`StorageCapabilities`](api-storage.md#storagecapabilities) for each field's contract.
 
 #### `GET /api/v1/storage/:key`
 

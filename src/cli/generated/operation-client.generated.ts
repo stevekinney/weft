@@ -23,6 +23,7 @@ export const CATALOG_OPERATION_NAMES = [
   'weft.schedules.pause',
   'weft.schedules.resume',
   'weft.schedules.update',
+  'weft.storage.capabilities',
   'weft.system.metrics',
   'weft.system.registry',
   'weft.task.queues.list',
@@ -219,6 +220,18 @@ export type CatalogOperationTypes = {
     };
     readonly output: null;
     readonly faults: 'Conflict' | 'InvalidParams' | 'NotFound';
+  };
+  'weft.storage.capabilities': {
+    readonly input: {};
+    readonly output: {
+      readonly atomicBatch: boolean;
+      readonly boundedRangeDelete: boolean;
+      readonly conditionalBatch: boolean;
+      readonly persistence?: 'ephemeral' | 'local' | 'remote';
+      readonly readAfterWrite: 'linearizable' | 'session' | 'eventual';
+      readonly scanConsistency: 'snapshot' | 'best-effort';
+    };
+    readonly faults: never;
   };
   'weft.system.metrics': {
     readonly input: {};

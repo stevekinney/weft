@@ -25,6 +25,7 @@ import { LocalClient } from './local.ts';
 // WeftClient interface. Reaching these from the client is the whole point of
 // the generated layer — they used to require hand-built raw calls.
 const UNCURATED_CATALOG_OPERATIONS = [
+  'weft.storage.capabilities',
   'weft.system.metrics',
   'weft.system.registry',
   'weft.workers.list',
@@ -87,6 +88,22 @@ describe('LocalClient catalog operations', () => {
     }
   });
 
+  it('reports the local engine storage capability profile', async () => {
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+    const client = new LocalClient(engine);
+    try {
+      await expect(client.operations['weft.storage.capabilities']({})).resolves.toEqual(
+        storage.capabilities(),
+      );
+      await expect(client.call('weft.storage.capabilities', {})).resolves.toEqual(
+        storage.capabilities(),
+      );
+    } finally {
+      engine[Symbol.dispose]();
+    }
+  });
+
   it('surfaces operation faults as thrown errors (drift: bulk-delete validation)', async () => {
     const engine = new Engine({ storage: new MemoryStorage() });
     const client = new LocalClient(engine);
@@ -118,6 +135,7 @@ describe('HttpClient catalog operations', () => {
         apiKeys: ['catalog-ops-secret'],
         defaultApiKeyScopes: [
           'system:read',
+          'storage:read',
           'workflows:read',
           'workflows:write',
           'workflows:admin',
@@ -149,6 +167,15 @@ describe('HttpClient catalog operations', () => {
   it('routes get-system-registry over JSON-RPC', async () => {
     const registry = await client.operations['weft.system.registry']({});
     expect(registry).toMatchObject({ registryVersion: expect.any(Number) });
+  });
+
+  it('reports the remote engine storage capability profile over JSON-RPC', async () => {
+    await expect(client.operations['weft.storage.capabilities']({})).resolves.toEqual(
+      engine.storage.capabilities(),
+    );
+    await expect(client.call('weft.storage.capabilities', {})).resolves.toEqual(
+      engine.storage.capabilities(),
+    );
   });
 
   it('reaches an uncurated workflow op (list) through the generated layer', async () => {
