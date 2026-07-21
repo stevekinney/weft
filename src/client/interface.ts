@@ -30,11 +30,11 @@ import type {
   RetentionOverview,
   ReviewListEntry,
   ReviewListFilter,
+  ScheduleUpdateOptions as ScheduleEdit,
   ScheduleFilter,
   ScheduleOptions,
   ScheduleSpec,
   ScheduleSummary,
-  ScheduleUpdateOptions,
   SearchAttributeValue,
   SignalDefinition,
   SignalDeliveryOptions,
@@ -272,7 +272,7 @@ export interface ClientScheduleHandle extends Disposable {
   cancel(): Promise<void>;
 
   /** Update the schedule cadence and optional mutable schedule settings. */
-  update(newSpec: string | ScheduleSpec, options?: ScheduleUpdateOptions): Promise<void>;
+  update(newSpec: string | ScheduleSpec, options?: ScheduleEdit): Promise<void>;
 
   /** Read the latest persisted summary for this schedule. */
   describe(): Promise<ScheduleSummary | null>;
@@ -337,6 +337,7 @@ export interface WeftClientActivity {
 export interface WeftClient {
   /**
    * Start a new workflow and return a handle to it.
+   *
    * When the {@link WorkflowRegistry} is augmented (e.g. via `weft codegen`),
    * the workflow name narrows `input` to that workflow's input type and the
    * returned handle's `result()` to its output type. Without augmentation the
@@ -367,6 +368,7 @@ export interface WeftClient {
    * signalled; a terminal target is rejected as a conflict unless
    * `options.onTerminalConflict: 'start-new'` is supplied with an explicit
    * workflow id and deterministic `signal.signalId`.
+   *
    * The rejection shape is transport-dependent: `LocalClient` throws the typed
    * `StartOrSignalConflictError` (and `IdempotencyKeyPurgedError` for a spent
    * key), while `HttpClient` throws `HttpClientError` with `status === 409` and
@@ -466,11 +468,7 @@ export interface WeftClient {
   cancelSchedule(id: string): Promise<void>;
 
   /** Update a recurring schedule's cadence and optional mutable schedule settings. */
-  updateSchedule(
-    id: string,
-    newSpec: string | ScheduleSpec,
-    options?: ScheduleUpdateOptions,
-  ): Promise<void>;
+  updateSchedule(id: string, newSpec: string | ScheduleSpec, options?: ScheduleEdit): Promise<void>;
 
   /** Send a named signal to a workflow. */
   signal(id: string, name: SignalDefinition): Promise<void>;
