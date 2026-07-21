@@ -5,6 +5,7 @@ import { MemoryStorage } from '../storage/memory.ts';
 import type { HandlerOptions } from './handler.ts';
 import {
   serve,
+  TaskQueue,
   WorkerRegistry,
   type AuthConfig,
   type DashboardRouteTarget,
@@ -15,7 +16,6 @@ import {
   type SchedulingPolicy,
   type ServeOptions,
   type TaskDispatch,
-  type TaskQueue,
   type WeftServer,
 } from './index.ts';
 
@@ -120,6 +120,16 @@ void taskQueue;
 // constructable from `/server` — not merely nameable as a type.
 const constructedRegistry = new WorkerRegistry();
 void constructedRegistry;
+
+// TaskQueue is also a VALUE because direct handleRequest() hosts must construct
+// the matching live queue and registry without importing server internals.
+const constructedTaskQueue = new TaskQueue();
+const liveHandlerOptions: HandlerOptions = {
+  workerRegistry: constructedRegistry,
+  taskQueue: constructedTaskQueue,
+};
+void liveHandlerOptions;
+void constructedTaskQueue;
 
 // Regression guard for #455: Engine.create({ storage, workflows: {} }) must
 // produce an Engine<DefaultWorkflowRegistry> and therefore satisfy

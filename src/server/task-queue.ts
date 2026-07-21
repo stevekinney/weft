@@ -57,21 +57,23 @@ interface Waiter {
  * until a task arrives or the timeout expires.
  *
  * `serve()` owns the live instance and exposes it as
- * {@link WeftServer.taskQueue} for inspection. Prefer the `WeftServer` methods
- * (`dispatchTask`, `shutdownWorker`, etc.) over mutating the queue directly —
- * the type is re-exported so callers can name `server.taskQueue`, not as a
- * stable mutation surface.
+ * {@link WeftServer.taskQueue} for inspection. Direct `handleRequest()` hosts
+ * can construct an instance alongside a `WorkerRegistry` and inject both via
+ * `HandlerOptions`. Prefer the `WeftServer` methods (`dispatchTask`,
+ * `shutdownWorker`, etc.) over mutating a server-owned queue directly.
  *
  * @example
  * ```ts
- * import { serve, type TaskQueue } from '@lostgradient/weft/server';
+ * import { serve, TaskQueue } from '@lostgradient/weft/server';
  * import { Engine, MemoryStorage } from '@lostgradient/weft';
  *
  * await using engine = new Engine({ storage: new MemoryStorage() });
  * await using server = serve({ engine });
  *
  * const taskQueue: TaskQueue = server.taskQueue;
+ * const standaloneTaskQueue = new TaskQueue();
  * void taskQueue;
+ * standaloneTaskQueue[Symbol.dispose]();
  * ```
  */
 export class TaskQueue implements Disposable {

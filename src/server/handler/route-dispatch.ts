@@ -4,6 +4,7 @@ import {
   createMetricsCollectorExporter,
   type PrometheusExporter,
 } from '../../observability/metrics.ts';
+import type { WorkerRegistry } from '../../worker/registry.ts';
 import { generateApiCatalog, originFromRequest, warnIfPublicOriginUnset } from '../api-catalog.ts';
 import { generateAsyncApiDocument } from '../asyncapi.ts';
 import type { AuthContext } from '../authentication.ts';
@@ -27,6 +28,7 @@ import {
   createLiveRestBindings,
   type UnknownRestBinding,
 } from '../rest-bindings.ts';
+import type { TaskQueue } from '../task-queue.ts';
 import type { WorkflowEventFeed } from '../workflow-event-feed.ts';
 import {
   defaultShapeSuccess,
@@ -45,8 +47,9 @@ import {
  * Options bag passed to `handleRequest` by the HTTP server wrapper.
  *
  * Injects the resolved authentication context, custom metrics exporters, and
- * an optional override for the operation registry and REST bindings.  Omit
- * `operationRegistry` and `restBindings` together to use the live defaults.
+ * an optional override for the operation registry and REST bindings. Omit
+ * `operationRegistry` and `restBindings` together to use the live defaults,
+ * optionally bound to the supplied worker registry and task queue.
  *
  * @example
  * ```ts
@@ -70,6 +73,10 @@ export interface HandlerOptions {
    * from the OpenTelemetry SDK (e.g. via `@opentelemetry/exporter-prometheus`).
    */
   prometheusExporter?: PrometheusExporter;
+  /** Live worker state used by worker and task-diagnostics operations. */
+  workerRegistry?: WorkerRegistry;
+  /** Live task-queue state used by queue and task-diagnostics operations. */
+  taskQueue?: TaskQueue;
   /**
    * Operation registry for pipeline dispatch. Must be supplied together
    * with `restBindings` — a caller that overrides one but not the other
@@ -252,7 +259,7 @@ export const DIRECT_ROUTE_EXECUTORS: Record<DirectRouteHandlerName, RouteExecuto
   openApiDocument: async ({ options }) =>
     jsonResponse(
       generateOpenApiDocument({
-        registry: options?.operationRegistry ?? defaultOperationRegistry(),
+        registry: options?.operationRegistry ?? defaultOperationRegistry(options),
         ...(options?.restBindings !== undefined ? { restBindings: options.restBindings } : {}),
         ...(options?.supportedAuthenticationSchemes !== undefined
           ? { supportedSchemes: options.supportedAuthenticationSchemes }
@@ -263,7 +270,7 @@ export const DIRECT_ROUTE_EXECUTORS: Record<DirectRouteHandlerName, RouteExecuto
   openRpcDocument: async ({ engine, options }) =>
     jsonResponse(
       generateOpenRpcDocument({
-        registry: options?.operationRegistry ?? defaultOperationRegistry(),
+        registry: options?.operationRegistry ?? defaultOperationRegistry(options),
         transports: ['http', 'websocket'],
         mcpTools: listMcpTools(engine),
         ...(options?.discoveryInfo !== undefined ? { discoveryInfo: options.discoveryInfo } : {}),
@@ -272,7 +279,7 @@ export const DIRECT_ROUTE_EXECUTORS: Record<DirectRouteHandlerName, RouteExecuto
   asyncApiDocument: async ({ options }) =>
     jsonResponse(
       generateAsyncApiDocument({
-        registry: options?.operationRegistry ?? defaultOperationRegistry(),
+        registry: options?.operationRegistry ?? defaultOperationRegistry(options),
         ...(options?.restBindings !== undefined ? { restBindings: options.restBindings } : {}),
         ...(options?.discoveryInfo !== undefined ? { discoveryInfo: options.discoveryInfo } : {}),
       }),
@@ -432,13 +439,22 @@ export function isOperationFaultLike(value: unknown): value is OperationFault {
 }
 
 /**
- * Lazily-initialized live operation registry used as the default for
- * callers that don't pass one. The registry is stateless and can be
- * shared across all requests.
+ * Lazily initialized discovery registry used when callers supply neither a
+ * custom registry nor live worker infrastructure. The discovery registry is
+ * stateless and shared; injected worker state gets a live registry bound to
+ * those instances.
  */
 let defaultOperationRegistryCache: OperationRegistry | undefined;
 
-export function defaultOperationRegistry(): OperationRegistry {
+export function defaultOperationRegistry(
+  options?: Pick<HandlerOptions, 'workerRegistry' | 'taskQueue'>,
+): OperationRegistry {
+  if (options?.workerRegistry !== undefined || options?.taskQueue !== undefined) {
+    return createLiveOperationRegistry({
+      ...(options.workerRegistry !== undefined ? { workerRegistry: options.workerRegistry } : {}),
+      ...(options.taskQueue !== undefined ? { taskQueue: options.taskQueue } : {}),
+    });
+  }
   if (defaultOperationRegistryCache === undefined) {
     defaultOperationRegistryCache = createLiveOperationRegistry();
   }

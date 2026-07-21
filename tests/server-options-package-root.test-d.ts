@@ -1,6 +1,7 @@
 import { createMetricsCollectorExporter, Engine, workflow } from '@lostgradient/weft';
 import {
   serve,
+  TaskQueue,
   WorkerRegistry,
   type AuthConfig,
   type DashboardRouteTarget,
@@ -11,7 +12,6 @@ import {
   type SchedulingPolicy,
   type ServeOptions,
   type TaskDispatch,
-  type TaskQueue,
   type WeftServer,
 } from '@lostgradient/weft/server';
 import {
@@ -128,6 +128,16 @@ void packageRootTaskQueue;
 const packageRootConstructedRegistry = new WorkerRegistry();
 void packageRootConstructedRegistry;
 
+// #729: direct handleRequest() hosts can construct and inject the live worker
+// infrastructure entirely through supported published subpaths.
+const packageRootConstructedTaskQueue = new TaskQueue();
+const packageRootLiveHandlerOptions: HandlerOptions = {
+  workerRegistry: packageRootConstructedRegistry,
+  taskQueue: packageRootConstructedTaskQueue,
+};
+void packageRootLiveHandlerOptions;
+void packageRootConstructedTaskQueue;
+
 // Regression guard for #708: `ServeOptions.engine` must accept BOTH
 // documented construction patterns from the published package without a
 // call-site cast — `new Engine({ storage })` (the default, empty registry —
@@ -147,7 +157,11 @@ async function verifyPackageRootConcreteWorkflowRegistryEngineAcceptedByServe():
 
   // Copilot review on #708 (PR #715): pin the same invariant for
   // `handleRequest`, symmetric with `ServeOptions.engine` above.
-  void handleRequest(new Request('http://localhost/v1/health'), concreteEngine);
+  void handleRequest(
+    new Request('http://localhost/v1/health'),
+    concreteEngine,
+    packageRootLiveHandlerOptions,
+  );
 }
 void verifyPackageRootConcreteWorkflowRegistryEngineAcceptedByServe;
 

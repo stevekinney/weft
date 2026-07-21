@@ -68,15 +68,16 @@ export {
 // from this entry point. (AuthConfig/RateLimitConfig ship from the auth block
 // above; CorsOptions from its own export above.) The `Engine` instance you pass
 // to `serve()` comes from the root `@lostgradient/weft` — its canonical home —
-// not from here. WorkerRegistry stays a value to match the root export; TaskQueue
-// is type-only — exposed for naming `server.taskQueue`, not for construction.
+// not from here. WorkerRegistry stays a value to match the root export, and
+// TaskQueue is a value so direct `handleRequest()` hosts can construct the live
+// worker infrastructure exposed through HandlerOptions.
 export type { RetryPolicy } from '../core/types.ts';
 export type { PrometheusExporter } from '../observability/metrics.ts';
 export { WorkerRegistry } from '../worker/registry.ts';
 export type { RoutingPolicy } from '../worker/registry.ts';
 export type { DiscoveryInfo } from './discovery-info.ts';
 export type { SchedulingPolicy } from './task-queue-types.ts';
-export type { TaskQueue } from './task-queue.ts';
+export { TaskQueue } from './task-queue.ts';
 
 /**
  * Static route patterns at which an externally supplied dashboard shell is

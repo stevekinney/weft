@@ -157,7 +157,7 @@ async function dispatchMatchedRoute(
   }
 
   const restBindings = options?.restBindings ?? defaultRestBindings();
-  const operationRegistry = options?.operationRegistry ?? defaultOperationRegistry();
+  const operationRegistry = options?.operationRegistry ?? defaultOperationRegistry(options);
   const bindingLookup = matchRouteBoundary(() =>
     matchRestBinding(request.method, url.pathname, restBindings),
   );

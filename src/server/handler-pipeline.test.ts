@@ -22,12 +22,14 @@ import { Engine } from '../core/engine.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types.ts';
 import { MemoryStorage } from '../storage/memory.ts';
-import { handleRequest } from './handler.ts';
+import { WorkerRegistry } from '../worker/registry.ts';
+import { handleRequest, type HandlerOptions } from './handler.ts';
 import { createOperationRegistry, type OperationRegistry } from './operation-catalog.ts';
 import { defineOperation } from './operation-registry.ts';
 import { principalFromApiKey, type Principal } from './principal.ts';
 import type { RestBinding } from './rest-binding.ts';
 import type { UnknownRestBinding } from './rest-bindings.ts';
+import { TaskQueue } from './task-queue.ts';
 
 const holdWorkflow = workflow({ name: 'hold' }).execute(async function* (
   ctx: WorkflowContext,
@@ -147,6 +149,83 @@ describe('handler pipeline — restBindings / operationRegistry pairing guard', 
     expect(await response.json()).toEqual({
       error: '`restBindings` and `operationRegistry` must be supplied together (or both omitted).',
     });
+  });
+});
+
+describe('handler pipeline — live worker infrastructure', () => {
+  it('uses HandlerOptions worker and queue state with the default REST bindings', async () => {
+    const engine = createEngine();
+    const workerRegistry = new WorkerRegistry();
+    using taskQueue = new TaskQueue({ pendingTaskTimeToLive: Infinity });
+    workerRegistry.register({
+      id: 'worker-729',
+      queue: 'workers',
+      activities: ['charge'],
+      concurrency: 2,
+    });
+    taskQueue.enqueue('backlog', {
+      operationId: 'operation-729',
+      activityName: 'charge',
+      input: { amount: 729 },
+      enqueuedAt: 1,
+    });
+    const options: HandlerOptions = {
+      workerRegistry,
+      taskQueue,
+      authContext: {
+        method: 'api-key',
+        principal: principalFromApiKey({ subject: 'operator', scopes: ['system:read'] }),
+      },
+    };
+
+    try {
+      const workersResponse = await handleRequest(
+        new Request('http://localhost/v1/workers'),
+        engine,
+        options,
+      );
+      expect(workersResponse.status).toBe(200);
+      expect(await workersResponse.json()).toEqual(
+        expect.objectContaining({
+          items: [expect.objectContaining({ id: 'worker-729', queue: 'workers' })],
+        }),
+      );
+
+      const queuesResponse = await handleRequest(
+        new Request('http://localhost/v1/task-queues'),
+        engine,
+        options,
+      );
+      expect(queuesResponse.status).toBe(200);
+      expect(await queuesResponse.json()).toEqual(
+        expect.objectContaining({
+          items: expect.arrayContaining([
+            expect.objectContaining({ queue: 'backlog', backlog: 1 }),
+            expect.objectContaining({ queue: 'workers', connectedWorkers: 1 }),
+          ]),
+        }),
+      );
+    } finally {
+      engine[Symbol.dispose]();
+    }
+  });
+
+  it('keeps operation-catalog authorization in front of injected worker state', async () => {
+    const engine = createEngine();
+    const workerRegistry = new WorkerRegistry();
+    using taskQueue = new TaskQueue();
+
+    try {
+      const response = await handleRequest(new Request('http://localhost/v1/workers'), engine, {
+        workerRegistry,
+        taskQueue,
+      });
+
+      expect(response.status).toBe(401);
+      expect(await response.json()).toEqual(expect.objectContaining({ error: expect.any(String) }));
+    } finally {
+      engine[Symbol.dispose]();
+    }
   });
 });
 
