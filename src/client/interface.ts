@@ -619,7 +619,7 @@ export interface WeftClient {
    *
    * Every catalog operation is reachable as `client.operations['weft.<op>']`,
    * including server operations the ergonomic surface does not curate (workers,
-   * task queues, task diagnostics, system metrics/registry, checkpoints). New
+   * task queues, task diagnostics, system lease/metrics/registry, checkpoints). New
    * catalog operations appear here automatically when the snapshot regenerates,
    * so the client never drifts behind the server.
    *

@@ -1237,6 +1237,76 @@
       "outputSchema": {}
     },
     {
+      "name": "weft.system.lease",
+      "kind": "unary",
+      "summary": "Get ownership-lease health for this engine process",
+      "description": "Reports whether lease ownership is disabled, not yet held, healthy, or contested. Contested results preserve the confirmed deposed or renewal-unconfirmable reason.",
+      "tags": ["System"],
+      "destructive": false,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["system:read"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expiresAt": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "fencingEpoch": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "heldSince": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "holderId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "holdsLease": {
+            "type": "boolean"
+          },
+          "lastRenewedAt": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lossReason": {
+            "enum": ["deposed", "renewal-unconfirmable"],
+            "type": "string"
+          },
+          "mode": {
+            "enum": ["none", "lease"],
+            "type": "string"
+          },
+          "status": {
+            "enum": ["disabled", "healthy", "no-lease", "contested"],
+            "type": "string"
+          }
+        },
+        "required": ["mode", "status", "holdsLease"],
+        "type": "object"
+      }
+    },
+    {
       "name": "weft.system.metrics",
       "kind": "unary",
       "summary": "Get JSON-shaped system metrics",

@@ -24,6 +24,7 @@ export const CATALOG_OPERATION_NAMES = [
   'weft.schedules.resume',
   'weft.schedules.update',
   'weft.storage.capabilities',
+  'weft.system.lease',
   'weft.system.metrics',
   'weft.system.registry',
   'weft.task.queues.list',
@@ -230,6 +231,21 @@ export type CatalogOperationTypes = {
       readonly persistence: 'ephemeral' | 'local' | 'remote';
       readonly readAfterWrite: 'linearizable' | 'session' | 'eventual';
       readonly scanConsistency: 'snapshot' | 'best-effort';
+    };
+    readonly faults: never;
+  };
+  'weft.system.lease': {
+    readonly input: {};
+    readonly output: {
+      readonly expiresAt?: number;
+      readonly fencingEpoch?: number;
+      readonly heldSince?: number;
+      readonly holderId?: string;
+      readonly holdsLease: boolean;
+      readonly lastRenewedAt?: number;
+      readonly lossReason?: 'deposed' | 'renewal-unconfirmable';
+      readonly mode: 'none' | 'lease';
+      readonly status: 'disabled' | 'healthy' | 'no-lease' | 'contested';
     };
     readonly faults: never;
   };

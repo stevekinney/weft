@@ -328,6 +328,20 @@ GET /api/v1/tasks/diagnostics?workflowId=<workflow-id>&queue=default&limit=25
 
 The diagnostics endpoint requires `system:read` and returns bounded evidence for stuck queued tasks, stale in-flight tasks, retry storms, all-workers-at-capacity conditions, and task-result dead letters. Use it when low-cardinality task metrics show a problem and you need workflow, operation, queue, or worker-level context.
 
+**Ownership lease health:**
+
+```
+GET /api/v1/system/lease
+→ { "mode": "none", "status": "disabled", "holdsLease": false }
+→ { "mode": "lease", "status": "healthy", "holdsLease": true, ... }
+→ { "mode": "lease", "status": "no-lease", "holdsLease": false }
+→ { "mode": "lease", "status": "contested", "holdsLease": false, "lossReason": "deposed" }
+```
+
+This endpoint requires `system:read`. It is a reload-safe operator diagnostic;
+`GET /v1/health` remains an anonymous liveness probe and intentionally does not
+disclose holder identity or fencing state.
+
 ```http
 DELETE /api/v1/tasks/diagnostics/dead-letter/<operation-id>
 → { "ok": true }

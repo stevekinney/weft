@@ -178,7 +178,8 @@ import {
 } from './inline-parking.ts';
 import { getInternals, initializeInternals, type EngineInternals } from './internals.ts';
 import { ENGINE_LEASE_LOST_WARNING_NAME, handleDeposition } from './lease-deposition.ts';
-import { createLeaseManager, type LeaseLostReason } from './lease-manager.ts';
+import type { EngineLeaseHealth, LeaseLostReason } from './lease-health.ts';
+import { createLeaseManager } from './lease-manager.ts';
 import {
   fork as forkFromLifecycle,
   recoverAll as recoverAllFromLifecycle,
@@ -312,6 +313,7 @@ export {
   EngineLeaseCorruptedError,
   EngineLeaseNotHeldError,
 } from './lease-errors.ts';
+export type { EngineLeaseHealth, LeaseLostReason } from './lease-health.ts';
 export type { RecoverAllOptions, RecoveredWorkflowInfo } from './lifecycle.ts';
 export { ScheduleHandle } from './schedule-handle.ts';
 export type {
@@ -1806,6 +1808,44 @@ export class Engine<
       return { ...state, status: 'pending' };
     }
     return state;
+  }
+  /**
+   * Return this process's last-known ownership-lease health.
+   *
+   * This is a synchronous diagnostic snapshot: it never performs a storage read
+   * and therefore remains available to operator transports after a confirmed
+   * deposition has detached the lease manager. Holder identifiers and timestamps
+   * are present only while the manager still has its own last-written holder
+   * record; a detached deposed engine reports the confirmed loss without
+   * inventing successor details.
+   */
+  getLeaseHealth(): EngineLeaseHealth {
+    const internals = getInternals(this);
+    if (internals.options.ownershipMode === 'none') {
+      return { mode: 'none', status: 'disabled', holdsLease: false };
+    }
+    if (internals.deposed) {
+      const lastKnownLease = internals.leaseManager?.health();
+      if (lastKnownLease !== undefined && lastKnownLease.status !== 'no-lease') {
+        return {
+          mode: 'lease',
+          ...lastKnownLease,
+          status: 'contested',
+          holdsLease: false,
+          lossReason: 'deposed',
+        };
+      }
+      return {
+        mode: 'lease',
+        status: 'contested',
+        holdsLease: false,
+        lossReason: 'deposed',
+      };
+    }
+    return {
+      mode: 'lease',
+      ...(internals.leaseManager?.health() ?? { status: 'no-lease', holdsLease: false }),
+    };
   }
   async getCurrentCheckpointStep(workflowId: string): Promise<number | null> {
     // Prefer the in-memory checkpoint: for a run live in this engine it is the

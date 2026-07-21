@@ -5,7 +5,7 @@
  *
  * The point of this layer is full operation coverage without drift: every
  * catalog operation — including server operations the ergonomic surface does
- * not curate (workers, task queues, task diagnostics, system metrics/registry,
+ * not curate (workers, task queues, task diagnostics, system lease/metrics/registry,
  * checkpoints) — is reachable from JS, and new catalog operations appear here
  * automatically when the snapshot regenerates.
  */
@@ -26,6 +26,7 @@ import { LocalClient } from './local.ts';
 // the generated layer — they used to require hand-built raw calls.
 const UNCURATED_CATALOG_OPERATIONS = [
   'weft.storage.capabilities',
+  'weft.system.lease',
   'weft.system.metrics',
   'weft.system.registry',
   'weft.workers.list',
@@ -69,6 +70,25 @@ describe('LocalClient catalog operations', () => {
       await expect(client.operations['weft.system.metrics']({})).resolves.toBeDefined();
       // call() resolves the same operation by name with identical typing.
       await expect(client.call('weft.system.metrics', {})).resolves.toBeDefined();
+    } finally {
+      engine[Symbol.dispose]();
+    }
+  });
+
+  it('routes lease health through the generated in-process operation client', async () => {
+    const engine = new Engine({ storage: new MemoryStorage() });
+    const client = new LocalClient(engine);
+    try {
+      await expect(client.operations['weft.system.lease']({})).resolves.toEqual({
+        mode: 'none',
+        status: 'disabled',
+        holdsLease: false,
+      });
+      await expect(client.call('weft.system.lease', {})).resolves.toEqual({
+        mode: 'none',
+        status: 'disabled',
+        holdsLease: false,
+      });
     } finally {
       engine[Symbol.dispose]();
     }
@@ -162,6 +182,19 @@ describe('HttpClient catalog operations', () => {
   it('routes a previously-unexposed op (get-system-metrics) over JSON-RPC', async () => {
     await expect(client.operations['weft.system.metrics']({})).resolves.toBeDefined();
     await expect(client.call('weft.system.metrics', {})).resolves.toBeDefined();
+  });
+
+  it('routes lease health over JSON-RPC', async () => {
+    await expect(client.operations['weft.system.lease']({})).resolves.toEqual({
+      mode: 'none',
+      status: 'disabled',
+      holdsLease: false,
+    });
+    await expect(client.call('weft.system.lease', {})).resolves.toEqual({
+      mode: 'none',
+      status: 'disabled',
+      holdsLease: false,
+    });
   });
 
   it('routes get-system-registry over JSON-RPC', async () => {

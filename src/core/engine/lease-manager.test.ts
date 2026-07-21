@@ -99,6 +99,26 @@ describe('createLeaseManager', () => {
     expect(new DataView(bytes!.buffer).getBigUint64(0, false)).toBe(1n);
   });
 
+  it('reports no lease before acquisition and a timestamped healthy snapshot after acquisition', async () => {
+    const storage = new MemoryStorage();
+    const clock = makeClock();
+    const manager = createLeaseManager(managerOptions({ storage, getNow: clock.now }));
+
+    expect(manager.health()).toEqual({ status: 'no-lease', holdsLease: false });
+
+    await manager.acquire();
+
+    expect(manager.health()).toEqual({
+      status: 'healthy',
+      holdsLease: true,
+      holderId: 'engine-a',
+      heldSince: 1_000_000,
+      expiresAt: 1_030_000,
+      lastRenewedAt: 1_000_000,
+      fencingEpoch: 1,
+    });
+  });
+
   it('renews with the same epoch and an advanced expiry; epoch bytes stay stable', async () => {
     const storage = new MemoryStorage();
     const clock = makeClock();
@@ -118,6 +138,37 @@ describe('createLeaseManager', () => {
     expect(holder?.expiresAt).toBeGreaterThan(expiryBefore!);
     // currentEpochBytes is stable across renewals — the contract Step-2 fencing relies on.
     expect(manager.currentEpochBytes()).toEqual(epochBytesBefore);
+    expect(manager.health()).toMatchObject({
+      status: 'healthy',
+      heldSince: 1_000_000,
+      expiresAt: 1_035_000,
+      lastRenewedAt: 1_005_000,
+      fencingEpoch: 1,
+    });
+  });
+
+  it('reports an expired last-known holder as contested without inventing a loss reason', async () => {
+    const storage = new MemoryStorage();
+    const clock = makeClock();
+    const manager = createLeaseManager(managerOptions({ storage, getNow: clock.now }));
+    await manager.acquire();
+
+    clock.advance(TTL_MS);
+    expect(manager.health()).toMatchObject({
+      status: 'contested',
+      holdsLease: false,
+      expiresAt: 1_030_000,
+    });
+    expect(manager.health()).not.toHaveProperty('lossReason');
+
+    await manager.renewOnce();
+
+    expect(manager.health()).toMatchObject({
+      status: 'healthy',
+      holdsLease: true,
+      expiresAt: 1_060_000,
+      lastRenewedAt: 1_030_000,
+    });
   });
 
   it('release deletes only the holder key; the epoch survives as a high-water mark', async () => {
@@ -131,6 +182,7 @@ describe('createLeaseManager', () => {
     expect(await readHolder(storage)).toBeNull();
     // The epoch is NOT deleted — a future boot must re-acquire above it.
     expect(await readEpoch(storage)).toBe(1);
+    expect(manager.health()).toEqual({ status: 'no-lease', holdsLease: false });
   });
 
   it('re-acquires after a clean release at epoch+1, conditioning on the surviving epoch', async () => {
@@ -303,6 +355,16 @@ describe('createLeaseManager', () => {
     await incumbent.renewOnce();
 
     expect(lost).toEqual(['deposed']);
+    expect(incumbent.health()).toEqual({
+      status: 'contested',
+      holdsLease: false,
+      lossReason: 'deposed',
+      holderId: 'engine-a',
+      heldSince: 1_000_000,
+      expiresAt: 1_030_000,
+      lastRenewedAt: 1_000_000,
+      fencingEpoch: 1,
+    });
     // The successor's record is intact — a deposed renewal does not clobber it.
     expect(await holderId(storage)).toBe('engine-b');
     expect(await readEpoch(storage)).toBe(2);
@@ -326,6 +388,16 @@ describe('createLeaseManager', () => {
     await manager.renewOnce();
 
     expect(lost).toEqual(['renewal-unconfirmable']);
+    expect(manager.health()).toEqual({
+      status: 'contested',
+      holdsLease: false,
+      lossReason: 'renewal-unconfirmable',
+      holderId: 'engine-a',
+      heldSince: 1_000_000,
+      expiresAt: 1_030_000,
+      lastRenewedAt: 1_000_000,
+      fencingEpoch: 1,
+    });
   });
 
   it('does not report loss on a transient storage failure before expiry', async () => {
@@ -403,6 +475,7 @@ describe('createLeaseManager', () => {
     expect(await readEpoch(storage)).toBe(epochBefore);
     expect(await holderExpiry(storage)).toBe(holderBefore?.expiresAt);
     expect(lost).toEqual([]);
+    expect(manager.health()).toEqual({ status: 'no-lease', holdsLease: false });
   });
 
   it('acquire returns without owning when the manager is already stopped', async () => {

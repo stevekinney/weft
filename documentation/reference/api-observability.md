@@ -145,6 +145,42 @@ type MetricType = 'counter' | 'gauge' | 'histogram';
 
 Task metrics stay deliberately low-cardinality. Use `GET /api/v1/tasks/diagnostics` when you need workflow IDs, operation IDs, worker IDs, or queue-specific evidence for stuck work or dead-lettered task results; keep metric labels suitable for aggregation.
 
+### Ownership lease health
+
+`GET /api/v1/system/lease` is backed by the `weft.system.lease` operation and
+requires `system:read`. It returns the serving engine process's last-known
+ownership state without changing the anonymous `GET /v1/health` liveness probe:
+
+```json
+{
+  "mode": "lease",
+  "status": "healthy",
+  "holdsLease": true,
+  "holderId": "process-instance-id",
+  "heldSince": 1720000000000,
+  "expiresAt": 1720000030000,
+  "lastRenewedAt": 1720000005000,
+  "fencingEpoch": 7
+}
+```
+
+| `mode`  | `status`    | Meaning                                                                                   |
+| ------- | ----------- | ----------------------------------------------------------------------------------------- |
+| `none`  | `disabled`  | This engine was not configured with lease ownership.                                      |
+| `lease` | `no-lease`  | Lease mode is configured, but this process has not acquired or has stopped holding it.    |
+| `lease` | `healthy`   | This process last acquired or renewed the lease successfully and currently claims it.     |
+| `lease` | `contested` | This process lost ownership or can no longer prove it; inspect `lossReason` when present. |
+
+When present, `lossReason` preserves the engine's real distinction: `deposed`
+confirms that a successor won the lease or a fenced write, while
+`renewal-unconfirmable` means a storage failure persisted past the last confirmed
+expiry. An expired last-known record is contested even before a renewal produces a
+specific loss reason. Holder and timestamp fields are last-known process-local
+evidence. After confirmed deposition detaches the manager, the response keeps
+`status: "contested"` and `lossReason: "deposed"` without guessing the successor's
+identity. Holder IDs remain confined to this scoped JSON diagnostic and are never
+emitted as metric labels.
+
 ### `GET /api/v1/tasks/diagnostics`
 
 Returns bounded task diagnostics for queued, in-flight, recently resolved, and task-result dead-letter activity records. The REST endpoint is backed by the `weft.tasks.diagnostics` operation and requires `system:read`.

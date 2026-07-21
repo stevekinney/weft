@@ -358,6 +358,29 @@ addInterceptor(interceptor: Interceptor): void
 
 Register a unified interceptor. It participates in the workflow and/or activity pipeline based on which hooks it implements. See the [Interceptors reference](./api-interceptors.md) for details.
 
+### `getLeaseHealth()`
+
+```ts
+import { Engine, type EngineLeaseHealth } from '@lostgradient/weft';
+
+const engine = new Engine();
+const health: EngineLeaseHealth = engine.getLeaseHealth();
+void health;
+engine[Symbol.dispose]();
+```
+
+Returns a synchronous, process-local ownership snapshot without reading storage.
+The result distinguishes lease ownership being `disabled`, configured but
+`no-lease`, `healthy`, or `contested`. Healthy results include this process's
+holder ID, timestamps, and fencing epoch. Contested results include the exact
+`deposed` or `renewal-unconfirmable` reason when the engine observed one; a
+confirmed deposition remains visible after the lease manager detaches.
+
+Use the scoped `weft.system.lease` operation or
+`GET /api/v1/system/lease` for a remote operator client. The anonymous
+`GET /v1/health` endpoint remains a liveness probe and does not expose ownership
+details.
+
 ### `storage` (getter)
 
 ```ts partial

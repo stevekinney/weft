@@ -53,9 +53,9 @@ import {
   type LeaseHolderRecord,
 } from './lease-codec.ts';
 import { EngineLeaseAcquisitionTimeoutError, EngineLeaseCorruptedError } from './lease-errors.ts';
+import type { LeaseLostReason, LeaseManagerHealth } from './lease-health.ts';
 
-/** Why a holder lost its lease — surfaced to {@link LeaseManagerOptions.onLeaseLost}. */
-export type LeaseLostReason = 'deposed' | 'renewal-unconfirmable';
+export type { LeaseLostReason } from './lease-health.ts';
 
 /** Options for {@link createLeaseManager}. */
 export type LeaseManagerOptions = {
@@ -114,6 +114,8 @@ export type LeaseManager = {
   startRenewal(): void;
   renewOnce(): Promise<void>;
   currentEpochBytes(): Uint8Array | null;
+  /** Return a defensive, synchronous view of this process's last-known lease state. */
+  health(): LeaseManagerHealth;
   release(): Promise<void>;
   stop(): void;
 };
@@ -141,6 +143,9 @@ export function createLeaseManager(options: LeaseManagerOptions): LeaseManager {
   let lastHolderBytes: Uint8Array | null = null;
   let renewalInterval: ReturnType<typeof setInterval> | null = null;
   let leaseLost = false;
+  let leaseLostReason: LeaseLostReason | null = null;
+  let heldSince: number | null = null;
+  let lastRenewedAt: number | null = null;
   // The single in-flight renewal, or null when none is running. Serializes
   // renewals (an overlapping tick would CAS against stale `lastHolderBytes` and
   // spuriously report 'deposed') and lets `release()` await a renewal that began
@@ -154,6 +159,7 @@ export function createLeaseManager(options: LeaseManagerOptions): LeaseManager {
   function reportLeaseLost(reason: LeaseLostReason): void {
     if (leaseLost) return;
     leaseLost = true;
+    leaseLostReason = reason;
     options.onLeaseLost?.(reason);
   }
 
@@ -203,7 +209,8 @@ export function createLeaseManager(options: LeaseManagerOptions): LeaseManager {
     expectedHolderBytes: Uint8Array | null,
     nextEpoch: number,
   ): Promise<boolean> {
-    const expiresAt = getNow() + ttlMs;
+    const acquiredAt = getNow();
+    const expiresAt = acquiredAt + ttlMs;
     const holderRecord: LeaseHolderRecord = { holderId, expiresAt, epoch: nextEpoch };
     const holderBytes = encodeHolder(holderRecord);
     const committed = await storageConditionalBatch(
@@ -221,6 +228,8 @@ export function createLeaseManager(options: LeaseManagerOptions): LeaseManager {
       heldEpoch = nextEpoch;
       heldEpochBytes = encodeEpoch(nextEpoch);
       lastHolderBytes = holderBytes;
+      heldSince = acquiredAt;
+      lastRenewedAt = acquiredAt;
     }
     return committed;
   }
@@ -321,7 +330,8 @@ export function createLeaseManager(options: LeaseManagerOptions): LeaseManager {
    */
   async function renewOnce(): Promise<void> {
     if (stopped || leaseLost || heldEpoch === null || lastHolderBytes === null) return;
-    const expiresAt = getNow() + ttlMs;
+    const renewedAt = getNow();
+    const expiresAt = renewedAt + ttlMs;
     const holderRecord: LeaseHolderRecord = { holderId, expiresAt, epoch: heldEpoch };
     const holderBytes = encodeHolder(holderRecord);
     let committed: boolean;
@@ -343,6 +353,7 @@ export function createLeaseManager(options: LeaseManagerOptions): LeaseManager {
     }
     if (committed) {
       lastHolderBytes = holderBytes;
+      lastRenewedAt = renewedAt;
       return;
     }
     reportLeaseLost('deposed');
@@ -383,6 +394,33 @@ export function createLeaseManager(options: LeaseManagerOptions): LeaseManager {
     // and a caller mutating the shared buffer would corrupt every future fence
     // condition. Cheap (8 bytes) relative to the integrity it protects.
     return heldEpochBytes === null ? null : heldEpochBytes.slice();
+  }
+
+  function health(): LeaseManagerHealth {
+    if (stopped) return { status: 'no-lease', holdsLease: false };
+    const holder = lastHolderBytes === null ? null : decodeHolder(lastHolderBytes);
+    if (holder === null || heldEpoch === null || heldSince === null || lastRenewedAt === null) {
+      return { status: 'no-lease', holdsLease: false };
+    }
+    const lastKnownLease = {
+      holderId: holder.holderId,
+      heldSince,
+      expiresAt: holder.expiresAt,
+      lastRenewedAt,
+      fencingEpoch: heldEpoch,
+    };
+    if (leaseLostReason !== null) {
+      return {
+        status: 'contested',
+        holdsLease: false,
+        lossReason: leaseLostReason,
+        ...lastKnownLease,
+      };
+    }
+    if (getNow() >= holder.expiresAt) {
+      return { status: 'contested', holdsLease: false, ...lastKnownLease };
+    }
+    return { status: 'healthy', holdsLease: true, ...lastKnownLease };
   }
 
   function clearRenewal(): void {
@@ -437,5 +475,5 @@ export function createLeaseManager(options: LeaseManagerOptions): LeaseManager {
     clearRenewal();
   }
 
-  return { acquire, startRenewal, renewOnce, currentEpochBytes, release, stop };
+  return { acquire, startRenewal, renewOnce, currentEpochBytes, health, release, stop };
 }

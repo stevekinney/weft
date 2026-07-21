@@ -70,7 +70,9 @@ export {
 } from './core/engine';
 export type {
   EngineCreateOptions,
+  EngineLeaseHealth,
   EngineStateNamespace,
+  LeaseLostReason,
   RecoverAllOptions,
   RecoveredWorkflowInfo,
 } from './core/engine';

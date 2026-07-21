@@ -80,6 +80,10 @@ import {
   getStreamChunksRestBinding,
 } from './operations/get-stream-chunks.ts';
 import {
+  getSystemLeaseOperation,
+  getSystemLeaseRestBinding,
+} from './operations/get-system-lease.ts';
+import {
   createGetSystemMetricsOperation,
   createGetSystemMetricsRestBinding,
 } from './operations/get-system-metrics.ts';
@@ -281,6 +285,7 @@ export const REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = [
   createScheduleRestBinding,
   updateScheduleRestBinding,
   getRegistryRestBinding,
+  getSystemLeaseRestBinding,
   getRetentionOverviewRestBinding,
   getUpdateResultRestBinding,
   listReviewsRestBinding,
@@ -333,16 +338,6 @@ export function createLiveRestBindings(): ReadonlyArray<UnknownRestBinding> {
   ];
 }
 
-/**
- * Live operation registry — populated with every operation that has a
- * `RestBinding`, a JSON-RPC mount, or an stdio mount. Exposed via a
- * factory so tests can spin up a fresh registry without inheriting
- * the live one's state.
- *
- * Concrete `OperationDefinition<Input, Output>` values are directly
- * assignable to `RegistrableOperation` by the variance design in
- * `operation-catalog.ts` — no `as ErasedOperation` cast is needed.
- */
 /**
  * Create the live operation registry for a server instance.
  *
@@ -457,6 +452,7 @@ export function createLiveOperationRegistry(
     createScheduleOperation,
     updateScheduleOperation,
     getRegistryOperation,
+    getSystemLeaseOperation,
     getRetentionOverviewOperation,
     getUpdateResultOperation,
     listReviewsOperation,

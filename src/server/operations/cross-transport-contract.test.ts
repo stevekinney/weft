@@ -95,6 +95,7 @@ describe('runtime operation cross-transport contract', () => {
       'weft.schedules.list',
       'weft.schedules.get',
       'weft.workflows.replay',
+      'weft.system.lease',
       'weft.system.metrics',
     ];
     for (const name of expected) {
