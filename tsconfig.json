@@ -64,6 +64,7 @@
     "src",
     "scripts/build.ts",
     "scripts/cli-smoke-main.ts",
+    "scripts/lib/build-guards.ts",
     "scripts/smoke-test-binary.ts",
     "scripts/validate-package-consumers.ts"
   ],

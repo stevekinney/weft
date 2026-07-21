@@ -4,6 +4,12 @@ import { dirname, resolve } from 'node:path';
 
 import chalk from 'chalk';
 
+import {
+  assertNoTestOnlyDependenciesInDist,
+  assertRelativeImportsResolveInDist,
+  assertSingletonModulesNotDuplicated,
+} from './lib/build-guards.ts';
+
 await $`rm -rf dist`;
 
 const typescriptTranspiler = new Bun.Transpiler({ loader: 'ts', target: 'bun' });
@@ -36,27 +42,6 @@ function rewriteRelativeJavaScriptSpecifiers(sourcePath: string, source: string)
       if (/\.(js|json|html|css)$/.test(specifier)) return match;
       return `import(${quote}${relativeSpecifierToJavaScript(sourcePath, specifier)}${quote})`;
     });
-}
-
-// Remove block and line comments so a token inside JSDoc/comments (which tsc
-// copies into `.d.ts`) is not mistaken for a real import. Build output never
-// contains a `//` or `/* */` sequence inside a string literal, so this is
-// safe for emitted code even though it would be unsound on arbitrary source.
-function stripComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
-}
-
-function allowsForbiddenSpecifier(distPath: string, specifier: string): boolean {
-  return specifier === 'bun:test' && distPath === 'dist/storage/testing.js';
-}
-
-/** Reduce a module specifier to its package root (`@scope/name` or `name`). */
-function packageRootOf(specifier: string): string {
-  if (specifier.startsWith('@')) {
-    const [scope, name] = specifier.split('/');
-    return name ? `${scope}/${name}` : specifier;
-  }
-  return specifier.split('/')[0] ?? specifier;
 }
 
 async function writeUnbundledRuntimeModules(): Promise<void> {
@@ -247,24 +232,41 @@ await Bun.build({
   external: ['bun:sqlite', 'better-sqlite3'],
 });
 
-// Browser entrypoints (IndexedDB, web-extension, HTTPStorage).
+// Browser entrypoints (Service Worker, IndexedDB, web-extension, HTTPStorage).
 //
-// `service-worker/index.ts` and `server/handler.ts` are deliberately EXCLUDED
-// here for the same reason `server/index.ts`/`cli-main.ts`/`mcp/cli.ts`/
-// `testing/index.ts`/`storage/typed-storage.ts` are excluded from the Bun
-// bundle above: both transitively reach `Engine` (and therefore
-// `core/engine/internals.ts`'s singleton WeakMap) and neither export is
-// `bun`-condition-gated in package.json, so a Node/Bun consumer can combine
-// a root-constructed `Engine` with `@lostgradient/weft/server/handler` or
-// `@lostgradient/weft/service-worker` in the same process. Bundling them
-// separately would duplicate the singleton (see SINGLETON_MODULE_MARKERS
-// below and #710). They stay on the unbundled path emitted by
-// `writeUnbundledRuntimeModules()` above, which is still browser-bundleable —
-// the browser consumer smoke re-bundles from dist/ with its own
-// `target: 'browser'` pass regardless of whether the source dist file was
-// pre-bundled.
+// `server/handler.ts` is deliberately EXCLUDED here for the same reason
+// `server/index.ts`/`cli-main.ts`/`mcp/cli.ts`/`testing/index.ts`/
+// `storage/typed-storage.ts` are excluded from the Bun bundle above: it
+// transitively reaches `Engine` (and therefore `core/engine/internals.ts`'s
+// singleton WeakMap), its export isn't `bun`-condition-gated in
+// package.json, and it is documented/used as a plain request handler a
+// Node/Bun HOST PROCESS can import directly alongside a root-constructed
+// `Engine` IN THE SAME REALM (see `runNodeConsumerSmoke` in
+// validate-package-consumers.ts). Bundling it separately would duplicate the
+// singleton (see SINGLETON_MODULE_MARKERS below and #710). It stays on the
+// unbundled path emitted by `writeUnbundledRuntimeModules()` above, which is
+// still browser-bundleable — the browser consumer smoke re-bundles from
+// dist/ with its own `target: 'browser'` pass regardless of whether the
+// source dist file was pre-bundled.
+//
+// `service-worker/index.ts` stays BUNDLED here, unlike the entry points
+// above. It transitively reaches the same `Engine`/codec singletons, but a
+// Service Worker always runs in its own JS realm (a separate global scope
+// from the page or any Node/Bun process) — see
+// documentation/guides/service-worker.md ("The Service Worker has to be a
+// separate bundle entry point... it doesn't reach back into the page").
+// Module instances, and therefore module-scope singleton state, are never
+// shared across that realm boundary regardless of bundling: an `Engine` used
+// inside a Service Worker is always constructed inside that same worker's
+// own module graph (see the `service-worker-browser.test.ts` fixtures, which
+// construct `new Engine(...)` in the same entrypoint that wires up the
+// listeners). So the #710 duplication risk this build guards against does
+// not apply here, and bundling it — as before this fix — is both correct and
+// simpler than carving out an unbundled exception with no compensating
+// benefit.
 await Bun.build({
   entrypoints: [
+    './src/service-worker/index.ts',
     './src/storage/indexeddb.ts',
     './src/storage/web-extension.ts',
     // HTTPStorage is portable and intentionally emitted from the browser build
@@ -301,171 +303,11 @@ async function removePackagedArtifactLeaks(): Promise<void> {
 
 await removePackagedArtifactLeaks();
 
-// Guard: nothing test-only may ship in the published package. Test-support
-// helpers under src/ that import dev-only modules used to leak into dist/
-// because the build excludes by filename suffix (*.test-support.ts), not by
-// reachability — a plainly named helper would compile and ship an import of a
-// devDependency a consumer never installs. Renaming the offenders to
-// *.test-support.ts fixed it; this assertion keeps it fixed.
-//
-// We match real module specifiers (import/export-from/require/dynamic-import),
-// not raw substrings, and we compare by package root so `bun:test` and any
-// subpath like `fake-indexeddb/auto` are both caught. Comments are stripped
-// first, because `tsc` emits JSDoc into `.d.ts` files — a shipped doc example
-// like `import { JSDOM } from 'jsdom'` is a mention, not a real dependency, and
-// must not fail the build. The forbidden set is curated rather than derived
-// from every devDependency: several devDependencies (better-sqlite3, valibot)
-// are deliberately present in dist/, so a blanket "no devDependency in dist"
-// rule would false-positive on them. These packages are test-only or
-// build-only modules with no legitimate path into shipped output; add to the
-// list if a new test-only or build-only runtime dependency is introduced.
-async function assertNoTestOnlyDependenciesInDist(): Promise<void> {
-  const forbiddenPackageRoots = [
-    '@electric-sql/pglite',
-    'bun:test',
-    'bun-plugin-svelte',
-    'fake-indexeddb',
-    'jsdom',
-    'playwright',
-    'svelte',
-  ];
-
-  // Capture the specifier from every form that pulls in a module: `from '…'`,
-  // `require('…')`, dynamic `import('…')`, and bare side-effect `import '…'`
-  // (the form the original leak used — `import 'fake-indexeddb/auto'`).
-  const specifierPattern =
-    /(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(\s*|\bimport\s+)(["'])([^"']+)\1/g;
-
-  const offenders: { file: string; specifier: string }[] = [];
-  const distGlob = new Bun.Glob('dist/**/*.{js,d.ts}');
-
-  for await (const distPath of distGlob.scan('.')) {
-    const contents = stripComments(await Bun.file(distPath).text());
-    for (const [, , specifier] of contents.matchAll(specifierPattern)) {
-      if (specifier === undefined) continue;
-      if (allowsForbiddenSpecifier(distPath, specifier)) continue;
-      if (forbiddenPackageRoots.includes(packageRootOf(specifier))) {
-        offenders.push({ file: distPath, specifier });
-      }
-    }
-  }
-
-  if (offenders.length > 0) {
-    console.error('Build produced dist/ artifacts that import test-only dependencies:');
-    for (const { file, specifier } of offenders) {
-      console.error(`  ${file} imports "${specifier}"`);
-    }
-    console.error(
-      'Rename the offending helper to *.test-support.ts so the build excludes it from dist/.',
-    );
-    process.exit(1);
-  }
-}
-
+// Post-build correctness guards. See scripts/lib/build-guards.ts for what
+// each one checks and why — they scan dist/ for a specific class of mistake
+// the build can make and fail loudly rather than shipping it.
 await assertNoTestOnlyDependenciesInDist();
-
-// Guard: every relative specifier the unbundled runtime build emits must point
-// at a file that actually exists in dist/. A bare directory import in source
-// (e.g. `export * from './diagnostics'`) used to be rewritten to
-// `./diagnostics.js` even though the directory's entry is `diagnostics/index.js`
-// — a "Cannot find module" the package consumer only hit at runtime. The
-// rewriter now resolves directory imports to `/index.js`; this assertion keeps
-// the whole class of dangling relative import out of shipped output.
-async function assertRelativeImportsResolveInDist(): Promise<void> {
-  // Match every form that pulls in a module: `from '…'`, `require('…')`,
-  // dynamic `import('…')`, and bare side-effect `import '…'`.
-  const relativeSpecifierPattern =
-    /(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(\s*|\bimport\s+)(["'])(\.\.?\/[^"']+)\1/g;
-
-  const offenders: { file: string; specifier: string }[] = [];
-  const distGlob = new Bun.Glob('dist/**/*.js');
-
-  for await (const distPath of distGlob.scan('.')) {
-    if (distPath.endsWith('.js.map')) continue;
-    const contents = stripComments(await Bun.file(distPath).text());
-    for (const [, , specifier] of contents.matchAll(relativeSpecifierPattern)) {
-      if (specifier === undefined) continue;
-      // Only check JavaScript module specifiers (asset/data files vary).
-      if (!specifier.endsWith('.js')) continue;
-      const resolved = resolve(dirname(distPath), specifier);
-      if (!existsSync(resolved)) {
-        offenders.push({ file: distPath, specifier });
-      }
-    }
-  }
-
-  if (offenders.length > 0) {
-    console.error('Build produced dist/ artifacts with unresolvable relative imports:');
-    for (const { file, specifier } of offenders) {
-      console.error(`  ${file} imports "${specifier}" which does not exist`);
-    }
-    console.error(
-      'Write directory re-exports in src/ explicitly as `./dir/index.ts` so the build emits `./dir/index.js`.',
-    );
-    process.exit(1);
-  }
-}
-
 await assertRelativeImportsResolveInDist();
-
-// Guard: a module-scope singleton registry must resolve to exactly one
-// on-disk module across every public entry point. Bundling an entry point
-// that transitively imports a singleton-bearing module (e.g. `Engine`, which
-// pulls in `core/engine/internals.ts`'s WeakMap) inlines a private copy of
-// that module's state — so an `Engine` built via the unbundled root import
-// registers its internals in ROOT's WeakMap, while a bundled `serve()`
-// checks its OWN, separately-inlined WeakMap, which never saw it. That was
-// #710: `serve({ engine })` unconditionally threw "Engine internals not
-// initialized" for every consumer of the published package.
-//
-// Each singleton module's throw-string literal survives minification (string
-// literals aren't renamed), so we can fingerprint it and assert it appears in
-// dist/ exactly once — in the singleton module's own unbundled output file.
-// A second occurrence means some other entry point re-inlined it and must be
-// moved off the bundled path (see the comment above the storage/CLI/server
-// Bun.build() call). Add an entry here whenever a new module-scope
-// WeakMap/Map/Set registry is introduced that more than one public entry
-// point can reach.
-const SINGLETON_MODULE_MARKERS: { canonicalFile: string; marker: string }[] = [
-  {
-    canonicalFile: 'dist/core/engine/internals.js',
-    marker: 'was not called in the Engine constructor',
-  },
-  {
-    canonicalFile: 'dist/core/codec/serializer-registry.js',
-    marker: 'No serializer registered for tag',
-  },
-];
-
-async function assertSingletonModulesNotDuplicated(): Promise<void> {
-  const offenders: { file: string; marker: string; canonicalFile: string }[] = [];
-  const distGlob = new Bun.Glob('dist/**/*.js');
-
-  for (const { canonicalFile, marker } of SINGLETON_MODULE_MARKERS) {
-    for await (const distPath of distGlob.scan('.')) {
-      if (distPath.endsWith('.js.map')) continue;
-      const contents = await Bun.file(distPath).text();
-      if (contents.includes(marker) && distPath !== canonicalFile) {
-        offenders.push({ file: distPath, marker, canonicalFile });
-      }
-    }
-  }
-
-  if (offenders.length > 0) {
-    console.error(
-      'Build produced dist/ artifacts that duplicate a module-scope singleton registry:',
-    );
-    for (const { file, marker, canonicalFile } of offenders) {
-      console.error(`  ${file} inlines "${marker}" — expected only in ${canonicalFile}`);
-    }
-    console.error(
-      'Remove the offending entry point from the bundled Bun.build() call in scripts/build.ts ' +
-        'so it stays on the unbundled path and shares the singleton module with root.',
-    );
-    process.exit(1);
-  }
-}
-
 await assertSingletonModulesNotDuplicated();
 
 // Summarize what shipped so a build prints something actionable instead of a
