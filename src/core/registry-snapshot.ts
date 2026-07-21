@@ -205,6 +205,7 @@ function addWorkflowMessageEntries(
 }
 
 type RegisteredMessageDefinition = {
+  readonly name: string;
   readonly inputSchema?: DefinitionSchema;
   readonly outputSchema?: DefinitionSchema;
 };
@@ -215,8 +216,11 @@ function buildMessageEntries(
   definitions: Readonly<Record<string, RegisteredMessageDefinition>>,
 ): Record<string, RegistryMessageEntry> {
   const entries = Object.create(null) as Record<string, RegistryMessageEntry>;
-  for (const name of Object.keys(definitions).toSorted()) {
-    const definition = definitions[name]!;
+  const sortedDefinitions = Object.values(definitions).toSorted((left, right) =>
+    left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
+  );
+  for (const definition of sortedDefinitions) {
+    const name = definition.name;
     const entry: RegistryMessageEntry = {};
     const entityName = `${workflowType}.${messageKind}.${name}`;
     if (definition.inputSchema !== undefined) {

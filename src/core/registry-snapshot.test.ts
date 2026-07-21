@@ -138,6 +138,23 @@ describe('buildRegistrySnapshot', () => {
     ]);
   });
 
+  it('keys message metadata by runtime definition names instead of builder aliases', () => {
+    engine = createEngine();
+    const aliasedWorkflow = workflow({ name: 'aliased-messages' })
+      .signals({ approveAlias: signal('approval') })
+      .updates({ renameAlias: update('rename') })
+      .queries({ statusAlias: query('status') })
+      .execute(async function* () {});
+    engine.register(aliasedWorkflow);
+
+    const snapshot = buildRegistrySnapshot(engine);
+    const entry = snapshot.workflows['aliased-messages'];
+
+    expect(Object.keys(entry?.signals ?? {})).toEqual(['approval']);
+    expect(Object.keys(entry?.updates ?? {})).toEqual(['rename']);
+    expect(Object.keys(entry?.queries ?? {})).toEqual(['status']);
+  });
+
   it('omits schema fields that are absent on the workflow registration', () => {
     engine = createEngine();
     const schemalessWorkflow = workflow({ name: 'schemaless' }).execute(async function* () {});
