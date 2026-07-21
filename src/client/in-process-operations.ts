@@ -27,12 +27,15 @@ import { createLiveOperationRegistry } from '../server/rest-bindings.ts';
  *
  * The registry and trusted principal are constructed once and reused across
  * calls. Operations run with `transport: 'jsonRpcHttp'` so input/output
- * validation and unknown-key handling match the remote JSON-RPC path exactly.
+ * validation and unknown-key handling match the selected remote transport.
  * A failed dispatch throws with the fault message, mirroring the HTTP
  * transport's `throw new Error(result.error.message)` contract so both clients
  * surface operation faults the same way.
  */
-export function inProcessCatalogTransport(engine: Engine): CatalogTransport {
+export function inProcessCatalogTransport(
+  engine: Engine,
+  restOperationNames: ReadonlySet<string> = new Set(),
+): CatalogTransport {
   const registry = createLiveOperationRegistry();
   const principal = principalFromStdioLocal();
 
@@ -40,7 +43,7 @@ export function inProcessCatalogTransport(engine: Engine): CatalogTransport {
     const result = await executeOperation(operationName, input, {
       principal,
       engine,
-      transport: 'jsonRpcHttp',
+      transport: restOperationNames.has(operationName) ? 'http-rest' : 'jsonRpcHttp',
       registry,
     });
     if (!result.ok) throw new Error(result.fault.message);

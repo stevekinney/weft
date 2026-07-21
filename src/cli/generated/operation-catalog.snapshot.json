@@ -1698,6 +1698,20 @@
         },
         "required": ["ok"],
         "type": "object"
+      },
+      "rest": {
+        "method": "DELETE",
+        "path": "/v1/tasks/diagnostics/dead-letter/:operationId",
+        "inputSources": {
+          "operationId": {
+            "kind": "path",
+            "pathParam": "operationId"
+          }
+        },
+        "success": {
+          "kind": "json",
+          "status": 200
+        }
       }
     },
     {

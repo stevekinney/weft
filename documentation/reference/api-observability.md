@@ -211,6 +211,22 @@ DELETE /api/v1/tasks/diagnostics/dead-letter/:operationId
 
 The clear action is backed by `weft.tasks.diagnostics.deadletters.clear`, requires `system:admin`, and returns `{ "ok": true }`. The diagnostics response also includes summary counts so callers can tell when more matching diagnostics exist than the requested item limit.
 
+`HttpClient` and `LocalClient` expose this REST-only mutation through the typed
+generated operation surface:
+
+```ts
+import { HttpClient } from '@lostgradient/weft/client';
+
+const client = new HttpClient({ baseUrl: 'https://weft.example.com' });
+await client.operations['weft.tasks.diagnostics.deadletters.clear']({
+  operationId: 'op-123',
+});
+```
+
+The generated client keeps the operation's REST method, path parameter, and
+success shape in catalog metadata; callers do not need to construct the route
+or reproduce `HttpClientError` parsing.
+
 ---
 
 ## Trace Propagation

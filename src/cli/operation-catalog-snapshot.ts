@@ -6,7 +6,15 @@ import type {
   TransportAvailability,
 } from '../server/operation-catalog.ts';
 import type { FaultCode } from '../server/operation-fault.ts';
-import { createLiveOperationRegistry } from '../server/rest-bindings.ts';
+import type { ParamSource, ResponseShape } from '../server/rest-binding.ts';
+import { createLiveOperationRegistry, createLiveRestBindings } from '../server/rest-bindings.ts';
+
+export type CatalogRestBindingSnapshot = {
+  readonly method: string;
+  readonly path: string;
+  readonly inputSources: Readonly<Record<string, ParamSource>>;
+  readonly success: ResponseShape;
+};
 
 export type CatalogAccessSnapshot =
   | { readonly kind: 'public' }
@@ -40,6 +48,8 @@ export type CatalogOperationSnapshot = {
   readonly inputSchema: Record<string, unknown>;
   readonly outputSchema: Record<string, unknown>;
   readonly eventSchema?: Record<string, unknown>;
+  /** Declarative REST route metadata for generated client transports. */
+  readonly rest?: CatalogRestBindingSnapshot;
 };
 
 export type CatalogSnapshot = {
@@ -51,8 +61,21 @@ export type CatalogSnapshot = {
 export function createCatalogSnapshot(
   sourceOperations: ReadonlyArray<ErasedOperation> = createLiveOperationRegistry().list(),
 ): CatalogSnapshot {
+  const restBindings = new Map(
+    createLiveRestBindings().map((binding) => [binding.operationName, binding] as const),
+  );
   const operations = sourceOperations
-    .map(operationToSnapshot)
+    .map((operation) =>
+      operationToSnapshot(
+        operation,
+        (operation.kind ?? 'unary') === 'unary' &&
+          operation.transports.http &&
+          !operation.transports.jsonRpcHttp &&
+          !operation.tags.includes('Storage')
+          ? restBindings.get(operation.name)
+          : undefined,
+      ),
+    )
     .toSorted((left, right) => compareStrings(left.name, right.name));
 
   return {
@@ -66,7 +89,10 @@ export function stringifyCatalogSnapshot(snapshot: CatalogSnapshot): string {
   return `${JSON.stringify(snapshot, null, 2)}\n`;
 }
 
-function operationToSnapshot(operation: ErasedOperation): CatalogOperationSnapshot {
+function operationToSnapshot(
+  operation: ErasedOperation,
+  restBinding: ReturnType<typeof createLiveRestBindings>[number] | undefined,
+): CatalogOperationSnapshot {
   const eventSchema = operation.eventSchema;
   return {
     name: operation.name,
@@ -88,6 +114,20 @@ function operationToSnapshot(operation: ErasedOperation): CatalogOperationSnapsh
     ...(eventSchema === undefined
       ? {}
       : { eventSchema: normalizeJsonObject(definitionSchemaToJsonSchema(eventSchema, 'output')) }),
+    ...(restBinding === undefined
+      ? {}
+      : {
+          rest: {
+            method: restBinding.method,
+            path: restBinding.path,
+            inputSources: Object.fromEntries(
+              Object.entries(restBinding.inputSources).filter(
+                (entry): entry is [string, ParamSource] => entry[1] !== undefined,
+              ),
+            ),
+            success: { ...restBinding.success },
+          },
+        }),
   };
 }
 

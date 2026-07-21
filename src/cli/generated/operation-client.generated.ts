@@ -5,6 +5,7 @@ import {
   createCatalogWeftClient,
   httpJsonRpcTransport,
   type CatalogWeftClient,
+  type ClientRestOperationBinding,
   type WeftClientConnection,
 } from '../operation-client-runtime.ts';
 
@@ -69,6 +70,75 @@ export const CATALOG_OPERATION_NAMES = [
 
 export type CatalogOperationName = (typeof CATALOG_OPERATION_NAMES)[number];
 
+export const CLIENT_OPERATION_NAMES = [
+  'weft.activities.complete',
+  'weft.activities.fail',
+  'weft.recover.all',
+  'weft.retention.get',
+  'weft.reviews.decision.submit',
+  'weft.reviews.get',
+  'weft.reviews.list',
+  'weft.schedules.cancel',
+  'weft.schedules.create',
+  'weft.schedules.get',
+  'weft.schedules.list',
+  'weft.schedules.pause',
+  'weft.schedules.resume',
+  'weft.schedules.update',
+  'weft.system.metrics',
+  'weft.system.registry',
+  'weft.task.queues.list',
+  'weft.tasks.diagnostics',
+  'weft.tasks.diagnostics.deadletters.clear',
+  'weft.updates.result.get',
+  'weft.worker.deployments.drain',
+  'weft.worker.deployments.resume',
+  'weft.workers.drain',
+  'weft.workers.list',
+  'weft.workers.resume',
+  'weft.workflows.aggregate',
+  'weft.workflows.attributes.get',
+  'weft.workflows.attributes.set',
+  'weft.workflows.bulk.cancel',
+  'weft.workflows.bulk.delete',
+  'weft.workflows.bulk.retryfailed',
+  'weft.workflows.bulk.signal',
+  'weft.workflows.bulk.tags',
+  'weft.workflows.cancel',
+  'weft.workflows.checkpoints.get',
+  'weft.workflows.checkpoints.list',
+  'weft.workflows.events.list',
+  'weft.workflows.fork',
+  'weft.workflows.get',
+  'weft.workflows.list',
+  'weft.workflows.purge',
+  'weft.workflows.query',
+  'weft.workflows.replay',
+  'weft.workflows.result.get',
+  'weft.workflows.resume',
+  'weft.workflows.signal',
+  'weft.workflows.start',
+  'weft.workflows.startorsignal',
+  'weft.workflows.streams.chunks',
+  'weft.workflows.suspend',
+  'weft.workflows.tags.add',
+  'weft.workflows.tags.remove',
+  'weft.workflows.timeline.get',
+  'weft.workflows.timeout',
+  'weft.workflows.update',
+] as const;
+
+export type ClientOperationName = (typeof CLIENT_OPERATION_NAMES)[number];
+
+export const CLIENT_REST_OPERATION_BINDINGS = {
+  'weft.tasks.diagnostics.deadletters.clear': {
+    method: 'DELETE',
+    path: '/tasks/diagnostics/dead-letter/:operationId',
+    inputSources: { operationId: { kind: 'path', pathParam: 'operationId' } },
+    success: { kind: 'json', status: 200 },
+  },
+} as const satisfies Readonly<Record<string, ClientRestOperationBinding>>;
+
 type SharedAttributesBulkConcurrenc_73ecbca6 = {
   readonly attributes?: ReadonlyArray<SharedGtGteKey_896a0c41>;
   readonly bulkConcurrency?: number;
@@ -114,7 +184,7 @@ type SharedGtGteLt_d9a61361 = {
   readonly lte?: number;
 };
 
-export type CatalogOperationTypes = {
+export type ClientOperationTypes = {
   'weft.activities.complete': {
     readonly input: { readonly result?: unknown; readonly token: string };
     readonly output: { readonly ok: boolean };
@@ -325,6 +395,11 @@ export type CatalogOperationTypes = {
         readonly stuckQueued: number;
       };
     };
+    readonly faults: never;
+  };
+  'weft.tasks.diagnostics.deadletters.clear': {
+    readonly input: { readonly operationId: string };
+    readonly output: { readonly ok: boolean };
     readonly faults: never;
   };
   'weft.updates.result.get': {
@@ -643,7 +718,10 @@ export type CatalogOperationTypes = {
   };
 };
 
+export type CatalogOperationTypes = Pick<ClientOperationTypes, CatalogOperationName>;
+
 export type WeftClient = CatalogWeftClient<CatalogOperationTypes>;
+export type ClientOperations = CatalogWeftClient<ClientOperationTypes>;
 
 export function createWeftClient(connection: WeftClientConnection = {}): WeftClient {
   return createCatalogWeftClient<CatalogOperationTypes>(

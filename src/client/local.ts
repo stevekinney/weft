@@ -9,10 +9,11 @@
  */
 
 import {
-  CATALOG_OPERATION_NAMES,
-  type CatalogOperationName,
-  type CatalogOperationTypes,
-  type WeftClient as CatalogOperations,
+  CLIENT_OPERATION_NAMES,
+  CLIENT_REST_OPERATION_BINDINGS,
+  type ClientOperationName,
+  type ClientOperationTypes,
+  type ClientOperations,
 } from '../cli/generated/operation-client.generated.ts';
 import { createCatalogWeftClient } from '../cli/operation-client-runtime.ts';
 import type { Engine } from '../core/engine.ts';
@@ -63,6 +64,7 @@ import type {
   WorkflowTimelineEntry,
 } from '../core/types.ts';
 import { messageName } from '../core/types.ts';
+import { createLocalClientStorage, type WeftClientStorage } from './client-storage.ts';
 import type { WorkflowEventTail } from './event-tail.ts';
 import { inProcessCatalogTransport } from './in-process-operations.ts';
 import type {
@@ -106,8 +108,10 @@ export class LocalClient<
   readonly #engine: RuntimeWorkflowEngine;
   /** The raw engine, kept for the in-process event feed used by {@link tail}. */
   readonly #rawEngine: Engine;
-  /** Typed low-level accessor for every catalog operation, routed in-process. */
-  readonly operations: CatalogOperations;
+  /** Typed low-level accessor for every client-callable operation, routed in-process. */
+  readonly operations: ClientOperations;
+  /** Raw storage administration against the engine-owned backend. */
+  readonly storage: WeftClientStorage;
 
   /**
    * Out-of-band ("async") activity completion. An activity that called
@@ -133,13 +137,17 @@ export class LocalClient<
     // `Engine<TWorkflows, TActivities>` is structurally a plain `Engine`. The
     // public constructor keeps the brand so call-site inference is preserved.
     this.#rawEngine = engine as Engine;
+    this.storage = createLocalClientStorage(this.#rawEngine.storage);
     this.activity = {
       complete: (token, result) => this.#engine.completeAsyncActivity(token, result),
       completeExceptionally: (token, error) => this.#engine.failAsyncActivity(token, error),
     };
-    this.operations = createCatalogWeftClient<CatalogOperationTypes>(
-      CATALOG_OPERATION_NAMES,
-      inProcessCatalogTransport(this.#rawEngine),
+    this.operations = createCatalogWeftClient<ClientOperationTypes>(
+      CLIENT_OPERATION_NAMES,
+      inProcessCatalogTransport(
+        this.#rawEngine,
+        new Set(Object.keys(CLIENT_REST_OPERATION_BINDINGS)),
+      ),
     );
   }
 
@@ -151,10 +159,10 @@ export class LocalClient<
   // returns an `HttpHandle`); rejected: a shared base class, which would drop
   // the per-class overload declarations from the emitted declarations.
   // jscpd:ignore-start
-  call<Name extends CatalogOperationName>(
+  call<Name extends ClientOperationName>(
     name: Name,
-    input: CatalogOperationTypes[Name]['input'],
-  ): Promise<CatalogOperationTypes[Name]['output']> {
+    input: ClientOperationTypes[Name]['input'],
+  ): Promise<ClientOperationTypes[Name]['output']> {
     return this.operations[name](input);
   }
 

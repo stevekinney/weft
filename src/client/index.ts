@@ -27,6 +27,7 @@ export {
   isWeftFault,
 } from '../core/weft-error.ts';
 export type { WeftErrorCode } from '../core/weft-error.ts';
+export type { WeftClientStorage } from './client-storage.ts';
 export type { WorkflowEventStreamOptions, WorkflowEventTransport } from './event-stream-options.ts';
 export type { WorkflowEventTail } from './event-tail.ts';
 export { HttpClient } from './http-client.ts';

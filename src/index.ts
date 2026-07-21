@@ -556,6 +556,7 @@ export type {
   RemoteWorkerWorkflowDefinition,
 } from './worker/workflow-activity-binding';
 
+export type { WeftClientStorage } from './client/client-storage';
 export type { WorkflowEventTail } from './client/event-tail';
 export { HttpClient, HttpClientError } from './client/index';
 export type {

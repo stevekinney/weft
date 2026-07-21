@@ -57,6 +57,25 @@ export type WeftClientConnection = ConnectionOptions;
  */
 export type CatalogTransport = (operationName: string, input: unknown) => Promise<unknown>;
 
+/** Generated metadata needed to map a typed client operation onto REST. */
+export type ClientRestOperationBinding = {
+  readonly method: string;
+  readonly path: string;
+  readonly inputSources: Readonly<
+    Record<
+      string,
+      | { readonly kind: 'path'; readonly pathParam: string }
+      | { readonly kind: 'query'; readonly queryParam: string; readonly repeating?: boolean }
+      | { readonly kind: 'header'; readonly headerName: string }
+      | { readonly kind: 'body'; readonly mediaType?: 'application/json' }
+      | { readonly kind: 'body-field'; readonly bodyField: string }
+    >
+  >;
+  readonly success:
+    | { readonly kind: 'json'; readonly status: number }
+    | { readonly kind: 'empty'; readonly status: number };
+};
+
 /**
  * Build a catalog client from a list of operation names and a transport. Each
  * name becomes a method that forwards its input through the transport, so the

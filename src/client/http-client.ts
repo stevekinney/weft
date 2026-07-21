@@ -1,8 +1,9 @@
 import {
-  CATALOG_OPERATION_NAMES,
-  type CatalogOperationName,
-  type CatalogOperationTypes,
-  type WeftClient as CatalogOperations,
+  CLIENT_OPERATION_NAMES,
+  CLIENT_REST_OPERATION_BINDINGS,
+  type ClientOperationName,
+  type ClientOperationTypes,
+  type ClientOperations,
 } from '../cli/generated/operation-client.generated.ts';
 import { createCatalogWeftClient } from '../cli/operation-client-runtime.ts';
 import type { StoredStreamChunk } from '../core/context.ts';
@@ -45,6 +46,7 @@ import type {
   WorkflowTimelineEntry,
 } from '../core/types.ts';
 import { messageName } from '../core/types.ts';
+import type { WeftClientStorage } from './client-storage.ts';
 import type { WorkflowEventStreamOptions } from './event-stream-options.ts';
 import type { WorkflowEventTail } from './event-tail.ts';
 import {
@@ -82,8 +84,9 @@ import {
   untagAllWorkflowRequests,
   updateScheduleRequest,
 } from './http-client-requests.ts';
+import { createHttpClientStorage } from './http-client-storage.ts';
 import { HttpHandle } from './http-handle.ts';
-import { httpClientCatalogTransport } from './http-operations.ts';
+import { httpClientOperationTransport } from './http-operations.ts';
 import { request, resolveHttpClientConnection, type HttpClientOptions } from './http-request.ts';
 import { HttpScheduleHandle } from './http-schedule-handle.ts';
 import type {
@@ -145,8 +148,10 @@ export class HttpClient implements WeftClient {
   readonly baseUrl: string;
   /** @internal Exposed for handle access. */
   readonly headers: Record<string, string>;
-  /** Typed low-level accessor for every catalog operation over JSON-RPC. */
-  readonly operations: CatalogOperations;
+  /** Typed low-level accessor over JSON-RPC and generated ordinary REST bindings. */
+  readonly operations: ClientOperations;
+  /** Raw storage administration over the byte-oriented REST bindings. */
+  readonly storage: WeftClientStorage;
   /**
    * Out-of-band ("async") activity completion over HTTP. POSTs to
    * `/v1/activities/{complete,fail}`; mirrors {@link LocalClient}'s `activity`.
@@ -158,10 +163,11 @@ export class HttpClient implements WeftClient {
     const connection = resolveHttpClientConnection(options);
     this.baseUrl = connection.baseUrl;
     this.headers = connection.headers;
-    this.operations = createCatalogWeftClient<CatalogOperationTypes>(
-      CATALOG_OPERATION_NAMES,
-      httpClientCatalogTransport(this.baseUrl, this.headers),
+    this.operations = createCatalogWeftClient<ClientOperationTypes>(
+      CLIENT_OPERATION_NAMES,
+      httpClientOperationTransport(this.baseUrl, this.headers, CLIENT_REST_OPERATION_BINDINGS),
     );
+    this.storage = createHttpClientStorage(this.baseUrl, this.headers);
     this.activity = {
       complete: (token, result) => completeAsyncActivityRequest(this, token, result),
       completeExceptionally: (token, error) => failAsyncActivityRequest(this, token, error),
@@ -181,10 +187,10 @@ export class HttpClient implements WeftClient {
   // `LocalHandle` over `#engine`); rejected: a shared base class, which drops
   // the per-class overload declarations from the emitted declarations.
   // jscpd:ignore-start
-  call<Name extends CatalogOperationName>(
+  call<Name extends ClientOperationName>(
     name: Name,
-    input: CatalogOperationTypes[Name]['input'],
-  ): Promise<CatalogOperationTypes[Name]['output']> {
+    input: ClientOperationTypes[Name]['input'],
+  ): Promise<ClientOperationTypes[Name]['output']> {
     return this.operations[name](input);
   }
 

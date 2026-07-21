@@ -178,8 +178,8 @@ function rethrowUnlessMissing(error: unknown): void {
 void rethrowUnlessMissing;
 ```
 
-> [!WARNING] `HttpClient.call()` / `client.operations.*` — JSON-RPC-over-HTTP — do not currently carry `weftCode`
-> `HttpClient`'s catalog transport (`HttpClient.call()` and every `client.operations.*` method, implemented in `src/client/http-operations.ts`) sends requests over JSON-RPC. The JSON-RPC error envelope's `data.weftCode` carries the coarse `FaultCode` (e.g. `NotFound`, `Conflict`), not the fine-grained `WeftErrorCode` — a pre-existing gap, not something this PR changes. `HttpClientError.weftCode` therefore stays `undefined` for errors thrown by that path, so `isWeftFault(error, code)` returns `false` even for a genuine match. Branch on `HttpClientError.faultCode` (a `FaultCode`) instead when working with `client.operations.*`.
+> [!WARNING] JSON-RPC-backed `HttpClient.call()` / `client.operations.*` entries do not currently carry `weftCode`
+> Most generated operations use JSON-RPC over HTTP. The JSON-RPC error envelope's `data.weftCode` carries the coarse `FaultCode` (e.g. `NotFound`, `Conflict`), not the fine-grained `WeftErrorCode` — a pre-existing gap, not something this change addresses. `HttpClientError.weftCode` therefore stays `undefined` for errors thrown by those entries, so `isWeftFault(error, code)` returns `false` even for a genuine match. Ordinary REST-only entries use their generated REST binding metadata and retain the same REST error shaping as ergonomic methods. Branch on `HttpClientError.faultCode` (a `FaultCode`) for JSON-RPC-backed `client.operations.*` calls.
 >
 > REST responses are not guaranteed to carry `weftCode`: `shapeRestFault` writes it only when the underlying fault has a fine-grained public code. Audited REST `data` is independent of that field, so callers can still use `HttpClientError.data` for validation and resource context when `HttpClientError.weftCode` is `undefined`.
 

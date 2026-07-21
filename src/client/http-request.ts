@@ -297,16 +297,32 @@ export async function request<T>(
   baseHeaders: Record<string, string>,
   options?: RequestInit,
 ): Promise<T> {
+  const response = await requestResponse(baseUrl, path, baseHeaders, options);
+  if (response === null) return null as T;
+  if (response.status === 204) return undefined as T;
+  return response.json() as Promise<T>;
+}
+
+/**
+ * Execute a REST request with the canonical {@link HttpClientError} shaping
+ * while leaving the successful response body available to binary or streaming
+ * client surfaces.
+ */
+export async function requestResponse(
+  baseUrl: string,
+  path: string,
+  baseHeaders: Record<string, string>,
+  options?: RequestInit,
+): Promise<Response | null> {
   const headers = buildRequestHeaders(baseHeaders, options);
   const response = await fetch(`${baseUrl}/v1${path}`, { ...options, headers });
 
   if (response.status === 404 && (!options?.method || options.method === 'GET')) {
-    return null as T;
+    return null;
   }
   if (!response.ok) {
     const { message, faultCode, weftCode, data } = await parseErrorBody(response);
     throw new HttpClientError(response.status, message, { faultCode, weftCode, data });
   }
-  if (response.status === 204) return undefined as T;
-  return response.json() as Promise<T>;
+  return response;
 }

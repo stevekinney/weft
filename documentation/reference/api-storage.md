@@ -718,6 +718,30 @@ using storage = new HTTPStorage({
 
 All required `Storage` methods, plus `conditionalBatch`. Single-value operations use `application/octet-stream`. Scans stream NDJSON with base64-encoded values; if the response would exceed 64MB the client throws explicitly. `query()` is not available.
 
+Code that already uses `HttpClient` or `LocalClient` can reach the same six raw
+operations through `client.storage`. That facade keeps `Uint8Array` values and
+`AsyncIterable<[string, Uint8Array]>` scans at the public boundary while the
+HTTP client handles octet-stream bodies, base64 batch values, NDJSON decoding,
+configured authentication headers, and `HttpClientError` responses:
+
+```ts
+import { HttpClient } from '@lostgradient/weft/client';
+
+const token = process.env['WEFT_TOKEN'];
+const client = new HttpClient({
+  baseUrl: 'https://weft.example.com',
+  ...(token === undefined ? {} : { token }),
+});
+
+await client.storage.put('operator:note', new TextEncoder().encode('ready'));
+for await (const [key, value] of client.storage.scan('operator:')) {
+  console.log(key, new TextDecoder().decode(value));
+}
+```
+
+The remote principal needs `storage:admin`. `LocalClient.storage` exposes the
+same six-method contract directly against the engine-owned backend.
+
 ---
 
 ## `CompressedStorage`

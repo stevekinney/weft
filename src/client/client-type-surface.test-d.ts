@@ -42,6 +42,7 @@ import {
   WorkflowTimedOutEvent as WorkflowTimedOutEventFromRoot,
 } from '../index.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import type { HttpClient } from './http-client.ts';
 import type {
   ClientStartOrSignalOptions,
   FaultCode as FaultCodeFromClientBarrel,
@@ -152,6 +153,23 @@ async function proveGenericConstructor(): Promise<void> {
   void _typedClient;
 }
 void proveGenericConstructor;
+
+// --- Issues #725/#728: REST-only operation and storage client surfaces -----
+
+declare const httpClient: HttpClient;
+const _clearDeadLetterResult: Promise<{ readonly ok: boolean }> = httpClient.call(
+  'weft.tasks.diagnostics.deadletters.clear',
+  { operationId: 'op-1' },
+);
+void _clearDeadLetterResult;
+
+const _storageGetResult: Promise<Uint8Array | null> = httpClient.storage.get('raw-key');
+void _storageGetResult;
+const _storageScanResult: AsyncIterable<[string, Uint8Array]> = httpClient.storage.scan('raw:');
+void _storageScanResult;
+
+// @ts-expect-error: the six specialized storage operations stay off the generic map.
+httpClient.operations['weft.storage.get'];
 
 // --- Issue #722: isWeftFault/isWeftError family importable from /client -----
 

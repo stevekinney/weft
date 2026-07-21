@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 
-import type { CatalogOperationTypes } from '../src/cli/generated/operation-client.generated.ts';
+import type {
+  CatalogOperationTypes,
+  ClientOperationTypes,
+} from '../src/cli/generated/operation-client.generated.ts';
 import {
   createCatalogSnapshot,
   stringifyCatalogSnapshot,
@@ -187,6 +190,47 @@ describe('generated catalog — storage capabilities', () => {
     const roundTrip: StorageCapabilities = generated;
 
     expect(roundTrip).toEqual(profile);
+  });
+});
+
+describe('generated client transport coverage', () => {
+  it('includes ordinary REST-only unary operations without pretending JSON-RPC supports them', async () => {
+    const source = await createOperationClientSource(createCatalogSnapshot());
+
+    expect(source).toContain('export const CLIENT_OPERATION_NAMES = [');
+    expect(source).toMatch(
+      /CLIENT_OPERATION_NAMES = \[[\s\S]*'weft\.tasks\.diagnostics\.deadletters\.clear'/,
+    );
+    const catalogNames = source.slice(
+      source.indexOf('export const CATALOG_OPERATION_NAMES'),
+      source.indexOf('export type CatalogOperationName'),
+    );
+    expect(catalogNames).not.toContain('weft.tasks.diagnostics.deadletters.clear');
+    expect(source).toContain("'weft.tasks.diagnostics.deadletters.clear': {");
+    expect(source).toContain("path: '/tasks/diagnostics/dead-letter/:operationId'");
+  });
+
+  it('keeps byte and streaming storage operations on the dedicated storage facade', async () => {
+    const source = await createOperationClientSource(createCatalogSnapshot());
+    const clientNames = source.slice(
+      source.indexOf('export const CLIENT_OPERATION_NAMES'),
+      source.indexOf('export type ClientOperationName'),
+    );
+
+    expect(clientNames).not.toContain('weft.storage.get');
+    expect(clientNames).not.toContain('weft.storage.put');
+    expect(clientNames).not.toContain('weft.storage.delete');
+    expect(clientNames).not.toContain('weft.storage.scan');
+    expect(clientNames).not.toContain('weft.storage.batch');
+    expect(clientNames).not.toContain('weft.storage.conditionalbatch');
+  });
+
+  it('types the REST-only dead-letter clear operation for client call sites', () => {
+    type Input = ClientOperationTypes['weft.tasks.diagnostics.deadletters.clear']['input'];
+    type Output = ClientOperationTypes['weft.tasks.diagnostics.deadletters.clear']['output'];
+    const input: Input = { operationId: 'op-1' };
+    const output: Output = { ok: true };
+    expect({ input, output }).toEqual({ input: { operationId: 'op-1' }, output: { ok: true } });
   });
 });
 

@@ -12,11 +12,15 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 
-import { CATALOG_OPERATION_NAMES } from '../cli/generated/operation-client.generated.ts';
+import {
+  CATALOG_OPERATION_NAMES,
+  CLIENT_OPERATION_NAMES,
+} from '../cli/generated/operation-client.generated.ts';
 import { Engine } from '../core/engine.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types.ts';
 import { serve, type WeftServer } from '../server/index.ts';
+import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { HttpClient } from './http-client.ts';
 import { LocalClient } from './local.ts';
@@ -36,12 +40,14 @@ const UNCURATED_CATALOG_OPERATIONS = [
   'weft.workflows.checkpoints.get',
 ] as const;
 
+const REST_ONLY_OPERATION = 'weft.tasks.diagnostics.deadletters.clear' as const;
+
 describe('LocalClient catalog operations', () => {
-  it('exposes a typed accessor covering every catalog operation', () => {
+  it('exposes a typed accessor covering every client-callable operation', () => {
     const engine = new Engine({ storage: new MemoryStorage() });
     const client = new LocalClient(engine);
     try {
-      for (const name of CATALOG_OPERATION_NAMES) {
+      for (const name of CLIENT_OPERATION_NAMES) {
         expect(client.operations[name]).toBeFunction();
       }
       // Full coverage: the catalog is strictly larger than the curated surface.
@@ -89,6 +95,45 @@ describe('LocalClient catalog operations', () => {
         status: 'disabled',
         holdsLease: false,
       });
+    } finally {
+      engine[Symbol.dispose]();
+    }
+  });
+
+  it('routes an ordinary REST-only operation through the in-process operation pipeline', async () => {
+    const engine = new Engine({ storage: new MemoryStorage() });
+    const client = new LocalClient(engine);
+    const operationId = 'local-dead-letter';
+    try {
+      await engine.storage.put(KEYS.operationDeadLetter(operationId), new Uint8Array([1]));
+      await expect(client.call(REST_ONLY_OPERATION, { operationId })).resolves.toEqual({
+        ok: true,
+      });
+      expect(await engine.storage.get(KEYS.operationDeadLetter(operationId))).toBeNull();
+    } finally {
+      engine[Symbol.dispose]();
+    }
+  });
+
+  it('exposes raw storage through the byte-oriented local storage facade', async () => {
+    const engine = new Engine({ storage: new MemoryStorage() });
+    const client = new LocalClient(engine);
+    try {
+      await client.storage.put('client:a', new Uint8Array([1, 2]));
+      await client.storage.batch([{ type: 'put', key: 'client:b', value: new Uint8Array([3]) }]);
+      expect(await client.storage.get('client:a')).toEqual(new Uint8Array([1, 2]));
+      await expect(Array.fromAsync(client.storage.scan('client:'))).resolves.toEqual([
+        ['client:a', new Uint8Array([1, 2])],
+        ['client:b', new Uint8Array([3])],
+      ]);
+      await expect(
+        client.storage.conditionalBatch(
+          [{ key: 'client:c', expectedValue: null }],
+          [{ type: 'put', key: 'client:c', value: new Uint8Array([4]) }],
+        ),
+      ).resolves.toBe(true);
+      await client.storage.delete('client:a');
+      expect(await client.storage.get('client:a')).toBeNull();
     } finally {
       engine[Symbol.dispose]();
     }
@@ -159,6 +204,8 @@ describe('HttpClient catalog operations', () => {
           'workflows:read',
           'workflows:write',
           'workflows:admin',
+          'system:admin',
+          'storage:admin',
         ],
       },
     });
@@ -173,8 +220,8 @@ describe('HttpClient catalog operations', () => {
     await engine[Symbol.asyncDispose]();
   });
 
-  it('exposes a typed accessor covering every catalog operation', () => {
-    for (const name of CATALOG_OPERATION_NAMES) {
+  it('exposes a typed accessor covering every client-callable operation', () => {
+    for (const name of CLIENT_OPERATION_NAMES) {
       expect(client.operations[name]).toBeFunction();
     }
   });
@@ -209,6 +256,58 @@ describe('HttpClient catalog operations', () => {
     await expect(client.call('weft.storage.capabilities', {})).resolves.toEqual(
       engine.storage.capabilities(),
     );
+  });
+
+  it('routes an ordinary REST-only operation through generated binding metadata', async () => {
+    const operationId = 'http/dead letter';
+    await engine.storage.put(KEYS.operationDeadLetter(operationId), new Uint8Array([1]));
+
+    await expect(client.operations[REST_ONLY_OPERATION]({ operationId })).resolves.toEqual({
+      ok: true,
+    });
+    expect(await engine.storage.get(KEYS.operationDeadLetter(operationId))).toBeNull();
+  });
+
+  it('preserves HttpClientError shaping for REST-only operation authorization failures', async () => {
+    const { HttpClientError } = await import('./http-request.ts');
+    const unauthenticatedClient = new HttpClient({ baseUrl: server.url, headers: {} });
+    const caught = await unauthenticatedClient
+      .call(REST_ONLY_OPERATION, { operationId: 'forbidden' })
+      .catch((error: unknown) => error);
+
+    expect(caught).toBeInstanceOf(HttpClientError);
+    if (!(caught instanceof HttpClientError)) throw new Error('unreachable');
+    expect(caught.status).toBe(401);
+  });
+
+  it('exposes raw storage through the byte and NDJSON-aware HTTP storage facade', async () => {
+    await client.storage.put('client:a/slash', new Uint8Array([1, 2]));
+    await client.storage.batch([{ type: 'put', key: 'client:b', value: new Uint8Array([3]) }]);
+    expect(await client.storage.get('client:a/slash')).toEqual(new Uint8Array([1, 2]));
+    await expect(Array.fromAsync(client.storage.scan('client:'))).resolves.toEqual([
+      ['client:a/slash', new Uint8Array([1, 2])],
+      ['client:b', new Uint8Array([3])],
+    ]);
+    await expect(
+      client.storage.conditionalBatch(
+        [{ key: 'client:c', expectedValue: null }],
+        [{ type: 'put', key: 'client:c', value: new Uint8Array([4]) }],
+      ),
+    ).resolves.toBe(true);
+    await client.storage.delete('client:a/slash');
+    expect(await client.storage.get('client:a/slash')).toBeNull();
+  });
+
+  it('preserves HttpClientError shaping for raw storage authorization failures', async () => {
+    const { HttpClientError } = await import('./http-request.ts');
+    const unauthenticatedClient = new HttpClient({ baseUrl: server.url, headers: {} });
+    const caught = await unauthenticatedClient.storage
+      .put('forbidden', new Uint8Array([1]))
+      .catch((error: unknown) => error);
+
+    expect(caught).toBeInstanceOf(HttpClientError);
+    if (!(caught instanceof HttpClientError)) throw new Error('unreachable');
+    expect(caught.status).toBe(401);
   });
 
   it('reaches an uncurated workflow op (list) through the generated layer', async () => {

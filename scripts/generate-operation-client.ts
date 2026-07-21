@@ -59,18 +59,33 @@ type ObjectField = {
 };
 
 export async function createOperationClientSource(snapshot: CatalogSnapshot): Promise<string> {
-  const operations = snapshot.operations
+  const catalogOperations = snapshot.operations
     .filter((operation) => operation.kind === 'unary' && operation.transports.jsonRpcHttp)
     .toSorted((left, right) => compareStrings(left.name, right.name));
-  const names = operations.map((operation) => `  '${operation.name}',`);
+  const restOnlyOperations = snapshot.operations
+    .filter(isGenericRestClientOperation)
+    .toSorted((left, right) => compareStrings(left.name, right.name));
+  const clientOperations = [...catalogOperations, ...restOnlyOperations].toSorted((left, right) =>
+    compareStrings(left.name, right.name),
+  );
+  const catalogNames = catalogOperations.map((operation) => `  '${operation.name}',`);
+  const clientNames = clientOperations.map((operation) => `  '${operation.name}',`);
+  const restBindings = restOnlyOperations.map((operation) => {
+    const rest = operation.rest;
+    if (rest === undefined) throw new Error(`missing REST binding for ${operation.name}`);
+    const clientPath = rest.path.replace(/^\/v1/, '');
+    return `  '${operation.name}': ${JSON.stringify({ ...rest, path: clientPath })},`;
+  });
 
-  const roots = operations.flatMap((operation) => [
+  const roots = clientOperations.flatMap((operation) => [
     schemaToNode(operation.inputSchema),
     schemaToNode(operation.outputSchema),
   ]);
 
   const { aliasNameByKey, nodeByKey } = selectAliases(roots);
-  const entries = operations.map((operation) => operationToTypeEntry(operation, aliasNameByKey));
+  const entries = clientOperations.map((operation) =>
+    operationToTypeEntry(operation, aliasNameByKey),
+  );
   const aliasDeclarations = renderAliasDeclarations(aliasNameByKey, nodeByKey);
 
   const aliasBlock = aliasDeclarations.length ? `\n${aliasDeclarations.join('\n')}\n` : '';
@@ -81,21 +96,35 @@ export async function createOperationClientSource(snapshot: CatalogSnapshot): Pr
 import {
   createCatalogWeftClient,
   httpJsonRpcTransport,
+  type ClientRestOperationBinding,
   type CatalogWeftClient,
   type WeftClientConnection,
 } from '../operation-client-runtime.ts';
 
 export const CATALOG_OPERATION_NAMES = [
-${names.join('\n')}
+${catalogNames.join('\n')}
 ] as const;
 
 export type CatalogOperationName = (typeof CATALOG_OPERATION_NAMES)[number];
+
+export const CLIENT_OPERATION_NAMES = [
+${clientNames.join('\n')}
+] as const;
+
+export type ClientOperationName = (typeof CLIENT_OPERATION_NAMES)[number];
+
+export const CLIENT_REST_OPERATION_BINDINGS = {
+${restBindings.join('\n')}
+} as const satisfies Readonly<Record<string, ClientRestOperationBinding>>;
 ${aliasBlock}
-export type CatalogOperationTypes = {
+export type ClientOperationTypes = {
 ${entries.join('\n')}
 };
 
+export type CatalogOperationTypes = Pick<ClientOperationTypes, CatalogOperationName>;
+
 export type WeftClient = CatalogWeftClient<CatalogOperationTypes>;
+export type ClientOperations = CatalogWeftClient<ClientOperationTypes>;
 
 export function createWeftClient(connection: WeftClientConnection = {}): WeftClient {
   return createCatalogWeftClient<CatalogOperationTypes>(
@@ -110,6 +139,22 @@ export function createWeftClient(connection: WeftClientConnection = {}): WeftCli
     prettierConfiguration === null
       ? { filepath: OPERATION_CLIENT_PATH }
       : { ...prettierConfiguration, filepath: OPERATION_CLIENT_PATH },
+  );
+}
+
+/**
+ * Ordinary REST-only unary operations can use the generated JSON request
+ * transport. Storage stays on `client.storage`: its octet-stream and NDJSON
+ * wire formats require a byte-oriented facade rather than schema-shaped JSON.
+ */
+function isGenericRestClientOperation(operation: CatalogOperationSnapshot): boolean {
+  if (operation.kind !== 'unary') return false;
+  if (!operation.transports.http || operation.transports.jsonRpcHttp) return false;
+  if (operation.tags.includes('Storage')) return false;
+  const rest = operation.rest;
+  if (rest === undefined || rest.success.kind === 'streaming') return false;
+  return Object.values(rest.inputSources).every(
+    (source) => source.kind !== 'body' || source.mediaType !== 'application/octet-stream',
   );
 }
 

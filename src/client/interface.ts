@@ -7,9 +7,9 @@
  */
 
 import type {
-  CatalogOperationName,
-  CatalogOperationTypes,
-  WeftClient as CatalogOperations,
+  ClientOperationName,
+  ClientOperationTypes,
+  ClientOperations,
 } from '../cli/generated/operation-client.generated.ts';
 import type { StoredStreamChunk } from '../core/context.ts';
 import type { StartOrSignalOutcome as EngineStartOrSignalOutcome } from '../core/engine/handles.ts';
@@ -53,6 +53,7 @@ import type {
   WorkflowSummary,
   WorkflowTimelineEntry,
 } from '../core/types.ts';
+import type { WeftClientStorage } from './client-storage.ts';
 import type { WorkflowEventTail } from './event-tail.ts';
 import type { KnownWorkflowName, UnknownNameWhenRegistryEmpty } from './workflow-name-typing.ts';
 
@@ -613,15 +614,15 @@ export interface WeftClient {
 
   /** Retrieve the result of a previously submitted coordinated update. */
   getUpdateResult(updateId: string): Promise<UpdateResult>;
-
   /**
    * Typed low-level accessor for the full operation catalog.
    *
-   * Every catalog operation is reachable as `client.operations['weft.<op>']`,
-   * including server operations the ergonomic surface does not curate (workers,
-   * task queues, task diagnostics, system lease/metrics/registry, checkpoints). New
-   * catalog operations appear here automatically when the snapshot regenerates,
-   * so the client never drifts behind the server.
+   * Every unary JSON-RPC operation and ordinary schema-shaped REST-only
+   * operation is reachable as `client.operations['weft.<op>']`, including
+   * server operations the ergonomic surface does not curate (workers, task
+   * queues, task diagnostics, system lease/metrics/registry, checkpoints). Binary
+   * and streaming raw-storage routes use {@link storage} instead. New compatible
+   * operations appear here when the snapshot regenerates.
    *
    * @example
    * ```ts
@@ -634,15 +635,16 @@ export interface WeftClient {
    * void metrics;
    * ```
    */
-  readonly operations: CatalogOperations;
-
+  readonly operations: ClientOperations;
+  /** Raw storage administration with byte values and streaming scans. */
+  readonly storage: WeftClientStorage;
   /**
    * Invoke a single catalog operation by name, with its input and output typed
    * from the generated catalog. Equivalent to `client.operations[name](input)`
    * but ergonomic when the operation name is known dynamically.
    */
-  call<Name extends CatalogOperationName>(
+  call<Name extends ClientOperationName>(
     name: Name,
-    input: CatalogOperationTypes[Name]['input'],
-  ): Promise<CatalogOperationTypes[Name]['output']>;
+    input: ClientOperationTypes[Name]['input'],
+  ): Promise<ClientOperationTypes[Name]['output']>;
 }
