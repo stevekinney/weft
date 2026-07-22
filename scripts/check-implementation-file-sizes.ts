@@ -207,12 +207,6 @@ export const CLASSIFIED_OVERSIZED_IMPLEMENTATION_FILES = [
       'Coordination operations keep race, all, nested signal, and branch-dispatch semantics together around one coordinator boundary.',
   },
   {
-    path: 'src/server/operations/storage.ts',
-    classification: 'justified-exception',
-    rationale:
-      'Storage operations keep REST-only bindings, binary body handling, batch validation, and fault shaping in one route contract.',
-  },
-  {
     path: 'src/core/engine/operations-activity.ts',
     classification: 'justified-exception',
     rationale:
@@ -314,6 +308,21 @@ async function measureOversizedFiles(root: string): Promise<MeasuredImplementati
   );
 }
 
+async function measureExistingClassifiedFiles(root: string): Promise<MeasuredImplementationFile[]> {
+  const measured: MeasuredImplementationFile[] = [];
+
+  for (const classification of CLASSIFIED_OVERSIZED_IMPLEMENTATION_FILES) {
+    const implementationFile = file(join(root, classification.path));
+    if (!(await implementationFile.exists())) continue;
+    measured.push({
+      path: classification.path,
+      lines: countLines(await implementationFile.text()),
+    });
+  }
+
+  return measured.toSorted((left, right) => left.path.localeCompare(right.path));
+}
+
 export function assertUniqueClassifications(
   classifications: readonly OversizedImplementationFile[] = CLASSIFIED_OVERSIZED_IMPLEMENTATION_FILES,
 ): void {
@@ -338,8 +347,12 @@ export async function runCli(argv: readonly string[]): Promise<number> {
     CLASSIFIED_OVERSIZED_IMPLEMENTATION_FILES.map((entry) => [entry.path, entry]),
   );
   const oversizedFiles = await measureOversizedFiles(root);
+  const existingClassifiedFiles = await measureExistingClassifiedFiles(root);
 
   const unclassified = oversizedFiles.filter((entry) => !classifications.has(entry.path));
+  const staleClassifications = existingClassifiedFiles.filter(
+    (entry) => entry.lines <= IMPLEMENTATION_FILE_SIZE_LIMIT,
+  );
 
   if (unclassified.length > 0) {
     console.error(
@@ -348,7 +361,21 @@ export async function runCli(argv: readonly string[]): Promise<number> {
     for (const entry of unclassified) {
       console.error(`  ${entry.lines.toString().padStart(5)} ${entry.path}`);
     }
+  }
 
+  if (staleClassifications.length > 0) {
+    console.error(
+      `Found ${staleClassifications.length} classified implementation file(s) at or below ${IMPLEMENTATION_FILE_SIZE_LIMIT} lines:`,
+    );
+    for (const entry of staleClassifications) {
+      console.error(`  ${entry.lines.toString().padStart(5)} ${entry.path}`);
+    }
+    console.error(
+      'Remove stale classifications from the executable registry and contributor documentation.',
+    );
+  }
+
+  if (unclassified.length > 0 || staleClassifications.length > 0) {
     return 1;
   }
 

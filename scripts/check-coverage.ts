@@ -236,7 +236,7 @@ const BASE_COVERAGE_ALLOWANCES = buildAllowanceLayer('BASE_COVERAGE_ALLOWANCES',
       // in-process, and the standalone entrypoint is exercised by subprocess
       // tests. The remaining miss is only the `import.meta.main` wrapper.
       functions: 1,
-      lines: new Set([362, 363]),
+      lines: new Set([389, 390]),
     },
   ],
   [
@@ -1132,11 +1132,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
       'src/core/context/parallel-operations.ts',
       {
         functions: 1,
-        lines: new Set([
-          30, 31, 32, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 77, 78, 79, 86,
-          87, 88, 171, 172, 173, 191, 192, 193, 295, 296, 297, 310, 330, 331, 333, 334, 335, 336,
-          337, 338, 339, 340, 341, 342, 344,
-        ]),
+        lines: new Set([19, 20, 21, 31, 37, 38, 39]),
       },
     ],
     [
@@ -1773,7 +1769,7 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       },
     ],
     ['src/cli/parse-schedule-arguments.ts', { lines: new Set([194, 195, 196, 197, 198, 199]) }],
-    ['src/cli/schedule.ts', { lines: new Set([16, 79]) }],
+    ['src/cli/schedule.ts', { lines: new Set([15, 78]) }],
     [
       'src/cli/serve-registrations.ts',
       {
@@ -2052,6 +2048,16 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
         // Bun still leaves one anonymous callback / IIFE function in this helper
         // uncounted after line coverage is exact.
         functions: 1,
+      },
+    ],
+    [
+      'src/storage/http.ts',
+      {
+        // The bounded NDJSON helper's configurable size-limit behavior is
+        // covered with small fixtures; this adapter line only supplies the
+        // fixed 64 MiB HTTPStorage error message to that tested callback.
+        functions: 1,
+        lines: new Set([238]),
       },
     ],
     [

@@ -194,6 +194,20 @@ describe('check-implementation-file-sizes', () => {
     expect(result.stdout).toContain('OK: 0 implementation file(s)');
   });
 
+  it('fails when an existing classified implementation file is no longer oversized', async () => {
+    const classifiedPath = CLASSIFIED_OVERSIZED_IMPLEMENTATION_FILES[0].path;
+    const stillOversizedPath = CLASSIFIED_OVERSIZED_IMPLEMENTATION_FILES[1].path;
+    await writeFixtureFile(root, classifiedPath, IMPLEMENTATION_FILE_SIZE_LIMIT);
+    await writeFixtureFile(root, stillOversizedPath, IMPLEMENTATION_FILE_SIZE_LIMIT + 1);
+
+    const result = await runDirect(['--root', root]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('classified implementation file(s) at or below 500 lines');
+    expect(result.stderr).toContain(`  500 ${classifiedPath}`);
+    expect(result.stderr).toContain('Remove stale classifications from the executable registry');
+  });
+
   it('prints usage without scanning when help is requested', async () => {
     const result = await runDirect(['--help']);
 
@@ -222,7 +236,7 @@ describe('check-implementation-file-sizes', () => {
     ).toThrow('Duplicate oversized-file classification for src/example.ts');
   });
 
-  it('keeps the contributor documentation table synchronized with the enforced classifications', async () => {
+  it('keeps documentation byte-for-byte aligned on classification paths, labels, and rationales', async () => {
     const documentationRows = await readDocumentationClassificationRows();
     const expectedRows = CLASSIFIED_OVERSIZED_IMPLEMENTATION_FILES.map((entry) => ({
       path: entry.path,
