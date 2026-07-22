@@ -10,12 +10,81 @@ import type { WorkflowContext } from '../types.ts';
 import { workflow } from '../types.ts';
 import { ReviewCompletedEvent, ReviewRequestedEvent } from './events.ts';
 import {
+  completedReviewEntrySchema,
+  pendingReviewEntrySchema,
   ReviewCoordinator,
   ReviewTimeoutError,
   type EscalationAction,
   type EscalationStep,
   type ReviewRequest,
 } from './index.ts';
+
+describe('review entry schemas', () => {
+  it('preserves pending omission and redaction semantics', () => {
+    const parsed = pendingReviewEntrySchema.parse({
+      status: 'pending',
+      reviewId: 'review-1',
+      workflowId: 'workflow-1',
+      artifact: { title: 'Release' },
+      reviewType: 'release',
+      reviewers: ['alice'],
+      allowPartial: false,
+      createdAt: 1_000,
+      internalNote: 'must not cross the public boundary',
+    });
+
+    expect(parsed).toEqual({
+      status: 'pending',
+      reviewId: 'review-1',
+      workflowId: 'workflow-1',
+      artifact: { title: 'Release' },
+      reviewType: 'release',
+      reviewers: ['alice'],
+      allowPartial: false,
+      createdAt: 1_000,
+    });
+    expect(parsed).not.toHaveProperty('timeout');
+    expect(parsed).not.toHaveProperty('webhookUrl');
+  });
+
+  it('preserves completed optional fields and decision timestamp semantics', () => {
+    const parsed = completedReviewEntrySchema.parse({
+      status: 'completed',
+      reviewId: 'review-1',
+      workflowId: 'workflow-1',
+      artifact: { title: 'Release' },
+      reviewType: 'release',
+      reviewers: ['alice'],
+      allowPartial: true,
+      timeout: 5_000,
+      webhookUrl: 'https://example.com/reviews',
+      createdAt: 1_000,
+      decision: 'needs-changes',
+      reviewer: 'alice',
+      feedback: 'Revise the rollout section',
+      sectionDecisions: { rollout: 'rejected' },
+      timestamp: 2_000,
+    });
+
+    expect(parsed).toEqual({
+      status: 'completed',
+      reviewId: 'review-1',
+      workflowId: 'workflow-1',
+      artifact: { title: 'Release' },
+      reviewType: 'release',
+      reviewers: ['alice'],
+      allowPartial: true,
+      timeout: 5_000,
+      webhookUrl: 'https://example.com/reviews',
+      createdAt: 1_000,
+      decision: 'needs-changes',
+      reviewer: 'alice',
+      feedback: 'Revise the rollout section',
+      sectionDecisions: { rollout: 'rejected' },
+      timestamp: 2_000,
+    });
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Helpers
