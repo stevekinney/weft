@@ -43,6 +43,7 @@ import {
 import { MemoryStorage } from '../storage/memory.ts';
 import type {
   ClientStartOrSignalOptions,
+  FaultCode as FaultCodeFromClientBarrel,
   StartOrSignalOutcome as OutcomeFromClientBarrel,
   WeftErrorCode as WeftErrorCodeFromClientBarrel,
 } from './index.ts';
@@ -188,8 +189,10 @@ void _isFaultFromRoot;
 
 declare const unknownFaultCode: unknown;
 if (isFaultCodeFromClientBarrel(unknownFaultCode)) {
-  const _sameNarrowing: FaultCodeFromRoot = unknownFaultCode;
+  const _sameNarrowing: FaultCodeFromClientBarrel = unknownFaultCode;
+  const _sameAsRoot: FaultCodeFromRoot = _sameNarrowing;
   void _sameNarrowing;
+  void _sameAsRoot;
 }
 const _rootGuardStillCallable: boolean = isFaultCodeFromRoot(unknownFaultCode);
 void _rootGuardStillCallable;

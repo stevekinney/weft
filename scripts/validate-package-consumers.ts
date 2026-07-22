@@ -587,7 +587,7 @@ async function runTypeScriptConsumerSmoke(consumerDirectory: string): Promise<vo
     join(consumerDirectory, 'consumer.ts'),
     [
       `import type { Engine } from '${packageName}';`,
-      `import { isFaultCode, WorkflowStartedEvent, WorkflowResumedEvent, WorkflowCompletedEvent, WorkflowFailedEvent, WorkflowCancelledEvent, WorkflowTimedOutEvent, WorkflowSuspendedEvent, type WeftClient } from '${packageName}/client';`,
+      `import { isFaultCode, WorkflowStartedEvent, WorkflowResumedEvent, WorkflowCompletedEvent, WorkflowFailedEvent, WorkflowCancelledEvent, WorkflowTimedOutEvent, WorkflowSuspendedEvent, type FaultCode, type WeftClient } from '${packageName}/client';`,
       `declare module '${packageName}' {`,
       '  interface WorkflowRegistry {',
       '    welcome: { input: { name: string }; output: { greeting: string } };',
@@ -597,7 +597,7 @@ async function runTypeScriptConsumerSmoke(consumerDirectory: string): Promise<vo
       'declare const client: WeftClient;',
       'declare const unknownCode: unknown;',
       'if (isFaultCode(unknownCode)) {',
-      '  const knownCode = unknownCode;',
+      '  const knownCode: FaultCode = unknownCode;',
       '  knownCode.toUpperCase();',
       '}',
       'const lifecycleTypes = [WorkflowStartedEvent.type, WorkflowResumedEvent.type, WorkflowCompletedEvent.type, WorkflowFailedEvent.type, WorkflowCancelledEvent.type, WorkflowTimedOutEvent.type, WorkflowSuspendedEvent.type] as const;',
