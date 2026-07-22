@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import type { Engine } from '../../core/engine.ts';
 import { WorkflowTypeNotRegisteredForRecoveryError } from '../../core/engine.ts';
-import { shapeRestFaultBody, type OperationFault } from '../operation-fault.ts';
+import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { shapeRestFault } from './operation-helpers.ts';
@@ -81,16 +81,5 @@ function shapeRecoverAllFault(fault: OperationFault): Response {
     return shapeRestFault(fault);
   }
 
-  return new Response(
-    JSON.stringify({
-      ...shapeRestFaultBody(fault, 'workflow_type_not_registered_for_recovery'),
-      missingTypes: fault.data.missingTypes,
-      missingWorkflowCount: fault.data.missingWorkflowCount,
-      samplesTruncated: fault.data.samplesTruncated,
-    }),
-    {
-      status: 409,
-      headers: { 'Content-Type': 'application/json' },
-    },
-  );
+  return shapeRestFault(fault, { message: 'workflow_type_not_registered_for_recovery' });
 }

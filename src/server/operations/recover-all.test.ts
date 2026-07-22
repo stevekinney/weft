@@ -119,9 +119,6 @@ describe('weft.recover.all', () => {
           missingWorkflowCount: 2,
           samplesTruncated: false,
         },
-        missingTypes: ['missingAlpha', 'missingBeta'],
-        missingWorkflowCount: 2,
-        samplesTruncated: false,
       });
       // Belt-and-suspenders against future renames of the test fixture IDs:
       // assert each specific workflow ID is absent from the serialized body.

@@ -88,7 +88,7 @@ REST exposes a smaller, audited data projection than JSON-RPC:
 
 The projection deliberately withholds authentication and authorization reasons, generic internal reasons, subscription identifiers, raw causes, stack traces, credentials, storage details, file paths, and workflow identifiers beyond the caller-supplied `NotFound.identifier`. Recovery conflicts may expose registered workflow type names and counts, but never the affected workflow IDs.
 
-`POST /v1/recover` retains its established top-level `missingTypes`, `missingWorkflowCount`, and `samplesTruncated` fields and now also places the same audited values under `data` for uniform `HttpClientError.data` handling.
+`POST /v1/recover` places `missingTypes`, `missingWorkflowCount`, and `samplesTruncated` under `data` for uniform `HttpClientError.data` handling.
 
 The flat REST body does not add the coarse `FaultCode`; use the HTTP status plus the documented `data` shape, and use top-level `weftCode` only when present. JSON-RPC continues to carry the coarse code in `error.data.weftCode`.
 
