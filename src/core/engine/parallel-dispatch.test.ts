@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'bun:test';
 
-import type { ParallelBranchSlot } from '../context/parallel-operations.ts';
+import type { ParallelBranchSlot } from '../context/parallel-cache-entry.ts';
 import {
   buildEntryFromSlots,
   dispatchBranchesAllSettled,

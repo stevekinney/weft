@@ -8,10 +8,10 @@
 
 import { describe, expect, it } from 'bun:test';
 
+import type { FaultCode } from '../core/fault-code.ts';
 import {
   FAULT_CODE_TO_HTTP_STATUS,
   FAULT_CODE_TO_JSON_RPC_CODE,
-  type FaultCode,
   type OperationFault,
 } from './operation-fault.ts';
 

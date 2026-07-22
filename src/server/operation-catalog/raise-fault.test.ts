@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 
-import type { FaultCode, OperationFault } from '../operation-fault.ts';
+import type { FaultCode } from '../../core/fault-code.ts';
+import type { OperationFault } from '../operation-fault.ts';
 import { raiseFault } from './raise-fault.ts';
 
 const originalNodeEnvironment = Bun.env['NODE_ENV'];

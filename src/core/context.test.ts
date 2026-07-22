@@ -7,7 +7,7 @@ import {
   type StreamReference,
   type StreamSink,
 } from './context.ts';
-import { BranchTopologyChangedError } from './context/parallel-operations.ts';
+import { BranchTopologyChangedError } from './context/parallel-cache-entry.ts';
 import {
   MAX_SESSION_STATE_SERIALIZED_BYTES,
   SessionStateValidationError,

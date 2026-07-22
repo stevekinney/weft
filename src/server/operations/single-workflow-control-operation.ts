@@ -1,8 +1,9 @@
 import type { z } from 'zod';
 
 import type { Engine } from '../../core/engine.ts';
+import type { FaultCode } from '../../core/fault-code.ts';
 import type { OperationDefinition } from '../operation-catalog.ts';
-import type { FaultCode, OperationFault } from '../operation-fault.ts';
+import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 
 type SingleWorkflowControlInput = {

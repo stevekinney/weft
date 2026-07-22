@@ -1,3 +1,4 @@
+import type { FaultCode } from '../core/fault-code.ts';
 import { definitionSchemaToJsonSchema } from '../core/types/definition-schema-to-json.ts';
 import { compareStrings, normalizeJsonObject } from '../server/json-schema-utilities.ts';
 import type {
@@ -5,7 +6,6 @@ import type {
   OperationKind,
   TransportAvailability,
 } from '../server/operation-catalog.ts';
-import type { FaultCode } from '../server/operation-fault.ts';
 import type { ParamSource, ResponseShape } from '../server/rest-binding.ts';
 import { createLiveOperationRegistry, createLiveRestBindings } from '../server/rest-bindings.ts';
 

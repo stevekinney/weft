@@ -1,7 +1,8 @@
 import { z } from 'zod';
 
+import type { FaultCode } from '../../core/fault-code.ts';
 import type { AccessPolicy } from '../authorization.ts';
-import type { FaultCode, OperationFault, TransportKind } from '../operation-fault.ts';
+import type { OperationFault, TransportKind } from '../operation-fault.ts';
 import type { Principal } from '../principal.ts';
 
 /**
