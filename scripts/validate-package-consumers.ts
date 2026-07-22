@@ -139,6 +139,7 @@ async function createConsumerProject(
 async function runBunConsumerSmoke(consumerDirectory: string): Promise<void> {
   const script = [
     `import { Engine, LocalClient, MemoryStorage, workflow } from '${packageName}';`,
+    `import { WorkflowStartedEvent as RootWorkflowStartedEvent, WorkflowResumedEvent as RootWorkflowResumedEvent, WorkflowCompletedEvent as RootWorkflowCompletedEvent, WorkflowFailedEvent as RootWorkflowFailedEvent, WorkflowCancelledEvent as RootWorkflowCancelledEvent, WorkflowTimedOutEvent as RootWorkflowTimedOutEvent, WorkflowSuspendedEvent as RootWorkflowSuspendedEvent } from '${packageName}';`,
     `import { isFaultCode, WorkflowStartedEvent, WorkflowResumedEvent, WorkflowCompletedEvent, WorkflowFailedEvent, WorkflowCancelledEvent, WorkflowTimedOutEvent, WorkflowSuspendedEvent } from '${packageName}/client';`,
     `import { TestEngine } from '${packageName}/testing';`,
     `import * as storage from '${packageName}/storage';`,
@@ -155,6 +156,7 @@ async function runBunConsumerSmoke(consumerDirectory: string): Promise<void> {
     '}',
     "if (!isFaultCode('NotFound')) throw new Error('expected client isFaultCode export to recognize NotFound');",
     "if (WorkflowStartedEvent.type !== 'workflow:started' || WorkflowResumedEvent.type !== 'workflow:resumed' || WorkflowCompletedEvent.type !== 'workflow:completed' || WorkflowFailedEvent.type !== 'workflow:failed' || WorkflowCancelledEvent.type !== 'workflow:cancelled' || WorkflowTimedOutEvent.type !== 'workflow:timed-out' || WorkflowSuspendedEvent.type !== 'workflow:suspended') throw new Error('unexpected client lifecycle event type');",
+    "if (WorkflowStartedEvent !== RootWorkflowStartedEvent || WorkflowResumedEvent !== RootWorkflowResumedEvent || WorkflowCompletedEvent !== RootWorkflowCompletedEvent || WorkflowFailedEvent !== RootWorkflowFailedEvent || WorkflowCancelledEvent !== RootWorkflowCancelledEvent || WorkflowTimedOutEvent !== RootWorkflowTimedOutEvent || WorkflowSuspendedEvent !== RootWorkflowSuspendedEvent) throw new Error('expected root and client lifecycle event constructors to be identical');",
     "if (SQLiteStorage.name !== 'BunSQLiteStorage') throw new Error(`expected Bun SQLite export, got ${SQLiteStorage.name}`);",
     'const taskQueue = new TaskQueue();',
     "if (!(taskQueue instanceof TaskQueue)) throw new Error('expected constructable TaskQueue export');",
@@ -375,7 +377,7 @@ async function runCliServeSharesRootSingletonsWithDynamicWorkflowModuleSmoke(
 async function runNodeConsumerSmoke(consumerDirectory: string): Promise<void> {
   const nodeExecutable = resolveRealNodeExecutable();
   const script = [
-    `import { Engine, MemoryStorage } from '${packageName}';`,
+    `import { Engine, MemoryStorage, WorkflowStartedEvent as RootWorkflowStartedEvent, WorkflowResumedEvent as RootWorkflowResumedEvent, WorkflowCompletedEvent as RootWorkflowCompletedEvent, WorkflowFailedEvent as RootWorkflowFailedEvent, WorkflowCancelledEvent as RootWorkflowCancelledEvent, WorkflowTimedOutEvent as RootWorkflowTimedOutEvent, WorkflowSuspendedEvent as RootWorkflowSuspendedEvent } from '${packageName}';`,
     `import { HttpClient, isFaultCode, WorkflowStartedEvent, WorkflowResumedEvent, WorkflowCompletedEvent, WorkflowFailedEvent, WorkflowCancelledEvent, WorkflowTimedOutEvent, WorkflowSuspendedEvent } from '${packageName}/client';`,
     `import { MemoryStorage as SubpathMemoryStorage } from '${packageName}/storage/memory';`,
     `import { SQLiteStorage } from '${packageName}/storage/sqlite';`,
@@ -386,6 +388,7 @@ async function runNodeConsumerSmoke(consumerDirectory: string): Promise<void> {
     '}',
     "if (!isFaultCode('NotFound')) throw new Error('expected client isFaultCode export to recognize NotFound');",
     "if (WorkflowStartedEvent.type !== 'workflow:started' || WorkflowResumedEvent.type !== 'workflow:resumed' || WorkflowCompletedEvent.type !== 'workflow:completed' || WorkflowFailedEvent.type !== 'workflow:failed' || WorkflowCancelledEvent.type !== 'workflow:cancelled' || WorkflowTimedOutEvent.type !== 'workflow:timed-out' || WorkflowSuspendedEvent.type !== 'workflow:suspended') throw new Error('unexpected client lifecycle event type');",
+    "if (WorkflowStartedEvent !== RootWorkflowStartedEvent || WorkflowResumedEvent !== RootWorkflowResumedEvent || WorkflowCompletedEvent !== RootWorkflowCompletedEvent || WorkflowFailedEvent !== RootWorkflowFailedEvent || WorkflowCancelledEvent !== RootWorkflowCancelledEvent || WorkflowTimedOutEvent !== RootWorkflowTimedOutEvent || WorkflowSuspendedEvent !== RootWorkflowSuspendedEvent) throw new Error('expected root and client lifecycle event constructors to be identical');",
     "if (SQLiteStorage.name !== 'NodeSQLiteStorage') throw new Error(`expected Node SQLite export, got ${SQLiteStorage.name}`);",
   ].join('\n');
   runCommand(
