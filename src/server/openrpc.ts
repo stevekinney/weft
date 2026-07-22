@@ -28,6 +28,7 @@
 
 import { z } from 'zod';
 
+import type { FaultCode } from '../core/fault-code.ts';
 import { definitionSchemaToJsonSchema } from '../core/types/definition-schema-to-json.ts';
 import type { McpToolDefinition } from '../mcp/tools.ts';
 import { VERSION } from '../version.ts';
@@ -48,7 +49,6 @@ import {
   type ErasedOperation,
   type OperationRegistry,
 } from './operation-catalog.ts';
-import type { FaultCode } from './operation-fault.ts';
 
 /** Transports that MAY be listed in `OpenRpcOptions.transports`. */
 export type OpenRpcTransport = 'http' | 'websocket' | 'stdio';

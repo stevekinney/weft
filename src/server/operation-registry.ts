@@ -19,6 +19,7 @@
 
 import type { z } from 'zod';
 
+import type { FaultCode } from '../core/fault-code.ts';
 import type { AuthorizationScope } from './authorization-scope.ts';
 import type { AccessPolicy, ScopeRequirement } from './authorization.ts';
 import { validateOperationName } from './operation-catalog.ts';
@@ -32,7 +33,6 @@ import type {
   TransportAvailability,
   UnknownKeyPolicy,
 } from './operation-catalog/types.ts';
-import type { FaultCode } from './operation-fault.ts';
 
 // Re-exported so callers that import the typed builder also get the name
 // validators from the same module surface. Both import paths are

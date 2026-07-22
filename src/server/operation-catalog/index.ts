@@ -9,7 +9,7 @@
  * @module server/operation-catalog
  */
 
-export type { FaultCode } from '../operation-fault.ts';
+export type { FaultCode } from '../../core/fault-code.ts';
 export { catalogActivities, catalogActivity } from './activity-adapter.ts';
 export type { CatalogActivityDefinition } from './activity-adapter.ts';
 export { DISPATCH_ALLOWLIST } from './dispatch-allowlist.ts';

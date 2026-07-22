@@ -3,7 +3,7 @@ import {
   isParallelOperationCacheEntry,
   type ParallelBranchSlot,
   type ParallelOperationCacheEntry,
-} from '../context/parallel-operations.ts';
+} from '../context/parallel-cache-entry.ts';
 import {
   executeRunAllBranches,
   executeRunAllBranchesSettled,

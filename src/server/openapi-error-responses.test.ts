@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
+import type { FaultCode } from '../core/fault-code.ts';
 import { buildErrorResponses, ERROR_SCHEMA } from './openapi-error-responses.ts';
 import type { ErasedOperation } from './operation-catalog.ts';
-import type { FaultCode } from './operation-fault.ts';
 
 function operation(producibleFaults?: readonly FaultCode[]): ErasedOperation {
   // Test-only cast: invoke parameter variance is intentionally relaxed in test fixtures.
