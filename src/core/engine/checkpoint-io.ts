@@ -54,7 +54,7 @@ export type PersistCheckpointOptions = {
   timeline?: 'record-operation' | 'preserve-pending';
 };
 
-type PersistCheckpointCallbacks = {
+export type PersistCheckpointCallbacks = {
   appendTimelineBatchOperations: (
     workflowId: string,
     operation: ContextOperationRequest,

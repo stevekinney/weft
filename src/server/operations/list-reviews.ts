@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import type { Engine } from '../../core/engine.ts';
+import { reviewListEntrySchema } from '../../core/review/index.ts';
 import type { ReviewListEntry, ReviewListFilter, ReviewStatus } from '../../core/types.ts';
 import { shapeOperationFaultAsJson } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
@@ -12,27 +13,6 @@ const listReviewsInput = z.object({
   workflowId: z.string().min(1).optional(),
   reviewType: z.string().min(1).optional(),
 });
-const pendingReviewEntrySchema = z.object({
-  status: z.literal('pending'),
-  reviewId: z.string(),
-  workflowId: z.string(),
-  artifact: z.unknown().nonoptional(),
-  reviewType: z.string(),
-  reviewers: z.array(z.string()),
-  allowPartial: z.boolean(),
-  timeout: z.number().optional(),
-  webhookUrl: z.string().optional(),
-  createdAt: z.number(),
-});
-const completedReviewEntrySchema = pendingReviewEntrySchema.extend({
-  status: z.literal('completed'),
-  decision: z.enum(['approved', 'rejected', 'needs-changes']),
-  reviewer: z.string(),
-  feedback: z.string().optional(),
-  sectionDecisions: z.record(z.string(), z.enum(['approved', 'rejected'])).optional(),
-  timestamp: z.number(),
-});
-const reviewListEntrySchema = z.union([pendingReviewEntrySchema, completedReviewEntrySchema]);
 const listReviewsOutput = z.object({
   items: z.array(reviewListEntrySchema),
 });

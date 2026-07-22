@@ -7,6 +7,8 @@
  * @module human-review
  */
 
+import { z } from 'zod';
+
 import type { BatchOperation, Storage } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { decode, encode } from '../codec.ts';
@@ -61,6 +63,48 @@ export interface ReviewDecisionRecord {
   sectionDecisions?: Record<string, 'approved' | 'rejected'>;
   timestamp: number;
 }
+
+const reviewRequestFields = {
+  reviewId: z.string(),
+  workflowId: z.string(),
+  artifact: z.unknown().nonoptional(),
+  reviewType: z.string(),
+  reviewers: z.array(z.string()),
+  allowPartial: z.boolean(),
+  timeout: z.number().optional(),
+  webhookUrl: z.string().optional(),
+  createdAt: z.number(),
+};
+
+const reviewDecisionFields = {
+  decision: z.enum(['approved', 'rejected', 'needs-changes']),
+  reviewer: z.string(),
+  feedback: z.string().optional(),
+  sectionDecisions: z.record(z.string(), z.enum(['approved', 'rejected'])).optional(),
+  timestamp: z.number(),
+};
+
+/** Canonical schema for a persisted review request without its storage envelope. */
+export const reviewRequestSchema = z.object(reviewRequestFields);
+
+/** Canonical schema for a pending review entry returned by review list surfaces. */
+export const pendingReviewEntrySchema = z.object({
+  status: z.literal('pending'),
+  ...reviewRequestFields,
+});
+
+/** Canonical schema for a completed review entry returned by review list surfaces. */
+export const completedReviewEntrySchema = z.object({
+  status: z.literal('completed'),
+  ...reviewRequestFields,
+  ...reviewDecisionFields,
+});
+
+/** Canonical schema for the discriminated review list-entry union. */
+export const reviewListEntrySchema = z.union([
+  pendingReviewEntrySchema,
+  completedReviewEntrySchema,
+]);
 
 /**
  * One step in a {@link ReviewOptions.escalation} chain. Either reassigns the
