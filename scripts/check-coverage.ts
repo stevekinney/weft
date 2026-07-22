@@ -1197,7 +1197,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
       },
     ],
     ['src/core/engine/listing.ts', { lines: new Set([52, 83, 180, 202]) }],
-    ['src/core/engine/review-list-entries.ts', { lines: new Set([84, 145]) }],
+    ['src/core/engine/review-list-entries.ts', { lines: new Set([120]) }],
     ['src/core/engine/reviews.ts', { lines: new Set([148, 208, 209, 225, 235, 239, 240, 286]) }],
     [
       'src/core/engine/state-utilities.ts',
@@ -2061,7 +2061,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
         // owned-driver path. NeonStorage's behavior tests cover the surrounding
         // ownership contract without opening a real network connection.
         functions: 1,
-        lines: new Set([55]),
+        lines: new Set([39]),
       },
     ],
     [

@@ -1,41 +1,16 @@
-import { z } from 'zod';
+import type { z } from 'zod';
 
 import { decode } from '../codec.ts';
-import type { HumanReviewResult, ReviewRequest } from '../review/index.ts';
+import {
+  completedReviewEntrySchema,
+  reviewRequestSchema,
+  type HumanReviewResult,
+  type ReviewRequest,
+} from '../review/index.ts';
 import type { CompletedReviewEntry, PendingReviewEntry } from '../types.ts';
 
-const storedReviewRequestSchema = z.object({
-  reviewId: z.string(),
-  workflowId: z.string(),
-  artifact: z.unknown().nonoptional(),
-  reviewType: z.string(),
-  reviewers: z.array(z.string()),
-  allowPartial: z.boolean(),
-  timeout: z.number().optional(),
-  webhookUrl: z.string().optional(),
-  createdAt: z.number(),
-});
-
-const persistedCompletedReviewEntrySchema = z.object({
-  status: z.literal('completed'),
-  reviewId: z.string(),
-  workflowId: z.string(),
-  artifact: z.unknown().nonoptional(),
-  reviewType: z.string(),
-  reviewers: z.array(z.string()),
-  allowPartial: z.boolean(),
-  timeout: z.number().optional(),
-  webhookUrl: z.string().optional(),
-  createdAt: z.number(),
-  decision: z.enum(['approved', 'rejected', 'needs-changes']),
-  reviewer: z.string(),
-  feedback: z.string().optional(),
-  sectionDecisions: z.record(z.string(), z.enum(['approved', 'rejected'])).optional(),
-  timestamp: z.number(),
-});
-
-type StoredReviewRequest = z.infer<typeof storedReviewRequestSchema>;
-type PersistedCompletedReviewEntry = z.infer<typeof persistedCompletedReviewEntrySchema>;
+type ParsedReviewRequest = z.output<typeof reviewRequestSchema>;
+type ParsedCompletedReviewEntry = z.output<typeof completedReviewEntrySchema>;
 
 function assignWhenDefined<T extends object, K extends keyof T>(
   target: T,
@@ -54,7 +29,7 @@ export function toPendingReviewEntry(review: ReviewRequest): PendingReviewEntry 
   };
 }
 
-function normalizeStoredReviewRequest(review: StoredReviewRequest): ReviewRequest {
+function normalizeStoredReviewRequest(review: ParsedReviewRequest): ReviewRequest {
   const normalizedReview: ReviewRequest = {
     reviewId: review.reviewId,
     workflowId: review.workflowId,
@@ -79,7 +54,7 @@ export function parseStoredReviewRequest(value: Uint8Array): ReviewRequest | nul
     return null;
   }
 
-  const parsedReview = storedReviewRequestSchema.safeParse(decodedValue);
+  const parsedReview = reviewRequestSchema.safeParse(decodedValue);
   if (!parsedReview.success) {
     return null;
   }
@@ -114,7 +89,7 @@ export function toCompletedReviewEntry(
 }
 
 function normalizeCompletedReviewEntry(
-  persistedReview: PersistedCompletedReviewEntry,
+  persistedReview: ParsedCompletedReviewEntry,
 ): CompletedReviewEntry {
   const completedReview: CompletedReviewEntry = {
     status: 'completed',
@@ -146,7 +121,7 @@ export function parseCompletedReviewEntry(value: Uint8Array): CompletedReviewEnt
     return null;
   }
 
-  const parsedReview = persistedCompletedReviewEntrySchema.safeParse(decodedValue);
+  const parsedReview = completedReviewEntrySchema.safeParse(decodedValue);
   if (!parsedReview.success) {
     return null;
   }
