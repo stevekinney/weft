@@ -112,9 +112,8 @@ function checkStatefulWithoutCompensator(
  * Validate a collection of workflow definitions for common anti-patterns.
  *
  * @param registrations A record of workflow type name to WorkflowDefinition.
- * @param activities    Optional list of ActivityDefinition objects to check.
- *                      Activities are not reachable from WorkflowDefinition
- *                      alone, so pass them explicitly when available.
+ * @param activities    Optional standalone ActivityDefinition objects to check
+ *                      in addition to activities embedded in workflow definitions.
  */
 export function validateRegistrations(
   registrations: Record<string, WorkflowDefinition>,
@@ -123,15 +122,17 @@ export function validateRegistrations(
   const issues: ValidationIssue[] = [];
   const workflowTypes = Object.keys(registrations);
 
+  for (const definition of Object.values(registrations)) {
+    for (const activity of workflowActivities(definition)) {
+      appendActivityIssues(issues, definition.name, activity);
+    }
+  }
+
   // Check explicitly-passed activities. Activities are not tied to a specific
   // workflow registration (they live in closures), so they are labelled
   // '(standalone)' when no registration context is available.
   for (const activity of activities) {
-    const retryIssue = checkUnboundedRetry('(standalone)', activity);
-    if (retryIssue) issues.push(retryIssue);
-
-    const compensatorIssue = checkStatefulWithoutCompensator('(standalone)', activity);
-    if (compensatorIssue) issues.push(compensatorIssue);
+    appendActivityIssues(issues, '(standalone)', activity);
   }
 
   const hasErrors = issues.some((i) => i.severity === 'error');
@@ -141,6 +142,25 @@ export function validateRegistrations(
     issues,
     valid: !hasErrors,
   };
+}
+
+function appendActivityIssues(
+  issues: ValidationIssue[],
+  workflowType: string,
+  activity: ActivityDefinition,
+): void {
+  const retryIssue = checkUnboundedRetry(workflowType, activity);
+  if (retryIssue) issues.push(retryIssue);
+
+  const compensatorIssue = checkStatefulWithoutCompensator(workflowType, activity);
+  if (compensatorIssue) issues.push(compensatorIssue);
+}
+
+function workflowActivities(definition: WorkflowDefinition): ActivityDefinition[] {
+  if (!('activities' in definition) || !isObject(definition.activities)) {
+    return [];
+  }
+  return Object.values(definition.activities).filter(isActivityDefinition);
 }
 
 // ---------------------------------------------------------------------------
@@ -165,22 +185,39 @@ function collectFromExports(
   entries: Iterable<[string, unknown]>,
   registrations: Record<string, WorkflowDefinition>,
   activities: ActivityDefinition[],
-  options: { allowOverwrite: boolean },
+  options: { allowOverwrite: boolean; visited: WeakSet<object> },
 ): void {
   for (const [key, value] of entries) {
-    if (isWorkflowDefinition(value)) {
-      if (options.allowOverwrite || !(value.name in registrations)) {
-        registrations[value.name] = value;
-      }
-    } else if (isActivityDefinition(value)) {
-      if (options.allowOverwrite || !activities.includes(value)) {
-        activities.push(value);
-      }
-    } else if (isObject(value)) {
-      assertNotRemovedWorkflowShape(key, value);
-      collectFromExports(Object.entries(value), registrations, activities, options);
-    }
+    collectExport(key, value, registrations, activities, options);
   }
+}
+
+function collectExport(
+  key: string,
+  value: unknown,
+  registrations: Record<string, WorkflowDefinition>,
+  activities: ActivityDefinition[],
+  options: { allowOverwrite: boolean; visited: WeakSet<object> },
+): void {
+  if (isWorkflowDefinition(value)) {
+    if (options.allowOverwrite || !(value.name in registrations)) {
+      registrations[value.name] = value;
+    }
+    return;
+  }
+  if (isActivityDefinition(value)) {
+    if (options.allowOverwrite || !activities.includes(value)) {
+      activities.push(value);
+    }
+    return;
+  }
+  if (!isObject(value)) return;
+
+  assertNotRemovedWorkflowShape(key, value);
+  if (options.visited.has(value) || !isDefinitionMap(value)) return;
+
+  options.visited.add(value);
+  collectFromExports(Object.entries(value), registrations, activities, options);
 }
 
 export async function loadRegistrationsFromModule(modulePath: string): Promise<{
@@ -192,18 +229,23 @@ export async function loadRegistrationsFromModule(modulePath: string): Promise<{
 
   const registrations: Record<string, WorkflowDefinition> = {};
   const activities: ActivityDefinition[] = [];
+  const visited = new WeakSet<object>();
 
   const defaultExport = mod.default as unknown;
   if (defaultExport !== undefined) {
     collectFromExports([['default', defaultExport]], registrations, activities, {
       allowOverwrite: true,
+      visited,
     });
   }
 
   const namedEntries = Object.entries(mod as Record<string, unknown>).filter(
     ([key]) => key !== 'default',
   );
-  collectFromExports(namedEntries, registrations, activities, { allowOverwrite: false });
+  collectFromExports(namedEntries, registrations, activities, {
+    allowOverwrite: false,
+    visited,
+  });
 
   return { registrations, activities };
 }
@@ -216,12 +258,23 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+function isRemovedWorkflowShape(value: unknown): value is Record<string, unknown> {
+  return isObject(value) && 'handler' in value && typeof value['handler'] === 'function';
+}
+
 function assertNotRemovedWorkflowShape(exportName: string, value: Record<string, unknown>): void {
-  if ('handler' in value) {
+  if (isRemovedWorkflowShape(value)) {
     throw new TypeError(
       `Workflow export "${exportName}" must be a builder-produced workflow definition with its own name. Create it with \`workflow({ name }).execute(handler)\`.`,
     );
   }
+}
+
+function isDefinitionMap(value: Record<string, unknown>): boolean {
+  return Object.values(value).some(
+    (entry) =>
+      isWorkflowDefinition(entry) || isActivityDefinition(entry) || isRemovedWorkflowShape(entry),
+  );
 }
 
 function isWorkflowDefinition(value: unknown): value is WorkflowDefinition {

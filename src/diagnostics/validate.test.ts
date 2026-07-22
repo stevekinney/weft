@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { ActivityDefinition, WorkflowDefinition } from '../core/types.ts';
+import { workflow } from '../core/types.ts';
 import {
   formatValidationReport,
   loadRegistrationsFromModule,
@@ -189,6 +190,35 @@ describe('validateRegistrations', () => {
 
     expect(report.valid).toBe(false);
     expect(report.issues[0]?.workflowType).toBe('(standalone)');
+  });
+
+  it('validates activities embedded in builder-produced workflow definitions', () => {
+    const definition = workflow({ name: 'checkout' })
+      .activities({
+        charge: makeActivity('charge', {
+          idempotent: true,
+          retry: {
+            maxAttempts: Infinity,
+            initialBackoff: '1s',
+            backoffMultiplier: 2,
+            maxBackoff: '30s',
+          },
+        }),
+      })
+      .execute(async function* () {
+        return 'done';
+      });
+
+    const report = validateRegistrations({ checkout: definition });
+
+    expect(report.valid).toBe(false);
+    expect(report.issues).toContainEqual(
+      expect.objectContaining({
+        code: 'unbounded-retry',
+        workflowType: 'checkout',
+        activityName: 'charge',
+      }),
+    );
   });
 });
 
@@ -371,5 +401,25 @@ export default {
     const result = await loadRegistrationsFromModule(filePath);
     expect(result.registrations).toEqual({});
     expect(result.activities).toEqual([]);
+  });
+
+  it('ignores circular non-definition object exports', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'weft-validate-'));
+    const filePath = join(dir, 'circular-export.ts');
+    await writeFile(
+      filePath,
+      `
+export const greet = {
+  name: 'greet',
+  handler: async function* () { return 'hi'; }
+};
+
+export const metadata = {};
+metadata.self = metadata;
+`,
+    );
+
+    const result = await loadRegistrationsFromModule(filePath);
+    expect(Object.keys(result.registrations)).toEqual(['greet']);
   });
 });
