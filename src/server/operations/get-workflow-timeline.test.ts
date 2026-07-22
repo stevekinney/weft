@@ -21,11 +21,18 @@ const twoStepsWorkflow = workflow({ name: 'two-steps' }).execute(async function*
   return yield* ctx.run(noop);
 });
 
+const coordinatorWorkflow = workflow({ name: 'timeline-coordinator' })
+  .activities({ first: async () => 'first', second: async () => 'second' })
+  .execute(async function* (ctx: WorkflowContext) {
+    return yield* ctx.all([ctx.run('first'), ctx.run('second')]);
+  });
+
 const noop = async () => null;
 
 function createEngine(): Engine {
   const engine = new Engine({ storage: new MemoryStorage(), checkpointHistory: 10 });
   engine.register(twoStepsWorkflow);
+  engine.register(coordinatorWorkflow);
   return engine;
 }
 
@@ -80,6 +87,30 @@ describe('weft.workflows.timeline.get', () => {
     expect(response.headers.get('content-type')).toBe('application/msgpack');
     const decoded = decode(new Uint8Array(await response.arrayBuffer()));
     expect(decoded).toEqual(expected);
+  });
+
+  it('returns coordinator detail unchanged over REST', async () => {
+    engine = createEngine();
+    const handle = await engine.start('timeline-coordinator', null, {
+      id: 'wf-timeline-coordinator',
+    });
+    await waitForWorkflowStatus(engine, handle.id, 'completed');
+
+    const response = await handleRequest(
+      new Request(`http://localhost/v1/workflows/${handle.id}/timeline`, { method: 'GET' }),
+      engine,
+      {
+        operationRegistry: registry,
+        restBindings: [getWorkflowTimelineRestBinding],
+      },
+    );
+
+    expect(response.status).toBe(200);
+    const timeline = (await response.json()) as Array<{ branches?: unknown[] }>;
+    expect(timeline[0]?.branches).toEqual([
+      expect.objectContaining({ index: 0, operationLabel: 'first', outcome: 'fulfilled' }),
+      expect.objectContaining({ index: 1, operationLabel: 'second', outcome: 'fulfilled' }),
+    ]);
   });
 
   it('returns 404 with the canonical error body when the workflow does not exist', async () => {

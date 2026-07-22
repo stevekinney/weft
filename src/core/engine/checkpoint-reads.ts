@@ -127,12 +127,28 @@ export async function getTimeline(
                 sanitizeTimelineSummary(decoded.outputSummary) ?? decoded.outputSummary,
             }
           : {}),
+        ...(decoded.branches === undefined
+          ? {}
+          : { branches: decoded.branches.map(sanitizeTimelineOperationDetail) }),
+        ...(decoded.children === undefined
+          ? {}
+          : { children: decoded.children.map(sanitizeTimelineOperationDetail) }),
       });
     }
   }
 
   timeline.sort((left, right) => left.step - right.step);
   return timeline;
+}
+
+function sanitizeTimelineOperationDetail(
+  detail: NonNullable<WorkflowTimelineEntry['branches']>[number],
+): NonNullable<WorkflowTimelineEntry['branches']>[number] {
+  if (detail.errorSummary === undefined) return detail;
+  return {
+    ...detail,
+    errorSummary: sanitizeTimelineSummary(detail.errorSummary) ?? detail.errorSummary,
+  };
 }
 
 /** Reconstruct workflow state at a historical checkpoint step. */

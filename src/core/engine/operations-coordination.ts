@@ -31,6 +31,12 @@ import {
 } from './signals.ts';
 import type { SpeculativeExecutionState } from './speculative-execution-state.ts';
 import { callActivityFunction } from './state-utilities.ts';
+import {
+  parallelTimelineDetails,
+  raceTimelineDetails,
+  recordTimelineBranches,
+  runAllTimelineDetails,
+} from './timeline-coordinator-detail.ts';
 
 type WaitSignalOperation = Extract<ContextOperationRequest, { type: 'wait-signal' }>;
 type ParallelOperation = Extract<ContextOperationRequest, { type: 'parallel' }>;
@@ -201,6 +207,11 @@ export async function processParallelOperation(
 
     const entry = buildEntryFromSlots('all', slots);
     writePartialEntry(internals, workflowId, operation.step, entry);
+    recordTimelineBranches(
+      internals,
+      workflowId,
+      parallelTimelineDetails(operation.operations, slots),
+    );
 
     if (hasFirstError) {
       // Rethrow the original reason as-is (could be a string, number,
@@ -305,20 +316,46 @@ export async function processRaceOperation(
   return callbacks.runOperationWithResult(workflowId, operation, async () => {
     assertSupportedSignalBranches(operation.operations);
     assertValidRaceBranchNames(operation);
-    const winner = await executeRaceSubOperations(
-      internals,
-      workflowId,
-      operation.operations,
-      (subOperation, signal) => callbacks.executeSubOperation(workflowId, subOperation, signal),
-      undefined,
-      (winnerIndex, value) => wrapRaceWinner(operation, winnerIndex, value),
-    );
-    // Finalize-and-unwrap the winner: a winning wait-signal branch resolves with
-    // a deferred-consume envelope, and this is the linearization point of "this
-    // branch won", so consuming here (after the race settles, before the result
-    // reaches the durable cache) deletes the signal exactly once and only for the
-    // winner. Losers' envelopes are dropped unfinalized.
-    return finalizeAndUnwrap(winner);
+    let winnerIndex: number | undefined;
+    let winnerError: unknown;
+    try {
+      const winner = await executeRaceSubOperations(
+        internals,
+        workflowId,
+        operation.operations,
+        (subOperation, signal) => callbacks.executeSubOperation(workflowId, subOperation, signal),
+        undefined,
+        (selectedIndex, value) => wrapRaceWinner(operation, selectedIndex, value),
+        (selectedIndex, error) => {
+          winnerIndex = selectedIndex;
+          winnerError = error;
+        },
+      );
+      // Finalize-and-unwrap the winner: a winning wait-signal branch resolves with
+      // a deferred-consume envelope, and this is the linearization point of "this
+      // branch won", so consuming here (after the race settles, before the result
+      // reaches the durable cache) deletes the signal exactly once and only for the
+      // winner. Losers' envelopes are dropped unfinalized.
+      try {
+        return await finalizeAndUnwrap(winner);
+      } catch (error) {
+        winnerError = error;
+        throw error;
+      }
+    } finally {
+      if (winnerIndex !== undefined) {
+        recordTimelineBranches(
+          internals,
+          workflowId,
+          raceTimelineDetails(
+            operation.operations,
+            winnerIndex,
+            operation.branchNames,
+            winnerError,
+          ),
+        );
+      }
+    }
   });
 }
 
@@ -351,6 +388,67 @@ export function wrapRaceWinner(
  * races on the existing Promise.race path and limits the stronger ordering
  * guarantee to the explicit non-blocking-drain idiom.
  */
+type RaceSettlement =
+  | { index: number; status: 'fulfilled'; value: unknown }
+  | { error: unknown; index: number; status: 'rejected' };
+
+type RaceWinnerObservers = {
+  observeWinner?: (winnerIndex: number, error?: unknown) => void;
+  wrapWinner?: (winnerIndex: number, value: unknown) => unknown;
+};
+
+function createRaceWinnerObservers(
+  wrapWinner: RaceWinnerObservers['wrapWinner'],
+  observeWinner: RaceWinnerObservers['observeWinner'],
+): RaceWinnerObservers {
+  const observers: RaceWinnerObservers = {};
+  if (wrapWinner !== undefined) observers.wrapWinner = wrapWinner;
+  if (observeWinner !== undefined) observers.observeWinner = observeWinner;
+  return observers;
+}
+
+async function settleRaceBranch(
+  operation: ContextOperationRequest,
+  index: number,
+  signal: AbortSignal,
+  execute: (operation: ContextOperationRequest, signal: AbortSignal) => Promise<unknown>,
+): Promise<RaceSettlement> {
+  try {
+    return { index, status: 'fulfilled', value: await execute(operation, signal) };
+  } catch (error) {
+    return { error, index, status: 'rejected' };
+  }
+}
+
+function resolveRaceSettlement(
+  settlement: RaceSettlement,
+  observers: RaceWinnerObservers,
+): unknown {
+  if (settlement.status === 'rejected') {
+    observers.observeWinner?.(settlement.index, settlement.error);
+    throw settlement.error;
+  }
+  observers.observeWinner?.(settlement.index);
+  return observers.wrapWinner === undefined
+    ? settlement.value
+    : observers.wrapWinner(settlement.index, settlement.value);
+}
+
+async function executeBufferedRaceWinner(
+  bufferedSignal: { index: number; operation: WaitSignalOperation },
+  signal: AbortSignal,
+  execute: (operation: ContextOperationRequest, signal: AbortSignal) => Promise<unknown>,
+  observers: RaceWinnerObservers,
+): Promise<unknown> {
+  const settlement = await settleRaceBranch(
+    bufferedSignal.operation,
+    bufferedSignal.index,
+    signal,
+    execute,
+  );
+  return resolveRaceSettlement(settlement, observers);
+}
+
 export async function executeRaceSubOperations(
   internals: EngineInternals,
   workflowId: string,
@@ -358,11 +456,13 @@ export async function executeRaceSubOperations(
   execute: (operation: ContextOperationRequest, signal: AbortSignal) => Promise<unknown>,
   parentSignal?: AbortSignal,
   wrapWinner?: (winnerIndex: number, value: unknown) => unknown,
+  observeWinner?: (winnerIndex: number, error?: unknown) => void,
 ): Promise<unknown> {
   parentSignal?.throwIfAborted();
 
   const controller = new AbortController();
   const abortFromParent = () => controller.abort(parentSignal?.reason);
+  const observers = createRaceWinnerObservers(wrapWinner, observeWinner);
   parentSignal?.addEventListener('abort', abortFromParent, { once: true });
 
   try {
@@ -370,18 +470,17 @@ export async function executeRaceSubOperations(
     parentSignal?.throwIfAborted();
 
     if (bufferedSignal !== undefined) {
-      const value = await execute(bufferedSignal.operation, controller.signal);
-      return wrapWinner === undefined ? value : wrapWinner(bufferedSignal.index, value);
+      return await executeBufferedRaceWinner(bufferedSignal, controller.signal, execute, observers);
     }
 
     const subOperations = operations.map((operation, index) =>
-      execute(operation, controller.signal).then((value) => ({ index, value })),
+      settleRaceBranch(operation, index, controller.signal, execute),
     );
     // Swallow rejections from losing branches — only the race winner's result
     // (or error) is surfaced. Losers usually reject after the controller aborts.
     void Promise.allSettled(subOperations);
     const winner = await Promise.race(subOperations);
-    return wrapWinner === undefined ? winner.value : wrapWinner(winner.index, winner.value);
+    return resolveRaceSettlement(winner, observers);
   } finally {
     parentSignal?.removeEventListener('abort', abortFromParent);
     // Abort losers before the owning coordinator finalizes a signal envelope.
@@ -440,6 +539,11 @@ export async function processRunAllOperation(
 
     const entry = buildEntryFromSlots('run-all', slots, branchNames);
     const partialEntryWritten = writePartialEntry(internals, workflowId, operation.step, entry);
+    recordTimelineBranches(
+      internals,
+      workflowId,
+      runAllTimelineDetails(branchNames, slots, operation.branches),
+    );
 
     if (hasFirstError) {
       assertPartialFailurePersistenceSupported(

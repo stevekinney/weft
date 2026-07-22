@@ -314,6 +314,11 @@ describe('#456 ctx.race / ctx.all with wait-signal branches', () => {
     release();
 
     expect(await handle.result()).toBe('run-again');
+    const timeline = await engine.getTimeline(handle.id);
+    expect(timeline[1]?.branches).toEqual([
+      expect.objectContaining({ index: 0, operationLabel: 'sync-requested', outcome: 'won' }),
+      expect.objectContaining({ index: 1, operationLabel: 'sleep', outcome: 'lost' }),
+    ]);
     const residualSignal = await peekSignal(
       getInternals(engine),
       'drain-buffered',

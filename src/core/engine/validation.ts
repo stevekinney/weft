@@ -17,6 +17,10 @@ import type {
 import { DEFAULT_WORKFLOW_VERSION } from '../versioning.ts';
 import { isWorkflowTagArray } from '../workflow-tags.ts';
 import type { WorkflowVersionTuple } from '../workflow-version-tuple.ts';
+import {
+  MAX_TIMELINE_COORDINATOR_DETAILS,
+  MAX_TIMELINE_DETAIL_STRING_LENGTH,
+} from './timeline-coordinator-constants.ts';
 
 const WORKFLOW_TIMELINE_STATUSES = new Set<WorkflowTimelineStatus>([
   'running',
@@ -99,6 +103,46 @@ export function isTimelineStep(value: unknown): value is number {
 
 type TimelineEntryFieldCheck = (entry: Record<string, unknown>) => boolean;
 
+const WORKFLOW_TIMELINE_DETAIL_OUTCOMES = new Set(['fulfilled', 'rejected', 'won', 'lost']);
+
+function isBoundedTimelineDetailString(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= MAX_TIMELINE_DETAIL_STRING_LENGTH;
+}
+
+const TIMELINE_DETAIL_FIELD_CHECKS: readonly TimelineEntryFieldCheck[] = [
+  (detail) =>
+    typeof detail['index'] === 'number' &&
+    Number.isSafeInteger(detail['index']) &&
+    detail['index'] >= 0,
+  (detail) => detail['key'] === undefined || isBoundedTimelineDetailString(detail['key']),
+  (detail) => isBoundedTimelineDetailString(detail['operationId']),
+  (detail) => isBoundedTimelineDetailString(detail['operationType']),
+  (detail) => isBoundedTimelineDetailString(detail['operationLabel']),
+  (detail) => WORKFLOW_TIMELINE_DETAIL_OUTCOMES.has(detail['outcome'] as string),
+  (detail) =>
+    detail['errorSummary'] === undefined || isBoundedTimelineDetailString(detail['errorSummary']),
+];
+
+function isWorkflowTimelineOperationDetail(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return TIMELINE_DETAIL_FIELD_CHECKS.every((check) => check(value));
+}
+
+function isWorkflowTimelineOperationDetails(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (Array.isArray(value) &&
+      value.length <= MAX_TIMELINE_COORDINATOR_DETAILS &&
+      value.every(isWorkflowTimelineOperationDetail))
+  );
+}
+
+function isOmittedTimelineDetailCount(value: unknown): boolean {
+  return (
+    value === undefined || (typeof value === 'number' && Number.isSafeInteger(value) && value > 0)
+  );
+}
+
 const TIMELINE_ENTRY_FIELD_CHECKS: readonly TimelineEntryFieldCheck[] = [
   (entry) => isTimelineStep(entry['step']),
   (entry) => typeof entry['operationType'] === 'string',
@@ -109,6 +153,14 @@ const TIMELINE_ENTRY_FIELD_CHECKS: readonly TimelineEntryFieldCheck[] = [
   (entry) => entry['outputSummary'] === undefined || typeof entry['outputSummary'] === 'string',
   (entry) => entry['duration'] === undefined || isFiniteNumber(entry['duration']),
   (entry) => entry['versionTuple'] === undefined || isWorkflowVersionTuple(entry['versionTuple']),
+  (entry) => isWorkflowTimelineOperationDetails(entry['branches']),
+  (entry) => isOmittedTimelineDetailCount(entry['branchesOmitted']),
+  (entry) => isWorkflowTimelineOperationDetails(entry['children']),
+  (entry) => isOmittedTimelineDetailCount(entry['childrenOmitted']),
+  (entry) =>
+    entry['speculationOutcome'] === undefined ||
+    entry['speculationOutcome'] === 'committed' ||
+    entry['speculationOutcome'] === 'rolled-back',
 ];
 
 export function isWorkflowTimelineEntry(value: unknown): value is WorkflowTimelineEntry {

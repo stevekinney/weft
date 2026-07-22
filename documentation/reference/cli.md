@@ -364,6 +364,22 @@ weft timeline <workflow-id> --diff 2 3 --database ./weft.db
 | `--diff`     |       | `false`     | Diff two checkpoint steps supplied after the workflow ID |
 | `--help`     | `-h`  |             | Show help message                                        |
 
+The timeline is a durable checkpoint-oriented summary, not an activity-attempt audit log. An
+activity that retries appears as separate failed activity, retry-backoff sleep, and later activity
+entries because each operation crosses its own durable boundary. Those entries deliberately do not
+carry an explicit attempt number or grouping identifier, a snapshot of the effective retry policy,
+or heartbeat payloads. Heartbeat details remain best-effort, in-process activity state and are never
+retained by the timeline; persist an application cursor when progress must survive a restart.
+
+Coordinator entries expose bounded metadata for their direct work without copying branch inputs or
+results. `ctx.all()` and `ctx.runAll()` branches report `fulfilled` or `rejected`; `ctx.race()` reports
+the first-settled branch as `won` and the others as `lost`. `lost` does not claim that an activity
+stopped: race cancellation is cooperative. `ctx.speculate()` instead exposes its ordered direct
+children and whether its child context was `committed` or `rolled-back`. Per-branch durations are
+omitted because a recovered fulfilled branch or a detached race loser has no truthful duration at
+the coordinator's durable boundary. When a coordinator exceeds the detail bound, `branchesOmitted`
+or `childrenOmitted` reports how many direct operations are not included.
+
 ### validate
 
 Validate a workflow module for correctness before deployment.

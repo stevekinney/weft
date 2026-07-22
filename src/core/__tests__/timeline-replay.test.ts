@@ -4,7 +4,14 @@ import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { encode } from '../codec.ts';
 import { Engine } from '../engine.ts';
-import { workflow, type WorkflowContext } from '../types.ts';
+import { activity, workflow, type ActivityContext, type WorkflowContext } from '../types.ts';
+
+async function waitForRaceLoss(_input: unknown, context?: ActivityContext): Promise<void> {
+  if (context === undefined || context.signal.aborted) return;
+  await new Promise<void>((resolve) => {
+    context.signal.addEventListener('abort', () => resolve(), { once: true });
+  });
+}
 
 describe('timeline and replay', () => {
   let engine: Engine;
@@ -78,6 +85,240 @@ describe('timeline and replay', () => {
     });
     expect(timeline[1]?.inputSummary).toContain('"cardNumber":"[REDACTED]"');
     expect(timeline[1]?.outputSummary).toContain('"cardNumber":"[REDACTED]"');
+  });
+
+  it('records every activity retry attempt and retry backoff as separate durable entries', async () => {
+    let attempts = 0;
+    const retryingActivity = activity({
+      name: 'retrying-activity',
+      retry: {
+        maxAttempts: 2,
+        initialBackoff: 0,
+        backoffMultiplier: 1,
+        maxBackoff: 0,
+      },
+      execute: async () => {
+        attempts++;
+        if (attempts === 1) throw new Error('retry me');
+        return 'completed';
+      },
+    });
+    const retryWorkflow = workflow({ name: 'timeline-retry' })
+      .activities({ 'retrying-activity': retryingActivity })
+      .execute(async function* (ctx: WorkflowContext) {
+        return yield* ctx.run(retryingActivity);
+      });
+    const storage = new MemoryStorage();
+    engine = new Engine({ storage });
+    engine.register(retryWorkflow);
+
+    const handle = await engine.start('timeline-retry', null, { id: 'wf-timeline-retry' });
+    await expect(handle.result()).resolves.toBe('completed');
+
+    const initialTimeline = await engine.getTimeline(handle.id);
+    expect(
+      initialTimeline.map((entry) => ({
+        label: entry.operationLabel,
+        status: entry.status,
+        type: entry.operationType,
+      })),
+    ).toEqual([
+      { label: 'retrying-activity', status: 'failed', type: 'activity' },
+      { label: 'sleep', status: 'completed', type: 'sleep' },
+      { label: 'retrying-activity', status: 'completed', type: 'activity' },
+    ]);
+
+    engine[Symbol.dispose]();
+    engine = new Engine({ storage });
+    const recoveredTimeline = await engine.getTimeline(handle.id);
+    expect(
+      recoveredTimeline.map((entry) => ({
+        label: entry.operationLabel,
+        status: entry.status,
+        type: entry.operationType,
+      })),
+    ).toEqual([
+      { label: 'retrying-activity', status: 'failed', type: 'activity' },
+      { label: 'sleep', status: 'completed', type: 'sleep' },
+      { label: 'retrying-activity', status: 'completed', type: 'activity' },
+    ]);
+  });
+
+  it('records bounded metadata-only branch details for all, runAll, and keyed and positional race', async () => {
+    const first = async () => ({ secret: 'first-result' });
+    const second = async () => ({ secret: 'second-result' });
+    const storage = new MemoryStorage();
+    engine = new Engine({ storage });
+    engine.register(
+      workflow({ name: 'timeline-coordinators' })
+        .activities({ first, second, waitForRaceLoss })
+        .execute(async function* (ctx: WorkflowContext) {
+          yield* ctx.all([ctx.run('first'), ctx.run('second')]);
+          yield* ctx.runAll({ firstNamed: [first], secondNamed: [second] });
+          yield* ctx.race([ctx.run('first'), ctx.run('waitForRaceLoss')]);
+          return yield* ctx.raceKeyed({
+            winner: ctx.run('second'),
+            loser: ctx.run('waitForRaceLoss'),
+          });
+        }),
+    );
+
+    const handle = await engine.start('timeline-coordinators', null, {
+      id: 'wf-timeline-coordinators',
+    });
+    await handle.result();
+    const timeline = await engine.getTimeline(handle.id);
+
+    expect(timeline[0]?.branches).toEqual([
+      expect.objectContaining({ index: 0, outcome: 'fulfilled', operationLabel: 'first' }),
+      expect.objectContaining({ index: 1, outcome: 'fulfilled', operationLabel: 'second' }),
+    ]);
+    expect(timeline[1]?.branches).toEqual([
+      expect.objectContaining({ index: 0, key: 'firstNamed', outcome: 'fulfilled' }),
+      expect.objectContaining({ index: 1, key: 'secondNamed', outcome: 'fulfilled' }),
+    ]);
+    expect(timeline[2]?.branches).toEqual([
+      expect.objectContaining({ index: 0, outcome: 'won', operationLabel: 'first' }),
+      expect.objectContaining({ index: 1, outcome: 'lost', operationLabel: 'waitForRaceLoss' }),
+    ]);
+    expect(timeline[3]?.branches).toEqual([
+      expect.objectContaining({ index: 0, key: 'winner', outcome: 'won' }),
+      expect.objectContaining({ index: 1, key: 'loser', outcome: 'lost' }),
+    ]);
+    expect(JSON.stringify(timeline.flatMap((entry) => entry.branches ?? []))).not.toContain(
+      'first-result',
+    );
+
+    engine[Symbol.dispose]();
+    engine = new Engine({ storage });
+    expect(await engine.getTimeline(handle.id)).toEqual(timeline);
+  });
+
+  it('bounds coordinator metadata and reports the omitted branch count', async () => {
+    const branches: Record<string, readonly [() => Promise<string>]> = {};
+    for (let index = 0; index < 101; index++) {
+      branches[index === 0 ? 'x'.repeat(600) : `branch-${String(index)}`] = [
+        async () => `raw-result-${String(index)}`,
+      ];
+    }
+    engine = new Engine({ storage: new MemoryStorage() });
+    engine.register(
+      workflow({ name: 'bounded-timeline-coordinator' }).execute(async function* (
+        ctx: WorkflowContext,
+      ) {
+        return yield* ctx.runAll(branches);
+      }),
+    );
+
+    const handle = await engine.start('bounded-timeline-coordinator', null, {
+      id: 'wf-bounded-timeline-coordinator',
+    });
+    await handle.result();
+    const timeline = await engine.getTimeline(handle.id);
+    const entry = timeline[0];
+
+    expect(entry?.branches).toHaveLength(100);
+    expect(entry?.branchesOmitted).toBe(1);
+    expect(entry?.branches?.[0]?.key?.length).toBe(512);
+    expect(JSON.stringify(entry?.branches)).not.toContain('raw-result');
+  });
+
+  it('records rejected all branches and a rejecting race winner without mislabeling losers', async () => {
+    const fail = async () => {
+      throw new Error('Bearer branch-secret');
+    };
+    const pass = async () => 'pass';
+    engine = new Engine({ storage: new MemoryStorage() });
+    engine.register(
+      workflow({ name: 'timeline-coordinator-failures' })
+        .activities({ fail, pass, waitForRaceLoss })
+        .execute(async function* (ctx: WorkflowContext) {
+          try {
+            yield* ctx.all([ctx.run('pass'), ctx.run('fail')]);
+          } catch {
+            // The following yield commits the failed coordinator timeline entry.
+          }
+          try {
+            yield* ctx.race([ctx.run('fail'), ctx.run('waitForRaceLoss')]);
+          } catch {
+            return 'caught';
+          }
+          return 'unreachable';
+        }),
+    );
+
+    const handle = await engine.start('timeline-coordinator-failures', null, {
+      id: 'wf-timeline-coordinator-failures',
+    });
+    await expect(handle.result()).resolves.toBe('caught');
+    const timeline = await engine.getTimeline(handle.id);
+
+    expect(timeline[0]?.branches).toEqual([
+      expect.objectContaining({ index: 0, outcome: 'fulfilled' }),
+      expect.objectContaining({ index: 1, outcome: 'rejected' }),
+    ]);
+    expect(timeline[0]?.branches?.[1]?.errorSummary).toContain('[REDACTED]');
+    expect(timeline[1]?.branches).toEqual([
+      expect.objectContaining({ index: 0, outcome: 'won' }),
+      expect.objectContaining({ index: 1, outcome: 'lost' }),
+    ]);
+    expect(timeline[1]?.branches?.[0]?.errorSummary).toContain('[REDACTED]');
+  });
+
+  it('records ordered speculative children and the coordinator commit or rollback outcome', async () => {
+    const pass = async () => 'pass-result';
+    const fail = async () => {
+      throw new Error('Bearer should-not-be-retained');
+    };
+    engine = new Engine({ storage: new MemoryStorage() });
+    engine.register(
+      workflow({ name: 'timeline-speculate' })
+        .activities({ fail, pass })
+        .execute(async function* (ctx: WorkflowContext, input: { rollback: boolean }) {
+          try {
+            return yield* ctx.speculate(async function* (branch) {
+              yield* branch.run('pass');
+              return input.rollback ? yield* branch.run('fail') : yield* branch.run('pass');
+            });
+          } catch {
+            return 'rolled-back';
+          }
+        }),
+    );
+
+    const committed = await engine.start(
+      'timeline-speculate',
+      { rollback: false },
+      {
+        id: 'wf-speculate-commit',
+      },
+    );
+    const rolledBack = await engine.start(
+      'timeline-speculate',
+      { rollback: true },
+      {
+        id: 'wf-speculate-rollback',
+      },
+    );
+    await Promise.all([committed.result(), rolledBack.result()]);
+
+    const committedTimeline = await engine.getTimeline(committed.id);
+    const committedEntry = committedTimeline[0];
+    expect(committedEntry?.speculationOutcome).toBe('committed');
+    expect(committedEntry?.children).toEqual([
+      expect.objectContaining({ index: 0, operationLabel: 'pass', outcome: 'fulfilled' }),
+      expect.objectContaining({ index: 1, operationLabel: 'pass', outcome: 'fulfilled' }),
+    ]);
+
+    const rolledBackTimeline = await engine.getTimeline(rolledBack.id);
+    const rolledBackEntry = rolledBackTimeline[0];
+    expect(rolledBackEntry?.speculationOutcome).toBe('rolled-back');
+    expect(rolledBackEntry?.children).toEqual([
+      expect.objectContaining({ index: 0, operationLabel: 'pass', outcome: 'fulfilled' }),
+      expect.objectContaining({ index: 1, operationLabel: 'fail', outcome: 'rejected' }),
+    ]);
+    expect(rolledBackEntry?.children?.[1]?.errorSummary).toContain('[REDACTED]');
+    expect(rolledBackEntry?.children?.[1]?.errorSummary).not.toContain('should-not-be-retained');
   });
 
   it('acceptance criterion: engine.replayTo(workflowId, step) reconstructs checkpoint state, accumulated results, and event log up to that step', async () => {

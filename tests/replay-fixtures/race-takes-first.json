@@ -21,6 +21,22 @@
       "versionTuple": {
         "workflowVersion": "1"
       },
+      "branches": [
+        {
+          "index": 0,
+          "operationId": "race:0:0",
+          "operationType": "activity",
+          "operationLabel": "anonymous",
+          "outcome": "won"
+        },
+        {
+          "index": 1,
+          "operationId": "race:0:1",
+          "operationType": "activity",
+          "operationLabel": "anonymous",
+          "outcome": "lost"
+        }
+      ],
       "outputSummary": "\"fast\"",
       "duration": 0
     }
@@ -52,6 +68,6 @@
     "wf:wf-race-takes-first": "i6JpZLN3Zi1yYWNlLXRha2VzLWZpcnN0pHR5cGWwcmFjZS10YWtlcy1maXJzdKZzdGF0dXOpY29tcGxldGVkpWlucHV0wKx2ZXJzaW9uVHVwbGWBr3dvcmtmbG93VmVyc2lvbqExtndvcmtmbG93RXhlY3V0aW9uVG9rZW7ZJDAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMbVleGVjdXRpb25TdGF0ZU93bmVySWSzd2YtcmFjZS10YWtlcy1maXJzdKljcmVhdGVkQXQAqXN0YXJ0ZWRBdACpdXBkYXRlZEF0AKZyZXN1bHSkZmFzdA==",
     "wf:wf-race-takes-first:ckpt": "iKp3b3JrZmxvd0lks3dmLXJhY2UtdGFrZXMtZmlyc3Skc3RlcAGmbG9jYWxzgLJhY2N1bXVsYXRlZFJlc3VsdHOQsHNlYXJjaEF0dHJpYnV0ZXOAp3ZlcnNpb26hMa1zY2hlbWFWZXJzaW9uAqljcmVhdGVkQXQA",
     "wf:wf-race-takes-first:ckpt:0000000001": "iKp3b3JrZmxvd0lks3dmLXJhY2UtdGFrZXMtZmlyc3Skc3RlcAGmbG9jYWxzgLJhY2N1bXVsYXRlZFJlc3VsdHOQsHNlYXJjaEF0dHJpYnV0ZXOAp3ZlcnNpb26hMa1zY2hlbWFWZXJzaW9uAqljcmVhdGVkQXQA",
-    "wf:wf-race-takes-first:timeline:0000000001": "iaRzdGVwAa1vcGVyYXRpb25UeXBlpHJhY2Wub3BlcmF0aW9uTGFiZWykcmFjZaxpbnB1dFN1bW1hcnm0eyJvcGVyYXRpb25Db3VudCI6Mn2pdGltZXN0YW1wAKZzdGF0dXOpY29tcGxldGVkrHZlcnNpb25UdXBsZYGvd29ya2Zsb3dWZXJzaW9uoTGtb3V0cHV0U3VtbWFyeaYiZmFzdCKoZHVyYXRpb24A"
+    "wf:wf-race-takes-first:timeline:0000000001": "iqRzdGVwAa1vcGVyYXRpb25UeXBlpHJhY2Wub3BlcmF0aW9uTGFiZWykcmFjZaxpbnB1dFN1bW1hcnm0eyJvcGVyYXRpb25Db3VudCI6Mn2pdGltZXN0YW1wAKZzdGF0dXOpY29tcGxldGVkrHZlcnNpb25UdXBsZYGvd29ya2Zsb3dWZXJzaW9uoTGoYnJhbmNoZXOShaVpbmRleACrb3BlcmF0aW9uSWSocmFjZTowOjCtb3BlcmF0aW9uVHlwZahhY3Rpdml0ea5vcGVyYXRpb25MYWJlbKlhbm9ueW1vdXOnb3V0Y29tZaN3b26FpWluZGV4AatvcGVyYXRpb25JZKhyYWNlOjA6Ma1vcGVyYXRpb25UeXBlqGFjdGl2aXR5rm9wZXJhdGlvbkxhYmVsqWFub255bW91c6dvdXRjb21lpGxvc3Stb3V0cHV0U3VtbWFyeaYiZmFzdCKoZHVyYXRpb24A"
   }
 }

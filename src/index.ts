@@ -227,6 +227,7 @@ export type {
   WorkflowStatus,
   WorkflowSummary,
   WorkflowTimelineEntry,
+  WorkflowTimelineOperationDetail,
   WorkflowTimelineStatus,
   WorkflowTypeRetentionPolicy,
 } from './core/types';

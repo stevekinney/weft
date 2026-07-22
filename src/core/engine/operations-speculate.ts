@@ -1,9 +1,14 @@
 import type { ContextOperationRequest } from '../context.ts';
+import type { WorkflowTimelineOperationDetail } from '../types.ts';
 import { finalizeAndUnwrap } from './deferred-consume-envelope.ts';
 import type { EngineInternals } from './internals.ts';
 import { assertSupportedSignalBranches } from './operations-coordination.ts';
 import type { OperationWithCallerStack } from './operations-router.ts';
 import { SpeculativeExecutionState } from './speculative-execution-state.ts';
+import {
+  operationTimelineDetail,
+  recordTimelineSpeculation,
+} from './timeline-coordinator-detail.ts';
 
 type SpeculateOperation = Extract<ContextOperationRequest, { type: 'speculate' }>;
 type SpeculativeOperationGenerator =
@@ -54,6 +59,7 @@ export async function executeSpeculativeBranch(
   const speculativeContext = parentContext.createSpeculativeChild();
   const speculativeState = new SpeculativeExecutionState();
   const generator = createSpeculativeOperationGenerator(operation, speculativeContext);
+  const children: WorkflowTimelineOperationDetail[] = [];
 
   try {
     const result = await driveSpeculativeGenerator(
@@ -61,12 +67,27 @@ export async function executeSpeculativeBranch(
       generator,
       speculativeState,
       callbacks,
+      (child, index, error) => {
+        children.push(
+          operationTimelineDetail(
+            child,
+            index,
+            error === undefined ? 'fulfilled' : 'rejected',
+            error === undefined ? {} : { error },
+          ),
+        );
+      },
     );
     await speculativeState.drainVerifications();
     parentContext.commitSpeculativeChild(speculativeContext);
+    recordTimelineSpeculation(internals, workflowId, children, 'committed');
     return result;
   } catch (error) {
-    await speculativeState.rollback();
+    try {
+      await speculativeState.rollback();
+    } finally {
+      recordTimelineSpeculation(internals, workflowId, children, 'rolled-back');
+    }
     throw error;
   }
 }
@@ -85,7 +106,9 @@ export async function driveSpeculativeGenerator(
   generator: SpeculativeOperationGenerator,
   speculativeState: SpeculativeExecutionState,
   callbacks: Pick<SpeculateOperationCallbacks, 'executeSubOperation'>,
+  observeChild?: (operation: ContextOperationRequest, index: number, error?: unknown) => void,
 ): Promise<unknown> {
+  let childIndex = 0;
   const advance = async (
     lastResult: unknown,
     errorToThrow: Error | undefined,
@@ -100,6 +123,7 @@ export async function driveSpeculativeGenerator(
     }
 
     const nextOperation = iterationResult.value;
+    const currentChildIndex = childIndex++;
     try {
       // The top-level `processRaceOperation` / `processParallelOperation`
       // reject a `race` / `all` whose branches wait on the same signal name
@@ -135,8 +159,10 @@ export async function driveSpeculativeGenerator(
       // uncompensated speculative activity write, persists even if the speculation
       // later rolls back.
       const finalizedResult = await finalizeAndUnwrap(nextResult);
+      observeChild?.(nextOperation, currentChildIndex);
       return advance(finalizedResult, undefined);
     } catch (error) {
+      observeChild?.(nextOperation, currentChildIndex, error);
       return advance(lastResult, error instanceof Error ? error : new Error(String(error)));
     }
   };

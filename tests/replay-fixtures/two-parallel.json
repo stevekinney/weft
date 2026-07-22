@@ -21,6 +21,22 @@
       "versionTuple": {
         "workflowVersion": "1"
       },
+      "branches": [
+        {
+          "index": 0,
+          "operationId": "parallel:0:0",
+          "operationType": "activity",
+          "operationLabel": "anonymous",
+          "outcome": "fulfilled"
+        },
+        {
+          "index": 1,
+          "operationId": "parallel:0:1",
+          "operationType": "activity",
+          "operationLabel": "anonymous",
+          "outcome": "fulfilled"
+        }
+      ],
       "outputSummary": "[\"left:data\",\"right:data\"]",
       "duration": 0
     }
@@ -55,6 +71,6 @@
     "wf:wf-two-parallel": "i6JpZK93Zi10d28tcGFyYWxsZWykdHlwZax0d28tcGFyYWxsZWymc3RhdHVzqWNvbXBsZXRlZKVpbnB1dKRkYXRhrHZlcnNpb25UdXBsZYGvd29ya2Zsb3dWZXJzaW9uoTG2d29ya2Zsb3dFeGVjdXRpb25Ub2tlbtkkMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxtWV4ZWN1dGlvblN0YXRlT3duZXJJZK93Zi10d28tcGFyYWxsZWypY3JlYXRlZEF0AKlzdGFydGVkQXQAqXVwZGF0ZWRBdACmcmVzdWx0gqFhqWxlZnQ6ZGF0YaFiqnJpZ2h0OmRhdGE=",
     "wf:wf-two-parallel:ckpt": "iKp3b3JrZmxvd0lkr3dmLXR3by1wYXJhbGxlbKRzdGVwAaZsb2NhbHOAsmFjY3VtdWxhdGVkUmVzdWx0c5Cwc2VhcmNoQXR0cmlidXRlc4CndmVyc2lvbqExrXNjaGVtYVZlcnNpb24CqWNyZWF0ZWRBdAA=",
     "wf:wf-two-parallel:ckpt:0000000001": "iKp3b3JrZmxvd0lkr3dmLXR3by1wYXJhbGxlbKRzdGVwAaZsb2NhbHOAsmFjY3VtdWxhdGVkUmVzdWx0c5Cwc2VhcmNoQXR0cmlidXRlc4CndmVyc2lvbqExrXNjaGVtYVZlcnNpb24CqWNyZWF0ZWRBdAA=",
-    "wf:wf-two-parallel:timeline:0000000001": "iaRzdGVwAa1vcGVyYXRpb25UeXBlqHBhcmFsbGVsrm9wZXJhdGlvbkxhYmVsqHBhcmFsbGVsrGlucHV0U3VtbWFyebR7Im9wZXJhdGlvbkNvdW50Ijoyfal0aW1lc3RhbXAApnN0YXR1c6ljb21wbGV0ZWSsdmVyc2lvblR1cGxlga93b3JrZmxvd1ZlcnNpb26hMa1vdXRwdXRTdW1tYXJ5ulsibGVmdDpkYXRhIiwicmlnaHQ6ZGF0YSJdqGR1cmF0aW9uAA=="
+    "wf:wf-two-parallel:timeline:0000000001": "iqRzdGVwAa1vcGVyYXRpb25UeXBlqHBhcmFsbGVsrm9wZXJhdGlvbkxhYmVsqHBhcmFsbGVsrGlucHV0U3VtbWFyebR7Im9wZXJhdGlvbkNvdW50Ijoyfal0aW1lc3RhbXAApnN0YXR1c6ljb21wbGV0ZWSsdmVyc2lvblR1cGxlga93b3JrZmxvd1ZlcnNpb26hMahicmFuY2hlc5KFpWluZGV4AKtvcGVyYXRpb25JZKxwYXJhbGxlbDowOjCtb3BlcmF0aW9uVHlwZahhY3Rpdml0ea5vcGVyYXRpb25MYWJlbKlhbm9ueW1vdXOnb3V0Y29tZalmdWxmaWxsZWSFpWluZGV4AatvcGVyYXRpb25JZKxwYXJhbGxlbDowOjGtb3BlcmF0aW9uVHlwZahhY3Rpdml0ea5vcGVyYXRpb25MYWJlbKlhbm9ueW1vdXOnb3V0Y29tZalmdWxmaWxsZWStb3V0cHV0U3VtbWFyebpbImxlZnQ6ZGF0YSIsInJpZ2h0OmRhdGEiXahkdXJhdGlvbgA="
   }
 }

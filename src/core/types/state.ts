@@ -101,6 +101,33 @@ export interface ForkLineage {
 export type WorkflowTimelineStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out';
 
 /**
+ * Bounded metadata describing one direct operation inside a timeline coordinator.
+ *
+ * @example
+ * ```ts
+ * import type { WorkflowTimelineOperationDetail } from '@lostgradient/weft';
+ *
+ * const winner: WorkflowTimelineOperationDetail = {
+ *   index: 0,
+ *   operationId: 'race:0:0',
+ *   operationType: 'activity',
+ *   operationLabel: 'fetchPrimary',
+ *   outcome: 'won',
+ * };
+ * void winner;
+ * ```
+ */
+export type WorkflowTimelineOperationDetail = {
+  index: number;
+  key?: string;
+  operationId: string;
+  operationType: string;
+  operationLabel: string;
+  outcome: 'fulfilled' | 'rejected' | 'won' | 'lost';
+  errorSummary?: string;
+};
+
+/**
  * A single chronological entry in a workflow's execution timeline, summarising
  * one operation (activity call, sleep, signal wait, etc.). Returned by
  * `engine.getTimeline(workflowId)` for replay and debugging.
@@ -118,6 +145,16 @@ export type WorkflowTimelineEntry = {
   timestamp: number;
   status: WorkflowTimelineStatus;
   versionTuple?: WorkflowVersionTuple;
+  /** Direct branch metadata for `ctx.all`, `ctx.runAll`, and `ctx.race`. */
+  branches?: WorkflowTimelineOperationDetail[];
+  /** Number of direct branches omitted from `branches` by the durable size bound. */
+  branchesOmitted?: number;
+  /** Ordered direct operations yielded by `ctx.speculate`. */
+  children?: WorkflowTimelineOperationDetail[];
+  /** Number of direct speculative children omitted from `children` by the durable size bound. */
+  childrenOmitted?: number;
+  /** Whether the speculative child context committed or rolled back. */
+  speculationOutcome?: 'committed' | 'rolled-back';
 };
 
 /**

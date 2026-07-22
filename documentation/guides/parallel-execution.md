@@ -96,6 +96,12 @@ async function* fetchWithFallback(ctx: Context, url: string) {
 
 This is useful for timeout patterns, redundant fetches, and any scenario where you want the fastest answer. The engine records whichever result arrives first as the checkpoint, so on recovery you get the same winner.
 
+The durable workflow timeline keeps bounded, metadata-only detail for direct `ctx.all`, `ctx.runAll`,
+and `ctx.race` branches. It records the stable operation identifier, operation type and label,
+optional keyed-branch name, and outcome, but never duplicates branch inputs or results. Race losers
+are labeled `lost`, not `aborted`, because the cancellation boundary below is cooperative. Branch
+durations are intentionally absent when the engine cannot reconstruct them truthfully after recovery.
+
 > [!WARNING] `ctx.race` cancellation is cooperative
 > When a branch wins, the race tears down the coordination work of the losers: a losing `ctx.sleep` clears its timer, a losing `ctx.waitForSignal` releases its waiter, and a losing inline activity receives an abort through `ActivityContext.signal`. The race stops awaiting every losing result, but worker-pooled activities do not receive the inline race-loss abort, and an inline activity that ignores its signal can keep running and producing side effects.
 >

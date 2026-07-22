@@ -94,6 +94,49 @@ describe('engine validation helpers', () => {
         versionTuple: { workflowVersion: '1', toolVersions: ['tool-a'] },
       }),
     ).toBe(true);
+    expect(
+      isWorkflowTimelineEntry({
+        step: 1,
+        operationType: 'race',
+        operationLabel: 'race',
+        inputSummary: '{"operationCount":2}',
+        timestamp: 1,
+        status: 'completed',
+        branches: [
+          {
+            index: 0,
+            operationId: 'race:0:0',
+            operationType: 'activity',
+            operationLabel: 'winner',
+            outcome: 'won',
+          },
+          {
+            index: 1,
+            operationId: 'race:0:1',
+            operationType: 'sleep',
+            operationLabel: 'sleep',
+            outcome: 'lost',
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      isWorkflowTimelineEntry({
+        step: 1,
+        operationType: 'race',
+        operationLabel: 'race',
+        inputSummary: '{}',
+        timestamp: 1,
+        status: 'completed',
+        branches: Array.from({ length: 101 }, (_, index) => ({
+          index,
+          operationId: `race:${String(index)}`,
+          operationType: 'activity',
+          operationLabel: 'branch',
+          outcome: 'lost',
+        })),
+      }),
+    ).toBe(false);
   });
 
   it('drops previous workflow failure category names while decoding persisted state', () => {
