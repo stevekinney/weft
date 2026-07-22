@@ -223,6 +223,7 @@ import { setupServiceWorker } from ${JSON.stringify(setupModulePath)};
 const serviceWorker = self;
 const instanceId = crypto.randomUUID();
 let activityCount = 0;
+const sleepReplayReady = Promise.withResolvers();
 
 const storage = new IndexedDBStorage(${JSON.stringify(databaseName)});
 
@@ -245,6 +246,10 @@ const waitForSignalWorkflow = workflow({ name: 'wait-for-signal' }).execute(asyn
 });
 
 const sleepThenFinishWorkflow = workflow({ name: 'sleep-then-finish' }).execute(async function* (ctx) {
+  // Resolve once per Service Worker instance. After a restart this proves the
+  // recovered generator has replayed far enough to register its sleep operation,
+  // so the test's single synthetic periodic-sync tick cannot race recovery.
+  sleepReplayReady.resolve();
   yield* ctx.sleep(60 * 60 * 1000);
   return 'slept-then-finished';
 });
@@ -297,7 +302,11 @@ serviceWorker.addEventListener('message', (event) => {
       // sleep deadline so the durable timer fires deterministically without a
       // real wall-clock wait. setupServiceWorker's own periodicsync listener
       // ticks at real Date.now(); driving the returned scheduler directly with
-      // an explicit future time keeps the test hermetic.
+      // an explicit future time keeps the test hermetic. Recovery intentionally
+      // retains a timer when it fires before its generator is ready; await the
+      // generator-owned readiness signal so this one synthetic tick represents
+      // the later periodic-sync delivery that can consume the retained timer.
+      await sleepReplayReady.promise;
       await scheduler.tick(Date.now() + 2 * 60 * 60 * 1000);
       port.postMessage({ ticked: true });
       return;
@@ -819,11 +828,10 @@ describe('Service Worker browser smoke', () => {
       });
       expect(tickResult).toEqual({ ticked: true });
 
-      // The tick only proves the scheduler accepted the recovered timer. Wait
-      // on the observable terminal state instead of sampling workflow/storage
-      // state immediately after the tick, which is load-sensitive in Chromium.
-      await waitForPageWorkflowStatus(page, timerWorkflow.id, 'completed');
-
+      // engine.fireTimer() acknowledges a sleep timer only after the awakened
+      // workflow commits later durable progress. This workflow terminates
+      // immediately after sleeping, so the completed state and timer deletion
+      // must both be observable as soon as the tick reply arrives.
       const timerState = await sendWorkerMessage<{
         remainingTimerCount: number;
         workflowStatus: string | null;
