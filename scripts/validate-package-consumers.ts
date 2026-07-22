@@ -312,7 +312,7 @@ async function runCliServeSharesRootSingletonsWithDynamicWorkflowModuleSmoke(
         jsonrpc: '2.0',
         id: 1,
         method: 'weft.workflows.start',
-        params: { type: 'cliSingletonProof', input: undefined },
+        params: { type: 'cli-singleton-proof', input: undefined },
       }),
     });
     const startBody = (await startResponse.json()) as {
