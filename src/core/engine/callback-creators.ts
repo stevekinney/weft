@@ -1,7 +1,6 @@
 import { KEYS } from '../../storage/interface.ts';
 import type { ContextOperationRequest } from '../context.ts';
-import { HISTORY_CIRCUIT_BREAKER_REASON } from '../types.ts';
-import { validateAttributeValueSizes } from './attributes-tags.ts';
+import { createCheckpointPersistenceCallbacks } from './callback-checkpoint-persistence.ts';
 import {
   createConstraintCallbacks,
   createLifecycleCallbacks,
@@ -9,12 +8,7 @@ import {
   registerEnsureRetentionSweepInterval,
 } from './callback-creators-core.ts';
 import { createOperationRouterCallbacks } from './callback-creators-router.ts';
-import {
-  appendTimelineBatchOperations,
-  persistCheckpoint,
-  pruneCheckpointHistory,
-  validateDevelopmentCheckpoint,
-} from './checkpoint-io.ts';
+import { persistCheckpoint, validateDevelopmentCheckpoint } from './checkpoint-io.ts';
 import { evaluateConstraints } from './constraints.ts';
 import type { Engine } from './index.ts';
 import {
@@ -33,8 +27,7 @@ import {
 } from './retention.ts';
 import { hasBufferedSignal } from './signals.ts';
 import { loadWorkflowState, runSerializedWorkflowStateWrite } from './storage-io.ts';
-import { swallowPromiseRejection } from './strategy-helpers.ts';
-import { cleanupWaiters, terminateWorkflow, type TerminationCallbacks } from './termination.ts';
+import { cleanupWaiters, type TerminationCallbacks } from './termination.ts';
 
 // Keep the callback factory families available from the engine callback module
 // that owns their shared construction surface.
@@ -110,33 +103,13 @@ export function persistCheckpointForEngine<TWorkflows extends object, TActivitie
   operation: ContextOperationRequest,
   workerCheckpointBytes?: ArrayBuffer,
 ): Promise<void> {
-  return persistCheckpoint(getInternals(engine), workflowId, operation, workerCheckpointBytes, {
-    appendTimelineBatchOperations: (id, checkpointOperation, step, timestamp, operations) =>
-      appendTimelineBatchOperations(
-        getInternals(engine),
-        id,
-        checkpointOperation,
-        step,
-        timestamp,
-        operations,
-      ),
-    swallowPromiseRejection: (promise) => {
-      void swallowPromiseRejection(promise);
-    },
-    validateAttributeValueSizes,
-    pruneCheckpointHistory: (id, step) => pruneCheckpointHistory(getInternals(engine), id, step),
-    dispatchEvent: (event) => {
-      engine.dispatchEvent(event);
-    },
-    enforceHistoryCircuitBreaker: (id) =>
-      terminateWorkflow(
-        getInternals(engine),
-        id,
-        'timed-out',
-        createTerminationCallbacks(engine),
-        HISTORY_CIRCUIT_BREAKER_REASON,
-      ),
-  });
+  return persistCheckpoint(
+    getInternals(engine),
+    workflowId,
+    operation,
+    workerCheckpointBytes,
+    createCheckpointPersistenceCallbacks(engine),
+  );
 }
 
 function ensureRetentionSweepIntervalForEngine<
