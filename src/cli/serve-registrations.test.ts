@@ -15,7 +15,7 @@ describe('registerModuleExports', () => {
 
     const handle = await engine.start('canonical-name', undefined);
     await expect(handle.result()).resolves.toBe('done');
-    expect(() => engine.start('exportAlias', undefined)).toThrow(
+    await expect(engine.start('exportAlias', undefined)).rejects.toThrow(
       'No workflow registered with name "exportAlias"',
     );
   });
