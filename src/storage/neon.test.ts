@@ -1,7 +1,8 @@
 import { PGlite } from '@electric-sql/pglite';
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 
-import { NeonStorage, type NeonPool, type NeonPoolClient } from './neon.ts';
+import { NeonStorage } from './neon.ts';
+import type { PostgresPool, PostgresPoolClient } from './postgres.ts';
 import {
   collect,
   decodeText,
@@ -30,7 +31,7 @@ afterAll(async () => {
 });
 
 /**
- * Wrap the shared PGlite instance as a {@link NeonPool}. PGlite is a real
+ * Wrap the shared PGlite instance as a {@link PostgresPool}. PGlite is a real
  * in-process Postgres, so this exercises the actual `$1`/BYTEA/`ON CONFLICT`/range
  * SQL and the `COLLATE "C"` ordering that a JS-map fake would silently get wrong.
  * PGlite serializes statements on one connection, so an interactive
@@ -38,8 +39,8 @@ afterAll(async () => {
  * back the same instance with a no-op `release()`. `end()` is a no-op because the
  * shared instance outlives any single case and is closed once in `afterAll`.
  */
-function sharedPgliteAsNeonPool(): NeonPool {
-  const client: NeonPoolClient = {
+function sharedPgliteAsPostgresPool(): PostgresPool {
+  const client: PostgresPoolClient = {
     query: (sql, parameters) => sharedDatabase.query(sql, parameters as unknown[]),
     release: () => {
       // Single shared connection; nothing to return to a pool.
@@ -64,7 +65,7 @@ async function createPgliteBackedNeonStorage(): Promise<NeonStorage> {
     'CREATE TABLE IF NOT EXISTS kv (key TEXT COLLATE "C" PRIMARY KEY, value BYTEA NOT NULL)',
   );
   await sharedDatabase.query('DELETE FROM kv');
-  return new NeonStorage({ url: 'pglite://memory', pool: sharedPgliteAsNeonPool() });
+  return new NeonStorage({ url: 'pglite://memory', pool: sharedPgliteAsPostgresPool() });
 }
 
 runStorageCapabilityConformance('NeonStorage', {
@@ -318,7 +319,7 @@ describe('NeonStorage', () => {
     const database = await new PGlite();
     try {
       await database.query('CREATE TABLE kv (key TEXT PRIMARY KEY, value BYTEA NOT NULL)');
-      const pool: NeonPool = {
+      const pool: PostgresPool = {
         query: (sql, parameters) => database.query(sql, parameters as unknown[]),
         connect: async () => ({
           query: (sql, parameters) => database.query(sql, parameters as unknown[]),
@@ -338,7 +339,7 @@ describe('NeonStorage', () => {
   it('throws when the collation introspection returns no row', async () => {
     // Defensive: if the introspection somehow finds no kv.key row, treat the
     // unknowable collation as a hard error rather than assume it is correct.
-    const pool: NeonPool = {
+    const pool: PostgresPool = {
       query: async (sql) => (sql.includes('pg_collation') ? { rows: [] } : { rows: [] }),
       connect: async () => ({ query: async () => ({ rows: [] }), release: () => {} }),
       end: async () => {},
@@ -355,7 +356,7 @@ describe('NeonStorage', () => {
     let createAttempts = 0;
     const database = await new PGlite();
     try {
-      const failingPool: NeonPool = {
+      const failingPool: PostgresPool = {
         query: (sql, parameters) => {
           if (sql.includes('CREATE TABLE IF NOT EXISTS')) {
             createAttempts += 1;
@@ -393,7 +394,7 @@ describe('NeonStorage', () => {
     // failure. Stage a client whose BEGIN succeeds, whose operation throws, and
     // whose ROLLBACK also rejects — the caller must see the operation error.
     const operationError = new Error('operation failed inside the transaction');
-    const pool: NeonPool = {
+    const pool: PostgresPool = {
       // #ensureTable runs on the pool directly: CREATE succeeds, collation is "C".
       query: async (sql) =>
         sql.includes('pg_collation') ? { rows: [{ collation: 'C' }] } : { rows: [] },
@@ -427,7 +428,7 @@ describe('NeonStorage', () => {
     // Ownership stays with the caller for an injected pool — disposing one
     // NeonStorage must not tear out a pool shared by other consumers.
     let endCalled = false;
-    const stubPool: NeonPool = {
+    const stubPool: PostgresPool = {
       query: async () => ({ rows: [] }),
       connect: async () => ({ query: async () => ({ rows: [] }), release: () => {} }),
       end: async () => {
@@ -442,7 +443,7 @@ describe('NeonStorage', () => {
 
   it('does NOT close an injected pool on async dispose either', async () => {
     let endCalled = false;
-    const stubPool: NeonPool = {
+    const stubPool: PostgresPool = {
       query: async () => ({ rows: [] }),
       connect: async () => ({ query: async () => ({ rows: [] }), release: () => {} }),
       end: async () => {
@@ -501,7 +502,7 @@ describe('NeonStorage', () => {
     // a thrown dispose. The internal poolFactory seam constructs an owned pool whose
     // end() rejects, without contacting any network.
     let endCalled = false;
-    const failingOwnedPool: NeonPool = {
+    const failingOwnedPool: PostgresPool = {
       query: async () => ({ rows: [] }),
       connect: async () => ({ query: async () => ({ rows: [] }), release: () => {} }),
       end: async () => {
@@ -522,7 +523,7 @@ describe('NeonStorage', () => {
     // surface here (unlike the fire-and-forget sync path). Repeated async dispose
     // reuses the one memoized (rejected) shutdown rather than calling end() again.
     let endCalls = 0;
-    const failingOwnedPool: NeonPool = {
+    const failingOwnedPool: PostgresPool = {
       query: async () => ({ rows: [] }),
       connect: async () => ({ query: async () => ({ rows: [] }), release: () => {} }),
       end: async () => {
@@ -538,10 +539,10 @@ describe('NeonStorage', () => {
 });
 
 describe('NeonStorage configurable schema/table (#468)', () => {
-  // Wrap a dedicated PGlite as a NeonPool. A dedicated instance (not the shared
+  // Wrap a dedicated PGlite as a PostgresPool. A dedicated instance (not the shared
   // one) is used so the schema-qualified table is created in isolation.
-  function dedicatedPgliteAsNeonPool(database: PGlite): NeonPool {
-    const client: NeonPoolClient = {
+  function dedicatedPgliteAsPostgresPool(database: PGlite): PostgresPool {
+    const client: PostgresPoolClient = {
       query: (sql, parameters) => database.query(sql, parameters as unknown[]),
       release: () => {},
     };
@@ -557,7 +558,7 @@ describe('NeonStorage configurable schema/table (#468)', () => {
     try {
       await using storage = new NeonStorage({
         url: 'pglite://memory',
-        pool: dedicatedPgliteAsNeonPool(database),
+        pool: dedicatedPgliteAsPostgresPool(database),
         schema: 'weft',
         table: 'state',
       });
@@ -583,7 +584,7 @@ describe('NeonStorage configurable schema/table (#468)', () => {
     try {
       await using storage = new NeonStorage({
         url: 'pglite://memory',
-        pool: dedicatedPgliteAsNeonPool(database),
+        pool: dedicatedPgliteAsPostgresPool(database),
         table: 'workflow_kv',
       });
       await storage.put('k', encode('v'));
@@ -601,7 +602,7 @@ describe('NeonStorage configurable schema/table (#468)', () => {
     try {
       await using storage = new NeonStorage({
         url: 'pglite://memory',
-        pool: dedicatedPgliteAsNeonPool(database),
+        pool: dedicatedPgliteAsPostgresPool(database),
         schema: 'weft',
       });
       await storage.batch([
@@ -618,7 +619,7 @@ describe('NeonStorage configurable schema/table (#468)', () => {
   });
 
   it('rejects an invalid schema or table identifier at construction', () => {
-    const stubPool: NeonPool = {
+    const stubPool: PostgresPool = {
       query: async () => ({ rows: [] }),
       connect: async () => ({ query: async () => ({ rows: [] }), release: () => {} }),
       end: async () => {},
