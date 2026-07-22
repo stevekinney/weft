@@ -213,13 +213,15 @@ function collectExport(
   }
   if (!isObject(value)) return;
 
-  assertNotRemovedWorkflowShape(key, value, options.depth === 0);
-  if (options.depth >= 1 || !isDefinitionMap(value)) return;
+  if (options.depth === 0 && isDefinitionMap(value)) {
+    collectFromExports(Object.entries(value), registrations, activities, {
+      ...options,
+      depth: options.depth + 1,
+    });
+    return;
+  }
 
-  collectFromExports(Object.entries(value), registrations, activities, {
-    ...options,
-    depth: options.depth + 1,
-  });
+  assertNotRemovedWorkflowShape(key, value, options.depth === 0);
 }
 
 export async function loadRegistrationsFromModule(modulePath: string): Promise<{

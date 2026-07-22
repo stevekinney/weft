@@ -402,6 +402,29 @@ export default {
     await expect(result.activities[0]!.execute('payload')).resolves.toEqual({ sent: true });
   });
 
+  it('loads an activity named handler from a default export object', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'weft-validate-'));
+    const filePath = join(dir, 'handler-activity.ts');
+    await writeFile(
+      filePath,
+      `
+async function handler() {}
+Object.defineProperty(handler, 'execute', {
+  value: async () => ({ handled: true }),
+  writable: true,
+  configurable: true,
+});
+
+export default { handler };
+`,
+    );
+
+    const result = await loadRegistrationsFromModule(filePath);
+
+    expect(result.activities.map((activity) => activity.name)).toEqual(['handler']);
+    await expect(result.activities[0]!.execute('payload')).resolves.toEqual({ handled: true });
+  });
+
   it('keeps default-export definitions when a named export uses the same canonical name', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'weft-validate-'));
     const filePath = join(dir, 'conflict.ts');
