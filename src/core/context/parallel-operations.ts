@@ -12,17 +12,6 @@ import {
 } from './parallel-cache-entry.ts';
 import { captureCallerStack } from './validation.ts';
 
-// Re-export the cache-entry surface so existing
-// `from './parallel-operations.ts'` imports keep working.
-export {
-  assertValidParallelOperationCacheEntry,
-  BranchTopologyChangedError,
-  createParallelOperationCacheEntry,
-  isParallelOperationCacheEntry,
-  type ParallelBranchSlot,
-  type ParallelOperationCacheEntry,
-};
-
 /** Reconstruct the user-visible array result from a v2 entry's slots. */
 function reconstructAllResult(entry: ParallelOperationCacheEntry): unknown[] {
   return entry.branches.map((slot) => {

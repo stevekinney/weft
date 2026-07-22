@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 
 import type { CommandOutput } from './types.ts';
 
-/** Checks stored workflow history against the current workflow registrations. */
+/** Checks stored workflow history against the current workflow definitions. */
 export async function executeVersionCheck(options: {
   database: string;
   workflows: string;
@@ -24,8 +24,9 @@ export async function executeVersionCheck(options: {
 
   try {
     const workflowsPath = resolve(process.cwd(), options.workflows);
-    const registrations = await import(workflowsPath);
-    const report = await runVersionCheck(storage, registrations.default);
+    const { loadRegistrationsFromModule } = await import('../diagnostics/validate.ts');
+    const { registrations } = await loadRegistrationsFromModule(workflowsPath);
+    const report = await runVersionCheck(storage, registrations);
     const stdout = options.json
       ? JSON.stringify(report, null, 2)
       : formatVersionCheckReport(report);

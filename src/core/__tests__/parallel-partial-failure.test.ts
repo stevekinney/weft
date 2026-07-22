@@ -13,7 +13,7 @@ import { describe, expect, it } from 'bun:test';
 import { deserializeCheckpoint, serializeCheckpoint } from '../checkpoint.ts';
 import { decode, encode } from '../codec.ts';
 import { Context } from '../context.ts';
-import { BranchTopologyChangedError } from '../context/parallel-operations.ts';
+import { BranchTopologyChangedError } from '../context/parallel-cache-entry.ts';
 import { Engine } from '../engine.ts';
 import { hydrateCheckpointReplayState } from '../engine/checkpoint-replay.ts';
 import {

@@ -949,6 +949,7 @@ describe('executeVersionCheck', () => {
         [
           'export default {',
           '  order: {',
+          '    name: "order",',
           '    version: "1.0.0",',
           '    handler: async function* () {',
           '      return null;',
@@ -1509,8 +1510,9 @@ describe('executeValidate', () => {
       await Bun.write(
         entryPath,
         [
-          'import type { WorkflowRegistration } from "./src/diagnostics/validate.ts";',
-          'export const myWorkflow: WorkflowRegistration = {',
+          `import type { WorkflowDefinition } from "${publicEntryPointUrl}";`,
+          'export const myWorkflow: WorkflowDefinition = {',
+          '  name: "myWorkflow",',
           '  handler: async function* () { return "done"; },',
           '};',
         ].join('\n'),
@@ -1561,8 +1563,9 @@ describe('executeValidate', () => {
       await Bun.write(
         entryPath,
         [
-          'import type { WorkflowRegistration } from "./src/diagnostics/validate.ts";',
-          'export const myWorkflow: WorkflowRegistration = {',
+          `import type { WorkflowDefinition } from "${publicEntryPointUrl}";`,
+          'export const myWorkflow: WorkflowDefinition = {',
+          '  name: "myWorkflow",',
           '  handler: async function* () { return "done"; },',
           '};',
         ].join('\n'),
@@ -1600,8 +1603,9 @@ describe('executeValidate', () => {
       await Bun.write(
         firstEntryPath,
         [
-          'import type { WorkflowRegistration } from "./src/diagnostics/validate.ts";',
-          'export const firstWorkflow: WorkflowRegistration = {',
+          `import type { WorkflowDefinition } from "${publicEntryPointUrl}";`,
+          'export const firstWorkflow: WorkflowDefinition = {',
+          '  name: "firstWorkflow",',
           '  handler: async function* () { return "first"; },',
           '};',
         ].join('\n'),
@@ -1609,8 +1613,9 @@ describe('executeValidate', () => {
       await Bun.write(
         secondEntryPath,
         [
-          'import type { WorkflowRegistration } from "./src/diagnostics/validate.ts";',
-          'export const secondWorkflow: WorkflowRegistration = {',
+          `import type { WorkflowDefinition } from "${publicEntryPointUrl}";`,
+          'export const secondWorkflow: WorkflowDefinition = {',
+          '  name: "secondWorkflow",',
           '  handler: async function* () { return "second"; },',
           '};',
         ].join('\n'),
@@ -1872,8 +1877,9 @@ describe('executeValidate', () => {
       await Bun.write(
         cleanEntryPath,
         [
-          'import type { WorkflowRegistration } from "./src/diagnostics/validate.ts";',
-          'export const cleanWorkflow: WorkflowRegistration = {',
+          `import type { WorkflowDefinition } from "${publicEntryPointUrl}";`,
+          'export const cleanWorkflow: WorkflowDefinition = {',
+          '  name: "cleanWorkflow",',
           '  handler: async function* () { return "clean"; },',
           '};',
         ].join('\n'),
@@ -1904,8 +1910,9 @@ describe('executeValidate', () => {
       await Bun.write(
         cleanEntryPath,
         [
-          'import type { WorkflowRegistration } from "./src/diagnostics/validate.ts";',
-          'export const cleanWorkflow: WorkflowRegistration = {',
+          `import type { WorkflowDefinition } from "${publicEntryPointUrl}";`,
+          'export const cleanWorkflow: WorkflowDefinition = {',
+          '  name: "cleanWorkflow",',
           '  handler: async function* () { return "clean"; },',
           '};',
         ].join('\n'),
@@ -1913,14 +1920,15 @@ describe('executeValidate', () => {
       await Bun.write(
         invalidEntryPath,
         [
-          'import type { WorkflowRegistration } from "./src/diagnostics/validate.ts";',
+          `import type { WorkflowDefinition } from "${publicEntryPointUrl}";`,
           `import { activity } from "${publicEntryPointUrl}";`,
           'export const sendEmail = activity({',
           '  name: "sendEmail",',
           '  idempotent: false,',
           '  execute: async () => undefined,',
           '});',
-          'export const invalidWorkflow: WorkflowRegistration = {',
+          'export const invalidWorkflow: WorkflowDefinition = {',
+          '  name: "invalidWorkflow",',
           '  handler: async function* (_ctx, input) {',
           '    return yield* sendEmail(input);',
           '  },',
@@ -1951,14 +1959,15 @@ describe('executeValidate', () => {
       await Bun.write(
         invalidEntryPath,
         [
-          'import type { WorkflowRegistration } from "./src/diagnostics/validate.ts";',
+          `import type { WorkflowDefinition } from "${publicEntryPointUrl}";`,
           `import { activity } from "${publicEntryPointUrl}";`,
           'export const sendEmail = activity({',
           '  name: "sendEmail",',
           '  idempotent: false,',
           '  execute: async () => undefined,',
           '});',
-          'export const invalidWorkflow: WorkflowRegistration = {',
+          'export const invalidWorkflow: WorkflowDefinition = {',
+          '  name: "invalidWorkflow",',
           '  handler: async function* (_ctx, input) {',
           '    return yield* sendEmail(input);',
           '  },',
@@ -2204,6 +2213,7 @@ describe('executeSchedule', () => {
       [
         'export default {',
         '  scheduledEcho: {',
+        '    name: "scheduledEcho",',
         '    handler: async function* (_ctx, input) {',
         '      return input;',
         '    },',
@@ -2331,6 +2341,7 @@ describe('executeSchedule', () => {
       [
         'export default {',
         '  scheduledEcho: {',
+        '    name: "scheduledEcho",',
         '    handler: async function* (_ctx, input) {',
         '      return input;',
         '    },',
@@ -2492,6 +2503,7 @@ describe('executeSchedule', () => {
       [
         'export default {',
         '  scheduledEcho: {',
+        '    name: "scheduledEcho",',
         '    handler: async function* (_ctx, input) {',
         '      return input;',
         '    },',
@@ -2556,15 +2568,16 @@ describe('executeSchedule', () => {
 });
 
 describe('loadRegistrationsFromModule', () => {
-  it('extracts WorkflowRegistration from named exports', async () => {
+  it('extracts WorkflowDefinition from named exports', async () => {
     const { loadRegistrationsFromModule } = await import('./diagnostics/validate.ts');
     const entryPath = join(tmpdir(), `weft-load-named-${crypto.randomUUID()}.ts`);
     try {
       await Bun.write(
         entryPath,
         [
-          'import type { WorkflowRegistration } from "./src/diagnostics/validate.ts";',
-          'export const myWorkflow: WorkflowRegistration = {',
+          `import type { WorkflowDefinition } from "${publicEntryPointUrl}";`,
+          'export const myWorkflow: WorkflowDefinition = {',
+          '  name: "myWorkflow",',
           '  handler: async function* () { return "done"; },',
           '};',
         ].join('\n'),

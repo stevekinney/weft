@@ -35,14 +35,8 @@
  * serialized consistently across REST and JSON-RPC transports.
  */
 
-// `FaultCode` is defined in `core` so the client can consume it off the wire
-// without importing from `server`. Imported for use within this module and
-// re-exported so existing server call sites importing it from here are
-// unaffected.
 import type { FaultCode } from '../core/fault-code.ts';
 import { isWeftErrorCode, type WeftErrorCode } from '../core/weft-error.ts';
-
-export type { FaultCode };
 
 /** Transport identifiers as seen by `executeOperation`. */
 export type TransportKind = 'http-rest' | 'jsonRpcHttp' | 'jsonRpcWebSocket' | 'jsonRpcStdio';

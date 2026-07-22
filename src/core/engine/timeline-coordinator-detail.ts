@@ -1,5 +1,5 @@
 import type { ContextOperationRequest } from '../context.ts';
-import type { ParallelBranchSlot } from '../context/parallel-operations.ts';
+import type { ParallelBranchSlot } from '../context/parallel-cache-entry.ts';
 import type { WorkflowTimelineOperationDetail } from '../types.ts';
 import type { EngineInternals } from './internals.ts';
 import { getTimelineOperationLabel, summarizeTimelineValue } from './state-utilities.ts';

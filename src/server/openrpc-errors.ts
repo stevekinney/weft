@@ -6,10 +6,10 @@
 
 import { z } from 'zod';
 
+import type { FaultCode } from '../core/fault-code.ts';
 import {
   FAULT_CODE_TO_HTTP_STATUS,
   FAULT_CODE_TO_JSON_RPC_CODE,
-  type FaultCode,
   type TransportKind,
 } from './operation-fault.ts';
 
