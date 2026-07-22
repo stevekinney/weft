@@ -38,6 +38,7 @@ import {
   WorkflowResumedEvent as WorkflowResumedEventFromRoot,
   WorkflowStartedEvent as WorkflowStartedEventFromRoot,
   WorkflowSuspendedEvent as WorkflowSuspendedEventFromRoot,
+  WorkflowTeardownEvent as WorkflowTeardownEventFromRoot,
   WorkflowTimedOutEvent as WorkflowTimedOutEventFromRoot,
 } from '../index.ts';
 import { MemoryStorage } from '../storage/memory.ts';
@@ -60,6 +61,7 @@ import {
   WorkflowResumedEvent as WorkflowResumedEventFromClientBarrel,
   WorkflowStartedEvent as WorkflowStartedEventFromClientBarrel,
   WorkflowSuspendedEvent as WorkflowSuspendedEventFromClientBarrel,
+  WorkflowTeardownEvent as WorkflowTeardownEventFromClientBarrel,
   WorkflowTimedOutEvent as WorkflowTimedOutEventFromClientBarrel,
 } from './index.ts';
 import { LocalClient } from './local.ts';
@@ -205,6 +207,7 @@ const _workflowLifecycleTypes = [
   WorkflowCancelledEventFromClientBarrel.type,
   WorkflowTimedOutEventFromClientBarrel.type,
   WorkflowSuspendedEventFromClientBarrel.type,
+  WorkflowTeardownEventFromClientBarrel.type,
 ] as const;
 const _expectedWorkflowLifecycleTypes: readonly [
   typeof WorkflowStartedEventFromRoot.type,
@@ -214,6 +217,7 @@ const _expectedWorkflowLifecycleTypes: readonly [
   typeof WorkflowCancelledEventFromRoot.type,
   typeof WorkflowTimedOutEventFromRoot.type,
   typeof WorkflowSuspendedEventFromRoot.type,
+  typeof WorkflowTeardownEventFromRoot.type,
 ] = _workflowLifecycleTypes;
 void _expectedWorkflowLifecycleTypes;
 
