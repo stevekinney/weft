@@ -422,4 +422,25 @@ metadata.self = metadata;
     const result = await loadRegistrationsFromModule(filePath);
     expect(Object.keys(result.registrations)).toEqual(['greet']);
   });
+
+  it('ignores unrelated exported handler maps', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'weft-validate-'));
+    const filePath = join(dir, 'route-config.ts');
+    await writeFile(
+      filePath,
+      `
+export const greet = {
+  name: 'greet',
+  handler: async function* () { return 'hi'; }
+};
+
+export const routes = {
+  webhook: { handler: async () => new Response('ok') },
+};
+`,
+    );
+
+    const result = await loadRegistrationsFromModule(filePath);
+    expect(Object.keys(result.registrations)).toEqual(['greet']);
+  });
 });

@@ -185,7 +185,7 @@ function collectFromExports(
   entries: Iterable<[string, unknown]>,
   registrations: Record<string, WorkflowDefinition>,
   activities: ActivityDefinition[],
-  options: { allowOverwrite: boolean; visited: WeakSet<object> },
+  options: { allowOverwrite: boolean; depth: number },
 ): void {
   for (const [key, value] of entries) {
     collectExport(key, value, registrations, activities, options);
@@ -197,7 +197,7 @@ function collectExport(
   value: unknown,
   registrations: Record<string, WorkflowDefinition>,
   activities: ActivityDefinition[],
-  options: { allowOverwrite: boolean; visited: WeakSet<object> },
+  options: { allowOverwrite: boolean; depth: number },
 ): void {
   if (isWorkflowDefinition(value)) {
     if (options.allowOverwrite || !(value.name in registrations)) {
@@ -214,10 +214,12 @@ function collectExport(
   if (!isObject(value)) return;
 
   assertNotRemovedWorkflowShape(key, value);
-  if (options.visited.has(value) || !isDefinitionMap(value)) return;
+  if (options.depth >= 1 || !isDefinitionMap(value)) return;
 
-  options.visited.add(value);
-  collectFromExports(Object.entries(value), registrations, activities, options);
+  collectFromExports(Object.entries(value), registrations, activities, {
+    ...options,
+    depth: options.depth + 1,
+  });
 }
 
 export async function loadRegistrationsFromModule(modulePath: string): Promise<{
@@ -229,13 +231,12 @@ export async function loadRegistrationsFromModule(modulePath: string): Promise<{
 
   const registrations: Record<string, WorkflowDefinition> = {};
   const activities: ActivityDefinition[] = [];
-  const visited = new WeakSet<object>();
 
   const defaultExport = mod.default as unknown;
   if (defaultExport !== undefined) {
     collectFromExports([['default', defaultExport]], registrations, activities, {
       allowOverwrite: true,
-      visited,
+      depth: 0,
     });
   }
 
@@ -244,7 +245,7 @@ export async function loadRegistrationsFromModule(modulePath: string): Promise<{
   );
   collectFromExports(namedEntries, registrations, activities, {
     allowOverwrite: false,
-    visited,
+    depth: 0,
   });
 
   return { registrations, activities };
@@ -259,7 +260,11 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 function isRemovedWorkflowShape(value: unknown): value is Record<string, unknown> {
-  return isObject(value) && 'handler' in value && typeof value['handler'] === 'function';
+  return (
+    isObject(value) &&
+    'handler' in value &&
+    Object.prototype.toString.call(value['handler']) === '[object AsyncGeneratorFunction]'
+  );
 }
 
 function assertNotRemovedWorkflowShape(exportName: string, value: Record<string, unknown>): void {
