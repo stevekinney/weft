@@ -4,9 +4,10 @@
  * @module server/openapi-error-responses
  */
 
+import type { FaultCode } from '../core/fault-code.ts';
 import type { ErasedOperation } from './operation-catalog.ts';
 import { UNIVERSAL_FAULT_DEFAULTS } from './operation-catalog/raise-fault.ts';
-import { FAULT_CODE_TO_HTTP_STATUS, type FaultCode } from './operation-fault.ts';
+import { FAULT_CODE_TO_HTTP_STATUS } from './operation-fault.ts';
 
 /**
  * Shared JSON error schema emitted as `#/components/schemas/Error`.

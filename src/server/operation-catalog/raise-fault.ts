@@ -4,7 +4,8 @@
  * @module server/operation-catalog/raise-fault
  */
 
-import type { FaultCode, OperationFault } from '../operation-fault.ts';
+import type { FaultCode } from '../../core/fault-code.ts';
+import type { OperationFault } from '../operation-fault.ts';
 import type { ErasedOperation } from './types.ts';
 
 /**

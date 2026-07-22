@@ -29,8 +29,8 @@
 import type {
   ParallelBranchSlot,
   ParallelOperationCacheEntry,
-} from '../context/parallel-operations.ts';
-import { createParallelOperationCacheEntry } from '../context/parallel-operations.ts';
+} from '../context/parallel-cache-entry.ts';
+import { createParallelOperationCacheEntry } from '../context/parallel-cache-entry.ts';
 
 export type ParallelDispatchResult = {
   /** Final slot table — every entry is `fulfilled` or `rejected`. */
