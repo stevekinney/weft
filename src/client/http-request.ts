@@ -135,8 +135,7 @@ export class HttpClientError extends WeftError<'HttpClientError'> {
   /**
    * The fault's wire `data` payload, when the response carried a structured
    * body (`{ error, data }` for production REST or `error.data` for JSON-RPC).
-   * Shape is
-   * fault-code-dependent — see {@link FaultCode} and the server's
+   * Shape is fault-code-dependent — see {@link FaultCode} and the server's
    * `OperationFault` per-code `data` union for what each code carries (e.g.
    * `InvalidParams.data.issues`, `NotFound.data.resource`). `undefined` for
    * plain-string error bodies, bodies with no `data` field, or a `data` field
