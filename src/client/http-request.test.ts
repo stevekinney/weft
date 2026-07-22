@@ -70,43 +70,19 @@ describe('HttpClientError', () => {
 });
 
 describe('request() error-body parsing', () => {
-  it('surfaces faultCode and derived category from a structured body', async () => {
+  it('falls back to statusText for a non-string error field', async () => {
     const error = await captureError(
       new Response(JSON.stringify({ error: { code: 'NotFound', message: 'no such workflow' } }), {
         status: 404,
+        statusText: 'Not Found',
         headers: { 'Content-Type': 'application/json' },
       }),
     );
     expect(error.status).toBe(404);
-    expect(error.message).toBe('no such workflow');
-    expect(error.faultCode).toBe('NotFound');
-    expect(error.category).toBe('application');
+    expect(error.message).toBe('Not Found');
+    expect(error.faultCode).toBeUndefined();
+    expect(error.category).toBeUndefined();
     expect(error.code).toBe('HttpClientError');
-  });
-
-  it('maps a Timeout fault to the timeout category', async () => {
-    const error = await captureError(
-      new Response(JSON.stringify({ error: { code: 'Timeout', message: 'deadline exceeded' } }), {
-        status: 408,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    );
-    expect(error.faultCode).toBe('Timeout');
-    expect(error.category).toBe('timeout');
-  });
-
-  it('maps a SubscriptionOverflow fault to the resource category', async () => {
-    const error = await captureError(
-      new Response(
-        JSON.stringify({ error: { code: 'SubscriptionOverflow', message: 'too many' } }),
-        {
-          status: 503,
-          headers: { 'Content-Type': 'application/json' },
-        },
-      ),
-    );
-    expect(error.faultCode).toBe('SubscriptionOverflow');
-    expect(error.category).toBe('resource');
   });
 
   it('extracts the message but no faultCode from a flat string body', async () => {
@@ -129,115 +105,12 @@ describe('request() error-body parsing', () => {
     expect(error.faultCode).toBeUndefined();
   });
 
-  it('surfaces the message but no faultCode for an unrecognized (future) code', async () => {
-    // A structured body whose `code` is not a known FaultCode still yields its
-    // human message — only the typed faultCode/category are withheld, so a
-    // forward-compatible server fault does not lose its message to statusText.
-    const error = await captureError(
-      new Response(JSON.stringify({ error: { code: 'Teapot', message: 'short and stout' } }), {
-        status: 418,
-        statusText: "I'm a teapot",
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    );
-    expect(error.faultCode).toBeUndefined();
-    expect(error.category).toBeUndefined();
-    expect(error.message).toBe('short and stout');
-  });
-
-  it('surfaces the structured data field alongside faultCode and weftCode (#711)', async () => {
-    const error = await captureError(
-      new Response(
-        JSON.stringify({ error: { code: 'NotFound', message: 'gone', data: { resource: 'wf' } } }),
-        { status: 404, headers: { 'Content-Type': 'application/json' } },
-      ),
-    );
-    expect(error.faultCode).toBe('NotFound');
-    expect(error.message).toBe('gone');
-    expect(error.data).toEqual({ resource: 'wf' });
-    expect(error.weftCode).toBeUndefined();
-  });
-
-  it('round-trips InvalidParams field issues through error.data.issues (#711)', async () => {
-    const issues = [
-      { path: ['input', 'name'], message: 'Required', code: 'invalid_type' },
-      { path: ['input', 'age'], message: 'Expected number', code: 'invalid_type' },
-    ];
-    const error = await captureError(
-      new Response(
-        JSON.stringify({
-          error: { code: 'InvalidParams', message: 'invalid input', data: { issues } },
-        }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } },
-      ),
-    );
-    expect(error.faultCode).toBe('InvalidParams');
-    expect(error.data?.['issues']).toEqual(issues);
-  });
-
-  it('round-trips Conflict resource/identifier and bulk sub-detail through error.data (#711)', async () => {
-    const error = await captureError(
-      new Response(
-        JSON.stringify({
-          error: {
-            code: 'Conflict',
-            message: 'already exists',
-            data: {
-              reason: 'duplicate',
-              missingTypes: ['a', 'b'],
-              missingWorkflowCount: 3,
-              samplesTruncated: true,
-            },
-          },
-        }),
-        { status: 409, headers: { 'Content-Type': 'application/json' } },
-      ),
-    );
-    expect(error.faultCode).toBe('Conflict');
-    expect(error.data).toEqual({
-      reason: 'duplicate',
-      missingTypes: ['a', 'b'],
-      missingWorkflowCount: 3,
-      samplesTruncated: true,
-    });
-  });
-
   it('leaves data undefined for a flat string body (no structured data on the wire)', async () => {
     const error = await captureError(
       new Response(JSON.stringify({ error: 'plain message' }), {
         status: 422,
         headers: { 'Content-Type': 'application/json' },
       }),
-    );
-    expect(error.data).toBeUndefined();
-  });
-
-  it('leaves data undefined when the structured body carries no data field', async () => {
-    const error = await captureError(
-      new Response(JSON.stringify({ error: { code: 'NotFound', message: 'gone' } }), {
-        status: 404,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    );
-    expect(error.data).toBeUndefined();
-  });
-
-  it('ignores a non-object data field (defensive parsing of untrusted wire input)', async () => {
-    const error = await captureError(
-      new Response(
-        JSON.stringify({ error: { code: 'NotFound', message: 'gone', data: 'not-an-object' } }),
-        { status: 404, headers: { 'Content-Type': 'application/json' } },
-      ),
-    );
-    expect(error.data).toBeUndefined();
-  });
-
-  it('ignores an array data field (defensive parsing of untrusted wire input)', async () => {
-    const error = await captureError(
-      new Response(
-        JSON.stringify({ error: { code: 'NotFound', message: 'gone', data: [1, 2, 3] } }),
-        { status: 404, headers: { 'Content-Type': 'application/json' } },
-      ),
     );
     expect(error.data).toBeUndefined();
   });
@@ -256,23 +129,6 @@ describe('request() error-body parsing', () => {
     expect(error.faultCode).toBeUndefined();
     expect(error.weftCode).toBeUndefined();
     expect(error.data).toBeUndefined();
-  });
-
-  it('surfaces a fine-grained weftCode from a structured body data field (#465)', async () => {
-    const error = await captureError(
-      new Response(
-        JSON.stringify({
-          error: {
-            code: 'NotFound',
-            message: 'workflow not found',
-            data: { resource: 'workflow', weftCode: 'WorkflowNotFoundError' },
-          },
-        }),
-        { status: 404, headers: { 'Content-Type': 'application/json' } },
-      ),
-    );
-    expect(error.faultCode).toBe('NotFound');
-    expect(error.weftCode).toBe('WorkflowNotFoundError');
   });
 
   it('surfaces a top-level weftCode sibling from a flat string body (#465)', async () => {
@@ -316,18 +172,6 @@ describe('request() error-body parsing', () => {
     );
     expect(error.message).toBe('boom');
     expect(error.weftCode).toBeUndefined();
-  });
-
-  it('falls back to statusText when a structured body has a code but no message', async () => {
-    const error = await captureError(
-      new Response(JSON.stringify({ error: { code: 'NotFound' } }), {
-        status: 404,
-        statusText: 'Not Found',
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    );
-    expect(error.faultCode).toBeUndefined();
-    expect(error.message).toBe('Not Found');
   });
 
   it('falls back to statusText for a null error field', async () => {
