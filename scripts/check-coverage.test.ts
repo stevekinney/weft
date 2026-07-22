@@ -29,6 +29,44 @@ describe('parseLcov', () => {
     expect(coverage.uncoveredFiles).toEqual(['src/example.ts']);
   });
 
+  it('rejects a line allowance that points at covered code', () => {
+    expect(() =>
+      parseLcov(
+        [
+          'SF:src/core/context/parallel-operations.ts',
+          'FNF:0',
+          'FNH:0',
+          'DA:19,1',
+          'end_of_record',
+        ].join('\n'),
+      ),
+    ).toThrow(
+      'Coverage allowance for src/core/context/parallel-operations.ts:19 points at a covered line',
+    );
+  });
+
+  it('applies the strict parallel-operation allowance only to its current uncovered lines', () => {
+    const coverage = parseLcov(
+      [
+        'SF:src/core/context/parallel-operations.ts',
+        'FNF:1',
+        'FNH:0',
+        'DA:19,0',
+        'DA:20,0',
+        'DA:21,0',
+        'DA:22,1',
+        'DA:31,0',
+        'DA:37,0',
+        'DA:38,0',
+        'DA:39,0',
+        'end_of_record',
+      ].join('\n'),
+    );
+
+    expect(coverage.covered).toBe(true);
+    expect(coverage.lines).toEqual({ total: 1, hit: 1, missed: 0 });
+  });
+
   it('ignores generated temporary workflow artifacts', () => {
     const generatedFiles = [
       'weft-schedule-workflows-example.ts',
