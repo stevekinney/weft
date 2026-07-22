@@ -156,6 +156,17 @@ describe('weft.workflows.activities.pending.list', () => {
       operationOptions(['workflows:read']),
     );
     expect(crossWorkflowCursor.status).toBe(400);
+
+    const missingWorkflow = await handleRequest(
+      request('GET', '/v1/workflows/missing/pending-async-activities'),
+      engine,
+      operationOptions(['workflows:read']),
+    );
+    expect(missingWorkflow.status).toBe(404);
+    expect(await missingWorkflow.json()).toEqual({
+      error: 'Workflow "missing" not found',
+      data: { resource: 'workflow', identifier: 'missing' },
+    });
   });
 });
 

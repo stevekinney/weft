@@ -1,12 +1,18 @@
 import { describe, expect, it } from 'bun:test';
 
+import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { flush } from '../../testing/storage-backends.test-support.ts';
 import type { ListFilter, WorkflowContext } from '../types.ts';
 import { workflow } from '../types.ts';
 import { Engine } from './index.ts';
 import { getInternals } from './internals.ts';
-import { streamMatchingWorkflowStates } from './workflow-state-stream.ts';
+import { MAX_LIST_SCAN_ROWS, WorkflowListScanCapExceededError } from './workflow-indexes.ts';
+import {
+  queryChildWorkflowIndex,
+  queryScheduleRunIndex,
+  streamMatchingWorkflowStates,
+} from './workflow-state-stream.ts';
 
 async function* echoWorkflow(_ctx: WorkflowContext, input: unknown) {
   return input;
@@ -55,6 +61,19 @@ class ConcurrentWorkflowStateReadCountingStorage extends MemoryStorage {
     this.workflowReadCount = 0;
     this.activeWorkflowReadCount = 0;
     this.maxConcurrentWorkflowReadCount = 0;
+  }
+}
+
+class OversizedIndexStorage extends MemoryStorage {
+  constructor(private readonly indexPrefix: string) {
+    super();
+  }
+
+  override async *scan(prefix: string): AsyncIterableIterator<[string, Uint8Array]> {
+    if (prefix !== this.indexPrefix) return;
+    for (let index = 0; index <= MAX_LIST_SCAN_ROWS; index += 1) {
+      yield [`${prefix}${String(index)}`, new Uint8Array()];
+    }
   }
 }
 
@@ -196,5 +215,25 @@ describe('streamMatchingWorkflowStates', () => {
     } finally {
       await engine[Symbol.asyncDispose]();
     }
+  });
+});
+
+describe('workflow reverse-index scan caps', () => {
+  it('rejects a direct-child index that exceeds the bounded scan cap', async () => {
+    const prefix = KEYS.childWorkflowByParentPrefix('parent-id', 'parent-token');
+    await using engine = new Engine({ storage: new OversizedIndexStorage(prefix) });
+
+    await expect(
+      queryChildWorkflowIndex(getInternals(engine), 'parent-id', 'parent-token'),
+    ).rejects.toBeInstanceOf(WorkflowListScanCapExceededError);
+  });
+
+  it('rejects a schedule-run index that exceeds the bounded scan cap', async () => {
+    const prefix = KEYS.scheduleRunBySchedulePrefix('schedule-id');
+    await using engine = new Engine({ storage: new OversizedIndexStorage(prefix) });
+
+    await expect(queryScheduleRunIndex(getInternals(engine), 'schedule-id')).rejects.toBeInstanceOf(
+      WorkflowListScanCapExceededError,
+    );
   });
 });

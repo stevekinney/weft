@@ -295,6 +295,14 @@ describe('engine validation helpers', () => {
     expect(decoded.parentWorkflowId).toBeUndefined();
     expect(decoded.parentWorkflowExecutionToken).toBeUndefined();
     expect(decoded.restartedFrom).toBeUndefined();
+
+    const invalidRestartId = decodeWorkflowState(
+      encode({
+        ...createWorkflowState(),
+        restartedFrom: { workflowId: '', replacedAt: 2 },
+      }),
+    );
+    expect(invalidRestartId.restartedFrom).toBeUndefined();
   });
 
   it('lifts a pre-unification flat version tuple into versionTuple on decode', () => {

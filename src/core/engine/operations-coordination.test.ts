@@ -9,6 +9,7 @@ import type { EngineInternals } from './internals.ts';
 import {
   executeRunAllOperationResult,
   processParallelOperation,
+  processRaceOperation,
   processRunAllOperation,
   processWaitSignalOperation,
 } from './operations-coordination.ts';
@@ -236,6 +237,79 @@ describe('partial-failure preservation worker-mode boundary', () => {
     expect((captured as Error).message).toBe('consume exploded');
     // The sibling finalizer ran to completion before the operation rejected.
     expect(siblingFinalized).toBe(true);
+  });
+
+  it("records a ctx.race winner's deferred-consume failure in branch timeline metadata", async () => {
+    const workflowId = 'wf-race-finalize-fail';
+    const timelineEntry = {
+      step: 0,
+      operationType: 'race',
+      operationLabel: 'race',
+      inputSummary: '{"operationCount":2}',
+      timestamp: 1,
+      status: 'running' as const,
+    };
+    const internals = {
+      ...createWorkerModeInternals(),
+      pendingTimelineEntries: new Map([[workflowId, { startedAt: 1, entry: timelineEntry }]]),
+    } as EngineInternals;
+    const operation: Extract<ContextOperationRequest, { type: 'race' }> = {
+      type: 'race',
+      operationId: 'race:0',
+      operations: [
+        { type: 'wait-signal', operationId: 'race:0:0', signalName: 'ready' },
+        {
+          type: 'activity',
+          operationId: 'race:0:1',
+          activityName: 'slow-loser',
+          fn: async () => undefined,
+          input: undefined,
+        },
+      ],
+    };
+
+    let captured: unknown;
+    await processRaceOperation(internals, workflowId, operation, {
+      executeSubOperation: async (_workflowId, subOperation, signal) => {
+        if (subOperation.operationId === 'race:0:0') {
+          return createDeferredConsumeEnvelope(async () => {
+            throw new Error('consume exploded');
+          });
+        }
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+        });
+      },
+      runOperationWithResult: async (_workflowId, _operation, execute) => {
+        try {
+          await execute();
+        } catch (error) {
+          captured = error;
+        }
+      },
+    });
+
+    expect(captured).toBeInstanceOf(Error);
+    expect((captured as Error).message).toBe('consume exploded');
+    expect(timelineEntry).toMatchObject({
+      branches: [
+        {
+          index: 0,
+          operationId: 'race:0:0',
+          operationType: 'wait-signal',
+          operationLabel: 'ready',
+          outcome: 'won',
+          errorSummary: '{"name":"Error","message":"consume exploded"}',
+        },
+        {
+          index: 1,
+          operationId: 'race:0:1',
+          operationType: 'activity',
+          operationLabel: 'slow-loser',
+          outcome: 'lost',
+        },
+      ],
+    });
   });
 
   it('cleans up a wait-signal waiter when cancellation lands after waiter registration', async () => {

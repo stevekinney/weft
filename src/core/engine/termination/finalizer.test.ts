@@ -744,6 +744,15 @@ describe('Engine.getFinalizerStatus', () => {
 
     await expect(engine.getFinalizerStatus(workflowId)).resolves.toBeNull();
   });
+
+  it('treats an undecodable success record as absent', async () => {
+    await using engine = new Engine();
+    const workflowId = 'finalizer-corrupt-success';
+
+    await engine.storage.put(KEYS.teardownSucceeded(workflowId), new Uint8Array([0xc1]));
+
+    await expect(engine.getFinalizerStatus(workflowId)).resolves.toBeNull();
+  });
 });
 
 describe('runFinalizerActivity — primitive', () => {

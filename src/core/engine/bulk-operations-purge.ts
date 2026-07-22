@@ -31,13 +31,11 @@ import {
 import { buildWorkflowVisibilityIndexTransition } from './workflow-indexes.ts';
 
 export const TERMINAL_CLEANUP_DELAY_MS = 60_000;
-
 export type PurgeParameters = {
   expiredOnly: boolean;
   now: number;
   limit?: number;
 };
-
 export type CleanupWaiters = (workflowId: string) => void;
 
 export async function purgeInternal(

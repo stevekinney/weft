@@ -371,6 +371,57 @@ describe('async activity completion', () => {
     await expect(
       engine.listPendingAsyncActivities('pending-invalid-cursor', { cursor: 'not-a-cursor' }),
     ).rejects.toThrow('Invalid pending async activity cursor');
+    await expect(
+      engine.listPendingAsyncActivities('pending-invalid-cursor', {
+        cursor: 'pending-async:v1:%',
+      }),
+    ).rejects.toThrow('Invalid pending async activity cursor');
+    await expect(
+      engine.listPendingAsyncActivities('pending-invalid-cursor', { limit: 0 }),
+    ).rejects.toThrow('Pending async activity limit must be an integer between 1 and 200');
+  });
+
+  it('skips undecodable and internally inconsistent pending records', async () => {
+    await using storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+    const workflowId = 'pending-corrupt-records';
+    const record = (token: string, step: number) => ({
+      version: 1,
+      token,
+      workflowId,
+      activityName: 'callback',
+      operationId: `operation-${token}`,
+      step,
+      attempt: 1,
+      createdAt: 1_000,
+    });
+
+    await storage.put(KEYS.asyncActivity(workflowId, 'bad-bytes'), new Uint8Array([0xc1]));
+    await storage.put(
+      KEYS.asyncActivity(workflowId, 'mismatched-key'),
+      encode(record('different-token', 0)),
+    );
+    await storage.put(
+      KEYS.asyncActivity(workflowId, 'invalid-step'),
+      encode(record('invalid-step', -1)),
+    );
+    await storage.put(
+      KEYS.asyncActivity(workflowId, 'valid-token'),
+      encode(record('valid-token', 2)),
+    );
+
+    await expect(engine.listPendingAsyncActivities(workflowId)).resolves.toEqual({
+      items: [
+        {
+          token: 'valid-token',
+          operationId: 'operation-valid-token',
+          activityName: 'callback',
+          step: 2,
+          attempt: 1,
+          createdAt: 1_000,
+        },
+      ],
+    });
   });
 
   it('removes a parked token when terminal cancellation cleans up the workflow', async () => {

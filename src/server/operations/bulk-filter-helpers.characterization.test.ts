@@ -28,6 +28,20 @@ function wrap(filter: unknown): unknown {
 }
 
 describe('parseBulkListFilterFromBody — validation precedence', () => {
+  it('preserves token-qualified parent workflow filters', () => {
+    expect(
+      parseBulkListFilterFromBody(
+        wrap({
+          parentWorkflowId: 'parent-id',
+          parentWorkflowExecutionToken: 'parent-token',
+        }),
+      ),
+    ).toEqual({
+      parentWorkflowId: 'parent-id',
+      parentWorkflowExecutionToken: 'parent-token',
+    });
+  });
+
   // --- adjacent pair: status before type ---
   it('reports status error before type error when both are invalid', () => {
     expect(() => parseBulkListFilterFromBody(wrap({ status: 42, type: 99 }))).toThrow(
