@@ -52,7 +52,13 @@ function appendAttributeFilters(
 
 function appendOptionalSearchParameter(
   params: URLSearchParams,
-  key: 'type' | 'schedule_id' | 'limit' | 'offset',
+  key:
+    | 'type'
+    | 'schedule_id'
+    | 'parent_workflow_id'
+    | 'parent_workflow_execution_token'
+    | 'limit'
+    | 'offset',
   value: string | number | undefined,
 ): void {
   if (value !== undefined) params.set(key, String(value));
@@ -64,6 +70,12 @@ export function buildWorkflowListSearchParams(filter?: ListFilter): URLSearchPar
   appendStatusFilters(params, filter?.status);
   appendOptionalSearchParameter(params, 'type', filter?.type);
   appendOptionalSearchParameter(params, 'schedule_id', filter?.scheduleId);
+  appendOptionalSearchParameter(params, 'parent_workflow_id', filter?.parentWorkflowId);
+  appendOptionalSearchParameter(
+    params,
+    'parent_workflow_execution_token',
+    filter?.parentWorkflowExecutionToken,
+  );
   appendTagFilters(params, filter?.tags);
   appendOptionalSearchParameter(params, 'limit', filter?.limit);
   appendOptionalSearchParameter(params, 'offset', filter?.offset);

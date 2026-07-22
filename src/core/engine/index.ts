@@ -606,6 +606,8 @@ export class Engine<
     getInternals(this).pendingNestingDepth = undefined;
     getInternals(this).pendingParentHeaders = undefined;
     getInternals(this).pendingExecutionStateOwnerId = undefined;
+    getInternals(this).pendingParentWorkflowId = undefined;
+    getInternals(this).pendingParentWorkflowExecutionToken = undefined;
     getInternals(this).workflowNestingDepths = new Map();
     getInternals(this).workflowHeaders = new Map();
     getInternals(this).workflowStateWriteChains = new Map();

@@ -391,6 +391,8 @@ describe('engine lifecycle coverage helpers', () => {
         undefined,
         'workflow-timeout-overflow',
         undefined,
+        undefined,
+        undefined,
         createLifecycleCallbacks() as never,
       ),
     ).toThrow('options.executionTimeout must resolve to a finite, non-negative deadline');
@@ -439,6 +441,8 @@ describe('engine lifecycle coverage helpers', () => {
       undefined,
       ['critical'],
       'owner-workflow',
+      undefined,
+      undefined,
       { fireAt: 20_000, id: 'delay', kind: 'delayed-start', workflowId: 'workflow-pending-state' },
       createLifecycleCallbacks() as never,
     );

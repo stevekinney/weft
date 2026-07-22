@@ -71,6 +71,8 @@ export function disposeEngine(internals: EngineInternals): void {
   internals.sleepTimersFiredWithoutResolver.clear();
   internals.checkpoints.clear();
   internals.pendingExecutionStateOwnerId = undefined;
+  internals.pendingParentWorkflowId = undefined;
+  internals.pendingParentWorkflowExecutionToken = undefined;
   internals.workflowNestingDepths.clear();
   // Release per-run `services` held in engine memory. Only terminal cleanup and
   // start-rollback delete these entries, so a run that never reaches a terminal

@@ -871,4 +871,14 @@ describe('KEYS', () => {
   it('encodes successful teardown outcomes by workflow id', () => {
     expect(KEYS.teardownSucceeded('workflow:id')).toBe('wf-teardown-succeeded:workflow%3Aid');
   });
+
+  it('encodes parent run lineage reverse-index dimensions independently', () => {
+    expect(KEYS.childWorkflowByParentPrefix('parent:id')).toBe('child-by-parent:parent%3Aid:');
+    expect(KEYS.childWorkflowByParentPrefix('parent:id', 'token:value')).toBe(
+      'child-by-parent:parent%3Aid:token%3Avalue:',
+    );
+    expect(KEYS.childWorkflowByParent('parent:id', 'token:value', 'child:id')).toBe(
+      'child-by-parent:parent%3Aid:token%3Avalue:child%3Aid',
+    );
+  });
 });

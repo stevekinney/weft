@@ -22,6 +22,8 @@ describe('extractListFilterFromQuery', () => {
     const url = urlWith({
       status: ['failed', 'timed-out'],
       type: 'order',
+      parent_workflow_id: 'parent-run',
+      parent_workflow_execution_token: 'parent-token',
       tag: ['nightly', 'v2'],
       id_prefix: 'order-',
       failure_category: ['resource', 'application'],
@@ -34,6 +36,8 @@ describe('extractListFilterFromQuery', () => {
     expect(extractListFilterFromQuery(url)).toEqual({
       status: ['failed', 'timed-out'],
       type: 'order',
+      parentWorkflowId: 'parent-run',
+      parentWorkflowExecutionToken: 'parent-token',
       tags: ['nightly', 'v2'],
       idPrefix: 'order-',
       failureCategory: ['resource', 'application'],

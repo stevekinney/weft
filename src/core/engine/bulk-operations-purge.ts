@@ -347,7 +347,7 @@ async function addScheduleRunHistoryDeleteKeys(
 }
 
 function buildBaseWorkflowDeleteKeys(state: WorkflowState): Set<string> {
-  return new Set([
+  const keys = new Set([
     KEYS.workflow(state.id),
     KEYS.checkpoint(state.id),
     KEYS.workflowHeaders(state.id),
@@ -375,6 +375,16 @@ function buildBaseWorkflowDeleteKeys(state: WorkflowState): Set<string> {
     KEYS.attribute(state.id),
     KEYS.terminalWorkflow(state.updatedAt, state.id),
   ]);
+  if (state.parentWorkflowId !== undefined) {
+    keys.add(
+      KEYS.childWorkflowByParent(
+        state.parentWorkflowId,
+        state.parentWorkflowExecutionToken,
+        state.id,
+      ),
+    );
+  }
+  return keys;
 }
 
 function addExecutionDeadlineDeleteKeys(deleteKeys: Set<string>, state: WorkflowState): void {

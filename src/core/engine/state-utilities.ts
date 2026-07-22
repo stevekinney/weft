@@ -379,6 +379,9 @@ function matchesListFilterIdentity(state: WorkflowState, filter: ListFilter): bo
   return (
     matchesListFilterStatus(state, filter) &&
     (filter.type === undefined || state.type === filter.type) &&
+    (filter.parentWorkflowId === undefined || state.parentWorkflowId === filter.parentWorkflowId) &&
+    (filter.parentWorkflowExecutionToken === undefined ||
+      state.parentWorkflowExecutionToken === filter.parentWorkflowExecutionToken) &&
     (filter.idPrefix === undefined || state.id.startsWith(filter.idPrefix))
   );
 }

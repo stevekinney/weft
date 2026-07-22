@@ -25,6 +25,8 @@ type ListFilterDimension =
   | 'status'
   | 'type'
   | 'scheduleId'
+  | 'parentWorkflowId'
+  | 'parentWorkflowExecutionToken'
   | 'tags'
   | 'attributes'
   | 'idPrefix'
@@ -53,6 +55,20 @@ function parseType(params: URLSearchParams): ListFilter['type'] | undefined {
 function parseScheduleId(params: URLSearchParams): ListFilter['scheduleId'] | undefined {
   const scheduleId = params.get('schedule_id');
   return scheduleId === null ? undefined : scheduleId;
+}
+
+function parseParentWorkflowId(
+  params: URLSearchParams,
+): ListFilter['parentWorkflowId'] | undefined {
+  const parentWorkflowId = params.get('parent_workflow_id');
+  return parentWorkflowId === null ? undefined : parentWorkflowId;
+}
+
+function parseParentWorkflowExecutionToken(
+  params: URLSearchParams,
+): ListFilter['parentWorkflowExecutionToken'] | undefined {
+  const parentWorkflowExecutionToken = params.get('parent_workflow_execution_token');
+  return parentWorkflowExecutionToken === null ? undefined : parentWorkflowExecutionToken;
 }
 
 function parseTags(params: URLSearchParams): ListFilter['tags'] | undefined {
@@ -107,6 +123,8 @@ const LIST_FILTER_QUERY_PARSERS = {
   status: parseStatus,
   type: parseType,
   scheduleId: parseScheduleId,
+  parentWorkflowId: parseParentWorkflowId,
+  parentWorkflowExecutionToken: parseParentWorkflowExecutionToken,
   tags: parseTags,
   attributes: parseAttributes,
   idPrefix: parseIdPrefix,

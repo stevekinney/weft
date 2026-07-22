@@ -99,27 +99,22 @@ async function readSearchAttributesForFilter(
   return decodeSearchAttributeRecord(await internals.storage.get(KEYS.attribute(workflowId)));
 }
 
-/** Resolve indexed workflow IDs implied by schedule, tag, and search-attribute filters. */
+/** Resolve indexed workflow IDs implied by lineage, schedule, tag, and search-attribute filters. */
 export async function resolveConstrainedIds(
   internals: EngineInternals,
   filter: ListFilter | undefined,
   normalizedTagFilters: readonly string[] | undefined,
 ): Promise<Set<string> | null> {
   const attributeFilters = filter?.attributes;
-  const hasAttributeFilters = attributeFilters !== undefined && attributeFilters.length > 0;
-  const hasTagFilters = normalizedTagFilters !== undefined && normalizedTagFilters.length > 0;
-  const hasScheduleFilter = filter?.scheduleId !== undefined;
-
-  if (!hasAttributeFilters && !hasTagFilters && !hasScheduleFilter) {
-    return null;
-  }
-
   const queries = buildConstrainedIdQueries(
     internals,
     normalizedTagFilters,
     attributeFilters,
     filter?.scheduleId,
+    filter?.parentWorkflowId,
+    filter?.parentWorkflowExecutionToken,
   );
+  if (queries.length === 0) return null;
   return intersectIdentifierSets(await runConstrainedIdQueries(queries));
 }
 
@@ -146,14 +141,39 @@ function buildConstrainedIdQueries(
   normalizedTagFilters: readonly string[] | undefined,
   attributeFilters: readonly AttributeFilter[] | undefined,
   scheduleId: string | undefined,
+  parentWorkflowId: string | undefined,
+  parentWorkflowExecutionToken: string | undefined,
 ): Array<() => Promise<Set<string>>> {
   return [
     ...(scheduleId === undefined ? [] : [() => queryScheduleRunIndex(internals, scheduleId)]),
+    ...(parentWorkflowId === undefined
+      ? []
+      : [() => queryChildWorkflowIndex(internals, parentWorkflowId, parentWorkflowExecutionToken)]),
     ...(normalizedTagFilters?.map((tag) => () => queryTagIndex(internals, tag)) ?? []),
     ...(attributeFilters?.map(
       (attributeFilter) => () => queryAttributeIndex(internals, attributeFilter),
     ) ?? []),
   ];
+}
+
+/** Resolve the durable reverse index from one concrete parent run to its direct children. */
+export async function queryChildWorkflowIndex(
+  internals: EngineInternals,
+  parentWorkflowId: string,
+  parentWorkflowExecutionToken: string | undefined,
+): Promise<Set<string>> {
+  const workflowIds = new Set<string>();
+  const prefix = KEYS.childWorkflowByParentPrefix(parentWorkflowId, parentWorkflowExecutionToken);
+  for await (const [key] of internals.storage.scan(prefix)) {
+    if (workflowIds.size >= MAX_LIST_SCAN_ROWS) {
+      throw new WorkflowListScanCapExceededError(MAX_LIST_SCAN_ROWS);
+    }
+    const encodedWorkflowId = key.slice(prefix.length).split(':').at(-1);
+    if (encodedWorkflowId === undefined) continue;
+    const workflowId = tryDecodeStorageKeyComponent(encodedWorkflowId);
+    if (workflowId !== null) workflowIds.add(workflowId);
+  }
+  return workflowIds;
 }
 
 /** Resolve the durable reverse index from a schedule id to launched workflow ids. */

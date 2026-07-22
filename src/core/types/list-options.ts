@@ -51,6 +51,10 @@ export interface ListFilter {
   type?: string;
   /** Match workflow runs launched by this recurring schedule. */
   scheduleId?: string;
+  /** Match direct child workflows launched by this parent workflow id. */
+  parentWorkflowId?: string;
+  /** Narrow `parentWorkflowId` to one concrete parent run generation. */
+  parentWorkflowExecutionToken?: string;
   /** Match workflows that carry every listed tag. */
   tags?: string[];
   /** Filter on indexed search attributes (equality, string any-of, or range). */

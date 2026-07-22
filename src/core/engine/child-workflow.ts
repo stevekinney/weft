@@ -72,6 +72,8 @@ type PendingChildExecutionContext = {
   pendingNestingDepth: number;
   pendingParentHeaders: Map<string, string> | undefined;
   pendingExecutionStateOwnerId: string | null;
+  pendingParentWorkflowId: string;
+  pendingParentWorkflowExecutionToken: string | undefined;
 };
 
 function applyPendingChildExecutionContext(
@@ -81,6 +83,8 @@ function applyPendingChildExecutionContext(
   internals.pendingNestingDepth = context.pendingNestingDepth;
   internals.pendingParentHeaders = context.pendingParentHeaders;
   internals.pendingExecutionStateOwnerId = context.pendingExecutionStateOwnerId;
+  internals.pendingParentWorkflowId = context.pendingParentWorkflowId;
+  internals.pendingParentWorkflowExecutionToken = context.pendingParentWorkflowExecutionToken;
 }
 
 function clearPendingChildExecutionContext(
@@ -96,17 +100,35 @@ function clearPendingChildExecutionContext(
   if (internals.pendingExecutionStateOwnerId === context.pendingExecutionStateOwnerId) {
     internals.pendingExecutionStateOwnerId = undefined;
   }
+  if (internals.pendingParentWorkflowId === context.pendingParentWorkflowId) {
+    internals.pendingParentWorkflowId = undefined;
+  }
+  if (
+    internals.pendingParentWorkflowExecutionToken === context.pendingParentWorkflowExecutionToken
+  ) {
+    internals.pendingParentWorkflowExecutionToken = undefined;
+  }
 }
 
 function existingChildMatchesRequest(
   existingState: WorkflowState,
   operation: ChildWorkflowOperation,
   executionStateOwnerId: string | undefined,
+  parentWorkflowId: string,
+  parentWorkflowExecutionToken: string | undefined,
 ): boolean {
+  // Records written before direct-run lineage was persisted still reattach by
+  // the established type/input/execution-owner replay identity.
+  const lineageMatches =
+    (existingState.parentWorkflowId === undefined &&
+      existingState.parentWorkflowExecutionToken === undefined) ||
+    (existingState.parentWorkflowId === parentWorkflowId &&
+      existingState.parentWorkflowExecutionToken === parentWorkflowExecutionToken);
   return (
     existingState.type === operation.workflowType &&
     encodedValuesEqual(existingState.input, operation.input) &&
-    existingState.executionStateOwnerId === executionStateOwnerId
+    existingState.executionStateOwnerId === executionStateOwnerId &&
+    lineageMatches
   );
 }
 
@@ -114,6 +136,8 @@ async function resolveCollisionChildHandle(
   childWorkflowId: string,
   operation: ChildWorkflowOperation,
   executionStateOwnerId: string | undefined,
+  parentWorkflowId: string,
+  parentWorkflowExecutionToken: string | undefined,
   collisionError: WorkflowAlreadyExistsError,
   callbacks: Pick<ChildWorkflowOperationCallbacks, 'getHandle' | 'loadWorkflowState'>,
 ): Promise<WorkflowHandle> {
@@ -123,7 +147,15 @@ async function resolveCollisionChildHandle(
     throw collisionError;
   }
 
-  if (!existingChildMatchesRequest(existingState, operation, executionStateOwnerId)) {
+  if (
+    !existingChildMatchesRequest(
+      existingState,
+      operation,
+      executionStateOwnerId,
+      parentWorkflowId,
+      parentWorkflowExecutionToken,
+    )
+  ) {
     throw new Error(
       `Child workflow id collision for "${childWorkflowId}" does not match the requested child workflow`,
       { cause: collisionError },
@@ -159,6 +191,8 @@ async function dispatchChildWorkflowStart(
       childWorkflowId,
       operation,
       context.pendingExecutionStateOwnerId ?? undefined,
+      context.pendingParentWorkflowId,
+      context.pendingParentWorkflowExecutionToken,
       error,
       callbacks,
     );
@@ -189,6 +223,8 @@ export async function executeChildWorkflow(
       pendingNestingDepth: currentDepth + 1,
       pendingParentHeaders: internals.workflowHeaders.get(workflowId),
       pendingExecutionStateOwnerId: executionStateOwnerId,
+      pendingParentWorkflowId: workflowId,
+      pendingParentWorkflowExecutionToken: parentState?.workflowExecutionToken,
     };
     const childHandle = await dispatchChildWorkflowStart(
       internals,

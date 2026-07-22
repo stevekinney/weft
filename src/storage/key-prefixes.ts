@@ -25,6 +25,7 @@ export const WEFT_RESERVED_KEY_PREFIXES = [
   'blob:',
   'budget:',
   'budget-charged:',
+  'child-by-parent:',
   'ev:',
   'fleet-event-by-workflow:',
   'fleet-event:',

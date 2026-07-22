@@ -232,6 +232,8 @@ async function exerciseWorkflowClientRequests(httpClient: HttpClient): Promise<v
     status: ['running', 'completed'],
     type: 'echo',
     scheduleId: 'daily-report',
+    parentWorkflowId: 'parent-run',
+    parentWorkflowExecutionToken: 'parent-token',
     limit: 5,
     offset: 2,
     attributes: [
@@ -439,6 +441,8 @@ function assertFilterAndFollowupCalls(fetchCalls: FetchCall[]): void {
   expect(listUrl.searchParams.getAll('status')).toEqual(['running', 'completed']);
   expect(listUrl.searchParams.get('type')).toBe('echo');
   expect(listUrl.searchParams.get('schedule_id')).toBe('daily-report');
+  expect(listUrl.searchParams.get('parent_workflow_id')).toBe('parent-run');
+  expect(listUrl.searchParams.get('parent_workflow_execution_token')).toBe('parent-token');
   expect(listUrl.searchParams.get('limit')).toBe('5');
   expect(listUrl.searchParams.get('offset')).toBe('2');
   expect(listUrl.searchParams.get('attr.priority')).toBe('high');

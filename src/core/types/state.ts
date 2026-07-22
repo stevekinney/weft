@@ -71,6 +71,10 @@ export interface WorkflowState {
    * tree.
    */
   executionStateOwnerId?: string;
+  /** Immediate parent workflow id for runs launched through `ctx.startChild()`. */
+  parentWorkflowId?: WorkflowId;
+  /** Concrete parent run token, used to distinguish stable-id reuse generations. */
+  parentWorkflowExecutionToken?: string;
   createdAt: number;
   startedAt?: number;
   updatedAt: number;
@@ -81,6 +85,31 @@ export interface WorkflowState {
    * another workflow checkpoint. Absent for workflows started normally.
    */
   forkedFrom?: ForkLineage;
+  /** Immediate terminal run displaced when this run was created with `start-new`. */
+  restartedFrom?: RestartLineage;
+}
+
+/**
+ * Immediate predecessor recorded when `onTerminalConflict: 'start-new'` reuses
+ * a stable workflow id. The execution token identifies the concrete displaced
+ * run because both runs share the same workflow id.
+ *
+ * @example
+ * ```ts
+ * import type { RestartLineage } from '@lostgradient/weft';
+ *
+ * const lineage: RestartLineage = {
+ *   workflowId: 'nightly-reconciliation',
+ *   workflowExecutionToken: 'prior-run-token',
+ *   replacedAt: Date.now(),
+ * };
+ * void lineage;
+ * ```
+ */
+export interface RestartLineage {
+  workflowId: WorkflowId;
+  workflowExecutionToken?: string;
+  replacedAt: number;
 }
 
 /**

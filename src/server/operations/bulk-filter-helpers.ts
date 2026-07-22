@@ -64,6 +64,8 @@ export const bulkListFilterInputSchema = z.object({
   status: z.union([workflowStatusSchema, z.array(workflowStatusSchema)]).optional(),
   type: z.string().optional(),
   scheduleId: z.string().min(1).optional(),
+  parentWorkflowId: z.string().min(1).optional(),
+  parentWorkflowExecutionToken: z.string().min(1).optional(),
   tags: z.array(z.string()).optional(),
   attributes: z.array(attributeFilterSchema).optional(),
   limit: z.number().int().min(0).optional(),
@@ -201,7 +203,7 @@ function parseFilterStatus(value: unknown): ListFilter['status'] {
 
 function parseOptionalFilterString(
   value: unknown,
-  fieldName: 'type' | 'scheduleId',
+  fieldName: 'type' | 'scheduleId' | 'parentWorkflowId' | 'parentWorkflowExecutionToken',
 ): string | undefined {
   if (value === undefined) {
     return undefined;
@@ -257,6 +259,22 @@ const BULK_FILTER_DIMENSION_PARSERS: ReadonlyArray<
   (filter, record) => {
     const scheduleId = parseOptionalFilterString(record['scheduleId'], 'scheduleId');
     if (scheduleId !== undefined) filter.scheduleId = scheduleId;
+  },
+  (filter, record) => {
+    const parentWorkflowId = parseOptionalFilterString(
+      record['parentWorkflowId'],
+      'parentWorkflowId',
+    );
+    if (parentWorkflowId !== undefined) filter.parentWorkflowId = parentWorkflowId;
+  },
+  (filter, record) => {
+    const parentWorkflowExecutionToken = parseOptionalFilterString(
+      record['parentWorkflowExecutionToken'],
+      'parentWorkflowExecutionToken',
+    );
+    if (parentWorkflowExecutionToken !== undefined) {
+      filter.parentWorkflowExecutionToken = parentWorkflowExecutionToken;
+    }
   },
   (filter, record) => {
     const tags = parseOptionalFilterTags(record['tags']);
@@ -416,6 +434,12 @@ function copyAttributeRangeBound(
 function applyExtendedBulkFilterFields(filter: ListFilter, input: BulkListFilterInput): void {
   if (input.scheduleId !== undefined) {
     filter.scheduleId = input.scheduleId;
+  }
+  if (input.parentWorkflowId !== undefined) {
+    filter.parentWorkflowId = input.parentWorkflowId;
+  }
+  if (input.parentWorkflowExecutionToken !== undefined) {
+    filter.parentWorkflowExecutionToken = input.parentWorkflowExecutionToken;
   }
   if (input.idPrefix !== undefined) {
     filter.idPrefix = input.idPrefix;

@@ -145,7 +145,7 @@ export const CLIENT_REST_OPERATION_BINDINGS = {
   },
 } as const satisfies Readonly<Record<string, ClientRestOperationBinding>>;
 
-type SharedAttributesBulkConcurrenc_1d8d91a7 = {
+type SharedAttributesBulkConcurrenc_f62debcf = {
   readonly attributes?: ReadonlyArray<SharedGtGteKey_896a0c41>;
   readonly bulkConcurrency?: number;
   readonly confirmationToken?: string;
@@ -156,6 +156,8 @@ type SharedAttributesBulkConcurrenc_1d8d91a7 = {
   readonly idPrefix?: string;
   readonly limit?: number;
   readonly offset?: number;
+  readonly parentWorkflowExecutionToken?: string;
+  readonly parentWorkflowId?: string;
   readonly requestId?: string;
   readonly scheduleId?: string;
   readonly status?: unknown;
@@ -163,7 +165,7 @@ type SharedAttributesBulkConcurrenc_1d8d91a7 = {
   readonly type?: string;
   readonly updatedAt?: SharedGtGteLt_d9a61361;
 };
-type SharedAttributesCreatedAtExecu_43cee107 = {
+type SharedAttributesCreatedAtExecu_2af7f9ff = {
   readonly attributes?: ReadonlyArray<SharedGtGteKey_896a0c41>;
   readonly createdAt?: SharedGtGteLt_d9a61361;
   readonly executionDeadline?: SharedGtGteLt_d9a61361;
@@ -171,6 +173,8 @@ type SharedAttributesCreatedAtExecu_43cee107 = {
   readonly idPrefix?: string;
   readonly limit?: number;
   readonly offset?: number;
+  readonly parentWorkflowExecutionToken?: string;
+  readonly parentWorkflowId?: string;
   readonly scheduleId?: string;
   readonly status?: unknown;
   readonly tags?: ReadonlyArray<string>;
@@ -489,6 +493,8 @@ export type ClientOperationTypes = {
       readonly groupBy: unknown;
       readonly idPrefix?: string;
       readonly limit?: number;
+      readonly parentWorkflowExecutionToken?: string;
+      readonly parentWorkflowId?: string;
       readonly scheduleId?: string;
       readonly status?: unknown;
       readonly tags?: ReadonlyArray<string>;
@@ -513,17 +519,17 @@ export type ClientOperationTypes = {
     readonly faults: never;
   };
   'weft.workflows.bulk.cancel': {
-    readonly input: SharedAttributesBulkConcurrenc_1d8d91a7;
+    readonly input: SharedAttributesBulkConcurrenc_f62debcf;
     readonly output: unknown;
     readonly faults: never;
   };
   'weft.workflows.bulk.delete': {
-    readonly input: SharedAttributesBulkConcurrenc_1d8d91a7;
+    readonly input: SharedAttributesBulkConcurrenc_f62debcf;
     readonly output: unknown;
     readonly faults: 'Unprocessable';
   };
   'weft.workflows.bulk.retryfailed': {
-    readonly input: SharedAttributesBulkConcurrenc_1d8d91a7;
+    readonly input: SharedAttributesBulkConcurrenc_f62debcf;
     readonly output: unknown;
     readonly faults: never;
   };
@@ -540,6 +546,8 @@ export type ClientOperationTypes = {
       readonly limit?: number;
       readonly name: string;
       readonly offset?: number;
+      readonly parentWorkflowExecutionToken?: string;
+      readonly parentWorkflowId?: string;
       readonly payload?: unknown;
       readonly requestId?: string;
       readonly scheduleId?: string;
@@ -556,7 +564,7 @@ export type ClientOperationTypes = {
       readonly bulkConcurrency?: number;
       readonly confirmationToken?: string;
       readonly dryRun?: boolean;
-      readonly filter?: SharedAttributesCreatedAtExecu_43cee107;
+      readonly filter?: SharedAttributesCreatedAtExecu_2af7f9ff;
       readonly operation: 'add' | 'remove';
       readonly requestId?: string;
       readonly tags: ReadonlyArray<string>;
@@ -609,6 +617,8 @@ export type ClientOperationTypes = {
       readonly include?: unknown;
       readonly limit?: number;
       readonly offset?: number;
+      readonly parentWorkflowExecutionToken?: string;
+      readonly parentWorkflowId?: string;
       readonly scheduleId?: string;
       readonly status?: unknown;
       readonly tags?: ReadonlyArray<string>;
@@ -619,7 +629,7 @@ export type ClientOperationTypes = {
     readonly faults: 'Unprocessable';
   };
   'weft.workflows.purge': {
-    readonly input: SharedAttributesCreatedAtExecu_43cee107;
+    readonly input: SharedAttributesCreatedAtExecu_2af7f9ff;
     readonly output: unknown;
     readonly faults: never;
   };

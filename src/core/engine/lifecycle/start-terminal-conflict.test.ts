@@ -71,6 +71,53 @@ function isRejected<T>(outcome: PromiseSettledResult<T>): outcome is PromiseReje
 }
 
 describe("engine.start onTerminalConflict: 'start-new'", () => {
+  it('records the exact displaced run as immediate restart lineage', async () => {
+    await using engine = createEngine();
+
+    const first = await engine.start('echo-input', 'first', {
+      id: 'restart-lineage',
+      defer: false,
+    });
+    await first.result();
+    const firstState = await engine.get(first.id);
+    const firstWorkflowExecutionToken = firstState?.workflowExecutionToken;
+    if (firstWorkflowExecutionToken === undefined) throw new Error('Expected first run token');
+
+    const second = await engine.start('echo-input', 'second', {
+      id: first.id,
+      onTerminalConflict: 'start-new',
+      defer: false,
+    });
+    await second.result();
+    const secondState = await engine.get(second.id);
+    const secondCreatedAt = secondState?.createdAt;
+    if (secondCreatedAt === undefined) throw new Error('Expected successor state');
+
+    expect(secondState?.workflowExecutionToken).not.toBe(firstWorkflowExecutionToken);
+    expect(secondState?.restartedFrom).toEqual({
+      workflowId: first.id,
+      workflowExecutionToken: firstWorkflowExecutionToken,
+      replacedAt: secondCreatedAt,
+    });
+
+    const secondWorkflowExecutionToken = secondState?.workflowExecutionToken;
+    if (secondWorkflowExecutionToken === undefined) throw new Error('Expected second run token');
+    const third = await engine.start('echo-input', 'third', {
+      id: second.id,
+      onTerminalConflict: 'start-new',
+      defer: false,
+    });
+    await third.result();
+    const thirdState = await engine.get(third.id);
+    const thirdCreatedAt = thirdState?.createdAt;
+    if (thirdCreatedAt === undefined) throw new Error('Expected third run state');
+    expect(thirdState?.restartedFrom).toEqual({
+      workflowId: second.id,
+      workflowExecutionToken: secondWorkflowExecutionToken,
+      replacedAt: thirdCreatedAt,
+    });
+  });
+
   it('restarts a completed run under the same id with a fresh result', async () => {
     const engine = createEngine();
 

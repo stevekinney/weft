@@ -684,6 +684,22 @@ export const KEYS = {
     `child-cancel:${encodeStorageKeyComponent(workflowId)}:`,
   childCancellation: (workflowId: string, childWorkflowId: string) =>
     `child-cancel:${encodeStorageKeyComponent(workflowId)}:${encodeStorageKeyComponent(childWorkflowId)}`,
+  childWorkflowByParentPrefix: (parentWorkflowId: string, parentWorkflowExecutionToken?: string) =>
+    `child-by-parent:${encodeStorageKeyComponent(parentWorkflowId)}:${
+      parentWorkflowExecutionToken === undefined
+        ? ''
+        : `${encodeStorageKeyComponent(parentWorkflowExecutionToken)}:`
+    }`,
+  childWorkflowByParent: (
+    parentWorkflowId: string,
+    parentWorkflowExecutionToken: string | undefined,
+    childWorkflowId: string,
+  ) =>
+    `child-by-parent:${encodeStorageKeyComponent(parentWorkflowId)}:${
+      parentWorkflowExecutionToken === undefined
+        ? ''
+        : `${encodeStorageKeyComponent(parentWorkflowExecutionToken)}:`
+    }${encodeStorageKeyComponent(childWorkflowId)}`,
   terminalCleanupNeeded: (workflowId: string) =>
     `wf-cleanup-needed:${encodeStorageKeyComponent(workflowId)}`,
   workflowConcurrency: (workflowType: string, partitionKey: string) =>

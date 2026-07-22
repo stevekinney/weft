@@ -160,6 +160,7 @@ export type {
   QueryMap,
   QueryShape,
   RegisteredWorkflowDefinition,
+  RestartLineage,
   RetentionOverview,
   RetentionPolicy,
   RetryPolicy,

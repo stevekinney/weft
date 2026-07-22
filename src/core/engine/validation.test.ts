@@ -255,6 +255,48 @@ describe('engine validation helpers', () => {
     expect(decoded.id).toBe('wf-extra-field');
   });
 
+  it('preserves valid lineage fields and accepts older records without them', () => {
+    const historical = decodeWorkflowState(encode(createWorkflowState()));
+    expect(historical.parentWorkflowId).toBeUndefined();
+    expect(historical.parentWorkflowExecutionToken).toBeUndefined();
+    expect(historical.restartedFrom).toBeUndefined();
+
+    const decoded = decodeWorkflowState(
+      encode(
+        createWorkflowState({
+          parentWorkflowId: 'parent-workflow',
+          parentWorkflowExecutionToken: 'parent-token',
+          restartedFrom: {
+            workflowId: 'workflow-id',
+            workflowExecutionToken: 'previous-token',
+            replacedAt: 2,
+          },
+        }),
+      ),
+    );
+    expect(decoded.parentWorkflowId).toBe('parent-workflow');
+    expect(decoded.parentWorkflowExecutionToken).toBe('parent-token');
+    expect(decoded.restartedFrom).toEqual({
+      workflowId: 'workflow-id',
+      workflowExecutionToken: 'previous-token',
+      replacedAt: 2,
+    });
+  });
+
+  it('drops malformed lineage fields while decoding persisted records', () => {
+    const decoded = decodeWorkflowState(
+      encode({
+        ...createWorkflowState(),
+        parentWorkflowId: '',
+        parentWorkflowExecutionToken: 'orphan-token',
+        restartedFrom: { workflowId: 'workflow-id', replacedAt: -1 },
+      }),
+    );
+    expect(decoded.parentWorkflowId).toBeUndefined();
+    expect(decoded.parentWorkflowExecutionToken).toBeUndefined();
+    expect(decoded.restartedFrom).toBeUndefined();
+  });
+
   it('lifts a pre-unification flat version tuple into versionTuple on decode', () => {
     const flatState = {
       id: 'wf-flat',

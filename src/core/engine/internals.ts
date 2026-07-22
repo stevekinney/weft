@@ -197,6 +197,8 @@ export interface EngineInternals {
   pendingNestingDepth: number | undefined;
   pendingParentHeaders: Map<string, string> | undefined;
   pendingExecutionStateOwnerId: string | null | undefined;
+  pendingParentWorkflowId: string | undefined;
+  pendingParentWorkflowExecutionToken: string | undefined;
   workflowNestingDepths: Map<string, number>;
   workflowHeaders: Map<string, Map<string, string>>;
   workflowStateWriteChains: Map<string, Promise<void>>;

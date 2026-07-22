@@ -20,6 +20,8 @@ describe('normalizeListFilter', () => {
         status: ['running', 'pending'],
         type: 'order',
         scheduleId: 'daily-report',
+        parentWorkflowId: 'order-parent',
+        parentWorkflowExecutionToken: 'parent-run-token',
         tags: ['nightly'],
         attributes: [{ key: 'customerId', value: 'acme' }],
         limit: 20,
@@ -34,6 +36,12 @@ describe('normalizeListFilter', () => {
 
     it('rejects an empty schedule id', () => {
       expect(() => normalizeListFilter({ scheduleId: '' })).toThrow(ListFilterValidationError);
+    });
+
+    it('requires a parent workflow id when filtering by parent execution token', () => {
+      expect(() =>
+        normalizeListFilter({ parentWorkflowExecutionToken: 'parent-run-token' }),
+      ).toThrow(ListFilterValidationError);
     });
   });
 

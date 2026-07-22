@@ -41,6 +41,15 @@ interface WorkflowState {
   createdAt: number;
   updatedAt: number;
   executionDeadline?: number;
+  parentWorkflowId?: WorkflowId;
+  parentWorkflowExecutionToken?: string;
+  restartedFrom?: RestartLineage;
+}
+
+interface RestartLineage {
+  workflowId: WorkflowId;
+  workflowExecutionToken?: string;
+  replacedAt: number;
 }
 
 interface WorkflowVersionTuple {
@@ -51,6 +60,8 @@ interface WorkflowVersionTuple {
 ```
 
 `versionTuple` is the canonical persisted workflow version metadata. It is captured at workflow start and compared against the currently registered workflow definition during recovery. `workflowVersion` is always present; `agentVersion` and `toolVersions` appear only when the workflow declares them. `WorkflowSummary.version` remains the public list-result shortcut for `versionTuple.workflowVersion`.
+
+Child runs persist their direct parent's workflow ID and execution token. `restartedFrom` identifies only the terminal run immediately displaced by `onTerminalConflict: 'start-new'`; it is informational lineage, not a retained snapshot of the purged run.
 
 ### `WorkflowFunction`
 
@@ -883,6 +894,8 @@ interface ListFilter {
   status?: WorkflowStatus | WorkflowStatus[];
   type?: string;
   scheduleId?: string;
+  parentWorkflowId?: string;
+  parentWorkflowExecutionToken?: string;
   attributes?: AttributeFilter[];
   limit?: number;
   offset?: number;

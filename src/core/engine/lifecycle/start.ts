@@ -59,6 +59,8 @@ type StartWorkflowPreparation = {
   callerProvidedId: boolean;
   parentHeaders: Map<string, string> | undefined;
   executionStateOwnerId: string | undefined;
+  parentWorkflowId: string | undefined;
+  parentWorkflowExecutionToken: string | undefined;
   submissionTime: number;
   delayedStartTimer: TimerEntry | undefined;
   normalizedTags: string[] | undefined;
@@ -85,6 +87,10 @@ function prepareStartWorkflow(
       ? undefined
       : (pendingExecutionStateOwnerId ?? workflowId);
   internals.pendingExecutionStateOwnerId = undefined;
+  const parentWorkflowId = internals.pendingParentWorkflowId;
+  internals.pendingParentWorkflowId = undefined;
+  const parentWorkflowExecutionToken = internals.pendingParentWorkflowExecutionToken;
+  internals.pendingParentWorkflowExecutionToken = undefined;
   const submissionTime = internals.options.getNow();
   const scheduledStartAt = resolveScheduledStartAt(internals, options, submissionTime, callbacks);
   const normalizedTags = normalizeStartWorkflowTags(internals, options?.tags, undefined, callbacks);
@@ -101,6 +107,8 @@ function prepareStartWorkflow(
     callerProvidedId,
     parentHeaders,
     executionStateOwnerId,
+    parentWorkflowId,
+    parentWorkflowExecutionToken,
     submissionTime,
     delayedStartTimer,
     normalizedTags,
@@ -152,8 +160,15 @@ export async function startWorkflow(
   assertValidOnTerminalConflict(options);
 
   const preparation = prepareStartWorkflow(internals, options, callbacks);
-  const { workflowId, callerProvidedId, parentHeaders, executionStateOwnerId, delayedStartTimer } =
-    preparation;
+  const {
+    workflowId,
+    callerProvidedId,
+    parentHeaders,
+    executionStateOwnerId,
+    parentWorkflowId,
+    parentWorkflowExecutionToken,
+    delayedStartTimer,
+  } = preparation;
 
   assertDeferSupported(internals, options, Boolean(delayedStartTimer));
 
@@ -191,9 +206,12 @@ export async function startWorkflow(
       options,
       preparation.normalizedTags,
       executionStateOwnerId,
+      parentWorkflowId,
+      parentWorkflowExecutionToken,
       delayedStartTimer,
       callbacks,
     );
+    applyRestartLineage(state, terminalRunToPurge);
     const checkpoint = createInitialCheckpoint(
       internals,
       workflowId,
@@ -308,6 +326,17 @@ export async function startWorkflow(
   }
 }
 
+function applyRestartLineage(state: WorkflowState, displacedState: WorkflowState | null): void {
+  if (displacedState === null) return;
+  state.restartedFrom = {
+    workflowId: displacedState.id,
+    ...(displacedState.workflowExecutionToken !== undefined && {
+      workflowExecutionToken: displacedState.workflowExecutionToken,
+    }),
+    replacedAt: state.createdAt,
+  };
+}
+
 export function resolveScheduledStartAt(
   internals: EngineInternals,
   options: StartOptions | undefined,
@@ -357,6 +386,8 @@ function buildInitialIdentitySlice(
   input: unknown,
   versionTuple: WorkflowVersionTuple,
   executionStateOwnerId: string | undefined,
+  parentWorkflowId: string | undefined,
+  parentWorkflowExecutionToken: string | undefined,
   delayedStartTimer: TimerEntry | undefined,
   now: number,
   tags: string[] | undefined,
@@ -369,6 +400,8 @@ function buildInitialIdentitySlice(
     versionTuple,
     workflowExecutionToken: crypto.randomUUID(),
     ...(executionStateOwnerId !== undefined && { executionStateOwnerId }),
+    ...(parentWorkflowId !== undefined && { parentWorkflowId }),
+    ...(parentWorkflowExecutionToken !== undefined && { parentWorkflowExecutionToken }),
     createdAt: now,
     ...(!delayedStartTimer && { startedAt: now }),
     updatedAt: now,
@@ -413,6 +446,8 @@ export function createInitialWorkflowState(
   options: StartOptions | undefined,
   tags: string[] | undefined,
   executionStateOwnerId: string | undefined,
+  parentWorkflowId: string | undefined,
+  parentWorkflowExecutionToken: string | undefined,
   delayedStartTimer: TimerEntry | undefined,
   callbacks: LifecycleCallbacks,
 ): WorkflowState {
@@ -423,6 +458,8 @@ export function createInitialWorkflowState(
     input,
     versionTuple,
     executionStateOwnerId,
+    parentWorkflowId,
+    parentWorkflowExecutionToken,
     delayedStartTimer,
     now,
     tags,

@@ -83,6 +83,8 @@ export const listFilterObjectSchema = z
     status: z.union([workflowStatusSchema, z.array(workflowStatusSchema)]).optional(),
     type: z.string().min(1).optional(),
     scheduleId: z.string().min(1).optional(),
+    parentWorkflowId: z.string().min(1).optional(),
+    parentWorkflowExecutionToken: z.string().min(1).optional(),
     tags: z.array(z.string()).optional(),
     attributes: z.array(attributeFilterSchema).optional(),
     limit: z.number().int().min(1).max(1000).optional(),
@@ -151,6 +153,18 @@ export function normalizeListFilter(input: unknown): ListFilter {
   const result = listFilterObjectSchema.safeParse(input ?? {});
   if (!result.success) {
     throw new ListFilterValidationError(result.error.issues.map(flattenIssue));
+  }
+  if (
+    result.data.parentWorkflowExecutionToken !== undefined &&
+    result.data.parentWorkflowId === undefined
+  ) {
+    throw new ListFilterValidationError([
+      {
+        path: ['parentWorkflowExecutionToken'],
+        message: 'parentWorkflowExecutionToken requires parentWorkflowId',
+        code: 'custom',
+      },
+    ]);
   }
   return result.data as ListFilter;
 }

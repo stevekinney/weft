@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
+import { KEYS } from '../storage/interface';
 import { MemoryStorage } from '../storage/memory';
 import { waitForCondition } from '../testing/fake-timers.test-support';
 import { Engine } from './engine';
@@ -23,6 +24,166 @@ async function waitForWorkflowStatus(
 }
 
 describe('child workflows', () => {
+  it('persists token-qualified parent lineage for every parent-close policy and lists direct children', async () => {
+    await using engine = new Engine();
+
+    engine.register(
+      workflow({ name: 'lineage-child' }).execute(async function* (
+        ctx: WorkflowContext,
+        input: { wait: boolean },
+      ) {
+        if (input.wait) return yield* ctx.waitForSignal('finish');
+        return 'completed';
+      }),
+    );
+    engine.register(
+      workflow({ name: 'lineage-parent' }).execute(async function* (ctx: WorkflowContext) {
+        const awaited = yield* ctx.startChild(
+          'lineage-child',
+          { wait: false },
+          {
+            id: 'lineage-awaited-child',
+            parentClosePolicy: 'await',
+          },
+        );
+        const abandoned = yield* ctx.startChild(
+          'lineage-child',
+          { wait: true },
+          {
+            id: 'lineage-abandoned-child',
+            parentClosePolicy: 'abandon',
+          },
+        );
+        const requestCancel = yield* ctx.startChild(
+          'lineage-child',
+          { wait: true },
+          {
+            id: 'lineage-request-cancel-child',
+            parentClosePolicy: 'request-cancel',
+          },
+        );
+        return { awaited, abandoned, requestCancel };
+      }),
+    );
+
+    const parent = await engine.start('lineage-parent', null, {
+      id: 'lineage-parent-run',
+      defer: false,
+    });
+    await parent.result();
+    const parentState = await engine.get(parent.id);
+    expect(parentState?.workflowExecutionToken).toBeString();
+    const parentWorkflowExecutionToken = parentState?.workflowExecutionToken;
+    if (parentWorkflowExecutionToken === undefined) throw new Error('Expected parent token');
+
+    for (const childId of [
+      'lineage-awaited-child',
+      'lineage-abandoned-child',
+      'lineage-request-cancel-child',
+    ]) {
+      const childState = await engine.get(childId);
+      expect(childState?.parentWorkflowId).toBe(parent.id);
+      expect(childState?.parentWorkflowExecutionToken).toBe(parentWorkflowExecutionToken);
+    }
+
+    const children = await engine.list({
+      parentWorkflowId: parent.id,
+      parentWorkflowExecutionToken,
+    });
+    expect(children.items.map((item) => item.id).toSorted()).toEqual([
+      'lineage-abandoned-child',
+      'lineage-awaited-child',
+      'lineage-request-cancel-child',
+    ]);
+    const unrelatedGeneration = await engine.list({
+      parentWorkflowId: parent.id,
+      parentWorkflowExecutionToken: 'different-run-token',
+    });
+    expect(unrelatedGeneration.items).toEqual([]);
+
+    const completedChildIndexKey = KEYS.childWorkflowByParent(
+      parent.id,
+      parentWorkflowExecutionToken,
+      'lineage-awaited-child',
+    );
+    expect(await engine.storage.get(completedChildIndexKey)).not.toBeNull();
+    expect(await engine.purge({ idPrefix: 'lineage-awaited-child' })).toMatchObject({ deleted: 1 });
+    expect(await engine.storage.get(completedChildIndexKey)).toBeNull();
+
+    await engine.signal('lineage-abandoned-child', 'finish', null);
+    await engine.signal('lineage-request-cancel-child', 'finish', null);
+  });
+
+  it('isolates direct children across stable parent id generations', async () => {
+    await using engine = new Engine();
+    engine.register(
+      workflow({ name: 'generation-child' }).execute(async function* () {
+        return 'done';
+      }),
+    );
+    engine.register(
+      workflow({ name: 'generation-parent' }).execute(async function* (
+        ctx: WorkflowContext,
+        childId: string,
+      ) {
+        return yield* ctx.startChild('generation-child', null, { id: childId });
+      }),
+    );
+    engine.register(
+      workflow({ name: 'generation-grandparent' }).execute(async function* (ctx: WorkflowContext) {
+        return yield* ctx.startChild('generation-parent', 'nested-leaf', {
+          id: 'nested-middle',
+        });
+      }),
+    );
+
+    const grandparent = await engine.start('generation-grandparent', null, {
+      id: 'nested-root',
+      defer: false,
+    });
+    await grandparent.result();
+    const middleState = await engine.get('nested-middle');
+    const leafState = await engine.get('nested-leaf');
+    expect(middleState?.parentWorkflowId).toBe(grandparent.id);
+    expect(leafState?.parentWorkflowId).toBe('nested-middle');
+    expect(leafState?.parentWorkflowExecutionToken).toBe(middleState?.workflowExecutionToken);
+
+    const first = await engine.start('generation-parent', 'first-child', {
+      id: 'stable-parent',
+      defer: false,
+    });
+    await first.result();
+    const firstState = await engine.get(first.id);
+    const firstToken = firstState?.workflowExecutionToken;
+    if (firstToken === undefined) throw new Error('Expected first parent token');
+
+    const second = await engine.start('generation-parent', 'second-child', {
+      id: first.id,
+      onTerminalConflict: 'start-new',
+      defer: false,
+    });
+    await second.result();
+    const secondState = await engine.get(second.id);
+    const secondToken = secondState?.workflowExecutionToken;
+    if (secondToken === undefined) throw new Error('Expected second parent token');
+
+    const allGenerations = await engine.list({ parentWorkflowId: first.id });
+    expect(allGenerations.items.map((item) => item.id).toSorted()).toEqual([
+      'first-child',
+      'second-child',
+    ]);
+    const firstGeneration = await engine.list({
+      parentWorkflowId: first.id,
+      parentWorkflowExecutionToken: firstToken,
+    });
+    expect(firstGeneration.items.map((item) => item.id)).toEqual(['first-child']);
+    const secondGeneration = await engine.list({
+      parentWorkflowId: second.id,
+      parentWorkflowExecutionToken: secondToken,
+    });
+    expect(secondGeneration.items.map((item) => item.id)).toEqual(['second-child']);
+  });
+
   it('parent starts child and gets result', async () => {
     const engine = new Engine();
 

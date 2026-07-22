@@ -53,6 +53,7 @@ export function buildStartBatchOperations(
     },
     ...visibilityIndexOperations,
     ...buildWorkflowTagIndexOperations(workflowId, undefined, state.tags),
+    ...buildChildWorkflowIndexOperations(state),
     ...buildInitialSearchAttributeOperations(
       _internals,
       workflowId,
@@ -83,6 +84,21 @@ export function buildStartBatchOperations(
   }
 
   return operations;
+}
+
+function buildChildWorkflowIndexOperations(state: WorkflowState): BatchOperation[] {
+  if (state.parentWorkflowId === undefined) return [];
+  return [
+    {
+      type: 'put',
+      key: KEYS.childWorkflowByParent(
+        state.parentWorkflowId,
+        state.parentWorkflowExecutionToken,
+        state.id,
+      ),
+      value: EMPTY_STORAGE_VALUE,
+    },
+  ];
 }
 
 /**

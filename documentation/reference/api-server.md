@@ -193,6 +193,9 @@ Returns `201` with `{ "id": "<workflow-id>", "outcome": "started" | "signalled" 
 | ------------------------------------------------------ | -------- | ------------------------------------------------------------------------------------ |
 | `status`                                               | `string` | Filter by status. Repeat for an OR filter (e.g. `?status=running&status=pending`).   |
 | `type`                                                 | `string` | Filter by workflow type.                                                             |
+| `schedule_id`                                          | `string` | Filter by the schedule that launched the workflow.                                   |
+| `parent_workflow_id`                                   | `string` | Filter to direct children of this stable parent workflow ID.                         |
+| `parent_workflow_execution_token`                      | `string` | Isolate one parent run; requires `parent_workflow_id`.                               |
 | `tag`                                                  | `string` | Filter by tag. Repeat to AND multiple tags.                                          |
 | `id_prefix`                                            | `string` | Match workflow ids starting with this prefix. Restricted to `[A-Za-z0-9_-]+`.        |
 | `failure_category`                                     | `string` | One of `application`, `timeout`, `cancellation`, `resource`, `system`. Repeats OR.   |

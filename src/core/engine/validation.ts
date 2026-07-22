@@ -58,12 +58,15 @@ const WORKFLOW_STATE_FIELD_NAMES = new Set<string>(
     'versionTuple',
     'workflowExecutionToken',
     'executionStateOwnerId',
+    'parentWorkflowId',
+    'parentWorkflowExecutionToken',
     'createdAt',
     'startedAt',
     'updatedAt',
     'terminalCleanupToken',
     'executionDeadline',
     'forkedFrom',
+    'restartedFrom',
   ]),
 );
 
@@ -230,9 +233,53 @@ export function decodeWorkflowState(bytes: Uint8Array): WorkflowState {
       delete state.executionStateOwnerId;
     }
   }
+  sanitizeDecodedParentLineage(state);
+  sanitizeDecodedRestartLineage(state);
   return decodedRecord === undefined
     ? state
     : stripUnknownWorkflowStateFields(state, decodedRecord);
+}
+
+function sanitizeDecodedParentLineage(state: WorkflowState): void {
+  if (state.parentWorkflowId !== undefined) {
+    try {
+      coerceStartWorkflowId(state.parentWorkflowId, 'parentWorkflowId');
+    } catch {
+      delete state.parentWorkflowId;
+    }
+  }
+  if (
+    typeof state.parentWorkflowExecutionToken !== 'string' ||
+    state.parentWorkflowExecutionToken.length === 0 ||
+    state.parentWorkflowId === undefined
+  ) {
+    delete state.parentWorkflowExecutionToken;
+  }
+}
+
+function sanitizeDecodedRestartLineage(state: WorkflowState): void {
+  const restartedFrom = state.restartedFrom;
+  if (!isRecord(restartedFrom)) {
+    delete state.restartedFrom;
+    return;
+  }
+  try {
+    coerceStartWorkflowId(restartedFrom['workflowId'], 'restartedFrom.workflowId');
+  } catch {
+    delete state.restartedFrom;
+    return;
+  }
+  const workflowExecutionToken = restartedFrom['workflowExecutionToken'];
+  const replacedAt = restartedFrom['replacedAt'];
+  if (
+    (workflowExecutionToken !== undefined &&
+      (typeof workflowExecutionToken !== 'string' || workflowExecutionToken.length === 0)) ||
+    typeof replacedAt !== 'number' ||
+    !Number.isSafeInteger(replacedAt) ||
+    replacedAt < 0
+  ) {
+    delete state.restartedFrom;
+  }
 }
 
 function stripUnknownWorkflowStateFields(

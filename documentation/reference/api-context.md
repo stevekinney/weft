@@ -486,6 +486,8 @@ async function* paymentWorkflow(ctx: WorkflowContext, payment: PaymentRequest) {
 
 Start a child workflow. The child workflow is independently checkpointed -- it has its own workflow ID, its own state in storage, and its own lifecycle. With the default `parentClosePolicy: 'await'`, the parent workflow suspends at the `yield*` boundary until the child completes or fails.
 
+Every child policy persists direct-run lineage on the child state as `parentWorkflowId` plus `parentWorkflowExecutionToken`. The execution token distinguishes generations when a stable parent ID is reused. Use `engine.list({ parentWorkflowId, parentWorkflowExecutionToken })` to list that concrete run's direct children; grandchildren point to their immediate parent, not the root.
+
 | Parameter      | Type                   | Description                               |
 | -------------- | ---------------------- | ----------------------------------------- |
 | `workflowType` | `string`               | The registered name of the child workflow |

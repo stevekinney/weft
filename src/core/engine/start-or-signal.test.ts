@@ -687,6 +687,9 @@ describe('engine.startOrSignal', () => {
         id: 'sos-restart-completed',
       });
       expect(await completed.result()).toBe('done');
+      const completedState = await engine.get(completed.id);
+      const completedWorkflowExecutionToken = completedState?.workflowExecutionToken;
+      if (completedWorkflowExecutionToken === undefined) throw new Error('Expected prior token');
 
       const { handle, outcome } = await engine.startOrSignal(
         'wait-for-release',
@@ -698,6 +701,14 @@ describe('engine.startOrSignal', () => {
       expect(outcome).toBe('started');
       expect(handle.id).toBe('sos-restart-completed');
       expect(await handle.result()).toBe('after-completed');
+      const restartedState = await engine.get(handle.id);
+      const restartedCreatedAt = restartedState?.createdAt;
+      if (restartedCreatedAt === undefined) throw new Error('Expected restarted state');
+      expect(restartedState?.restartedFrom).toEqual({
+        workflowId: completed.id,
+        workflowExecutionToken: completedWorkflowExecutionToken,
+        replacedAt: restartedCreatedAt,
+      });
       expect(await countWorkflowRecords(engine)).toBe(1);
     } finally {
       await engine[Symbol.asyncDispose]();
