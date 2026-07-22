@@ -747,6 +747,10 @@ describe('ctx.services — terminal cleanup', () => {
       KEYS.scheduleRunBySchedule('purge-schedule-metadata', 'purge-schedule-metadata-run'),
       new Uint8Array(0),
     );
+    await expect(engine.getScheduleProvenance('purge-schedule-metadata-run')).resolves.toEqual({
+      scheduleId: 'purge-schedule-metadata',
+      occurrence: 1_767_225_600_000,
+    });
 
     const purged = await engine.purge();
     expect(purged.deleted).toBeGreaterThanOrEqual(1);
@@ -757,6 +761,7 @@ describe('ctx.services — terminal cleanup', () => {
         KEYS.scheduleRunBySchedule('purge-schedule-metadata', 'purge-schedule-metadata-run'),
       ),
     ).toBeNull();
+    await expect(engine.getScheduleProvenance('purge-schedule-metadata-run')).resolves.toBeNull();
     await engine[Symbol.asyncDispose]();
   });
 
@@ -802,6 +807,9 @@ describe('ctx.services — terminal cleanup', () => {
         ),
       ),
     ).toBeNull();
+    await expect(
+      engine.getScheduleProvenance('retention-schedule-metadata-run'),
+    ).resolves.toBeNull();
     await engine[Symbol.asyncDispose]();
   });
 });

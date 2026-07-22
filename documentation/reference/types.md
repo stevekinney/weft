@@ -832,6 +832,32 @@ interface WorkflowSnapshot {
 
 Returned by `WorkflowHandle.snapshot()` for recovered progress reattachment and operator views.
 
+### `WorkflowScheduleProvenance`
+
+```ts partial
+interface WorkflowScheduleProvenance {
+  scheduleId: string;
+  occurrence?: number;
+}
+```
+
+Returned by `Engine.getScheduleProvenance()` and
+`weft.workflows.scheduleprovenance.get` for schedule-launched runs.
+
+### `WorkflowFinalizerStatus`
+
+```ts partial
+type WorkflowFinalizerStatus =
+  | { status: 'pending'; attempts: number }
+  | { status: 'running'; attempts: number; startedAt: number }
+  | { status: 'succeeded'; attempts: number; completedAt: number }
+  | { status: 'failed'; attempts: number; failedAt: number; error: string };
+```
+
+Returned by `Engine.getFinalizerStatus()` and `weft.workflows.finalizer.get`.
+`attempts` counts attempts already completed for pending work and includes the active
+attempt for running work.
+
 ### `SearchAttributeValue`
 
 ```ts partial

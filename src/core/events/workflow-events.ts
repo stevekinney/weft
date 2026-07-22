@@ -312,7 +312,8 @@ export class WorkflowRecoverySkippedEvent extends Event {
  *   dead-letter horizon is reached. Per-attempt observability — fires on every retry.
  * - `'dead-lettered'`: the retry horizon was reached without success; the external
  *   resource may be leaked. The durable record is `KEYS.teardownDeadLetter`, which
- *   survives purge so the leak is auditable after the workflow record is gone.
+ *   survives purge so `getFinalizerStatus()` remains auditable after the workflow
+ *   record is gone.
  *
  * @example
  * ```ts

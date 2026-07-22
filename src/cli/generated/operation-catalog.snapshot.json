@@ -3869,6 +3869,125 @@
       }
     },
     {
+      "name": "weft.workflows.finalizer.get",
+      "kind": "unary",
+      "summary": "Get workflow finalizer progress and outcome",
+      "description": "Read durable post-terminal finalizer progress or its succeeded or failed outcome. Returns null when the workflow did not record finalizer work.",
+      "tags": ["Workflows"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workflowId"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "anyOf": [
+          {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "attempts": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "status": {
+                    "const": "pending",
+                    "type": "string"
+                  }
+                },
+                "required": ["status", "attempts"],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "attempts": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
+                  "startedAt": {
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "status": {
+                    "const": "running",
+                    "type": "string"
+                  }
+                },
+                "required": ["status", "attempts", "startedAt"],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "attempts": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
+                  "completedAt": {
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "status": {
+                    "const": "succeeded",
+                    "type": "string"
+                  }
+                },
+                "required": ["status", "attempts", "completedAt"],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "attempts": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "error": {
+                    "type": "string"
+                  },
+                  "failedAt": {
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "status": {
+                    "const": "failed",
+                    "type": "string"
+                  }
+                },
+                "required": ["status", "attempts", "failedAt", "error"],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    {
       "name": "weft.workflows.fork",
       "kind": "unary",
       "summary": "Fork a workflow from a checkpoint",
@@ -4376,6 +4495,55 @@
         },
         "required": ["id"],
         "type": "object"
+      }
+    },
+    {
+      "name": "weft.workflows.scheduleprovenance.get",
+      "kind": "unary",
+      "summary": "Get the schedule occurrence that launched a workflow",
+      "description": "Read the durable schedule id and optional occurrence timestamp that launched a workflow. Returns null for runs that were not launched by a schedule or whose workflow history was purged.",
+      "tags": ["Workflows"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workflowId"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "occurrence": {
+                "type": "number"
+              },
+              "scheduleId": {
+                "type": "string"
+              }
+            },
+            "required": ["scheduleId"],
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     {

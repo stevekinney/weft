@@ -18,6 +18,8 @@ export const INTERACTIVE_OPERATION_NAMES: ReadonlyArray<string> = [
   // Workflow lifecycle
   'weft.workflows.start',
   'weft.workflows.get',
+  'weft.workflows.scheduleprovenance.get',
+  'weft.workflows.finalizer.get',
   'weft.workflows.list',
   'weft.workflows.signal',
   'weft.workflows.query',

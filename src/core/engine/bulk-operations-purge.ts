@@ -369,6 +369,9 @@ function buildBaseWorkflowDeleteKeys(state: WorkflowState): Set<string> {
     // operator trail for a leaked resource and must outlive purge.
     KEYS.finalizerState(state.id),
     KEYS.teardownOwed(state.id),
+    // Successful finalizer outcomes belong to the purged run. Dead-letter records
+    // intentionally remain as leak evidence and are run-token qualified on read.
+    KEYS.teardownSucceeded(state.id),
     KEYS.attribute(state.id),
     KEYS.terminalWorkflow(state.updatedAt, state.id),
   ]);

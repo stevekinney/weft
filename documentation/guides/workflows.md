@@ -430,6 +430,13 @@ What the engine guarantees once you have recorded finalizer state:
 - **It retries with backoff and dead-letters.** A finalizer that throws is retried on a backoff schedule; after it exhausts its attempt budget the failure is recorded durably (a dead-letter) rather than retried forever.
 - **It runs _at least once_, so it must be idempotent.** Retries and crash-recovery re-drive mean your finalizer can see the same payload more than once. Destroying an already-destroyed resource must succeed (or no-op) — the same discipline as keying a destroy by `sandboxId`. This is the central contract: write the teardown so repetition is harmless.
 
+Operators can query the durable state instead of racing the best-effort
+`workflow:teardown` event. Use `engine.getFinalizerStatus(workflowId)`, REST
+`GET /api/v1/workflows/:id/finalizer`, or the transport-neutral
+`weft.workflows.finalizer.get` operation. The result distinguishes `pending`,
+`running`, `succeeded`, and `failed`; it returns `null` when the run never recorded
+finalizer work.
+
 The recorded value is last-write-wins: call `setFinalizerState` again to replace it when the live resource changes (for example, after re-provisioning). Recording `null` still counts as recorded — the finalizer runs with a `null` payload — which is the difference between "tear down with no extra detail" and "nothing to tear down."
 
 > [!NOTE] Finalizers run on the engine host

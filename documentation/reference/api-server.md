@@ -146,17 +146,19 @@ The handler exposes the following routes under the `/v1` prefix:
 
 ### Workflows
 
-| Method   | Path                                | Description                                                                          |
-| -------- | ----------------------------------- | ------------------------------------------------------------------------------------ |
-| `POST`   | `/api/v1/workflows`                 | Start a new workflow                                                                 |
-| `GET`    | `/api/v1/workflows`                 | List workflows — see [Visibility filters](#list-workflows----query-parameters) below |
-| `GET`    | `/api/v1/workflows/aggregate`       | Group-by counts over the same filter shape                                           |
-| `POST`   | `/api/v1/workflows/start-or-signal` | Start a workflow or signal an existing non-terminal run atomically                   |
-| `GET`    | `/api/v1/workflows/:id`             | Get workflow state                                                                   |
-| `DELETE` | `/api/v1/workflows/:id`             | Cancel a workflow                                                                    |
-| `GET`    | `/api/v1/workflows/:id/result`      | Await workflow result (30s default long-poll timeout, configurable up to 60s)        |
-| `POST`   | `/api/v1/workflows/:id/suspend`     | Suspend an inline workflow without settling `result()`                               |
-| `POST`   | `/api/v1/workflows/:id/resume`      | Resume a suspended workflow or a persisted running workflow                          |
+| Method   | Path                                        | Description                                                                          |
+| -------- | ------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `POST`   | `/api/v1/workflows`                         | Start a new workflow                                                                 |
+| `GET`    | `/api/v1/workflows`                         | List workflows — see [Visibility filters](#list-workflows----query-parameters) below |
+| `GET`    | `/api/v1/workflows/aggregate`               | Group-by counts over the same filter shape                                           |
+| `POST`   | `/api/v1/workflows/start-or-signal`         | Start a workflow or signal an existing non-terminal run atomically                   |
+| `GET`    | `/api/v1/workflows/:id`                     | Get workflow state                                                                   |
+| `GET`    | `/api/v1/workflows/:id/schedule-provenance` | Get the schedule occurrence that launched the workflow                               |
+| `GET`    | `/api/v1/workflows/:id/finalizer`           | Get durable finalizer progress or outcome                                            |
+| `DELETE` | `/api/v1/workflows/:id`                     | Cancel a workflow                                                                    |
+| `GET`    | `/api/v1/workflows/:id/result`              | Await workflow result (30s default long-poll timeout, configurable up to 60s)        |
+| `POST`   | `/api/v1/workflows/:id/suspend`             | Suspend an inline workflow without settling `result()`                               |
+| `POST`   | `/api/v1/workflows/:id/resume`              | Resume a suspended workflow or a persisted running workflow                          |
 
 #### Start Workflow -- Request Body
 

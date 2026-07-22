@@ -395,6 +395,31 @@ get storage(): Storage
 
 Direct access to the underlying storage backend. Primarily useful for `TestEngine` and debugging.
 
+### `getScheduleProvenance()`
+
+```ts partial
+getScheduleProvenance(workflowId: string): Promise<WorkflowScheduleProvenance | null>
+```
+
+Read the recurring schedule occurrence that launched a workflow. The result contains
+`scheduleId` and, when the scheduler retained it, the nominal `occurrence` timestamp.
+Ordinary starts return `null`. The link survives terminal cleanup and remains readable
+until workflow purge or retention removes that run's history.
+
+### `getFinalizerStatus()`
+
+```ts partial
+getFinalizerStatus(workflowId: string): Promise<WorkflowFinalizerStatus | null>
+```
+
+Read durable post-terminal finalizer progress or outcome. Pending and running results
+come from the durable teardown claim; succeeded and failed results remain queryable
+after the attempt settles. A successful outcome is retained until workflow purge or
+retention. A dead-lettered failure remains durable after purge as resource-leak evidence,
+but is qualified by the workflow execution token so a later `start-new` run using the
+same workflow ID cannot inherit it. Workflows with no recorded finalizer work return
+`null`.
+
 ### `schedule()`
 
 ```ts partial

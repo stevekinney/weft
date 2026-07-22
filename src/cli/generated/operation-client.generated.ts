@@ -48,6 +48,7 @@ export const CATALOG_OPERATION_NAMES = [
   'weft.workflows.checkpoints.get',
   'weft.workflows.checkpoints.list',
   'weft.workflows.events.list',
+  'weft.workflows.finalizer.get',
   'weft.workflows.fork',
   'weft.workflows.get',
   'weft.workflows.list',
@@ -56,6 +57,7 @@ export const CATALOG_OPERATION_NAMES = [
   'weft.workflows.replay',
   'weft.workflows.result.get',
   'weft.workflows.resume',
+  'weft.workflows.scheduleprovenance.get',
   'weft.workflows.signal',
   'weft.workflows.start',
   'weft.workflows.startorsignal',
@@ -110,6 +112,7 @@ export const CLIENT_OPERATION_NAMES = [
   'weft.workflows.checkpoints.get',
   'weft.workflows.checkpoints.list',
   'weft.workflows.events.list',
+  'weft.workflows.finalizer.get',
   'weft.workflows.fork',
   'weft.workflows.get',
   'weft.workflows.list',
@@ -118,6 +121,7 @@ export const CLIENT_OPERATION_NAMES = [
   'weft.workflows.replay',
   'weft.workflows.result.get',
   'weft.workflows.resume',
+  'weft.workflows.scheduleprovenance.get',
   'weft.workflows.signal',
   'weft.workflows.start',
   'weft.workflows.startorsignal',
@@ -580,6 +584,11 @@ export type ClientOperationTypes = {
     readonly output: unknown;
     readonly faults: 'NotFound';
   };
+  'weft.workflows.finalizer.get': {
+    readonly input: { readonly workflowId: string };
+    readonly output: unknown;
+    readonly faults: never;
+  };
   'weft.workflows.fork': {
     readonly input: { readonly fromStep?: unknown; readonly workflowId: string };
     readonly output: { readonly id: string };
@@ -637,6 +646,11 @@ export type ClientOperationTypes = {
     readonly input: { readonly workflowId: string };
     readonly output: { readonly id: string };
     readonly faults: 'Conflict' | 'NotFound';
+  };
+  'weft.workflows.scheduleprovenance.get': {
+    readonly input: { readonly workflowId: string };
+    readonly output: unknown;
+    readonly faults: never;
   };
   'weft.workflows.signal': {
     readonly input: {

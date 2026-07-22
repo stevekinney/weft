@@ -60,6 +60,8 @@ const EXPECTED_DESTRUCTIVE: Readonly<Record<string, boolean>> = {
   'weft.workflows.suspend': false,
   'weft.workflows.replay': false,
   'weft.workflows.get': false,
+  'weft.workflows.scheduleprovenance.get': false,
+  'weft.workflows.finalizer.get': false,
   'weft.workflows.result.get': false,
   'weft.workflows.attributes.get': false,
   'weft.workflows.attributes.set': false,

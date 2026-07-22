@@ -731,14 +731,17 @@ export const KEYS = {
    */
   teardownOwed: (workflowId: string) =>
     `wf-teardown-needed:${encodeStorageKeyComponent(workflowId)}`,
+  /** Durable successful finalizer outcome, retained until workflow purge or retention. */
+  teardownSucceeded: (workflowId: string) =>
+    `wf-teardown-succeeded:${encodeStorageKeyComponent(workflowId)}`,
   /**
    * Durable audit record written when a workflow's finalizer permanently fails — the
    * retry horizon is reached, or the recorded resource state vanished so the finalizer
    * can never run (issue #446 Phase 2). Holds the `TeardownDeadLetterRecord` shape
-   * `{ type, lastError, attempts, deadLetteredAt, finalizerInput? }`. **Excluded from
-   * the workflow purge delete-set** so it survives as the operator's evidence of a
-   * leaked external resource — in-process `WorkflowTeardownEvent`s are not durable, so
-   * raw inspection of this key is the supported operator surface after purge.
+   * `{ type, lastError, attempts, deadLetteredAt, workflowExecutionToken?, finalizerInput? }`.
+   * **Excluded from the workflow purge delete-set** so it survives as the operator's
+   * evidence of a leaked external resource and remains queryable through the durable
+   * finalizer-status API after purge.
    */
   teardownDeadLetter: (workflowId: string) =>
     `wf-teardown-deadletter:${encodeStorageKeyComponent(workflowId)}`,

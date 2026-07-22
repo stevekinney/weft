@@ -16,7 +16,9 @@ import {
   CATALOG_OPERATION_NAMES,
   CLIENT_OPERATION_NAMES,
 } from '../cli/generated/operation-client.generated.ts';
+import { encode } from '../core/codec.ts';
 import { Engine } from '../core/engine.ts';
+import { encodeScheduleRunMetadata } from '../core/engine/schedule-run-metadata.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types.ts';
 import { serve, type WeftServer } from '../server/index.ts';
@@ -169,6 +171,32 @@ describe('LocalClient catalog operations', () => {
     }
   });
 
+  it('reads workflow provenance and finalizer progress through generated local operations', async () => {
+    const engine = new Engine({ storage: new MemoryStorage() });
+    const client = new LocalClient(engine);
+    try {
+      await engine.storage.put(
+        KEYS.scheduleRunLink('local-observed-run'),
+        encodeScheduleRunMetadata('local-schedule', 1_000),
+      );
+      await engine.storage.put(
+        KEYS.teardownOwed('local-observed-run'),
+        encode({ status: 'owed', attempts: 1, token: 'claim' }),
+      );
+
+      await expect(
+        client.operations['weft.workflows.scheduleprovenance.get']({
+          workflowId: 'local-observed-run',
+        }),
+      ).resolves.toEqual({ scheduleId: 'local-schedule', occurrence: 1_000 });
+      await expect(
+        client.operations['weft.workflows.finalizer.get']({ workflowId: 'local-observed-run' }),
+      ).resolves.toEqual({ status: 'pending', attempts: 1 });
+    } finally {
+      engine[Symbol.dispose]();
+    }
+  });
+
   it('surfaces operation faults as thrown errors (drift: bulk-delete validation)', async () => {
     const engine = new Engine({ storage: new MemoryStorage() });
     const client = new LocalClient(engine);
@@ -256,6 +284,26 @@ describe('HttpClient catalog operations', () => {
     await expect(client.call('weft.storage.capabilities', {})).resolves.toEqual(
       engine.storage.capabilities(),
     );
+  });
+
+  it('reads workflow provenance and finalizer progress through generated JSON-RPC operations', async () => {
+    await engine.storage.put(
+      KEYS.scheduleRunLink('http-observed-run'),
+      encodeScheduleRunMetadata('http-schedule', 2_000),
+    );
+    await engine.storage.put(
+      KEYS.teardownOwed('http-observed-run'),
+      encode({ status: 'running', attempts: 1, token: 'claim', claimedAt: 1_500 }),
+    );
+
+    await expect(
+      client.operations['weft.workflows.scheduleprovenance.get']({
+        workflowId: 'http-observed-run',
+      }),
+    ).resolves.toEqual({ scheduleId: 'http-schedule', occurrence: 2_000 });
+    await expect(
+      client.operations['weft.workflows.finalizer.get']({ workflowId: 'http-observed-run' }),
+    ).resolves.toEqual({ status: 'running', attempts: 2, startedAt: 1_500 });
   });
 
   it('routes an ordinary REST-only operation through generated binding metadata', async () => {

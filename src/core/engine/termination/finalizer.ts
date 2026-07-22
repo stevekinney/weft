@@ -34,6 +34,7 @@ import { KEYS } from '../../../storage/interface.ts';
 import { decode } from '../../codec.ts';
 import { WorkflowTeardownEvent } from '../../events.ts';
 import type { WorkflowState } from '../../types.ts';
+import { buildTeardownSuccessOperations } from '../finalizer-status.ts';
 import type { EngineInternals } from '../internals.ts';
 import { isTeardownClaim, parseTeardownTimerId, type TeardownClaim } from '../state-utilities.ts';
 import { runFinalizerActivity, type RunnableFinalizer } from './finalizer-activity.ts';
@@ -66,9 +67,8 @@ const TERMINAL_STATUSES_OWED_TEARDOWN = new Set<WorkflowState['status']>([
   'timed-out',
 ]);
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
+const errorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
 
 /**
  * Re-arm a self-heal timer after a settle CAS lost its race (the `running` bytes we wrote
@@ -76,8 +76,7 @@ function errorMessage(error: unknown): string {
  * once the drive returns, so without this the marker could be stranded with no follow-up
  * timer — violating the self-heal invariant. Symmetric with the lost-CLAIM-CAS re-arm in
  * {@link driveResolvedTeardown}. Idempotent and bounded: a redundant timer just makes the
- * next drive re-read the marker (re-arm on a still-fresh claim, or clear if it's gone), and
- * the dead-letter horizon caps total attempts. (Cursor Bugbot round 4.)
+ * next drive re-read the marker; the dead-letter horizon caps total attempts.
  */
 async function rearmOnLostSettle(
   internals: EngineInternals,
@@ -235,6 +234,7 @@ async function resolveTeardownDrive(
       internals,
       workflowId,
       state.type,
+      state.workflowExecutionToken,
       claim.attempts,
       markerBytes,
       callbacks,
@@ -249,17 +249,15 @@ async function resolveTeardownDrive(
 }
 
 /**
- * The recorded resource state is gone, so the finalizer can never run with its input —
- * dead-letter rather than silently clearing (which would falsely report "torn down").
- * The input is unrecoverable, so the record omits it. Conditioned on `expectedBytes` (the
- * marker bytes this drive read) so a concurrent drive that already settled the teardown
- * isn't overwritten with a false leak record; the dead-lettered event fires only when the
- * durable write commits. (Junior MF1 / Codex MF1; Codex round-2 MF2.)
+ * Dead-letter missing finalizer state rather than falsely reporting successful teardown.
+ * Condition on the observed marker so a concurrent successful settle cannot be overwritten;
+ * emit only after the durable record commits.
  */
 async function deadLetterMissingState(
   internals: EngineInternals,
   workflowId: string,
   workflowType: string,
+  workflowExecutionToken: string | undefined,
   attempts: number,
   expectedBytes: Uint8Array,
   callbacks: FinalizerDriveCallbacks,
@@ -275,6 +273,7 @@ async function deadLetterMissingState(
       lastError,
       finalizerInput: undefined,
     },
+    workflowExecutionToken,
   );
   if (settled) {
     // The event's `error` is present for every 'failed'/'dead-lettered' status (the
@@ -373,6 +372,7 @@ async function driveResolvedTeardown(
       internals,
       workflowId,
       state.type,
+      state.workflowExecutionToken,
       token,
       attempt,
       runningBytes,
@@ -414,23 +414,27 @@ async function driveResolvedTeardown(
 }
 
 /**
- * Finalizer succeeded: clear both keys, conditioned on still owning the `running` claim.
- * Emits the completed event only when the settle CAS commits (a lost CAS means a
- * reclaimer took over — stay silent and re-arm so the marker is never stranded).
+ * Finalizer succeeded: clear both active keys and write the durable run-qualified outcome,
+ * conditioned on still owning the `running` claim. Emit only after commit; a lost CAS
+ * re-arms without emitting.
  */
 async function settleTeardownSuccess(
   internals: EngineInternals,
   workflowId: string,
   workflowType: string,
+  workflowExecutionToken: string | undefined,
   token: string,
   attempt: number,
   runningBytes: Uint8Array,
   callbacks: FinalizerDriveCallbacks,
 ): Promise<void> {
-  const settled = await settleOnRunningClaim(internals, workflowId, runningBytes, [
-    { type: 'delete', key: KEYS.teardownOwed(workflowId) },
-    { type: 'delete', key: KEYS.finalizerState(workflowId) },
-  ]);
+  const operations = buildTeardownSuccessOperations(
+    workflowId,
+    attempt,
+    internals.options.getNow(),
+    workflowExecutionToken,
+  );
+  const settled = await settleOnRunningClaim(internals, workflowId, runningBytes, operations);
   if (!settled) {
     await rearmOnLostSettle(internals, workflowId, token);
     return;
@@ -464,6 +468,7 @@ async function settleTeardownFailure(
         lastError: message,
         finalizerInput: finalizerStateBytes === null ? undefined : decode(finalizerStateBytes),
       },
+      state.workflowExecutionToken,
     );
     // A lost settle CAS means a reclaimer took the running bytes (it will settle/re-arm).
     // Re-arm anyway so the marker is never stranded after the fired timer is deleted —

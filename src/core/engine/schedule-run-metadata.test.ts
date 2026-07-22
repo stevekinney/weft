@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'bun:test';
 
+import { KEYS } from '../../storage/interface.ts';
+import { MemoryStorage } from '../../storage/memory.ts';
 import { encode } from '../codec.ts';
+import { Engine } from '../engine.ts';
 import { decodeScheduleRunMetadata, encodeScheduleRunMetadata } from './schedule-run-metadata.ts';
 
 describe('schedule-run metadata', () => {
@@ -44,5 +47,30 @@ describe('schedule-run metadata', () => {
 
   it('rejects unreadable persisted metadata bytes', () => {
     expect(decodeScheduleRunMetadata(new Uint8Array([0xc1]))).toBeNull();
+  });
+
+  it('reads client-facing provenance from the durable schedule-run link', async () => {
+    const storage = new MemoryStorage();
+    await using engine = new Engine({ storage });
+    await storage.put(
+      KEYS.scheduleRunLink('scheduled-workflow'),
+      encodeScheduleRunMetadata('nightly-schedule', 1_767_225_600_000),
+    );
+
+    await expect(engine.getScheduleProvenance('scheduled-workflow')).resolves.toEqual({
+      scheduleId: 'nightly-schedule',
+      occurrence: 1_767_225_600_000,
+    });
+    await expect(engine.getScheduleProvenance('ordinary-workflow')).resolves.toBeNull();
+  });
+
+  it('keeps historical string links readable through the client-facing provenance API', async () => {
+    const storage = new MemoryStorage();
+    await using engine = new Engine({ storage });
+    await storage.put(KEYS.scheduleRunLink('historical-workflow'), encode('historical-schedule'));
+
+    await expect(engine.getScheduleProvenance('historical-workflow')).resolves.toEqual({
+      scheduleId: 'historical-schedule',
+    });
   });
 });

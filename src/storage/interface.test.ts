@@ -162,6 +162,7 @@ describe('WEFT_RESERVED_KEY_PREFIXES', () => {
       KEYS.scheduleRun('workflow-id'),
       KEYS.scheduleRunLink('workflow-id'),
       KEYS.scheduleRunBySchedule('schedule-id', 'workflow-id'),
+      KEYS.teardownSucceeded('workflow-id'),
       KEYS.operation('default', 1, 'operation-id'),
       KEYS.operationInflight('operation-id'),
       KEYS.operationQueued('operation-id'),
@@ -865,5 +866,9 @@ describe('KEYS', () => {
     expect(KEYS.scheduleRunBySchedule('schedule:id', 'workflow:id')).toBe(
       'schedule-run-by-schedule:schedule%3Aid:workflow%3Aid',
     );
+  });
+
+  it('encodes successful teardown outcomes by workflow id', () => {
+    expect(KEYS.teardownSucceeded('workflow:id')).toBe('wf-teardown-succeeded:workflow%3Aid');
   });
 });

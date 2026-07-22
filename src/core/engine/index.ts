@@ -71,9 +71,11 @@ import {
   type UpdateDefinition,
   type WorkerOutboundMessage,
   type WorkflowEvent,
+  type WorkflowFinalizerStatus,
   type WorkflowInput,
   type WorkflowOutput,
   type WorkflowReplay,
+  type WorkflowScheduleProvenance,
   type WorkflowServices,
   type WorkflowServicesUnion,
   type WorkflowState,
@@ -165,6 +167,7 @@ import {
 } from './errors.ts';
 import { assertLeaseHeldForEngineWork, commitFencedEngineWrite } from './fenced-write.ts';
 import { recordFinalizerState } from './finalizer-state.ts';
+import { getFinalizerStatus as getFinalizerStatusFromInternals } from './finalizer-status.ts';
 import {
   createWorkflowHandleWithResultPromise as createWorkflowHandleWithResultPromiseFromInternals,
   getWorkflowResultPromise as getWorkflowResultPromiseFromInternals,
@@ -226,6 +229,7 @@ import {
   submitReview as submitReviewFromInternals,
 } from './reviews.ts';
 import { ScheduleHandle } from './schedule-handle.ts';
+import { decodeScheduleRunMetadata } from './schedule-run-metadata.ts';
 import {
   cancelSchedule as cancelScheduleFromInternals,
   listSchedules as listSchedulesFromInternals,
@@ -1808,6 +1812,23 @@ export class Engine<
       return { ...state, status: 'pending' };
     }
     return state;
+  }
+  /** Return the schedule occurrence that launched a workflow, when applicable. */
+  async getScheduleProvenance(workflowId: string): Promise<WorkflowScheduleProvenance | null> {
+    const bytes = await getInternals(this).storage.get(KEYS.scheduleRunLink(workflowId));
+    if (bytes === null) return null;
+    const metadata = decodeScheduleRunMetadata(bytes);
+    if (metadata === null) return null;
+    return {
+      scheduleId: metadata.id,
+      ...(metadata.occurrence === undefined ? {} : { occurrence: metadata.occurrence }),
+    };
+  }
+  /** Return durable post-terminal finalizer progress or outcome, when applicable. */
+  async getFinalizerStatus(workflowId: string): Promise<WorkflowFinalizerStatus | null> {
+    const internals = getInternals(this);
+    const state = await loadWorkflowState(internals, workflowId);
+    return getFinalizerStatusFromInternals(internals, workflowId, state);
   }
   /**
    * Return this process's last-known ownership-lease health.

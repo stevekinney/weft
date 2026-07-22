@@ -106,6 +106,7 @@ import {
   getWorkflowEventsOperation,
   getWorkflowEventsRestBinding,
 } from './operations/get-workflow-events.ts';
+import * as workflowObservability from './operations/get-workflow-observability.ts';
 import {
   getWorkflowResultOperation,
   getWorkflowResultRestBinding,
@@ -270,6 +271,7 @@ export const REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = [
   cancelWorkflowRestBinding,
   getWorkflowResultRestBinding,
   getWorkflowAttributesRestBinding,
+  ...workflowObservability.workflowObservabilityRestBindings,
   getWorkflowEventsRestBinding,
   setWorkflowAttributesRestBinding,
   signalWorkflowRestBinding,
@@ -438,6 +440,7 @@ export function createLiveOperationRegistry(
     cancelWorkflowOperation,
     getWorkflowResultOperation,
     getWorkflowAttributesOperation,
+    ...workflowObservability.workflowObservabilityOperations,
     getWorkflowEventsOperation,
     setWorkflowAttributesOperation,
     signalWorkflowOperation,

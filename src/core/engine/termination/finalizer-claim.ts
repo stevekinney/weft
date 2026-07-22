@@ -102,11 +102,11 @@ export function runningClaimIsStale(
 /**
  * Durable audit record written to {@link KEYS.teardownDeadLetter} when a workflow's
  * finalizer permanently fails — the retry horizon was reached, or the recorded resource
- * state vanished so the finalizer can never run. It is the supported operator surface
- * for a leaked external resource: raw storage inspection of the `wf-teardown-deadletter:`
- * key is the contract (in-process teardown events are best-effort and not durable, and
- * the record is excluded from the workflow purge delete-set so it survives after the
- * workflow record is gone).
+ * state vanished so the finalizer can never run. It is the supported durable operator
+ * record for a leaked external resource; {@link Engine.getFinalizerStatus} and the matching
+ * transport operation expose it without relying on best-effort teardown events. The record
+ * is excluded from the workflow purge delete-set so it survives after the workflow record
+ * is gone.
  */
 export interface TeardownDeadLetterRecord {
   /** The workflow type whose finalizer leaked. */
@@ -117,6 +117,8 @@ export interface TeardownDeadLetterRecord {
   attempts: number;
   /** Engine clock when the record was written. */
   deadLetteredAt: number;
+  /** Concrete run identity, present on records written from current workflow state. */
+  workflowExecutionToken?: string;
   /** The decoded `ctx.setFinalizerState` payload, when it was still recoverable. */
   finalizerInput?: unknown;
 }
@@ -256,12 +258,14 @@ export async function deadLetterTeardown(
   attempts: number,
   expectedBytes: Uint8Array,
   details: { lastError: string; finalizerInput: unknown },
+  workflowExecutionToken?: string,
 ): Promise<boolean> {
   const deadLetter: TeardownDeadLetterRecord = {
     type: workflowType,
     lastError: details.lastError,
     attempts,
     deadLetteredAt: internals.options.getNow(),
+    ...(workflowExecutionToken === undefined ? {} : { workflowExecutionToken }),
     // Omit `finalizerInput` entirely when absent rather than persisting `undefined`,
     // so the record's shape stays clean under `exactOptionalPropertyTypes`. (typescript MF.)
     ...(details.finalizerInput === undefined ? {} : { finalizerInput: details.finalizerInput }),

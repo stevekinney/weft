@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 
+import { KEYS } from '../../storage/interface.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { encode } from '../codec.ts';
 import type { ActivityContext, WorkflowContext } from '../types.ts';
 import { activity, workflow } from '../types.ts';
 import { Engine } from './index.ts';
@@ -65,6 +67,10 @@ describe('workflow and activity execution tokens', () => {
       id: 'stable-token-id',
     });
     const firstToken = await firstHandle.result();
+    await engine.storage.put(
+      KEYS.teardownSucceeded('stable-token-id'),
+      encode({ workflowExecutionToken: firstToken, attempts: 1, completedAt: 1 }),
+    );
 
     const secondHandle = await engine.start('restart-token-workflow', null, {
       id: 'stable-token-id',
@@ -75,6 +81,8 @@ describe('workflow and activity execution tokens', () => {
     expect(firstToken).toBeString();
     expect(secondToken).toBeString();
     expect(secondToken).not.toBe(firstToken);
+    expect(await engine.storage.get(KEYS.teardownSucceeded('stable-token-id'))).toBeNull();
+    await expect(engine.getFinalizerStatus('stable-token-id')).resolves.toBeNull();
   });
 
   it('exposes workflow and finalizer attempt tokens to finalizers', async () => {

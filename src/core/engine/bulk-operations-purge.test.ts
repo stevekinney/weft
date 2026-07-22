@@ -175,6 +175,8 @@ describe('bulk purge helpers', () => {
     expect(deleteKeys.has(KEYS.update(state.id, 'update-a'))).toBe(true);
     expect(deleteKeys.has(KEYS.updateResponse('update-a'))).toBe(true);
     expect(deleteKeys.has(KEYS.updateResponse(''))).toBe(false);
+    expect(deleteKeys.has(KEYS.teardownSucceeded(state.id))).toBe(true);
+    expect(deleteKeys.has(KEYS.teardownDeadLetter(state.id))).toBe(false);
   });
 
   it('surfaces lost lease preconditions while purging a workflow', async () => {

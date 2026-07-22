@@ -37,6 +37,7 @@ function terminalState(id: string, type: string): WorkflowState {
     createdAt: 0,
     updatedAt: 0,
     versionTuple: { workflowVersion: '0' },
+    workflowExecutionToken: `execution-${id}`,
   };
 }
 
@@ -282,6 +283,10 @@ describe('runWorkflowFinalizer — defensive bail-out branches', () => {
     };
     await internals.storage.put(KEYS.teardownOwed(workflowId), encode(runningClaim));
     await internals.storage.put(KEYS.finalizerState(workflowId), encode({ sandboxId: 'sbx' }));
+    await internals.storage.put(
+      KEYS.workflow(workflowId),
+      encode(terminalState(workflowId, 'teardown-stale-reclaim')),
+    );
 
     await runWorkflowFinalizer(
       internals,
@@ -362,6 +367,7 @@ describe('runWorkflowFinalizer — defensive bail-out branches', () => {
       // The settle CAS lost (the marker now holds 'other-token'), so the drive re-armed a
       // self-heal timer rather than stranding the marker.
       expect(await teardownTimerCount(internalsRef)).toBe(1);
+      expect(await internalsRef.storage.get(KEYS.teardownSucceeded(workflowId))).toBeNull();
       engine[Symbol.dispose]();
     });
   }
@@ -410,6 +416,17 @@ describe('runWorkflowFinalizer — defensive bail-out branches', () => {
 
     expect(finalizerRuns).toBe(1);
     expect(await internals.storage.get(KEYS.teardownOwed(workflowId))).toBeNull();
+    const succeededBytes = await internals.storage.get(KEYS.teardownSucceeded(workflowId));
+    expect(succeededBytes).not.toBeNull();
+    expect(decode(succeededBytes!)).toMatchObject({
+      workflowExecutionToken: `execution-${workflowId}`,
+      attempts: 1,
+      completedAt: expect.any(Number),
+    });
+    await expect(engine.getFinalizerStatus(workflowId)).resolves.toMatchObject({
+      status: 'succeeded',
+      attempts: 1,
+    });
     engine[Symbol.dispose]();
   });
 
@@ -476,6 +493,7 @@ describe('runWorkflowFinalizer — defensive bail-out branches', () => {
     expect(record.type).toBe('teardown-missing-state');
     expect(record.attempts).toBe(2);
     expect(record.lastError).toContain('finalizer state missing');
+    expect(record.workflowExecutionToken).toBe(`execution-${workflowId}`);
     expect('finalizerInput' in record).toBe(false);
     // The dead-lettered event fires for symmetry with the retry-horizon path, and carries
     // the `error` reason (present for every 'failed'/'dead-lettered' status — Copilot). It
@@ -661,6 +679,70 @@ describe('terminal teardown gate — staged-but-not-durable finalizer state', ()
     expect(await internals.storage.get(KEYS.finalizerState(workflowId))).not.toBeNull();
 
     engine[Symbol.dispose]();
+  });
+});
+
+describe('Engine.getFinalizerStatus', () => {
+  it('reads pending and running claims with meaningful attempt counts', async () => {
+    await using engine = new Engine();
+    const workflowId = 'finalizer-progress';
+    await engine.storage.put(KEYS.workflow(workflowId), encode(terminalState(workflowId, 'type')));
+    await engine.storage.put(KEYS.teardownOwed(workflowId), encode(owedClaim('token', 2)));
+
+    await expect(engine.getFinalizerStatus(workflowId)).resolves.toEqual({
+      status: 'pending',
+      attempts: 2,
+    });
+
+    await engine.storage.put(
+      KEYS.teardownOwed(workflowId),
+      encode({ status: 'running', attempts: 2, token: 'token', claimedAt: 500 }),
+    );
+    await expect(engine.getFinalizerStatus(workflowId)).resolves.toEqual({
+      status: 'running',
+      attempts: 3,
+      startedAt: 500,
+    });
+  });
+
+  it('returns a durable dead-letter after purge but rejects it for a replacement run', async () => {
+    await using engine = new Engine();
+    const workflowId = 'finalizer-failed';
+    await engine.storage.put(
+      KEYS.teardownDeadLetter(workflowId),
+      encode({
+        type: 'type',
+        lastError: 'resource leaked',
+        attempts: 8,
+        deadLetteredAt: 900,
+        workflowExecutionToken: 'old-run',
+      }),
+    );
+
+    await expect(engine.getFinalizerStatus(workflowId)).resolves.toEqual({
+      status: 'failed',
+      attempts: 8,
+      failedAt: 900,
+      error: 'resource leaked',
+    });
+
+    await engine.storage.put(
+      KEYS.workflow(workflowId),
+      encode({ ...terminalState(workflowId, 'type'), workflowExecutionToken: 'new-run' }),
+    );
+    await expect(engine.getFinalizerStatus(workflowId)).resolves.toBeNull();
+  });
+
+  it('does not attribute an unqualified historical outcome to a current tokenized run', async () => {
+    await using engine = new Engine();
+    const workflowId = 'finalizer-historical-outcome';
+    await engine.storage.put(KEYS.workflow(workflowId), encode(terminalState(workflowId, 'type')));
+    await engine.storage.put(
+      KEYS.teardownDeadLetter(workflowId),
+      encode({ type: 'type', lastError: 'old failure', attempts: 8, deadLetteredAt: 900 }),
+    );
+
+    await expect(engine.getFinalizerStatus(workflowId)).resolves.toBeNull();
   });
 });
 
