@@ -138,11 +138,35 @@ function buildRegistrationEntry(name: string, registration: WorkflowDefinition):
   const entry = buildBaseRegistrationEntry(name, registration);
   applyOptionalRegistrationFields(entry, registration);
   if (isBuilderWorkflowDefinition(registration)) {
-    entry.signals = registration.signals;
-    entry.updates = registration.updates;
-    entry.queries = registration.queries;
+    entry.signals = normalizeMessageDefinitions(name, 'signal', registration.signals);
+    entry.updates = normalizeMessageDefinitions(name, 'update', registration.updates);
+    entry.queries = normalizeMessageDefinitions(name, 'query', registration.queries);
   }
   return entry;
+}
+
+type RuntimeNamedMessageDefinition = {
+  readonly name: string;
+};
+
+function normalizeMessageDefinitions<TDefinition extends RuntimeNamedMessageDefinition>(
+  workflowType: string,
+  messageKind: 'signal' | 'update' | 'query',
+  definitions: Readonly<Record<string, TDefinition>>,
+): Readonly<Record<string, TDefinition>> {
+  const normalized = Object.create(null) as Record<string, TDefinition>;
+  const sortedDefinitions = Object.values(definitions).toSorted((left, right) =>
+    left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
+  );
+  for (const definition of sortedDefinitions) {
+    if (Object.hasOwn(normalized, definition.name)) {
+      throw new Error(
+        `Duplicate ${messageKind} runtime name "${definition.name}" in workflow "${workflowType}"`,
+      );
+    }
+    normalized[definition.name] = definition;
+  }
+  return normalized;
 }
 
 function commitWorkflowDefinition(

@@ -195,9 +195,9 @@ describe('engine + workflow-builder integration', () => {
 
   it('message definitions from the builder are wired onto workflow introspection', () => {
     const interactive = workflow({ name: 'interactive' })
-      .signals({ approve: signal('approve') })
-      .updates({ rename: update('rename') })
-      .queries({ status: query('status') })
+      .signals({ approveAlias: signal('approve') })
+      .updates({ renameAlias: update('rename') })
+      .queries({ statusAlias: query('status') })
       .execute(async function* () {});
 
     const engine = track(new Engine());
@@ -207,6 +207,17 @@ describe('engine + workflow-builder integration', () => {
     expect(Object.keys(definition?.signals ?? {})).toEqual(['approve']);
     expect(Object.keys(definition?.updates ?? {})).toEqual(['rename']);
     expect(Object.keys(definition?.queries ?? {})).toEqual(['status']);
+  });
+
+  it('rejects duplicate runtime message names hidden behind builder aliases', () => {
+    const duplicateSignals = workflow({ name: 'duplicate-signals' })
+      .signals({ first: signal('approve'), second: signal('approve') })
+      .execute(async function* () {});
+
+    const engine = track(new Engine());
+    expect(() => engine.register(duplicateSignals)).toThrow(
+      'Duplicate signal runtime name "approve" in workflow "duplicate-signals"',
+    );
   });
 
   it('hot-add after start: registerWorkflows is callable post-construction', async () => {
