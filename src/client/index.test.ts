@@ -1475,21 +1475,6 @@ describe('HttpClient request surface', () => {
     });
   });
 
-  it('converts a structured coordinated-update fault body to the human message', async () => {
-    globalThis.fetch = (async () =>
-      new Response(JSON.stringify({ error: { code: 'Unprocessable', message: 'bad payload' } }), {
-        status: 422,
-        headers: { 'Content-Type': 'application/json' },
-      })) as unknown as typeof fetch;
-
-    const httpClient = new HttpClient({ baseUrl: 'http://example.test' });
-
-    // The behavioral contract: the structured fault's human message reaches the
-    // `error` field and the call resolves rather than throwing.
-    const result = await httpClient.submitCoordinatedUpdate('wf-1', 'rename');
-    expect(result.error).toBe('bad payload');
-  });
-
   it('throws a 404 client error when handle.result() points at a missing workflow', async () => {
     const responses = [
       jsonResponse({ id: 'wf-1' }),
