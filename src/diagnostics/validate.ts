@@ -200,7 +200,7 @@ function collectExport(
   options: { allowOverwrite: boolean; depth: number },
 ): void {
   if (isWorkflowDefinition(value)) {
-    if (options.allowOverwrite || !(value.name in registrations)) {
+    if (options.allowOverwrite || !Object.hasOwn(registrations, value.name)) {
       registrations[value.name] = value;
     }
     return;
@@ -229,7 +229,7 @@ export async function loadRegistrationsFromModule(modulePath: string): Promise<{
   const absolutePath = resolve(process.cwd(), modulePath);
   const mod = await import(absolutePath);
 
-  const registrations: Record<string, WorkflowDefinition> = {};
+  const registrations: Record<string, WorkflowDefinition> = Object.create(null);
   const activities: ActivityDefinition[] = [];
 
   const defaultExport = mod.default as unknown;
@@ -260,11 +260,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 function isRemovedWorkflowShape(value: unknown): value is Record<string, unknown> {
-  return (
-    isObject(value) &&
-    'handler' in value &&
-    Object.prototype.toString.call(value['handler']) === '[object AsyncGeneratorFunction]'
-  );
+  return isObject(value) && 'handler' in value && typeof value['handler'] === 'function';
 }
 
 function assertNotRemovedWorkflowShape(exportName: string, value: Record<string, unknown>): void {
@@ -276,9 +272,20 @@ function assertNotRemovedWorkflowShape(exportName: string, value: Record<string,
 }
 
 function isDefinitionMap(value: Record<string, unknown>): boolean {
+  // Keep map discovery narrower than direct-export rejection: arbitrary route
+  // maps may also contain callable `handler` fields.
   return Object.values(value).some(
     (entry) =>
-      isWorkflowDefinition(entry) || isActivityDefinition(entry) || isRemovedWorkflowShape(entry),
+      isWorkflowDefinition(entry) ||
+      isActivityDefinition(entry) ||
+      isRemovedAsyncGeneratorWorkflowShape(entry),
+  );
+}
+
+function isRemovedAsyncGeneratorWorkflowShape(value: unknown): boolean {
+  return (
+    isRemovedWorkflowShape(value) &&
+    Object.prototype.toString.call(value['handler']) === '[object AsyncGeneratorFunction]'
   );
 }
 

@@ -303,6 +303,57 @@ export const greet = {
     await expect(iterator.next()).resolves.toEqual({ value: 'hi', done: true });
   });
 
+  it('preserves workflow definitions whose canonical names are inherited object keys', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'weft-validate-'));
+    const filePath = join(dir, 'prototype-names.ts');
+    await writeFile(
+      filePath,
+      `
+export const protoWorkflow = {
+  name: '__proto__',
+  handler: async function* () { return 'proto'; }
+};
+export const stringWorkflow = {
+  name: 'toString',
+  handler: async function* () { return 'string'; }
+};
+`,
+    );
+
+    const { registrations } = await loadRegistrationsFromModule(filePath);
+
+    expect(Object.getPrototypeOf(registrations)).toBeNull();
+    expect(Object.keys(registrations).toSorted()).toEqual(['__proto__', 'toString']);
+    expect(Object.hasOwn(registrations, '__proto__')).toBe(true);
+    expect(Object.hasOwn(registrations, 'toString')).toBe(true);
+    expect(registrations['__proto__']?.name).toBe('__proto__');
+    expect(registrations['toString']?.name).toBe('toString');
+  });
+
+  it('uses own-property precedence when default and named exports share a prototype name', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'weft-validate-'));
+    const filePath = join(dir, 'prototype-name-conflict.ts');
+    await writeFile(
+      filePath,
+      `
+const defaultDefinition = {
+  name: 'toString',
+  handler: async function* () { return 'default'; }
+};
+export const namedDefinition = {
+  name: 'toString',
+  handler: async function* () { return 'named'; }
+};
+export default { defaultDefinition };
+`,
+    );
+
+    const { registrations } = await loadRegistrationsFromModule(filePath);
+    const iterator = registrations['toString']!.handler({} as never, undefined);
+
+    await expect(iterator.next()).resolves.toEqual({ value: 'default', done: true });
+  });
+
   it('loads a single default-exported workflow definition', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'weft-validate-'));
     const filePath = join(dir, 'default-definition.ts');
@@ -382,6 +433,24 @@ export const greet = {
 
     await expect(loadRegistrationsFromModule(filePath)).rejects.toThrow(
       'Workflow export "greet" must be a builder-produced workflow definition with its own name',
+    );
+  });
+
+  it('rejects removed registrations whose handler wraps an async generator', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'weft-validate-'));
+    const filePath = join(dir, 'wrapped-handler.ts');
+    await writeFile(
+      filePath,
+      `
+async function* greetWorkflow() { return 'hi'; }
+export const greet = {
+  handler: () => greetWorkflow()
+};
+`,
+    );
+
+    await expect(loadRegistrationsFromModule(filePath)).rejects.toThrow(
+      'Workflow export "greet" must be a builder-produced workflow definition with its own name. Create it with `workflow({ name }).execute(handler)`.',
     );
   });
 
