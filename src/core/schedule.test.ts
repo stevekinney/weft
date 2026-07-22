@@ -6,7 +6,7 @@ import {
   yieldToEventLoop,
 } from '../testing/fake-timers.test-support.ts';
 
-import type { BatchOperation } from '../storage/interface.ts';
+import type { BatchOperation, ConditionalBatchCondition } from '../storage/interface.ts';
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { decode, encode } from './codec.ts';
@@ -106,6 +106,25 @@ class ScheduleRunStartFailureStorage extends MemoryStorage {
     }
 
     return super.batch(operations);
+  }
+}
+
+class ScheduleRunCleanupRaceStorage extends MemoryStorage {
+  cleanupKeyToReject: string | null = null;
+
+  override async conditionalBatch(
+    conditions: ConditionalBatchCondition[],
+    operations: BatchOperation[],
+  ): Promise<boolean> {
+    if (
+      this.cleanupKeyToReject !== null &&
+      operations.some(
+        (operation) => operation.type === 'delete' && operation.key === this.cleanupKeyToReject,
+      )
+    ) {
+      return false;
+    }
+    return super.conditionalBatch(conditions, operations);
   }
 }
 
@@ -451,6 +470,25 @@ describe('recurring schedules', () => {
       await handleScheduledWorkflowTerminalForEngine(engine, 'workflow-corrupt-run');
 
       expect(await storage.get(KEYS.scheduleRun('workflow-corrupt-run'))).toBeNull();
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('surfaces a same-epoch race while deleting corrupt schedule-run metadata', async () => {
+    const storage = new ScheduleRunCleanupRaceStorage();
+    const engine = await Engine.create({ storage, ownership: 'lease', recover: false });
+    const workflowId = 'workflow-corrupt-run-race';
+    const scheduleRunKey = KEYS.scheduleRun(workflowId);
+
+    try {
+      await storage.put(scheduleRunKey, encode({ invalid: true }));
+      storage.cleanupKeyToReject = scheduleRunKey;
+
+      await expect(handleScheduledWorkflowTerminalForEngine(engine, workflowId)).rejects.toThrow(
+        `Schedule-run cleanup for workflow "${workflowId}" lost its precondition.`,
+      );
+      expect(await storage.get(scheduleRunKey)).not.toBeNull();
     } finally {
       await engine[Symbol.asyncDispose]();
     }

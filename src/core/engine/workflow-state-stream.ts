@@ -177,27 +177,24 @@ export async function queryScheduleRunIndex(
 async function runConstrainedIdQueries(
   queries: Array<() => Promise<Set<string>>>,
 ): Promise<Set<string>[]> {
-  const idSets: Array<Set<string> | undefined> = Array.from({ length: queries.length });
   let nextIndex = 0;
-  const runWorker = async (): Promise<void> => {
+  const runWorker = async (): Promise<Array<readonly [number, Set<string>]>> => {
+    const workerResults: Array<readonly [number, Set<string>]> = [];
     while (nextIndex < queries.length) {
       const currentIndex = nextIndex;
       nextIndex += 1;
-      idSets[currentIndex] = await queries[currentIndex]!();
+      workerResults.push([currentIndex, await queries[currentIndex]!()]);
     }
+    return workerResults;
   };
 
   const workerLimit = Math.max(1, Math.min(ATTRIBUTE_SCAN_CONCURRENCY, queries.length));
-  await Promise.all(Array.from({ length: workerLimit }, () => runWorker()));
-  return idSets.map(requireConstrainedIdSet);
-}
-
-function requireConstrainedIdSet(idSet: Set<string> | undefined): Set<string> {
-  if (idSet === undefined) {
-    throw new Error('Attribute index query did not produce a workflow ID set.');
-  }
-
-  return idSet;
+  const workerResultBatches = await Promise.all(
+    Array.from({ length: workerLimit }, () => runWorker()),
+  );
+  const completedResults = workerResultBatches.flat();
+  completedResults.sort(([leftIndex], [rightIndex]) => leftIndex - rightIndex);
+  return completedResults.map(([, idSet]) => idSet);
 }
 
 async function collectExactAttributeMatches(

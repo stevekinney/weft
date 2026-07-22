@@ -13,10 +13,15 @@ import { MemoryStorage } from '../storage/memory.ts';
 import { BULK_WORKFLOW_FILTER_ERROR_MESSAGE } from './bulk-workflow-filter.ts';
 import { decode, encode } from './codec.ts';
 import { BulkDeleteRequiresTerminalWorkflowsError, Engine } from './engine.ts';
+import { normalizeBulkOperationOptions } from './engine/bulk-operations-shared.ts';
 import { cancelAll } from './engine/bulk-operations.ts';
 import { BULK_OPERATION_BATCH_SIZE } from './engine/listing.ts';
 import type { SearchAttributeValue, WorkflowContext, WorkflowState } from './types.ts';
 import { workflow } from './types.ts';
+import {
+  MAX_BULK_CONFIRMATION_TOKEN_LENGTH,
+  MAX_BULK_OPERATION_REQUEST_ID_LENGTH,
+} from './types/bulk.ts';
 
 async function* echoWorkflow(_ctx: WorkflowContext, input: unknown) {
   return input;
@@ -473,6 +478,27 @@ class BulkTagDeletionDuringMutationStorage extends MemoryStorage {
 }
 
 describe('bulk workflow operations', () => {
+  it('rejects malformed programmatic bulk operation controls', () => {
+    expect(() => normalizeBulkOperationOptions({ dryRun: true, bulkConcurrency: 0 })).toThrow(
+      'Field "bulkConcurrency" must be a positive integer',
+    );
+    expect(() =>
+      normalizeBulkOperationOptions({
+        confirmationToken: 'x'.repeat(MAX_BULK_CONFIRMATION_TOKEN_LENGTH + 1),
+      }),
+    ).toThrow(
+      `Field "confirmationToken" must be at most ${String(MAX_BULK_CONFIRMATION_TOKEN_LENGTH)} characters`,
+    );
+    expect(() =>
+      normalizeBulkOperationOptions({
+        dryRun: true,
+        requestId: 'x'.repeat(MAX_BULK_OPERATION_REQUEST_ID_LENGTH + 1),
+      }),
+    ).toThrow(
+      `Field "requestId" must be at most ${String(MAX_BULK_OPERATION_REQUEST_ID_LENGTH)} characters`,
+    );
+  });
+
   it('reports workflows that remain active after bulk cancellation attempts', async () => {
     const storage = new MemoryStorage();
     const workflowId = 'bulk-cancel-remains-running';
@@ -1391,27 +1417,33 @@ describe('bulk workflow operations', () => {
   it('previews bulk cancellation with attribute any-of filters', async () => {
     const engine = new Engine({ storage: new MemoryStorage() });
     const regionWorkflow = workflow({ name: 'bulk-attribute-preview' })
-      .searchAttributes({ region: { type: 'string' } })
+      .searchAttributes({ region: { type: 'string' }, tier: { type: 'string' } })
       .execute(waitForSignalWorkflow);
     engine.register(regionWorkflow);
 
     try {
       await engine.start('bulk-attribute-preview', 'east', {
         id: 'bulk-attribute-preview-east',
-        searchAttributes: { region: 'us-east' },
+        searchAttributes: { region: 'us-east', tier: 'active' },
       });
       await engine.start('bulk-attribute-preview', 'west', {
         id: 'bulk-attribute-preview-west',
-        searchAttributes: { region: 'eu-west' },
+        searchAttributes: { region: 'eu-west', tier: 'active' },
       });
       await engine.start('bulk-attribute-preview', 'south', {
         id: 'bulk-attribute-preview-south',
-        searchAttributes: { region: 'ap-south' },
+        searchAttributes: { region: 'ap-south', tier: 'active' },
       });
       await waitForWorkflowStatusCount(engine, 'running', 3, 10_000);
 
       const preview = await engine.cancelAll(
-        { attributes: [{ key: 'region', value: ['us-east', 'eu-west'] }] },
+        {
+          type: 'bulk-attribute-preview',
+          attributes: [
+            { key: 'region', value: ['us-east', 'eu-west'] },
+            { key: 'tier', value: 'active' },
+          ],
+        },
         { dryRun: true, requestId: 'bulk-attribute-preview-request' },
       );
 
@@ -1423,6 +1455,15 @@ describe('bulk workflow operations', () => {
           requestId: 'bulk-attribute-preview-request',
           sampleWorkflowIds: ['bulk-attribute-preview-east', 'bulk-attribute-preview-west'],
           confirmationToken: expect.stringMatching(/^bulk:/),
+        }),
+      );
+      expect(preview.scope.filter).toEqual(
+        expect.objectContaining({
+          type: 'bulk-attribute-preview',
+          attributes: expect.arrayContaining([
+            { key: 'region', value: ['us-east', 'eu-west'] },
+            { key: 'tier', value: 'active' },
+          ]),
         }),
       );
     } finally {

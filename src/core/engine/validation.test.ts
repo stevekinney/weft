@@ -393,6 +393,9 @@ describe('engine validation helpers', () => {
         decodeScheduleRuntimeFields(createScheduleRecord({ queuedRuns: 1 }), 'schedule-id'),
       ).toBeNull();
       expect(
+        decodeScheduleRuntimeFields(createScheduleRecord({ queuedRuns: [null] }), 'schedule-id'),
+      ).toBeNull();
+      expect(
         decodeScheduleRuntimeFields(
           createScheduleRecord({ queuedRuns: [{ workflowId: '', queuedAt: 3 }] }),
           'schedule-id',

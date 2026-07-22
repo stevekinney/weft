@@ -2177,7 +2177,16 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       },
     ],
     ['src/core/engine/workflow-indexes.ts', { lines: new Set([49]) }],
-    ['src/core/engine/workflow-state-stream.ts', { lines: new Set([170]) }],
+    [
+      'src/core/engine/workflow-state-stream.ts',
+      {
+        // The guard requires one million distinct schedule-run index entries before
+        // it rejects the next row. Its error type and equivalent list/aggregate scan
+        // caps are covered directly; materializing that operational ceiling in the
+        // unit suite would add disproportionate memory and runtime cost.
+        lines: new Set([168]),
+      },
+    ],
     ['src/core/scheduler/timer-sources.ts', { lines: new Set([26, 51, 79, 80, 81, 82]) }],
     [
       'src/mcp/http.ts',

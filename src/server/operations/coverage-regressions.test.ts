@@ -16,7 +16,12 @@ import {
   bulkDeleteWorkflowsOperation,
   bulkDeleteWorkflowsRestBinding,
 } from './bulk-delete-workflows.ts';
-import { parseRequiredBulkListFilter } from './bulk-filter-helpers.ts';
+import {
+  bulkOperationOptionsFromInput,
+  listFilterFromBulkInput,
+  parseBulkOperationControlFromBody,
+  parseRequiredBulkListFilter,
+} from './bulk-filter-helpers.ts';
 import {
   bulkMutateWorkflowTagsOperation,
   bulkMutateWorkflowTagsRestBinding,
@@ -96,6 +101,70 @@ describe('operation coverage regressions', () => {
         'Field "filter.failureCategory" must be one of application, timeout, cancellation, resource, system',
       ).message,
     );
+  });
+
+  it('maps complete bulk filters and rejects malformed control inputs', () => {
+    expect(
+      listFilterFromBulkInput({
+        status: ['running'],
+        type: 'checkout',
+        tags: ['nightly'],
+        attributes: [{ key: 'amount', value: 2, gt: 1, lt: 5, gte: 2, lte: 4 }],
+        limit: 20,
+        offset: 3,
+        scheduleId: 'schedule-1',
+        idPrefix: 'checkout-',
+        failureCategory: 'application',
+        createdAt: { gt: 1, gte: 2, lt: 5, lte: 4 },
+        updatedAt: { gte: 6 },
+        executionDeadline: { lte: 10 },
+      }),
+    ).toEqual({
+      status: ['running'],
+      type: 'checkout',
+      tags: ['nightly'],
+      attributes: [{ key: 'amount', value: 2, gt: 1, lt: 5, gte: 2, lte: 4 }],
+      limit: 20,
+      offset: 3,
+      scheduleId: 'schedule-1',
+      idPrefix: 'checkout-',
+      failureCategory: 'application',
+      createdAt: { gt: 1, gte: 2, lt: 5, lte: 4 },
+      updatedAt: { gte: 6 },
+      executionDeadline: { lte: 10 },
+    });
+
+    expect(() =>
+      parseRequiredBulkListFilter({
+        filter: { attributes: [{ key: 'amount', gt: ['low', 'high'] }] },
+      }),
+    ).toThrow('Field "filter.attributes[0].gt" must be a string, number, or boolean');
+    expect(() =>
+      Reflect.apply(listFilterFromBulkInput, undefined, [
+        { attributes: [{ key: 'amount', gt: ['low', 'high'] }] },
+      ]),
+    ).toThrow('Field "filter.attributes[].gt" must be a string, number, or boolean');
+
+    expect(parseBulkOperationControlFromBody(undefined)).toEqual({});
+    expect(() => parseBulkOperationControlFromBody(null)).toThrow(
+      'Request body must be a JSON object',
+    );
+    expect(() => parseBulkOperationControlFromBody([])).toThrow(
+      'Request body must be a JSON object',
+    );
+    expect(() => parseBulkOperationControlFromBody({ dryRun: 'yes' })).toThrow(
+      'Field "dryRun" must be a boolean',
+    );
+    expect(() => parseBulkOperationControlFromBody({ bulkConcurrency: 0 })).toThrow(
+      'Field "bulkConcurrency" must be a positive integer',
+    );
+    expect(() => parseBulkOperationControlFromBody({ confirmationToken: '' })).toThrow(
+      'Field "confirmationToken" must be a non-empty string',
+    );
+    expect(bulkOperationOptionsFromInput({ dryRun: true }, anonymousPrincipal())).toEqual({
+      dryRun: true,
+      principal: { method: 'unauthenticated' },
+    });
   });
 
   it('rejects invalid filter tags across bulk operations', async () => {
