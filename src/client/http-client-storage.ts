@@ -1,3 +1,4 @@
+import { readBoundedNdjsonResponse } from '../storage/bounded-ndjson-response.ts';
 import { decodeBase64ToBytes, encodeBytesToBase64, isRecord } from '../storage/byte-encoding.ts';
 import {
   assertStorageBatchOperationCount,
@@ -35,50 +36,13 @@ function scanEntry(value: unknown): [string, Uint8Array] {
   return [value['key'], decodeBase64ToBytes(value['value'])];
 }
 
-async function releaseScanReader(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  reachedEndOfStream: boolean,
-): Promise<void> {
-  if (!reachedEndOfStream) {
-    try {
-      await reader.cancel();
-    } catch {
-      // Preserve the scan failure or consumer return that triggered cleanup.
-    }
-  }
-  reader.releaseLock();
-}
-
 async function* scanResponse(response: Response): AsyncIterable<[string, Uint8Array]> {
-  if (response.body === null) return;
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let bufferedText = '';
-  let bytesRead = 0;
-  let reachedEndOfStream = false;
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        reachedEndOfStream = true;
-        break;
-      }
-      bytesRead += value.byteLength;
-      if (bytesRead > MAX_SCAN_RESPONSE_BYTES) {
-        throw new Error('HttpClient storage scan response exceeded the maximum allowed size.');
-      }
-      bufferedText += decoder.decode(value, { stream: true });
-      const lines = bufferedText.split('\n');
-      bufferedText = lines.pop() ?? '';
-      for (const line of lines) {
-        if (line.trim().length > 0) yield scanEntry(JSON.parse(line));
-      }
-    }
-    bufferedText += decoder.decode();
-    if (bufferedText.trim().length > 0) yield scanEntry(JSON.parse(bufferedText));
-  } finally {
-    await releaseScanReader(reader, reachedEndOfStream);
+  for await (const line of readBoundedNdjsonResponse(response, {
+    maximumBytes: MAX_SCAN_RESPONSE_BYTES,
+    sizeLimitError: () =>
+      new Error('HttpClient storage scan response exceeded the maximum allowed size.'),
+  })) {
+    if (line.trim().length > 0) yield scanEntry(JSON.parse(line));
   }
 }
 

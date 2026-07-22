@@ -201,7 +201,7 @@ If you're retiring an activity, the same drain-then-drop discipline applies — 
 
 When you expose recovery over HTTP via the `weft.recover.all` operation, the same drift behavior applies, with two extra constraints to keep the public surface safe:
 
-- **Workflow IDs never cross the HTTP boundary.** Storage with unknown types causes the operation to return a `409 Conflict` fault. The fault payload includes `missingTypes` (array of type names), `missingWorkflowCount` (integer), and `samplesTruncated` (boolean) — but never workflow IDs. IDs stay on the structured error in-process.
+- **Workflow IDs never cross the HTTP boundary.** Storage with unknown types causes the operation to return a `409 Conflict` fault. The fault's `data` object includes `missingTypes` (array of type names), `missingWorkflowCount` (integer), and `samplesTruncated` (boolean) — but never workflow IDs. IDs stay on the structured error in-process.
 - **The `acknowledgeUnknownWorkflowTypes` opt-out is not exposed over HTTP.** Letting an unauthenticated caller silently skip recovery would be a footgun on a public route, so the HTTP request body has no input fields. Operators who need the opt-out call `engine.recoverAll({ acknowledgeUnknownWorkflowTypes: true })` from their own boot code, where the intent is established before the engine starts handling requests.
 
 This is intentionally one-way: an HTTP client gets enough information to know recovery is blocked and what types are missing, but cannot enumerate affected workflows or skip the gate. If your operators need ID-level visibility or the skip behavior, they need access to the engine process — logs, metrics, or the in-process API — not the HTTP route.

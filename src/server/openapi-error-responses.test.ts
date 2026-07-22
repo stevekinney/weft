@@ -33,7 +33,7 @@ function responseSchema(response: unknown): unknown {
 }
 
 describe('buildErrorResponses', () => {
-  it('documents the additive flat REST fault body and audited data fields (#720)', () => {
+  it('documents the canonical REST fault body and audited data fields (#720, #763)', () => {
     expect(ERROR_SCHEMA).toEqual({
       type: 'object',
       required: ['error'],
@@ -43,20 +43,6 @@ describe('buildErrorResponses', () => {
         weftCode: {
           type: 'string',
           description: 'Fine-grained public Weft error code when one is available',
-        },
-        missingTypes: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Established recovery-conflict field; also present under data',
-        },
-        missingWorkflowCount: {
-          type: 'integer',
-          minimum: 0,
-          description: 'Established recovery-conflict field; also present under data',
-        },
-        samplesTruncated: {
-          type: 'boolean',
-          description: 'Established recovery-conflict field; also present under data',
         },
         data: {
           type: 'object',

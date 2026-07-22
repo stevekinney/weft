@@ -239,7 +239,7 @@ export function shapeOperationFaultAsJson(
   return shapeRestFaultAsJson(fault, { ...options, ...(message === undefined ? {} : { message }) });
 }
 
-/** Canonical flat REST response used by bindings and route-dispatch fallback. */
+/** Canonical REST response used by bindings and route-dispatch fallback. */
 export function shapeRestFaultAsJson(
   fault: OperationFault,
   options: RestFaultResponseOptions = {},
@@ -256,8 +256,8 @@ export function shapeRestFaultAsJson(
   });
 }
 
-/** Build the audited body for bespoke REST shapers that retain extra legacy fields. */
-export function shapeRestFaultBody(fault: OperationFault, message?: string): RestFaultBody {
+/** Build the audited canonical REST body. */
+function shapeRestFaultBody(fault: OperationFault, message?: string): RestFaultBody {
   if (fault.code === 'EngineFailure') return { error: 'Internal server error' };
 
   const error = message ?? fault.message;

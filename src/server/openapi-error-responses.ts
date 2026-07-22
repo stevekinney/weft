@@ -21,20 +21,6 @@ export const ERROR_SCHEMA: Record<string, unknown> = {
       type: 'string',
       description: 'Fine-grained public Weft error code when one is available',
     },
-    missingTypes: {
-      type: 'array',
-      items: { type: 'string' },
-      description: 'Established recovery-conflict field; also present under data',
-    },
-    missingWorkflowCount: {
-      type: 'integer',
-      minimum: 0,
-      description: 'Established recovery-conflict field; also present under data',
-    },
-    samplesTruncated: {
-      type: 'boolean',
-      description: 'Established recovery-conflict field; also present under data',
-    },
     data: {
       type: 'object',
       description: 'Audited fault-specific context; omitted when no fields are safe to expose',
