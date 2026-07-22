@@ -33,6 +33,7 @@ import {
   WORKFLOW_HELP_TEXT,
   writeRunLockfile,
 } from './cli/index.ts';
+import { CLI_SHUTDOWN_SIGNALS, createCliShutdownHandler } from './cli/shutdown.ts';
 import { Engine } from './core/engine.ts';
 import { serve } from './server/index.ts';
 
@@ -80,42 +81,18 @@ if (parsedArguments.command === 'version') {
   console.log(`Storage: ${parsedArguments.storage}`);
   console.log(`Database: ${parsedArguments.database}`);
 
-  process.on('SIGINT', () => {
-    console.log('\nShutting down...');
-    void server
-      .stop()
-      .then(async () => {
-        try {
-          await removeRunLockfile(server.url);
-        } catch (error) {
-          console.error('[weft] Failed to remove run lockfile:', error);
-        }
-        storage[Symbol.dispose]();
-        process.exit(0);
-      })
-      .catch((error) => {
-        console.error('[weft] Shutdown error:', error);
-        process.exit(1);
-      });
+  const shutdown = createCliShutdownHandler({
+    stopServer: () => server.stop(),
+    removeRunLockfile: () => removeRunLockfile(server.url),
+    disposeStorage: () => storage[Symbol.dispose](),
+    log: (message) => console.log(message),
+    reportError: (message, error) => console.error(message, error),
+    exit: (code) => process.exit(code),
   });
 
-  process.on('SIGTERM', () => {
-    void server
-      .stop()
-      .then(async () => {
-        try {
-          await removeRunLockfile(server.url);
-        } catch (error) {
-          console.error('[weft] Failed to remove run lockfile:', error);
-        }
-        storage[Symbol.dispose]();
-        process.exit(0);
-      })
-      .catch((error) => {
-        console.error('[weft] Shutdown error:', error);
-        process.exit(1);
-      });
-  });
+  for (const signal of CLI_SHUTDOWN_SIGNALS) {
+    process.on(signal, () => void shutdown(signal));
+  }
 } else if (parsedArguments.command === 'doctor') {
   if (parsedArguments.help) {
     console.log(DOCTOR_HELP_TEXT);
