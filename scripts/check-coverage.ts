@@ -22,6 +22,7 @@ type FileCoverageResult = {
 type CoverageAllowance = {
   functions?: number;
   lines?: Set<number>;
+  requireUncoveredLines?: boolean;
 };
 
 type CoverageAllowanceEntry = readonly [path: string, allowance: CoverageAllowance];
@@ -1131,8 +1132,13 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
     [
       'src/core/context/parallel-operations.ts',
       {
+        // Fresh LCOV maps these misses to the defensive reconstruction errors for
+        // non-fulfilled or unnamed cached branches. The parser rejects an allowance
+        // that ever lands on a covered DA record, so line movement cannot silently
+        // subtract unrelated executed code.
         functions: 1,
         lines: new Set([19, 20, 21, 31, 37, 38, 39]),
+        requireUncoveredLines: true,
       },
     ],
     [
@@ -2390,6 +2396,7 @@ function summarizeCoverageFiles(files: ReadonlyMap<string, FileCoverageResult>):
  */
 export function parseLcovFiles(content: string): Map<string, FileCoverageResult> {
   const files = new Map<string, FileCoverageResult>();
+  const coveredLineAllowances: string[] = [];
 
   let currentFile = '';
   let fileLineTotal = 0;
@@ -2457,10 +2464,15 @@ export function parseLcovFiles(content: string): Map<string, FileCoverageResult>
       const [, lineNumberText, hitCountText] = /^DA:(\d+),(\d+)(?:,.*)?$/.exec(line) ?? [];
       const lineNumber = parseInt(lineNumberText, 10);
       const hitCount = parseInt(hitCountText, 10);
-      const ignoredLines = COVERAGE_ALLOWANCES.get(currentFile)?.lines;
+      const allowance = COVERAGE_ALLOWANCES.get(currentFile);
+      const ignoredLines = allowance?.lines;
 
       if (ignoredLines?.has(lineNumber)) {
-        continue;
+        if (hitCount > 0 && allowance.requireUncoveredLines === true) {
+          coveredLineAllowances.push(`${currentFile}:${String(lineNumber)}`);
+        } else {
+          continue;
+        }
       }
 
       fileLineTotal += 1;
@@ -2474,6 +2486,12 @@ export function parseLcovFiles(content: string): Map<string, FileCoverageResult>
   }
 
   finalizeCurrentFile();
+  if (coveredLineAllowances.length > 0) {
+    throw new Error(
+      `Coverage allowance for ${coveredLineAllowances.join(', ')} points at a covered line. ` +
+        'Realign or remove the stale allowance instead of subtracting unrelated coverage.',
+    );
+  }
   return files;
 }
 
