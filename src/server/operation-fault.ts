@@ -166,12 +166,14 @@ export type RestFaultBody = {
   readonly data?: Readonly<Record<string, unknown>>;
 };
 
-type RestFaultDataExtractor<Code extends OperationFault['code']> = (
-  data: Extract<OperationFault, { code: Code }>['data'],
+type RestProjectableFault = Exclude<OperationFault, { code: 'EngineFailure' }>;
+
+type RestFaultDataExtractor<Code extends RestProjectableFault['code']> = (
+  data: Extract<RestProjectableFault, { code: Code }>['data'],
 ) => Readonly<Record<string, unknown>>;
 
 type RestFaultDataExtractors = {
-  [Code in OperationFault['code']]: RestFaultDataExtractor<Code>;
+  [Code in RestProjectableFault['code']]: RestFaultDataExtractor<Code>;
 };
 
 const NO_REST_FAULT_DATA: Readonly<Record<string, unknown>> = Object.freeze({});
@@ -216,7 +218,6 @@ const REST_FAULT_DATA_EXTRACTORS: RestFaultDataExtractors = {
           })),
         },
   MethodNotFound: (data) => ({ method: data.method }),
-  EngineFailure: () => NO_REST_FAULT_DATA,
 };
 
 /**
@@ -272,7 +273,7 @@ export function shapeRestFaultBody(fault: OperationFault, message?: string): Res
   return body;
 }
 
-function restDataFromFault(fault: OperationFault): Readonly<Record<string, unknown>> {
+function restDataFromFault(fault: RestProjectableFault): Readonly<Record<string, unknown>> {
   // The table maps every discriminant to the matching data extractor. TypeScript
   // cannot preserve that correlation through a dynamic lookup, so this narrow
   // assertion reconnects the already-exhaustive key/value relationship.
