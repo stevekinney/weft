@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 
-import { NeonStorage, type NeonPool, type NeonPoolClient } from './neon.ts';
+import { NeonStorage } from './neon.ts';
+import type { PostgresPool, PostgresPoolClient } from './postgres.ts';
 import { bytes as encode } from './storage-adapter.test-support.ts';
 
 /**
- * A {@link NeonPool} stub that injects a Postgres serialization failure
+ * A {@link PostgresPool} stub that injects a Postgres serialization failure
  * (`SQLSTATE 40001`) at `COMMIT` for a configurable number of attempts. PGlite
  * serializes on one connection and never produces a 40001, so the SERIALIZABLE
  * retry loop — the entire reason the Pool driver was chosen — can only be
@@ -12,7 +13,7 @@ import { bytes as encode } from './storage-adapter.test-support.ts';
  * times each condition key is read so a test can prove the loop re-runs the
  * whole `BEGIN → read → compare → write → COMMIT` cycle on every retry.
  */
-class FaultInjectingPool implements NeonPool {
+class FaultInjectingPool implements PostgresPool {
   /** Number of COMMITs that should fail before one succeeds. */
   #commitFailuresRemaining: number;
   /** SQLSTATE the failing COMMITs throw (40001 serialization, 40P01 deadlock). */
@@ -38,7 +39,7 @@ class FaultInjectingPool implements NeonPool {
     return { rows: [] };
   }
 
-  async connect(): Promise<NeonPoolClient> {
+  async connect(): Promise<PostgresPoolClient> {
     return {
       query: async (sql: string, parameters?: unknown[]) => {
         if (sql.startsWith('BEGIN')) {
@@ -161,7 +162,7 @@ describe('NeonStorage conditionalBatch serialization retry', () => {
     let commitCount = 0;
     let rollbackCount = 0;
     let beginCount = 0;
-    const pool: NeonPool = {
+    const pool: PostgresPool = {
       query: async (sql?: string) =>
         sql?.includes('pg_collation') ? { rows: [{ collation: 'C' }] } : { rows: [] },
       connect: async () => ({

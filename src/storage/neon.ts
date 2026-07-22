@@ -3,27 +3,11 @@ import {
   PostgresKeyValueStorage,
   type PostgresKeyValueStorageOptions,
   type PostgresPool,
-  type PostgresPoolClient,
 } from './postgres-key-value-storage.ts';
 
 /**
- * A connection that can run a single interactive transaction, obtained from
- * {@link NeonPool.connect}. Alias of the driver-agnostic
- * {@link PostgresPoolClient}; kept for backward-compatible imports.
- */
-export type NeonPoolClient = PostgresPoolClient;
-
-/**
- * Minimal structural view of a node-postgres `Pool`. The Neon serverless `Pool`
- * satisfies this; the PGlite test backend is wrapped to satisfy it too. Alias of
- * the driver-agnostic {@link PostgresPool}; kept for backward-compatible imports.
- */
-export type NeonPool = PostgresPool;
-
-/**
- * Configuration for connecting to a Neon (or any Postgres) database. Alias of the
- * shared {@link PostgresKeyValueStorageOptions}; `url` is optional and required
- * only when no `pool` is supplied.
+ * Configuration for connecting {@link NeonStorage} to a Neon database.
+ * `url` is optional and required only when no `pool` is supplied.
  *
  * @example
  * ```ts
