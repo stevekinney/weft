@@ -2,7 +2,8 @@ import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
 import type { FaultCode } from '../core/fault-code.ts';
-import { buildErrorResponses, ERROR_SCHEMA } from './openapi-error-responses.ts';
+import { buildErrorResponses } from './openapi-error-responses.ts';
+import { generateOpenApiDocument } from './openapi.ts';
 import type { ErasedOperation } from './operation-catalog.ts';
 
 function operation(producibleFaults?: readonly FaultCode[]): ErasedOperation {
@@ -32,9 +33,13 @@ function responseSchema(response: unknown): unknown {
   return (applicationJson as Record<string, unknown>)['schema'];
 }
 
-describe('buildErrorResponses', () => {
-  it('documents the canonical REST fault body and audited data fields (#720, #763)', () => {
-    expect(ERROR_SCHEMA).toEqual({
+describe('OpenAPI error responses', () => {
+  it('documents the generated canonical REST fault component and audited data fields (#720, #763, #771)', () => {
+    const document = generateOpenApiDocument();
+    const components = document['components'] as Record<string, unknown> | undefined;
+    const schemas = components?.['schemas'] as Record<string, unknown> | undefined;
+
+    expect(schemas?.['Error']).toEqual({
       type: 'object',
       required: ['error'],
       additionalProperties: false,
