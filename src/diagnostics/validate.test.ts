@@ -459,6 +459,25 @@ export const greet = {
     );
   });
 
+  it('rejects removed async-generator registrations nested in a definition map', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'weft-validate-'));
+    const filePath = join(dir, 'nested-bare-handler.ts');
+    await writeFile(
+      filePath,
+      `
+export default {
+  legacy: {
+    handler: async function* () { return 'hi'; }
+  }
+};
+`,
+    );
+
+    await expect(loadRegistrationsFromModule(filePath)).rejects.toThrow(
+      'Workflow export "legacy" must be a builder-produced workflow definition with its own name. Create it with `workflow({ name }).execute(handler)`.',
+    );
+  });
+
   it('rejects removed registrations whose handler wraps an async generator', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'weft-validate-'));
     const filePath = join(dir, 'wrapped-handler.ts');
