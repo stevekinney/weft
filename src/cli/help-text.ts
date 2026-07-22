@@ -10,7 +10,7 @@ Commands:
   schedule        Manage recurring schedules
   timeline        Inspect workflow timeline and replay history
   version:check   Check workflow version compatibility
-  validate        Lint workflow registrations for design-time anti-patterns
+  validate        Lint workflow definitions for design-time anti-patterns
   codegen         Generate TypeScript declarations from a registry snapshot
   api             Inspect and invoke catalog operations on a running server
   server          Inspect a running server's health and operation surface
@@ -129,7 +129,7 @@ period after that.
 Options:
   -d, --database <path>     Database file path (default: ./weft.db)
   -s, --storage <backend>   Storage backend: sqlite, lmdb (default: sqlite)
-  -w, --workflows <path>    Path to workflow registrations module (required for create)
+  -w, --workflows <path>    Path to workflow definitions module (required for create)
       --every <duration>    Interval cadence for create (e.g. 30s, 5m, 1h); mutually exclusive with the cron positional
       --input <json>        JSON input payload for create (default: null)
       --id <id>             Custom schedule id for create
@@ -141,13 +141,13 @@ Options:
 `;
 
 export const VALIDATE_HELP_TEXT = `
-weft validate - Lint workflow registrations for design-time anti-patterns
+weft validate - Lint workflow definitions for design-time anti-patterns
 
 Usage: weft validate <entry.ts>... [options]
 
 Arguments:
   <entry.ts>...           One or more TypeScript modules or glob patterns that
-                          resolve to workflow registrations and/or activity
+                          resolve to workflow definitions and/or activity
                           definitions.
 
 Options:

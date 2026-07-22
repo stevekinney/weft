@@ -1,7 +1,6 @@
 import type { Engine } from '../core/engine.ts';
 import { registerOnRuntimeEngine, runtimeWorkflowEngine } from '../core/runtime-workflow-engine.ts';
 import type { WorkflowDefinition } from '../core/types.ts';
-import type { WorkflowRegistration } from '../diagnostics/validate.ts';
 import { createStorage } from './storage-factory.ts';
 import type {
   CommandOutput,
@@ -100,15 +99,11 @@ async function registerScheduleWorkflows(
   engine: Engine,
   workflowsPath: string,
   loadRegistrationsFromModule: (modulePath: string) => Promise<{
-    registrations: Record<string, WorkflowRegistration>;
+    registrations: Record<string, WorkflowDefinition>;
   }>,
 ): Promise<void> {
   const loaded = await loadRegistrationsFromModule(workflowsPath);
-  for (const [workflowType, registration] of Object.entries(loaded.registrations)) {
-    // Loaded modules historically export bare `{ handler, ... }` objects keyed
-    // by workflow name. Promote the export key into the definition's `name`
-    // field so `engine.register` can accept it as a `WorkflowDefinition`.
-    const definition: WorkflowDefinition = { ...registration, name: workflowType };
+  for (const definition of Object.values(loaded.registrations)) {
     registerOnRuntimeEngine(runtimeWorkflowEngine(engine), definition);
   }
 }
@@ -117,7 +112,7 @@ async function executeScheduleCreate(
   options: ScheduleCreateCommand,
   engine: Engine,
   loadRegistrationsFromModule: (modulePath: string) => Promise<{
-    registrations: Record<string, WorkflowRegistration>;
+    registrations: Record<string, WorkflowDefinition>;
   }>,
 ): Promise<CommandOutput> {
   const validationError = getScheduleCreateValidationError(options);

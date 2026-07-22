@@ -1,7 +1,7 @@
 import type { ActivityDefinition } from '../core/activity.ts';
 import type { Engine } from '../core/engine.ts';
 import { registerOnRuntimeEngine, runtimeWorkflowEngine } from '../core/runtime-workflow-engine.ts';
-import type { WorkflowRegistration } from '../diagnostics/validate.ts';
+import type { WorkflowDefinition } from '../core/types.ts';
 
 /**
  * Convert a plain-object `ActivityDefinition` into a callable function that
@@ -25,18 +25,18 @@ export function toActivityCallable(
 }
 
 /**
- * Register a map of workflow registrations and a list of activity definitions
+ * Register a map of workflow definitions and a list of activity definitions
  * on an engine instance. Plain-object activities are normalized to callables
  * before registration.
  */
 export function registerModuleExports(
   engine: Engine,
-  registrations: Record<string, WorkflowRegistration>,
+  registrations: Record<string, WorkflowDefinition>,
   activities: ActivityDefinition[],
 ): void {
   const runtime = runtimeWorkflowEngine(engine);
-  for (const [workflowType, registration] of Object.entries(registrations)) {
-    registerOnRuntimeEngine(runtime, { ...registration, name: workflowType });
+  for (const definition of Object.values(registrations)) {
+    registerOnRuntimeEngine(runtime, definition);
   }
   for (const activity of activities) {
     if (typeof activity === 'function') {

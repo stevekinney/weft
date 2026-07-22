@@ -1,6 +1,25 @@
 import { describe, expect, it } from 'bun:test';
 import type { ActivityDefinition } from '../core/activity.ts';
-import { toActivityCallable } from './serve-registrations.ts';
+import { Engine } from '../core/engine.ts';
+import { workflow } from '../core/types.ts';
+import { registerModuleExports, toActivityCallable } from './serve-registrations.ts';
+
+describe('registerModuleExports', () => {
+  it('registers workflow definitions under their canonical names', async () => {
+    const definition = workflow({ name: 'canonical-name' }).execute(async function* () {
+      return 'done';
+    });
+    await using engine = new Engine();
+
+    registerModuleExports(engine, { exportAlias: definition }, []);
+
+    const handle = await engine.start('canonical-name', undefined);
+    await expect(handle.result()).resolves.toBe('done');
+    expect(() => engine.start('exportAlias', undefined)).toThrow(
+      'No workflow registered with name "exportAlias"',
+    );
+  });
+});
 
 describe('toActivityCallable', () => {
   it('preserves the activity name', () => {

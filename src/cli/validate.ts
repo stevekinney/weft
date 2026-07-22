@@ -1,15 +1,15 @@
-import type { ActivityDefinition } from '../core/types.ts';
-import type { ValidationReport, WorkflowRegistration } from '../diagnostics/validate.ts';
+import type { ActivityDefinition, WorkflowDefinition } from '../core/types.ts';
+import type { ValidationReport } from '../diagnostics/validate.ts';
 import type { CommandOutput } from './types.ts';
 import { expandGlobEntryPaths } from './utilities.ts';
 
 type LoadRegistrationsFromModule = (modulePath: string) => Promise<{
-  registrations: Record<string, WorkflowRegistration>;
+  registrations: Record<string, WorkflowDefinition>;
   activities: ActivityDefinition[];
 }>;
 
 type ValidateRegistrations = (
-  registrations: Record<string, WorkflowRegistration>,
+  registrations: Record<string, WorkflowDefinition>,
   activities: ActivityDefinition[],
 ) => ValidationReport;
 
@@ -110,7 +110,7 @@ function formatValidationLoadError(entry: ValidationLoadErrorEntry): string {
   return `Error: could not load entry file '${entry.entryPath}': ${entry.loadError}`;
 }
 
-/** Validates workflow registration modules and reports load or design-time errors. */
+/** Validates workflow definition modules and reports load or design-time errors. */
 export async function executeValidate(options: {
   entryPaths: string[];
   json: boolean;

@@ -249,6 +249,7 @@ describe('CLI edge coverage', () => {
       [
         'export default {',
         '  scheduledEcho: {',
+        '    name: "scheduledEcho",',
         '    handler: async function* (_ctx, input) {',
         '      return input;',
         '    },',

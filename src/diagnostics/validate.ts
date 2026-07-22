@@ -1,7 +1,7 @@
 /**
  * Design-time workflow validation for `weft validate`.
  *
- * Analyses workflow registrations for common anti-patterns:
+ * Analyses workflow definitions for common anti-patterns:
  *
  * 1. **Unbounded retry policy** — an activity whose `retry.maxAttempts` is
  *    `Infinity` (or the workflow registration specifies `retry.maxAttempts`
@@ -24,34 +24,7 @@
 
 import { resolve } from 'node:path';
 
-import type { ConstraintDefinition } from '../core/constraint.ts';
-import type {
-  ActivityDefinition,
-  DefinitionSchema,
-  RetentionPolicy,
-  SearchAttributeSchema,
-  WorkflowFunction,
-} from '../core/types.ts';
-
-/**
- * Loosely-typed workflow registration shape used only by the `weft validate`
- * and `weft schedule` CLIs when loading workflow modules from disk. This is
- * intentionally separate from the public `WorkflowDefinition` type because
- * loaded modules historically export bare `{ handler, ... }` objects that
- * do not carry a `name` field — the registration key comes from the export
- * key, not the object itself.
- */
-export interface WorkflowRegistration<TInput = unknown, TOutput = unknown> {
-  version?: string;
-  description?: string;
-  tags?: ReadonlyArray<string>;
-  inputSchema?: DefinitionSchema<unknown, TInput>;
-  outputSchema?: DefinitionSchema<unknown, TOutput>;
-  handler: WorkflowFunction<TInput, TOutput>;
-  searchAttributes?: SearchAttributeSchema;
-  retention?: RetentionPolicy;
-  constraints?: ConstraintDefinition[];
-}
+import type { ActivityDefinition, WorkflowDefinition } from '../core/types.ts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -72,7 +45,7 @@ export interface ValidationIssue {
 }
 
 export interface ValidationReport {
-  /** Total number of workflow registrations scanned. */
+  /** Total number of workflow definitions scanned. */
   workflowCount: number;
   /** All detected issues across all registrations. */
   issues: ValidationIssue[];
@@ -136,15 +109,15 @@ function checkStatefulWithoutCompensator(
 // ---------------------------------------------------------------------------
 
 /**
- * Validate a collection of workflow registrations for common anti-patterns.
+ * Validate a collection of workflow definitions for common anti-patterns.
  *
- * @param registrations A record of workflow type name → WorkflowRegistration.
+ * @param registrations A record of workflow type name to WorkflowDefinition.
  * @param activities    Optional list of ActivityDefinition objects to check.
- *                      Activities are not reachable from WorkflowRegistration
+ *                      Activities are not reachable from WorkflowDefinition
  *                      alone, so pass them explicitly when available.
  */
 export function validateRegistrations(
-  registrations: Record<string, WorkflowRegistration>,
+  registrations: Record<string, WorkflowDefinition>,
   activities: ActivityDefinition[] = [],
 ): ValidationReport {
   const issues: ValidationIssue[] = [];
@@ -175,11 +148,11 @@ export function validateRegistrations(
 // ---------------------------------------------------------------------------
 
 /**
- * Load workflow registrations from an entry module.
+ * Load workflow definitions from an entry module.
  *
  * The entry module may export:
- * - `default`: a `Record<string, WorkflowRegistration>` — used directly.
- * - Named exports typed as `WorkflowRegistration` with a `handler` field.
+ * - `default`: a `WorkflowDefinition` or map of workflow definitions.
+ * - Named `WorkflowDefinition` values or maps of workflow definitions.
  * - Named exports typed as `ActivityDefinition` with `name` and `execute` fields.
  *
  * Relative `modulePath` values are resolved against `process.cwd()` so that
@@ -190,41 +163,41 @@ export function validateRegistrations(
  */
 function collectFromExports(
   entries: Iterable<[string, unknown]>,
-  registrations: Record<string, WorkflowRegistration>,
+  registrations: Record<string, WorkflowDefinition>,
   activities: ActivityDefinition[],
   options: { allowOverwrite: boolean },
 ): void {
   for (const [key, value] of entries) {
-    if (isWorkflowRegistration(value)) {
-      if (options.allowOverwrite || !(key in registrations)) {
-        registrations[key] = value;
+    if (isWorkflowDefinition(value)) {
+      if (options.allowOverwrite || !(value.name in registrations)) {
+        registrations[value.name] = value;
       }
     } else if (isActivityDefinition(value)) {
       if (options.allowOverwrite || !activities.includes(value)) {
         activities.push(value);
       }
+    } else if (isObject(value)) {
+      assertNotRemovedWorkflowShape(key, value);
+      collectFromExports(Object.entries(value), registrations, activities, options);
     }
   }
 }
 
 export async function loadRegistrationsFromModule(modulePath: string): Promise<{
-  registrations: Record<string, WorkflowRegistration>;
+  registrations: Record<string, WorkflowDefinition>;
   activities: ActivityDefinition[];
 }> {
   const absolutePath = resolve(process.cwd(), modulePath);
   const mod = await import(absolutePath);
 
-  const registrations: Record<string, WorkflowRegistration> = {};
+  const registrations: Record<string, WorkflowDefinition> = {};
   const activities: ActivityDefinition[] = [];
 
   const defaultExport = mod.default as unknown;
-  if (defaultExport !== null && typeof defaultExport === 'object') {
-    collectFromExports(
-      Object.entries(defaultExport as Record<string, unknown>),
-      registrations,
-      activities,
-      { allowOverwrite: true },
-    );
+  if (defaultExport !== undefined) {
+    collectFromExports([['default', defaultExport]], registrations, activities, {
+      allowOverwrite: true,
+    });
   }
 
   const namedEntries = Object.entries(mod as Record<string, unknown>).filter(
@@ -239,12 +212,24 @@ export async function loadRegistrationsFromModule(modulePath: string): Promise<{
 // Type guards
 // ---------------------------------------------------------------------------
 
-function isWorkflowRegistration(value: unknown): value is WorkflowRegistration {
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function assertNotRemovedWorkflowShape(exportName: string, value: Record<string, unknown>): void {
+  if ('handler' in value) {
+    throw new TypeError(
+      `Workflow export "${exportName}" must be a builder-produced workflow definition with its own name. Create it with \`workflow({ name }).execute(handler)\`.`,
+    );
+  }
+}
+
+function isWorkflowDefinition(value: unknown): value is WorkflowDefinition {
   return (
-    typeof value === 'object' &&
-    value !== null &&
+    isObject(value) &&
+    typeof value['name'] === 'string' &&
     'handler' in value &&
-    typeof (value as { handler: unknown }).handler === 'function'
+    typeof value['handler'] === 'function'
   );
 }
 

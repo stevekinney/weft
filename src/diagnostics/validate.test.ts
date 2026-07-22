@@ -12,8 +12,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import type { ActivityDefinition } from '../core/types.ts';
-import type { WorkflowRegistration } from './validate.ts';
+import type { ActivityDefinition, WorkflowDefinition } from '../core/types.ts';
 import {
   formatValidationReport,
   loadRegistrationsFromModule,
@@ -24,8 +23,9 @@ import {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeRegistration(_name: string): WorkflowRegistration {
+function makeRegistration(name: string): WorkflowDefinition {
   return {
+    name,
     handler: async function* () {
       return 'done';
     },
@@ -254,24 +254,40 @@ export const sendEmail = fn;
     await expect(activities[0]!.execute('payload')).resolves.toEqual({ sent: true });
   });
 
-  it('resolves relative paths against process.cwd(), not the source file', async () => {
-    // Write a module in tmpdir and load it by absolute path — this confirms
-    // the path.resolve(cwd, modulePath) logic works correctly.
+  it('keys named workflow definitions by their canonical name', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'weft-validate-'));
     const filePath = join(dir, 'workflows.ts');
     await writeFile(
       filePath,
       `
 export const greet = {
+  name: 'canonical-greet',
   handler: async function* () { return 'hi'; }
 };
 `,
     );
 
     const { registrations } = await loadRegistrationsFromModule(filePath);
-    expect('greet' in registrations).toBe(true);
-    const iterator = registrations['greet']!.handler({} as never, undefined);
+    expect('greet' in registrations).toBe(false);
+    const iterator = registrations['canonical-greet']!.handler({} as never, undefined);
     await expect(iterator.next()).resolves.toEqual({ value: 'hi', done: true });
+  });
+
+  it('loads a single default-exported workflow definition', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'weft-validate-'));
+    const filePath = join(dir, 'default-definition.ts');
+    await writeFile(
+      filePath,
+      `
+export default {
+  name: 'greet',
+  handler: async function* () { return 'hi'; }
+};
+`,
+    );
+
+    const { registrations } = await loadRegistrationsFromModule(filePath);
+    expect(Object.keys(registrations)).toEqual(['greet']);
   });
 
   it('loads registrations and activities from a default export object', async () => {
@@ -281,6 +297,7 @@ export const greet = {
       filePath,
       `
 const registration = {
+  name: 'greet',
   handler: async function* () { return 'hi'; }
 };
 
@@ -304,14 +321,14 @@ export default {
     await expect(result.activities[0]!.execute('payload')).resolves.toEqual({ sent: true });
   });
 
-  it('keeps default-export registrations when a named export uses the same key', async () => {
+  it('keeps default-export definitions when a named export uses the same canonical name', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'weft-validate-'));
     const filePath = join(dir, 'conflict.ts');
     await writeFile(
       filePath,
       `
-const defaultGreet = { handler: async function* () { return 'default'; } };
-export const greet = { handler: async function* () { return 'named'; } };
+const defaultGreet = { name: 'greet', handler: async function* () { return 'default'; } };
+export const greet = { name: 'greet', handler: async function* () { return 'named'; } };
 export default { greet: defaultGreet };
 `,
     );
@@ -319,6 +336,23 @@ export default { greet: defaultGreet };
     const { registrations } = await loadRegistrationsFromModule(filePath);
     const iterator = registrations['greet']!.handler({} as never, undefined);
     await expect(iterator.next()).resolves.toEqual({ value: 'default', done: true });
+  });
+
+  it('rejects the removed bare handler registration shape', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'weft-validate-'));
+    const filePath = join(dir, 'bare-handler.ts');
+    await writeFile(
+      filePath,
+      `
+export const greet = {
+  handler: async function* () { return 'hi'; }
+};
+`,
+    );
+
+    await expect(loadRegistrationsFromModule(filePath)).rejects.toThrow(
+      'Workflow export "greet" must be a builder-produced workflow definition with its own name',
+    );
   });
 
   it('ignores primitive exports that are neither registrations nor activity definitions', async () => {
