@@ -1,3 +1,4 @@
+import { readBoundedNdjsonResponse } from './bounded-ndjson-response.ts';
 import { decodeBase64ToBytes, encodeBytesToBase64, isRecord } from './byte-encoding.ts';
 import { normalizeDeleteRangeOptions, type DeleteRangeOptions } from './delete-range.ts';
 import {
@@ -113,57 +114,6 @@ function parseScanLine(line: string): [string, Uint8Array] | null {
   if (line.trim().length === 0) return null;
   const entry = parseScanEntry(JSON.parse(line));
   return [entry.key, decodeBase64ToBytes(entry.value)];
-}
-
-function assertScanResponseSize(bytesRead: number): void {
-  if (bytesRead > MAX_SCAN_RESPONSE_BYTES) {
-    throw new Error('HTTPStorage scan response exceeded the maximum allowed size.');
-  }
-}
-
-async function* readNdjsonLines(response: Response): AsyncIterable<string> {
-  if (response.body === null) return;
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let bufferedText = '';
-  let bytesRead = 0;
-  let reachedEndOfStream = false;
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        reachedEndOfStream = true;
-        break;
-      }
-
-      bytesRead += value.byteLength;
-      assertScanResponseSize(bytesRead);
-
-      bufferedText += decoder.decode(value, { stream: true });
-      const lines = bufferedText.split('\n');
-      bufferedText = lines.pop() ?? '';
-
-      for (const line of lines) {
-        yield line;
-      }
-    }
-
-    bufferedText += decoder.decode();
-    if (bufferedText.length > 0) {
-      yield bufferedText;
-    }
-  } finally {
-    try {
-      if (!reachedEndOfStream) {
-        await reader.cancel();
-      }
-    } catch {
-      // Ignore cancellation errors while unwinding a terminated scan.
-    }
-    reader.releaseLock();
-  }
 }
 
 /**
@@ -283,7 +233,11 @@ export class HTTPStorage implements Storage {
       headers: { accept: 'application/x-ndjson' },
     });
 
-    for await (const line of readNdjsonLines(response)) {
+    for await (const line of readBoundedNdjsonResponse(response, {
+      maximumBytes: MAX_SCAN_RESPONSE_BYTES,
+      sizeLimitError: () =>
+        new Error('HTTPStorage scan response exceeded the maximum allowed size.'),
+    })) {
       const entry = parseScanLine(line);
       if (entry !== null) yield entry;
     }
