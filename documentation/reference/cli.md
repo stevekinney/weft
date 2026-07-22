@@ -34,7 +34,7 @@ weft serve --port 8080 --database /var/data/weft.db
 | `--workflows` | `-w`  |             | Path to a workflow module to load and register on startup |
 | `--help`      | `-h`  |             | Show help message                                         |
 
-When `--workflows` is omitted, the server starts in inspect-only mode (useful for viewing existing persisted workflow state via the REST API, but no new workflow types can be executed). When provided, the module's exported `WorkflowRegistration` values and `ActivityDefinition` values are loaded and registered before the server begins accepting requests.
+When `--workflows` is omitted, the server starts in inspect-only mode (useful for viewing existing persisted workflow state via the REST API, but no new workflow types can be executed). When provided, the module's exported `WorkflowDefinition` values and `ActivityDefinition` values are loaded and registered before the server begins accepting requests.
 
 ```bash
 weft serve --workflows ./src/workflows.ts
@@ -173,29 +173,33 @@ weft version:check --database ./weft.db --workflows ./src/workflows.ts --json
 
 **Options:**
 
-| Flag          | Short | Default     | Description                                     |
-| ------------- | ----- | ----------- | ----------------------------------------------- |
-| `--database`  | `-d`  | `./weft.db` | SQLite database file path                       |
-| `--workflows` | `-w`  | (required)  | Path to module exporting workflow registrations |
-| `--json`      | `-j`  | `false`     | Output as JSON instead of human-readable text   |
-| `--help`      | `-h`  |             | Show help message                               |
+| Flag          | Short | Default     | Description                                   |
+| ------------- | ----- | ----------- | --------------------------------------------- |
+| `--database`  | `-d`  | `./weft.db` | SQLite database file path                     |
+| `--workflows` | `-w`  | (required)  | Path to module exporting workflow definitions |
+| `--json`      | `-j`  | `false`     | Output as JSON instead of human-readable text |
+| `--help`      | `-h`  |             | Show help message                             |
 
 The `--workflows` path is a TypeScript module resolved by Bun at runtime. Point it at source—for example `./src/workflows.ts`—not at compiled output in `dist/`, or version checks reflect stale code.
 
-The workflows module must default-export a `Record<string, WorkflowRegistration>`:
+The workflows module may export builder-produced workflow definitions directly or as a map:
 
 ```typescript partial
-import type { WorkflowRegistration } from '@lostgradient/weft';
+import { workflow } from '@lostgradient/weft';
+
+export const order = workflow({
+  name: 'order',
+  version: '2.0.0',
+  description: 'Runs order fulfillment',
+  tags: ['orders'],
+}).execute(orderWorkflow);
+
+export const onboard = workflow({ name: 'onboard', version: '1.0.0' }).execute(onboardWorkflow);
 
 export default {
-  order: {
-    version: '2.0.0',
-    description: 'Runs order fulfillment',
-    tags: ['orders'],
-    handler: orderWorkflow,
-  },
-  onboard: { version: '1.0.0', handler: onboardWorkflow },
-} satisfies Record<string, WorkflowRegistration>;
+  order,
+  onboard,
+};
 ```
 
 **Verdicts:**

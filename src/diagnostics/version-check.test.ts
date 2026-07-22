@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'bun:test';
 
 import { encode } from '../core/codec.ts';
-import type { WorkflowState } from '../core/types.ts';
+import type { WorkflowDefinition, WorkflowState } from '../core/types.ts';
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
-import type { WorkflowRegistration } from './validate.ts';
 import { runVersionCheck } from './version-check.ts';
 
 function makeWorkflowState(
@@ -38,7 +37,7 @@ function dummyHandler(): AsyncGenerator<unknown, unknown, unknown> {
 describe('runVersionCheck', () => {
   it('returns empty workflowTypes and safe verdict for an empty database', async () => {
     const storage = new MemoryStorage();
-    const registrations: Record<string, WorkflowRegistration> = {};
+    const registrations: Record<string, WorkflowDefinition> = {};
 
     const report = await runVersionCheck(storage, registrations);
 
@@ -67,8 +66,8 @@ describe('runVersionCheck', () => {
       }),
     );
 
-    const registrations: Record<string, WorkflowRegistration> = {
-      order: { version: '1.0.0', handler: () => dummyHandler() },
+    const registrations: Record<string, WorkflowDefinition> = {
+      order: { name: 'order', version: '1.0.0', handler: () => dummyHandler() },
     };
 
     const report = await runVersionCheck(storage, registrations);
@@ -88,8 +87,8 @@ describe('runVersionCheck', () => {
       makeWorkflowState({ id: 'wf-2', type: 'order', version: '1.0.0', status: 'pending' }),
     );
 
-    const registrations: Record<string, WorkflowRegistration> = {
-      order: { version: '1.0.0', handler: () => dummyHandler() },
+    const registrations: Record<string, WorkflowDefinition> = {
+      order: { name: 'order', version: '1.0.0', handler: () => dummyHandler() },
     };
 
     const report = await runVersionCheck(storage, registrations);
@@ -110,8 +109,9 @@ describe('runVersionCheck', () => {
       makeWorkflowState({ id: 'wf-1', type: 'order', version: '1.0.0', status: 'running' }),
     );
 
-    const registrations: Record<string, WorkflowRegistration> = {
+    const registrations: Record<string, WorkflowDefinition> = {
       order: {
+        name: 'order',
         version: '2.0.0',
         handler: () => dummyHandler(),
       },
@@ -147,10 +147,10 @@ describe('runVersionCheck', () => {
       makeWorkflowState({ id: 'wf-3', type: 'payment', version: '1.0.0', status: 'pending' }),
     );
 
-    const registrations: Record<string, WorkflowRegistration> = {
-      order: { version: '1.0.0', handler: () => dummyHandler() },
-      onboard: { version: '2.0.0', handler: () => dummyHandler() },
-      payment: { version: '3.0.0', handler: () => dummyHandler() },
+    const registrations: Record<string, WorkflowDefinition> = {
+      order: { name: 'order', version: '1.0.0', handler: () => dummyHandler() },
+      onboard: { name: 'onboard', version: '2.0.0', handler: () => dummyHandler() },
+      payment: { name: 'payment', version: '3.0.0', handler: () => dummyHandler() },
     };
 
     const report = await runVersionCheck(storage, registrations);
@@ -170,8 +170,8 @@ describe('runVersionCheck', () => {
       makeWorkflowState({ id: 'wf-2', type: 'order', version: '1.0.0', status: 'running' }),
     );
 
-    const registrations: Record<string, WorkflowRegistration> = {
-      order: { version: '1.0.0', handler: () => dummyHandler() },
+    const registrations: Record<string, WorkflowDefinition> = {
+      order: { name: 'order', version: '1.0.0', handler: () => dummyHandler() },
     };
 
     const report = await runVersionCheck(storage, registrations);
@@ -201,8 +201,8 @@ describe('runVersionCheck', () => {
       makeWorkflowState({ id: 'wf-4', type: 'order', version: '1.0.0', status: 'timed-out' }),
     );
 
-    const registrations: Record<string, WorkflowRegistration> = {
-      order: { version: '2.0.0', handler: () => dummyHandler() },
+    const registrations: Record<string, WorkflowDefinition> = {
+      order: { name: 'order', version: '2.0.0', handler: () => dummyHandler() },
     };
 
     const report = await runVersionCheck(storage, registrations);
@@ -221,8 +221,8 @@ describe('runVersionCheck', () => {
     // Manually add a checkpoint entry that should be skipped
     await storage.put(KEYS.checkpoint('wf-1'), encode({ step: 1 }));
 
-    const registrations: Record<string, WorkflowRegistration> = {
-      order: { version: '1.0.0', handler: () => dummyHandler() },
+    const registrations: Record<string, WorkflowDefinition> = {
+      order: { name: 'order', version: '1.0.0', handler: () => dummyHandler() },
     };
 
     const report = await runVersionCheck(storage, registrations);
@@ -238,8 +238,8 @@ describe('runVersionCheck', () => {
       makeWorkflowState({ id: 'wf-1', type: 'order', version: '0.0.0', status: 'running' }),
     );
 
-    const registrations: Record<string, WorkflowRegistration> = {
-      order: { handler: () => dummyHandler() },
+    const registrations: Record<string, WorkflowDefinition> = {
+      order: { name: 'order', handler: () => dummyHandler() },
     };
 
     const report = await runVersionCheck(storage, registrations);
@@ -269,8 +269,8 @@ describe('runVersionCheck', () => {
       makeWorkflowState({ id: 'wf-4', type: 'order', version: '0.9.0', status: 'running' }),
     );
 
-    const registrations: Record<string, WorkflowRegistration> = {
-      order: { version: '1.0.0', handler: () => dummyHandler() },
+    const registrations: Record<string, WorkflowDefinition> = {
+      order: { name: 'order', version: '1.0.0', handler: () => dummyHandler() },
     };
 
     const report = await runVersionCheck(storage, registrations);

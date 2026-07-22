@@ -10,10 +10,10 @@
 
 import { decodeWorkflowState } from '../core/engine/validation.ts';
 import { isTopLevelWorkflowStateKey } from '../core/engine/workflow-state-stream.ts';
+import type { WorkflowDefinition } from '../core/types.ts';
 import { DEFAULT_WORKFLOW_VERSION, checkVersionCompatibility } from '../core/versioning.ts';
 import type { Storage } from '../storage/interface.ts';
 import type { VersionCheckReport, WorkflowTypeReport } from './types.ts';
-import type { WorkflowRegistration } from './validate.ts';
 
 interface WorkflowTypeGroup {
   count: number;
@@ -61,7 +61,7 @@ function findMostCommonVersion(versionCounts: Map<string, number>): string {
 
 function buildWorkflowTypeReports(
   groups: Map<string, WorkflowTypeGroup>,
-  registrations: Record<string, WorkflowRegistration>,
+  registrations: Record<string, WorkflowDefinition>,
 ): WorkflowTypeReport[] {
   const reports: WorkflowTypeReport[] = [];
   for (const [type, group] of groups) {
@@ -115,7 +115,7 @@ function computeOverallVerdict(
  */
 export async function runVersionCheck(
   storage: Storage,
-  registrations: Record<string, WorkflowRegistration>,
+  registrations: Record<string, WorkflowDefinition>,
 ): Promise<VersionCheckReport> {
   const groups = await groupActiveWorkflowsByType(storage);
   const workflowTypes = buildWorkflowTypeReports(groups, registrations);

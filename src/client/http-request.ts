@@ -1,5 +1,5 @@
 import { resolveConnection } from '../connection.ts';
-import { failureCategoryForFaultCode, isFaultCode, type FaultCode } from '../core/fault-code.ts';
+import { failureCategoryForFaultCode, type FaultCode } from '../core/fault-code.ts';
 import type { FailureCategory } from '../core/types/identity.ts';
 import { isWeftErrorCode, WeftError, type WeftErrorCode } from '../core/weft-error.ts';
 import type { WorkflowEventTransport } from './event-stream-options.ts';
@@ -81,7 +81,7 @@ export function resolveHttpClientConnection(options: HttpClientOptions): {
 /**
  * Error thrown when the server returns a non-2xx response.
  *
- * When the server sends a fault body with a recognized coarse `code`, the wire
+ * When a transport response carries a recognized coarse fault code, the wire
  * value is surfaced as {@link HttpClientError.faultCode} with a derived
  * {@link HttpClientError.category}, so callers can branch without
  * string-matching `message`. Both are `undefined` for the production flat REST
@@ -114,8 +114,8 @@ export class HttpClientError extends WeftError<'HttpClientError'> {
   /** HTTP status code of the failed response. */
   readonly status: number;
   /**
-   * The server's stable wire fault code, when the response carried a structured
-   * fault body. `undefined` for plain-string error bodies or unrecognized codes.
+   * The server's stable wire fault code, when the transport response carried a
+   * recognized code. `undefined` for flat REST error bodies or unrecognized codes.
    */
   readonly faultCode?: FaultCode | undefined;
   /**
@@ -125,18 +125,17 @@ export class HttpClientError extends WeftError<'HttpClientError'> {
   readonly category?: FailureCategory | undefined;
   /**
    * The fine-grained originating public {@link WeftErrorCode} the server
-   * attached (e.g. `WorkflowNotFoundError`), when the structured fault carried
-   * one. This is what makes cross-transport branching work: a producer can call
+   * attached (e.g. `WorkflowNotFoundError`), when the response carried one.
+   * This is what makes cross-transport branching work: a producer can call
    * `isWeftFault(error, 'WorkflowNotFoundError')` and have it match over HTTP
    * exactly as it matches the in-process typed error. `undefined` when the fault
-   * carried only the coarse {@link faultCode} (most faults) or no structured body.
+   * carried only the coarse {@link faultCode} (most faults) or no recognized code.
    */
   readonly weftCode?: WeftErrorCode | undefined;
   /**
    * The fault's wire `data` payload, when the response carried a structured
-   * body (`{ error, data }` for production REST, nested `{ error: { data } }`
-   * for structured REST responses, or `error.data` for JSON-RPC). Shape is
-   * fault-code-dependent — see {@link FaultCode} and the server's
+   * body (`{ error, data }` for production REST or `error.data` for JSON-RPC).
+   * Shape is fault-code-dependent — see {@link FaultCode} and the server's
    * `OperationFault` per-code `data` union for what each code carries (e.g.
    * `InvalidParams.data.issues`, `NotFound.data.resource`). `undefined` for
    * plain-string error bodies, bodies with no `data` field, or a `data` field
@@ -216,33 +215,6 @@ function parseFlatErrorBody(body: { error: string; weftCode?: unknown; data?: un
 }
 
 /**
- * Structured error body accepted from older or alternate servers:
- * `{ error: { code, message, data? } }`. Current Weft REST responses use the
- * flat shape above. The human `message` is required; `code` and `data` are
- * validated separately so an unrecognized (e.g. future) fault code still
- * surfaces its message — only the typed {@link FaultCode} is withheld.
- */
-function isStructuredErrorBody(
-  value: unknown,
-): value is { error: { code?: unknown; message: string; data?: unknown } } {
-  if (value === null || typeof value !== 'object') return false;
-  const error = (value as { error?: unknown }).error;
-  if (error === null || typeof error !== 'object') return false;
-  return typeof (error as { message?: unknown }).message === 'string';
-}
-
-/**
- * Pull the fine-grained `weftCode` out of a structured fault's `data`, when the
- * server attached a recognized public code. Returns `undefined` for faults that
- * carry only the coarse code or no `data.weftCode`.
- */
-function weftCodeFromData(data: unknown): WeftErrorCode | undefined {
-  if (data === null || typeof data !== 'object') return undefined;
-  const candidate = (data as { weftCode?: unknown }).weftCode;
-  return isWeftErrorCode(candidate) ? candidate : undefined;
-}
-
-/**
  * Narrow an untrusted wire `data` value to a plain JSON object. The wire body
  * is server-controlled but crosses a network boundary, so `data` is
  * shape-checked before being surfaced on {@link HttpClientError.data} rather
@@ -253,33 +225,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Parse a non-2xx response body into the human message and, when the server
- * sent a structured fault, its coarse wire {@link FaultCode}, any fine-grained
- * {@link WeftErrorCode} (`data.weftCode`), and the fault's typed `data`
- * payload. A structured body with an unknown code still yields its message.
+ * Parse a non-2xx flat REST response body into the human message and any
+ * top-level fine-grained {@link WeftErrorCode} and audited `data` payload.
  * Falls back to `response.statusText` when the body is missing, non-JSON, or
- * carries no usable message.
+ * carries no usable string message.
  */
 async function parseErrorBody(response: Response): Promise<{
   message: string;
-  faultCode?: FaultCode | undefined;
   weftCode?: WeftErrorCode;
   data?: Readonly<Record<string, unknown>>;
 }> {
   try {
     const body: unknown = await response.json();
-    if (isStructuredErrorBody(body)) {
-      const { code, message, data } = body.error;
-      const weftCode = weftCodeFromData(data);
-      const base: {
-        message: string;
-        weftCode?: WeftErrorCode;
-        data?: Readonly<Record<string, unknown>>;
-      } = { message };
-      if (weftCode !== undefined) base.weftCode = weftCode;
-      if (isRecord(data)) base.data = data;
-      return isFaultCode(code) ? { ...base, faultCode: code } : base;
-    }
     if (isFlatErrorBody(body) && body.error) {
       // `shapeRestFault` flat body, optionally with top-level `weftCode` and
       // audited `data` siblings. The masked EngineFailure body has neither.
@@ -321,8 +278,8 @@ export async function requestResponse(
     return null;
   }
   if (!response.ok) {
-    const { message, faultCode, weftCode, data } = await parseErrorBody(response);
-    throw new HttpClientError(response.status, message, { faultCode, weftCode, data });
+    const { message, weftCode, data } = await parseErrorBody(response);
+    throw new HttpClientError(response.status, message, { weftCode, data });
   }
   return response;
 }
