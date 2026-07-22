@@ -496,6 +496,26 @@ export const greet = {
     );
   });
 
+  it('rejects removed wrapper registrations nested in a default export map', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'weft-validate-'));
+    const filePath = join(dir, 'nested-wrapped-handler.ts');
+    await writeFile(
+      filePath,
+      `
+async function* greetWorkflow() { return 'hi'; }
+export default {
+  greet: {
+    handler: () => greetWorkflow()
+  }
+};
+`,
+    );
+
+    await expect(loadRegistrationsFromModule(filePath)).rejects.toThrow(
+      'Workflow export "greet" must be a builder-produced workflow definition with its own name. Create it with `workflow({ name }).execute(handler)`.',
+    );
+  });
+
   it('ignores primitive exports that are neither registrations nor activity definitions', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'weft-validate-'));
     const filePath = join(dir, 'mixed-exports.ts');
@@ -553,6 +573,40 @@ export const routes = {
 
     const result = await loadRegistrationsFromModule(filePath);
     expect(Object.keys(result.registrations)).toEqual(['greet']);
+  });
+
+  it('ignores an unrelated top-level async handler export', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'weft-validate-'));
+    const filePath = join(dir, 'top-level-route.ts');
+    await writeFile(
+      filePath,
+      `
+export const webhook = { handler: async () => new Response('ok') };
+`,
+    );
+
+    const result = await loadRegistrationsFromModule(filePath);
+
+    expect(Object.keys(result.registrations)).toEqual([]);
+    expect(result.activities).toEqual([]);
+  });
+
+  it('rejects an async handler export with legacy workflow metadata', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'weft-validate-'));
+    const filePath = join(dir, 'legacy-async-handler.ts');
+    await writeFile(
+      filePath,
+      `
+export const greet = {
+  version: '1.0.0',
+  handler: async () => 'hi'
+};
+`,
+    );
+
+    await expect(loadRegistrationsFromModule(filePath)).rejects.toThrow(
+      'Workflow export "greet" must be a builder-produced workflow definition with its own name. Create it with `workflow({ name }).execute(handler)`.',
+    );
   });
 
   it('ignores unrelated handler objects beside workflows in a default export map', async () => {

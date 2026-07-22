@@ -221,7 +221,7 @@ function collectExport(
     return;
   }
 
-  assertNotRemovedWorkflowShape(key, value, options.depth === 0);
+  assertNotRemovedWorkflowShape(key, value);
 }
 
 export async function loadRegistrationsFromModule(modulePath: string): Promise<{
@@ -262,18 +262,33 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 function isRemovedWorkflowShape(value: unknown): value is Record<string, unknown> {
-  return isObject(value) && 'handler' in value && typeof value['handler'] === 'function';
+  if (!isObject(value) || !Object.hasOwn(value, 'handler')) return false;
+
+  const handler = value['handler'];
+  if (typeof handler !== 'function') return false;
+
+  const functionKind = Object.prototype.toString.call(handler);
+  if (functionKind === '[object AsyncGeneratorFunction]') return true;
+
+  const hasLegacyMetadata = [
+    'version',
+    'description',
+    'tags',
+    'inputSchema',
+    'outputSchema',
+    'searchAttributes',
+  ].some((key) => Object.hasOwn(value, key));
+  if (hasLegacyMetadata) return true;
+
+  // A handler-only ordinary function is the removed synchronous wrapper shape.
+  // It is structurally indistinguishable from a synchronous framework handler
+  // without invoking user code, so workflow entry modules reserve this shape;
+  // async route-style handlers remain unrelated exports and are ignored.
+  return functionKind === '[object Function]' && Object.keys(value).length === 1;
 }
 
-function assertNotRemovedWorkflowShape(
-  exportName: string,
-  value: Record<string, unknown>,
-  includeWrapperHandlers: boolean,
-): void {
-  const isRemovedShape = includeWrapperHandlers
-    ? isRemovedWorkflowShape(value)
-    : isRemovedAsyncGeneratorWorkflowShape(value);
-  if (isRemovedShape) {
+function assertNotRemovedWorkflowShape(exportName: string, value: Record<string, unknown>): void {
+  if (isRemovedWorkflowShape(value)) {
     throw new TypeError(
       `Workflow export "${exportName}" must be a builder-produced workflow definition with its own name. Create it with \`workflow({ name }).execute(handler)\`.`,
     );
@@ -285,16 +300,7 @@ function isDefinitionMap(value: Record<string, unknown>): boolean {
   // arbitrary route maps may also contain callable `handler` fields.
   return Object.values(value).some(
     (entry) =>
-      isWorkflowDefinition(entry) ||
-      isActivityDefinition(entry) ||
-      isRemovedAsyncGeneratorWorkflowShape(entry),
-  );
-}
-
-function isRemovedAsyncGeneratorWorkflowShape(value: unknown): boolean {
-  return (
-    isRemovedWorkflowShape(value) &&
-    Object.prototype.toString.call(value['handler']) === '[object AsyncGeneratorFunction]'
+      isWorkflowDefinition(entry) || isActivityDefinition(entry) || isRemovedWorkflowShape(entry),
   );
 }
 
