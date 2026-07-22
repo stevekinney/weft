@@ -213,7 +213,7 @@ function collectExport(
   }
   if (!isObject(value)) return;
 
-  assertNotRemovedWorkflowShape(key, value);
+  assertNotRemovedWorkflowShape(key, value, options.depth === 0);
   if (options.depth >= 1 || !isDefinitionMap(value)) return;
 
   collectFromExports(Object.entries(value), registrations, activities, {
@@ -263,8 +263,15 @@ function isRemovedWorkflowShape(value: unknown): value is Record<string, unknown
   return isObject(value) && 'handler' in value && typeof value['handler'] === 'function';
 }
 
-function assertNotRemovedWorkflowShape(exportName: string, value: Record<string, unknown>): void {
-  if (isRemovedWorkflowShape(value)) {
+function assertNotRemovedWorkflowShape(
+  exportName: string,
+  value: Record<string, unknown>,
+  includeWrapperHandlers: boolean,
+): void {
+  const isRemovedShape = includeWrapperHandlers
+    ? isRemovedWorkflowShape(value)
+    : isRemovedAsyncGeneratorWorkflowShape(value);
+  if (isRemovedShape) {
     throw new TypeError(
       `Workflow export "${exportName}" must be a builder-produced workflow definition with its own name. Create it with \`workflow({ name }).execute(handler)\`.`,
     );
@@ -272,8 +279,8 @@ function assertNotRemovedWorkflowShape(exportName: string, value: Record<string,
 }
 
 function isDefinitionMap(value: Record<string, unknown>): boolean {
-  // Keep map discovery narrower than direct-export rejection: arbitrary route
-  // maps may also contain callable `handler` fields.
+  // Keep nested map discovery and rejection narrower than direct exports:
+  // arbitrary route maps may also contain callable `handler` fields.
   return Object.values(value).some(
     (entry) =>
       isWorkflowDefinition(entry) ||

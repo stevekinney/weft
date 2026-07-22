@@ -512,4 +512,24 @@ export const routes = {
     const result = await loadRegistrationsFromModule(filePath);
     expect(Object.keys(result.registrations)).toEqual(['greet']);
   });
+
+  it('ignores unrelated handler objects beside workflows in a default export map', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'weft-validate-'));
+    const filePath = join(dir, 'mixed-default-map.ts');
+    await writeFile(
+      filePath,
+      `
+const greet = {
+  name: 'greet',
+  handler: async function* () { return 'hi'; }
+};
+
+const route = { handler: async () => new Response('ok') };
+export default { greet, route };
+`,
+    );
+
+    const result = await loadRegistrationsFromModule(filePath);
+    expect(Object.keys(result.registrations)).toEqual(['greet']);
+  });
 });
