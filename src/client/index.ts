@@ -19,6 +19,11 @@ export {
   WorkflowTimedOutEvent,
 } from '../core/events/workflow-events.ts';
 export { isFaultCode, type FaultCode } from '../core/fault-code.ts';
+export type {
+  PendingAsyncActivityInfo,
+  PendingAsyncActivityListOptions,
+  PendingAsyncActivityPage,
+} from '../core/types.ts';
 export {
   WeftError,
   isWeftError,

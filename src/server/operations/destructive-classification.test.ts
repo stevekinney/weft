@@ -69,6 +69,7 @@ const EXPECTED_DESTRUCTIVE: Readonly<Record<string, boolean>> = {
   'weft.workflows.timeline.get': false,
   'weft.workflows.query': false,
   'weft.workflows.list': false,
+  'weft.workflows.activities.pending.list': false,
   'weft.workflows.aggregate': false,
   'weft.workflows.tags.add': false,
   'weft.workflows.tags.remove': false,

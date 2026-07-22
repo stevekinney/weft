@@ -91,6 +91,7 @@ export function expectSharedWeftClientMethodSurface(client: WeftClient): void {
     expect(client[methodName], `WeftClient.${methodName}`).toBeFunction();
   }
   expect(client.activity.complete, 'WeftClient.activity.complete').toBeFunction();
+  expect(client.activity.listPending, 'WeftClient.activity.listPending').toBeFunction();
   expect(
     client.activity.completeExceptionally,
     'WeftClient.activity.completeExceptionally',
@@ -648,8 +649,13 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
       // Parked, not finished: the workflow is suspended on the async activity.
       await waitForRunning?.(handle.id);
       await expect(client.get(handle.id)).resolves.toMatchObject({ status: 'running' });
+      await expect(client.activity.listPending(handle.id)).resolves.toEqual({
+        items: [expect.objectContaining({ token })],
+      });
 
       await client.activity.complete(token, { decision: 'approved' });
+
+      await expect(client.activity.listPending(handle.id)).resolves.toEqual({ items: [] });
 
       await expect(handle.result()).resolves.toEqual({
         input: 'complete-case',

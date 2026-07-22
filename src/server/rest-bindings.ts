@@ -25,6 +25,8 @@ import {
   completeAsyncActivityRestBinding,
   failAsyncActivityOperation,
   failAsyncActivityRestBinding,
+  listPendingAsyncActivitiesOperation,
+  listPendingAsyncActivitiesRestBinding,
 } from './operations/async-activity.ts';
 import {
   bulkCancelWorkflowsOperation,
@@ -275,6 +277,7 @@ export const REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = [
   getWorkflowEventsRestBinding,
   setWorkflowAttributesRestBinding,
   signalWorkflowRestBinding,
+  listPendingAsyncActivitiesRestBinding,
   completeAsyncActivityRestBinding,
   failAsyncActivityRestBinding,
   queryWorkflowRestBinding,
@@ -444,6 +447,7 @@ export function createLiveOperationRegistry(
     getWorkflowEventsOperation,
     setWorkflowAttributesOperation,
     signalWorkflowOperation,
+    listPendingAsyncActivitiesOperation,
     completeAsyncActivityOperation,
     failAsyncActivityOperation,
     queryWorkflowOperation,

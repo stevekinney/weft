@@ -130,16 +130,18 @@ export interface ActivityContext {
    * `client.activity.*` methods).
    *
    * The durable task token is announced on the engine as an
-   * `activity:async-pending` event (listen for it to receive the token).
-   * The token is deterministic and survives engine restart: it is re-minted
-   * identically when the activity replays after recovery.
+   * `activity:async-pending` event and remains discoverable through
+   * `engine.listPendingAsyncActivities(workflowId)` or
+   * `client.activity.listPending(workflowId)`. The token is deterministic and
+   * survives engine restart: it is re-minted identically on recovery.
    *
    * Security: the token is a deterministic identifier, NOT a secret. When the
    * completion endpoint is reachable by untrusted callers, anyone who can infer
    * a workflow id can forge this activity's result or error. Treat the completed
    * value as hostile external input (validate it as you would a signal payload),
-   * and gate the mutating surface with `serve({ auth })` if completions must not
-   * be anonymous.
+   * The transport query requires `workflows:read`; completion and failure require
+   * `workflows:write`. Configure `serve({ auth })` with those scopes before
+   * exposing the routes.
    *
    * `completeAsync()` never returns normally — it throws an internal sentinel
    * that the engine recognizes to park the activity. Call it as the last
@@ -161,6 +163,54 @@ export interface ActivityContext {
    * ```
    */
   completeAsync(): never;
+}
+
+/**
+ * Durable metadata for one activity awaiting out-of-band completion.
+ * @example
+ * ```ts
+ * import type { PendingAsyncActivityInfo } from '@lostgradient/weft';
+ * declare const pending: PendingAsyncActivityInfo; console.log(pending.token, pending.activityName);
+ * ```
+ */
+export interface PendingAsyncActivityInfo {
+  readonly token: string;
+  readonly operationId: string;
+  readonly activityName: string;
+  readonly step: number;
+  readonly attempt: number;
+  readonly createdAt: number;
+}
+
+/**
+ * Bounded cursor options for listing a workflow's pending async activities.
+ * @example
+ * ```ts
+ * import type { PendingAsyncActivityListOptions } from '@lostgradient/weft';
+ * const options: PendingAsyncActivityListOptions = { limit: 25 };
+ * void options;
+ * ```
+ */
+export interface PendingAsyncActivityListOptions {
+  /** Maximum records to inspect for this page. Defaults to 50 and cannot exceed 200. */
+  readonly limit?: number;
+  /** Opaque continuation cursor returned by the previous page. */
+  readonly cursor?: string;
+}
+
+/**
+ * One deterministic page of pending async activities.
+ * @example
+ * ```ts
+ * import type { PendingAsyncActivityPage } from '@lostgradient/weft';
+ * const page: PendingAsyncActivityPage = { items: [] };
+ * void page;
+ * ```
+ */
+export interface PendingAsyncActivityPage {
+  readonly items: PendingAsyncActivityInfo[];
+  /** Present when another page of durable records may remain. */
+  readonly nextCursor?: string;
 }
 
 // ---------------------------------------------------------------------------

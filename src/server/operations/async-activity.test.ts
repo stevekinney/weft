@@ -3,15 +3,20 @@ import { describe, expect, it } from 'bun:test';
 import { AsyncActivityTokenNotFoundError, Engine } from '../../core/engine.ts';
 import type { ActivityContext, WorkflowContext } from '../../core/types.ts';
 import { activity, workflow } from '../../core/types.ts';
+import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { nextAsyncPendingToken } from '../../testing/async-activity.test-support.ts';
+import type { AuthorizationScope } from '../authorization-scope.ts';
 import { handleRequest } from '../handler.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
+import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
+import { principalFromApiKey } from '../principal.ts';
 import {
   completeAsyncActivityOperation,
   completeAsyncActivityRestBinding,
   failAsyncActivityOperation,
   failAsyncActivityRestBinding,
+  listPendingAsyncActivitiesOperation,
+  listPendingAsyncActivitiesRestBinding,
 } from './async-activity.ts';
 
 const awaitCallback = activity({
@@ -35,8 +40,24 @@ function createEngine(): Engine {
 const registry = createOperationRegistry([
   completeAsyncActivityOperation,
   failAsyncActivityOperation,
+  listPendingAsyncActivitiesOperation,
 ]);
-const bindings = [completeAsyncActivityRestBinding, failAsyncActivityRestBinding];
+const bindings = [
+  completeAsyncActivityRestBinding,
+  failAsyncActivityRestBinding,
+  listPendingAsyncActivitiesRestBinding,
+];
+
+function operationOptions(scopes: readonly AuthorizationScope[] = ['workflows:write']) {
+  return {
+    operationRegistry: registry,
+    restBindings: bindings,
+    authContext: {
+      method: 'api-key' as const,
+      principal: principalFromApiKey({ subject: 'async-activity-test', scopes }),
+    },
+  };
+}
 
 function request(method: string, path: string, body?: unknown): Request {
   const init: RequestInit = { method };
@@ -47,7 +68,125 @@ function request(method: string, path: string, body?: unknown): Request {
   return new Request(`http://localhost${path}`, init);
 }
 
+describe('weft.workflows.activities.pending.list', () => {
+  it('returns the durable pending token over REST and every JSON-RPC transport', async () => {
+    await using engine = createEngine();
+    const tokenPromise = nextAsyncPendingToken(engine);
+    const handle = await engine.start('deferring', 'list-pending');
+    const token = await tokenPromise;
+
+    const response = await handleRequest(
+      request('GET', `/v1/workflows/${handle.id}/pending-async-activities?limit=1`),
+      engine,
+      operationOptions(['workflows:read']),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      items: [
+        expect.objectContaining({
+          token,
+          activityName: 'awaitCallback',
+          attempt: 1,
+          step: 0,
+        }),
+      ],
+    });
+
+    const principal = principalFromApiKey({
+      subject: 'async-activity-reader',
+      scopes: ['workflows:read'],
+    });
+    for (const transport of ['jsonRpcHttp', 'jsonRpcWebSocket', 'jsonRpcStdio'] as const) {
+      const result = await executeOperation(
+        'weft.workflows.activities.pending.list',
+        { workflowId: handle.id, limit: 1 },
+        { engine, registry, principal, transport },
+      );
+      expect(result).toEqual({
+        ok: true,
+        value: { items: [expect.objectContaining({ token })] },
+      });
+    }
+  });
+
+  it('requires workflows:read and validates bounded pagination inputs', async () => {
+    await using engine = createEngine();
+
+    const anonymous = await handleRequest(
+      request('GET', '/v1/workflows/missing/pending-async-activities'),
+      engine,
+      {
+        operationRegistry: registry,
+        restBindings: bindings,
+      },
+    );
+    expect(anonymous.status).toBe(401);
+
+    const wrongScope = await handleRequest(
+      request('GET', '/v1/workflows/missing/pending-async-activities'),
+      engine,
+      operationOptions(['workflows:write']),
+    );
+    expect(wrongScope.status).toBe(403);
+
+    const oversizedLimit = await handleRequest(
+      request('GET', '/v1/workflows/missing/pending-async-activities?limit=201'),
+      engine,
+      operationOptions(['workflows:read']),
+    );
+    expect(oversizedLimit.status).toBe(400);
+
+    const malformedCursor = await handleRequest(
+      request('GET', '/v1/workflows/missing/pending-async-activities?cursor=not-a-cursor'),
+      engine,
+      operationOptions(['workflows:read']),
+    );
+    expect(malformedCursor.status).toBe(400);
+
+    const otherWorkflowCursor = `pending-async:v1:${encodeURIComponent(
+      KEYS.asyncActivity('other-workflow', 'token-a'),
+    )}`;
+    const crossWorkflowCursor = await handleRequest(
+      request(
+        'GET',
+        `/v1/workflows/missing/pending-async-activities?cursor=${encodeURIComponent(otherWorkflowCursor)}`,
+      ),
+      engine,
+      operationOptions(['workflows:read']),
+    );
+    expect(crossWorkflowCursor.status).toBe(400);
+  });
+});
+
 describe('weft.activities.complete', () => {
+  it('requires workflows:write before resolving a token', async () => {
+    await using engine = createEngine();
+
+    const anonymous = await handleRequest(
+      request('POST', '/v1/activities/complete', {
+        token: 'async-act:v1:unknown:0:1',
+        result: 'value',
+      }),
+      engine,
+      {
+        operationRegistry: registry,
+        restBindings: bindings,
+      },
+    );
+    expect(anonymous.status).toBe(401);
+
+    const readOnly = await handleRequest(
+      request('POST', '/v1/activities/fail', {
+        token: 'async-act:v1:unknown:0:1',
+        error: { message: 'rejected' },
+      }),
+      engine,
+      operationOptions(['workflows:read']),
+    );
+    expect(readOnly.status).toBe(403);
+  });
+
   it('completes a deferred activity by token and resumes the workflow', async () => {
     await using engine = createEngine();
     const tokenPromise = nextAsyncPendingToken(engine);
@@ -59,7 +198,7 @@ describe('weft.activities.complete', () => {
     const response = await handleRequest(
       request('POST', '/v1/activities/complete', { token, result: { decision: 'approved' } }),
       engine,
-      { operationRegistry: registry, restBindings: bindings },
+      operationOptions(),
     );
 
     expect(response.status).toBe(200);
@@ -79,7 +218,7 @@ describe('weft.activities.complete', () => {
     const response = await handleRequest(
       request('POST', '/v1/activities/complete', { token }),
       engine,
-      { operationRegistry: registry, restBindings: bindings },
+      operationOptions(),
     );
 
     expect(response.status).toBe(200);
@@ -95,7 +234,7 @@ describe('weft.activities.complete', () => {
         result: 'value',
       }),
       engine,
-      { operationRegistry: registry, restBindings: bindings },
+      operationOptions(),
     );
 
     expect(response.status).toBe(404);
@@ -113,7 +252,7 @@ describe('weft.activities.complete', () => {
     const first = await handleRequest(
       request('POST', '/v1/activities/complete', { token, result: 'first' }),
       engine,
-      { operationRegistry: registry, restBindings: bindings },
+      operationOptions(),
     );
     expect(first.status).toBe(200);
     await handle.result();
@@ -121,7 +260,7 @@ describe('weft.activities.complete', () => {
     const replay = await handleRequest(
       request('POST', '/v1/activities/complete', { token, result: 'second' }),
       engine,
-      { operationRegistry: registry, restBindings: bindings },
+      operationOptions(),
     );
     expect(replay.status).toBe(404);
   });
@@ -136,7 +275,7 @@ describe('weft.activities.complete', () => {
         body: '"a string is not an object"',
       }),
       engine,
-      { operationRegistry: registry, restBindings: bindings },
+      operationOptions(),
     );
 
     expect(response.status).toBe(400);
@@ -152,7 +291,7 @@ describe('weft.activities.complete', () => {
         body: '{"token":',
       }),
       engine,
-      { operationRegistry: registry, restBindings: bindings },
+      operationOptions(),
     );
 
     expect(response.status).toBe(400);
@@ -169,7 +308,7 @@ describe('weft.activities.complete', () => {
       const response = await handleRequest(
         request('POST', '/v1/activities/complete', { token: 'async-act:v1:x:0:1', result: 1 }),
         engine,
-        { operationRegistry: registry, restBindings: bindings },
+        operationOptions(),
       );
 
       expect(response.status).toBe(500);
@@ -193,7 +332,7 @@ describe('weft.activities.fail', () => {
         error: { message: 'reviewer rejected', name: 'ReviewError' },
       }),
       engine,
-      { operationRegistry: registry, restBindings: bindings },
+      operationOptions(),
     );
 
     expect(response.status).toBe(200);
@@ -220,7 +359,7 @@ describe('weft.activities.fail', () => {
         error: { message: 'whatever' },
       }),
       engine,
-      { operationRegistry: registry, restBindings: bindings },
+      operationOptions(),
     );
 
     expect(response.status).toBe(404);
@@ -236,7 +375,7 @@ describe('weft.activities.fail', () => {
     const response = await handleRequest(
       request('POST', '/v1/activities/fail', { token, error: 'not-an-object' }),
       engine,
-      { operationRegistry: registry, restBindings: bindings },
+      operationOptions(),
     );
 
     expect(response.status).toBe(400);
@@ -256,7 +395,7 @@ describe('weft.activities.fail', () => {
           error: { message: 'boom' },
         }),
         engine,
-        { operationRegistry: registry, restBindings: bindings },
+        operationOptions(),
       );
 
       expect(response.status).toBe(500);
@@ -312,7 +451,7 @@ describe('async activity payload-size enforcement', () => {
     const response = await handleRequest(
       request('POST', '/v1/activities/complete', { token, result: { blob: 'x'.repeat(200) } }),
       engine,
-      { operationRegistry: registry, restBindings: bindings },
+      operationOptions(),
     );
 
     // A caller-input size violation is a 400, mirroring how signal rejects an
@@ -364,7 +503,7 @@ describe('async activity payload-size enforcement', () => {
     const response = await handleRequest(
       request('POST', '/v1/activities/fail', { token, error: { message: 'z'.repeat(200) } }),
       engine,
-      { operationRegistry: registry, restBindings: bindings },
+      operationOptions(),
     );
 
     expect(response.status).toBe(400);

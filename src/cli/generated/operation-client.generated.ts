@@ -36,6 +36,7 @@ export const CATALOG_OPERATION_NAMES = [
   'weft.workers.drain',
   'weft.workers.list',
   'weft.workers.resume',
+  'weft.workflows.activities.pending.list',
   'weft.workflows.aggregate',
   'weft.workflows.attributes.get',
   'weft.workflows.attributes.set',
@@ -100,6 +101,7 @@ export const CLIENT_OPERATION_NAMES = [
   'weft.workers.drain',
   'weft.workers.list',
   'weft.workers.resume',
+  'weft.workflows.activities.pending.list',
   'weft.workflows.aggregate',
   'weft.workflows.attributes.get',
   'weft.workflows.attributes.set',
@@ -476,6 +478,25 @@ export type ClientOperationTypes = {
     readonly input: { readonly workerId: string };
     readonly output: unknown;
     readonly faults: 'NotFound';
+  };
+  'weft.workflows.activities.pending.list': {
+    readonly input: {
+      readonly cursor?: string;
+      readonly limit: number;
+      readonly workflowId: string;
+    };
+    readonly output: {
+      readonly items: ReadonlyArray<{
+        readonly activityName: string;
+        readonly attempt: number;
+        readonly createdAt: number;
+        readonly operationId: string;
+        readonly step: number;
+        readonly token: string;
+      }>;
+      readonly nextCursor?: string;
+    };
+    readonly faults: 'InvalidParams' | 'NotFound';
   };
   'weft.workflows.aggregate': {
     readonly input: {

@@ -9,6 +9,8 @@ import type {
   CoordinatedUpdateResult,
   ForkOptions,
   ListFilter,
+  PendingAsyncActivityListOptions,
+  PendingAsyncActivityPage,
   PurgeResult,
   RetentionOverview,
   ReviewListEntry,
@@ -354,6 +356,23 @@ export async function completeAsyncActivityRequest(
     method: 'POST',
     body: JSON.stringify({ token, result }),
   });
+}
+
+/** List durable async activities awaiting completion for one workflow. */
+export async function listPendingAsyncActivitiesRequest(
+  context: HttpClientRequestContext,
+  workflowId: string,
+  options?: PendingAsyncActivityListOptions,
+): Promise<PendingAsyncActivityPage> {
+  const search = new URLSearchParams();
+  if (options?.limit !== undefined) search.set('limit', String(options.limit));
+  if (options?.cursor !== undefined) search.set('cursor', options.cursor);
+  const query = search.size > 0 ? `?${search.toString()}` : '';
+  return request<PendingAsyncActivityPage>(
+    context.baseUrl,
+    `/workflows/${encodeURIComponent(workflowId)}/pending-async-activities${query}`,
+    context.headers,
+  );
 }
 
 /**

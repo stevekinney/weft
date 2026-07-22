@@ -19,11 +19,21 @@
 import { KEYS, encodeStorageKeyComponent, type BatchOperation } from '../../storage/interface.ts';
 import { decode, encode } from '../codec.ts';
 import { ActivityAsyncPendingEvent } from '../events.ts';
-import type { OperationOutcome } from '../types.ts';
+import type {
+  OperationOutcome,
+  PendingAsyncActivityInfo,
+  PendingAsyncActivityListOptions,
+  PendingAsyncActivityPage,
+} from '../types.ts';
 import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
 
 const ASYNC_ACTIVITY_TOKEN_PREFIX = 'async-act:v1';
+const PENDING_ASYNC_ACTIVITY_CURSOR_PREFIX = 'pending-async:v1:';
+
+export const DEFAULT_PENDING_ASYNC_ACTIVITY_LIMIT = 50;
+export const MAX_PENDING_ASYNC_ACTIVITY_LIMIT = 200;
+export const MAX_PENDING_ASYNC_ACTIVITY_CURSOR_LENGTH = 8_192;
 
 /**
  * Storage-key prefix for durable async-activity records. Matches the base of
@@ -96,6 +106,149 @@ function isPersistedAsyncActivity(value: unknown): value is PersistedAsyncActivi
     typeof record['attempt'] === 'number' &&
     typeof record['createdAt'] === 'number'
   );
+}
+
+function decodePendingAsyncActivityCursor(cursor: string): string | null {
+  if (
+    cursor.length > MAX_PENDING_ASYNC_ACTIVITY_CURSOR_LENGTH ||
+    !cursor.startsWith(PENDING_ASYNC_ACTIVITY_CURSOR_PREFIX)
+  ) {
+    return null;
+  }
+  try {
+    const suffix = decodeURIComponent(cursor.slice(PENDING_ASYNC_ACTIVITY_CURSOR_PREFIX.length));
+    return suffix.length > 0 ? suffix : null;
+  } catch {
+    return null;
+  }
+}
+
+export function isPendingAsyncActivityCursor(cursor: string): boolean {
+  return decodePendingAsyncActivityCursor(cursor) !== null;
+}
+
+export function isPendingAsyncActivityCursorForWorkflow(
+  cursor: string,
+  workflowId: string,
+): boolean {
+  const key = decodePendingAsyncActivityCursor(cursor);
+  const prefix = asyncActivityWorkflowPrefix(workflowId);
+  return key !== null && key.startsWith(prefix) && key.length > prefix.length;
+}
+
+function encodePendingAsyncActivityCursor(key: string): string {
+  return `${PENDING_ASYNC_ACTIVITY_CURSOR_PREFIX}${encodeURIComponent(key)}`;
+}
+
+function resolvePendingAsyncActivityLimit(limit: number | undefined): number {
+  const resolved = limit ?? DEFAULT_PENDING_ASYNC_ACTIVITY_LIMIT;
+  if (
+    !Number.isSafeInteger(resolved) ||
+    resolved < 1 ||
+    resolved > MAX_PENDING_ASYNC_ACTIVITY_LIMIT
+  ) {
+    throw new RangeError(
+      `Pending async activity limit must be an integer between 1 and ${MAX_PENDING_ASYNC_ACTIVITY_LIMIT}.`,
+    );
+  }
+  return resolved;
+}
+
+function toPendingAsyncActivityInfo(
+  value: unknown,
+  key: string,
+  workflowId: string,
+): PendingAsyncActivityInfo | null {
+  if (!isPersistedAsyncActivity(value)) return null;
+  if (value.workflowId !== workflowId || key !== KEYS.asyncActivity(workflowId, value.token)) {
+    return null;
+  }
+  if (
+    !Number.isSafeInteger(value.step) ||
+    value.step < 0 ||
+    !Number.isSafeInteger(value.attempt) ||
+    value.attempt < 1 ||
+    !Number.isFinite(value.createdAt)
+  ) {
+    return null;
+  }
+  return {
+    token: value.token,
+    operationId: value.operationId,
+    activityName: value.activityName,
+    step: value.step,
+    attempt: value.attempt,
+    createdAt: value.createdAt,
+  };
+}
+
+function resolvePendingAsyncActivityAfterKey(
+  cursor: string | undefined,
+  workflowId: string,
+): string | undefined {
+  if (cursor === undefined) return undefined;
+  const key = decodePendingAsyncActivityCursor(cursor);
+  if (key === null || !isPendingAsyncActivityCursorForWorkflow(cursor, workflowId)) {
+    throw new TypeError('Invalid pending async activity cursor.');
+  }
+  return key;
+}
+
+function decodePendingAsyncActivityInfo(
+  bytes: Uint8Array,
+  key: string,
+  workflowId: string,
+): PendingAsyncActivityInfo | null {
+  try {
+    return toPendingAsyncActivityInfo(decode(bytes), key, workflowId);
+  } catch {
+    return null;
+  }
+}
+
+function pendingAsyncActivityPage(
+  scanned: ReadonlyArray<readonly [string, Uint8Array]>,
+  limit: number,
+  workflowId: string,
+): PendingAsyncActivityPage {
+  const pageEntries = scanned.slice(0, limit);
+  const items = pageEntries.flatMap(([key, bytes]) => {
+    const item = decodePendingAsyncActivityInfo(bytes, key, workflowId);
+    return item === null ? [] : [item];
+  });
+  const cursorKey = pageEntries.at(-1)?.[0];
+  return {
+    items,
+    ...(scanned.length > limit && cursorKey !== undefined
+      ? { nextCursor: encodePendingAsyncActivityCursor(cursorKey) }
+      : {}),
+  };
+}
+
+/**
+ * Read a bounded page directly from the durable per-workflow async-activity
+ * namespace. Pagination advances over raw storage keys, so corrupt or resolved
+ * records cannot stall a caller or expand one request beyond `limit + 1` reads.
+ */
+export async function listPendingAsyncActivities(
+  internals: EngineInternals,
+  workflowId: string,
+  options: PendingAsyncActivityListOptions = {},
+): Promise<PendingAsyncActivityPage> {
+  const limit = resolvePendingAsyncActivityLimit(options.limit);
+  const prefix = asyncActivityWorkflowPrefix(workflowId);
+  const afterKey = resolvePendingAsyncActivityAfterKey(options.cursor, workflowId);
+
+  const scanned: Array<readonly [string, Uint8Array]> = [];
+  for await (const entry of internals.storage.scan(prefix, {
+    limit: limit + 1,
+    ...(afterKey === undefined ? {} : { gt: afterKey }),
+  })) {
+    scanned.push(entry);
+    if (scanned.length >= limit + 1) break;
+  }
+
+  return pendingAsyncActivityPage(scanned, limit, workflowId);
 }
 
 /**

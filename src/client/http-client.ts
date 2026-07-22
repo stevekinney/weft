@@ -65,6 +65,7 @@ import {
   getTimelineRequest,
   getUpdateResultRequest,
   getWorkflowRequest,
+  listPendingAsyncActivitiesRequest,
   listReviewRequests,
   pauseScheduleRequest,
   purgeWorkflowRequests,
@@ -169,6 +170,8 @@ export class HttpClient implements WeftClient {
     );
     this.storage = createHttpClientStorage(this.baseUrl, this.headers);
     this.activity = {
+      listPending: (workflowId, listOptions) =>
+        listPendingAsyncActivitiesRequest(this, workflowId, listOptions),
       complete: (token, result) => completeAsyncActivityRequest(this, token, result),
       completeExceptionally: (token, error) => failAsyncActivityRequest(this, token, error),
     };

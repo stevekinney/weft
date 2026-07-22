@@ -10,7 +10,8 @@
       "tags": ["Activities"],
       "destructive": true,
       "access": {
-        "kind": "public"
+        "kind": "scoped",
+        "scopes": ["workflows:write"]
       },
       "transports": {
         "http": true,
@@ -51,7 +52,8 @@
       "tags": ["Activities"],
       "destructive": true,
       "access": {
-        "kind": "public"
+        "kind": "scoped",
+        "scopes": ["workflows:write"]
       },
       "transports": {
         "http": true,
@@ -2316,6 +2318,88 @@
             "type": "object"
           }
         ]
+      }
+    },
+    {
+      "name": "weft.workflows.activities.pending.list",
+      "kind": "unary",
+      "summary": "List pending async activities for a workflow",
+      "description": "Read a bounded, deterministic page of durable activity task tokens awaiting out-of-band completion. The cursor is opaque and scoped to the selected workflow. A listed token may be consumed concurrently, so a later completion can return NotFound.",
+      "tags": ["Activities"],
+      "destructive": false,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["workflows:read"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcStdio": true,
+        "jsonRpcWebSocket": true
+      },
+      "producibleFaults": ["InvalidParams", "NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "maxLength": 8192,
+            "type": "string"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workflowId", "limit"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "activityName": {
+                  "type": "string"
+                },
+                "attempt": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "createdAt": {
+                  "type": "number"
+                },
+                "operationId": {
+                  "type": "string"
+                },
+                "step": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "token": {
+                  "type": "string"
+                }
+              },
+              "required": ["token", "operationId", "activityName", "step", "attempt", "createdAt"],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "type": "string"
+          }
+        },
+        "required": ["items"],
+        "type": "object"
       }
     },
     {

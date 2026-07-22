@@ -25,6 +25,8 @@ import type {
   ForkOptions,
   ListFilter,
   PaginatedResult,
+  PendingAsyncActivityListOptions,
+  PendingAsyncActivityPage,
   PurgeResult,
   QueryDefinition,
   RetentionOverview,
@@ -279,8 +281,6 @@ export interface ClientScheduleHandle extends Disposable {
   describe(): Promise<ScheduleSummary | null>;
 }
 
-// Update result + async-activity completion surface.
-
 /** Result of a coordinated update request. */
 export type UpdateResult = {
   updateId: string;
@@ -292,33 +292,29 @@ export type UpdateResult = {
  * Out-of-band ("async") activity completion surface, shared by every client.
  *
  * An activity that called `ActivityContext.completeAsync()` parks its workflow
- * until an external system resolves it by the durable task token announced on
- * the engine's `activity:async-pending` event. Library mode calls the engine
- * directly; server mode POSTs to `/v1/activities/{complete,fail}`. After a
- * restart, wait for recovery to settle first — a completion racing `recoverAll()`
- * consumes the single-use token before re-adoption and strands the workflow. The
- * token is a deterministic identifier, not a secret (see `completeAsync`).
+ * until an external system resolves it by durable task token. `listPending()`
+ * queries the durable record after a missed live event or process restart.
+ * Library mode calls the engine directly; server mode uses the matching REST
+ * operations. The token is a deterministic identifier, not a secret.
  *
  * @example
  * ```ts
- * import { Engine, LocalClient, type WeftClientActivity } from '@lostgradient/weft';
- *
- * const activity: WeftClientActivity = new LocalClient(new Engine()).activity;
- * // `token` comes from the engine's `activity:async-pending` event:
- * // await activity.complete(token, { approved: true });
- * void activity;
+ * import type { WeftClientActivity } from '@lostgradient/weft/client';
+ * declare const activity: WeftClientActivity;
+ * void activity.listPending('order-1');
  * ```
  */
 export interface WeftClientActivity {
+  /** List a bounded page of durable activities awaiting completion for one workflow. */
+  listPending(
+    workflowId: string,
+    options?: PendingAsyncActivityListOptions,
+  ): Promise<PendingAsyncActivityPage>;
   /** Complete a deferred activity by token, resuming its workflow with `result` (optional; omitted/`undefined` resumes with `undefined`). */
   complete(token: string, result?: unknown): Promise<void>;
   /** Fail a deferred activity by token; the error is thrown into its workflow. */
   completeExceptionally(token: string, error: unknown): Promise<void>;
 }
-
-// ---------------------------------------------------------------------------
-// WeftClient interface
-// ---------------------------------------------------------------------------
 
 /**
  * Operations shared by both in-process and HTTP clients.

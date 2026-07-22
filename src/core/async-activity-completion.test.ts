@@ -15,6 +15,7 @@ import { LocalClient } from '../client/local.ts';
 import { KEYS, type BatchOperation, type ConditionalBatchCondition } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { nextAsyncPendingToken } from '../testing/async-activity.test-support.ts';
+import { encode } from './codec.ts';
 import { AsyncActivityTokenNotFoundError, Engine } from './engine.ts';
 import type { ActivityContext, WorkflowContext } from './types.ts';
 import { activity, workflow } from './types.ts';
@@ -109,9 +110,21 @@ describe('async activity completion', () => {
     // The workflow has not finished — it is parked on the async activity.
     const beforeState = await engine.get(handle.id);
     expect(beforeState?.status).toBe('running');
+    expect(await engine.listPendingAsyncActivities(handle.id)).toEqual({
+      items: [
+        expect.objectContaining({
+          token,
+          activityName: 'awaitCallback',
+          attempt: 1,
+          step: 0,
+        }),
+      ],
+    });
 
     // Complete the activity out-of-band.
     await engine.completeAsyncActivity(token, { decision: 'approved' });
+
+    expect(await engine.listPendingAsyncActivities(handle.id)).toEqual({ items: [] });
 
     await expect(handle.result()).resolves.toEqual({
       approval: { decision: 'approved' },
@@ -254,15 +267,21 @@ describe('async activity completion', () => {
       firstEngine[Symbol.dispose]();
     }
 
-    // Second engine: recover from the same storage. The deferred activity
+    // Second engine: query the same storage before recovery. Listing reads the
+    // durable source of truth directly rather than depending on recovery having
+    // repopulated the in-memory completion map.
+    const recoveredEngine = new Engine({ storage });
+    recoveredEngine.register(orderWorkflow);
+    expect(await recoveredEngine.listPendingAsyncActivities(workflowId)).toEqual({
+      items: [expect.objectContaining({ token: firstToken })],
+    });
+
+    // Recover the deferred activity. The deferred activity
     // re-runs during replay and re-registers the SAME deterministic token.
     // The activity:async-pending event is NOT re-emitted on replay (idempotency
     // guard) — the token is already registered by recoverPendingAsyncActivities
     // before the workflow replays. Callers that need the token after a restart
     // should read it from the persisted storage record or from the first run.
-    const recoveredEngine = new Engine({ storage });
-    recoveredEngine.register(orderWorkflow);
-
     const handles = await recoveredEngine.recoverAll();
     expect(handles.map((handle) => handle.id)).toContain(workflowId);
 
@@ -279,6 +298,103 @@ describe('async activity completion', () => {
     });
 
     recoveredEngine[Symbol.dispose]();
+  });
+
+  it('paginates durable records deterministically while skipping malformed and resolved entries', async () => {
+    await using storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+    const workflowId = 'pending-pagination';
+
+    const pendingRecord = (token: string, step: number) => ({
+      version: 1,
+      token,
+      workflowId,
+      activityName: `activity-${step}`,
+      operationId: `operation-${step}`,
+      step,
+      attempt: 1,
+      createdAt: 1_000 + step,
+    });
+
+    await storage.put(
+      KEYS.asyncActivity(workflowId, 'token-a'),
+      encode(pendingRecord('token-a', 0)),
+    );
+    await storage.put(
+      KEYS.asyncActivity(workflowId, 'token-b'),
+      encode({ version: 99, token: 'malformed' }),
+    );
+    await storage.put(
+      KEYS.asyncActivity(workflowId, 'token-c'),
+      encode(pendingRecord('token-c', 2)),
+    );
+    await storage.put(
+      KEYS.asyncActivityResolution(workflowId, 'token-d'),
+      encode({
+        version: 1,
+        kind: 'resolution',
+        token: 'token-d',
+        workflowId,
+        outcome: { status: 'completed', value: 'done' },
+      }),
+    );
+    await storage.put(
+      KEYS.asyncActivity(workflowId, 'token-e'),
+      encode(pendingRecord('token-e', 4)),
+    );
+
+    const first = await engine.listPendingAsyncActivities(workflowId, { limit: 2 });
+    expect(first.items.map((item) => item.token)).toEqual(['token-a']);
+    expect(first.nextCursor).toBeString();
+    if (first.nextCursor === undefined) throw new Error('expected a second page');
+
+    const second = await engine.listPendingAsyncActivities(workflowId, {
+      limit: 2,
+      cursor: first.nextCursor,
+    });
+    expect(second.items.map((item) => item.token)).toEqual(['token-c']);
+    expect(second.nextCursor).toBeString();
+    if (second.nextCursor === undefined) throw new Error('expected a third page');
+
+    const third = await engine.listPendingAsyncActivities(workflowId, {
+      limit: 2,
+      cursor: second.nextCursor,
+    });
+    expect(third).toEqual({ items: [expect.objectContaining({ token: 'token-e' })] });
+
+    engine[Symbol.dispose]();
+  });
+
+  it('rejects cursors that were not issued by the pending-activity query', async () => {
+    await using engine = new Engine({ storage: new MemoryStorage() });
+
+    await expect(
+      engine.listPendingAsyncActivities('pending-invalid-cursor', { cursor: 'not-a-cursor' }),
+    ).rejects.toThrow('Invalid pending async activity cursor');
+  });
+
+  it('removes a parked token when terminal cancellation cleans up the workflow', async () => {
+    await using storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+    engine.register(
+      workflow({ name: 'cancel-pending' })
+        .activities({ awaitCallback })
+        .execute(async function* (ctx: WorkflowContext) {
+          return yield* ctx.run(awaitCallback);
+        }),
+    );
+
+    const tokenPromise = nextAsyncPendingToken(engine);
+    const handle = await engine.start('cancel-pending', null);
+    const token = await tokenPromise;
+    const pendingBeforeCancel = await engine.listPendingAsyncActivities(handle.id);
+    expect(pendingBeforeCancel.items[0]?.token).toBe(token);
+
+    await engine.cancel(handle.id);
+
+    expect(await engine.listPendingAsyncActivities(handle.id)).toEqual({ items: [] });
+    expect(await storage.get(KEYS.asyncActivity(handle.id, token))).toBeNull();
+    engine[Symbol.dispose]();
   });
 });
 
@@ -355,6 +471,8 @@ describe('async activity completion acknowledgement durability', () => {
 
     // The caller must learn the completion did NOT stick, so it can retry.
     await expect(ack).rejects.toThrow();
+    const pendingAfterFailure = await engine.listPendingAsyncActivities(handle.id);
+    expect(pendingAfterFailure.items[0]?.token).toBe(token);
 
     // The token must remain completable: the failed acknowledgement consumed nothing.
     await engine.completeAsyncActivity(token, { decision: 'second' });

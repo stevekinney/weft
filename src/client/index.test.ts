@@ -523,7 +523,13 @@ beforeAll(() => {
     maxRequestBodyBytes: CONTRACT_PAYLOAD_CAP_BYTES * 3,
     auth: {
       apiKeys: [CONTRACT_API_KEY],
-      defaultApiKeyScopes: ['events:read', 'reviews:read', 'system:read', 'workflows:read'],
+      defaultApiKeyScopes: [
+        'events:read',
+        'reviews:read',
+        'system:read',
+        'workflows:read',
+        'workflows:write',
+      ],
     },
   });
 

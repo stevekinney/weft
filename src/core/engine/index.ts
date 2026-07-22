@@ -48,6 +48,8 @@ import {
   type ListOptions,
   type MessageName,
   type PaginatedResult,
+  type PendingAsyncActivityListOptions,
+  type PendingAsyncActivityPage,
   type PurgeResult,
   type QueryDefinition,
   type RegisteredWorkflowDefinition,
@@ -94,7 +96,10 @@ import {
   completeAsyncActivity as completeAsyncActivityFromInternals,
   failAsyncActivity as failAsyncActivityFromInternals,
 } from './async-activity-completion.ts';
-import { recoverPendingAsyncActivities } from './async-activity-records.ts';
+import {
+  listPendingAsyncActivities as listPendingAsyncActivitiesFromInternals,
+  recoverPendingAsyncActivities,
+} from './async-activity-records.ts';
 import { broadcast as broadcastFromInternals, type BroadcastCallbacks } from './broadcast.ts';
 import {
   cancelAll as cancelAllWorkflows,
@@ -1748,6 +1753,19 @@ export class Engine<
       finalizeTimeline: (workflowId, status, output) =>
         finalizePendingTimelineEntry(getInternals(this), workflowId, status, output),
     });
+  }
+
+  /**
+   * List a bounded page of durable async activities awaiting out-of-band
+   * completion for one workflow. This reads storage directly, so callers can
+   * recover tokens after a process restart before `recoverAll()` repopulates
+   * the in-memory completion map.
+   */
+  async listPendingAsyncActivities(
+    workflowId: string,
+    options?: PendingAsyncActivityListOptions,
+  ): Promise<PendingAsyncActivityPage> {
+    return listPendingAsyncActivitiesFromInternals(getInternals(this), workflowId, options);
   }
 
   /**

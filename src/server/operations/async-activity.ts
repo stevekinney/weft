@@ -1,7 +1,15 @@
 import { z } from 'zod';
 
 import { AsyncActivityTokenNotFoundError, type Engine } from '../../core/engine.ts';
+import {
+  DEFAULT_PENDING_ASYNC_ACTIVITY_LIMIT,
+  isPendingAsyncActivityCursor,
+  isPendingAsyncActivityCursorForWorkflow,
+  MAX_PENDING_ASYNC_ACTIVITY_CURSOR_LENGTH,
+  MAX_PENDING_ASYNC_ACTIVITY_LIMIT,
+} from '../../core/engine/async-activity-records.ts';
 import { PayloadSizeExceededError } from '../../core/payload-size.ts';
+import type { PendingAsyncActivityPage } from '../../core/types.ts';
 import type { AccessPolicy } from '../authorization.ts';
 import { raiseFault } from '../operation-catalog.ts';
 import { defineOperation } from '../operation-registry.ts';
@@ -18,23 +26,19 @@ import { invalidParamsFault, isOperationFault, shapeRestFault } from './operatio
  * a webhook handler or callback dispatcher can complete the activity without an
  * in-process {@link Engine} reference.
  *
- * Security posture: the access policy is `public`, identical to and no broader
- * than the already-shipped `weft.workflows.signal` operation. The task token is
- * a *deterministic identifier* (`async-act:v1:<workflowId>:<step>:<attempt>`),
- * not a secret capability — it is intentionally derivable so a crashed-and-
- * recovered workflow re-mints the same token. Exposure therefore matches the
- * existing signal/cancel/update endpoints and is gated by the same auth layer
- * (`evaluateAccess`), not by token entropy.
+ * Security posture: listing requires `workflows:read`; completion and failure
+ * require `workflows:write`. The task token is a deterministic identifier
+ * (`async-act:v1:<workflowId>:<step>:<attempt>`), not a secret capability — it
+ * is intentionally derivable so a recovered workflow re-mints the same token.
  *
  * Because the token is guessable, a caller who can infer a workflow id can forge
  * the *result* or *error* of a parked activity step. This is a sharper trust
  * issue than `signal`: a signal is an external message a workflow author already
  * treats as untrusted input, whereas an activity result is the private
  * continuation of the author's own `ctx.run(...)` and may be trusted blindly.
- * Workflow authors who use `completeAsync()` and expose this endpoint to
- * untrusted networks MUST validate completion payloads as hostile external
- * input — exactly as they would a signal. Lock the mutating surface down with
- * `serve({ auth })` if completions should not be anonymous.
+ * Workflow authors who use `completeAsync()` MUST validate completion payloads
+ * as hostile external input — exactly as they would a signal — even after the
+ * caller passes the operation's scope check.
  *
  * The token travels in the request body, never the URL path: tokens embed the
  * workflow id and `:` separators, which have no business in a route.
@@ -46,7 +50,14 @@ import { invalidParamsFault, isOperationFault, shapeRestFault } from './operatio
  * @module server/operations/async-activity
  */
 
-const asyncActivityAccess: AccessPolicy = { kind: 'public' };
+const asyncActivityReadAccess: AccessPolicy = {
+  kind: 'scoped',
+  scopes: { kind: 'anyOf', scopes: ['workflows:read'] },
+};
+const asyncActivityWriteAccess: AccessPolicy = {
+  kind: 'scoped',
+  scopes: { kind: 'anyOf', scopes: ['workflows:write'] },
+};
 
 const httpAndJsonRpcTransports = {
   http: true,
@@ -59,6 +70,39 @@ const completeAsyncActivityInput = z.object({
   token: z.string().min(1),
   result: z.unknown().optional(),
 });
+
+const pendingAsyncActivityItemSchema = z
+  .object({
+    token: z.string(),
+    operationId: z.string(),
+    activityName: z.string(),
+    step: z.number().int().nonnegative(),
+    attempt: z.number().int().positive(),
+    createdAt: z.number(),
+  })
+  .strict();
+
+const listPendingAsyncActivitiesInput = z.object({
+  workflowId: z.string().min(1),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_PENDING_ASYNC_ACTIVITY_LIMIT)
+    .default(DEFAULT_PENDING_ASYNC_ACTIVITY_LIMIT),
+  cursor: z
+    .string()
+    .max(MAX_PENDING_ASYNC_ACTIVITY_CURSOR_LENGTH)
+    .refine(isPendingAsyncActivityCursor, { message: 'Invalid cursor' })
+    .optional(),
+});
+
+const listPendingAsyncActivitiesOutput = z
+  .object({
+    items: z.array(pendingAsyncActivityItemSchema),
+    nextCursor: z.string().optional(),
+  })
+  .strict();
 
 /**
  * The failure payload is a *serializable* error description, not a live `Error`.
@@ -80,6 +124,52 @@ const okOutput = z.object({ ok: z.literal(true) });
 export type CompleteAsyncActivityInput = z.infer<typeof completeAsyncActivityInput>;
 export type FailAsyncActivityInput = z.infer<typeof failAsyncActivityInput>;
 export type AsyncActivityOutput = z.infer<typeof okOutput>;
+export type ListPendingAsyncActivitiesInput = z.infer<typeof listPendingAsyncActivitiesInput>;
+export type ListPendingAsyncActivitiesOutput = PendingAsyncActivityPage;
+
+export const listPendingAsyncActivitiesOperation = defineOperation<
+  ListPendingAsyncActivitiesInput,
+  ListPendingAsyncActivitiesOutput
+>({
+  name: 'weft.workflows.activities.pending.list',
+  mcpExposable: false,
+  summary: 'List pending async activities for a workflow',
+  description:
+    'Read a bounded, deterministic page of durable activity task tokens awaiting ' +
+    'out-of-band completion. The cursor is opaque and scoped to the selected workflow. ' +
+    'A listed token may be consumed concurrently, so a later completion can return NotFound.',
+  destructive: false,
+  tags: ['Activities'],
+  inputSchema: listPendingAsyncActivitiesInput,
+  outputSchema: listPendingAsyncActivitiesOutput as z.ZodType<ListPendingAsyncActivitiesOutput>,
+  access: asyncActivityReadAccess,
+  producibleFaults: ['NotFound', 'InvalidParams'],
+  transports: httpAndJsonRpcTransports,
+  unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
+  invoke: async ({ input, engine }): Promise<ListPendingAsyncActivitiesOutput> => {
+    const liveEngine = engine as Engine;
+    if (
+      input.cursor !== undefined &&
+      !isPendingAsyncActivityCursorForWorkflow(input.cursor, input.workflowId)
+    ) {
+      raiseFault(
+        listPendingAsyncActivitiesOperation,
+        invalidParamsFault('Cursor does not belong to this workflow.'),
+      );
+    }
+    if ((await liveEngine.get(input.workflowId)) === null) {
+      raiseFault(listPendingAsyncActivitiesOperation, {
+        code: 'NotFound',
+        message: `Workflow "${input.workflowId}" not found`,
+        data: { resource: 'workflow', identifier: input.workflowId },
+      });
+    }
+    return liveEngine.listPendingAsyncActivities(input.workflowId, {
+      limit: input.limit,
+      ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+    });
+  },
+});
 
 /**
  * Reconstruct an `Error` from the serializable failure payload so the engine
@@ -138,7 +228,7 @@ export const completeAsyncActivityOperation = defineOperation<
   tags: ['Activities'],
   inputSchema: completeAsyncActivityInput,
   outputSchema: okOutput,
-  access: asyncActivityAccess,
+  access: asyncActivityWriteAccess,
   producibleFaults: ['NotFound', 'InvalidParams'],
   transports: httpAndJsonRpcTransports,
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
@@ -177,7 +267,7 @@ export const failAsyncActivityOperation = defineOperation<
   tags: ['Activities'],
   inputSchema: failAsyncActivityInput,
   outputSchema: okOutput,
-  access: asyncActivityAccess,
+  access: asyncActivityWriteAccess,
   producibleFaults: ['NotFound', 'InvalidParams'],
   transports: httpAndJsonRpcTransports,
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
@@ -199,6 +289,39 @@ function shapeAsyncActivitySuccess(output: AsyncActivityOutput): Response {
     headers: { 'Content-Type': 'application/json' },
   });
 }
+
+function shapePendingAsyncActivitiesSuccess(output: ListPendingAsyncActivitiesOutput): Response {
+  return new Response(JSON.stringify(output), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+export const listPendingAsyncActivitiesRestBinding: UnknownRestBinding = {
+  method: 'GET',
+  path: '/v1/workflows/:id/pending-async-activities',
+  pathParamNames: ['id'],
+  operationName: 'weft.workflows.activities.pending.list',
+  inputSources: {
+    workflowId: { kind: 'path', pathParam: 'id' },
+    limit: { kind: 'query', queryParam: 'limit' },
+    cursor: { kind: 'query', queryParam: 'cursor' },
+  },
+  extractInput: async (request, pathParams) => {
+    const search = new URL(request.url).searchParams;
+    const limit = search.get('limit');
+    const cursor = search.get('cursor');
+    return {
+      workflowId: pathParams['id'] ?? '',
+      ...(limit === null ? {} : { limit: Number(limit) }),
+      ...(cursor === null ? {} : { cursor }),
+    };
+  },
+  success: { kind: 'json', status: 200 },
+  shapeSuccess: (output: ListPendingAsyncActivitiesOutput) =>
+    shapePendingAsyncActivitiesSuccess(output),
+  shapeFault: shapeRestFault,
+};
 
 async function readJsonObjectBody(
   request: Request,

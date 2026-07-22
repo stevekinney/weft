@@ -191,10 +191,13 @@ const awaitWebhook = activity({
 });
 ```
 
-The engine emits an `activity:async-pending` event with the token. Resolve it in-process with `engine.completeAsyncActivity(token, result)` / `engine.failAsyncActivity(token, error)`, through the transport-neutral client surface `client.activity.complete(token, result)` / `client.activity.completeExceptionally(token, error)`, or over REST:
+The engine emits an `activity:async-pending` event with the token. For durable discovery after a listener disconnect or process restart, call `engine.listPendingAsyncActivities(workflowId)`, `client.activity.listPending(workflowId)`, `weft.workflows.activities.pending.list`, or `GET /api/v1/workflows/:id/pending-async-activities`. The query returns deterministic pages ordered by durable storage key, defaults to 50 inspected records, accepts at most 200, and uses an opaque `cursor` for continuation. A token can be consumed after it is listed, so a concurrent completion may still return `NotFound`.
+
+Resolve a token in-process with `engine.completeAsyncActivity(token, result)` / `engine.failAsyncActivity(token, error)`, through `client.activity.complete(token, result)` / `client.activity.completeExceptionally(token, error)`, or over REST:
 
 ```bash
 curl -X POST http://localhost:7233/api/v1/activities/complete \
+  -H 'authorization: Bearer <token-with-workflows:write>' \
   -H 'content-type: application/json' \
   -d '{"token":"async-act:v1:workflow-123:4:1","result":{"ok":true}}'
 ```
@@ -205,7 +208,7 @@ When a completion is accepted, the acknowledgement is durable before the call re
 
 After a restart, register workflows and activities, then await `engine.recoverAll()` before accepting callback traffic if your application needs deterministic startup ordering. If a completion or failure races recovery after the token has been recovered but before replay has adopted the workflow generator, Weft buffers that outcome and delivers it when replay reaches the same async-activity token.
 
-The token is a deterministic identifier, not a secret. Treat completion payloads as hostile external input, validate them the same way you validate signal payloads, and enable `serve({ auth })` before exposing completion endpoints outside a trusted boundary.
+The token is a deterministic identifier, not a secret. Treat completion payloads as hostile external input and validate them the same way you validate signal payloads. Transport queries require `workflows:read`; completion and failure require `workflows:write`. Configure `serve({ auth })` with callers holding those scopes before exposing the endpoints.
 
 ## Per-call options
 

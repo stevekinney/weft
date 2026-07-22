@@ -51,6 +51,28 @@ describe('EngineOptions.onLog host sink', () => {
     expect(captured.records.some((r) => r.message === 'marker:hello')).toBe(false);
   });
 
+  it('keeps ctx.log records host-owned and out of durable workflow history', async () => {
+    const sunk: WorkflowLogRecord[] = [];
+    await using engine = new Engine({
+      storage: new MemoryStorage(),
+      onLog: (record) => sunk.push(record),
+    });
+    engine.register(
+      workflow({ name: 'host-owned-log-wf' }).execute(async function* (ctx) {
+        ctx.log?.info('marker:host-owned');
+        return 'ok';
+      }),
+    );
+
+    const handle = await engine.start('host-owned-log-wf', null, { id: 'host-owned-log-1' });
+    await expect(handle.result()).resolves.toBe('ok');
+
+    expect(sunk.some((record) => record.message === 'marker:host-owned')).toBe(true);
+    const events = await engine.getEvents(handle.id);
+    expect(events.some((event) => JSON.stringify(event).includes('marker:host-owned'))).toBe(false);
+    expect('getLogs' in engine).toBe(false);
+  });
+
   it('falls back to the console when no onLog sink is configured', async () => {
     await using engine = new Engine();
     engine.register(

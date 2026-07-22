@@ -24,8 +24,9 @@ export type WorkflowLogLevel = 'debug' | 'info' | 'warn' | 'error';
  * fields (`level`, `message`, `workflowId`, `workflowType`, `timestamp`) are
  * engine-owned and always present; caller `attributes` nest under their own key so
  * they can never shadow an envelope field. `timestamp` is wall-clock ms at emit —
- * observability metadata, never checkpointed or replayed. Type a host sink
- * installed via `EngineOptions.onLog` with this record.
+ * observability metadata, never checkpointed or replayed. Weft does not retain
+ * records for later engine/client/transport queries; a host that needs history
+ * persists records received through `EngineOptions.onLog` in its logging system.
  *
  * @example
  * ```ts

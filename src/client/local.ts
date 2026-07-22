@@ -139,6 +139,8 @@ export class LocalClient<
     this.#rawEngine = engine as Engine;
     this.storage = createLocalClientStorage(this.#rawEngine.storage);
     this.activity = {
+      listPending: (workflowId, options) =>
+        this.#engine.listPendingAsyncActivities(workflowId, options),
       complete: (token, result) => this.#engine.completeAsyncActivity(token, result),
       completeExceptionally: (token, error) => this.#engine.failAsyncActivity(token, error),
     };
