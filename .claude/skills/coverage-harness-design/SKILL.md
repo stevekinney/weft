@@ -78,6 +78,7 @@ description: >-
 32. For `resolveDefaultStorage()` coverage, inject runtime globals instead of mutating `globalThis`, and assert the selected adapter receives the same WebExtension namespace or IndexedDB globals used during detection.
 33. For schedule and worker seam coverage, add focused assertions for public validation and replay behavior first: malformed schedule records should decode safely, invalid `jitter` should surface as a create-schedule input error, worker `getVersion()` replay should cover missing and cached replay state, interceptor context should stay omitted when no signal or tokens exist, and task-result persistence failures should emit the operator-facing leak diagnostic.
 34. For async activity completion coverage, assert the durable token record survives acknowledgement precondition loss under `ownership: 'lease'`, and assert malformed persisted resolution outcomes are dropped during recovery instead of being buffered for workflow adoption.
+35. For line-keyed allowance changes, derive the exact lines from fresh `coverage/lcov.info` and set `requireUncoveredLines: true` for allowances tied to specific misses. Add a parser regression for a covered target line so source movement cannot silently turn an allowance into unrelated coverage subtraction.
 
 ## Verification
 

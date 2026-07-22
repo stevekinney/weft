@@ -45,6 +45,7 @@ description: >-
 19. For Tier-0 or persisted-format prose, use rolling-upgrade contract language when that is the actual guarantee. Do not describe pre-release current behavior as "legacy" behavior, and do not call shape tests "migration tests" unless they test an implemented migration path.
 20. For fixture names, reserve `historical-*` for old persisted records or protocol shapes. When a test only compares current behavior, use direct names such as `retiredField`, `old`, or `current` instead of `legacy`.
 21. For implementation-file-size exceptions, update `documentation/contributing/development-setup.md` and `scripts/check-implementation-file-sizes.ts` together. The rationale should name the current responsibility boundary, not preservation of old import paths, compatibility barrels, or shim layers.
+22. For REST fault documentation, describe the current flat `{ error, weftCode?, data? }` body, keep `EngineFailure` masked, and place recover-all conflict details under `data`; do not document the retired nested envelope. For embedded `handleRequest()` hosts, document that injected `WorkerRegistry` and `TaskQueue` instances supply the live state used by worker, queue, and task-diagnostics operations.
 
 ## Verification
 

@@ -123,7 +123,7 @@ async function handleRequest(
 
 A pure HTTP request handler that maps a `Request` to a `Response`. Has no Bun-specific dependencies -- suitable for embedding in any server framework that uses the Web `Request`/`Response` API.
 
-`HandlerOptions` accepts an operation registry, REST bindings, and a Prometheus exporter. Omit it to use defaults.
+`HandlerOptions` accepts an operation registry, REST bindings, a Prometheus exporter, and optional live `WorkerRegistry` and `TaskQueue` instances. Pass the worker registry and task queue when embedding Weft in a host that constructs its own `handleRequest()` pipeline; the default operation registry uses those instances for worker, queue, and task-diagnostics routes. Omit both to use the defaults created by the handler.
 
 ```ts partial
 import { handleRequest } from '@lostgradient/weft/server/handler';
