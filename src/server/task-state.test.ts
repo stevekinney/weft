@@ -61,15 +61,38 @@ function makeInflightRecord(overrides: Partial<InflightRecord> = {}): InflightRe
 
 class GetCountingStorage extends MemoryStorage {
   readonly getCounts = new Map<string, number>();
+  readonly readKeys: string[] = [];
+  activeReads = 0;
+  maxConcurrentReads = 0;
 
   override async get(key: string): Promise<Uint8Array | null> {
     this.getCounts.set(key, (this.getCounts.get(key) ?? 0) + 1);
-    return super.get(key);
+    this.readKeys.push(key);
+    this.activeReads += 1;
+    this.maxConcurrentReads = Math.max(this.maxConcurrentReads, this.activeReads);
+    await Promise.resolve();
+    try {
+      return await super.get(key);
+    } finally {
+      this.activeReads -= 1;
+    }
   }
 
   getCount(key: string): number {
     return this.getCounts.get(key) ?? 0;
   }
+
+  resetReadTracking(): void {
+    this.getCounts.clear();
+    this.readKeys.length = 0;
+    this.maxConcurrentReads = 0;
+  }
+}
+
+function taskStateKey(state: 'inflight' | 'queued' | 'resolved', operationId: string): string {
+  if (state === 'inflight') return KEYS.operationInflight(operationId);
+  if (state === 'queued') return KEYS.operationQueued(operationId);
+  return KEYS.operationResolved(operationId);
 }
 
 function createEngine(storage?: MemoryStorage): Engine {
@@ -112,6 +135,37 @@ async function connectAndRegisterWorker(
 // ---------------------------------------------------------------------------
 
 describe('getTaskState', () => {
+  it('reads each state key once concurrently for every lookup shape', async () => {
+    const storage = new GetCountingStorage();
+    const keys = [
+      KEYS.operationInflight('read-shape'),
+      KEYS.operationQueued('read-shape'),
+      KEYS.operationResolved('read-shape'),
+    ];
+
+    const cases = [
+      { records: [], expected: null },
+      { records: ['inflight'], expected: 'inflight' },
+      { records: ['queued'], expected: 'queued' },
+      { records: ['resolved'], expected: 'resolved' },
+      { records: ['queued', 'resolved'], expected: 'queued' },
+      { records: ['inflight', 'queued', 'resolved'], expected: 'inflight' },
+    ] as const;
+
+    for (const testCase of cases) {
+      await storage.clear();
+      for (const state of testCase.records) {
+        await storage.put(taskStateKey(state, 'read-shape'), new Uint8Array([1]));
+      }
+      storage.resetReadTracking();
+
+      await expect(getTaskState(storage, 'read-shape')).resolves.toBe(testCase.expected);
+      expect(storage.readKeys).toEqual(keys);
+      expect(storage.maxConcurrentReads).toBe(3);
+      expect(storage.readKeys.every((key) => storage.getCount(key) === 1)).toBe(true);
+    }
+  });
+
   it('returns null for an unknown operation', async () => {
     const storage = new MemoryStorage();
 
@@ -150,6 +204,44 @@ describe('getTaskState', () => {
 });
 
 describe('getExclusiveTaskState', () => {
+  it('uses the same three-key snapshot for absent, single, partial, and all states', async () => {
+    const storage = new GetCountingStorage();
+    const cases = [
+      { records: [], expected: null },
+      { records: ['inflight'], expected: 'inflight' },
+      { records: ['queued', 'resolved'], error: 'multiple states simultaneously' },
+      { records: ['inflight', 'queued', 'resolved'], error: 'multiple states simultaneously' },
+    ] as const;
+
+    for (const testCase of cases) {
+      await storage.clear();
+      for (const state of testCase.records) {
+        const key =
+          state === 'inflight'
+            ? KEYS.operationInflight('exclusive-read-shape')
+            : state === 'queued'
+              ? KEYS.operationQueued('exclusive-read-shape')
+              : KEYS.operationResolved('exclusive-read-shape');
+        await storage.put(key, new Uint8Array([1]));
+      }
+      storage.resetReadTracking();
+
+      const lookup = getExclusiveTaskState(storage, 'exclusive-read-shape');
+      if ('error' in testCase) {
+        await expect(lookup).rejects.toThrow(testCase.error);
+      } else {
+        await expect(lookup).resolves.toBe(testCase.expected);
+      }
+      expect(storage.readKeys).toEqual([
+        KEYS.operationInflight('exclusive-read-shape'),
+        KEYS.operationQueued('exclusive-read-shape'),
+        KEYS.operationResolved('exclusive-read-shape'),
+      ]);
+      expect(storage.maxConcurrentReads).toBe(3);
+      expect(storage.readKeys.every((key) => storage.getCount(key) === 1)).toBe(true);
+    }
+  });
+
   it('returns null for an unknown operation', async () => {
     const storage = new MemoryStorage();
 

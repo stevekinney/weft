@@ -155,6 +155,25 @@ export interface TransitionInflightToResolvedOptions {
 // State query
 // ---------------------------------------------------------------------------
 
+interface TaskStateSnapshot {
+  inflight: Uint8Array | null;
+  queued: Uint8Array | null;
+  resolved: Uint8Array | null;
+}
+
+async function readTaskStateSnapshot(
+  storage: Storage,
+  operationId: string,
+): Promise<TaskStateSnapshot> {
+  const [inflight, queued, resolved] = await Promise.all([
+    storage.get(KEYS.operationInflight(operationId)),
+    storage.get(KEYS.operationQueued(operationId)),
+    storage.get(KEYS.operationResolved(operationId)),
+  ]);
+
+  return { inflight, queued, resolved };
+}
+
 /**
  * Look up the current durable state of a task.
  *
@@ -166,11 +185,7 @@ export async function getTaskState(
   storage: Storage,
   operationId: string,
 ): Promise<TaskState | null> {
-  const [inflight, queued, resolved] = await Promise.all([
-    storage.get(KEYS.operationInflight(operationId)),
-    storage.get(KEYS.operationQueued(operationId)),
-    storage.get(KEYS.operationResolved(operationId)),
-  ]);
+  const { inflight, queued, resolved } = await readTaskStateSnapshot(storage, operationId);
 
   if (inflight !== null) return 'inflight';
   if (queued !== null) return 'queued';
@@ -188,11 +203,7 @@ export async function getExclusiveTaskState(
   storage: Storage,
   operationId: string,
 ): Promise<TaskState | null> {
-  const [inflight, queued, resolved] = await Promise.all([
-    storage.get(KEYS.operationInflight(operationId)),
-    storage.get(KEYS.operationQueued(operationId)),
-    storage.get(KEYS.operationResolved(operationId)),
-  ]);
+  const { inflight, queued, resolved } = await readTaskStateSnapshot(storage, operationId);
 
   const states: TaskState[] = [];
   if (inflight !== null) states.push('inflight');
