@@ -13,7 +13,7 @@ export interface TaskInfo {
   input: unknown;
   headers?: Record<string, string>;
   workflowExecutionToken?: string;
-  attemptToken?: string;
+  attemptToken: string;
 }
 
 export interface ComposedInterceptor {
@@ -72,11 +72,7 @@ function createActivityExecutionContext(
   task: TaskInfo,
   signal: AbortSignal | undefined,
 ): ActivityExecutionContext | undefined {
-  if (
-    signal === undefined &&
-    task.workflowExecutionToken === undefined &&
-    task.attemptToken === undefined
-  ) {
+  if (signal === undefined && task.workflowExecutionToken === undefined) {
     return undefined;
   }
 
@@ -85,6 +81,6 @@ function createActivityExecutionContext(
     ...(task.workflowExecutionToken !== undefined && {
       workflowExecutionToken: task.workflowExecutionToken,
     }),
-    ...(task.attemptToken !== undefined && { activityAttemptToken: task.attemptToken }),
+    activityAttemptToken: task.attemptToken,
   };
 }

@@ -918,7 +918,12 @@ describe('serve() with authentication', () => {
     const noAuthResponse = await fetch(`${server.url}/v1/tasks/default/result`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ operationId: 'op-1', status: 'completed', value: 42 }),
+      body: JSON.stringify({
+        operationId: 'op-1',
+        attemptToken: 'attempt-token',
+        status: 'completed',
+        value: 42,
+      }),
     });
     expect(noAuthResponse.status).toBe(401);
 
@@ -928,7 +933,12 @@ describe('serve() with authentication', () => {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${TEST_API_KEY}`,
       },
-      body: JSON.stringify({ operationId: 'op-1', status: 'completed', value: 42 }),
+      body: JSON.stringify({
+        operationId: 'op-1',
+        attemptToken: 'attempt-token',
+        status: 'completed',
+        value: 42,
+      }),
     });
     expect(forbiddenResponse.status).toBe(403);
 
@@ -945,7 +955,12 @@ describe('serve() with authentication', () => {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${TEST_API_KEY}`,
       },
-      body: JSON.stringify({ operationId: 'op-1', status: 'completed', value: 42 }),
+      body: JSON.stringify({
+        operationId: 'op-1',
+        attemptToken: 'attempt-token',
+        status: 'completed',
+        value: 42,
+      }),
     });
     expect(allowedResponse.status).toBe(200);
   });

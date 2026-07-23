@@ -139,6 +139,7 @@ type TaskMessage = {
   type: string;
   operationId?: string;
   attempt?: number;
+  attemptToken?: string;
 };
 
 function collectTaskMessages(webSocket: WebSocket): TaskMessage[] {
@@ -164,7 +165,7 @@ function collectAndCompleteTaskMessages(
     const message = JSON.parse(String(event.data)) as TaskMessage;
     received.push(message);
     if (completeWhen(message)) {
-      sendCompletedTaskResult(webSocket, message.operationId, resultValue);
+      sendCompletedTaskResult(webSocket, message.operationId, message.attemptToken, resultValue);
     }
   });
   return received;
@@ -173,12 +174,14 @@ function collectAndCompleteTaskMessages(
 function sendCompletedTaskResult(
   webSocket: WebSocket,
   operationId: string | undefined,
+  attemptToken: string | undefined,
   value: unknown,
 ): void {
   webSocket.send(
     JSON.stringify({
       type: 'taskResult',
       operationId,
+      attemptToken,
       status: 'completed',
       value,
     }),
@@ -1686,12 +1689,17 @@ describe('worker WebSocket protocol', () => {
     await registerWorker(ws, { workerId: 'w-diagnostics', activities: ['charge'], concurrency: 1 });
 
     ws.addEventListener('message', (event) => {
-      const message = JSON.parse(String(event.data)) as { type: string; operationId?: string };
+      const message = JSON.parse(String(event.data)) as {
+        type: string;
+        operationId?: string;
+        attemptToken?: string;
+      };
       if (message.type === 'task') {
         ws.send(
           JSON.stringify({
             type: 'taskResult',
             operationId: message.operationId,
+            attemptToken: message.attemptToken,
             status: 'completed',
             value: 42,
           }),
@@ -1778,12 +1786,17 @@ describe('worker WebSocket protocol', () => {
     await registerWorker(ws, { workerId: 'w-owned-metrics', activities: ['charge'] });
 
     ws.addEventListener('message', (event) => {
-      const message = JSON.parse(String(event.data)) as { type: string; operationId?: string };
+      const message = JSON.parse(String(event.data)) as {
+        type: string;
+        operationId?: string;
+        attemptToken?: string;
+      };
       if (message.type === 'task') {
         ws.send(
           JSON.stringify({
             type: 'taskResult',
             operationId: message.operationId,
+            attemptToken: message.attemptToken,
             status: 'completed',
             value: 42,
           }),
@@ -1830,6 +1843,7 @@ describe('worker WebSocket protocol', () => {
       input: null,
       attempt: 1,
       visibilityTimeout: 30_000,
+      attemptToken: 'attempt-token',
       firstQueuedAt: now - 70_000,
       lastQueuedAt: now - 70_000,
       lastDispatchedAt: now - 65_000,
@@ -2040,7 +2054,11 @@ describe('worker WebSocket protocol', () => {
     const activeSocket = await connectWorker(server);
     const receivedByActive: string[] = [];
     activeSocket.addEventListener('message', (event) => {
-      const message = JSON.parse(String(event.data)) as { type: string; operationId?: string };
+      const message = JSON.parse(String(event.data)) as {
+        type: string;
+        operationId?: string;
+        attemptToken?: string;
+      };
       if (message.type === 'task' && message.operationId !== undefined) {
         receivedByActive.push(message.operationId);
       }
@@ -2056,7 +2074,13 @@ describe('worker WebSocket protocol', () => {
       activities: ['charge'],
       concurrency: 5,
     });
-    server.registry.assignTask('draining-worker', 'already-running', 30_000);
+    server.registry.assignTask(
+      'draining-worker',
+      'already-running',
+      30_000,
+      undefined,
+      'attempt-token',
+    );
 
     server.registry.markWorkerDraining('draining-worker', {
       reason: 'rolling deploy',
@@ -2414,7 +2438,13 @@ describe('worker WebSocket protocol', () => {
 
     // Complete one task
     ws.send(
-      JSON.stringify({ type: 'taskResult', operationId: 't-1', status: 'completed', value: null }),
+      JSON.stringify({
+        type: 'taskResult',
+        operationId: 't-1',
+        attemptToken: server.registry.getTask('t-1')?.attemptToken,
+        status: 'completed',
+        value: null,
+      }),
     );
     await waitFor(() => worker().concurrency - worker().inFlight === 2, {
       label: 'first task completion freed capacity',
@@ -2423,7 +2453,13 @@ describe('worker WebSocket protocol', () => {
 
     // Complete the other
     ws.send(
-      JSON.stringify({ type: 'taskResult', operationId: 't-2', status: 'completed', value: null }),
+      JSON.stringify({
+        type: 'taskResult',
+        operationId: 't-2',
+        attemptToken: server.registry.getTask('t-2')?.attemptToken,
+        status: 'completed',
+        value: null,
+      }),
     );
     await waitFor(() => worker().concurrency - worker().inFlight === 3, {
       label: 'second task completion freed capacity',
@@ -2500,17 +2536,22 @@ describe('worker WebSocket protocol', () => {
 
     const ws1 = await connectWorker(server);
     const ws2 = await connectWorker(server);
-    const received1: Array<{ type: string; operationId?: string }> = [];
-    const received2: Array<{ type: string; operationId?: string }> = [];
+    const received1: Array<{ type: string; operationId?: string; attemptToken?: string }> = [];
+    const received2: Array<{ type: string; operationId?: string; attemptToken?: string }> = [];
 
     ws1.addEventListener('message', (event) => {
-      const msg = JSON.parse(String(event.data)) as { type: string; operationId?: string };
+      const msg = JSON.parse(String(event.data)) as {
+        type: string;
+        operationId?: string;
+        attemptToken?: string;
+      };
       received1.push(msg);
       if (msg.type === 'task') {
         ws1.send(
           JSON.stringify({
             type: 'taskResult',
             operationId: msg.operationId,
+            attemptToken: msg.attemptToken,
             status: 'completed',
             value: null,
           }),
@@ -2518,13 +2559,18 @@ describe('worker WebSocket protocol', () => {
       }
     });
     ws2.addEventListener('message', (event) => {
-      const msg = JSON.parse(String(event.data)) as { type: string; operationId?: string };
+      const msg = JSON.parse(String(event.data)) as {
+        type: string;
+        operationId?: string;
+        attemptToken?: string;
+      };
       received2.push(msg);
       if (msg.type === 'task') {
         ws2.send(
           JSON.stringify({
             type: 'taskResult',
             operationId: msg.operationId,
+            attemptToken: msg.attemptToken,
             status: 'completed',
             value: null,
           }),
@@ -2576,11 +2622,17 @@ describe('worker WebSocket protocol', () => {
 
     const ws1 = await connectWorker(server);
     const ws2 = await connectWorker(server);
-    const received2: Array<{ type: string; operationId?: string }> = [];
+    const received2: Array<{ type: string; operationId?: string; attemptToken?: string }> = [];
 
     // Worker 1 does NOT auto-complete tasks (stays at capacity)
     ws2.addEventListener('message', (event) => {
-      received2.push(JSON.parse(String(event.data)) as { type: string; operationId?: string });
+      received2.push(
+        JSON.parse(String(event.data)) as {
+          type: string;
+          operationId?: string;
+          attemptToken?: string;
+        },
+      );
     });
 
     await registerWorker(ws1, { workerId: 'cap-w1', activities: ['compute'], concurrency: 1 });
@@ -2673,15 +2725,25 @@ describe('queue-aware worker stream', () => {
     const billingWs = await connectWorker(server, workerStreamPath('billing'));
     const shippingWs = await connectWorker(server, workerStreamPath('shipping'));
 
-    const billingReceived: Array<{ type: string; operationId?: string }> = [];
-    const shippingReceived: Array<{ type: string; operationId?: string }> = [];
+    const billingReceived: Array<{ type: string; operationId?: string; attemptToken?: string }> =
+      [];
+    const shippingReceived: Array<{ type: string; operationId?: string; attemptToken?: string }> =
+      [];
 
     billingWs.addEventListener('message', (event) => {
-      const message = JSON.parse(String(event.data)) as { type: string; operationId?: string };
+      const message = JSON.parse(String(event.data)) as {
+        type: string;
+        operationId?: string;
+        attemptToken?: string;
+      };
       if (message.type === 'task') billingReceived.push(message);
     });
     shippingWs.addEventListener('message', (event) => {
-      const message = JSON.parse(String(event.data)) as { type: string; operationId?: string };
+      const message = JSON.parse(String(event.data)) as {
+        type: string;
+        operationId?: string;
+        attemptToken?: string;
+      };
       if (message.type === 'task') shippingReceived.push(message);
     });
 
@@ -2732,10 +2794,14 @@ describe('queue-aware worker stream', () => {
     server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server, workerStreamPath('default'));
-    const received: Array<{ type: string; operationId?: string }> = [];
+    const received: Array<{ type: string; operationId?: string; attemptToken?: string }> = [];
 
     ws.addEventListener('message', (event) => {
-      const message = JSON.parse(String(event.data)) as { type: string; operationId?: string };
+      const message = JSON.parse(String(event.data)) as {
+        type: string;
+        operationId?: string;
+        attemptToken?: string;
+      };
       if (message.type === 'task') received.push(message);
     });
 
@@ -4051,6 +4117,7 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         operationId: 'op-complete-1',
+        attemptToken: 'attempt-token-complete-1',
         status: 'completed',
         value: { result: 42 },
       }),
@@ -4083,6 +4150,7 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           operationId,
+          attemptToken: 'attempt-token-complete-fail',
           status: 'completed',
           value: { result: 42 },
         }),
@@ -4145,6 +4213,7 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         operationId: 'op-cb',
+        attemptToken: 'attempt-token-callback',
         status: 'completed',
         value: 'done',
       }),
@@ -4212,10 +4281,14 @@ describe('task assignment deduplication', () => {
     server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
-    const received: Array<{ type: string; operationId?: string }> = [];
+    const received: Array<{ type: string; operationId?: string; attemptToken?: string }> = [];
 
     ws.addEventListener('message', (event) => {
-      const message = JSON.parse(String(event.data)) as { type: string; operationId?: string };
+      const message = JSON.parse(String(event.data)) as {
+        type: string;
+        operationId?: string;
+        attemptToken?: string;
+      };
       if (message.type === 'task') received.push(message);
     });
 
@@ -4356,7 +4429,11 @@ describe('task assignment deduplication', () => {
       'unexpected status protocolError',
     );
     ws.addEventListener('message', (event) => {
-      const msg = JSON.parse(String(event.data)) as { type: string; operationId?: string };
+      const msg = JSON.parse(String(event.data)) as {
+        type: string;
+        operationId?: string;
+        attemptToken?: string;
+      };
       if (msg.type === 'task') {
         ws.send(
           JSON.stringify({
@@ -4389,12 +4466,17 @@ describe('task assignment deduplication', () => {
 
     const ws = await connectWorker(server);
     ws.addEventListener('message', (event) => {
-      const msg = JSON.parse(String(event.data)) as { type: string; operationId?: string };
+      const msg = JSON.parse(String(event.data)) as {
+        type: string;
+        operationId?: string;
+        attemptToken?: string;
+      };
       if (msg.type === 'task') {
         ws.send(
           JSON.stringify({
             type: 'taskResult',
             operationId: msg.operationId,
+            attemptToken: msg.attemptToken,
             status: 'cancelled',
             error: 'activity cancelled',
           }),
@@ -4857,6 +4939,7 @@ describe('visibility timeout persistence', () => {
       input: null,
       attempt: 1,
       visibilityTimeout: 60_000,
+      attemptToken: 'attempt-token-restored',
     };
     await storage.put(KEYS.operationInflight('restored-op'), encode(inflightRecord));
 
@@ -4883,6 +4966,7 @@ describe('visibility timeout persistence', () => {
       input: null,
       attempt: 1,
       visibilityTimeout: 60_000,
+      attemptToken: 'attempt-token-restored-cancel',
     };
     await storage.put(KEYS.operationInflight('restored-cancel-op'), encode(inflightRecord));
 
@@ -4890,7 +4974,7 @@ describe('visibility timeout persistence', () => {
     await waitForRealTimersForTesting(100);
 
     const ws = await connectWorker(server);
-    const received: Array<{ type: string; operationId?: string }> = [];
+    const received: Array<{ type: string; operationId?: string; attemptToken?: string }> = [];
     ws.addEventListener('message', (event) => {
       received.push(JSON.parse(String(event.data)));
     });
@@ -4997,6 +5081,7 @@ describe('visibility timeout persistence', () => {
       input: null,
       attempt: 1,
       visibilityTimeout: 30_000,
+      attemptToken: 'attempt-token-stale-expiry',
     };
     await storage.put(KEYS.operationInflight('expired-op'), encode(expiredRecord));
 
@@ -5243,7 +5328,7 @@ describe('worker disconnection triggers task reassignment', () => {
     const ws1 = await connectWorker(server);
     const ws2 = await connectWorker(server);
 
-    const received: Array<{ type: string; operationId?: string }> = [];
+    const received: Array<{ type: string; operationId?: string; attemptToken?: string }> = [];
     ws2.addEventListener('message', (event) => {
       received.push(JSON.parse(String(event.data)));
     });
@@ -5579,7 +5664,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
 
     const ws = await connectWorker(server);
 
-    const received: Array<{ type: string; operationId?: string }> = [];
+    const received: Array<{ type: string; operationId?: string; attemptToken?: string }> = [];
     ws.addEventListener('message', (event) => {
       received.push(JSON.parse(String(event.data)));
     });
@@ -5622,6 +5707,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
         type: string;
         operationId?: string;
         attempt?: number;
+        attemptToken?: string;
       };
       // Complete on attempt 2 to stop the reassignment cycle
       if (msg.type === 'task' && (msg.attempt ?? 1) >= 2) {
@@ -5629,6 +5715,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
           JSON.stringify({
             type: 'taskResult',
             operationId: msg.operationId,
+            attemptToken: msg.attemptToken,
             status: 'completed',
             value: null,
           }),
@@ -5704,7 +5791,12 @@ describe('visibility timeout expiry triggers task reassignment', () => {
 
     // Connect a worker that can receive the reassigned task
     const ws = await connectWorker(server);
-    const received: Array<{ type: string; operationId?: string; attempt?: number }> = [];
+    const received: Array<{
+      type: string;
+      operationId?: string;
+      attempt?: number;
+      attemptToken?: string;
+    }> = [];
     ws.addEventListener('message', (event) => {
       received.push(JSON.parse(String(event.data)));
     });
@@ -5722,6 +5814,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
       input: null,
       attempt: 1,
       visibilityTimeout: 30_000,
+      attemptToken: 'attempt-token-orphan',
     };
     await storage.put(KEYS.operationInflight('orphan-op'), encode(expiredRecord));
 
@@ -5759,7 +5852,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 50 });
 
     const ws = await connectWorker(server);
-    const received: Array<{ type: string; operationId?: string }> = [];
+    const received: Array<{ type: string; operationId?: string; attemptToken?: string }> = [];
     ws.addEventListener('message', (event) => {
       received.push(JSON.parse(String(event.data)));
     });
@@ -5829,6 +5922,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
       input: null,
       attempt: 1,
       visibilityTimeout: 30_000,
+      attemptToken: 'attempt-token-stale-expiry',
     };
     await storage.put(KEYS.operationInflight(operationId), encode(inflightRecord));
 
@@ -6121,12 +6215,18 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 20 });
 
     const ws = await connectWorker(server);
-    const received: Array<{ type: string; operationId?: string; attempt?: number }> = [];
+    const received: Array<{
+      type: string;
+      operationId?: string;
+      attempt?: number;
+      attemptToken?: string;
+    }> = [];
     ws.addEventListener('message', (event) => {
       const message = JSON.parse(String(event.data)) as {
         type: string;
         operationId?: string;
         attempt?: number;
+        attemptToken?: string;
       };
       received.push(message);
       if (message.type === 'task' && message.operationId === 'orphan-track-op') {
@@ -6134,6 +6234,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
           JSON.stringify({
             type: 'taskResult',
             operationId: message.operationId,
+            attemptToken: message.attemptToken,
             status: 'completed',
             value: null,
           }),
@@ -6154,6 +6255,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
         input: null,
         attempt: 1,
         visibilityTimeout: 500,
+        attemptToken: 'attempt-token-orphan-track',
       }),
     );
 
@@ -6383,6 +6485,7 @@ describe('concurrent scanner deduplication', () => {
       input: null,
       attempt: 1,
       visibilityTimeout: 30_000,
+      attemptToken: 'attempt-token-dedup-orphan',
     };
     await storage.put(KEYS.operationInflight('dedup-orphan-op'), encode(orphanRecord));
 
@@ -6497,6 +6600,7 @@ describe('concurrent scanner deduplication', () => {
           input: null,
           attempt: 1,
           visibilityTimeout: 30_000,
+          attemptToken: 'attempt-token-dedup-readd',
         }),
       );
 
@@ -6693,6 +6797,7 @@ describe('retry policy respected on reassignment', () => {
         type: string;
         operationId?: string;
         attempt?: number;
+        attemptToken?: string;
       };
       if (msg.type === 'task' && msg.operationId === 'backoff-expiry-op') {
         timestamps.push(Date.now());
@@ -6702,6 +6807,7 @@ describe('retry policy respected on reassignment', () => {
             JSON.stringify({
               type: 'taskResult',
               operationId: msg.operationId,
+              attemptToken: msg.attemptToken,
               status: 'completed',
               value: null,
             }),
@@ -7014,13 +7120,15 @@ describe('worker shutdown and cancel propagation', () => {
     server = serveTestServer({ engine, port: 0, workerShutdownTimeoutMs: 500 });
 
     const ws = await connectWorker(server);
+    let taskAttemptToken: string | undefined;
     let receivedShutdown = false;
     ws.addEventListener('message', (event) => {
-      const parsed = JSON.parse(String(event.data)) as { type: string };
+      const parsed = JSON.parse(String(event.data)) as { type: string; attemptToken?: string };
+      if (parsed.type === 'task') taskAttemptToken = parsed.attemptToken;
       if (parsed.type !== 'shutdown') return;
 
       receivedShutdown = true;
-      sendCompletedTaskResult(ws, operationId, 'drained-before-stop');
+      sendCompletedTaskResult(ws, operationId, taskAttemptToken, 'drained-before-stop');
       void waitFor(async () => (await storage.get(KEYS.operationResolved(operationId))) !== null, {
         label: 'task result persisted during server stop drain',
       })
@@ -7077,7 +7185,7 @@ describe('worker shutdown and cancel propagation', () => {
     engine = createEngine();
     server = serveTestServer({ engine, port: 0 });
 
-    const received: Array<{ type: string; operationId?: string }> = [];
+    const received: Array<{ type: string; operationId?: string; attemptToken?: string }> = [];
     const ws = await connectWorker(server);
 
     ws.addEventListener('message', (event) => {
@@ -7122,7 +7230,7 @@ describe('worker shutdown and cancel propagation', () => {
     engine = createEngine();
     server = serveTestServer({ engine, port: 0 });
 
-    const received: Array<{ type: string; operationId?: string }> = [];
+    const received: Array<{ type: string; operationId?: string; attemptToken?: string }> = [];
     const ws = await connectWorker(server);
 
     ws.addEventListener('message', (event) => {

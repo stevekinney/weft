@@ -228,18 +228,9 @@ function onTaskResultMessage(
     });
     return;
   }
-  // Attempt guard, layered after the workerId guard. (operationId, workerId)
-  // alone cannot reject a stale completion when a LATER attempt is reassigned to
-  // the SAME workerId (e.g. a single-worker deployment where the only available
-  // worker is the one that just timed out). The per-dispatch attempt token —
-  // additive to the message payload, NOT a protocol-version change — is the only
-  // field distinguishing attempts: the worker echoes the token from the task it
-  // received, and a token from an earlier attempt no longer matches the registry's
-  // current entry. Reject without mutating engine state. The guard is purely
-  // additive: it fires only on a present-but-wrong token, so a worker that
-  // predates the field (or a task assigned before it existed) falls back to the
-  // workerId-only guard and is never live-locked — required to hold the no-version-
-  // bump promise for the singleton deployment this defends.
+  // The non-empty token is part of every task result. Check it after worker
+  // ownership so a stale completion cannot mutate state when a later attempt is
+  // reassigned to the same worker.
   if (!context.registry.isAssignedToAttempt(operationId, workerId, message.attemptToken)) {
     sendWorkerProtocolMessage(ws, {
       type: 'protocolError',

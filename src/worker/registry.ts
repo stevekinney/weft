@@ -207,8 +207,8 @@ export class WorkerRegistry {
     workerId: string,
     operationId: string,
     visibilityTimeout: number,
-    fairShareKey?: string,
-    attemptToken?: string,
+    fairShareKey: string | undefined,
+    attemptToken: string,
   ): void {
     const deadline = Date.now() + visibilityTimeout;
 
@@ -217,10 +217,8 @@ export class WorkerRegistry {
       workerId,
       deadline,
       visibilityTimeout,
+      attemptToken,
     };
-    if (attemptToken !== undefined) {
-      task.attemptToken = attemptToken;
-    }
     if (fairShareKey !== undefined) {
       task.fairShareKey = fairShareKey;
       this.#fairShareCounts.increment(workerId, fairShareKey);
@@ -281,25 +279,12 @@ export class WorkerRegistry {
    * to reject a stale completion from an EARLIER attempt that was reassigned to the
    * same worker — the only case the workerId guard alone cannot catch.
    *
-   * The token check is purely additive, so a worker that predates the field is
-   * never refused (no protocol version bump): it fires only when the tracked
-   * task has a stored token AND the completion echoes one AND they differ. A
-   * token-less task matches any echo, and an absent echo falls back to the
-   * workerId-only guard that already passed. The defended case — a stale earlier
-   * attempt — always echoes the OLD token it was dispatched with (present, wrong),
-   * so it is still rejected.
+   * The workerId and token must both match the current assignment exactly.
    */
-  isAssignedToAttempt(
-    operationId: string,
-    workerId: string,
-    attemptToken: string | undefined,
-  ): boolean {
+  isAssignedToAttempt(operationId: string, workerId: string, attemptToken: string): boolean {
     const task = this.#inFlightTasks.get(operationId);
     if (task === undefined || task.workerId !== workerId) {
       return false;
-    }
-    if (task.attemptToken === undefined || attemptToken === undefined) {
-      return true;
     }
     return task.attemptToken === attemptToken;
   }

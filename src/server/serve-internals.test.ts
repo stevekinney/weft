@@ -380,9 +380,8 @@ describe('restoreInflightTasks', () => {
   it('rehydrates the attemptToken so the stale-attempt guard survives a server restart', async () => {
     // Regression: restoreInflightTasks must carry the durable record's
     // attemptToken into the rehydrated registry entry. If it drops the token,
-    // isAssignedToAttempt sees a token-less in-memory task and accepts ANY echo
-    // (backward-compat), silently disabling the stale-attempt guard for every
-    // in-flight task across a restart — even though storage still holds the
+    // Losing the token would silently disable the stale-attempt guard for every
+    // in-flight task across a restart, even though storage still holds the
     // current attempt's token.
     const storage = new MemoryStorage();
     const context = minimalServerContext();

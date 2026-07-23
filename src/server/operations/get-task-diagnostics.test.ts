@@ -122,6 +122,7 @@ describe('weft.tasks.diagnostics', () => {
       deadline: 20_000,
       attempt: 2,
       visibilityTimeout: 30_000,
+      attemptToken: 'attempt-token',
       firstQueuedAt: 1_000,
       lastQueuedAt: 1_000,
       lastDispatchedAt: 2_000,
@@ -157,7 +158,7 @@ describe('weft.tasks.diagnostics', () => {
       activities: ['charge'],
       concurrency: 1,
     });
-    registry.assignTask('worker-capacity', 'busy-operation', 30_000);
+    registry.assignTask('worker-capacity', 'busy-operation', 30_000, undefined, 'attempt-token');
     taskQueue.enqueue('payments', {
       operationId: 'queued-capacity',
       activityName: 'charge',
@@ -223,6 +224,7 @@ describe('weft.tasks.diagnostics', () => {
       deadline: 2_000,
       attempt: 2,
       visibilityTimeout: 30_000,
+      attemptToken: 'attempt-token',
       firstQueuedAt: 1_000,
       lastQueuedAt: 1_500,
       lastDispatchedAt: 2_000,

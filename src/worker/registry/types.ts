@@ -131,13 +131,8 @@ export interface InFlightTask {
   visibilityTimeout: number; // original timeout duration in ms
   /** Optional fair-share partition key the task was assigned under. */
   fairShareKey?: string;
-  /**
-   * Unique, unguessable token for this dispatch attempt. The WebSocket completion
-   * handler compares the worker's echoed token against this in-memory value (after
-   * the workerId ownership guard) to reject a stale completion from an earlier
-   * attempt reassigned to the same worker.
-   */
-  attemptToken?: string;
+  /** Unique, unguessable token for this dispatch attempt. */
+  attemptToken: string;
 }
 
 export interface WorkerRegistryOptions {

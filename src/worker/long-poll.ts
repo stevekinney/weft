@@ -177,7 +177,7 @@ export class LongPollWorker implements Disposable {
           headers?: Record<string, string>;
           workerId?: string;
           workflowExecutionToken?: string;
-          attemptToken?: string;
+          attemptToken: string;
         };
 
         void this.#executeTask(task, resultUrl);
@@ -199,16 +199,11 @@ export class LongPollWorker implements Disposable {
       headers?: Record<string, string>;
       workerId?: string;
       workflowExecutionToken?: string;
-      attemptToken?: string;
+      attemptToken: string;
     },
     resultUrl: string,
   ): Promise<void> {
     this.#inFlight += 1;
-
-    // Echo the per-claim attempt token only when present. Spread it explicitly
-    // (rather than relying on JSON.stringify dropping an `undefined` field) so the
-    // additive, no-version-bump contract is visible at every result body.
-    const tokenEcho = task.attemptToken !== undefined ? { attemptToken: task.attemptToken } : {};
 
     try {
       const activityFunction = this.#options.activities[task.activityName];
@@ -219,7 +214,7 @@ export class LongPollWorker implements Disposable {
           body: JSON.stringify({
             operationId: task.operationId,
             workerId: task.workerId,
-            ...tokenEcho,
+            attemptToken: task.attemptToken,
             status: 'failed',
             error: `Unknown activity: ${task.activityName}`,
           }),
@@ -241,7 +236,7 @@ export class LongPollWorker implements Disposable {
         body: JSON.stringify({
           operationId: task.operationId,
           workerId: task.workerId,
-          ...tokenEcho,
+          attemptToken: task.attemptToken,
           status: 'completed',
           value: result,
         }),
@@ -255,7 +250,7 @@ export class LongPollWorker implements Disposable {
           body: JSON.stringify({
             operationId: task.operationId,
             workerId: task.workerId,
-            ...tokenEcho,
+            attemptToken: task.attemptToken,
             status: 'failed',
             error: error instanceof Error ? error.message : String(error),
           }),

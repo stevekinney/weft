@@ -50,10 +50,19 @@ socket.addEventListener('message', (event) => {
     return;
   }
 
-  send({ type: 'taskResult', operationId, status: 'completed', value: parsed['input'] ?? null });
+  send({
+    type: 'taskResult',
+    operationId,
+    attemptToken: parsed['attemptToken'],
+    status: 'completed',
+    value: parsed['input'] ?? null,
+  });
+  // Allow the server's asynchronous result transition to observe the frame
+  // before closing the socket; closing immediately can trigger disconnect
+  // cleanup before the completion persistence finishes.
   setTimeout(() => {
     socket.close();
-  }, 10);
+  }, 100);
 });
 
 socket.addEventListener('close', () => {

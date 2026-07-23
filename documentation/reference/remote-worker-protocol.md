@@ -211,21 +211,21 @@ Sent when an in-flight task completes, fails, or is cancelled.
 }
 ```
 
-| Field          | Type                                     | Required                    | Description                                                                                                                |
-| -------------- | ---------------------------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `type`         | `"taskResult"`                           | Yes                         | Message discriminator.                                                                                                     |
-| `operationId`  | string                                   | Yes                         | The opaque `operationId` from the corresponding `task` message.                                                            |
-| `status`       | `"completed" \| "failed" \| "cancelled"` | Yes                         | Terminal outcome.                                                                                                          |
-| `value`        | any JSON value                           | Yes if `completed`          | Activity result. Use `null` when the activity has no value.                                                                |
-| `error`        | string                                   | Yes if `failed`/`cancelled` | Human-readable error message.                                                                                              |
-| `cancelled`    | `true`                                   | No                          | Optional marker for cancelled results. If present, it must be `true`.                                                      |
-| `attemptToken` | non-empty string                         | No                          | Per-dispatch token from the matching `task` frame. Upgraded workers echo it; the server rejects a present-but-wrong token. |
+| Field          | Type                                     | Required                    | Description                                                                           |
+| -------------- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------- |
+| `type`         | `"taskResult"`                           | Yes                         | Message discriminator.                                                                |
+| `operationId`  | string                                   | Yes                         | The opaque `operationId` from the corresponding `task` message.                       |
+| `status`       | `"completed" \| "failed" \| "cancelled"` | Yes                         | Terminal outcome.                                                                     |
+| `value`        | any JSON value                           | Yes if `completed`          | Activity result. Use `null` when the activity has no value.                           |
+| `error`        | string                                   | Yes if `failed`/`cancelled` | Human-readable error message.                                                         |
+| `cancelled`    | `true`                                   | No                          | Optional marker for cancelled results. If present, it must be `true`.                 |
+| `attemptToken` | non-empty string                         | Yes                         | Per-dispatch token from the matching `task` frame. The worker must echo it unchanged. |
 
 The server stores `completed` as a completed task and treats `failed` and `cancelled` as failed terminal resolutions. Missing `operationId`, missing `value` on completed results, unknown statuses, non-string errors on failed or cancelled results, and non-string or empty `attemptToken` values are malformed messages. The server sends `protocolError` and closes the socket with `1002`.
 
-For a well-formed result, the server verifies that the WebSocket connection still owns the `operationId`, and then validates the echoed `attemptToken` when the result includes one. WebSocket task results use an additive compatibility guard: an absent token falls back to the worker ownership check, while a present-but-wrong token is rejected with `protocolError` and ignored. This protects upgraded workers from stale completions without live-locking older workers that do not echo tokens yet.
+For a well-formed result, the server verifies that the WebSocket connection still owns the `operationId`, and then requires the echoed `attemptToken` to match the current dispatch exactly. Missing or mismatched tokens are rejected with `protocolError` before task state changes.
 
-Upgraded workers echo the token when the `task` frame includes one:
+Workers must echo the token from every `task` frame:
 
 ```json
 {
@@ -256,16 +256,16 @@ Dispatched when the server has work for this worker.
 }
 ```
 
-| Field                    | Type                     | Required | Description                                                                            |
-| ------------------------ | ------------------------ | -------- | -------------------------------------------------------------------------------------- |
-| `type`                   | `"task"`                 | Yes      | Message discriminator.                                                                 |
-| `operationId`            | string                   | Yes      | Unique task identifier the worker echoes back in `taskResult`.                         |
-| `activityName`           | string                   | Yes      | Name of the activity to execute. Must be in the worker's `activities` list.            |
-| `input`                  | any JSON value           | Yes      | Activity input. `null` is used when the dispatch input is undefined.                   |
-| `attempt`                | number                   | No       | Retry counter. Present on retries.                                                     |
-| `workflowExecutionToken` | non-empty string         | No       | Durable per-run token exposed to the activity context for external write fencing.      |
-| `attemptToken`           | non-empty string         | No       | Per-dispatch token the worker should echo on `taskResult` for stale-attempt rejection. |
-| `headers`                | `Record<string, string>` | No       | Interceptor-propagated headers from the dispatch path.                                 |
+| Field                    | Type                     | Required | Description                                                                          |
+| ------------------------ | ------------------------ | -------- | ------------------------------------------------------------------------------------ |
+| `type`                   | `"task"`                 | Yes      | Message discriminator.                                                               |
+| `operationId`            | string                   | Yes      | Unique task identifier the worker echoes back in `taskResult`.                       |
+| `activityName`           | string                   | Yes      | Name of the activity to execute. Must be in the worker's `activities` list.          |
+| `input`                  | any JSON value           | Yes      | Activity input. `null` is used when the dispatch input is undefined.                 |
+| `attempt`                | number                   | No       | Retry counter. Present on retries.                                                   |
+| `workflowExecutionToken` | non-empty string         | No       | Durable per-run token exposed to the activity context for external write fencing.    |
+| `attemptToken`           | non-empty string         | Yes      | Per-dispatch token the worker must echo on `taskResult` for stale-attempt rejection. |
+| `headers`                | `Record<string, string>` | No       | Interceptor-propagated headers from the dispatch path.                               |
 
 If the worker does not recognize `activityName`, it should send `taskResult` with `status: "failed"` and an explanatory `error`.
 
@@ -469,14 +469,14 @@ Failure body:
 }
 ```
 
-| Field          | Type                      | Required                                  | Description                                                 |
-| -------------- | ------------------------- | ----------------------------------------- | ----------------------------------------------------------- |
-| `operationId`  | string                    | Yes                                       | Opaque task identifier from the poll response.              |
-| `workerId`     | string                    | Yes for claimed tasks                     | Synthetic worker id from the poll response.                 |
-| `attemptToken` | non-empty string          | Yes when the in-flight record carries one | Per-claim token from the poll response.                     |
-| `status`       | `"completed" \| "failed"` | Yes                                       | Terminal activity result status.                            |
-| `value`        | JSON value                | Yes if `completed`                        | Activity result. Use `null` when the activity has no value. |
-| `error`        | string                    | Yes if `failed`                           | Human-readable failure message.                             |
+| Field          | Type                      | Required              | Description                                                 |
+| -------------- | ------------------------- | --------------------- | ----------------------------------------------------------- |
+| `operationId`  | string                    | Yes                   | Opaque task identifier from the poll response.              |
+| `workerId`     | string                    | Yes for claimed tasks | Synthetic worker id from the poll response.                 |
+| `attemptToken` | non-empty string          | Yes                   | Per-claim token from the poll response.                     |
+| `status`       | `"completed" \| "failed"` | Yes                   | Terminal activity result status.                            |
+| `value`        | JSON value                | Yes if `completed`    | Activity result. Use `null` when the activity has no value. |
+| `error`        | string                    | Yes if `failed`       | Human-readable failure message.                             |
 
 | Response | Meaning                                                                                                |
 | -------- | ------------------------------------------------------------------------------------------------------ |

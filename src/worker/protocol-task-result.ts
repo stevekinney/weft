@@ -41,19 +41,13 @@ export type TaskResultMessage =
 
 type TaskResultStatus = TaskResultMessage['status'];
 
-/** Validate and extract the optional echoed `attemptToken` from a taskResult record. */
+/** Validate and extract the required echoed `attemptToken` from a taskResult record. */
 function parseEchoedAttemptToken(
   record: Record<string, unknown>,
-): RemoteWorkerProtocolParseResult<{ attemptToken?: string }> {
+): RemoteWorkerProtocolParseResult<{ attemptToken: string }> {
   const attemptToken = record['attemptToken'];
-  if (attemptToken === undefined) {
-    return { ok: true, message: {} };
-  }
   if (!isNonEmptyString(attemptToken)) {
-    return protocolFailure(
-      'invalid_message',
-      'taskResult.attemptToken must be a non-empty string when present',
-    );
+    return protocolFailure('invalid_message', 'taskResult.attemptToken must be a non-empty string');
   }
   return { ok: true, message: { attemptToken } };
 }

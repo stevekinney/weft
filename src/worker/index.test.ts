@@ -468,6 +468,7 @@ describe('RemoteWorker', () => {
             JSON.stringify({
               type: 'task',
               operationId: 'op-1',
+              attemptToken: 'attempt-token',
               activityName: 'orders.processOrder',
               input: { orderId: 123 },
             }),
@@ -507,6 +508,7 @@ describe('RemoteWorker', () => {
             JSON.stringify({
               type: 'task',
               operationId: 'op-2',
+              attemptToken: 'attempt-token',
               activityName: 'nonExistentActivity',
               input: null,
             }),
@@ -546,6 +548,7 @@ describe('RemoteWorker', () => {
             JSON.stringify({
               type: 'task',
               operationId: 'op-3',
+              attemptToken: 'attempt-token',
               activityName: 'orders.failingActivity',
               input: null,
             }),
@@ -587,6 +590,7 @@ describe('RemoteWorker', () => {
             JSON.stringify({
               type: 'task',
               operationId: 'op-4',
+              attemptToken: 'attempt-token',
               activityName: 'orders.stringThrow',
               input: null,
             }),
@@ -629,6 +633,7 @@ describe('RemoteWorker', () => {
             JSON.stringify({
               type: 'task',
               operationId: 'op-5',
+              attemptToken: 'attempt-token',
               activityName: 'orders.slowActivity',
               input: null,
             }),
@@ -864,6 +869,7 @@ describe('RemoteWorker', () => {
             JSON.stringify({
               type: 'task',
               operationId: 'op-shutdown-1',
+              attemptToken: 'attempt-token',
               activityName: 'orders.slowActivity',
               input: null,
             }),
@@ -944,6 +950,7 @@ describe('RemoteWorker', () => {
               JSON.stringify({
                 type: 'task',
                 operationId: 'op-post-shutdown',
+                attemptToken: 'attempt-token',
                 activityName: 'orders.processOrder',
                 input: null,
               }),
@@ -990,6 +997,7 @@ describe('RemoteWorker', () => {
             JSON.stringify({
               type: 'task',
               operationId: 'op-timeout-1',
+              attemptToken: 'attempt-token',
               activityName: 'orders.hangingActivity',
               input: null,
             }),
@@ -1047,6 +1055,7 @@ describe('RemoteWorker', () => {
             JSON.stringify({
               type: 'task',
               operationId: 'op-shutdown-timeout-1',
+              attemptToken: 'attempt-token',
               activityName: 'orders.hangingActivity',
               input: null,
             }),
@@ -1166,6 +1175,7 @@ describe('RemoteWorker', () => {
               JSON.stringify({
                 type: 'task',
                 operationId: 'op-post-reconnect',
+                attemptToken: 'attempt-token',
                 activityName: 'orders.processOrder',
                 input: { orderId: 42 },
               }),
@@ -1250,6 +1260,7 @@ describe('RemoteWorker', () => {
             JSON.stringify({
               type: 'task',
               operationId: 'op-intercept-1',
+              attemptToken: 'attempt-token',
               activityName: 'orders.greet',
               input: 'world',
             }),
@@ -1300,6 +1311,7 @@ describe('RemoteWorker', () => {
             JSON.stringify({
               type: 'task',
               operationId: 'op-modify-input',
+              attemptToken: 'attempt-token',
               activityName: 'orders.echo',
               input: 'original',
             }),
@@ -1346,6 +1358,7 @@ describe('RemoteWorker', () => {
             JSON.stringify({
               type: 'task',
               operationId: 'op-headers',
+              attemptToken: 'attempt-token',
               activityName: 'orders.echo',
               input: 'data',
               headers: { 'x-trace-id': 'trace-abc', 'x-auth': 'token-xyz' },
@@ -1397,6 +1410,7 @@ describe('RemoteWorker', () => {
             JSON.stringify({
               type: 'task',
               operationId: 'op-no-interceptor',
+              attemptToken: 'attempt-token',
               activityName: 'orders.double',
               input: 21,
             }),
@@ -1438,6 +1452,7 @@ describe('RemoteWorker', () => {
             JSON.stringify({
               type: 'task',
               operationId: 'op-context-check',
+              attemptToken: 'attempt-token',
               activityName: 'orders.echo',
               input: 'test',
             }),
@@ -1495,6 +1510,7 @@ describe('RemoteWorker', () => {
             JSON.stringify({
               type: 'task',
               operationId: 'op-cancel-1',
+              attemptToken: 'attempt-token',
               activityName: 'orders.cancellableActivity',
               input: null,
             }),
@@ -2007,6 +2023,7 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
           JSON.stringify({
             type: 'task',
             operationId: 'op-buffer',
+            attemptToken: 'attempt-token',
             activityName: 'orders.slow',
             input: null,
           }),
@@ -2070,6 +2087,7 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
           JSON.stringify({
             type: 'task',
             operationId: 'op-immediate',
+            attemptToken: 'attempt-token',
             activityName: 'orders.echo',
             input: 'hi',
           }),
@@ -2114,6 +2132,7 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
           JSON.stringify({
             type: 'task',
             operationId: 'op-fail',
+            attemptToken: 'attempt-token',
             activityName: 'orders.boom',
             input: null,
           }),
@@ -2176,6 +2195,7 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
           JSON.stringify({
             type: 'task',
             operationId: 'op-after-dispose',
+            attemptToken: 'attempt-token',
             activityName: 'orders.slow',
             input: null,
           }),
@@ -2262,6 +2282,7 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
           JSON.stringify({
             type: 'task',
             operationId: 'op-throw',
+            attemptToken: 'attempt-token',
             activityName: 'orders.slow',
             input: null,
           }),
@@ -2318,6 +2339,7 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
           JSON.stringify({
             type: 'task',
             operationId: 'op-flush-throw',
+            attemptToken: 'attempt-token',
             activityName: 'orders.slow',
             input: null,
           }),
@@ -2408,6 +2430,7 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
                 JSON.stringify({
                   type: 'task',
                   operationId: 'op-preack',
+                  attemptToken: 'attempt-token',
                   activityName: 'orders.slow',
                   input: null,
                 }),
@@ -2494,6 +2517,7 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
           JSON.stringify({
             type: 'task',
             operationId: 'op-declined',
+            attemptToken: 'attempt-token',
             activityName: 'orders.declined',
             input: null,
           }),
@@ -2540,6 +2564,7 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
           JSON.stringify({
             type: 'task',
             operationId: 'op-failsock',
+            attemptToken: 'attempt-token',
             activityName: 'orders.slow',
             input: null,
           }),

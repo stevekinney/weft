@@ -73,7 +73,7 @@ describe('weft.task.queues.list — REST GET /v1/task-queues', () => {
       activities: ['activity-A'],
       concurrency: 4,
     });
-    workerRegistry.assignTask('w-a', 'op-inflight', 30_000);
+    workerRegistry.assignTask('w-a', 'op-inflight', 30_000, undefined, 'attempt-token');
     taskQueue.enqueue('queue-a', pinnedTask('op-a1', 'activity-A', 1000));
     taskQueue.enqueue('queue-a', pinnedTask('op-a2', 'activity-A', 500));
 

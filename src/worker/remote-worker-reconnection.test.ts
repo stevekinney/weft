@@ -181,7 +181,7 @@ describe('RemoteWorker durability — scanner-driven takeover', () => {
       operationId,
       status: 'completed',
       value: 'v',
-      attemptToken: dispatchToB.attemptToken!,
+      attemptToken: dispatchToB.attemptToken,
     });
 
     // The resolved record appears once the server processes the completion.
@@ -239,6 +239,7 @@ describe('RemoteWorker durability — idempotent duplicate completion (different
       operationId,
       status: 'completed',
       value: 'stale-from-a',
+      attemptToken: 'stale-token',
     });
     const protocolError = await protocolErrorPromise;
     if (protocolError.type !== 'protocolError') throw new Error('expected protocolError');
@@ -257,7 +258,7 @@ describe('RemoteWorker durability — idempotent duplicate completion (different
       operationId,
       status: 'completed',
       value: 'real',
-      attemptToken: dispatchToB.attemptToken!,
+      attemptToken: dispatchToB.attemptToken,
     });
 
     let resolved: unknown;
@@ -278,6 +279,7 @@ describe('RemoteWorker durability — idempotent duplicate completion (different
       operationId,
       status: 'completed',
       value: 'stale-from-a-again',
+      attemptToken: 'stale-token',
     });
     const secondError = await secondErrorPromise;
     if (secondError.type !== 'protocolError') throw new Error('expected protocolError');
@@ -345,7 +347,7 @@ describe('RemoteWorker durability — same-worker stale attempt (attempt token)'
       operationId,
       status: 'completed',
       value: 'stale-attempt-1',
-      attemptToken: dispatch1.attemptToken!,
+      attemptToken: dispatch1.attemptToken,
     });
     const rejected = await staleError;
     if (rejected.type !== 'protocolError') throw new Error('expected protocolError');
@@ -362,7 +364,7 @@ describe('RemoteWorker durability — same-worker stale attempt (attempt token)'
       operationId,
       status: 'completed',
       value: 'fresh-attempt-2',
-      attemptToken: dispatch2.attemptToken!,
+      attemptToken: dispatch2.attemptToken,
     });
 
     let resolved: unknown;
@@ -415,7 +417,7 @@ describe('RemoteWorker durability — transient reconnect continuity', () => {
       operationId,
       status: 'completed',
       value: 'v',
-      attemptToken: dispatch.attemptToken!,
+      attemptToken: dispatch.attemptToken,
     });
 
     let resolved: unknown;
@@ -499,7 +501,7 @@ describe('RemoteWorker durability — backpressure decline is redelivered', () =
       operationId,
       status: 'completed',
       value: 'v',
-      attemptToken: dispatchToB.attemptToken!,
+      attemptToken: dispatchToB.attemptToken,
     });
 
     await waitForCondition(
@@ -710,7 +712,7 @@ process.on('SIGINT', () => void stop(0));
       value: 'restart-value',
       // Re-dispatch after recovery routes through selectAndReserveWorker, which
       // rotates the attempt token; echo the token from B's fresh dispatch.
-      attemptToken: dispatchToB.attemptToken!,
+      attemptToken: dispatchToB.attemptToken,
     });
 
     // Poll the rebooted subprocess's test-control endpoint for resolution.

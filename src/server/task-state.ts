@@ -92,14 +92,8 @@ export interface InflightRecord extends TaskLifecycleFields {
   workflowId?: string | undefined;
   /** Durable token for the workflow run that dispatched this activity, when known. */
   workflowExecutionToken?: string | undefined;
-  /**
-   * Unique, unguessable token identifying this dispatch attempt. Rotated on every
-   * (re-)dispatch because each dispatch writes a fresh InflightRecord. The
-   * long-poll completion handler rejects a result whose echoed token does not
-   * match this value. Optional for back-compatible decoding of records written
-   * before this field existed; a missing token disables the check for that record.
-   */
-  attemptToken?: string | undefined;
+  /** Unique, unguessable token identifying this dispatch attempt. */
+  attemptToken: string;
 }
 
 /** Persisted record for a task in the resolved state. */
@@ -232,6 +226,10 @@ export function isQueuedRecord(value: unknown): value is QueuedRecord {
   );
 }
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
 /** Type guard for decoded storage records in the inflight state. */
 export function isInflightRecord(value: unknown): value is InflightRecord {
   if (value === null || typeof value !== 'object') return false;
@@ -243,7 +241,8 @@ export function isInflightRecord(value: unknown): value is InflightRecord {
     typeof record['attempt'] === 'number' &&
     typeof record['visibilityTimeout'] === 'number' &&
     typeof record['workerId'] === 'string' &&
-    typeof record['deadline'] === 'number'
+    typeof record['deadline'] === 'number' &&
+    isNonEmptyString(record['attemptToken'])
   );
 }
 

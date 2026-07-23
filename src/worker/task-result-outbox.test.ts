@@ -4,7 +4,13 @@ import type { TaskResultMessage } from './protocol.ts';
 import { isOutboxFull, MAX_BUFFERED_TASK_RESULTS, TaskResultOutbox } from './task-result-outbox.ts';
 
 function completed(operationId: string, value: string): TaskResultMessage {
-  return { type: 'taskResult', operationId, status: 'completed', value };
+  return {
+    type: 'taskResult',
+    operationId,
+    status: 'completed',
+    value,
+    attemptToken: 'attempt-token',
+  };
 }
 
 describe('isOutboxFull', () => {

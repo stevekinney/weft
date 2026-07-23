@@ -182,7 +182,12 @@ describe('handleTaskResultRequest', () => {
   it('returns 200 ok for a valid completed result', async () => {
     const context = createMinimalContext();
     const options = createMinimalOptions();
-    const request = makePostRequest({ operationId: 'op-1', status: 'completed', value: 42 });
+    const request = makePostRequest({
+      operationId: 'op-1',
+      attemptToken: 'attempt-token',
+      status: 'completed',
+      value: 42,
+    });
     const response = await handleTaskResultRequest(context, options, request, makeUrl());
     expect(response?.status).toBe(200);
     const body = await response?.json();
@@ -194,6 +199,7 @@ describe('handleTaskResultRequest', () => {
     const options = createMinimalOptions();
     const request = makePostRequest({
       operationId: 'op-2',
+      attemptToken: 'attempt-token',
       status: 'failed',
       error: 'Something went wrong',
     });
@@ -383,7 +389,11 @@ describe('handleTaskResultRequest', () => {
     context.deadlineTracker.add({ operationId: 'op-tracked', deadline: Date.now() + 30_000 });
     expect(context.deadlineTracker.size).toBe(1);
 
-    const request = makePostRequest({ operationId: 'op-tracked', status: 'completed' });
+    const request = makePostRequest({
+      operationId: 'op-tracked',
+      attemptToken: 'attempt-token',
+      status: 'completed',
+    });
     await handleTaskResultRequest(
       context,
       options,
@@ -483,6 +493,7 @@ describe('handleTaskPollRequest', () => {
       options,
       makePostRequest({
         operationId: 'op-owned',
+        attemptToken: 'attempt-token',
         status: 'completed',
         value: 42,
         workerId: 'longpoll-attacker',
@@ -538,7 +549,7 @@ describe('handleTaskPollRequest', () => {
       makeUrl('/v1/tasks/default/result'),
       WORKER_PRINCIPAL,
     );
-    expect(rejected?.status).toBe(403);
+    expect(rejected?.status).toBe(400);
   });
 
   it('rejects an in-flight result whose attempt token does not match the claim', async () => {
@@ -680,7 +691,7 @@ describe('handleTaskPollRequest', () => {
       makeUrl('/v1/tasks/default/result'),
       WORKER_PRINCIPAL,
     );
-    expect(rejected?.status).toBe(403);
+    expect(rejected?.status).toBe(400);
   });
 
   it('accepts a result with no in-flight record without an ownership check', async () => {
@@ -695,6 +706,7 @@ describe('handleTaskPollRequest', () => {
       options,
       makePostRequest({
         operationId: 'op-never-claimed',
+        attemptToken: 'attempt-token',
         status: 'completed',
         value: 42,
         workerId: 'longpoll-whatever',

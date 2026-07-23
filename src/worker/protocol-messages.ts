@@ -110,12 +110,8 @@ export type CompletedTaskResultMessage = {
   readonly operationId: string;
   readonly status: 'completed';
   readonly value: RemoteWorkerJsonValue;
-  /**
-   * The per-dispatch token echoed from the {@link TaskMessage}. Optional on the
-   * wire so older workers still parse, but the server's completion handler
-   * rejects a result whose token does not match the current attempt.
-   */
-  readonly attemptToken?: string;
+  /** Required per-dispatch token echoed from the {@link TaskMessage}. */
+  readonly attemptToken: string;
 };
 
 /**
@@ -138,8 +134,8 @@ export type FailedTaskResultMessage = {
   readonly operationId: string;
   readonly status: 'failed';
   readonly error: string;
-  /** The per-dispatch token echoed from the {@link TaskMessage}. See {@link CompletedTaskResultMessage.attemptToken}. */
-  readonly attemptToken?: string;
+  /** Required per-dispatch token echoed from the {@link TaskMessage}. */
+  readonly attemptToken: string;
 };
 
 /**
@@ -164,8 +160,8 @@ export type CancelledTaskResultMessage = {
   readonly status: 'cancelled';
   readonly error: string;
   readonly cancelled?: true;
-  /** The per-dispatch token echoed from the {@link TaskMessage}. See {@link CompletedTaskResultMessage.attemptToken}. */
-  readonly attemptToken?: string;
+  /** Required per-dispatch token echoed from the {@link TaskMessage}. */
+  readonly attemptToken: string;
 };
 
 /**
@@ -267,15 +263,8 @@ export type TaskMessage = {
   readonly headers?: Readonly<Record<string, string>>;
   /** Durable token for the workflow run that launched this activity, when known. */
   readonly workflowExecutionToken?: string;
-  /**
-   * Unique, unguessable token identifying this specific dispatch attempt. The
-   * current server always stamps one, and the worker must echo it back on the
-   * {@link CompletedTaskResultMessage} (or failed/cancelled variant) so the server
-   * can reject a stale completion from an earlier attempt that was reassigned to
-   * the same worker. Optional on the type because a frame from an older server may
-   * omit it; the worker simply has no token to echo in that case.
-   */
-  readonly attemptToken?: string;
+  /** Unique, unguessable token identifying this dispatch attempt. */
+  readonly attemptToken: string;
 };
 
 /**

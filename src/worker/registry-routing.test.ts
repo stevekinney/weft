@@ -146,7 +146,7 @@ describe('WorkerRegistry routing policies', () => {
       for (let index = 0; index < 3; index += 1) {
         const worker = registry.findWorker('runAgent', { fairShareKey: 'share-alpha' });
         expect(worker).toBeDefined();
-        registry.assignTask(worker!.id, `op-${index}`, 30_000, 'share-alpha');
+        registry.assignTask(worker!.id, `op-${index}`, 30_000, 'share-alpha', 'attempt-token');
         picks.push(worker!.id);
       }
 
@@ -165,8 +165,8 @@ describe('WorkerRegistry routing policies', () => {
       });
 
       // Pre-load worker-0 with two share-alpha tasks
-      registry.assignTask(workerIds[0]!, 'op-a', 30_000, 'share-alpha');
-      registry.assignTask(workerIds[0]!, 'op-b', 30_000, 'share-alpha');
+      registry.assignTask(workerIds[0]!, 'op-a', 30_000, 'share-alpha', 'attempt-token');
+      registry.assignTask(workerIds[0]!, 'op-b', 30_000, 'share-alpha', 'attempt-token');
 
       const pick = registry.findWorker('runAgent', { fairShareKey: 'share-alpha' });
       expect(pick?.id).toBe(workerIds[1]);
@@ -178,9 +178,9 @@ describe('WorkerRegistry routing policies', () => {
       });
 
       // Stack share-alpha on worker-0 and share-beta on worker-1
-      registry.assignTask(workerIds[0]!, 'alpha-1', 30_000, 'share-alpha');
-      registry.assignTask(workerIds[0]!, 'alpha-2', 30_000, 'share-alpha');
-      registry.assignTask(workerIds[1]!, 'beta-1', 30_000, 'share-beta');
+      registry.assignTask(workerIds[0]!, 'alpha-1', 30_000, 'share-alpha', 'attempt-token');
+      registry.assignTask(workerIds[0]!, 'alpha-2', 30_000, 'share-alpha', 'attempt-token');
+      registry.assignTask(workerIds[1]!, 'beta-1', 30_000, 'share-beta', 'attempt-token');
 
       // Share-gamma has no history — pick should use inFlight tiebreak, which
       // makes worker-1 (1 inflight) win over worker-0 (2 inflight).
@@ -193,8 +193,8 @@ describe('WorkerRegistry routing policies', () => {
         policy: 'fair-share',
       });
 
-      registry.assignTask(workerIds[0]!, 'op-a', 30_000, 'share-alpha');
-      registry.assignTask(workerIds[0]!, 'op-b', 30_000, 'share-alpha');
+      registry.assignTask(workerIds[0]!, 'op-a', 30_000, 'share-alpha', 'attempt-token');
+      registry.assignTask(workerIds[0]!, 'op-b', 30_000, 'share-alpha', 'attempt-token');
       registry.completeTask('op-a');
       registry.completeTask('op-b');
 

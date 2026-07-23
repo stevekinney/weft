@@ -81,6 +81,7 @@ function makeInflightRecord(operationId: string, workerId: string): InflightReco
     input: null,
     attempt: 1,
     visibilityTimeout: 30_000,
+    attemptToken: 'attempt-token',
   };
 }
 
@@ -290,7 +291,7 @@ describe('handleWorkerWebSocketMessage', () => {
       );
 
       // Manually assign a task to the registry and add deadline
-      context.registry.assignTask('w-result', 'op-finish', 30_000, undefined);
+      context.registry.assignTask('w-result', 'op-finish', 30_000, undefined, 'attempt-token');
       context.deadlineTracker.add({ operationId: 'op-finish', deadline: Date.now() + 30_000 });
 
       expect(context.registry.isAssigned('op-finish')).toBe(true);
@@ -303,6 +304,7 @@ describe('handleWorkerWebSocketMessage', () => {
         JSON.stringify({
           type: 'taskResult',
           operationId: 'op-finish',
+          attemptToken: 'attempt-token',
           status: 'completed',
           value: 'done',
         }),
@@ -334,7 +336,7 @@ describe('handleWorkerWebSocketMessage', () => {
         NOOP_CLEANUP,
       );
 
-      context.registry.assignTask('w-cleanup', 'op-cleanup', 30_000, undefined);
+      context.registry.assignTask('w-cleanup', 'op-cleanup', 30_000, undefined, 'attempt-token');
 
       handleWorkerWebSocketMessage(
         context,
@@ -343,6 +345,7 @@ describe('handleWorkerWebSocketMessage', () => {
         JSON.stringify({
           type: 'taskResult',
           operationId: 'op-cleanup',
+          attemptToken: 'attempt-token',
           status: 'failed',
           error: 'something broke',
         }),
@@ -375,7 +378,7 @@ describe('handleWorkerWebSocketMessage', () => {
         NOOP_CLEANUP,
       );
 
-      context.registry.assignTask('w-oversize', 'op-oversize', 30_000, undefined);
+      context.registry.assignTask('w-oversize', 'op-oversize', 30_000, undefined, 'attempt-token');
       context.deadlineTracker.add({ operationId: 'op-oversize', deadline: Date.now() + 30_000 });
       await markInflight(storage, makeInflightRecord('op-oversize', 'w-oversize'));
 
@@ -386,6 +389,7 @@ describe('handleWorkerWebSocketMessage', () => {
         JSON.stringify({
           type: 'taskResult',
           operationId: 'op-oversize',
+          attemptToken: 'attempt-token',
           status: 'completed',
           value: { blob: 'x'.repeat(200) },
         }),
@@ -436,7 +440,13 @@ describe('handleWorkerWebSocketMessage', () => {
         NOOP_CLEANUP,
       );
 
-      context.registry.assignTask('w-cancel-oversize', 'op-cancel-oversize', 30_000, undefined);
+      context.registry.assignTask(
+        'w-cancel-oversize',
+        'op-cancel-oversize',
+        30_000,
+        undefined,
+        'attempt-token',
+      );
       await markInflight(storage, makeInflightRecord('op-cancel-oversize', 'w-cancel-oversize'));
 
       handleWorkerWebSocketMessage(
@@ -446,6 +456,7 @@ describe('handleWorkerWebSocketMessage', () => {
         JSON.stringify({
           type: 'taskResult',
           operationId: 'op-cancel-oversize',
+          attemptToken: 'attempt-token',
           status: 'cancelled',
           cancelled: true,
           error: 'x'.repeat(200),
@@ -497,7 +508,13 @@ describe('handleWorkerWebSocketMessage', () => {
         NOOP_CLEANUP,
       );
 
-      context.registry.assignTask('w-storage-failure', 'op-storage-failure', 30_000, undefined);
+      context.registry.assignTask(
+        'w-storage-failure',
+        'op-storage-failure',
+        30_000,
+        undefined,
+        'attempt-token',
+      );
 
       using errorSpy = spyOn(console, 'error').mockImplementation(() => {});
 
@@ -508,6 +525,7 @@ describe('handleWorkerWebSocketMessage', () => {
         JSON.stringify({
           type: 'taskResult',
           operationId: 'op-storage-failure',
+          attemptToken: 'attempt-token',
           status: 'completed',
           value: 'done',
         }),

@@ -30,6 +30,7 @@ async function nextLaunchIndex(): Promise<number> {
 const launchIndex = await nextLaunchIndex();
 const socket = new WebSocket(serverUrl);
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+const taskTokens = new Map<string, string>();
 
 function send(message: Record<string, unknown>): void {
   if (socket.readyState === WebSocket.OPEN) {
@@ -46,14 +47,27 @@ function readMilliseconds(input: unknown): number {
   return typeof milliseconds === 'number' ? milliseconds : 25;
 }
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
 function handleTaskMessage(parsed: Record<string, unknown>): void {
   const operationId = parsed['operationId'];
   const activityName = parsed['activityName'];
   const input = parsed['input'];
+  const attemptToken = parsed['attemptToken'];
   if (typeof operationId !== 'string' || typeof activityName !== 'string') return;
+  if (!isNonEmptyString(attemptToken)) return;
+  taskTokens.set(operationId, attemptToken);
 
   if (activityName === 'weft.conformance.echo') {
-    send({ type: 'taskResult', operationId, status: 'completed', value: input ?? null });
+    send({
+      type: 'taskResult',
+      operationId,
+      attemptToken,
+      status: 'completed',
+      value: input ?? null,
+    });
     return;
   }
 
@@ -64,7 +78,13 @@ function handleTaskMessage(parsed: Record<string, unknown>): void {
   const milliseconds = readMilliseconds(input);
   if (mode === 'replacement-disconnect' && milliseconds > 100 && launchIndex === 1) {
     setTimeout(() => {
-      send({ type: 'taskResult', operationId, status: 'completed', value: input ?? null });
+      send({
+        type: 'taskResult',
+        operationId,
+        attemptToken,
+        status: 'completed',
+        value: input ?? null,
+      });
     }, milliseconds * 20);
     return;
   }
@@ -75,17 +95,29 @@ function handleTaskMessage(parsed: Record<string, unknown>): void {
       return;
     }
 
-    send({ type: 'taskResult', operationId, status: 'completed', value: input ?? null });
+    send({
+      type: 'taskResult',
+      operationId,
+      attemptToken,
+      status: 'completed',
+      value: input ?? null,
+    });
   }, milliseconds);
 }
 
 function handleCancelMessage(parsed: Record<string, unknown>): void {
   const operationId = parsed['operationId'];
+  const attemptToken =
+    typeof parsed['attemptToken'] === 'string'
+      ? parsed['attemptToken']
+      : taskTokens.get(operationId as string);
   if (typeof operationId !== 'string') return;
+  if (typeof attemptToken !== 'string' || attemptToken.length === 0) return;
 
   send({
     type: 'taskResult',
     operationId,
+    attemptToken,
     status: 'failed',
     error: 'Task cancelled',
   });

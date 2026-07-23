@@ -81,23 +81,19 @@ export const REMOTE_WORKER_MESSAGE_SCHEMAS = {
       {
         type: 'object',
         additionalProperties: false,
-        required: ['type', 'operationId', 'status', 'value'],
+        required: ['type', 'operationId', 'status', 'value', 'attemptToken'],
         properties: {
           type: { const: 'taskResult' },
           operationId: { type: 'string', minLength: 1 },
           status: { const: 'completed' },
           value: jsonValueSchema,
-          // Echoed from the dispatched task so the server can reject a stale
-          // completion from an earlier attempt reassigned to the same worker.
-          // Optional on the wire (older workers omit it); the completion handler
-          // enforces it. Keeping it optional avoids a protocol-version bump.
           attemptToken: { type: 'string', minLength: 1 },
         },
       },
       {
         type: 'object',
         additionalProperties: false,
-        required: ['type', 'operationId', 'status', 'error'],
+        required: ['type', 'operationId', 'status', 'error', 'attemptToken'],
         properties: {
           type: { const: 'taskResult' },
           operationId: { type: 'string', minLength: 1 },
@@ -109,7 +105,7 @@ export const REMOTE_WORKER_MESSAGE_SCHEMAS = {
       {
         type: 'object',
         additionalProperties: false,
-        required: ['type', 'operationId', 'status', 'error'],
+        required: ['type', 'operationId', 'status', 'error', 'attemptToken'],
         properties: {
           type: { const: 'taskResult' },
           operationId: { type: 'string', minLength: 1 },
@@ -124,7 +120,7 @@ export const REMOTE_WORKER_MESSAGE_SCHEMAS = {
   task: {
     type: 'object',
     additionalProperties: false,
-    required: ['type', 'operationId', 'activityName', 'input'],
+    required: ['type', 'operationId', 'activityName', 'input', 'attemptToken'],
     properties: {
       type: { const: 'task' },
       operationId: { type: 'string', minLength: 1 },
@@ -132,11 +128,6 @@ export const REMOTE_WORKER_MESSAGE_SCHEMAS = {
       input: jsonValueSchema,
       attempt: { type: 'number', minimum: 1 },
       headers: stringMapSchema,
-      // Unique, unguessable per-dispatch token. The server always stamps one and
-      // the worker echoes it on completion so the server can reject a stale
-      // earlier attempt. Optional in the wire SHAPE (not in `required`) so a frame
-      // from an older server still validates — adding it never bumps the protocol
-      // version; the completion handler is what enforces the token.
       workflowExecutionToken: { type: 'string', minLength: 1 },
       attemptToken: { type: 'string', minLength: 1 },
     },

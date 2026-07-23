@@ -143,11 +143,11 @@ describe('pickFairShare characterization', () => {
     registry.register({ id: 'light-key', queue: 'q', activities: ['a'], concurrency: 10 });
 
     // heavy-key has 2 tasks for share-alpha but only 2 overall
-    registry.assignTask('heavy-key', 'op-1', 30_000, 'share-alpha');
-    registry.assignTask('heavy-key', 'op-2', 30_000, 'share-alpha');
+    registry.assignTask('heavy-key', 'op-1', 30_000, 'share-alpha', 'attempt-token');
+    registry.assignTask('heavy-key', 'op-2', 30_000, 'share-alpha', 'attempt-token');
     // light-key has 0 tasks for share-alpha but 5 overall (different key)
     for (let index = 0; index < 5; index += 1) {
-      registry.assignTask('light-key', `other-${index}`, 30_000, 'share-beta');
+      registry.assignTask('light-key', `other-${index}`, 30_000, 'share-beta', 'attempt-token');
     }
 
     // keyLoad (share-alpha) for light-key is 0 vs 2 for heavy-key
@@ -269,8 +269,8 @@ describe('projectWorkerSummaries characterization', () => {
     registry.getWorker('bravo')!.lastHeartbeat = 2000;
     registry.getWorker('charlie')!.lastHeartbeat = 3000;
 
-    registry.assignTask('bravo', 'op-1', 30_000);
-    registry.assignTask('bravo', 'op-2', 30_000);
+    registry.assignTask('bravo', 'op-1', 30_000, undefined, 'attempt-token');
+    registry.assignTask('bravo', 'op-2', 30_000, undefined, 'attempt-token');
 
     const now = 5000;
 

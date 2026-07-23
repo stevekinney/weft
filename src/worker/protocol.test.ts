@@ -281,6 +281,7 @@ describe('RemoteWorker protocol contract', () => {
     const taskInput = {
       type: 'task',
       operationId: 'op-1',
+      attemptToken: 'attempt-token',
       activityName: 'charge',
       input: { amount: 42, memo: null },
       attempt: 3,
@@ -292,6 +293,7 @@ describe('RemoteWorker protocol contract', () => {
     const cancelledInput = {
       type: 'taskResult',
       operationId: 'op-2',
+      attemptToken: 'attempt-token-2',
       status: 'cancelled',
       error: 'Task cancelled by client',
       cancelled: true,
@@ -302,6 +304,7 @@ describe('RemoteWorker protocol contract', () => {
     const completedInput = {
       type: 'taskResult',
       operationId: 'op-3',
+      attemptToken: 'attempt-token-3',
       status: 'completed',
       value: { ok: true, attempts: 1 },
     } as const;
@@ -313,6 +316,7 @@ describe('RemoteWorker protocol contract', () => {
     const failedInput = {
       type: 'taskResult',
       operationId: 'op-4',
+      attemptToken: 'attempt-token-4',
       status: 'failed',
       error: 'upstream timeout',
     } as const;
@@ -347,10 +351,17 @@ describe('RemoteWorker protocol contract', () => {
         operationId: 'op-1',
         status: 'failed',
         error: 'failed',
+        attemptToken: 'attempt-token',
       }),
     ).toEqual({
       ok: true,
-      message: { type: 'taskResult', operationId: 'op-1', status: 'failed', error: 'failed' },
+      message: {
+        type: 'taskResult',
+        operationId: 'op-1',
+        status: 'failed',
+        error: 'failed',
+        attemptToken: 'attempt-token',
+      },
     });
 
     expect(
@@ -360,6 +371,7 @@ describe('RemoteWorker protocol contract', () => {
         status: 'cancelled',
         error: 'cancelled',
         cancelled: true,
+        attemptToken: 'attempt-token',
       }),
     ).toEqual({
       ok: true,
@@ -369,6 +381,7 @@ describe('RemoteWorker protocol contract', () => {
         status: 'cancelled',
         error: 'cancelled',
         cancelled: true,
+        attemptToken: 'attempt-token',
       },
     });
 
@@ -434,8 +447,7 @@ describe('RemoteWorker protocol contract', () => {
   });
 
   it('rejects a taskResult whose echoed attemptToken is present but not a non-empty string', () => {
-    // The optional attemptToken echo is validated when present: a non-string (or
-    // empty string) is a malformed frame, distinct from omitting the field. The
+    // The required attemptToken echo is validated as a non-empty string. The
     // same `parseEchoedAttemptToken` guard runs for all three status variants, so
     // pin every variant rather than trusting the shared helper.
     const variants = [
@@ -454,7 +466,7 @@ describe('RemoteWorker protocol contract', () => {
           }),
         ).toMatchObject({
           ok: false,
-          error: { message: 'taskResult.attemptToken must be a non-empty string when present' },
+          error: { message: 'taskResult.attemptToken must be a non-empty string' },
         });
       }
     }
@@ -476,6 +488,7 @@ describe('RemoteWorker protocol contract', () => {
       parseServerToWorkerMessage({
         type: 'task',
         operationId: 'op-1',
+        attemptToken: 'attempt-token',
         activityName: 'charge',
         input: [{ amount: 42 }, null, ['ok']],
         headers: { traceparent: 'trace' },
@@ -549,6 +562,7 @@ describe('RemoteWorker protocol contract', () => {
       parseServerToWorkerMessage({
         type: 'task',
         operationId: 'op-1',
+        attemptToken: 'attempt-token',
         activityName: '',
         input: null,
       }),
@@ -560,6 +574,7 @@ describe('RemoteWorker protocol contract', () => {
       parseServerToWorkerMessage({
         type: 'task',
         operationId: 'op-1',
+        attemptToken: 'attempt-token',
         activityName: 'charge',
         input: Symbol('bad'),
       }),
@@ -571,6 +586,7 @@ describe('RemoteWorker protocol contract', () => {
       parseServerToWorkerMessage({
         type: 'task',
         operationId: 'op-1',
+        attemptToken: 'attempt-token',
         activityName: 'charge',
         input: null,
         attempt: Number.NaN,
@@ -583,6 +599,7 @@ describe('RemoteWorker protocol contract', () => {
       parseServerToWorkerMessage({
         type: 'task',
         operationId: 'op-1',
+        attemptToken: 'attempt-token',
         activityName: 'charge',
         input: null,
         headers: { traceparent: 123 },

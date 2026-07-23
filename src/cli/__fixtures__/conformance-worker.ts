@@ -9,7 +9,7 @@ type InFlightTask = {
   // (not a side map keyed by operationId) so a re-dispatch of the same operation
   // cannot overwrite an earlier attempt's token — echoing the wrong token would
   // mask the very stale-attempt bug the conformance suite exists to catch.
-  attemptToken?: string;
+  attemptToken: string;
 };
 
 const serverUrl = Bun.env['WEFT_WORKER_URL'];
@@ -44,35 +44,31 @@ function startHeartbeats(): void {
   }, heartbeatIntervalMs);
 }
 
-/** Build the attempt-token echo, omitting the field when this dispatch carried none. */
-function tokenEcho(attemptToken: string | undefined): { attemptToken?: string } {
-  return attemptToken !== undefined ? { attemptToken } : {};
-}
-
-function complete(operationId: string, value: unknown, attemptToken: string | undefined): void {
+function complete(operationId: string, value: unknown, attemptToken: string): void {
   inFlightTasks.delete(operationId);
   send({
     type: 'taskResult',
     operationId,
     status: 'completed',
     value: value === undefined ? null : value,
-    ...tokenEcho(attemptToken),
+    attemptToken,
   });
 }
 
-function fail(operationId: string, error: string, attemptToken: string | undefined): void {
+function fail(operationId: string, error: string, attemptToken: string): void {
   inFlightTasks.delete(operationId);
   send({
     type: 'taskResult',
     operationId,
     status: 'failed',
     error,
-    ...tokenEcho(attemptToken),
+    attemptToken,
   });
 }
 
 function cancel(operationId: string): void {
   const task = inFlightTasks.get(operationId);
+  if (task === undefined) return;
   if (task?.timeout !== undefined) {
     clearTimeout(task.timeout);
   }
@@ -84,7 +80,7 @@ function cancel(operationId: string): void {
     cancelled: true,
     error: 'Task cancelled',
     // Echo the token captured on THIS dispatch's in-flight task object.
-    ...tokenEcho(task?.attemptToken),
+    attemptToken: task.attemptToken,
   });
 }
 
@@ -106,15 +102,15 @@ function handleTask(message: Record<string, unknown>): void {
   // Capture the per-dispatch token from THIS task and carry it on the dispatch —
   // either passed straight to the synchronous result or stored on the in-flight
   // task object for the deferred ones. Never looked up later by operationId.
-  const rawToken = message['attemptToken'];
-  const attemptToken = typeof rawToken === 'string' ? rawToken : undefined;
+  const attemptToken = message['attemptToken'];
+  if (typeof attemptToken !== 'string' || attemptToken.length === 0) return;
 
   if (activityName === 'weft.conformance.echo') {
     complete(operationId, message['input'], attemptToken);
     return;
   }
 
-  const tokenField = attemptToken !== undefined ? { attemptToken } : {};
+  const tokenField = { attemptToken };
 
   if (activityName === 'weft.conformance.sleep') {
     const timeout = setTimeout(

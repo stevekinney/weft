@@ -54,6 +54,7 @@ function makeInflightRecord(overrides: Partial<InflightRecord> = {}): InflightRe
     input: { amount: 100 },
     attempt: 1,
     visibilityTimeout: 30_000,
+    attemptToken: 'attempt-token',
     ...overrides,
   };
 }
@@ -458,12 +459,17 @@ describe('task state invariant (server integration)', () => {
 
     // Auto-respond with a completed result
     ws.addEventListener('message', (event) => {
-      const msg = JSON.parse(String(event.data)) as { type: string; operationId?: string };
+      const msg = JSON.parse(String(event.data)) as {
+        type: string;
+        operationId?: string;
+        attemptToken?: string;
+      };
       if (msg.type === 'task') {
         ws.send(
           JSON.stringify({
             type: 'taskResult',
             operationId: msg.operationId,
+            attemptToken: msg.attemptToken,
             status: 'completed',
             value: 42,
           }),

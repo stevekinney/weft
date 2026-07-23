@@ -55,12 +55,12 @@ describe('WorkerRegistry', () => {
     });
 
     // Stack a few fair-share tasks on the worker we are about to remove.
-    registry.assignTask('worker-doomed', 'op-1', 30_000, 'share-alpha');
-    registry.assignTask('worker-doomed', 'op-2', 30_000, 'share-alpha');
-    registry.assignTask('worker-doomed', 'op-3', 30_000, 'share-beta');
+    registry.assignTask('worker-doomed', 'op-1', 30_000, 'share-alpha', 'attempt-token');
+    registry.assignTask('worker-doomed', 'op-2', 30_000, 'share-alpha', 'attempt-token');
+    registry.assignTask('worker-doomed', 'op-3', 30_000, 'share-beta', 'attempt-token');
 
     // And one task on the survivor so we can assert it isn't disturbed.
-    registry.assignTask('worker-survivor', 'op-survivor', 30_000, 'share-alpha');
+    registry.assignTask('worker-survivor', 'op-survivor', 30_000, 'share-alpha', 'attempt-token');
 
     registry.unregister('worker-doomed');
 
@@ -601,7 +601,7 @@ describe('WorkerRegistry', () => {
       registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
 
       const now = Date.now();
-      registry.assignTask('w1', 'op-1', 30_000);
+      registry.assignTask('w1', 'op-1', 30_000, undefined, 'attempt-token');
 
       // Task just assigned — should not be expired yet
       const expired = registry.checkExpiredTasks(now + 1000);
@@ -612,7 +612,7 @@ describe('WorkerRegistry', () => {
       const registry = new WorkerRegistry();
       registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
 
-      registry.assignTask('w1', 'op-1', 500);
+      registry.assignTask('w1', 'op-1', 500, undefined, 'attempt-token');
 
       // Check well past the deadline
       const expired = registry.checkExpiredTasks(Date.now() + 60_000);
@@ -625,7 +625,7 @@ describe('WorkerRegistry', () => {
       const registry = new WorkerRegistry();
       registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
 
-      registry.assignTask('w1', 'op-1', 500);
+      registry.assignTask('w1', 'op-1', 500, undefined, 'attempt-token');
       expect(registry.isAssigned('op-1')).toBe(true);
 
       registry.checkExpiredTasks(Date.now() + 60_000);
@@ -638,8 +638,8 @@ describe('WorkerRegistry', () => {
       const registry = new WorkerRegistry();
       registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
 
-      registry.assignTask('w1', 'op-1', 500);
-      registry.assignTask('w1', 'op-2', 500);
+      registry.assignTask('w1', 'op-1', 500, undefined, 'attempt-token');
+      registry.assignTask('w1', 'op-2', 500, undefined, 'attempt-token');
 
       const expired = registry.checkExpiredTasks(Date.now() + 60_000);
       expect(expired).toHaveLength(2);
@@ -651,7 +651,7 @@ describe('WorkerRegistry', () => {
       const registry = new WorkerRegistry();
       registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
 
-      registry.assignTask('w1', 'op-1', 500);
+      registry.assignTask('w1', 'op-1', 500, undefined, 'attempt-token');
 
       const firstCall = registry.checkExpiredTasks(Date.now() + 60_000);
       expect(firstCall).toHaveLength(1);
@@ -664,7 +664,7 @@ describe('WorkerRegistry', () => {
       const registry = new WorkerRegistry();
       registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
 
-      registry.assignTask('w1', 'op-1', 500);
+      registry.assignTask('w1', 'op-1', 500, undefined, 'attempt-token');
 
       // Extend by 60 seconds
       registry.extendVisibility('op-1', 60_000);
@@ -680,8 +680,8 @@ describe('WorkerRegistry', () => {
       registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
       registry.register({ id: 'w2', queue: 'default', activities: ['doWork'], concurrency: 5 });
 
-      registry.assignTask('w1', 'op-1', 60_000); // expires in 60s
-      registry.assignTask('w2', 'op-2', 100); // expires in 100ms
+      registry.assignTask('w1', 'op-1', 60_000, undefined, 'attempt-token'); // expires in 60s
+      registry.assignTask('w2', 'op-2', 100, undefined, 'attempt-token'); // expires in 100ms
 
       // Check at 10s from now — only op-2 should be expired
       const expired = registry.checkExpiredTasks(Date.now() + 10_000);
@@ -699,7 +699,7 @@ describe('WorkerRegistry', () => {
       const registry = new WorkerRegistry();
       registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
 
-      registry.assignTask('w1', 'op-1', 30_000);
+      registry.assignTask('w1', 'op-1', 30_000, undefined, 'attempt-token');
 
       const worker = registry.getAll()[0]!;
       expect(worker.inFlight).toBe(1);
@@ -709,7 +709,7 @@ describe('WorkerRegistry', () => {
       const registry = new WorkerRegistry();
       registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
 
-      registry.assignTask('w1', 'op-1', 15_000);
+      registry.assignTask('w1', 'op-1', 15_000, undefined, 'attempt-token');
 
       const tasks = registry.getWorkerTasks('w1');
       expect(tasks).toHaveLength(1);
@@ -731,8 +731,8 @@ describe('WorkerRegistry', () => {
       const registry = new WorkerRegistry();
       registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
 
-      registry.assignTask('w1', 'op-1', 30_000);
-      registry.assignTask('w1', 'op-2', 30_000);
+      registry.assignTask('w1', 'op-1', 30_000, undefined, 'attempt-token');
+      registry.assignTask('w1', 'op-2', 30_000, undefined, 'attempt-token');
 
       const tasks = registry.getWorkerTasks('w1');
       expect(tasks).toHaveLength(2);
@@ -747,8 +747,8 @@ describe('WorkerRegistry', () => {
       registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
       registry.register({ id: 'w2', queue: 'default', activities: ['doWork'], concurrency: 5 });
 
-      registry.assignTask('w1', 'op-1', 30_000);
-      registry.assignTask('w2', 'op-2', 30_000);
+      registry.assignTask('w1', 'op-1', 30_000, undefined, 'attempt-token');
+      registry.assignTask('w2', 'op-2', 30_000, undefined, 'attempt-token');
 
       const w1Tasks = registry.getWorkerTasks('w1');
       expect(w1Tasks).toHaveLength(1);
@@ -759,8 +759,8 @@ describe('WorkerRegistry', () => {
       const registry = new WorkerRegistry();
       registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
 
-      registry.assignTask('w1', 'op-1', 30_000);
-      registry.assignTask('w1', 'op-2', 30_000);
+      registry.assignTask('w1', 'op-1', 30_000, undefined, 'attempt-token');
+      registry.assignTask('w1', 'op-2', 30_000, undefined, 'attempt-token');
       registry.completeTask('op-1');
 
       const tasks = registry.getWorkerTasks('w1');
@@ -778,7 +778,7 @@ describe('WorkerRegistry', () => {
       const registry = new WorkerRegistry();
       registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
 
-      registry.assignTask('w1', 'op-1', 5_000);
+      registry.assignTask('w1', 'op-1', 5_000, undefined, 'attempt-token');
 
       // Simulate time passing (4.9s) — almost expired
       const almostExpired = Date.now() + 4_900;
@@ -800,8 +800,8 @@ describe('WorkerRegistry', () => {
       const registry = new WorkerRegistry();
       registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
 
-      registry.assignTask('w1', 'op-1', 2_000);
-      registry.assignTask('w1', 'op-2', 2_000);
+      registry.assignTask('w1', 'op-1', 2_000, undefined, 'attempt-token');
+      registry.assignTask('w1', 'op-2', 2_000, undefined, 'attempt-token');
 
       // Both would expire in 2s — extend them
       for (const task of registry.getWorkerTasks('w1')) {
@@ -819,8 +819,8 @@ describe('WorkerRegistry', () => {
       registry.register({ id: 'w2', queue: 'default', activities: ['doWork'], concurrency: 5 });
 
       // w1 gets a long timeout, w2 gets a short one
-      registry.assignTask('w1', 'op-1', 30_000);
-      registry.assignTask('w2', 'op-2', 1_000);
+      registry.assignTask('w1', 'op-1', 30_000, undefined, 'attempt-token');
+      registry.assignTask('w2', 'op-2', 1_000, undefined, 'attempt-token');
 
       // Extend only w1's tasks using its stored visibilityTimeout
       for (const task of registry.getWorkerTasks('w1')) {
@@ -842,7 +842,7 @@ describe('WorkerRegistry', () => {
     it('returns true when an operation is assigned to the named worker', () => {
       const registry = new WorkerRegistry();
       registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
-      registry.assignTask('w1', 'op-1', 30_000);
+      registry.assignTask('w1', 'op-1', 30_000, undefined, 'attempt-token');
       expect(registry.isAssignedToWorker('op-1', 'w1')).toBe(true);
     });
 
@@ -850,7 +850,7 @@ describe('WorkerRegistry', () => {
       const registry = new WorkerRegistry();
       registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
       registry.register({ id: 'w2', queue: 'default', activities: ['doWork'], concurrency: 5 });
-      registry.assignTask('w1', 'op-1', 30_000);
+      registry.assignTask('w1', 'op-1', 30_000, undefined, 'attempt-token');
       expect(registry.isAssignedToWorker('op-1', 'w2')).toBe(false);
     });
 
@@ -875,25 +875,12 @@ describe('WorkerRegistry', () => {
       expect(registry.isAssignedToAttempt('op-1', 'w2', 'token-1')).toBe(false);
     });
 
-    it('matches any token when the in-flight task carries no stored token', () => {
-      // Backward-compat: a task assigned before the attempt-token field existed
-      // has no stored token, so it must not strand completions — any echoed
-      // token (including a present one or none at all) is accepted.
-      const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
-      registry.assignTask('w1', 'op-1', 30_000);
-      expect(registry.isAssignedToAttempt('op-1', 'w1', 'whatever-token')).toBe(true);
-      expect(registry.isAssignedToAttempt('op-1', 'w1', undefined)).toBe(true);
-    });
-
-    it('falls back to the workerId guard when a token-bearing task gets no echoed token', () => {
-      // Additive guard, no protocol version bump: a worker that does not echo a
-      // token (e.g. one predating the field) is authorized on workerId alone, so
-      // the only worker in a singleton deployment is never live-locked.
+    it('requires the exact token stored with the in-flight task', () => {
       const registry = new WorkerRegistry();
       registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
       registry.assignTask('w1', 'op-1', 30_000, undefined, 'token-1');
-      expect(registry.isAssignedToAttempt('op-1', 'w1', undefined)).toBe(true);
+      expect(registry.isAssignedToAttempt('op-1', 'w1', 'token-1')).toBe(true);
+      expect(registry.isAssignedToAttempt('op-1', 'w1', 'token-stale')).toBe(false);
     });
 
     it('rejects only a present-but-wrong echoed token against a token-bearing task', () => {
@@ -915,8 +902,8 @@ describe('WorkerRegistry', () => {
     it('re-derives inFlight from the in-flight task map when called again for the same workerId', () => {
       const registry = new WorkerRegistry();
       registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
-      registry.assignTask('w1', 'op-1', 30_000);
-      registry.assignTask('w1', 'op-2', 30_000);
+      registry.assignTask('w1', 'op-1', 30_000, undefined, 'attempt-token');
+      registry.assignTask('w1', 'op-2', 30_000, undefined, 'attempt-token');
       expect(registry.getWorker('w1')?.inFlight).toBe(2);
 
       // Reconnect: register is called again without an intervening unregister.
@@ -942,7 +929,7 @@ describe('WorkerRegistry', () => {
       const registry = new WorkerRegistry();
       registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
 
-      registry.assignTask('w1', 'op-1', 30_000);
+      registry.assignTask('w1', 'op-1', 30_000, undefined, 'attempt-token');
 
       expect(registry.isAssigned('op-1')).toBe(true);
     });
@@ -951,7 +938,7 @@ describe('WorkerRegistry', () => {
       const registry = new WorkerRegistry();
       registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
 
-      registry.assignTask('w1', 'op-1', 30_000);
+      registry.assignTask('w1', 'op-1', 30_000, undefined, 'attempt-token');
       registry.completeTask('op-1');
 
       expect(registry.isAssigned('op-1')).toBe(false);
@@ -967,7 +954,7 @@ describe('WorkerRegistry', () => {
       const registry = new WorkerRegistry();
       registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
 
-      registry.assignTask('w1', 'op-1', 30_000);
+      registry.assignTask('w1', 'op-1', 30_000, undefined, 'attempt-token');
       expect(registry.getWorker('w1')!.inFlight).toBe(1);
 
       const removed = registry.completeTask('op-1');
@@ -987,7 +974,7 @@ describe('WorkerRegistry', () => {
       const registry = new WorkerRegistry();
       registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
 
-      registry.assignTask('w1', 'op-1', 30_000);
+      registry.assignTask('w1', 'op-1', 30_000, undefined, 'attempt-token');
       registry.unregister('w1');
 
       // unregister() now purges in-flight rows that referenced the worker so
@@ -1000,8 +987,8 @@ describe('WorkerRegistry', () => {
       const registry = new WorkerRegistry();
       registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
 
-      registry.assignTask('w1', 'op-1', 30_000);
-      registry.assignTask('w1', 'op-2', 30_000);
+      registry.assignTask('w1', 'op-1', 30_000, undefined, 'attempt-token');
+      registry.assignTask('w1', 'op-2', 30_000, undefined, 'attempt-token');
       expect(registry.getWorker('w1')!.inFlight).toBe(2);
 
       registry.completeTask('op-1');
@@ -1027,8 +1014,8 @@ describe('WorkerRegistry', () => {
       registry.getWorker('bravo')!.lastHeartbeat = 2000;
       registry.getWorker('charlie')!.lastHeartbeat = 3000;
 
-      registry.assignTask('bravo', 'op-1', 30_000);
-      registry.assignTask('bravo', 'op-2', 30_000);
+      registry.assignTask('bravo', 'op-1', 30_000, undefined, 'attempt-token');
+      registry.assignTask('bravo', 'op-2', 30_000, undefined, 'attempt-token');
 
       const summaries = registry.getWorkerSummaries(5000);
 
@@ -1114,7 +1101,7 @@ describe('WorkerRegistry', () => {
         concurrency: 3,
         deploymentName: 'payments',
       });
-      registry.assignTask('draining-worker', 'op-inflight', 30_000);
+      registry.assignTask('draining-worker', 'op-inflight', 30_000, undefined, 'attempt-token');
 
       const result = registry.markWorkerDraining('draining-worker', {
         reason: 'rolling deploy',
@@ -1251,7 +1238,7 @@ describe('WorkerRegistry', () => {
         gitSha: 'abc',
         startedAt: 200,
       });
-      registry.assignTask('draining', 'op-1', 30_000);
+      registry.assignTask('draining', 'op-1', 30_000, undefined, 'attempt-token');
       registry.markWorkerDraining('draining', { reason: 'replace host', updatedAt: 1000 });
 
       expect(registry.getDeploymentSummaries(2000)).toEqual([

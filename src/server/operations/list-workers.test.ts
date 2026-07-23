@@ -81,7 +81,7 @@ describe('weft.workers.list — REST GET /v1/workers', () => {
     // Pin lastHeartbeat so the assertion against the injected clock is exact.
     workerRegistry.getWorker('alpha')!.lastHeartbeat = 1000;
     workerRegistry.getWorker('charlie')!.lastHeartbeat = 2500;
-    workerRegistry.assignTask('charlie', 'op-1', 30_000);
+    workerRegistry.assignTask('charlie', 'op-1', 30_000, undefined, 'attempt-token');
 
     const FIXED_NOW = 5000;
     const operation = createListWorkersOperation({
@@ -151,7 +151,7 @@ describe('weft.workers.list — REST GET /v1/workers', () => {
       gitSha: 'abc',
       startedAt: 200,
     });
-    workerRegistry.assignTask('draining-worker', 'op-draining', 30_000);
+    workerRegistry.assignTask('draining-worker', 'op-draining', 30_000, undefined, 'attempt-token');
     workerRegistry.markWorkerDraining('draining-worker', {
       reason: 'host replacement',
       updatedAt: 1000,
@@ -262,7 +262,7 @@ describe('worker drain operations', () => {
       activities: ['charge'],
       concurrency: 2,
     });
-    workerRegistry.assignTask('worker-1', 'in-flight', 30_000);
+    workerRegistry.assignTask('worker-1', 'in-flight', 30_000, undefined, 'attempt-token');
 
     const registry = createOperationRegistry([
       createDrainWorkerOperation({ workerRegistry, clock: () => 1000 }),

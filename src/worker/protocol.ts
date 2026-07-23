@@ -205,10 +205,7 @@ const TASK_FIELD_SPECS: readonly FieldSpec[] = [
     isNonEmptyString,
     'task.workflowExecutionToken must be a non-empty string',
   ],
-  // Required: the server always stamps a per-dispatch token the worker echoes on
-  // completion. Optional in the spec table so a frame from an older server still
-  // parses; a missing token simply disables the worker-side echo for that task.
-  ['attemptToken', false, isNonEmptyString, 'task.attemptToken must be a non-empty string'],
+  ['attemptToken', true, isNonEmptyString, 'task.attemptToken must be a non-empty string'],
 ];
 
 function parseTaskMessage(

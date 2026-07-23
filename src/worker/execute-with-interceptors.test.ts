@@ -21,6 +21,7 @@ describe('executeWithInterceptors', () => {
         activityName: 'charge',
         operationId: 'op-no-context',
         input: { amount: 42 },
+        attemptToken: 'attempt-token',
       },
       null,
     );

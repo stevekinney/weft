@@ -448,11 +448,7 @@ export function restoreInflightTasks(context: ServerContext, options: ServeOptio
       // extensions use the full duration, not the diminished remainder.
       const remaining = record.deadline - now;
       // Carry the durable record's attemptToken into the rehydrated registry
-      // entry. Without it the in-memory task would have no token, and
-      // isAssignedToAttempt treats a missing in-memory token as backward-
-      // compatible (accept any echo) — which would silently disable the stale-
-      // attempt guard for every in-flight task across a server restart, exactly
-      // when the durable record still holds the current attempt's token.
+      // entry so the stale-attempt guard survives a server restart.
       context.registry.assignTask(
         record.workerId,
         record.operationId,
