@@ -19,6 +19,7 @@ import {
   computeScheduleJitterOffset,
   resolveEffectiveScheduleFireAt,
 } from './engine/schedule-jitter.ts';
+import { toScheduleSummary } from './engine/schedules.ts';
 import {
   decodeScheduleIdentityFields,
   decodeScheduleState,
@@ -2568,6 +2569,43 @@ describe('recurring schedules', () => {
     }
 
     engine[Symbol.dispose]();
+  });
+
+  it('derives complete summaries from schedule metadata without sharing queued runs', () => {
+    const queuedRuns = [{ workflowId: 'queued-workflow', queuedAt: 2, occurrence: 3 }];
+    const state = createScheduleState({
+      currentWorkflowId: 'running-workflow',
+      description: 'nightly maintenance',
+      intervalMs: 60_000,
+      jitterMs: 250,
+      lastFireAt: 4,
+      lastMissedFireAt: 5,
+      queuedRuns,
+    });
+
+    const summary = toScheduleSummary(state);
+
+    expect(summary).toMatchObject({
+      id: state.id,
+      workflowType: state.workflowType,
+      description: state.description,
+      intervalMs: state.intervalMs,
+      status: state.status,
+      overlap: state.overlap,
+      backfill: state.backfill,
+      jitterMs: state.jitterMs,
+      createdAt: state.createdAt,
+      updatedAt: state.updatedAt,
+      lastFireAt: state.lastFireAt,
+      lastMissedFireAt: state.lastMissedFireAt,
+      missedFireCount: state.missedFireCount,
+      nextFireAt: state.nextFireAt,
+      currentWorkflowId: state.currentWorkflowId,
+      queuedRuns,
+    });
+    expect(summary).not.toHaveProperty('input');
+    expect(summary.queuedRuns).not.toBe(queuedRuns);
+    expect(summary.queuedRuns[0]).not.toBe(queuedRuns[0]);
   });
 
   it('Rejects malformed persisted schedules and validates runtime schedule inputs.', async () => {

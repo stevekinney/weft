@@ -178,7 +178,11 @@ async function hasCurrentScheduleTimer(
 
 export function toScheduleSummary(state: ScheduleState): ScheduleSummary {
   const { input: _input, ...summary } = state;
-  return { ...summary, queuedRuns: summary.queuedRuns.map((queuedRun) => ({ ...queuedRun })) };
+  const projectedSummary = {
+    ...summary,
+    queuedRuns: summary.queuedRuns.map((queuedRun) => ({ ...queuedRun })),
+  } satisfies ScheduleSummary;
+  return projectedSummary;
 }
 
 export async function pauseSchedule(internals: EngineInternals, scheduleId: string): Promise<void> {

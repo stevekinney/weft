@@ -11,8 +11,28 @@ import {
   type ScheduleDefinition,
   type ScheduleHandle,
   type ScheduleSpec,
+  type ScheduleState,
+  type ScheduleSummary,
   type WorkflowContext,
 } from '../../index.ts';
+
+const metadata: ScheduleSummary = {
+  id: 'daily-report',
+  workflowType: 'report',
+  status: 'active',
+  overlap: 'skip',
+  backfill: false,
+  createdAt: 1,
+  updatedAt: 1,
+  missedFireCount: 0,
+  nextFireAt: null,
+  queuedRuns: [],
+};
+const state: ScheduleState = { ...metadata, input: null };
+void state;
+type SummaryHasNoInput = ScheduleSummary extends { input: unknown } ? never : true;
+const summaryHasNoInput: SummaryHasNoInput = true;
+void summaryHasNoInput;
 
 // ---- ctx.sleep accepts both Duration forms -------------------------------
 workflow({ name: 'sleeps' }).execute(async function* (ctx: WorkflowContext) {

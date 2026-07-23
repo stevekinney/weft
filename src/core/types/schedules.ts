@@ -195,14 +195,13 @@ export function schedule<TInput>(
 }
 
 /**
- * Full persisted state of a recurring schedule. Returned by `engine.getSchedule(id)`.
- * Use {@link ScheduleSummary} (returned by list operations and `engine.getSchedule()`)
- * for the lightweight variant — it omits `input` to keep payloads small.
+ * Metadata shared by persisted schedule state and lightweight schedule summaries.
+ * Persisted state and summaries extend this contract so metadata cannot drift
+ * between durable records and public lightweight responses.
  */
-export interface ScheduleState {
+export interface ScheduleMetadata {
   id: string;
   workflowType: string;
-  input: unknown;
   /** Human-readable operator description stored with this schedule. */
   description?: string;
   /**
@@ -236,38 +235,21 @@ export interface ScheduleState {
 }
 
 /**
+ * Full persisted state of a recurring schedule. Returned by `engine.getSchedule(id)`.
+ * Use {@link ScheduleSummary} (returned by list operations and `engine.getSchedule()`)
+ * for the lightweight variant — it omits `input` to keep payloads small.
+ */
+export interface ScheduleState extends ScheduleMetadata {
+  input: unknown;
+}
+
+/**
  * Lightweight summary of a recurring schedule returned by list operations.
  * Contains cron expression, status, timing metadata, and the ID of the
  * currently running workflow (if any). For the full record including the
  * `input`, use {@link ScheduleState}.
  */
-export interface ScheduleSummary {
-  id: string;
-  workflowType: string;
-  /** Human-readable operator description stored with this schedule. */
-  description?: string;
-  /** Cron expression for cron-based schedules; absent for interval schedules. */
-  cronExpression?: string;
-  /** Interval period in milliseconds for interval-based schedules; absent for cron schedules. */
-  intervalMs?: number;
-  status: ScheduleStatus;
-  overlap: ScheduleOverlapPolicy;
-  backfill: boolean;
-  /** Normalized deterministic jitter window in milliseconds. */
-  jitterMs?: number;
-  createdAt: number;
-  updatedAt: number;
-  /** Most recent occurrence that started a scheduled workflow. */
-  lastFireAt?: number;
-  /** Most recent occurrence skipped because a non-backfill timer was late. */
-  lastMissedFireAt?: number;
-  /** Lifetime count of occurrences skipped because a non-backfill timer was late. */
-  missedFireCount: number;
-  nextFireAt: number | null;
-  currentWorkflowId?: string;
-  /** Ordered durable occurrences waiting behind `currentWorkflowId`. */
-  queuedRuns: ScheduleQueuedRun[];
-}
+export interface ScheduleSummary extends ScheduleMetadata {}
 
 /**
  * Filter criteria for `engine.listSchedules`. All fields are optional.
