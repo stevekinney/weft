@@ -37,6 +37,8 @@ export async function parseScheduleRestBodyRequestRecord(
 export function extractSharedScheduleRestFields(
   record: Record<string, unknown>,
 ): SharedScheduleRestFields {
+  // Read cadence fields by own property: arrays inherit `every` from
+  // Array.prototype, and a direct read would masquerade as an interval spec.
   return {
     cronExpression: Object.hasOwn(record, 'cronExpression') ? record['cronExpression'] : undefined,
     every: Object.hasOwn(record, 'every') ? record['every'] : undefined,
