@@ -51,6 +51,12 @@ opens downstream bump issues for repositories listed in
    rg '0\.0\.0|X\.Y\.Z|Current release|VERSION' README.md documentation src package.json
    ```
 
+5. If the release adds compiled modules, let `prepack` establish the packed
+   entry count before updating `maximumEntryCount` in
+   `scripts/check-package-contents.ts`. Keep packed-consumer starts keyed by
+   the registered `workflow({ name })` value in
+   `scripts/validate-package-consumers.ts`, not the source variable name.
+
 ## Local gates
 
 Run the release-specific checks before opening the release pull request:

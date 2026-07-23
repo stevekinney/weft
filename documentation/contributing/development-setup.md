@@ -212,6 +212,8 @@ npm publish --dry-run --ignore-scripts
 
 `prepack` already runs the build, export and portability checks, Markdown and JSDoc doctests, package-content validation, and packed-consumer checks. The publish dry run uses `--ignore-scripts` to match the release workflow, where `prepack` has already run explicitly before publish. The release workflow also runs `bun run validate` before publishing, and `verify-release-version` fails unless the pushed tag, `package.json.version`, and the exported `VERSION` constant all agree.
 
+When a release adds compiled package modules, update the `maximumEntryCount` ratchet in `scripts/check-package-contents.ts` only after `prepack` proves the new packed entry count. Keep packed-consumer workflow starts keyed by the registered `workflow({ name })` value, as exercised by `scripts/validate-package-consumers.ts`, rather than by the source variable name.
+
 ## Git hooks
 
 Husky manages Git hooks. The shell wrappers live in `.husky/` and delegate to TypeScript scripts under `scripts/husky/`. Those scripts use `chalk` for color, `change-case` for headings, and Bun's `$` shell and `Bun.write` for I/O.

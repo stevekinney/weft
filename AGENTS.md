@@ -98,6 +98,8 @@ Use `bun run prepack` before release or package-surface changes. It runs the bui
 
 Release version changes must keep `package.json`, `src/version.ts`, and server discovery defaults aligned. Run `bun run verify:release-version` before release pull requests, and include OpenAPI, OpenRPC, AsyncAPI, and MCP discovery tests when the default version string changes.
 
+When a release adds compiled modules, update `maximumEntryCount` in `scripts/check-package-contents.ts` only from the packed count reported by `prepack`. Keep `scripts/validate-package-consumers.ts` workflow starts keyed by each registered `workflow({ name })` value, not the source variable name; this is the packed-consumer contract exercised by the release gate.
+
 The release workflow now opens downstream bump issues after npm publish. Keep `downstream-release-repositories.toml` as the editable repository list, keep `DOWNSTREAM_ISSUE_TOKEN` as the cross-repository issue credential, and preserve duplicate-title detection before creating new downstream issues.
 
 Use `weft conformance` when a change touches the `RemoteWorker` protocol or worker SDK compatibility. Use `weft codegen` when validating cross-process type-generation docs or client fixtures; the command reads `/v1/registry` from a live server or `--from` a vendored registry JSON file and writes a deterministic `.d.ts`.
