@@ -29,6 +29,12 @@ import { getInternals } from './internals.ts';
 // surface as non-deterministic flakes under parallel execution.
 const engines: Disposable[] = [];
 
+class TestEngine extends Engine {
+  registerGlobalActivity(name: string, fn: Function): void {
+    this.registerActivityFunction(name, fn);
+  }
+}
+
 function track<TEngine extends Disposable>(engine: TEngine): TEngine {
   engines.push(engine);
   return engine;
@@ -57,9 +63,37 @@ describe('engine + workflow-builder integration', () => {
     const perWorkflow = getInternals(engine).activityRegistriesByWorkflow.get('welcome');
     expect(perWorkflow).toBeDefined();
     expect(perWorkflow?.has('formatGreeting')).toBe(true);
-    // Global registry stays empty for this transitional period — Phase 6
-    // removes the global path entirely.
+    // Builder activities are scoped to this workflow; shared activities remain
+    // available through the engine-wide registry as a fallback.
     expect(getInternals(engine).activityRegistry.has('formatGreeting')).toBe(false);
+  });
+
+  it('resolves per-workflow activities before the global fallback', async () => {
+    const welcome = workflow({ name: 'welcome' })
+      .activities({ shared: async () => 'workflow-result' })
+      .execute(async function* (ctx) {
+        return yield* ctx.run('shared');
+      });
+
+    const engine = track(new TestEngine());
+    engine.registerGlobalActivity('shared', async () => 'global-result');
+    engine.register(welcome);
+
+    const handle = await engine.start('welcome', undefined);
+    expect(await handle.result()).toBe('workflow-result');
+  });
+
+  it('resolves a global activity when the workflow has no local definition', async () => {
+    const welcome = workflow({ name: 'welcome' }).execute(async function* (ctx) {
+      return yield* ctx.run('shared');
+    });
+
+    const engine = track(new TestEngine());
+    engine.registerGlobalActivity('shared', async () => 'global-result');
+    engine.register(welcome);
+
+    const handle = await engine.start('welcome', undefined);
+    expect(await handle.result()).toBe('global-result');
   });
 
   it('register(workflow) is idempotent for the same definition reference', () => {

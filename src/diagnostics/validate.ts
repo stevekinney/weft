@@ -270,7 +270,7 @@ function isRemovedWorkflowShape(value: unknown): value is Record<string, unknown
   const functionKind = Object.prototype.toString.call(handler);
   if (functionKind === '[object AsyncGeneratorFunction]') return true;
 
-  const hasLegacyMetadata = [
+  const hasRemovedWorkflowMetadata = [
     'version',
     'description',
     'tags',
@@ -278,7 +278,7 @@ function isRemovedWorkflowShape(value: unknown): value is Record<string, unknown
     'outputSchema',
     'searchAttributes',
   ].some((key) => Object.hasOwn(value, key));
-  if (hasLegacyMetadata) return true;
+  if (hasRemovedWorkflowMetadata) return true;
 
   // A handler-only ordinary function is the removed synchronous wrapper shape.
   // It is structurally indistinguishable from a synchronous framework handler

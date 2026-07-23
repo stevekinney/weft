@@ -466,7 +466,7 @@ export const greet = {
       filePath,
       `
 export default {
-  legacy: {
+  removedMetadata: {
     handler: async function* () { return 'hi'; }
   }
 };
@@ -474,7 +474,7 @@ export default {
     );
 
     await expect(loadRegistrationsFromModule(filePath)).rejects.toThrow(
-      'Workflow export "legacy" must be a builder-produced workflow definition with its own name. Create it with `workflow({ name }).execute(handler)`.',
+      'Workflow export "removedMetadata" must be a builder-produced workflow definition with its own name. Create it with `workflow({ name }).execute(handler)`.',
     );
   });
 
@@ -591,9 +591,9 @@ export const webhook = { handler: async () => new Response('ok') };
     expect(result.activities).toEqual([]);
   });
 
-  it('rejects an async handler export with legacy workflow metadata', async () => {
+  it('rejects an async handler export with removed workflow metadata', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'weft-validate-'));
-    const filePath = join(dir, 'legacy-async-handler.ts');
+    const filePath = join(dir, 'removed-metadata-async-handler.ts');
     await writeFile(
       filePath,
       `
