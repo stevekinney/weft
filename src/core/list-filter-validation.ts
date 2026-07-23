@@ -9,11 +9,12 @@
  * @module core/list-filter-validation
  */
 
-import { z, type ZodIssue } from 'zod';
+import { z } from 'zod';
 
 import { FAILURE_CATEGORIES, isFailureCategory } from './failure-categories.ts';
 import type { FailureCategory, WorkflowStatus } from './types/identity.ts';
 import type { ListFilter } from './types/list-options.ts';
+import { flattenZodIssue, type ValidationIssue } from './validation-issues.ts';
 import { WeftError } from './weft-error.ts';
 
 const WORKFLOW_STATUSES = [
@@ -104,23 +105,7 @@ export const listFilterObjectSchema = z
   .strict();
 
 /** A flattened Zod issue suitable for cross-transport serialization. */
-export type FilterValidationIssue = {
-  readonly path: ReadonlyArray<string | number>;
-  readonly message: string;
-  readonly code: string;
-};
-
-function flattenIssue(issue: ZodIssue): FilterValidationIssue {
-  const path: Array<string | number> = [];
-  for (const segment of issue.path) {
-    if (typeof segment === 'string' || typeof segment === 'number') {
-      path.push(segment);
-    } else {
-      path.push(String(segment));
-    }
-  }
-  return { path, message: issue.message, code: issue.code };
-}
+export type FilterValidationIssue = ValidationIssue;
 
 /**
  * Thrown by {@link normalizeListFilter} when the input fails validation.
@@ -152,7 +137,7 @@ export class ListFilterValidationError extends WeftError<'ListFilterValidationEr
 export function normalizeListFilter(input: unknown): ListFilter {
   const result = listFilterObjectSchema.safeParse(input ?? {});
   if (!result.success) {
-    throw new ListFilterValidationError(result.error.issues.map(flattenIssue));
+    throw new ListFilterValidationError(result.error.issues.map(flattenZodIssue));
   }
   if (
     result.data.parentWorkflowExecutionToken !== undefined &&

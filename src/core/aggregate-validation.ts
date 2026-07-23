@@ -11,8 +11,9 @@
  * @module core/aggregate-validation
  */
 
-import { z, type ZodIssue } from 'zod';
+import { z } from 'zod';
 
+import { flattenZodIssue, type ValidationIssue } from './validation-issues.ts';
 import { WeftError } from './weft-error.ts';
 
 const attributeDimensionSchema = z.object({ attribute: z.string().min(1) }).strict();
@@ -69,23 +70,7 @@ export const aggregateOptionsObjectSchema = z
   .strict();
 
 /** A flattened Zod issue suitable for cross-transport serialization. */
-export type AggregateOptionsValidationIssue = {
-  readonly path: ReadonlyArray<string | number>;
-  readonly message: string;
-  readonly code: string;
-};
-
-function flattenIssue(issue: ZodIssue): AggregateOptionsValidationIssue {
-  const path: Array<string | number> = [];
-  for (const segment of issue.path) {
-    if (typeof segment === 'string' || typeof segment === 'number') {
-      path.push(segment);
-    } else {
-      path.push(String(segment));
-    }
-  }
-  return { path, message: issue.message, code: issue.code };
-}
+export type AggregateOptionsValidationIssue = ValidationIssue;
 
 /**
  * Thrown by {@link normalizeAggregateOptions} when input fails validation.
@@ -135,7 +120,7 @@ export class AggregateDistinctKeyCapExceededError extends WeftError<'AggregateDi
 export function normalizeAggregateOptions(input: unknown): AggregateOptions {
   const result = aggregateOptionsObjectSchema.safeParse(input ?? {});
   if (!result.success) {
-    throw new AggregateOptionsValidationError(result.error.issues.map(flattenIssue));
+    throw new AggregateOptionsValidationError(result.error.issues.map(flattenZodIssue));
   }
   const { groupBy, limit } = result.data;
   return { groupBy, ...(limit !== undefined && { limit }) };

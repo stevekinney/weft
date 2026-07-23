@@ -60,6 +60,21 @@ describe('normalizeAggregateOptions', () => {
       AggregateOptionsValidationError,
     );
   });
+
+  it('preserves nested issue paths, codes, order, and the rendered message', () => {
+    try {
+      normalizeAggregateOptions({ groupBy: { attribute: '', extra: 1 }, extra: true });
+      expect.unreachable('expected throw');
+    } catch (error) {
+      expect(error).toBeInstanceOf(AggregateOptionsValidationError);
+      const validationError = error as AggregateOptionsValidationError;
+      expect(validationError.issues).toEqual([
+        { path: ['groupBy'], message: 'Invalid input', code: 'invalid_union' },
+        { path: [], message: 'Unrecognized key: "extra"', code: 'unrecognized_keys' },
+      ]);
+      expect(validationError.message).toBe('groupBy: Invalid input; Unrecognized key: "extra"');
+    }
+  });
 });
 
 describe('aggregateOptionsObjectSchema', () => {

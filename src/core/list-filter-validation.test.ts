@@ -141,6 +141,24 @@ describe('normalizeListFilter', () => {
         expect(paths).toContain('type');
       }
     });
+
+    it('preserves nested array paths, issue codes, order, and the rendered message', () => {
+      try {
+        normalizeListFilter({ status: ['running', 'bogus'] });
+        expect.unreachable('expected throw');
+      } catch (error) {
+        expect(error).toBeInstanceOf(ListFilterValidationError);
+        const validationError = error as ListFilterValidationError;
+        expect(validationError.issues).toEqual([
+          {
+            path: ['status'],
+            message: 'Invalid input',
+            code: 'invalid_union',
+          },
+        ]);
+        expect(validationError.message).toBe('status: Invalid input');
+      }
+    });
   });
 });
 
