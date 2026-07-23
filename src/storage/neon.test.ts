@@ -1,8 +1,9 @@
 import { PGlite } from '@electric-sql/pglite';
-import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
+import { describe, expect, it } from 'bun:test';
 
 import { NeonStorage } from './neon.ts';
-import type { PostgresPool, PostgresPoolClient } from './postgres.ts';
+import { createPGliteTestFixture, pgliteAsPostgresPool } from './pglite.test-support.ts';
+import type { PostgresPool } from './postgres.ts';
 import {
   collect,
   decodeText,
@@ -11,49 +12,7 @@ import {
   runStorageCapabilityConformance,
 } from './storage-adapter.test-support.ts';
 
-/**
- * A single PGlite instance is booted once in `beforeAll` and shared by every case
- * in this file purely for speed: a fresh PGlite is a full WASM Postgres boot
- * (~hundreds of ms), so booting one and truncating the table between cases keeps
- * the suite fast instead of re-booting per test. Booting in a hook (not at
- * module-eval) keeps the import phase side-effect-free and lets the boot await
- * cleanly before the first case runs.
- */
-let sharedDatabase: PGlite;
-
-beforeAll(async () => {
-  sharedDatabase = await new PGlite();
-  await sharedDatabase.query('SELECT 1');
-});
-
-afterAll(async () => {
-  await sharedDatabase.close();
-});
-
-/**
- * Wrap the shared PGlite instance as a {@link PostgresPool}. PGlite is a real
- * in-process Postgres, so this exercises the actual `$1`/BYTEA/`ON CONFLICT`/range
- * SQL and the `COLLATE "C"` ordering that a JS-map fake would silently get wrong.
- * PGlite serializes statements on one connection, so an interactive
- * `BEGIN`/`COMMIT` driven through plain `query()` is safe and `connect()` hands
- * back the same instance with a no-op `release()`. `end()` is a no-op because the
- * shared instance outlives any single case and is closed once in `afterAll`.
- */
-function sharedPgliteAsPostgresPool(): PostgresPool {
-  const client: PostgresPoolClient = {
-    query: (sql, parameters) => sharedDatabase.query(sql, parameters as unknown[]),
-    release: () => {
-      // Single shared connection; nothing to return to a pool.
-    },
-  };
-  return {
-    query: (sql, parameters) => sharedDatabase.query(sql, parameters as unknown[]),
-    connect: async () => client,
-    end: async () => {
-      // The shared instance is closed once in afterAll, not per dispose.
-    },
-  };
-}
+const pgliteFixture = createPGliteTestFixture();
 
 /**
  * Construct a NeonStorage over the shared PGlite, resetting the table first so
@@ -61,11 +20,8 @@ function sharedPgliteAsPostgresPool(): PostgresPool {
  * table on first use; truncating here is enough to isolate cases.
  */
 async function createPgliteBackedNeonStorage(): Promise<NeonStorage> {
-  await sharedDatabase.query(
-    'CREATE TABLE IF NOT EXISTS kv (key TEXT COLLATE "C" PRIMARY KEY, value BYTEA NOT NULL)',
-  );
-  await sharedDatabase.query('DELETE FROM kv');
-  return new NeonStorage({ url: 'pglite://memory', pool: sharedPgliteAsPostgresPool() });
+  await pgliteFixture.reset();
+  return new NeonStorage({ url: 'pglite://memory', pool: pgliteFixture.pool });
 }
 
 runStorageCapabilityConformance('NeonStorage', {
@@ -539,26 +495,12 @@ describe('NeonStorage', () => {
 });
 
 describe('NeonStorage configurable schema/table (#468)', () => {
-  // Wrap a dedicated PGlite as a PostgresPool. A dedicated instance (not the shared
-  // one) is used so the schema-qualified table is created in isolation.
-  function dedicatedPgliteAsPostgresPool(database: PGlite): PostgresPool {
-    const client: PostgresPoolClient = {
-      query: (sql, parameters) => database.query(sql, parameters as unknown[]),
-      release: () => {},
-    };
-    return {
-      query: (sql, parameters) => database.query(sql, parameters as unknown[]),
-      connect: async () => client,
-      end: async () => {},
-    };
-  }
-
   it('creates the schema, qualifies the table, and round-trips values', async () => {
     const database = await new PGlite();
     try {
       await using storage = new NeonStorage({
         url: 'pglite://memory',
-        pool: dedicatedPgliteAsPostgresPool(database),
+        pool: pgliteAsPostgresPool(database),
         schema: 'weft',
         table: 'state',
       });
@@ -584,7 +526,7 @@ describe('NeonStorage configurable schema/table (#468)', () => {
     try {
       await using storage = new NeonStorage({
         url: 'pglite://memory',
-        pool: dedicatedPgliteAsPostgresPool(database),
+        pool: pgliteAsPostgresPool(database),
         table: 'workflow_kv',
       });
       await storage.put('k', encode('v'));
@@ -602,7 +544,7 @@ describe('NeonStorage configurable schema/table (#468)', () => {
     try {
       await using storage = new NeonStorage({
         url: 'pglite://memory',
-        pool: dedicatedPgliteAsPostgresPool(database),
+        pool: pgliteAsPostgresPool(database),
         schema: 'weft',
       });
       await storage.batch([

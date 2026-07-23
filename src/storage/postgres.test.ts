@@ -1,56 +1,14 @@
-import { PGlite } from '@electric-sql/pglite';
-import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
+import { describe, expect, it } from 'bun:test';
 
-import { PostgresStorage, type PostgresPool, type PostgresPoolClient } from './postgres.ts';
+import { createPGliteTestFixture } from './pglite.test-support.ts';
+import { PostgresStorage, type PostgresPool } from './postgres.ts';
 import {
   bytes as encode,
   runBasicStorageContract,
   runStorageCapabilityConformance,
 } from './storage-adapter.test-support.ts';
 
-/**
- * A single PGlite instance is booted once in `beforeAll` and shared by every case
- * in this file purely for speed: a fresh PGlite is a full WASM Postgres boot
- * (~hundreds of ms), so booting one and truncating the table between cases keeps
- * the suite fast instead of re-booting per test. Booting in a hook (not at
- * module-eval) keeps the import phase side-effect-free and lets the boot await
- * cleanly before the first case runs.
- */
-let sharedDatabase: PGlite;
-
-beforeAll(async () => {
-  sharedDatabase = await new PGlite();
-  await sharedDatabase.query('SELECT 1');
-});
-
-afterAll(async () => {
-  await sharedDatabase.close();
-});
-
-/**
- * Wrap the shared PGlite instance as a {@link PostgresPool}. PGlite is a real
- * in-process Postgres, so this exercises the actual `$1`/BYTEA/`ON CONFLICT`/range
- * SQL and the `COLLATE "C"` ordering that a JS-map fake would silently get wrong.
- * PGlite serializes statements on one connection, so an interactive
- * `BEGIN`/`COMMIT` driven through plain `query()` is safe and `connect()` hands
- * back the same instance with a no-op `release()`. `end()` is a no-op because the
- * shared instance outlives any single case and is closed once in `afterAll`.
- */
-function sharedPgliteAsPostgresPool(): PostgresPool {
-  const client: PostgresPoolClient = {
-    query: (sql, parameters) => sharedDatabase.query(sql, parameters as unknown[]),
-    release: () => {
-      // Single shared connection; nothing to return to a pool.
-    },
-  };
-  return {
-    query: (sql, parameters) => sharedDatabase.query(sql, parameters as unknown[]),
-    connect: async () => client,
-    end: async () => {
-      // The shared instance is closed once in afterAll, not per dispose.
-    },
-  };
-}
+const pgliteFixture = createPGliteTestFixture();
 
 /**
  * Construct a PostgresStorage over the shared PGlite, resetting the table first so
@@ -58,11 +16,8 @@ function sharedPgliteAsPostgresPool(): PostgresPool {
  * creates the table on first use; truncating here is enough to isolate cases.
  */
 async function createPgliteBackedPostgresStorage(): Promise<PostgresStorage> {
-  await sharedDatabase.query(
-    'CREATE TABLE IF NOT EXISTS kv (key TEXT COLLATE "C" PRIMARY KEY, value BYTEA NOT NULL)',
-  );
-  await sharedDatabase.query('DELETE FROM kv');
-  return new PostgresStorage({ pool: sharedPgliteAsPostgresPool() });
+  await pgliteFixture.reset();
+  return new PostgresStorage({ pool: pgliteFixture.pool });
 }
 
 runStorageCapabilityConformance('PostgresStorage', {
@@ -88,11 +43,8 @@ describe('PostgresStorage', () => {
     // supplied, `url` is optional and never touched. This is the papercut fix that
     // lets a caller reuse a shared application pool without a dummy connection
     // string.
-    await using storage = new PostgresStorage({ pool: sharedPgliteAsPostgresPool() });
-    await sharedDatabase.query(
-      'CREATE TABLE IF NOT EXISTS kv (key TEXT COLLATE "C" PRIMARY KEY, value BYTEA NOT NULL)',
-    );
-    await sharedDatabase.query('DELETE FROM kv');
+    await using storage = new PostgresStorage({ pool: pgliteFixture.pool });
+    await pgliteFixture.reset();
     await storage.put('k', encode('v'));
     expect(await storage.get('k')).toEqual(encode('v'));
   });
@@ -114,15 +66,15 @@ describe('PostgresStorage', () => {
     // state shares ONE database with the application's tables (atomic with app
     // writes, one PITR line). Prove the adapter actually writes to `weft.kv`, not
     // `public.kv`.
-    await sharedDatabase.query('DROP SCHEMA IF EXISTS weft CASCADE');
+    await pgliteFixture.database.query('DROP SCHEMA IF EXISTS weft CASCADE');
     await using storage = new PostgresStorage({
-      pool: sharedPgliteAsPostgresPool(),
+      pool: pgliteFixture.pool,
       schema: 'weft',
     });
     await storage.put('k', encode('v'));
     expect(await storage.get('k')).toEqual(encode('v'));
 
-    const qualified = await sharedDatabase.query('SELECT count(*)::int AS n FROM weft.kv');
+    const qualified = await pgliteFixture.database.query('SELECT count(*)::int AS n FROM weft.kv');
     expect((qualified.rows[0] as { n: number }).n).toBe(1);
   });
 
