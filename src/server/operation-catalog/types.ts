@@ -136,7 +136,7 @@ export type OperationContext<Input> = {
  * Common operation fields shared by unary, stream, and subscription kinds.
  * The discriminated union below adds `kind` and `eventSchema` per kind.
  */
-type OperationDefinitionBase<Input, Output, Element = unknown> = {
+export type OperationDefinitionBase<Input, Output, Element = unknown> = {
   readonly name: string;
   readonly mcpExposable: boolean;
   readonly mcpTool?: McpToolMetadata;

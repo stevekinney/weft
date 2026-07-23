@@ -19,19 +19,13 @@
 
 import type { z } from 'zod';
 
-import type { FaultCode } from '../core/fault-code.ts';
 import type { AuthorizationScope } from './authorization-scope.ts';
 import type { AccessPolicy, ScopeRequirement } from './authorization.ts';
 import { validateOperationName } from './operation-catalog.ts';
 import type {
-  AuthorizationDecision,
-  McpToolMetadata,
-  OperationContext,
   OperationDefinition,
-  OperationInvocationResult,
+  OperationDefinitionBase,
   ParameterizedAccessHint,
-  TransportAvailability,
-  UnknownKeyPolicy,
 } from './operation-catalog/types.ts';
 
 // Re-exported so callers that import the typed builder also get the name
@@ -51,37 +45,11 @@ export { isValidOperationName, validateOperationName } from './operation-catalog
  * passes. When present, BOTH `access` AND `authorize` must permit the
  * call: the policy runs first, then the parameter-aware hook.
  */
-type OperationDefinitionInputBase<Input, Output, Element = unknown> = {
-  readonly name: string;
-  readonly mcpExposable: boolean;
-  readonly mcpTool?: McpToolMetadata;
-  readonly summary: string;
-  /**
-   * Optional longer-form prose. See {@link OperationDefinition} for the
-   * contract and the surfaces (OpenAPI, OpenRPC, CLI `--describe`, MCP
-   * discovery) that read it. `summary` stays mandatory and short.
-   */
-  readonly description?: string;
+type OperationDefinitionInputBase<Input, Output, Element = unknown> = Omit<
+  OperationDefinitionBase<Input, Output, Element>,
+  'tags'
+> & {
   readonly tags?: ReadonlyArray<string>;
-  /**
-   * Whether invoking this operation irreversibly mutates state. Required —
-   * there is deliberately no default, so every operation author must make
-   * the call explicitly. See {@link OperationDefinition} for the contract
-   * and the consumers that read it.
-   */
-  readonly destructive: boolean;
-  readonly inputSchema: z.ZodType<Input>;
-  readonly outputSchema: z.ZodType<Output>;
-  readonly access: AccessPolicy;
-  readonly parameterizedAccess?: ParameterizedAccessHint;
-  readonly producibleFaults?: ReadonlyArray<FaultCode>;
-  readonly discoverable?: boolean;
-  readonly transports: TransportAvailability;
-  readonly unknownKeyPolicy: UnknownKeyPolicy;
-  readonly authorize?: (context: OperationContext<Input>) => Promise<AuthorizationDecision>;
-  readonly invoke: (
-    context: OperationContext<Input>,
-  ) => Promise<OperationInvocationResult<Output, Element>>;
 };
 
 /**

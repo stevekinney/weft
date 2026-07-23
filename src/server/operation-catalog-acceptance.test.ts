@@ -88,6 +88,82 @@ const subscribeServeOptions = {
   },
 };
 
+describe('defineOperation builder input', () => {
+  it('accepts omitted tags and preserves contextual unary inference', async () => {
+    const operation = defineOperation({
+      name: 'weft.acceptance.inferred',
+      mcpExposable: false,
+      summary: 'inferred unary operation',
+      destructive: false,
+      inputSchema: z.object({ value: z.string() }),
+      outputSchema: z.object({ length: z.number() }),
+      access: { kind: 'public' },
+      transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
+      unknownKeyPolicy: { http: 'reject', jsonRpc: 'reject' },
+      authorize: async ({ input }) => {
+        input.value.toUpperCase();
+        return { allowed: true };
+      },
+      invoke: async ({ input }) => ({ length: input.value.length }),
+    });
+
+    expect(operation.tags).toEqual([]);
+    expect(
+      await operation.invoke({
+        input: { value: 'ok' },
+        principal: anonymousPrincipal(),
+        engine: {},
+        transport: 'http-rest',
+      }),
+    ).toEqual({ length: 2 });
+  });
+
+  it('preserves stream and subscription discriminants with event schemas', () => {
+    const stream = defineOperation({
+      name: 'weft.acceptance.stream',
+      mcpExposable: false,
+      summary: 'stream operation',
+      destructive: false,
+      kind: 'stream',
+      inputSchema: z.object({}),
+      outputSchema: z.object({}),
+      eventSchema: z.object({ chunk: z.string() }),
+      access: { kind: 'public' },
+      transports: { http: true, jsonRpcHttp: false, jsonRpcWebSocket: true, jsonRpcStdio: false },
+      unknownKeyPolicy: { http: 'reject', jsonRpc: 'reject' },
+      invoke: async () =>
+        (async function* () {
+          yield { chunk: 'ok' };
+        })(),
+    });
+    const subscription = defineOperation({
+      name: 'weft.acceptance.subscription',
+      mcpExposable: false,
+      summary: 'subscription operation',
+      destructive: false,
+      kind: 'subscription',
+      inputSchema: z.object({}),
+      outputSchema: z.object({ subscriptionId: z.string() }),
+      eventSchema: z.object({ value: z.number() }),
+      access: { kind: 'public' },
+      transports: { http: false, jsonRpcHttp: false, jsonRpcWebSocket: true, jsonRpcStdio: false },
+      unknownKeyPolicy: { http: 'reject', jsonRpc: 'reject' },
+      invoke: async () => ({
+        envelope: { subscriptionId: 's' },
+        iterable: (async function* () {
+          yield { value: 1 };
+        })(),
+        close: async () => {},
+      }),
+    });
+
+    expect(stream.tags).toEqual([]);
+    expect(stream.kind).toBe('stream');
+    expect(subscription.tags).toEqual([]);
+    expect(subscription.kind).toBe('subscription');
+  });
+});
+
 /**
  * Proves the single-projection invariant: the envelopes a WebSocket subscriber
  * receives over the wire match, position-for-position, the envelopes the engine
