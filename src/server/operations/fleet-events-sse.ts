@@ -10,6 +10,13 @@ import {
   type Cursor,
   type ReplayLiveSubscribeOptions,
 } from '../workflow-event-feed.ts';
+import {
+  createReplayAwareClosableIterable,
+  fleetEventEnvelopeSchema,
+  isClosableAsyncIterable,
+  isReplayAwareClosableIterable,
+  type ReplayAwareClosableIterable,
+} from './event-stream-contracts.ts';
 import { invalidParamsFault } from './operation-helpers.ts';
 import {
   createEventEnvelopeSSEStream,
@@ -20,12 +27,7 @@ import {
 } from './sse-stream.ts';
 
 type FleetEventsSseOutput = AsyncIterable<FleetEventEnvelope>;
-type ClosableFleetEventsIterable = AsyncIterable<FleetEventEnvelope> & {
-  close(): Promise<void>;
-};
-type ReplayAwareFleetEventsIterable = ClosableFleetEventsIterable & {
-  readonly replayComplete: Promise<void>;
-};
+type ReplayAwareFleetEventsOutput = ReplayAwareClosableIterable<FleetEventEnvelope>;
 
 type FleetEventStreamOperationContext = {
   readonly fleetEventFeed?: Pick<FleetEventFeed, 'subscribe'>;
@@ -52,15 +54,6 @@ const fleetEventsSseOutputSchema: z.ZodType<FleetEventsSseOutput> = z.custom<Fle
   isAsyncIterable,
   'Expected async iterable fleet event stream',
 );
-
-const fleetEventEnvelopeSchema: z.ZodType<FleetEventEnvelope> = z.object({
-  kind: z.string(),
-  workflowId: z.string().optional(),
-  sequence: z.number(),
-  cursor: z.string(),
-  emittedAtMs: z.number(),
-  payload: z.unknown(),
-});
 
 export const fleetEventsSseOperation = defineOperation<
   FleetEventsSseInput,
@@ -110,22 +103,6 @@ function isAsyncIterable(value: unknown): value is AsyncIterable<FleetEventEnvel
   return typeof candidate[Symbol.asyncIterator] === 'function';
 }
 
-function isClosableFleetEventsIterable(
-  value: AsyncIterable<FleetEventEnvelope>,
-): value is ClosableFleetEventsIterable {
-  return 'close' in value && typeof value.close === 'function';
-}
-
-function isReplayAwareFleetEventsIterable(
-  value: AsyncIterable<FleetEventEnvelope>,
-): value is ReplayAwareFleetEventsIterable {
-  return (
-    isClosableFleetEventsIterable(value) &&
-    'replayComplete' in value &&
-    value.replayComplete instanceof Promise
-  );
-}
-
 function matchesFleetEventFilter(
   envelope: FleetEventEnvelope,
   input: FleetEventsSseInput,
@@ -138,57 +115,35 @@ function matchesFleetEventFilter(
 function createFleetEventsIterable(
   input: FleetEventsSseInput,
   context: FleetEventStreamOperationContext,
-): ReplayAwareFleetEventsIterable {
+): ReplayAwareFleetEventsOutput {
   const feed = context.fleetEventFeed;
   if (feed === undefined) {
     throw unsupportedEventStreamContextFault('fleet event SSE requires a fleet event feed');
   }
 
   const controller = new AbortController();
-  const replayComplete = Promise.withResolvers<void>();
-  let closed = false;
-  const close = async (): Promise<void> => {
-    if (closed) return;
-    closed = true;
-    controller.abort();
-  };
-
   const fromCursor = input.lastEventId ?? input.fromCursor ?? INITIAL_CURSOR;
-  const subscribeOptions: ReplayLiveSubscribeOptions<FleetEventEnvelope> = {
-    fromCursor,
-    signal: controller.signal,
-    replayLimit: MAX_FLEET_SSE_REPLAY_EVENTS,
-    filterEnvelope: (envelope) => matchesFleetEventFilter(envelope, input),
-    onReplayComplete: () => replayComplete.resolve(),
-    createReplayLimitError: (count, limit) =>
-      invalidParamsFault(
-        `Fleet event replay window is ${count} matching events; maximum is ${limit}. Supply a more recent fromCursor.`,
-      ),
-  };
-
-  let source: AsyncIterable<FleetEventEnvelope>;
-  try {
-    source = feed.subscribe(subscribeOptions);
-  } catch (error) {
-    void close();
-    throw error;
-  }
-
-  return {
-    async *[Symbol.asyncIterator]() {
-      try {
-        for await (const envelope of source) yield envelope;
-      } finally {
-        await close();
-      }
+  return createReplayAwareClosableIterable(
+    (onReplayComplete) => {
+      const subscribeOptions: ReplayLiveSubscribeOptions<FleetEventEnvelope> = {
+        fromCursor,
+        signal: controller.signal,
+        replayLimit: MAX_FLEET_SSE_REPLAY_EVENTS,
+        filterEnvelope: (envelope) => matchesFleetEventFilter(envelope, input),
+        onReplayComplete,
+        createReplayLimitError: (count, limit) =>
+          invalidParamsFault(
+            `Fleet event replay window is ${count} matching events; maximum is ${limit}. Supply a more recent fromCursor.`,
+          ),
+      };
+      return feed.subscribe(subscribeOptions);
     },
-    replayComplete: replayComplete.promise,
-    close,
-  };
+    { close: () => controller.abort() },
+  );
 }
 
 function shapeFleetEventsSseSuccess(output: FleetEventsSseOutput, request: Request): Response {
-  const close = isClosableFleetEventsIterable(output)
+  const close = isClosableAsyncIterable<FleetEventEnvelope>(output)
     ? () => output.close()
     : async () => undefined;
 
@@ -196,7 +151,9 @@ function shapeFleetEventsSseSuccess(output: FleetEventsSseOutput, request: Reque
     createEventEnvelopeSSEStream({
       iterable: output,
       close,
-      ...(isReplayAwareFleetEventsIterable(output) ? { ready: output.replayComplete } : {}),
+      ...(isReplayAwareClosableIterable<FleetEventEnvelope>(output)
+        ? { ready: output.replayComplete }
+        : {}),
       signal: request.signal,
     }),
     {

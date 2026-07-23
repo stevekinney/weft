@@ -14,6 +14,14 @@ import {
   type ReplayLiveSubscribeOptions,
   type WorkflowEventFeed,
 } from '../workflow-event-feed.ts';
+import {
+  createReplayAwareClosableIterable,
+  isClosableAsyncIterable,
+  isReplayAwareClosableIterable,
+  workflowEventEnvelopeSchema,
+  workflowEventParameterizedAccess,
+  type ReplayAwareClosableIterable,
+} from './event-stream-contracts.ts';
 import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
 import {
   createEventEnvelopeSSEStream,
@@ -33,12 +41,7 @@ export type EventStreamOperationContext = {
 };
 
 type WorkflowEventsSseOutput = AsyncIterable<EventEnvelope>;
-type ClosableWorkflowEventsIterable = AsyncIterable<EventEnvelope> & {
-  close(): Promise<void>;
-};
-type ReplayAwareWorkflowEventsIterable = ClosableWorkflowEventsIterable & {
-  readonly replayComplete: Promise<void>;
-};
+type ReplayAwareWorkflowEventsOutput = ReplayAwareClosableIterable<EventEnvelope>;
 
 const INITIAL_CURSOR: Cursor = '-1';
 const MAX_WORKFLOW_SSE_REPLAY_EVENTS = 1_000;
@@ -63,16 +66,6 @@ const workflowEventsSseOutputSchema: z.ZodType<WorkflowEventsSseOutput> =
     'Expected async iterable workflow event stream',
   );
 
-const workflowEventEnvelopeSchema: z.ZodType<EventEnvelope> = z.object({
-  kind: z.string(),
-  workflowId: z.string(),
-  selector: z.enum(['events', 'tokens']),
-  sequence: z.number(),
-  cursor: z.string(),
-  emittedAtMs: z.number(),
-  payload: z.unknown(),
-});
-
 export const workflowEventsSseOperation = defineOperation<
   WorkflowEventsSseInput,
   WorkflowEventsSseOutput,
@@ -89,20 +82,7 @@ export const workflowEventsSseOperation = defineOperation<
   inputSchema: workflowEventsSseInputSchema,
   outputSchema: workflowEventsSseOutputSchema,
   eventSchema: workflowEventEnvelopeSchema,
-  parameterizedAccess: {
-    discriminator: 'selector',
-    defaultValue: 'events',
-    variants: [
-      {
-        value: 'events',
-        access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['events:read'] } },
-      },
-      {
-        value: 'tokens',
-        access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['streams:read'] } },
-      },
-    ],
-  },
+  parameterizedAccess: workflowEventParameterizedAccess,
   producibleFaults: ['InvalidParams', 'UnsupportedTransport'],
   access: { kind: 'authenticated' },
   authorize: async ({ input, principal }) => {
@@ -153,26 +133,10 @@ function isAsyncIterable(value: unknown): value is AsyncIterable<EventEnvelope> 
   return typeof candidate[Symbol.asyncIterator] === 'function';
 }
 
-function isClosableWorkflowEventsIterable(
-  value: AsyncIterable<EventEnvelope>,
-): value is ClosableWorkflowEventsIterable {
-  return 'close' in value && typeof value.close === 'function';
-}
-
-function isReplayAwareWorkflowEventsIterable(
-  value: AsyncIterable<EventEnvelope>,
-): value is ReplayAwareWorkflowEventsIterable {
-  return (
-    isClosableWorkflowEventsIterable(value) &&
-    'replayComplete' in value &&
-    value.replayComplete instanceof Promise
-  );
-}
-
 function createWorkflowEventsIterable(
   input: WorkflowEventsSseInput,
   context: EventStreamOperationContext,
-): ReplayAwareWorkflowEventsIterable {
+): ReplayAwareWorkflowEventsOutput {
   const feed = context.workflowEventFeed;
   if (feed === undefined) {
     throw unsupportedEventStreamContextFault('workflow event SSE requires a workflow event feed');
@@ -183,59 +147,41 @@ function createWorkflowEventsIterable(
     throw maximumWorkflowStreamsFault();
   }
 
-  const controller = new AbortController();
-  const replayComplete = Promise.withResolvers<void>();
-  let closed = false;
-  const close = async (): Promise<void> => {
-    if (closed) return;
-    closed = true;
-    controller.abort();
-    lease?.release();
-  };
-
   const fromCursor = input.lastEventId ?? input.fromCursor ?? INITIAL_CURSOR;
-  const subscribeOptions: {
-    workflowId: string;
-    selector: EventSelector;
-  } & ReplayLiveSubscribeOptions<EventEnvelope> = {
-    workflowId: input.workflowId,
-    selector: input.selector,
-    fromCursor,
-    signal: controller.signal,
-    replayLimit: MAX_WORKFLOW_SSE_REPLAY_EVENTS,
-    onReplayComplete: () => replayComplete.resolve(),
-    createReplayLimitError: (count, limit) =>
-      invalidParamsFault(
-        `Workflow event replay window is ${count} events; maximum is ${limit}. Supply a more recent fromCursor.`,
-      ),
-  };
-
-  let source: AsyncIterable<EventEnvelope>;
-  try {
-    source = feed.subscribe(subscribeOptions);
-  } catch (error) {
-    void close();
-    throw error;
-  }
-
-  return {
-    async *[Symbol.asyncIterator]() {
-      try {
-        for await (const envelope of source) yield envelope;
-      } finally {
-        await close();
-      }
+  const controller = new AbortController();
+  return createReplayAwareClosableIterable(
+    (onReplayComplete) => {
+      const subscribeOptions: {
+        workflowId: string;
+        selector: EventSelector;
+      } & ReplayLiveSubscribeOptions<EventEnvelope> = {
+        workflowId: input.workflowId,
+        selector: input.selector,
+        fromCursor,
+        signal: controller.signal,
+        replayLimit: MAX_WORKFLOW_SSE_REPLAY_EVENTS,
+        onReplayComplete,
+        createReplayLimitError: (count, limit) =>
+          invalidParamsFault(
+            `Workflow event replay window is ${count} events; maximum is ${limit}. Supply a more recent fromCursor.`,
+          ),
+      };
+      return feed.subscribe(subscribeOptions);
     },
-    replayComplete: replayComplete.promise,
-    close,
-  };
+    {
+      close: () => {
+        controller.abort();
+        lease?.release();
+      },
+    },
+  );
 }
 
 function shapeWorkflowEventsSseSuccess(
   output: WorkflowEventsSseOutput,
   request: Request,
 ): Response {
-  const close = isClosableWorkflowEventsIterable(output)
+  const close = isClosableAsyncIterable<EventEnvelope>(output)
     ? () => output.close()
     : async () => undefined;
 
@@ -243,7 +189,9 @@ function shapeWorkflowEventsSseSuccess(
     createEventEnvelopeSSEStream({
       iterable: output,
       close,
-      ...(isReplayAwareWorkflowEventsIterable(output) ? { ready: output.replayComplete } : {}),
+      ...(isReplayAwareClosableIterable<EventEnvelope>(output)
+        ? { ready: output.replayComplete }
+        : {}),
       signal: request.signal,
     }),
     {

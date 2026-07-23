@@ -6,6 +6,10 @@ import type { TransportKind } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import { EVENTS_READ_EVENT_TYPES } from '../runtime/client-visible-events.ts';
 import { decodeCursor, type Cursor } from '../workflow-event-feed.ts';
+import {
+  createReplayAwareClosableIterable,
+  fleetEventEnvelopeSchema,
+} from './event-stream-contracts.ts';
 import { invalidParamsFault } from './operation-helpers.ts';
 
 const INITIAL_SUBSCRIPTION_CURSOR: Cursor = '-1';
@@ -28,15 +32,6 @@ const fleetEventsSubscriptionInput = z.object({
 const fleetEventsSubscriptionEnvelope = z.object({
   subscriptionId: z.string(),
   cursor: z.string(),
-});
-
-const fleetEventEnvelopeSchema: z.ZodType<FleetEventEnvelope> = z.object({
-  kind: z.string(),
-  workflowId: z.string().optional(),
-  sequence: z.number(),
-  cursor: z.string(),
-  emittedAtMs: z.number(),
-  payload: z.unknown(),
 });
 
 export type FleetEventsSubscriptionInput = z.infer<typeof fleetEventsSubscriptionInput>;
@@ -73,20 +68,23 @@ export const fleetEventsSubscriptionOperation = defineOperation<
     }
     const fleetFeed = getFleetEventFeed(engine, transport);
     const controller = new AbortController();
-    const iterable = fleetFeed.subscribe({
-      ...(input.fromCursor === undefined ? {} : { fromCursor: input.fromCursor }),
-      signal: controller.signal,
-      replayLimit: MAX_FLEET_SUBSCRIPTION_REPLAY_EVENTS,
-      filterEnvelope: (envelope) => matchesFleetEventFilter(envelope, input),
-      createReplayLimitError: (count, limit) => fleetReplayLimitFault(count, limit),
-    });
+    const iterable = createReplayAwareClosableIterable(
+      (onReplayComplete) =>
+        fleetFeed.subscribe({
+          ...(input.fromCursor === undefined ? {} : { fromCursor: input.fromCursor }),
+          signal: controller.signal,
+          replayLimit: MAX_FLEET_SUBSCRIPTION_REPLAY_EVENTS,
+          filterEnvelope: (envelope) => matchesFleetEventFilter(envelope, input),
+          onReplayComplete,
+          createReplayLimitError: (count, limit) => fleetReplayLimitFault(count, limit),
+        }),
+      { close: () => controller.abort() },
+    );
 
     return {
       envelope: { subscriptionId: `sub_${crypto.randomUUID()}`, cursor: startingCursor },
       iterable,
-      close: async () => {
-        controller.abort();
-      },
+      close: () => iterable.close(),
     };
   },
 });

@@ -10,6 +10,11 @@ import {
   type ReplayLiveSubscribeOptions,
   type WorkflowEventFeed,
 } from '../workflow-event-feed.ts';
+import {
+  createReplayAwareClosableIterable,
+  workflowEventEnvelopeSchema,
+  workflowEventParameterizedAccess,
+} from './event-stream-contracts.ts';
 import { invalidParamsFault } from './operation-helpers.ts';
 
 const INITIAL_SUBSCRIPTION_CURSOR: Cursor = '-1';
@@ -69,30 +74,9 @@ export const workflowEventsSubscriptionOperation = defineOperation<
   inputSchema: workflowEventsSubscriptionInput,
   outputSchema: workflowEventsSubscriptionEnvelope,
   producibleFaults: ['InvalidParams'],
-  eventSchema: z.object({
-    kind: z.string(),
-    workflowId: z.string(),
-    selector: z.enum(['events', 'tokens']),
-    sequence: z.number(),
-    cursor: z.string(),
-    emittedAtMs: z.number(),
-    payload: z.unknown(),
-  }),
+  eventSchema: workflowEventEnvelopeSchema,
   access: { kind: 'authenticated' },
-  parameterizedAccess: {
-    discriminator: 'selector',
-    defaultValue: 'events',
-    variants: [
-      {
-        value: 'events',
-        access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['events:read'] } },
-      },
-      {
-        value: 'tokens',
-        access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['streams:read'] } },
-      },
-    ],
-  },
+  parameterizedAccess: workflowEventParameterizedAccess,
   authorize: async ({ input, principal }) => {
     const requiredScope = workflowSubscriptionScope(input.selector);
     if (!isAuthenticated(principal)) {
@@ -134,14 +118,15 @@ export const workflowEventsSubscriptionOperation = defineOperation<
           `Workflow event replay window is ${count} events; maximum is ${limit}. Supply a more recent fromCursor.`,
         ),
     };
-    const iterable: AsyncIterable<EventEnvelope> = feed.subscribe(subscribeOptions);
+    const iterable = createReplayAwareClosableIterable(
+      (onReplayComplete) => feed.subscribe({ ...subscribeOptions, onReplayComplete }),
+      { close: () => controller.abort() },
+    );
 
     return {
       envelope: { subscriptionId: `sub_${crypto.randomUUID()}`, cursor: startingCursor },
       iterable,
-      close: async () => {
-        controller.abort();
-      },
+      close: () => iterable.close(),
     };
   },
 });
