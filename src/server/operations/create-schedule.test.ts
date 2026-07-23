@@ -66,6 +66,20 @@ describe('weft.schedules.create', () => {
     );
   });
 
+  it('keeps create-only fields beside shared schedule fields', async () => {
+    const input = {
+      type: 'echo',
+      input: { payload: 'create-only' },
+      every: '5m',
+      id: 'create-only-fields',
+    };
+    const request = jsonRequest('POST', '/v1/schedules', input);
+
+    const extracted = await createScheduleRestBinding.extractInput(request, {}, {});
+
+    expect(extracted).toEqual(input);
+  });
+
   it('returns 400 when description is not a string', async () => {
     engine = createEngine();
 

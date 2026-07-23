@@ -70,6 +70,27 @@ describe('weft.schedules.update', () => {
     );
   });
 
+  it('keeps the path identifier and partial update fields at the binding boundary', async () => {
+    const extracted = await updateScheduleRestBinding.extractInput(
+      jsonRequest('PATCH', '/v1/schedules/schedule-partial', {
+        every: '5m',
+        overlap: 'queue',
+      }),
+      { id: 'schedule-partial' },
+      {},
+    );
+
+    expect(extracted).toEqual({
+      scheduleId: 'schedule-partial',
+      cronExpression: undefined,
+      every: '5m',
+      description: undefined,
+      overlap: 'queue',
+      backfill: undefined,
+      jitter: undefined,
+    });
+  });
+
   it('updates mutable options over JSON-RPC with the same contract as REST', async () => {
     engine = createEngine();
     await engine.schedule('echo', null, '0 * * * *', {

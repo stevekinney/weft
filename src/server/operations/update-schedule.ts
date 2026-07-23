@@ -5,9 +5,12 @@ import { normalizeScheduleUpdateOptions } from '../../core/engine/validation/sch
 import type { ScheduleUpdateOptions } from '../../core/types.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { readRestJsonBody } from '../rest-body.ts';
-import { invalidParamsFault, isOperationFault, shapeRestFault } from './operation-helpers.ts';
+import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
 import { mapScheduleErrorToFault, validateScheduleInputCadence } from './schedule-faults.ts';
+import {
+  extractSharedScheduleRestFields,
+  parseScheduleRestBodyRequestRecord,
+} from './schedule-rest-body.ts';
 
 // `cronExpression`/`every` are intentionally permissive at the schema boundary
 // so REST and JSON-RPC clients hit the same validation in `invoke()`.
@@ -157,33 +160,10 @@ export const updateScheduleRestBinding: UnknownRestBinding = {
     jitter: { kind: 'body-field', bodyField: 'jitter' },
   },
   extractInput: async (request, pathParams, context) => {
-    let body: unknown;
-    try {
-      body = await readRestJsonBody(request, context);
-    } catch (error) {
-      if (isOperationFault(error)) throw error;
-      throw invalidParamsFault('Invalid JSON body');
-    }
-
-    // arrays are typeof 'object' && !== null, so they pass
-    // this guard and fall through to the cadence check in `invoke`.
-    if (typeof body !== 'object' || body === null) {
-      throw invalidParamsFault('Request body must be a JSON object');
-    }
-
-    const record = body as Record<string, unknown>;
-    // Read own properties only so an array body (whose prototype carries an
-    // `every` method) does not masquerade as an interval spec.
+    const record = await parseScheduleRestBodyRequestRecord(request, context);
     return {
       scheduleId: pathParams['id'] ?? '',
-      cronExpression: Object.hasOwn(record, 'cronExpression')
-        ? record['cronExpression']
-        : undefined,
-      every: Object.hasOwn(record, 'every') ? record['every'] : undefined,
-      description: record['description'],
-      overlap: record['overlap'],
-      backfill: record['backfill'],
-      jitter: record['jitter'],
+      ...extractSharedScheduleRestFields(record),
     };
   },
   success: { kind: 'empty', status: 204 },

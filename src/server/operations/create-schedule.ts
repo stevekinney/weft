@@ -4,9 +4,12 @@ import type { Engine } from '../../core/engine.ts';
 import type { ScheduleOptions, ScheduleSpec } from '../../core/types.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { readRestJsonBody } from '../rest-body.ts';
-import { invalidParamsFault, isOperationFault, shapeRestFault } from './operation-helpers.ts';
+import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
 import { mapScheduleErrorToFault, validateScheduleInputCadence } from './schedule-faults.ts';
+import {
+  extractSharedScheduleRestFields,
+  parseScheduleRestBodyRequestRecord,
+} from './schedule-rest-body.ts';
 
 const VALID_SCHEDULE_OVERLAP_POLICIES = new Set<NonNullable<ScheduleOptions['overlap']>>([
   'skip',
@@ -215,36 +218,12 @@ export const createScheduleRestBinding: UnknownRestBinding = {
     jitter: { kind: 'body-field', bodyField: 'jitter' },
   },
   extractInput: async (request, _pathParams, context) => {
-    let body: unknown;
-    try {
-      body = await readRestJsonBody(request, context);
-    } catch (error) {
-      if (isOperationFault(error)) throw error;
-      throw invalidParamsFault('Invalid JSON body');
-    }
-
-    // arrays are typeof 'object' && !== null, so they pass
-    // this guard and fall through to the type/cadence checks in
-    // `invoke` (which is the single cross-transport validator).
-    if (typeof body !== 'object' || body === null) {
-      throw invalidParamsFault('Request body must be a JSON object');
-    }
-
-    const record = body as Record<string, unknown>;
-    // Read own properties only so an array body (whose prototype carries an
-    // `every` method) does not masquerade as an interval spec.
+    const record = await parseScheduleRestBodyRequestRecord(request, context);
     return {
       type: record['type'],
-      cronExpression: Object.hasOwn(record, 'cronExpression')
-        ? record['cronExpression']
-        : undefined,
-      every: Object.hasOwn(record, 'every') ? record['every'] : undefined,
       input: record['input'],
       id: record['id'],
-      description: record['description'],
-      overlap: record['overlap'],
-      backfill: record['backfill'],
-      jitter: record['jitter'],
+      ...extractSharedScheduleRestFields(record),
     };
   },
   success: { kind: 'json', status: 201 },
