@@ -274,6 +274,27 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
     generator: AsyncGenerator,
     lastResult: unknown,
   ): Promise<void> {
+    return this.#advanceGenerator(workflowId, () => generator.next(lastResult), undefined);
+  }
+
+  #throwIntoGenerator(
+    workflowId: string,
+    generator: AsyncGenerator,
+    error: unknown,
+    operationFailureCategory?: FailureCategory,
+  ): Promise<void> {
+    return this.#advanceGenerator(
+      workflowId,
+      () => generator.throw(error),
+      operationFailureCategory,
+    );
+  }
+
+  #advanceGenerator(
+    workflowId: string,
+    advance: () => Promise<IteratorResult<unknown, unknown>>,
+    fallbackFailureCategory: FailureCategory | undefined,
+  ): Promise<void> {
     return this.#trackWorkflowAdvance(
       workflowId,
       (async () => {
@@ -281,7 +302,7 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
           const abortController = this.#abortControllers.get(workflowId);
           if (abortController?.signal.aborted) return;
 
-          const iterationResult = await generator.next(lastResult);
+          const iterationResult = await advance();
 
           if (iterationResult.done) {
             this.#cleanup(workflowId, {
@@ -314,71 +335,14 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
             type: 'failed',
             workflowId,
             error: error instanceof Error ? error.message : String(error),
-            failureCategory: classifyErrorAsFailureCategory(error, {
-              defaultErrorCategory: 'application',
-            }),
-          };
-          if (error instanceof Error && error.stack !== undefined) {
-            failedMessage.errorStack = error.stack;
-          }
-          this.#emit(failedMessage);
-        }
-      })(),
-    );
-  }
-
-  #throwIntoGenerator(
-    workflowId: string,
-    generator: AsyncGenerator,
-    error: unknown,
-    operationFailureCategory?: FailureCategory,
-  ): Promise<void> {
-    return this.#trackWorkflowAdvance(
-      workflowId,
-      (async () => {
-        try {
-          const abortController = this.#abortControllers.get(workflowId);
-          if (abortController?.signal.aborted) return;
-
-          const iterationResult = await generator.throw(error);
-
-          if (iterationResult.done) {
-            this.#cleanup(workflowId, {
-              preserveTrackedAdvance: true,
-              preserveTrackedTurn: true,
-            });
-            this.#emit({
-              type: 'completed',
-              workflowId,
-              result: iterationResult.value,
-            });
-            return;
-          }
-
-          const operation = iterationResult.value as ContextOperationRequest;
-          this.#emit({
-            type: 'checkpoint',
-            workflowId,
-            checkpoint: new ArrayBuffer(0),
-            operationRequest: operation as never,
-          });
-        } catch (innerError) {
-          this.#cleanup(workflowId, {
-            preserveTrackedAdvance: true,
-            preserveTrackedTurn: true,
-          });
-          const failedMessage: WorkerOutboundMessage = {
-            type: 'failed',
-            workflowId,
-            error: innerError instanceof Error ? innerError.message : String(innerError),
             failureCategory:
-              operationFailureCategory ??
-              classifyErrorAsFailureCategory(innerError, {
+              fallbackFailureCategory ??
+              classifyErrorAsFailureCategory(error, {
                 defaultErrorCategory: 'application',
               }),
           };
-          if (innerError instanceof Error && innerError.stack !== undefined) {
-            failedMessage.errorStack = innerError.stack;
+          if (error instanceof Error && error.stack !== undefined) {
+            failedMessage.errorStack = error.stack;
           }
           this.#emit(failedMessage);
         }

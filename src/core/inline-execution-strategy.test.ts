@@ -857,6 +857,118 @@ describe('InlineExecutionStrategy', () => {
         expect(message.failureCategory).toBe('timeout');
       }
     });
+
+    it('emits a checkpoint when a thrown operation is caught and the workflow resumes', async () => {
+      setup();
+
+      registrations.set('resilient-checkpoint', {
+        handler: async function* (_context, _input) {
+          try {
+            yield {
+              type: 'activity',
+              operationId: 'op-1',
+              activityName: 'mayFail',
+              fn: () => {},
+              input: undefined,
+            };
+          } catch {
+            yield {
+              type: 'activity',
+              operationId: 'op-2',
+              activityName: 'recover',
+              fn: () => {},
+              input: undefined,
+            };
+          }
+          return 'done';
+        },
+        version: '1',
+      });
+
+      strategy.startWorkflow({
+        workflowId: 'wf-1',
+        workflowType: 'resilient-checkpoint',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+
+      await sleepForTesting(10);
+      messages.length = 0;
+      strategy.throwIntoWorkflow('wf-1', new Error('activity failed'));
+      await sleepForTesting(10);
+
+      const message = firstMessage();
+      expect(message.type).toBe('checkpoint');
+      if (message.type === 'checkpoint') {
+        expect(message.checkpoint.byteLength).toBe(0);
+        expect(message.operationRequest).toMatchObject({ operationId: 'op-2' });
+      }
+    });
+
+    it('preserves the original stack and caller-provided failure category for thrown errors', async () => {
+      setup();
+
+      const error = new Error('operation failed');
+      registrations.set('unhandled-throw', {
+        handler: async function* (_context, _input) {
+          yield {
+            type: 'activity',
+            operationId: 'op-1',
+            activityName: 'doWork',
+            fn: () => {},
+            input: undefined,
+          };
+        },
+        version: '1',
+      });
+
+      strategy.startWorkflow({
+        workflowId: 'wf-1',
+        workflowType: 'unhandled-throw',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+      await sleepForTesting(10);
+      messages.length = 0;
+      strategy.throwIntoWorkflow('wf-1', error, 'timeout');
+      await sleepForTesting(10);
+
+      const message = firstMessage();
+      expect(message.type).toBe('failed');
+      if (message.type === 'failed') {
+        expect(message.error).toBe('operation failed');
+        expect(message.errorStack).toBe(error.stack);
+        expect(message.failureCategory).toBe('timeout');
+      }
+    });
+
+    it('does not advance an already-aborted workflow', async () => {
+      setup();
+
+      let advanced = false;
+      const generator = (async function* (): AsyncGenerator {
+        advanced = true;
+        return 'done';
+      })();
+      const context = new Context({
+        workflowId: 'wf-aborted',
+        workflowType: 'aborted',
+        startedAt: Date.now(),
+        abortController: new AbortController(),
+        getNow: Date.now,
+        nestingDepth: 0,
+      });
+      const abortController = new AbortController();
+      abortController.abort();
+      strategy.adoptWorkflow('wf-aborted', generator, context, abortController);
+
+      strategy.continueWorkflow('wf-aborted', undefined);
+      await sleepForTesting(10);
+
+      expect(advanced).toBe(false);
+      expect(messages).toHaveLength(0);
+      expect(strategy.hasGenerator('wf-aborted')).toBe(true);
+    });
   });
 
   // -------------------------------------------------------------------------
