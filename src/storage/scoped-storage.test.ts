@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import type { BatchOperation, Storage } from './interface.ts';
+import type { BatchOperation, ConditionalBatchCondition, Storage } from './interface.ts';
 import { MemoryStorage } from './memory.ts';
 import { scopedStorage } from './scoped-storage.ts';
 import {
@@ -15,6 +15,27 @@ function encode(value: string): Uint8Array {
 
 function decode(value: Uint8Array): string {
   return new TextDecoder().decode(value);
+}
+
+class RecordingStorage extends MemoryStorage {
+  batches: BatchOperation[][] = [];
+  conditionalBatches: {
+    conditions: ConditionalBatchCondition[];
+    operations: BatchOperation[];
+  }[] = [];
+
+  override async batch(operations: BatchOperation[]): Promise<void> {
+    this.batches.push(operations);
+    await super.batch(operations);
+  }
+
+  override async conditionalBatch(
+    conditions: ConditionalBatchCondition[],
+    operations: BatchOperation[],
+  ): Promise<boolean> {
+    this.conditionalBatches.push({ conditions, operations });
+    return super.conditionalBatch(conditions, operations);
+  }
 }
 
 async function writeEntries(storage: Storage, operations: BatchOperation[]): Promise<void> {
@@ -246,6 +267,43 @@ describe('scopedStorage', () => {
     // Writes landed under the scope prefix in the inner store.
     expect(decode((await inner.get('scope:counter'))!)).toBe('next');
     expect(await inner.get('scope:stale')).toBeNull();
+  });
+
+  it('shares operation rewriting while preserving order, values, and empty scoped keys', async () => {
+    const inner = new RecordingStorage();
+    const scoped = scopedStorage(inner, 'scope:');
+    const firstValue = encode('first');
+    const secondValue = encode('second');
+    const operations: BatchOperation[] = [
+      { type: 'put', key: '', value: firstValue },
+      { type: 'delete', key: 'middle' },
+      { type: 'put', key: 'last', value: secondValue },
+    ];
+
+    await scoped.batch(operations);
+
+    expect(inner.batches).toHaveLength(1);
+    expect(inner.batches[0]).toEqual([
+      { type: 'put', key: 'scope:', value: firstValue },
+      { type: 'delete', key: 'scope:middle' },
+      { type: 'put', key: 'scope:last', value: secondValue },
+    ]);
+    expect(inner.batches[0]![0]).toMatchObject({ value: firstValue });
+    expect(inner.batches[0]![2]).toMatchObject({ value: secondValue });
+
+    const expectedValue = encode('first');
+    expect(
+      await scoped.conditionalBatch(
+        [{ key: '', expectedValue }],
+        [{ type: 'delete', key: 'last' }],
+      ),
+    ).toBe(true);
+
+    expect(inner.conditionalBatches).toHaveLength(1);
+    expect(inner.conditionalBatches[0]).toEqual({
+      conditions: [{ key: 'scope:', expectedValue }],
+      operations: [{ type: 'delete', key: 'scope:last' }],
+    });
   });
 });
 

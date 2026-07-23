@@ -77,6 +77,23 @@ export class ScopedStorage implements Storage {
     return key.length === 0 ? `${this.#scopePrefix}:` : `${this.#scopePrefix}:${key}`;
   }
 
+  #toInnerOperations(operations: BatchOperation[]): BatchOperation[] {
+    return operations.map((operation) => {
+      if (operation.type === 'put') {
+        return {
+          type: 'put',
+          key: this.#toInnerKey(operation.key),
+          value: operation.value,
+        };
+      }
+
+      return {
+        type: 'delete',
+        key: this.#toInnerKey(operation.key),
+      };
+    });
+  }
+
   #toPublicKey(key: string): string {
     if (this.#scopePrefix.length === 0) {
       return key;
@@ -170,22 +187,7 @@ export class ScopedStorage implements Storage {
 
   async batch(operations: BatchOperation[]): Promise<void> {
     assertStorageBatchOperationCount('batch operations', operations.length);
-    await this.#storage.batch(
-      operations.map((operation) => {
-        if (operation.type === 'put') {
-          return {
-            type: 'put' as const,
-            key: this.#toInnerKey(operation.key),
-            value: operation.value,
-          };
-        }
-
-        return {
-          type: 'delete' as const,
-          key: this.#toInnerKey(operation.key),
-        };
-      }),
-    );
+    await this.#storage.batch(this.#toInnerOperations(operations));
   }
 
   async conditionalBatch(
@@ -198,20 +200,7 @@ export class ScopedStorage implements Storage {
         key: this.#toInnerKey(condition.key),
         expectedValue: condition.expectedValue,
       })),
-      operations.map((operation) => {
-        if (operation.type === 'put') {
-          return {
-            type: 'put' as const,
-            key: this.#toInnerKey(operation.key),
-            value: operation.value,
-          };
-        }
-
-        return {
-          type: 'delete' as const,
-          key: this.#toInnerKey(operation.key),
-        };
-      }),
+      this.#toInnerOperations(operations),
     );
   }
 
