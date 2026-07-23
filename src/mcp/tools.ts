@@ -12,6 +12,7 @@ import {
 } from './access.ts';
 import { parseMcpListFilter } from './list-filter.ts';
 import type { McpSession } from './session.ts';
+import { tupleListsEqual } from './tuple-list-equality.ts';
 
 /** MCP tool definition. */
 export type McpToolDefinition = {
@@ -128,20 +129,14 @@ function toolRegistrySignaturesEqual(
   left: ReadonlyArray<ToolRegistrySignatureEntry>,
   right: ReadonlyArray<ToolRegistrySignatureEntry>,
 ): boolean {
-  if (left.length !== right.length) return false;
-  for (let index = 0; index < left.length; index++) {
-    const leftEntry = left[index];
-    const rightEntry = right[index];
-    if (leftEntry === undefined || rightEntry === undefined) return false;
-    if (
-      leftEntry[0] !== rightEntry[0] ||
-      leftEntry[1] !== rightEntry[1] ||
-      leftEntry[2] !== rightEntry[2]
-    ) {
-      return false;
-    }
-  }
-  return true;
+  return tupleListsEqual(
+    left,
+    right,
+    (leftEntry, rightEntry) =>
+      leftEntry[0] === rightEntry[0] &&
+      leftEntry[1] === rightEntry[1] &&
+      leftEntry[2] === rightEntry[2],
+  );
 }
 
 function buildToolImplementations(engine: Engine): ToolImplementation[] {

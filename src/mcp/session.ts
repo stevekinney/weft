@@ -6,6 +6,7 @@ import type { Principal } from '../server/principal.ts';
 import { MCP_TOOLS_LIST_CHANGED_NOTIFICATION, requestIdKey, type McpResponse } from './protocol.ts';
 import { isWorkflowSearchResourceUri, workflowResourceUri } from './resources.ts';
 import { listMcpTools } from './tools.ts';
+import { tupleListsEqual } from './tuple-list-equality.ts';
 
 type NotificationTarget = (message: McpResponse | Record<string, unknown>) => void;
 
@@ -395,21 +396,15 @@ function toolListSignaturesEqual(
   left: ReadonlyArray<ToolListSignatureEntry>,
   right: ReadonlyArray<ToolListSignatureEntry>,
 ): boolean {
-  if (left.length !== right.length) return false;
-  for (let index = 0; index < left.length; index++) {
-    const leftEntry = left[index];
-    const rightEntry = right[index];
-    if (leftEntry === undefined || rightEntry === undefined) return false;
-    if (
-      leftEntry[0] !== rightEntry[0] ||
-      leftEntry[1] !== rightEntry[1] ||
-      leftEntry[2] !== rightEntry[2] ||
-      leftEntry[3] !== rightEntry[3]
-    ) {
-      return false;
-    }
-  }
-  return true;
+  return tupleListsEqual(
+    left,
+    right,
+    (leftEntry, rightEntry) =>
+      leftEntry[0] === rightEntry[0] &&
+      leftEntry[1] === rightEntry[1] &&
+      leftEntry[2] === rightEntry[2] &&
+      leftEntry[3] === rightEntry[3],
+  );
 }
 
 /**
