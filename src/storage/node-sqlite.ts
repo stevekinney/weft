@@ -11,6 +11,7 @@
  * @module storage/node-sqlite
  */
 
+import { runConditionalBatchBody } from './conditional-batch-body.ts';
 import type {
   BatchOperation,
   ConditionalBatchCondition,
@@ -18,7 +19,7 @@ import type {
   Storage,
   StorageCapabilities,
 } from './interface.ts';
-import { assertStorageBatchOperationCount, storageValuesEqual } from './interface.ts';
+import { assertStorageBatchOperationCount } from './interface.ts';
 import {
   createMissingBetterSqlite3Error,
   isBetterSqlite3LoadFailure,
@@ -191,28 +192,23 @@ export class NodeSQLiteStorage implements Storage {
     assertStorageBatchOperationCount('conditionalBatch operations', operations.length);
 
     const conditionalTransaction = this.#database.transaction(
-      (...arguments_: unknown[]): boolean => {
-        const pendingConditions = arguments_[0] as ConditionalBatchCondition[];
-        const pendingOperations = arguments_[1] as BatchOperation[];
-
-        for (const condition of pendingConditions) {
-          const row = this.#getStatement.get(condition.key);
-          const currentValue = row ? new Uint8Array((row as { value: Uint8Array }).value) : null;
-          if (!storageValuesEqual(currentValue, condition.expectedValue)) {
-            return false;
-          }
-        }
-
-        for (const operation of pendingOperations) {
-          if (operation.type === 'put') {
-            this.#putStatement.run(operation.key, operation.value);
-          } else {
-            this.#deleteStatement.run(operation.key);
-          }
-        }
-
-        return true;
-      },
+      (pendingConditions: ConditionalBatchCondition[], pendingOperations: BatchOperation[]) =>
+        runConditionalBatchBody(pendingConditions, pendingOperations, {
+          read: (key) => {
+            const row = this.#getStatement.get(key);
+            if (!row) return null;
+            if (!(row['value'] instanceof Uint8Array)) {
+              throw new Error('SQLite value must be a byte array');
+            }
+            return new Uint8Array(row['value']);
+          },
+          put: (key, value) => {
+            this.#putStatement.run(key, value);
+          },
+          delete: (key) => {
+            this.#deleteStatement.run(key);
+          },
+        }),
     );
 
     return Boolean(conditionalTransaction(conditions, operations));

@@ -1,9 +1,9 @@
 import { Database, Statement, type SQLQueryBindings } from 'bun:sqlite';
 
+import { runConditionalBatchBody } from './conditional-batch-body';
 import { normalizeDeleteRangeOptions, type DeleteRangeOptions } from './delete-range';
 import {
   assertStorageBatchOperationCount,
-  storageValuesEqual,
   type BatchOperation,
   type ConditionalBatchCondition,
   type ScanOptions,
@@ -253,28 +253,19 @@ export class BunSQLiteStorage implements Storage {
     assertStorageBatchOperationCount('conditionalBatch operations', operations.length);
 
     const conditionalTransaction = this.#database.transaction(
-      (
-        pendingConditions: ConditionalBatchCondition[],
-        pendingOperations: BatchOperation[],
-      ): boolean => {
-        for (const condition of pendingConditions) {
-          const row = this.#getStatement.get(condition.key);
-          const currentValue = row ? new Uint8Array(row.value) : null;
-          if (!storageValuesEqual(currentValue, condition.expectedValue)) {
-            return false;
-          }
-        }
-
-        for (const operation of pendingOperations) {
-          if (operation.type === 'put') {
-            this.#putStatement.run(operation.key, operation.value);
-          } else {
-            this.#deleteStatement.run(operation.key);
-          }
-        }
-
-        return true;
-      },
+      (pendingConditions: ConditionalBatchCondition[], pendingOperations: BatchOperation[]) =>
+        runConditionalBatchBody(pendingConditions, pendingOperations, {
+          read: (key) => {
+            const row = this.#getStatement.get(key);
+            return row ? new Uint8Array(row.value) : null;
+          },
+          put: (key, value) => {
+            this.#putStatement.run(key, value);
+          },
+          delete: (key) => {
+            this.#deleteStatement.run(key);
+          },
+        }),
     );
 
     return conditionalTransaction(conditions, operations);

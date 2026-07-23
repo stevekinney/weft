@@ -21,13 +21,17 @@ export type BetterSqliteStatement = {
   all(...parameters: unknown[]): Record<string, unknown>[];
 };
 
-export type BetterSqliteTransaction = (...args: unknown[]) => unknown;
+export type BetterSqliteTransaction = <TArguments extends unknown[], TResult>(
+  ...args: TArguments
+) => TResult;
 
 export type BetterSqliteDatabase = {
   pragma(source: string): unknown;
   exec(source: string): void;
   prepare(source: string): BetterSqliteStatement;
-  transaction(fn: (...args: unknown[]) => unknown): BetterSqliteTransaction;
+  transaction<TArguments extends unknown[], TResult>(
+    fn: (...args: TArguments) => TResult,
+  ): BetterSqliteTransaction;
   close(): void;
 };
 
