@@ -27,11 +27,11 @@ export async function parseScheduleRestBodyRequestRecord(
     throw invalidParamsFault('Invalid JSON body');
   }
 
-  if (body === null || typeof body !== 'object') {
+  if (!isJsonObjectLikeRecord(body)) {
     throw invalidParamsFault('Request body must be a JSON object');
   }
 
-  return isJsonObjectLikeRecord(body) ? body : {};
+  return body;
 }
 
 export function extractSharedScheduleRestFields(
