@@ -541,15 +541,21 @@ describe('handleTaskPollRequest', () => {
     );
 
     // A claimed task has an owner; a result that does not echo the workerId is
-    // rejected rather than treated as a wildcard match.
+    // rejected rather than treated as a wildcard match. Echo the token so the
+    // request reaches the ownership guard instead of failing body validation.
     const rejected = await handleTaskResultRequest(
       context,
       options,
-      makePostRequest({ operationId: 'op-missing-worker', status: 'completed', value: 42 }),
+      makePostRequest({
+        operationId: 'op-missing-worker',
+        status: 'completed',
+        value: 42,
+        attemptToken: 'attempt-token',
+      }),
       makeUrl('/v1/tasks/default/result'),
       WORKER_PRINCIPAL,
     );
-    expect(rejected?.status).toBe(400);
+    expect(rejected?.status).toBe(403);
   });
 
   it('rejects an in-flight result whose attempt token does not match the claim', async () => {
