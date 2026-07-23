@@ -4,46 +4,17 @@ import type { Engine } from '../../core/engine.ts';
 import { WorkflowListScanCapExceededError } from '../../core/engine/workflow-indexes.ts';
 import {
   ListFilterValidationError,
+  listFilterObjectSchema,
   normalizeListFilter,
 } from '../../core/list-filter-validation.ts';
 import { coerceStartWorkflowTags } from '../../core/start-workflow-validation.ts';
-import type {
-  FailureCategory,
-  ListFilter,
-  PaginatedResult,
-  SearchAttributeValue,
-  WorkflowStatus,
-  WorkflowSummary,
-} from '../../core/types.ts';
+import type { ListFilter, PaginatedResult, WorkflowSummary } from '../../core/types.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { extractListFilterFromQuery } from './list-filter-query-extractor.ts';
 import { shapeRestFault } from './operation-helpers.ts';
 
-const workflowStatusSchema = z.custom<WorkflowStatus>((value) => typeof value === 'string');
-const failureCategorySchema = z.custom<FailureCategory>((value) => typeof value === 'string');
-const searchAttributeValueSchema = z.custom<SearchAttributeValue>((value) => {
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-    return true;
-  }
-
-  return Array.isArray(value) && value.every((entry) => typeof entry === 'string');
-});
-const attributeFilterSchema = z.object({
-  key: z.string().min(1),
-  value: searchAttributeValueSchema.optional(),
-  gt: searchAttributeValueSchema.optional(),
-  lt: searchAttributeValueSchema.optional(),
-  gte: searchAttributeValueSchema.optional(),
-  lte: searchAttributeValueSchema.optional(),
-});
-const timeRangeSchema = z.object({
-  gte: z.number().optional(),
-  gt: z.number().optional(),
-  lte: z.number().optional(),
-  lt: z.number().optional(),
-});
 const listIncludeSchema = z
   .union([z.string(), z.array(z.string()).min(1)])
   .refine(
@@ -54,23 +25,24 @@ const listIncludeSchema = z
     { message: 'include must be "failureCategory"' },
   );
 
-const listWorkflowsInput = z.object({
-  status: z.union([workflowStatusSchema, z.array(workflowStatusSchema)]).optional(),
-  type: z.string().optional(),
-  scheduleId: z.string().min(1).optional(),
-  parentWorkflowId: z.string().min(1).optional(),
-  parentWorkflowExecutionToken: z.string().min(1).optional(),
-  tags: z.array(z.string()).optional(),
-  attributes: z.array(attributeFilterSchema).optional(),
-  limit: z.number().int().min(1).max(1000).optional(),
-  offset: z.number().int().min(0).optional(),
-  idPrefix: z.string().optional(),
-  createdAt: timeRangeSchema.optional(),
-  updatedAt: timeRangeSchema.optional(),
-  executionDeadline: timeRangeSchema.optional(),
-  failureCategory: z.union([failureCategorySchema, z.array(failureCategorySchema)]).optional(),
-  include: listIncludeSchema.optional(),
-});
+const listWorkflowsInput = z
+  .object({
+    ...listFilterObjectSchema.shape,
+    // Transport parsing stays permissive; invoke owns canonical validation and
+    // preserves the existing field-specific fault envelope.
+    status: z.union([z.string(), z.array(z.string())]).optional(),
+    type: z.string().optional(),
+    idPrefix: z.string().optional(),
+    createdAt: z.object(listFilterObjectSchema.shape.createdAt.unwrap().shape).strict().optional(),
+    updatedAt: z.object(listFilterObjectSchema.shape.updatedAt.unwrap().shape).strict().optional(),
+    executionDeadline: z
+      .object(listFilterObjectSchema.shape.executionDeadline.unwrap().shape)
+      .strict()
+      .optional(),
+    failureCategory: z.union([z.string(), z.array(z.string())]).optional(),
+    include: listIncludeSchema.optional(),
+  })
+  .strict();
 const listWorkflowsOutput = z.unknown();
 
 export type ListWorkflowsInput = z.infer<typeof listWorkflowsInput>;

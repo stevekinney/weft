@@ -21,7 +21,11 @@
 
 import { describe, expect, it } from 'bun:test';
 
-import { bulkListFilterInputSchema, parseBulkListFilterFromBody } from './bulk-filter-helpers.ts';
+import {
+  bulkListFilterInputSchema,
+  listFilterFromBulkInput,
+  parseBulkListFilterFromBody,
+} from './bulk-filter-helpers.ts';
 
 function wrap(filter: unknown): unknown {
   return { filter };
@@ -78,7 +82,7 @@ describe('parseBulkListFilterFromBody — validation precedence', () => {
   });
 
   // --- adjacent pair: offset before failureCategory ---
-  // idPrefix is not validated (any string accepted), so skip to failureCategory
+  // idPrefix has no parser-level error case, so skip to failureCategory
   it('reports offset error before failureCategory error when both are invalid', () => {
     expect(() =>
       parseBulkListFilterFromBody(wrap({ offset: -1, failureCategory: 'not-a-category' })),
@@ -120,6 +124,12 @@ describe('parseBulkListFilterFromBody — validation precedence', () => {
 });
 
 describe('bulkListFilterInputSchema', () => {
+  it('shares core validation while retaining the bulk limit zero override', () => {
+    expect(bulkListFilterInputSchema.safeParse({ limit: 0 }).success).toBe(true);
+    expect(bulkListFilterInputSchema.safeParse({ type: '' }).success).toBe(false);
+    expect(bulkListFilterInputSchema.safeParse({ idPrefix: 'a:b' }).success).toBe(false);
+  });
+
   it('accepts scalar arrays for exact attribute values but rejects arrays for range bounds', () => {
     expect(
       bulkListFilterInputSchema.safeParse({
@@ -132,5 +142,10 @@ describe('bulkListFilterInputSchema', () => {
         attributes: [{ key: 'score', gt: [1, 2] }],
       }).success,
     ).toBe(false);
+  });
+
+  it('preserves a bulk limit of zero through both input paths', () => {
+    expect(listFilterFromBulkInput({ limit: 0 })).toEqual({ limit: 0 });
+    expect(parseBulkListFilterFromBody(wrap({ limit: 0 }))).toEqual({ limit: 0 });
   });
 });

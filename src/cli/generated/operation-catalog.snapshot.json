@@ -2838,15 +2838,115 @@
             "items": {
               "additionalProperties": false,
               "properties": {
-                "gt": {},
-                "gte": {},
-                "key": {
-                  "minLength": 1,
-                  "type": "string"
+                "gt": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
                 },
-                "lt": {},
-                "lte": {},
-                "value": {}
+                "gte": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "key": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {}
+                  ]
+                },
+                "lt": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "lte": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "value": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                }
               },
               "required": ["key"],
               "type": "object"
@@ -2904,14 +3004,23 @@
           },
           "failureCategory": {
             "anyOf": [
-              {},
               {
-                "items": {},
+                "enum": ["application", "timeout", "cancellation", "resource", "system"],
+                "type": "string"
+              },
+              {
+                "items": {
+                  "enum": ["application", "timeout", "cancellation", "resource", "system"],
+                  "type": "string"
+                },
+                "minItems": 1,
                 "type": "array"
               }
             ]
           },
           "idPrefix": {
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
             "type": "string"
           },
           "limit": {
@@ -2943,9 +3052,31 @@
           },
           "status": {
             "anyOf": [
-              {},
               {
-                "items": {},
+                "enum": [
+                  "pending",
+                  "running",
+                  "completed",
+                  "failed",
+                  "cancelled",
+                  "timed-out",
+                  "suspended"
+                ],
+                "type": "string"
+              },
+              {
+                "items": {
+                  "enum": [
+                    "pending",
+                    "running",
+                    "completed",
+                    "failed",
+                    "cancelled",
+                    "timed-out",
+                    "suspended"
+                  ],
+                  "type": "string"
+                },
                 "type": "array"
               }
             ]
@@ -2957,6 +3088,7 @@
             "type": "array"
           },
           "type": {
+            "minLength": 1,
             "type": "string"
           },
           "updatedAt": {
@@ -3006,15 +3138,115 @@
             "items": {
               "additionalProperties": false,
               "properties": {
-                "gt": {},
-                "gte": {},
-                "key": {
-                  "minLength": 1,
-                  "type": "string"
+                "gt": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
                 },
-                "lt": {},
-                "lte": {},
-                "value": {}
+                "gte": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "key": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {}
+                  ]
+                },
+                "lt": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "lte": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "value": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                }
               },
               "required": ["key"],
               "type": "object"
@@ -3072,14 +3304,23 @@
           },
           "failureCategory": {
             "anyOf": [
-              {},
               {
-                "items": {},
+                "enum": ["application", "timeout", "cancellation", "resource", "system"],
+                "type": "string"
+              },
+              {
+                "items": {
+                  "enum": ["application", "timeout", "cancellation", "resource", "system"],
+                  "type": "string"
+                },
+                "minItems": 1,
                 "type": "array"
               }
             ]
           },
           "idPrefix": {
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
             "type": "string"
           },
           "limit": {
@@ -3111,9 +3352,31 @@
           },
           "status": {
             "anyOf": [
-              {},
               {
-                "items": {},
+                "enum": [
+                  "pending",
+                  "running",
+                  "completed",
+                  "failed",
+                  "cancelled",
+                  "timed-out",
+                  "suspended"
+                ],
+                "type": "string"
+              },
+              {
+                "items": {
+                  "enum": [
+                    "pending",
+                    "running",
+                    "completed",
+                    "failed",
+                    "cancelled",
+                    "timed-out",
+                    "suspended"
+                  ],
+                  "type": "string"
+                },
                 "type": "array"
               }
             ]
@@ -3125,6 +3388,7 @@
             "type": "array"
           },
           "type": {
+            "minLength": 1,
             "type": "string"
           },
           "updatedAt": {
@@ -3174,15 +3438,115 @@
             "items": {
               "additionalProperties": false,
               "properties": {
-                "gt": {},
-                "gte": {},
-                "key": {
-                  "minLength": 1,
-                  "type": "string"
+                "gt": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
                 },
-                "lt": {},
-                "lte": {},
-                "value": {}
+                "gte": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "key": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {}
+                  ]
+                },
+                "lt": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "lte": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "value": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                }
               },
               "required": ["key"],
               "type": "object"
@@ -3240,14 +3604,23 @@
           },
           "failureCategory": {
             "anyOf": [
-              {},
               {
-                "items": {},
+                "enum": ["application", "timeout", "cancellation", "resource", "system"],
+                "type": "string"
+              },
+              {
+                "items": {
+                  "enum": ["application", "timeout", "cancellation", "resource", "system"],
+                  "type": "string"
+                },
+                "minItems": 1,
                 "type": "array"
               }
             ]
           },
           "idPrefix": {
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
             "type": "string"
           },
           "limit": {
@@ -3279,9 +3652,31 @@
           },
           "status": {
             "anyOf": [
-              {},
               {
-                "items": {},
+                "enum": [
+                  "pending",
+                  "running",
+                  "completed",
+                  "failed",
+                  "cancelled",
+                  "timed-out",
+                  "suspended"
+                ],
+                "type": "string"
+              },
+              {
+                "items": {
+                  "enum": [
+                    "pending",
+                    "running",
+                    "completed",
+                    "failed",
+                    "cancelled",
+                    "timed-out",
+                    "suspended"
+                  ],
+                  "type": "string"
+                },
                 "type": "array"
               }
             ]
@@ -3293,6 +3688,7 @@
             "type": "array"
           },
           "type": {
+            "minLength": 1,
             "type": "string"
           },
           "updatedAt": {
@@ -3342,15 +3738,115 @@
             "items": {
               "additionalProperties": false,
               "properties": {
-                "gt": {},
-                "gte": {},
-                "key": {
-                  "minLength": 1,
-                  "type": "string"
+                "gt": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
                 },
-                "lt": {},
-                "lte": {},
-                "value": {}
+                "gte": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "key": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {}
+                  ]
+                },
+                "lt": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "lte": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "value": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                }
               },
               "required": ["key"],
               "type": "object"
@@ -3408,14 +3904,23 @@
           },
           "failureCategory": {
             "anyOf": [
-              {},
               {
-                "items": {},
+                "enum": ["application", "timeout", "cancellation", "resource", "system"],
+                "type": "string"
+              },
+              {
+                "items": {
+                  "enum": ["application", "timeout", "cancellation", "resource", "system"],
+                  "type": "string"
+                },
+                "minItems": 1,
                 "type": "array"
               }
             ]
           },
           "idPrefix": {
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
             "type": "string"
           },
           "limit": {
@@ -3452,9 +3957,31 @@
           },
           "status": {
             "anyOf": [
-              {},
               {
-                "items": {},
+                "enum": [
+                  "pending",
+                  "running",
+                  "completed",
+                  "failed",
+                  "cancelled",
+                  "timed-out",
+                  "suspended"
+                ],
+                "type": "string"
+              },
+              {
+                "items": {
+                  "enum": [
+                    "pending",
+                    "running",
+                    "completed",
+                    "failed",
+                    "cancelled",
+                    "timed-out",
+                    "suspended"
+                  ],
+                  "type": "string"
+                },
                 "type": "array"
               }
             ]
@@ -3466,6 +3993,7 @@
             "type": "array"
           },
           "type": {
+            "minLength": 1,
             "type": "string"
           },
           "updatedAt": {
@@ -3532,15 +4060,115 @@
                 "items": {
                   "additionalProperties": false,
                   "properties": {
-                    "gt": {},
-                    "gte": {},
-                    "key": {
-                      "minLength": 1,
-                      "type": "string"
+                    "gt": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {},
+                        {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      ]
                     },
-                    "lt": {},
-                    "lte": {},
-                    "value": {}
+                    "gte": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {},
+                        {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      ]
+                    },
+                    "key": {
+                      "anyOf": [
+                        {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        {}
+                      ]
+                    },
+                    "lt": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {},
+                        {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      ]
+                    },
+                    "lte": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {},
+                        {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      ]
+                    },
+                    "value": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {},
+                        {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      ]
+                    }
                   },
                   "required": ["key"],
                   "type": "object"
@@ -3585,14 +4213,23 @@
               },
               "failureCategory": {
                 "anyOf": [
-                  {},
                   {
-                    "items": {},
+                    "enum": ["application", "timeout", "cancellation", "resource", "system"],
+                    "type": "string"
+                  },
+                  {
+                    "items": {
+                      "enum": ["application", "timeout", "cancellation", "resource", "system"],
+                      "type": "string"
+                    },
+                    "minItems": 1,
                     "type": "array"
                   }
                 ]
               },
               "idPrefix": {
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_-]+$",
                 "type": "string"
               },
               "limit": {
@@ -3619,9 +4256,31 @@
               },
               "status": {
                 "anyOf": [
-                  {},
                   {
-                    "items": {},
+                    "enum": [
+                      "pending",
+                      "running",
+                      "completed",
+                      "failed",
+                      "cancelled",
+                      "timed-out",
+                      "suspended"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "items": {
+                      "enum": [
+                        "pending",
+                        "running",
+                        "completed",
+                        "failed",
+                        "cancelled",
+                        "timed-out",
+                        "suspended"
+                      ],
+                      "type": "string"
+                    },
                     "type": "array"
                   }
                 ]
@@ -3633,6 +4292,7 @@
                 "type": "array"
               },
               "type": {
+                "minLength": 1,
                 "type": "string"
               },
               "updatedAt": {
@@ -4212,15 +4872,115 @@
             "items": {
               "additionalProperties": false,
               "properties": {
-                "gt": {},
-                "gte": {},
-                "key": {
-                  "minLength": 1,
-                  "type": "string"
+                "gt": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
                 },
-                "lt": {},
-                "lte": {},
-                "value": {}
+                "gte": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "key": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {}
+                  ]
+                },
+                "lt": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "lte": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "value": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                }
               },
               "required": ["key"],
               "type": "object"
@@ -4265,9 +5025,13 @@
           },
           "failureCategory": {
             "anyOf": [
-              {},
               {
-                "items": {},
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
                 "type": "array"
               }
             ]
@@ -4313,9 +5077,13 @@
           },
           "status": {
             "anyOf": [
-              {},
               {
-                "items": {},
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
                 "type": "array"
               }
             ]
@@ -4375,15 +5143,115 @@
             "items": {
               "additionalProperties": false,
               "properties": {
-                "gt": {},
-                "gte": {},
-                "key": {
-                  "minLength": 1,
-                  "type": "string"
+                "gt": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
                 },
-                "lt": {},
-                "lte": {},
-                "value": {}
+                "gte": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "key": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {}
+                  ]
+                },
+                "lt": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "lte": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "value": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                }
               },
               "required": ["key"],
               "type": "object"
@@ -4428,14 +5296,23 @@
           },
           "failureCategory": {
             "anyOf": [
-              {},
               {
-                "items": {},
+                "enum": ["application", "timeout", "cancellation", "resource", "system"],
+                "type": "string"
+              },
+              {
+                "items": {
+                  "enum": ["application", "timeout", "cancellation", "resource", "system"],
+                  "type": "string"
+                },
+                "minItems": 1,
                 "type": "array"
               }
             ]
           },
           "idPrefix": {
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
             "type": "string"
           },
           "limit": {
@@ -4462,9 +5339,31 @@
           },
           "status": {
             "anyOf": [
-              {},
               {
-                "items": {},
+                "enum": [
+                  "pending",
+                  "running",
+                  "completed",
+                  "failed",
+                  "cancelled",
+                  "timed-out",
+                  "suspended"
+                ],
+                "type": "string"
+              },
+              {
+                "items": {
+                  "enum": [
+                    "pending",
+                    "running",
+                    "completed",
+                    "failed",
+                    "cancelled",
+                    "timed-out",
+                    "suspended"
+                  ],
+                  "type": "string"
+                },
                 "type": "array"
               }
             ]
@@ -4476,6 +5375,7 @@
             "type": "array"
           },
           "type": {
+            "minLength": 1,
             "type": "string"
           },
           "updatedAt": {

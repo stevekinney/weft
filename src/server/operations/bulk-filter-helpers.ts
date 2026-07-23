@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { assertScopedBulkWorkflowFilter } from '../../core/bulk-workflow-filter.ts';
-import { isFailureCategory } from '../../core/failure-categories.ts';
+import { listFilterObjectSchema, normalizeListFilter } from '../../core/list-filter-validation.ts';
 import { coerceStartWorkflowTags } from '../../core/start-workflow-validation.ts';
 import type {
   AttributeFilter,
@@ -9,7 +9,6 @@ import type {
   BulkOperationCommitOptions,
   BulkOperationDryRunOptions,
   BulkOperationPrincipal,
-  FailureCategory,
   ListFilter,
   SearchAttributeValue,
   TimeRange,
@@ -27,54 +26,9 @@ import { readRestTextBody } from '../rest-body.ts';
 import { parseOptionalFailureCategoryFilter } from './failure-category-filter.ts';
 import { invalidParamsFault, isOperationFault } from './operation-helpers.ts';
 
-const workflowStatusSchema = z.custom<WorkflowStatus>((value) => typeof value === 'string');
-const searchAttributeValueSchema = z.custom<SearchAttributeValue>((value) => {
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-    return true;
-  }
-
-  return (
-    Array.isArray(value) &&
-    value.every(
-      (entry) =>
-        typeof entry === 'string' || typeof entry === 'number' || typeof entry === 'boolean',
-    )
-  );
-});
-const attributeFilterScalarValueSchema = z.custom<AttributeFilterScalarValue>(
-  (value) => typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean',
-);
-const attributeFilterSchema = z.object({
-  key: z.string().min(1),
-  value: searchAttributeValueSchema.optional(),
-  gt: attributeFilterScalarValueSchema.optional(),
-  lt: attributeFilterScalarValueSchema.optional(),
-  gte: attributeFilterScalarValueSchema.optional(),
-  lte: attributeFilterScalarValueSchema.optional(),
-});
-const failureCategorySchema = z.custom<FailureCategory>(isFailureCategory);
-const timeRangeSchema = z.object({
-  gte: z.number().optional(),
-  gt: z.number().optional(),
-  lte: z.number().optional(),
-  lt: z.number().optional(),
-});
-
-export const bulkListFilterInputSchema = z.object({
-  status: z.union([workflowStatusSchema, z.array(workflowStatusSchema)]).optional(),
-  type: z.string().optional(),
-  scheduleId: z.string().min(1).optional(),
-  parentWorkflowId: z.string().min(1).optional(),
-  parentWorkflowExecutionToken: z.string().min(1).optional(),
-  tags: z.array(z.string()).optional(),
-  attributes: z.array(attributeFilterSchema).optional(),
+export const bulkListFilterInputSchema = listFilterObjectSchema.extend({
+  // Bulk operations intentionally accept zero as a no-op limit.
   limit: z.number().int().min(0).optional(),
-  offset: z.number().int().min(0).optional(),
-  idPrefix: z.string().optional(),
-  failureCategory: z.union([failureCategorySchema, z.array(failureCategorySchema)]).optional(),
-  createdAt: timeRangeSchema.optional(),
-  updatedAt: timeRangeSchema.optional(),
-  executionDeadline: timeRangeSchema.optional(),
 });
 
 export type BulkListFilterInput = z.infer<typeof bulkListFilterInputSchema>;
@@ -339,7 +293,7 @@ export function parseBulkListFilterFromBody(body: unknown): ListFilter {
   for (const applyDimension of BULK_FILTER_DIMENSION_PARSERS) {
     applyDimension(filter, filterRecord);
   }
-  return filter;
+  return normalizeBulkListFilter(filter);
 }
 
 const TIME_RANGE_BOUNDS = ['gte', 'gt', 'lte', 'lt'] as const;
@@ -375,7 +329,14 @@ export function listFilterFromBulkInput(input: BulkListFilterInput): ListFilter 
   applyBasicBulkFilterFields(filter, input);
   applyExtendedBulkFilterFields(filter, input);
   applyBulkTimeRangeFields(filter, input);
-  return filter;
+  return normalizeBulkListFilter(filter);
+}
+
+function normalizeBulkListFilter(filter: ListFilter): ListFilter {
+  const limit = filter.limit;
+  delete filter.limit;
+  const normalized = normalizeListFilter(filter);
+  return limit === undefined ? normalized : { ...normalized, limit };
 }
 
 function applyBasicBulkFilterFields(filter: ListFilter, input: BulkListFilterInput): void {
@@ -404,6 +365,11 @@ function copyAttributeFilter(
 ): AttributeFilter {
   const filter: AttributeFilter = { key: attribute.key };
   if (attribute.value !== undefined) {
+    if (!isJsonSearchAttributeValue(attribute.value)) {
+      throw new Error(
+        'Field "filter.attributes[].value" must be a string, number, boolean, or scalar array',
+      );
+    }
     filter.value = attribute.value;
   }
   if (attribute.gt !== undefined) {
@@ -422,13 +388,13 @@ function copyAttributeFilter(
 }
 
 function copyAttributeRangeBound(
-  value: SearchAttributeValue,
+  value: unknown,
   property: 'gt' | 'lt' | 'gte' | 'lte',
 ): AttributeFilterScalarValue {
-  if (Array.isArray(value)) {
+  if (!isJsonSearchAttributeValue(value) || Array.isArray(value)) {
     throw new Error(`Field "filter.attributes[].${property}" must be a string, number, or boolean`);
   }
-  return value as AttributeFilterScalarValue;
+  return value;
 }
 
 function applyExtendedBulkFilterFields(filter: ListFilter, input: BulkListFilterInput): void {

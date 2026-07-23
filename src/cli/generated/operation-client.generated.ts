@@ -147,8 +147,8 @@ export const CLIENT_REST_OPERATION_BINDINGS = {
   },
 } as const satisfies Readonly<Record<string, ClientRestOperationBinding>>;
 
-type SharedAttributesBulkConcurrenc_f62debcf = {
-  readonly attributes?: ReadonlyArray<SharedGtGteKey_896a0c41>;
+type SharedAttributesBulkConcurrenc_ff397168 = {
+  readonly attributes?: ReadonlyArray<SharedGtGteKey_e658e64c>;
   readonly bulkConcurrency?: number;
   readonly confirmationToken?: string;
   readonly createdAt?: SharedGtGteLt_d9a61361;
@@ -167,8 +167,8 @@ type SharedAttributesBulkConcurrenc_f62debcf = {
   readonly type?: string;
   readonly updatedAt?: SharedGtGteLt_d9a61361;
 };
-type SharedAttributesCreatedAtExecu_2af7f9ff = {
-  readonly attributes?: ReadonlyArray<SharedGtGteKey_896a0c41>;
+type SharedAttributesCreatedAtExecu_0caddefc = {
+  readonly attributes?: ReadonlyArray<SharedGtGteKey_e658e64c>;
   readonly createdAt?: SharedGtGteLt_d9a61361;
   readonly executionDeadline?: SharedGtGteLt_d9a61361;
   readonly failureCategory?: unknown;
@@ -183,10 +183,10 @@ type SharedAttributesCreatedAtExecu_2af7f9ff = {
   readonly type?: string;
   readonly updatedAt?: SharedGtGteLt_d9a61361;
 };
-type SharedGtGteKey_896a0c41 = {
+type SharedGtGteKey_e658e64c = {
   readonly gt?: unknown;
   readonly gte?: unknown;
-  readonly key: string;
+  readonly key: unknown;
   readonly lt?: unknown;
   readonly lte?: unknown;
   readonly value?: unknown;
@@ -500,14 +500,7 @@ export type ClientOperationTypes = {
   };
   'weft.workflows.aggregate': {
     readonly input: {
-      readonly attributes?: ReadonlyArray<{
-        readonly gt?: unknown;
-        readonly gte?: unknown;
-        readonly key: unknown;
-        readonly lt?: unknown;
-        readonly lte?: unknown;
-        readonly value?: unknown;
-      }>;
+      readonly attributes?: ReadonlyArray<SharedGtGteKey_e658e64c>;
       readonly createdAt?: SharedGtGteLt_d9a61361;
       readonly executionDeadline?: SharedGtGteLt_d9a61361;
       readonly failureCategory?: unknown;
@@ -540,23 +533,23 @@ export type ClientOperationTypes = {
     readonly faults: never;
   };
   'weft.workflows.bulk.cancel': {
-    readonly input: SharedAttributesBulkConcurrenc_f62debcf;
+    readonly input: SharedAttributesBulkConcurrenc_ff397168;
     readonly output: unknown;
     readonly faults: never;
   };
   'weft.workflows.bulk.delete': {
-    readonly input: SharedAttributesBulkConcurrenc_f62debcf;
+    readonly input: SharedAttributesBulkConcurrenc_ff397168;
     readonly output: unknown;
     readonly faults: 'Unprocessable';
   };
   'weft.workflows.bulk.retryfailed': {
-    readonly input: SharedAttributesBulkConcurrenc_f62debcf;
+    readonly input: SharedAttributesBulkConcurrenc_ff397168;
     readonly output: unknown;
     readonly faults: never;
   };
   'weft.workflows.bulk.signal': {
     readonly input: {
-      readonly attributes?: ReadonlyArray<SharedGtGteKey_896a0c41>;
+      readonly attributes?: ReadonlyArray<SharedGtGteKey_e658e64c>;
       readonly bulkConcurrency?: number;
       readonly confirmationToken?: string;
       readonly createdAt?: SharedGtGteLt_d9a61361;
@@ -585,7 +578,7 @@ export type ClientOperationTypes = {
       readonly bulkConcurrency?: number;
       readonly confirmationToken?: string;
       readonly dryRun?: boolean;
-      readonly filter?: SharedAttributesCreatedAtExecu_2af7f9ff;
+      readonly filter?: SharedAttributesCreatedAtExecu_0caddefc;
       readonly operation: 'add' | 'remove';
       readonly requestId?: string;
       readonly tags: ReadonlyArray<string>;
@@ -630,7 +623,7 @@ export type ClientOperationTypes = {
   };
   'weft.workflows.list': {
     readonly input: {
-      readonly attributes?: ReadonlyArray<SharedGtGteKey_896a0c41>;
+      readonly attributes?: ReadonlyArray<SharedGtGteKey_e658e64c>;
       readonly createdAt?: SharedGtGteLt_d9a61361;
       readonly executionDeadline?: SharedGtGteLt_d9a61361;
       readonly failureCategory?: unknown;
@@ -650,7 +643,7 @@ export type ClientOperationTypes = {
     readonly faults: 'Unprocessable';
   };
   'weft.workflows.purge': {
-    readonly input: SharedAttributesCreatedAtExecu_2af7f9ff;
+    readonly input: SharedAttributesCreatedAtExecu_0caddefc;
     readonly output: unknown;
     readonly faults: never;
   };
