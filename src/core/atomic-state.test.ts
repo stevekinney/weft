@@ -13,7 +13,7 @@ import {
   atomicStateDataKey,
   atomicStateVersionKey,
 } from './atomic-state.ts';
-import { decode } from './codec.ts';
+import { decode, encode } from './codec.ts';
 
 function createStorage() {
   return new MemoryStorage();
@@ -110,6 +110,111 @@ describe('AtomicState', () => {
 
     await expect(state.increment()).rejects.toThrow(AtomicStateConflictError);
     expect(sleepCalls).toHaveLength(2);
+  });
+
+  it('reruns update against the fresh value after a conflict', async () => {
+    const storage = createStorage();
+    const key = KEYS.stateExecution('wf-1', 'counter');
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+    let calls = 0;
+    storage.conditionalBatch = async (conditions, operations) => {
+      calls += 1;
+      if (calls === 1) {
+        await originalConditionalBatch(
+          [{ key: atomicStateVersionKey(key), expectedValue: null }],
+          [
+            { type: 'put', key, value: encode(5) },
+            { type: 'put', key: atomicStateVersionKey(key), value: encode(1) },
+          ],
+        );
+        return false;
+      }
+      return originalConditionalBatch(conditions, operations);
+    };
+    const state = new AtomicState<number>(storage, key, {
+      initial: 0,
+      sleep: async () => {},
+    });
+    const events: Event[] = [];
+    state.addEventListener('conflict', (event) => events.push(event));
+    state.addEventListener('change', (event) => events.push(event));
+
+    expect(await state.increment()).toBe(6);
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({ type: 'conflict', attempt: 1 });
+    expect(events[1]).toMatchObject({
+      type: 'change',
+      value: 6,
+      previousValue: 5,
+      version: 2,
+    });
+  });
+
+  it('emits the delete change payload and preserves the tombstone after a conflict', async () => {
+    const storage = createStorage();
+    const key = KEYS.stateExecution('wf-1', 'counter');
+    const state = new AtomicState<number>(storage, key, {
+      initial: 5,
+      sleep: async () => {},
+    });
+    await state.set(5);
+
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+    let calls = 0;
+    storage.conditionalBatch = async (conditions, operations) => {
+      calls += 1;
+      if (calls === 1) {
+        return false;
+      }
+      return originalConditionalBatch(conditions, operations);
+    };
+    const events: Event[] = [];
+    state.addEventListener('conflict', (event) => events.push(event));
+    state.addEventListener('change', (event) => events.push(event));
+
+    await state.delete();
+
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({ type: 'conflict', attempt: 1 });
+    expect(events[1]).toMatchObject({
+      type: 'change',
+      value: undefined,
+      previousValue: 5,
+      version: 2,
+    });
+    expect(await storage.get(key)).toBeNull();
+    expect(decode((await storage.get(atomicStateVersionKey(key)))!)).toBe(2);
+  });
+
+  it('reports every exhausted attempt in order', async () => {
+    const storage = createStorage();
+    const key = KEYS.stateExecution('wf-1', 'counter');
+    storage.conditionalBatch = async () => false;
+    const state = new AtomicState<number>(storage, key, {
+      initial: 0,
+      maxRetries: 3,
+      sleep: async () => {},
+    });
+    const events: Event[] = [];
+    state.addEventListener('conflict', (event) => events.push(event));
+    state.addEventListener('exhausted', (event) => events.push(event));
+
+    await expect(state.delete()).rejects.toMatchObject({
+      stateKey: key,
+      attempts: 3,
+      message: `AtomicState conflict: failed to update "${key}" after 3 attempts`,
+    });
+
+    expect(events.map((event) => event.type)).toEqual([
+      'conflict',
+      'conflict',
+      'conflict',
+      'exhausted',
+    ]);
+    expect(events.slice(0, 3).map((event) => (event as AtomicStateConflictEvent).attempt)).toEqual([
+      1, 2, 3,
+    ]);
+    expect((events[3] as AtomicStateExhaustedEvent).attempts).toBe(3);
   });
 
   it('supports typed convenience methods', async () => {

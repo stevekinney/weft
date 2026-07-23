@@ -256,8 +256,7 @@ export class AtomicState<T> extends EventTarget {
 
   /** Update the state with optimistic concurrency and automatic retry. */
   async update(updater: (current: T | undefined) => T): Promise<T> {
-    for (let attempt = 0; attempt < this.#maxRetries; attempt++) {
-      const snapshot = await this.#read();
+    return this.#runOptimisticMutation(async (snapshot) => {
       const nextValue = updater(snapshot.value);
       const commit = await commitAtomicStateValue(
         this.#storage,
@@ -265,23 +264,8 @@ export class AtomicState<T> extends EventTarget {
         snapshot.version,
         nextValue,
       );
-
-      if (commit.applied) {
-        dispatchAtomicStateEvent(
-          this,
-          new AtomicStateChangeEvent<T>(nextValue, snapshot.value, commit.version),
-        );
-        return nextValue;
-      }
-
-      dispatchAtomicStateEvent(this, new AtomicStateConflictEvent(this.#stateKey, attempt + 1));
-      if (attempt < this.#maxRetries - 1) {
-        await this.#sleep(retryDelay(attempt));
-      }
-    }
-
-    dispatchAtomicStateEvent(this, new AtomicStateExhaustedEvent(this.#stateKey, this.#maxRetries));
-    throw new AtomicStateConflictError(this.#stateKey, this.#maxRetries);
+      return { commit, result: nextValue, eventValue: nextValue };
+    });
   }
 
   /** Replace the state value. */
@@ -294,26 +278,10 @@ export class AtomicState<T> extends EventTarget {
    * concurrent writers cannot silently overwrite a delete.
    */
   async delete(): Promise<void> {
-    for (let attempt = 0; attempt < this.#maxRetries; attempt++) {
-      const snapshot = await this.#read();
+    await this.#runOptimisticMutation(async (snapshot) => {
       const commit = await commitAtomicStateDelete(this.#storage, this.#dataKey, snapshot.version);
-
-      if (commit.applied) {
-        dispatchAtomicStateEvent(
-          this,
-          new AtomicStateChangeEvent<T>(undefined, snapshot.value, commit.version),
-        );
-        return;
-      }
-
-      dispatchAtomicStateEvent(this, new AtomicStateConflictEvent(this.#stateKey, attempt + 1));
-      if (attempt < this.#maxRetries - 1) {
-        await this.#sleep(retryDelay(attempt));
-      }
-    }
-
-    dispatchAtomicStateEvent(this, new AtomicStateExhaustedEvent(this.#stateKey, this.#maxRetries));
-    throw new AtomicStateConflictError(this.#stateKey, this.#maxRetries);
+      return { commit, result: undefined, eventValue: undefined };
+    });
   }
 
   increment(this: AtomicState<number>, amount: number = 1): Promise<number> {
@@ -403,6 +371,39 @@ export class AtomicState<T> extends EventTarget {
       this.removeEventListener('conflict', listener);
       this.removeEventListener('exhausted', listener);
     }
+  }
+
+  async #runOptimisticMutation<TResult>(
+    attemptMutation: (snapshot: AtomicStateSnapshot<T>) => Promise<{
+      commit: AtomicStateCommitResult;
+      result: TResult;
+      eventValue: T | undefined;
+    }>,
+  ): Promise<TResult> {
+    for (let attempt = 0; attempt < this.#maxRetries; attempt++) {
+      const snapshot = await this.#read();
+      const mutation = await attemptMutation(snapshot);
+
+      if (mutation.commit.applied) {
+        dispatchAtomicStateEvent(
+          this,
+          new AtomicStateChangeEvent<T>(
+            mutation.eventValue,
+            snapshot.value,
+            mutation.commit.version,
+          ),
+        );
+        return mutation.result;
+      }
+
+      dispatchAtomicStateEvent(this, new AtomicStateConflictEvent(this.#stateKey, attempt + 1));
+      if (attempt < this.#maxRetries - 1) {
+        await this.#sleep(retryDelay(attempt));
+      }
+    }
+
+    dispatchAtomicStateEvent(this, new AtomicStateExhaustedEvent(this.#stateKey, this.#maxRetries));
+    throw new AtomicStateConflictError(this.#stateKey, this.#maxRetries);
   }
 
   async #read(): Promise<AtomicStateSnapshot<T>> {
