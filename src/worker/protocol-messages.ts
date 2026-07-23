@@ -102,6 +102,7 @@ export type HeartbeatMessage = {
  *   operationId: 'op-1',
  *   status: 'completed',
  *   value: null,
+ *   attemptToken: 'attempt-token',
  * };
  * ```
  */
@@ -126,6 +127,7 @@ export type CompletedTaskResultMessage = {
  *   operationId: 'op-1',
  *   status: 'failed',
  *   error: 'SMTP rejected the message',
+ *   attemptToken: 'attempt-token',
  * };
  * ```
  */
@@ -151,6 +153,7 @@ export type FailedTaskResultMessage = {
  *   status: 'cancelled',
  *   error: 'Task cancelled',
  *   cancelled: true,
+ *   attemptToken: 'attempt-token',
  * };
  * ```
  */

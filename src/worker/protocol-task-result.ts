@@ -31,6 +31,7 @@ import type {
  *
  * const message: TaskResultMessage = {
  *   type: 'taskResult', operationId: 'op-1', status: 'completed', value: { ok: true },
+ *   attemptToken: 'attempt-token',
  * };
  * ```
  */
