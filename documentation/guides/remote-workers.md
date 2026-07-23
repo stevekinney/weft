@@ -3,7 +3,7 @@
 Your workflow engine runs on one machine, but your activities need to run on GPU nodes, region-specific servers, or isolated containers. Remote workers connect to the Weft server over WebSocket (or HTTP long-polling as a fallback) and execute activities wherever they're deployed.
 
 > [!NOTE]
-> [`RemoteWorker`](../reference/api-workers.md#remoteworker) is a candidate-stable, provisional surface. The v1 task transport and worker lifecycle are intended for serious trials, but release notes may still call out Tier-0-driven changes to error codes or storage-capability failures before 1.0.
+> [`RemoteWorker`](../reference/api-workers.md#remoteworker) is a candidate-stable, provisional surface. The v1 task transport and worker lifecycle are intended for serious trials, but release notes may still call out Tier-0-driven changes to error codes or storage-capability failures before 1.0. See the [canonical stability-tier inventory](../contributing/breaking-changes.md#stability-tiers).
 
 ## The RemoteWorker class
 

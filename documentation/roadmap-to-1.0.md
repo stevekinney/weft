@@ -1,6 +1,6 @@
 # Roadmap to 1.0
 
-Weft is on the `0.10.x` release line while the final correctness and compatibility contracts settle. A `1.0` release should mean a durable, documented support promise for the stable tier, not just a larger version number.
+The [breaking-change policy's stability-tier inventory](contributing/breaking-changes.md#stability-tiers) is the canonical list while the final correctness and compatibility contracts settle. A `1.0` release should mean a durable, documented support promise for the stable tier, not just a larger version number.
 
 ## What 1.0 Means for Adopters
 
@@ -14,17 +14,7 @@ Version 1.0 means teams can build on the stable tier with a clear compatibility 
 
 ## What 1.0 Covers
 
-The 1.0 compatibility promise applies to surfaces that graduate into the stable tier:
-
-- Engine core workflow execution and recovery.
-- `TestEngine`.
-- [Bun SQLite and SQLite via Node compatibility APIs](reference/api-storage.md#sqlitestorage), plus [LMDB](reference/api-storage.md#lmdbstorage) storage adapters.
-- `RemoteWorker`.
-- `serve()` and the `/v1` REST surface.
-- Source and binary CLI commands `serve`, `doctor`, `version`, `--version`, and `-v`.
-- Exported public error codes.
-
-Experimental surfaces can continue changing before they graduate. That includes the browser runtime, MCP, IndexedDB, WebExtension, HTTP and compressed storage, [Turso](reference/api-storage.md#tursostorage) until conformance proof is complete, CLI commands beyond `serve`, `doctor`, `version`, `--version`, and `-v`, OpenTelemetry metric names, externally supplied dashboard mounting, and `ctx.step()` sugar.
+The 1.0 compatibility promise applies to surfaces that graduate into the stable tier. See the [canonical stability-tier inventory](contributing/breaking-changes.md#stability-tiers) for the current candidate-stable and experimental memberships; this roadmap owns only the graduation criteria below.
 
 ## Required Before 1.0
 

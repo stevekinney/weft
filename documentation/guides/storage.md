@@ -6,6 +6,8 @@ Every checkpoint, workflow state, signal, and timer in Weft is ultimately a key-
 
 SQLite is the default for Bun and Node. WebExtension storage is the browser-extension default, and IndexedDB is the browser and Service Worker default. `resolveDefaultStorage()` picks the matching persistent backend and gives you durable local storage without environment branches.
 
+The adapter-specific capability table below describes storage behavior; the [canonical stability-tier inventory](../contributing/breaking-changes.md#stability-tiers) owns the project-wide compatibility tier for each surface.
+
 ```ts
 import { Engine } from '@lostgradient/weft';
 import { resolveDefaultStorage } from '@lostgradient/weft/storage/auto';
