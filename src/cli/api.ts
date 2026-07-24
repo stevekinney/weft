@@ -1,6 +1,7 @@
 import { createLiveOperationRegistry } from '../server/rest-bindings.ts';
 import { findNearestCandidate } from './command-suggestions.ts';
 import snapshotData from './generated/operation-catalog.snapshot.json';
+import { loadJsonInput } from './json-input.ts';
 import { sendJsonRpcRequest } from './json-rpc-client.ts';
 import type {
   CatalogAccessSnapshot,
@@ -143,27 +144,11 @@ function formatOperationDescription(operation: CatalogOperationSnapshot): string
 async function readInput(
   command: ApiCommand,
 ): Promise<{ ok: true; value: unknown } | { ok: false; output: CommandOutput }> {
-  if (command.input !== undefined) return parseInput(command.input);
-  if (command.inputFile !== undefined) {
-    if (command.inputFile === '-') return parseInput(await Bun.stdin.text());
-    const file = Bun.file(command.inputFile);
-    if (!(await file.exists())) {
-      return { ok: false, output: usageError(`api: input file not found: ${command.inputFile}`) };
-    }
-    return parseInput(await file.text());
+  const result = await loadJsonInput(command.input, command.inputFile);
+  if (!result.ok) {
+    return { ok: false, output: usageError(`api: ${result.error.message}`) };
   }
-  return { ok: true, value: {} };
-}
-
-function parseInput(
-  source: string,
-): { ok: true; value: unknown } | { ok: false; output: CommandOutput } {
-  try {
-    return { ok: true, value: JSON.parse(source) as unknown };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return { ok: false, output: usageError(`api: invalid JSON input: ${message}`) };
-  }
+  return { ok: true, value: result.value === undefined ? {} : result.value };
 }
 
 function validateInput(

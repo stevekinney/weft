@@ -12,10 +12,10 @@
  */
 
 import type { ConnectionOptions } from '../connection.ts';
+import { loadJsonInput } from './json-input.ts';
 import {
   confirmDestructive,
   formatTimestamp,
-  messageOf,
   ndjson,
   prettyJson,
   truncateToWidth,
@@ -164,35 +164,13 @@ async function executeWorkflowEvents(
   return { stdout: lines.join('\n'), exitCode: 0 };
 }
 
-async function readInlineInput(
-  input: string | undefined,
-  inputFile: string | undefined,
-): Promise<{ ok: true; value: unknown } | { ok: false; message: string }> {
-  if (input !== undefined) return parseJson(input);
-  if (inputFile !== undefined) {
-    if (inputFile === '-') return parseJson(await Bun.stdin.text());
-    const file = Bun.file(inputFile);
-    if (!(await file.exists())) return { ok: false, message: `input file not found: ${inputFile}` };
-    return parseJson(await file.text());
-  }
-  return { ok: true, value: undefined };
-}
-
-function parseJson(source: string): { ok: true; value: unknown } | { ok: false; message: string } {
-  try {
-    return { ok: true, value: JSON.parse(source) as unknown };
-  } catch (error) {
-    return { ok: false, message: `invalid JSON input: ${messageOf(error)}` };
-  }
-}
-
 async function executeWorkflowStart(
   command: Extract<WorkflowCommand, { action: 'start' }>,
   connection: ConnectionOptions,
 ): Promise<CommandOutput> {
-  const parsed = await readInlineInput(command.input, command.inputFile);
+  const parsed = await loadJsonInput(command.input, command.inputFile);
   if (!parsed.ok) {
-    return { stdout: '', stderr: `workflow start: ${parsed.message}`, exitCode: 3 };
+    return { stdout: '', stderr: `workflow start: ${parsed.error.message}`, exitCode: 3 };
   }
 
   const result = await callCatalogOperation(connection, 'weft.workflows.start', {
@@ -252,9 +230,9 @@ async function executeWorkflowSignal(
   command: Extract<WorkflowCommand, { action: 'signal' }>,
   connection: ConnectionOptions,
 ): Promise<CommandOutput> {
-  const parsed = await readInlineInput(command.input, command.inputFile);
+  const parsed = await loadJsonInput(command.input, command.inputFile);
   if (!parsed.ok) {
-    return { stdout: '', stderr: `workflow signal: ${parsed.message}`, exitCode: 3 };
+    return { stdout: '', stderr: `workflow signal: ${parsed.error.message}`, exitCode: 3 };
   }
 
   const result = await callCatalogOperation(connection, 'weft.workflows.signal', {

@@ -1,6 +1,7 @@
 import type { Engine } from '../core/engine.ts';
 import { registerOnRuntimeEngine, runtimeWorkflowEngine } from '../core/runtime-workflow-engine.ts';
 import type { WorkflowDefinition } from '../core/types.ts';
+import { parseJsonInput } from './json-input.ts';
 import { createStorage } from './storage-factory.ts';
 import type {
   CommandOutput,
@@ -84,17 +85,6 @@ function getScheduleCreateValidationError(options: ScheduleCreateCommand): strin
   return null;
 }
 
-function parseScheduleInput(
-  input: string,
-): { ok: true; value: unknown } | { ok: false; message: string } {
-  try {
-    return { ok: true, value: JSON.parse(input) };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return { ok: false, message: `Error: could not parse --input JSON: ${message}` };
-  }
-}
-
 async function registerScheduleWorkflows(
   engine: Engine,
   workflowsPath: string,
@@ -122,9 +112,16 @@ async function executeScheduleCreate(
 
   await registerScheduleWorkflows(engine, options.workflows, loadRegistrationsFromModule);
 
-  const parsedInput = parseScheduleInput(options.input);
+  const parsedInput = parseJsonInput(options.input);
   if (!parsedInput.ok) {
-    return { stdout: '', stderr: parsedInput.message, exitCode: 1 };
+    return {
+      stdout: '',
+      stderr:
+        parsedInput.error.kind === 'invalid-json'
+          ? `Error: could not parse --input JSON: ${parsedInput.error.detail}`
+          : `Error: ${parsedInput.error.message}`,
+      exitCode: 1,
+    };
   }
 
   const spec = options.every !== undefined ? { every: options.every } : options.cronExpression;
