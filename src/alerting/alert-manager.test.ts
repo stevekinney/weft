@@ -60,6 +60,14 @@ describe('AlertManager', () => {
       expect(fired[0]!.threshold).toBe(0.5);
       expect(fired[0]!.currentValue).toBe(0.5);
       expect(manager.states[0]!.status).toBe('firing');
+      expect(manager.activeStates).toEqual([
+        {
+          rule: options.rules[0]!,
+          status: 'firing',
+          currentValue: 0.5,
+          lastFiredAt: 4000,
+        },
+      ]);
 
       manager[Symbol.dispose]();
     });

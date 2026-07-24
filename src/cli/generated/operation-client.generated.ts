@@ -12,6 +12,7 @@ import {
 export const CATALOG_OPERATION_NAMES = [
   'weft.activities.complete',
   'weft.activities.fail',
+  'weft.alerts.list',
   'weft.recover.all',
   'weft.retention.get',
   'weft.reviews.decision.submit',
@@ -76,6 +77,7 @@ export type CatalogOperationName = (typeof CATALOG_OPERATION_NAMES)[number];
 export const CLIENT_OPERATION_NAMES = [
   'weft.activities.complete',
   'weft.activities.fail',
+  'weft.alerts.list',
   'weft.recover.all',
   'weft.retention.get',
   'weft.reviews.decision.submit',
@@ -211,6 +213,19 @@ export type ClientOperationTypes = {
     };
     readonly output: { readonly ok: boolean };
     readonly faults: 'InvalidParams' | 'NotFound';
+  };
+  'weft.alerts.list': {
+    readonly input: {};
+    readonly output: {
+      readonly items: ReadonlyArray<{
+        readonly currentValue: number;
+        readonly firedAt: unknown;
+        readonly metric: 'workflow.failure_rate' | 'activity.p99_duration' | 'storage.size';
+        readonly threshold: number;
+        readonly window: unknown;
+      }>;
+    };
+    readonly faults: never;
   };
   'weft.recover.all': {
     readonly input: {};

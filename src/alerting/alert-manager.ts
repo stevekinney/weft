@@ -267,6 +267,11 @@ export class AlertManager implements Disposable {
     return this.#states;
   }
 
+  /** Get the alert rules that are currently firing. */
+  get activeStates(): readonly AlertState[] {
+    return this.#states.filter((state) => state.status === 'firing');
+  }
+
   [Symbol.dispose](): void {
     // Stop periodic re-evaluation
     if (this.#tickInterval !== null) {

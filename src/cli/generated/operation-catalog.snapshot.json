@@ -99,6 +99,77 @@
       }
     },
     {
+      "name": "weft.alerts.list",
+      "kind": "unary",
+      "summary": "List currently firing alerts",
+      "description": "List the alert rules that are currently firing, including their metric, threshold, current value, configured window, and firing timestamp. Read-only and limited to active in-memory alert state; resolved alerts are not returned.",
+      "tags": ["Observability"],
+      "destructive": false,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["system:read"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "currentValue": {
+                  "type": "number"
+                },
+                "firedAt": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "metric": {
+                  "enum": ["workflow.failure_rate", "activity.p99_duration", "storage.size"],
+                  "type": "string"
+                },
+                "threshold": {
+                  "type": "number"
+                },
+                "window": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": ["metric", "threshold", "currentValue", "window", "firedAt"],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": ["items"],
+        "type": "object"
+      }
+    },
+    {
       "name": "weft.events.sse",
       "kind": "stream",
       "summary": "Stream fleet events as Server-Sent Events",

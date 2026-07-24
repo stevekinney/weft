@@ -111,6 +111,7 @@ import {
   getWorkflowTimelineRestBinding,
 } from './operations/get-workflow-timeline.ts';
 import { getWorkflowOperation, getWorkflowRestBinding } from './operations/get-workflow.ts';
+import { listAlertsOperation, listAlertsRestBinding } from './operations/list-alerts.ts';
 import {
   listCheckpointsOperation,
   listCheckpointsRestBinding,
@@ -251,6 +252,7 @@ export type UnknownRestBinding = RestBinding<any, any>;
  * Use `createLiveRestBindings()` to get the full set for a given server.
  */
 export const REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = [
+  listAlertsRestBinding,
   startWorkflowRestBinding,
   startOrSignalWorkflowRestBinding,
   recoverAllRestBinding,
@@ -476,6 +478,7 @@ export function createLiveOperationRegistry(
     clearTaskDeadLetterOperation,
     // Operation-catalog-backed routes
     listSchedulesOperation,
+    listAlertsOperation,
     getScheduleOperation,
     replayWorkflowOperation,
     storageCapabilities.storageCapabilitiesOperation,

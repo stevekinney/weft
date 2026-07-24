@@ -15,6 +15,7 @@
 
 /** Operation names that must declare a `description`. */
 export const INTERACTIVE_OPERATION_NAMES: ReadonlyArray<string> = [
+  'weft.alerts.list',
   // Workflow lifecycle
   'weft.workflows.start',
   'weft.workflows.get',

@@ -363,6 +363,26 @@ Use the scoped `weft.system.lease` operation or
 `GET /v1/health` endpoint remains a liveness probe and does not expose ownership
 details.
 
+### `getActiveAlerts()`
+
+```ts
+import { Engine, type AlertState } from '@lostgradient/weft';
+
+const engine = new Engine({
+  alerts: {
+    rules: [{ metric: 'storage.size', threshold: 1_000_000, action: 'log' }],
+  },
+});
+const active: readonly AlertState[] = engine.getActiveAlerts();
+void active;
+engine[Symbol.dispose]();
+```
+
+Returns the alert rules that are currently firing in this engine process.
+The snapshot is in-memory and read-only; resolved alerts and any acknowledged
+state are not included because the alert manager does not retain an
+acknowledged state.
+
 ### `storage` (getter)
 
 ```ts partial

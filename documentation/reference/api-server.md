@@ -448,6 +448,16 @@ These extensions describe operation authorization, while OpenAPI's standard `sec
 
 The OpenAPI and OpenRPC documents enumerate operations from the unified catalog. To see which transports an operation is bound to, look at the `tags` and binding metadata in the document. To see the input/output schemas for an operation, follow the `$ref` links into `components.schemas`. To build a scope matrix without guessing from tags or operation names, read `x-weft-access` and any `x-weft-parameterizedAccess` variants.
 
+### Active alerts
+
+`weft.alerts.list` and `GET /v1/alerts` return the alert rules that are
+currently firing in the engine's in-memory alert manager. The response is
+`{ "items": [...] }`; each item contains `metric`, `threshold`,
+`currentValue`, `window`, and `firedAt`. Rule actions and webhook URLs are not
+included in this operator-facing diagnostic shape. The operation requires
+`system:read` and is read-only. There is no acknowledge operation because the
+current alert manager model has no acknowledged state distinct from resolved.
+
 ### MCP Server
 
 The MCP server exposes Weft workflows to [Model Context Protocol](https://modelcontextprotocol.io/) clients. It is not a fifth operation-catalog transport: `tools/list`, `tools/call`, and `resources/read` are MCP methods that adapt registered workflows and workflow resources into the MCP protocol.

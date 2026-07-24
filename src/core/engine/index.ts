@@ -1,5 +1,6 @@
 /* oxlint-disable max-lines -- Engine's public overload signatures (~191 lines: register/start/signal/update/query, the five bulk dry-run-vs-commit methods, schedule, and static create) plus member JSDoc (~130 lines) ARE the published declaration surface, gated byte-for-byte by verify:jsdoc:declarations and the scoped Engine class-block .d.ts oracle; the irreducible declaration floor alone (>=531 lines, counted with skipBlankLines:false skipComments:false) exceeds the 500 ceiling before any method body is counted. The aggressive class split was attempted (task 3765ffa6, documentation/engine-split-log/PR-33.md): a class-expression mixin regresses the emitted .d.ts (Engine extends a synthetic any-typed Engine_base intersection; schedule methods leave the Engine block), and a verbatim class move only relocates this suppression because max-lines is repo-wide; rejected. All extractable bodies live in ~90 sibling modules under src/core/engine/. */
 import { AlertManager } from '../../alerting/alert-manager.ts';
+import type { AlertState } from '../../alerting/types.ts';
 import {
   KEYS,
   requireStorageCapability,
@@ -1001,6 +1002,12 @@ export class Engine<
         new AtomicState<T>(storage, KEYS.stateWorkflow(workflowType, key), options),
     };
   }
+
+  /** Return the alert rules that are currently firing. */
+  getActiveAlerts(): readonly AlertState[] {
+    return getInternals(this).alertManager?.activeStates ?? [];
+  }
+
   async #handleStrategyMessage(message: WorkerOutboundMessage): Promise<void> {
     return handleStrategyMessageFromInternals(
       getInternals(this),
