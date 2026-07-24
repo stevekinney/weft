@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { Engine } from '../core/engine';
 import { WorkflowResumedEvent } from '../core/events.ts';
 import { workflow } from '../core/types/workflow-function.ts';
+import { principalFromApiKey } from '../server/principal.ts';
+import type { EventEnvelope, WorkflowEventFeed } from '../server/workflow-event-feed.ts';
 import { IndexedDBStorage } from '../storage/indexeddb';
 import { MemoryStorage } from '../storage/memory';
 import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
@@ -233,6 +235,73 @@ describe('setupServiceWorker', () => {
       expect(respondedWith).toBeDefined();
       const response = await respondedWith!;
       expect(response).toBeInstanceOf(Response);
+      setup.engine[Symbol.dispose]();
+    });
+  });
+
+  it('passes supported handler options to authenticated event streams', async () => {
+    const scope = createFakeServiceWorkerScope();
+    let acquireCalls = 0;
+    let releaseCalls = 0;
+    const envelope: EventEnvelope = {
+      kind: 'workflow:started',
+      workflowId: 'wf-service-worker',
+      selector: 'events',
+      sequence: 0,
+      cursor: '0',
+      emittedAtMs: 0,
+      payload: { workflowId: 'wf-service-worker' },
+    };
+    const workflowEventFeed: WorkflowEventFeed = {
+      async *replay() {
+        yield envelope;
+      },
+      subscribe() {
+        return (async function* events() {
+          yield envelope;
+        })();
+      },
+      dispose() {},
+    };
+
+    await withFakeSelf(scope, async () => {
+      const setup = await setupServiceWorker({
+        storage: new MemoryStorage(),
+        handlerOptions: {
+          authContext: {
+            method: 'api-key',
+            principal: principalFromApiKey({
+              subject: 'service-worker',
+              scopes: ['events:read'],
+            }),
+          },
+          workflowEventFeed,
+          acquireWorkflowStreamConnection: () => {
+            acquireCalls += 1;
+            return {
+              release() {
+                releaseCalls += 1;
+              },
+            };
+          },
+        },
+      });
+      const fetchListener = listenerFor(scope, 'fetch');
+      let respondedWith: Promise<Response> | undefined;
+      fetchListener({
+        request: new Request('https://example.com/weft/v1/workflows/wf-service-worker/events/sse', {
+          headers: { Accept: 'text/event-stream' },
+        }),
+        respondWith(response) {
+          respondedWith = Promise.resolve(response);
+        },
+      });
+
+      const response = await respondedWith!;
+      expect(response.status).toBe(200);
+      await expect(response.text()).resolves.toContain('workflow:started');
+      expect(acquireCalls).toBe(1);
+      expect(releaseCalls).toBe(1);
       setup.engine[Symbol.dispose]();
     });
   });

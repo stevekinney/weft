@@ -12,6 +12,7 @@
  */
 
 import { Engine, type RegistryAgnosticEngine } from '../core/engine';
+import type { HandlerOptions } from '../server/handler';
 import { handleRequest } from '../server/handler';
 import { IndexedDBStorage } from '../storage/indexeddb';
 import type { Storage as WeftStorage } from '../storage/interface';
@@ -26,6 +27,27 @@ import {
 } from './shared.ts';
 
 const DEFAULT_DATABASE_NAME = 'weft';
+
+/**
+ * The subset of {@link HandlerOptions} that can be supplied by a Service
+ * Worker. Service Workers can inject request authorization and event-stream
+ * plumbing, but cannot provide server-owned registries or Bun runtime
+ * integrations.
+ *
+ * @example
+ * ```ts
+ * import type { ServiceWorkerHandlerOptions } from '@lostgradient/weft/service-worker';
+ *
+ * const handlerOptions: ServiceWorkerHandlerOptions = {
+ *   authContext: { method: 'public' },
+ * };
+ * void handlerOptions;
+ * ```
+ */
+export type ServiceWorkerHandlerOptions = Pick<
+  HandlerOptions,
+  'authContext' | 'workflowEventFeed' | 'fleetEventFeed' | 'acquireWorkflowStreamConnection'
+>;
 
 /**
  * Options for {@link setupServiceWorker}. All fields are optional; the
@@ -72,6 +94,8 @@ export interface SetupServiceWorkerOptions {
    * engine's storage when both are provided.
    */
   storage?: WeftStorage;
+  /** Handler options supported by the Service Worker runtime. */
+  handlerOptions?: ServiceWorkerHandlerOptions;
   /**
    * Register workflows on the engine before listeners do real work.
    * Resolves before the helper returns. Rejection causes subsequent
@@ -200,6 +224,7 @@ function buildFetchListener(
   pathPrefix: string,
   engine: Engine,
   registrationReady: Promise<void>,
+  handlerOptions: ServiceWorkerHandlerOptions | undefined,
 ): (event: MinimalFetchEvent) => void {
   // Reuses the shared `buildDelegatedRequest` helper so the URL-stripping
   // convention can't drift between `setupServiceWorker` and the lower-level
@@ -210,7 +235,7 @@ function buildFetchListener(
     if (delegatedRequest === null) return;
     event.respondWith(
       registrationReady
-        .then(() => handleRequest(delegatedRequest, engine))
+        .then(() => handleRequest(delegatedRequest, engine, handlerOptions))
         .catch((error: unknown) =>
           buildErrorResponse(error instanceof Error ? error : new Error(String(error))),
         ),
@@ -225,8 +250,9 @@ function attachListeners(
   engine: Engine,
   scheduler: ServiceWorkerScheduler,
   registrationReady: Promise<void>,
+  handlerOptions: ServiceWorkerHandlerOptions | undefined,
 ): void {
-  const fetchListener = buildFetchListener(pathPrefix, engine, registrationReady);
+  const fetchListener = buildFetchListener(pathPrefix, engine, registrationReady, handlerOptions);
   const periodicSyncListener = (event: MinimalPeriodicSyncEvent) => {
     if (event.tag !== periodicSyncTag) return;
     event.waitUntil(registrationReady.then(() => scheduler.tick()));
@@ -324,7 +350,15 @@ export function setupServiceWorker(
   }
   const registrationReady: Promise<void> = Promise.resolve().then(runRegistrationAndRecovery);
 
-  attachListeners(scope, pathPrefix, periodicSyncTag, engine, scheduler, registrationReady);
+  attachListeners(
+    scope,
+    pathPrefix,
+    periodicSyncTag,
+    engine,
+    scheduler,
+    registrationReady,
+    options.handlerOptions,
+  );
 
   const result: SetupServiceWorkerResult = {
     engine,

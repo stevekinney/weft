@@ -10,6 +10,7 @@
 import type { RegistryAgnosticEngine } from '../core/engine';
 import { handleRequest } from '../server/handler';
 import type { ServiceWorkerScheduler } from './scheduler.ts';
+import type { ServiceWorkerHandlerOptions } from './setup.ts';
 import type {
   MinimalExtendableEvent,
   MinimalFetchEvent,
@@ -61,6 +62,8 @@ export interface ServiceWorkerOptions {
    */
   engine: RegistryAgnosticEngine;
   pathPrefix?: string;
+  /** Handler options supported by the Service Worker runtime. */
+  handlerOptions?: ServiceWorkerHandlerOptions;
 }
 
 // ---------------------------------------------------------------------------
@@ -100,13 +103,13 @@ export interface ServiceWorkerOptions {
 export function createFetchHandler(
   options: ServiceWorkerOptions,
 ): (event: MinimalFetchEvent) => void {
-  const { engine } = options;
+  const { engine, handlerOptions } = options;
   const pathPrefix = normalizePathPrefix(options.pathPrefix);
 
   return (event: MinimalFetchEvent) => {
     const delegatedRequest = buildDelegatedRequest(event, pathPrefix);
     if (delegatedRequest === null) return;
-    event.respondWith(handleRequest(delegatedRequest, engine));
+    event.respondWith(handleRequest(delegatedRequest, engine, handlerOptions));
   };
 }
 
@@ -211,6 +214,7 @@ export function createLifecycleHandlers(): {
 
 export {
   setupServiceWorker,
+  type ServiceWorkerHandlerOptions,
   type SetupServiceWorkerOptions,
   type SetupServiceWorkerResult,
 } from './setup.ts';

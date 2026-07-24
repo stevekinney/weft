@@ -4,6 +4,7 @@ import { MemoryStorage } from '../storage/memory.ts';
 import {
   createFetchHandler,
   setupServiceWorker,
+  type ServiceWorkerHandlerOptions,
   type ServiceWorkerOptions,
   type SetupServiceWorkerOptions,
 } from './index.ts';
@@ -41,5 +42,19 @@ async function verifyServiceWorkerOptionsAcceptBothEngineConstructionPatterns():
 
   void setupServiceWorker({ engine: defaultEngine });
   void setupServiceWorker({ engine: concreteEngine });
+
+  const handlerOptions = {
+    authContext: { method: 'public' as const },
+  } satisfies ServiceWorkerHandlerOptions;
+  const optionsWithHandlerOptions: ServiceWorkerOptions = {
+    engine: defaultEngine,
+    handlerOptions,
+  };
+  const setupWithHandlerOptions: SetupServiceWorkerOptions = {
+    engine: concreteEngine,
+    handlerOptions,
+  };
+  void optionsWithHandlerOptions;
+  void setupWithHandlerOptions;
 }
 void verifyServiceWorkerOptionsAcceptBothEngineConstructionPatterns;

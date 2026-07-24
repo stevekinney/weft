@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
 
+import { principalFromApiKey } from '../server/principal.ts';
+import type { EventEnvelope, WorkflowEventFeed } from '../server/workflow-event-feed.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import {
   buildDelegatedRequest,
@@ -179,6 +181,48 @@ describe('createFetchHandler', () => {
     const responsePromise = event.respondWith.mock.calls[0]![0] as Promise<Response>;
     const response = await responsePromise;
     expect(response.status).toBe(404);
+  });
+
+  it('passes handler options through the lower-level fetch handler', async () => {
+    const envelope: EventEnvelope = {
+      kind: 'workflow:started',
+      workflowId: 'wf-service-worker',
+      selector: 'events',
+      sequence: 0,
+      cursor: '0',
+      emittedAtMs: 0,
+      payload: {},
+    };
+    const workflowEventFeed: WorkflowEventFeed = {
+      async *replay() {
+        yield envelope;
+      },
+      subscribe() {
+        return (async function* events() {
+          yield envelope;
+        })();
+      },
+      dispose() {},
+    };
+    const handler = createFetchHandler({
+      engine: mockEngine as any,
+      handlerOptions: {
+        authContext: {
+          method: 'api-key',
+          principal: principalFromApiKey({ subject: 'service-worker', scopes: ['events:read'] }),
+        },
+        workflowEventFeed,
+      },
+    });
+    const event = createMockFetchEvent(
+      'https://example.com/weft/v1/workflows/wf-service-worker/events/sse',
+    );
+    event.request = new Request(event.request, { headers: { Accept: 'text/event-stream' } });
+
+    handler(event as any);
+    const response = await (event.respondWith.mock.calls[0]![0] as Promise<Response>);
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toContain('workflow:started');
   });
 });
 
