@@ -328,6 +328,7 @@ async function removePackagedArtifactLeaks(): Promise<void> {
   const removeGlobPatterns = [
     'dist/**/*.map',
     'dist/**/*.test-d.d.ts',
+    'dist/**/*.test-support.d.ts',
     'dist/benchmarks/**',
     'dist/**/__fixtures__/**',
     'dist/**/__tests__/**',

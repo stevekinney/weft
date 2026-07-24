@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'bun:test';
 
+import { MemoryStorage } from './memory.ts';
 import {
   coreStorageCapabilities,
   fullStorageCapabilities,
 } from './storage-adapter.test-support.ts';
+import {
+  assertCapabilitiesShape,
+  bytes,
+  collect,
+  decodeText,
+} from './storage-test-primitives.test-support.ts';
 
 describe('storage adapter test-support capability rows', () => {
   it('returns the fully featured single-process capability profile', () => {
@@ -26,5 +33,27 @@ describe('storage adapter test-support capability rows', () => {
       conditionalBatch: false,
       boundedRangeDelete: false,
     });
+  });
+});
+
+describe('shared storage test primitives', () => {
+  it('encodes, decodes, collects, and validates storage values', async () => {
+    const storage = new MemoryStorage();
+    try {
+      const encoded = bytes('value');
+
+      expect(decodeText(encoded)).toBe('value');
+      expect(
+        await collect(
+          (async function* () {
+            yield 'first';
+            yield 'second';
+          })(),
+        ),
+      ).toEqual(['first', 'second']);
+      assertCapabilitiesShape(storage);
+    } finally {
+      storage[Symbol.dispose]();
+    }
   });
 });

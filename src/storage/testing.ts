@@ -12,35 +12,12 @@ import { describe, expect, it } from 'bun:test';
 
 import type { Storage, StorageCapabilities } from './interface.ts';
 import { storageConditionalBatch } from './interface.ts';
-
-const textEncoder = new TextEncoder();
-const textDecoder = new TextDecoder();
-
-function bytes(value: string): Uint8Array {
-  return textEncoder.encode(value);
-}
-
-function decodeText(value: Uint8Array): string {
-  return textDecoder.decode(value);
-}
-
-async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
-  const values: T[] = [];
-  for await (const value of iterable) {
-    values.push(value);
-  }
-  return values;
-}
-
-function assertCapabilitiesShape(storage: Storage): void {
-  const capabilities = storage.capabilities();
-  expect(['ephemeral', 'local', 'remote']).toContain(capabilities.persistence ?? '');
-  expect(['linearizable', 'session', 'eventual']).toContain(capabilities.readAfterWrite);
-  expect(['snapshot', 'best-effort']).toContain(capabilities.scanConsistency);
-  expect(typeof capabilities.atomicBatch).toBe('boolean');
-  expect(typeof capabilities.conditionalBatch).toBe('boolean');
-  expect(typeof capabilities.boundedRangeDelete).toBe('boolean');
-}
+import {
+  assertCapabilitiesShape,
+  bytes,
+  collect,
+  decodeText,
+} from './storage-test-primitives.test-support.ts';
 
 /**
  * Options for {@link runStorageCapabilityConformance}.
