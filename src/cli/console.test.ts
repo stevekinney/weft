@@ -41,6 +41,32 @@ describe('optional Weft Console mount', () => {
     ).rejects.toThrow('@lostgradient/weft-console must export a weftConsole() function');
   });
 
+  it('masks a throwing weftConsole factory with an actionable diagnostic', async () => {
+    await expect(
+      loadConsoleMount({
+        resolveModule: () => fixtureEntry,
+        importModule: async () => ({
+          weftConsole: () => {
+            throw new Error('console factory failed');
+          },
+        }),
+      }),
+    ).rejects.toThrow(
+      '--console @lostgradient/weft-console weftConsole() failed; reinstall or update it, then retry, or remove --console',
+    );
+  });
+
+  it('rejects an invalid dashboard route target with an actionable diagnostic', async () => {
+    await expect(
+      loadConsoleMount({
+        resolveModule: () => fixtureEntry,
+        importModule: async () => ({ weftConsole: () => ({}) }),
+      }),
+    ).rejects.toThrow(
+      '--console @lostgradient/weft-console weftConsole() failed; reinstall or update it, then retry, or remove --console',
+    );
+  });
+
   it('does not expose dynamic import errors', async () => {
     const secretPath = '/Users/example/.secrets/weft-console-token.txt';
     await expect(
