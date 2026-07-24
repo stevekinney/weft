@@ -10,6 +10,7 @@
  */
 
 import { describe, expect, it } from 'bun:test';
+import { makeActivity } from '../../testing/activity.test-support.ts';
 import { sleepForTesting, waitForCondition } from '../../testing/fake-timers.test-support.ts';
 
 import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
@@ -17,7 +18,7 @@ import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { decode } from '../codec.ts';
 import { Engine } from '../engine.ts';
-import type { ActivityDefinition, WorkflowContext } from '../types.ts';
+import type { WorkflowContext } from '../types.ts';
 import { activity, workflow } from '../types.ts';
 
 async function flush(): Promise<void> {
@@ -43,22 +44,6 @@ function deferred<T = void>(): {
     result.reject = reject;
   });
   return result;
-}
-
-// ---------------------------------------------------------------------------
-// Helper — simple activity builder
-// ---------------------------------------------------------------------------
-
-function makeActivity<TInput, TOutput>(options: {
-  name: string;
-  execute: (input: TInput) => TOutput | Promise<TOutput>;
-  compensate?: (input: TInput, output: TOutput) => void | Promise<void>;
-}): ActivityDefinition<TInput, TOutput> {
-  return {
-    name: options.name,
-    execute: async (input: TInput) => options.execute(input),
-    ...(options.compensate !== undefined ? { compensate: options.compensate } : {}),
-  };
 }
 
 // ---------------------------------------------------------------------------

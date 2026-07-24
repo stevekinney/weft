@@ -1,3 +1,4 @@
+import { makeActivity } from '../../testing/activity.test-support.ts';
 import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
 /**
  * Tests for ctx.saga() — sequential activity execution with reverse compensation.
@@ -19,22 +20,6 @@ import { workflow } from '../types.ts';
 /** Drain microtasks so fire-and-forget engine work completes. */
 async function flush(): Promise<void> {
   await sleepForTesting(10);
-}
-
-// ---------------------------------------------------------------------------
-// Reusable activity builder
-// ---------------------------------------------------------------------------
-
-function makeActivity<TInput, TOutput>(options: {
-  name: string;
-  execute: (input: TInput) => TOutput | Promise<TOutput>;
-  compensate?: (input: TInput, output: TOutput) => void | Promise<void>;
-}): ActivityDefinition<TInput, TOutput> {
-  return {
-    name: options.name,
-    execute: async (input: TInput) => options.execute(input),
-    ...(options.compensate !== undefined ? { compensate: options.compensate } : {}),
-  };
 }
 
 // ---------------------------------------------------------------------------
