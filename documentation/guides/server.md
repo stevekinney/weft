@@ -58,15 +58,6 @@ CLI runs, calls its exported `weftConsole()` function, and mounts the package's
 export the expected function, the command reports an actionable error and exits
 before starting the server.
 
-Library users can mount the same package explicitly:
-
-```typescript
-import { weftConsole } from '@lostgradient/weft-console';
-import { serve } from '@lostgradient/weft/server';
-
-const server = serve({ engine, dashboard: weftConsole() });
-```
-
 The console package is an optional peer of Weft; it is not installed by
 `@lostgradient/weft` itself.
 

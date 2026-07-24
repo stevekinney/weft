@@ -53,8 +53,7 @@ weft serve --console --workflows ./src/workflows.ts
 The CLI resolves the package from the current project, calls its exported
 `weftConsole()` function, and mounts its adjacent `assets/` directory at
 `/assets`. A missing package or invalid export is reported as an error before
-the server binds. Library users can mount it directly with
-`serve({ engine, dashboard: weftConsole() })`.
+the server binds.
 
 ### doctor
 
