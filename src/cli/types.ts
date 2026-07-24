@@ -14,6 +14,7 @@ export type CliCommand =
       database: string;
       storage: StorageBackend;
       help: boolean;
+      console: boolean;
       workflows?: string;
     }
   | { command: 'version' }

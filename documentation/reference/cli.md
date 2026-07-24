@@ -32,6 +32,7 @@ weft serve --port 8080 --database /var/data/weft.db
 | `--database`  | `-d`  | `./weft.db` | SQLite database file path                                 |
 | `--storage`   | `-s`  | `sqlite`    | Storage backend: `sqlite`, `lmdb`, or `memory`            |
 | `--workflows` | `-w`  |             | Path to a workflow module to load and register on startup |
+| `--console`   |       | `false`     | Mount `@lostgradient/weft-console` and its static assets  |
 | `--help`      | `-h`  |             | Show help message                                         |
 
 When `--workflows` is omitted, the server starts in inspect-only mode (useful for viewing existing persisted workflow state via the REST API, but no new workflow types can be executed). When provided, the module's exported `WorkflowDefinition` values and `ActivityDefinition` values are loaded and registered before the server begins accepting requests.
@@ -40,6 +41,20 @@ When `--workflows` is omitted, the server starts in inspect-only mode (useful fo
 weft serve --workflows ./src/workflows.ts
 weft serve --port 8080 --database /var/data/weft.db --workflows ./src/my-workflows.ts
 ```
+
+To mount the optional operator console from the CLI, install it in the project
+where `weft serve` runs and pass `--console`:
+
+```bash
+bun add @lostgradient/weft-console
+weft serve --console --workflows ./src/workflows.ts
+```
+
+The CLI resolves the package from the current project, calls its exported
+`weftConsole()` function, and mounts its adjacent `assets/` directory at
+`/assets`. A missing package or invalid export is reported as an error before
+the server binds. Library users can mount it directly with
+`serve({ engine, dashboard: weftConsole() })`.
 
 ### doctor
 

@@ -126,6 +126,11 @@ describe('CLI argument parsing', () => {
       expect(result.help).toBe(true);
     });
 
+    it('parses --console flag', () => {
+      const result = parseCliArguments(['serve', '--console']) as ServeCommand;
+      expect(result.console).toBe(true);
+    });
+
     it('defaults help to false', () => {
       const result = parseCliArguments([]) as ServeCommand;
       expect(result.command).toBe('serve');
@@ -1099,6 +1104,33 @@ describe('CLI direct execution', () => {
     expect(stdout).toContain('weft');
     expect(stdout).toContain('--port');
     expect(stdout).toContain('--database');
+    expect(stdout).toContain('--console');
+  });
+
+  it('fails before binding when --console cannot resolve the optional peer', async () => {
+    const port = 17233 + Math.floor(Math.random() * 1000);
+    const process = Bun.spawn(
+      [
+        'bun',
+        './src/cli-main.ts',
+        'serve',
+        '--console',
+        '--port',
+        String(port),
+        '--database',
+        ':memory:',
+      ],
+      { stdout: 'pipe', stderr: 'pipe' },
+    );
+
+    const exitCode = await process.exited;
+    const stdout = await new Response(process.stdout).text();
+    const stderr = await new Response(process.stderr).text();
+
+    expect(exitCode).toBe(1);
+    expect(stdout).not.toContain('Weft API running');
+    expect(stderr).toContain('--console requires @lostgradient/weft-console');
+    await expect(fetch(`http://127.0.0.1:${port}/v1/health`)).rejects.toThrow();
   });
 
   it('rejects ignored serve positionals before starting the server', async () => {

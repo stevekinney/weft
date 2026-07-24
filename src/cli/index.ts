@@ -5,6 +5,7 @@ export { executeApi } from './api.ts';
 export { executeCodegen } from './codegen.ts';
 export { executeCompletions } from './completions.ts';
 export { executeConformance } from './conformance.ts';
+export { loadConsoleMount } from './console.ts';
 export { executeDoctor } from './doctor.ts';
 export { createWeftClient } from './generated/operation-client.generated.ts';
 export type { CatalogOperationName, WeftClient } from './generated/operation-client.generated.ts';

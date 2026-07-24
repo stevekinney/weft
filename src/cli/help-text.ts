@@ -27,6 +27,7 @@ Serve Options:
   -d, --database <path>       Database file path (default: ./weft.db)
   -s, --storage <backend>     Storage backend: sqlite, lmdb, memory (default: sqlite)
   -w, --workflows <path>      Path to workflow module to register on startup
+      --console               Mount @lostgradient/weft-console
   -h, --help                  Show this help message
 `;
 

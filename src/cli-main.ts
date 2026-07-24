@@ -22,6 +22,7 @@ import {
   executeWorkflow,
   findCliSubcommandName,
   HELP_TEXT,
+  loadConsoleMount,
   parseCliArguments,
   removeRunLockfile,
   SCHEDULE_HELP_TEXT,
@@ -57,6 +58,8 @@ if (parsedArguments.command === 'version') {
     process.exit(0);
   }
 
+  const consoleMount = parsedArguments.console ? await loadConsoleMount() : undefined;
+
   const storage = await createStorage(parsedArguments.storage, parsedArguments.database);
   const engine = new Engine({ storage });
 
@@ -73,6 +76,7 @@ if (parsedArguments.command === 'version') {
   const server = serve({
     engine,
     port: Number(parsedArguments.port),
+    ...consoleMount,
   });
   await writeRunLockfile(server.url);
 

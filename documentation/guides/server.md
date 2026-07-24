@@ -30,6 +30,7 @@ interface ServeOptions {
   hostname?: string;
   development?: boolean; // enable Bun's development mode (HMR, source maps)
   dashboard?: DashboardRouteTarget; // external dashboard shell served at supported page routes
+  dashboardAssets?: DashboardAssets; // static dashboard files mounted below a prefix
   auth?: AuthConfig; // API key or JWT authentication configuration
   cors?: CorsOptions; // cross-origin policy for browser clients; omit for same-origin only
   unauthenticatedAccess?: 'warn' | 'allow' | 'reject'; // startup policy when auth is omitted
@@ -40,6 +41,34 @@ interface ServeOptions {
   prometheusExporter?: PrometheusExporter; // Prometheus metrics exporter
 }
 ```
+
+### Mounting the console
+
+CLI users can mount the optional Weft Console package without writing a server
+entrypoint:
+
+```bash
+bun add @lostgradient/weft-console
+weft serve --console --workflows ./src/workflows.ts
+```
+
+`--console` resolves `@lostgradient/weft-console` from the directory where the
+CLI runs, calls its exported `weftConsole()` function, and mounts the package's
+`assets/` directory at `/assets`. If the optional package is missing or does not
+export the expected function, the command reports an actionable error and exits
+before starting the server.
+
+Library users can mount the same package explicitly:
+
+```typescript
+import { weftConsole } from '@lostgradient/weft-console';
+import { serve } from '@lostgradient/weft/server';
+
+const server = serve({ engine, dashboard: weftConsole() });
+```
+
+The console package is an optional peer of Weft; it is not installed by
+`@lostgradient/weft` itself.
 
 When [`auth`](../reference/configuration.md#serveoptions) is omitted, [`serve()`](../reference/api-server.md#serve) starts in an open local-development mode and logs a loud startup warning because every non-public operation is reachable by anyone who can connect to the server. Production wrappers should pass `unauthenticatedAccess: 'reject'` or set [`WEFT_SERVER_AUTHENTICATION_REQUIRED=1`](../reference/configuration.md#environment-variables); either setting makes `serve()` fail before binding unless `auth` is configured. Use `unauthenticatedAccess: 'allow'` only when an intentionally open local process boundary should start without a warning.
 
