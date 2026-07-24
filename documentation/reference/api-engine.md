@@ -16,31 +16,7 @@ class Engine extends EventTarget implements Disposable, AsyncDisposable
 new Engine(options?: Partial<EngineOptions>)
 ```
 
-Creates a new engine instance. All options are optional — sensible defaults are applied when omitted.
-
-| Option                           | Type                       | Default               | Description                                                                    |
-| -------------------------------- | -------------------------- | --------------------- | ------------------------------------------------------------------------------ |
-| `storage`                        | `Storage`                  | `new MemoryStorage()` | Storage backend for workflow state and checkpoints                             |
-| `development`                    | `boolean`                  | `false`               | Enable development-mode checkpoint validation                                  |
-| `backgroundTasks`                | `'automatic' \| 'manual'`  | `'automatic'`         | Run periodic engine maintenance in-process or through explicit host ticks      |
-| `serializer`                     | `Serializer`               | built-in codec        | Custom serialization for checkpoint data                                       |
-| `retention`                      | `RetentionPolicy`          | `undefined`           | Default retention policy for completed, failed, and cancelled workflows        |
-| `retentionSweepInterval`         | `Duration`                 | internal default      | Interval for automatic retention sweeps                                        |
-| `retentionSweepBatchSize`        | `number`                   | internal default      | Maximum workflows considered by one retention sweep                            |
-| `history`                        | `HistoryPolicy`            | `undefined`           | Lifetime history circuit-breaker and event-log compaction policy               |
-| `archive`                        | `ArchiveAdapter`           | `undefined`           | Best-effort sink for event-log ranges discarded by compaction                  |
-| `payloadSize`                    | `PayloadSizePolicy`        | `undefined`           | Admission-time cap for workflow inputs, signal payloads, and activity results  |
-| `compression`                    | `CompressionOptions`       | `undefined`           | Enable framed storage payload compression for checkpoints and activity results |
-| `checkpointHistory`              | `number`                   | `10`                  | Number of historical checkpoints to retain                                     |
-| `checkpointSizeWarningThreshold` | `number`                   | `65_536`              | Byte threshold that triggers a `CheckpointSizeWarningEvent`                    |
-| `maxNestingDepth`                | `number`                   | `10`                  | Maximum allowed nesting depth for child workflows                              |
-| `broadcastEvents`                | `boolean`                  | `false`               | Enable `BroadcastChannel` for cross-worker event coordination                  |
-| `workflowExecutionMode`          | `'inline' \| 'worker'`     | `'inline'`            | Inline or Worker workflow execution; Worker mode requires `workerExecution`    |
-| `workerExecution`                | `WorkerExecutionOptions`   | `undefined`           | Configuration for offloading workflow execution to Web Workers                 |
-| `resolveWorkflowServices`        | `WorkflowServicesResolver` | `undefined`           | Rebuild per-run inline `ctx.services` during fresh-process recovery            |
-| `activityExecution`              | `ActivityExecutionOptions` | `undefined`           | Configuration for activity execution behavior                                  |
-| `alerts`                         | `AlertOptions[]`           | `undefined`           | Metric alert thresholds that fire `AlertFiredEvent` / `AlertResolvedEvent`     |
-| `interceptors`                   | `readonly Interceptor[]`   | `undefined`           | Unified interceptors registered at construction                                |
+Creates a new engine instance. All options are optional — sensible defaults are applied when omitted. See the canonical [`EngineOptions` configuration reference](./configuration.md#engineoptions) for the complete field inventory, defaults, and contract details.
 
 ```ts
 import { Engine } from '@lostgradient/weft';
