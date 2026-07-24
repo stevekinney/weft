@@ -243,6 +243,26 @@ describe('generateRecommendations', () => {
     expect(recommendations[0]!.message).toContain('state size');
   });
 
+  it.each([
+    [500, '500 B'],
+    [1536, '1.5 KB'],
+    [2.5 * 1024 * 1024, '2.5 MB'],
+    [2.3 * 1024 * 1024 * 1024, '2.3 GB'],
+  ])('uses canonical byte formatting for a %s-byte checkpoint', (sizeBytes, formatted) => {
+    const recommendations = generateRecommendations(
+      {
+        database: makeHealthyDatabase(),
+        workflows: makeHealthyWorkflows({
+          largestCheckpoint: { workflowId: 'wf-large', sizeBytes },
+        }),
+        queues: [],
+      },
+      { largeCheckpointBytes: 0 },
+    );
+
+    expect(recommendations[0]!.message).toContain(`has a ${formatted} checkpoint`);
+  });
+
   it('generates a warning for queues with pending work but nothing in-flight', () => {
     const queues: QueueStatistics[] = [{ name: 'default', pendingCount: 5, inflightCount: 0 }];
 
