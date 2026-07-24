@@ -2,7 +2,11 @@ import { describe, expect, it } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
-import { waitForCondition, waitForever } from '../../testing/fake-timers.test-support.ts';
+import {
+  createDeferred,
+  waitForCondition,
+  waitForever,
+} from '../../testing/fake-timers.test-support.ts';
 import { decode } from '../codec.ts';
 import { durableActivity } from '../context/durable-activity.ts';
 import type { Context } from '../context/index.ts';
@@ -49,19 +53,6 @@ async function yieldTurns(count: number): Promise<void> {
 }
 
 type PendingHelperScenario = 'dispose' | 'cancel';
-
-type Deferred = {
-  promise: Promise<void>;
-  resolve: () => void;
-};
-
-function createDeferred(): Deferred {
-  let settle!: () => void;
-  const promise = new Promise<void>((resolve) => {
-    settle = resolve;
-  });
-  return { promise, resolve: settle };
-}
 
 type PendingHelperSetup = {
   storage: MemoryStorage;
