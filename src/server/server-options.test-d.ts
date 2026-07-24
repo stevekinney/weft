@@ -8,6 +8,7 @@ import {
   TaskQueue,
   WorkerRegistry,
   type AuthConfig,
+  type DashboardAssets,
   type DashboardRouteTarget,
   type DiscoveryInfo,
   type PrometheusExporter,
@@ -35,6 +36,9 @@ void lockedDownServeOptions;
 const dashboardTarget: DashboardRouteTarget = new Response('<html></html>');
 void dashboardTarget;
 
+const dashboardAssets: DashboardAssets = { prefix: '/assets', directory: './dist/assets' };
+void dashboardAssets;
+
 const dashboardHandlerTarget: DashboardRouteTarget = (_request, server) => {
   void server;
   return new Response('<html></html>');
@@ -50,6 +54,7 @@ void dashboardServeOptions;
 const functionDashboardServeOptions: ServeOptions = {
   engine,
   dashboard: dashboardHandlerTarget,
+  dashboardAssets,
 };
 void functionDashboardServeOptions;
 

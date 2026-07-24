@@ -183,6 +183,7 @@ interface ServeOptions {
   hostname?: string;
   development?: boolean;
   dashboard?: DashboardRouteTarget;
+  dashboardAssets?: DashboardAssets;
   auth?: AuthConfig;
   rateLimit?: RateLimitConfig;
   cors?: CorsOptions;
@@ -205,6 +206,7 @@ interface ServeOptions {
 | `hostname`                        | `string`                        | `'0.0.0.0'`      | Hostname/IP to bind to                                                                                   |
 | `development`                     | `boolean`                       | `false`          | Enable development mode with verbose error responses                                                     |
 | `dashboard`                       | `DashboardRouteTarget`          | `undefined`      | External dashboard shell served at supported page routes                                                 |
+| `dashboardAssets`                 | `DashboardAssets`               | `undefined`      | Static dashboard files served below an explicit, non-reserved prefix                                     |
 | `auth`                            | `AuthConfig`                    | `undefined`      | Authentication configuration (JWT, mTLS, or custom)                                                      |
 | `rateLimit`                       | `RateLimitConfig`               | `undefined`      | Optional single-process request throttling; see [rate limiting](../guides/server.md#rate-limiting)       |
 | `cors`                            | `CorsOptions`                   | `undefined`      | Optional browser cross-origin policy; see [CORS](../guides/server.md#cross-origin-resource-sharing-cors) |

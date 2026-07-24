@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, spyOn } from 'bun:test';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { waitForParityCondition as waitFor } from '../core/parity/real-timer-wait.test-support.ts';
 import { waitForRealTimersForTesting } from '../testing/fake-timers.test-support.ts';
 
@@ -580,6 +583,147 @@ describe('serve', () => {
 
     const response = await fetch(`${server.url}/nonsense`);
     expect(response.status).toBe(404);
+  });
+
+  it('serves a dashboard asset directory through explicit GET and HEAD routes', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
+    try {
+      mkdirSync(join(directory, 'images'));
+      writeFileSync(join(directory, 'app-abc123.js'), 'console.log("dashboard");');
+      writeFileSync(join(directory, 'styles-def456.css'), 'body { color: red; }');
+      writeFileSync(join(directory, 'images', 'logo.svg'), '<svg></svg>');
+      writeFileSync(join(directory, '%2e%2e.txt'), 'encoded filename');
+      engine = createEngine();
+      server = serveTestServer({
+        engine,
+        port: 0,
+        dashboard: makeDashboard(),
+        dashboardAssets: { prefix: '/assets', directory },
+      });
+
+      const javascript = await fetch(`${server.url}/assets/app-abc123.js`);
+      expect(javascript.status).toBe(200);
+      expect(javascript.headers.get('content-type')).toContain('text/javascript');
+      expect(await javascript.text()).toContain('dashboard');
+
+      const stylesheetHead = await fetch(`${server.url}/assets/styles-def456.css`, {
+        method: 'HEAD',
+      });
+      expect(stylesheetHead.status).toBe(200);
+      expect(await stylesheetHead.text()).toBe('');
+
+      const stylesheet = await fetch(`${server.url}/assets/styles-def456.css`);
+      expect(stylesheet.status).toBe(200);
+      expect(stylesheet.headers.get('content-type')).toContain('text/css');
+
+      const image = await fetch(`${server.url}/assets/images/logo.svg`);
+      expect(image.status).toBe(200);
+      expect(image.headers.get('content-type')).toContain('image/svg+xml');
+
+      const missing = await fetch(`${server.url}/assets/missing-999.js`);
+      expect(missing.status).toBe(404);
+      expect(await missing.text()).not.toContain(directory);
+
+      const traversal = await fetch(`${server.url}/assets/%2e%2e/%2e%2e/secret.txt`);
+      expect(traversal.status).toBe(404);
+      expect(await traversal.text()).not.toContain(directory);
+
+      const post = await fetch(`${server.url}/assets/app-abc123.js`, { method: 'POST' });
+      expect(post.status).toBe(404);
+      expect(await post.text()).not.toContain('dashboard');
+
+      for (const path of ['/v1/health', '/api/v1/health', '/openapi.json']) {
+        const response = await fetch(`${server.url}${path}`);
+        expect(response.status).toBe(200);
+        expect(await response.text()).not.toContain('dashboard');
+      }
+
+      const encodedFilename = await fetch(`${server.url}/assets/%252e%252e.txt`);
+      expect(encodedFilename.status).toBe(200);
+      expect(await encodedFilename.text()).toBe('encoded filename');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('validates dashboard asset prefixes synchronously before binding', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
+    try {
+      for (const prefix of [
+        '/api/assets',
+        '/v1/assets',
+        '/openapi.json',
+        '/workflows/assets',
+        '/assets/',
+        '/assets/*',
+        '/assets/%2e%2e',
+      ]) {
+        const assetEngine = createEngine();
+        expect(() =>
+          serve({
+            engine: assetEngine,
+            port: 0,
+            dashboardAssets: { prefix, directory },
+          }),
+        ).toThrow();
+        assetEngine[Symbol.dispose]();
+      }
+
+      const filePath = join(directory, 'not-a-directory.txt');
+      writeFileSync(filePath, 'file');
+      const fileEngine = createEngine();
+      expect(() =>
+        serve({
+          engine: fileEngine,
+          port: 0,
+          dashboardAssets: { prefix: '/assets', directory: filePath },
+        }),
+      ).toThrow();
+      fileEngine[Symbol.dispose]();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('does not serve a symlink that escapes the dashboard asset directory', async () => {
+    const parentDirectory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
+    const directory = join(parentDirectory, 'assets');
+    const outsideFile = join(parentDirectory, 'outside.txt');
+    try {
+      mkdirSync(directory);
+      writeFileSync(outsideFile, 'outside asset');
+      try {
+        symlinkSync(outsideFile, join(directory, 'outside.txt'));
+        symlinkSync(join(directory, 'missing.txt'), join(directory, 'broken.txt'));
+      } catch (error) {
+        const errorCode =
+          typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined;
+        if (errorCode === 'EACCES' || errorCode === 'EPERM' || errorCode === 'ENOTSUP') {
+          console.warn(
+            `Skipping symlink asset test: platform rejected symlink creation (${errorCode})`,
+          );
+          return;
+        }
+        throw error;
+      }
+
+      engine = createEngine();
+      server = serveTestServer({
+        engine,
+        port: 0,
+        dashboardAssets: { prefix: '/assets', directory },
+      });
+
+      const response = await fetch(`${server.url}/assets/outside.txt`);
+      expect(response.status).toBe(404);
+      expect(await response.text()).not.toContain(outsideFile);
+
+      const brokenLinkResponse = await fetch(`${server.url}/assets/broken.txt`);
+      expect(brokenLinkResponse.status).toBe(404);
+      expect(await brokenLinkResponse.text()).not.toContain(directory);
+    } finally {
+      rmSync(parentDirectory, { recursive: true, force: true });
+    }
   });
 
   it('handles workflow API routes (POST /v1/workflows)', async () => {

@@ -36,6 +36,7 @@ interface ServeOptions {
   hostname?: string;
   development?: boolean;
   dashboard?: DashboardRouteTarget;
+  dashboardAssets?: DashboardAssets;
   auth?: AuthConfig;
   rateLimit?: RateLimitConfig;
   cors?: CorsOptions;
@@ -58,6 +59,7 @@ interface ServeOptions {
 | `hostname`                        | `string`                        | `'0.0.0.0'`      | Hostname/IP to bind to                                                                    |
 | `development`                     | `boolean`                       | `false`          | Enable development mode with verbose error responses                                      |
 | `dashboard`                       | `DashboardRouteTarget`          | `undefined`      | External dashboard shell served at supported page routes when supplied                    |
+| `dashboardAssets`                 | `DashboardAssets`               | `undefined`      | Static dashboard files served below an explicit prefix                                    |
 | `auth`                            | `AuthConfig`                    | `undefined`      | Authentication configuration (JWT, mTLS, or custom)                                       |
 | `rateLimit`                       | `RateLimitConfig`               | `undefined`      | Optional single-process request throttling                                                |
 | `cors`                            | `CorsOptions`                   | `undefined`      | Optional browser cross-origin policy                                                      |
@@ -72,6 +74,8 @@ interface ServeOptions {
 | `prometheusExporter`              | `PrometheusExporter`            | `undefined`      | Exporter that produces the response body for `/v1/metrics`                                |
 
 See [configuration.md](./configuration.md) for `AuthConfig`, `RateLimitConfig`, `CorsOptions`, `RoutingPolicy`, and `SchedulingPolicy` details. The [server guide](../guides/server.md#rate-limiting) covers rate limiting, and the [CORS section](../guides/server.md#cross-origin-resource-sharing-cors) covers browser cross-origin policy.
+
+Set `dashboardAssets` alongside `dashboard` to serve a multi-file dashboard from one process. Its existing `directory` is validated synchronously, its explicit `prefix` cannot overlap API, discovery, or dashboard page routes, and only `GET` and `HEAD` requests below that prefix are registered.
 
 When `auth` is omitted, [`serve()`](#serve) defaults to `unauthenticatedAccess: 'warn'`: it starts, logs a startup warning, and leaves non-public operations reachable to any network client. Set `unauthenticatedAccess: 'reject'` or [`WEFT_SERVER_AUTHENTICATION_REQUIRED=1`](./configuration.md#environment-variables) in production so startup fails before binding unless an `auth` configuration is present. Set `unauthenticatedAccess: 'allow'` only for intentionally open local process boundaries; it does not override `WEFT_SERVER_AUTHENTICATION_REQUIRED`.
 

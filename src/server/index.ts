@@ -11,6 +11,11 @@ import type { PrometheusExporter } from '../observability/metrics.ts';
 import type { RoutingPolicy } from '../worker/registry.ts';
 import { WorkerRegistry } from '../worker/registry.ts';
 import type { AuthConfig, RateLimitConfig } from './authentication.ts';
+import {
+  createDashboardAssetRoute,
+  resolveDashboardAssets,
+  type DashboardAssets,
+} from './dashboard-assets.ts';
 import type { DiscoveryInfo } from './discovery-info.ts';
 import type { WebSocketData } from './json-rpc-websocket-runtime.ts';
 import { createServerWebSocketHandlers } from './runtime/authentication-bridge.ts';
@@ -43,6 +48,7 @@ export {
   type EventBroadcastingHandle,
 } from './runtime/event-broadcasting.ts';
 
+export type { DashboardAssets } from './dashboard-assets.ts';
 export type { CorsOptions } from './runtime/cors.ts';
 
 export {
@@ -199,6 +205,11 @@ export interface ServeOptions {
   development?: boolean;
   /** Optional external dashboard shell served at {@link DASHBOARD_PAGE_ROUTES}. */
   dashboard?: DashboardRouteTarget;
+  /**
+   * Static files served below an explicit prefix for the supplied dashboard.
+   * The directory and prefix are validated synchronously before the port binds.
+   */
+  dashboardAssets?: DashboardAssets;
   /** Authentication configuration. When provided, all non-public endpoints require valid credentials. */
   auth?: AuthConfig;
   /**
@@ -461,6 +472,10 @@ export interface WeftServer extends AsyncDisposable {
  * ```
  */
 export function serve(options: ServeOptions): WeftServer {
+  const dashboardAssets =
+    options.dashboardAssets === undefined
+      ? undefined
+      : resolveDashboardAssets(options.dashboardAssets, DASHBOARD_PAGE_ROUTES);
   const { port, hostname, development, tlsOptions, serverOptions, serverMetricsCollector } =
     resolveNetworkConfig(options);
 
@@ -479,6 +494,9 @@ export function serve(options: ServeOptions): WeftServer {
     for (const path of DASHBOARD_PAGE_ROUTES) {
       routes[path] = options.dashboard;
     }
+  }
+  if (dashboardAssets !== undefined) {
+    routes[`${dashboardAssets.prefix}/*`] = createDashboardAssetRoute(dashboardAssets);
   }
 
   const serverHolder: { current: ReturnType<typeof Bun.serve> | null } = { current: null };

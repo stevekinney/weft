@@ -1236,10 +1236,22 @@ interface ServeOptions {
   hostname?: string;
   development?: boolean;
   dashboard?: DashboardRouteTarget;
+  dashboardAssets?: DashboardAssets;
   auth?: AuthConfig;
   unauthenticatedAccess?: 'warn' | 'allow' | 'reject';
 }
 ```
+
+`DashboardAssets` describes the static files for an externally supplied multi-file dashboard:
+
+```ts
+interface DashboardAssets {
+  prefix: string;
+  directory: string;
+}
+```
+
+`prefix` must be an explicit absolute path such as `/assets`; `directory` must be an existing directory. `serve()` validates both synchronously, registers only `GET` and `HEAD` below `${prefix}/*`, and rejects prefixes that overlap API, discovery, or dashboard page routes.
 
 ### `WeftServer`
 

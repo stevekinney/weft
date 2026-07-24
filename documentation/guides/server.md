@@ -124,7 +124,7 @@ Each key may also carry an absolute `expiresAt` timestamp, after which it is rej
 
 ## Cross-Origin Resource Sharing (CORS)
 
-External dashboards and the [Service Worker browser runtime](#service-worker) are browser clients. When they run on the **same origin** as the API—for example, when an embedded server mounts a dashboard shell with `serve({ dashboard })`, or when a reverse proxy puts the UI and API behind one hostname—no CORS configuration is needed, and Weft ships nothing by default: `serve()` emits no `Access-Control-*` headers and only same-origin browser requests succeed. **The default is deliberately restrictive; Weft never sends `Access-Control-Allow-Origin: *`.**
+External dashboards and the [Service Worker browser runtime](#service-worker) are browser clients. When they run on the **same origin** as the API—for example, when an embedded server mounts a dashboard shell and its assets with `serve({ dashboard, dashboardAssets })`, or when a reverse proxy puts the UI and API behind one hostname—no CORS configuration is needed, and Weft ships nothing by default: `serve()` emits no `Access-Control-*` headers and only same-origin browser requests succeed. **The default is deliberately restrictive; Weft never sends `Access-Control-Allow-Origin: *`.**
 
 Configure `cors` only when a browser client calls the API from a **different origin** (a dashboard hosted separately, a web app embedding Weft's API, or a Service Worker registered under another origin):
 
@@ -165,7 +165,7 @@ A wildcard origin is allowed only for a public, non-credentialed API that does n
 
 ## External Dashboard Mounting
 
-Weft no longer bundles a dashboard, and the CLI starts a headless API server. Embedded servers can still pass an externally supplied dashboard shell to `serve({ dashboard })`; Weft mounts that shell at `/`, `/workflows`, `/workflows/*`, `/reviews`, `/workers`, `/schedules`, `/storage`, and `/system`, while `/api/...` and discovery routes continue to be handled by the API. `serve({ auth })` protects API calls made by that shell; it does not authenticate the shell route itself because Bun serves `routes` entries before Weft's fetch handler runs. For production, put an external dashboard behind a trusted reverse proxy or operator-only network when the shell itself must be access-controlled.
+Weft no longer bundles a dashboard, and the CLI starts a headless API server. Embedded servers can still pass an externally supplied dashboard shell to `serve({ dashboard })`; Weft mounts that shell at `/`, `/workflows`, `/workflows/*`, `/reviews`, `/workers`, `/schedules`, `/storage`, and `/system`, while `/api/...` and discovery routes continue to be handled by the API. Add `dashboardAssets: { prefix: '/assets', directory: './dist/assets' }` to serve a multi-file dashboard's hashed JavaScript, CSS, image, and other files from the same process. Asset prefixes must be explicit non-reserved paths, and traversal or symlink escapes are rejected. `serve({ auth })` protects API calls made by that shell; it does not authenticate the shell route itself because Bun serves `routes` entries before Weft's fetch handler runs. For production, put an external dashboard behind a trusted reverse proxy or operator-only network when the shell itself must be access-controlled.
 
 ## The WeftServer handle
 

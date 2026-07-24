@@ -4,6 +4,7 @@ import {
   TaskQueue,
   WorkerRegistry,
   type AuthConfig,
+  type DashboardAssets,
   type DashboardRouteTarget,
   type DiscoveryInfo,
   type PrometheusExporter,
@@ -40,6 +41,12 @@ void packageRootServeOptions;
 const packageRootDashboardTarget: DashboardRouteTarget = new Response('<html></html>');
 void packageRootDashboardTarget;
 
+const packageRootDashboardAssets: DashboardAssets = {
+  prefix: '/assets',
+  directory: './dist/assets',
+};
+void packageRootDashboardAssets;
+
 const packageRootDashboardHandlerTarget: DashboardRouteTarget = (_request, server) => {
   void server;
   return new Response('<html></html>');
@@ -55,6 +62,7 @@ void packageRootDashboardServeOptions;
 const packageRootDashboardHandlerServeOptions: ServeOptions = {
   engine: packageRootEngine,
   dashboard: packageRootDashboardHandlerTarget,
+  dashboardAssets: packageRootDashboardAssets,
 };
 void packageRootDashboardHandlerServeOptions;
 
