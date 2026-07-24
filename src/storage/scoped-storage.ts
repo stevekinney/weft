@@ -17,6 +17,8 @@ import {
   type StorageCapabilities,
 } from './interface.ts';
 
+type RangeOptions = Pick<ScanOptions, 'limit' | 'gt' | 'gte' | 'lt' | 'lte'>;
+
 function normalizeScopePrefix(prefix: string): string {
   return prefix.replaceAll(/:+$/g, '');
 }
@@ -102,56 +104,26 @@ export class ScopedStorage implements Storage {
     return key.slice(this.#scopePrefix.length + 1);
   }
 
-  #toInnerOptions(options: ScanOptions = {}): ScanOptions {
-    const innerOptions: ScanOptions = {};
+  #toInnerRangeOptions(options: RangeOptions): RangeOptions {
+    const innerOptions: RangeOptions = {};
 
-    if (options.limit !== undefined) {
-      innerOptions.limit = options.limit;
-    }
-
-    if (options.reverse !== undefined) {
-      innerOptions.reverse = options.reverse;
-    }
-
-    if (options.gt !== undefined) {
-      innerOptions.gt = this.#toInnerKey(options.gt);
-    }
-
-    if (options.gte !== undefined) {
-      innerOptions.gte = this.#toInnerKey(options.gte);
-    }
-
-    if (options.lt !== undefined) {
-      innerOptions.lt = this.#toInnerKey(options.lt);
-    }
-
-    if (options.lte !== undefined) {
-      innerOptions.lte = this.#toInnerKey(options.lte);
-    }
+    if (options.limit !== undefined) innerOptions.limit = options.limit;
+    if (options.gt !== undefined) innerOptions.gt = this.#toInnerKey(options.gt);
+    if (options.gte !== undefined) innerOptions.gte = this.#toInnerKey(options.gte);
+    if (options.lt !== undefined) innerOptions.lt = this.#toInnerKey(options.lt);
+    if (options.lte !== undefined) innerOptions.lte = this.#toInnerKey(options.lte);
 
     return innerOptions;
   }
 
-  #toInnerDeleteRangeOptions(options: DeleteRangeOptions): DeleteRangeOptions {
-    const innerOptions: DeleteRangeOptions = {};
-
-    if (options.limit !== undefined) {
-      innerOptions.limit = options.limit;
-    }
-    if (options.gt !== undefined) {
-      innerOptions.gt = this.#toInnerKey(options.gt);
-    }
-    if (options.gte !== undefined) {
-      innerOptions.gte = this.#toInnerKey(options.gte);
-    }
-    if (options.lt !== undefined) {
-      innerOptions.lt = this.#toInnerKey(options.lt);
-    }
-    if (options.lte !== undefined) {
-      innerOptions.lte = this.#toInnerKey(options.lte);
-    }
-
+  #toInnerOptions(options: ScanOptions = {}): ScanOptions {
+    const innerOptions: ScanOptions = this.#toInnerRangeOptions(options);
+    if (options.reverse !== undefined) innerOptions.reverse = options.reverse;
     return innerOptions;
+  }
+
+  #toInnerDeleteRangeOptions(options: DeleteRangeOptions): DeleteRangeOptions {
+    return this.#toInnerRangeOptions(options);
   }
 
   capabilities(): StorageCapabilities {

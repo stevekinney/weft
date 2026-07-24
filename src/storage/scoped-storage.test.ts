@@ -151,6 +151,44 @@ describe('scopedStorage', () => {
     expect(await scoped.get('item:4')).toEqual(encode('4'));
   });
 
+  it.each([
+    ['gt', { gt: 'item:1' }, ['item:2', 'item:3', 'item:4'], ['item:1']],
+    ['gte', { gte: 'item:2' }, ['item:2', 'item:3', 'item:4'], ['item:1']],
+    ['lt', { lt: 'item:4' }, ['item:1', 'item:2', 'item:3'], ['item:4']],
+    ['lte', { lte: 'item:3' }, ['item:1', 'item:2', 'item:3'], ['item:4']],
+  ] as const)(
+    'rewrites the %s bound consistently across range operations',
+    async (_, options, expected, remaining) => {
+      const storage = new MemoryStorage();
+      const outer = storage.scoped('outer');
+      if (!outer?.scoped) throw new Error('Scoped storage should support nested scopes.');
+      const scoped = outer.scoped('inner');
+      if (!scoped.keys || !scoped.deleteRange) {
+        throw new Error('Scoped storage should expose keys and deleteRange.');
+      }
+      const expectedKeys = [...expected];
+      const remainingKeys = [...remaining];
+
+      await writeEntries(storage, [
+        ...[1, 2, 3, 4].map((n) => ({
+          type: 'put' as const,
+          key: `outer:inner:item:${n}`,
+          value: encode(String(n)),
+        })),
+        { type: 'put', key: 'outer:other:item:2', value: encode('outside') },
+      ]);
+
+      expect(await collect(scoped.keys('item:', { ...options, limit: 3 }))).toEqual(expectedKeys);
+      expect(await collect(scoped.scan('item:', { ...options, limit: 3 }))).toEqual(
+        expectedKeys.map((key) => [key, encode(key.slice(-1))]),
+      );
+
+      expect(await scoped.deleteRange('item:', { ...options, limit: 3 })).toBe(3);
+      expect(await collect(scoped.keys('item:'))).toEqual(remainingKeys);
+      expect(await storage.get('outer:other:item:2')).toEqual(encode('outside'));
+    },
+  );
+
   it('storage.scoped(prefix) translates bounds, reverse ordering, and limit within the namespace', async () => {
     const storage = new MemoryStorage();
     if (!storage.scoped) {
