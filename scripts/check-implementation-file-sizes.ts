@@ -153,12 +153,6 @@ export const CLASSIFIED_OVERSIZED_IMPLEMENTATION_FILES = [
       'Workflow context exposes the generator-facing API surface; splitting it would make one context contract harder to inspect.',
   },
   {
-    path: 'scripts/regenerate-trace-fixtures.ts',
-    classification: 'justified-exception',
-    rationale:
-      'Trace-fixture regeneration keeps scenario discovery, execution, serialization, and drift output in one fixture owner.',
-  },
-  {
     path: 'src/core/types/workflow-context.ts',
     classification: 'justified-exception',
     rationale:

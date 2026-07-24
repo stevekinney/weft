@@ -6,16 +6,12 @@
  * change them; if a fixture changes, that is a regression.
  */
 
-import type { Context } from '../src/core/context.ts';
 import { Engine } from '../src/core/engine.ts';
-import { compileStepWorkflow } from '../src/core/step-context.ts';
+import type { WorkflowState } from '../src/core/types.ts';
 import {
-  workflow,
-  type ActivityDefinition,
-  type StepWorkflowContext,
-  type WorkflowContext,
-  type WorkflowState,
-} from '../src/core/types.ts';
+  registerScenarioHandlers,
+  scenarioNames,
+} from '../src/testing/replay-scenarios.test-support.ts';
 import { TestEngine } from '../src/testing/test-engine.ts';
 import {
   sortedStorageEntries,
@@ -114,18 +110,6 @@ async function waitForCheckpointStep(
   throw new Error(`Checkpoint step ${step} was not recorded for workflow "${workflowId}"`);
 }
 
-async function pipeStageOne(_ctx: StepWorkflowContext, input: unknown): Promise<string> {
-  return `s1:${String(input)}`;
-}
-
-async function pipeStageTwo(_ctx: StepWorkflowContext, input: unknown): Promise<string> {
-  return `s2:${String(input)}`;
-}
-
-async function pipeStageThree(_ctx: StepWorkflowContext, input: unknown): Promise<string> {
-  return `s3:${String(input)}`;
-}
-
 async function ensureFixtureDirectories(): Promise<void> {
   await Bun.$`mkdir -p ${replayFixtureDirectory} ${checkpointFixtureDirectory}`.quiet();
 }
@@ -151,19 +135,7 @@ async function findExistingFixtureFiles(): Promise<string[]> {
 
 async function runSimpleSequential(): Promise<ScenarioRun> {
   const engine = new TestEngine({ startTime: 0 });
-
-  engine.register(
-    workflow({ name: 'simple-sequential' }).execute(async function* (
-      ctx: WorkflowContext,
-      input: unknown,
-    ) {
-      const result = yield* (ctx as Context).run(
-        async (value: unknown) => `processed:${String(value)}`,
-        input,
-      );
-      return result;
-    }),
-  );
+  registerScenarioHandlers(engine, 'simple-sequential');
 
   const handle = await engine.start('simple-sequential', 'hello', {
     id: 'wf-simple-sequential',
@@ -175,21 +147,7 @@ async function runSimpleSequential(): Promise<ScenarioRun> {
 
 async function runTwoParallel(): Promise<ScenarioRun> {
   const engine = new TestEngine({ startTime: 0 });
-
-  engine.register(
-    workflow({ name: 'two-parallel' }).execute(async function* (
-      ctx: WorkflowContext,
-      input: unknown,
-    ) {
-      const context = ctx as Context;
-      const [left, right] = yield* context.all([
-        context.run(async (value: unknown) => `left:${String(value)}`, input),
-        context.run(async (value: unknown) => `right:${String(value)}`, input),
-      ]);
-
-      return { a: left, b: right };
-    }),
-  );
+  registerScenarioHandlers(engine, 'two-parallel');
 
   const handle = await engine.start('two-parallel', 'data', { id: 'wf-two-parallel' });
   await handle.result();
@@ -199,21 +157,7 @@ async function runTwoParallel(): Promise<ScenarioRun> {
 
 async function runRaceTakesFirst(): Promise<ScenarioRun> {
   const engine = new TestEngine({ startTime: 0 });
-
-  engine.register(
-    workflow({ name: 'race-takes-first' }).execute(async function* (ctx: WorkflowContext) {
-      const context = ctx as Context;
-      const result = yield* context.race([
-        context.run(async () => 'fast'),
-        context.run(async () => {
-          await Bun.sleep(50);
-          return 'slow';
-        }),
-      ]);
-
-      return result;
-    }),
-  );
+  registerScenarioHandlers(engine, 'race-takes-first');
 
   const handle = await engine.start('race-takes-first', null, { id: 'wf-race-takes-first' });
   await handle.result();
@@ -223,13 +167,7 @@ async function runRaceTakesFirst(): Promise<ScenarioRun> {
 
 async function runSignalAndWait(): Promise<ScenarioRun> {
   const engine = new TestEngine({ startTime: 0 });
-
-  engine.register(
-    workflow({ name: 'signal-and-wait' }).execute(async function* (ctx: WorkflowContext) {
-      const payload = yield* (ctx as Context).waitForSignal('go');
-      return { received: payload };
-    }),
-  );
+  registerScenarioHandlers(engine, 'signal-and-wait');
 
   const handle = await engine.start('signal-and-wait', null, { id: 'wf-signal-and-wait' });
   await waitForCheckpoint(engine, handle.id);
@@ -241,13 +179,7 @@ async function runSignalAndWait(): Promise<ScenarioRun> {
 
 async function runSleepAndResume(): Promise<ScenarioRun> {
   const engine = new TestEngine({ startTime: 0 });
-
-  engine.register(
-    workflow({ name: 'sleep-and-resume' }).execute(async function* (ctx: WorkflowContext) {
-      yield* (ctx as Context).sleep(100);
-      return 'awake';
-    }),
-  );
+  registerScenarioHandlers(engine, 'sleep-and-resume');
 
   const handle = await engine.start('sleep-and-resume', null, { id: 'wf-sleep-and-resume' });
   await engine.advanceTime(100);
@@ -258,27 +190,7 @@ async function runSleepAndResume(): Promise<ScenarioRun> {
 
 async function runChildWorkflow(): Promise<ScenarioRun> {
   const engine = new TestEngine({ startTime: 0 });
-
-  engine.register(
-    workflow({ name: 'child-workflow-child' }).execute(
-      compileStepWorkflow(async function childWorkflowChild(
-        _ctx: StepWorkflowContext,
-        input: unknown,
-      ) {
-        return `child-result:${String(input)}`;
-      }),
-    ),
-  );
-
-  engine.register(
-    workflow({ name: 'child-workflow' }).execute(async function* (
-      ctx: WorkflowContext,
-      input: unknown,
-    ) {
-      const childResult = yield* (ctx as Context).startChild('child-workflow-child', input);
-      return { parent: String(input), child: childResult };
-    }),
-  );
+  registerScenarioHandlers(engine, 'child-workflow');
 
   const handle = await engine.start('child-workflow', 'parent-input', {
     id: 'wf-child-workflow',
@@ -290,35 +202,7 @@ async function runChildWorkflow(): Promise<ScenarioRun> {
 
 async function runSagaWithCompensation(): Promise<ScenarioRun> {
   const engine = new TestEngine({ startTime: 0 });
-  const compensated: string[] = [];
-
-  engine.register(
-    workflow({ name: 'saga-with-compensation' }).execute(async function* (ctx: WorkflowContext) {
-      const stepOne: ActivityDefinition<unknown, string> = {
-        name: 'step-one',
-        execute: async () => 'output-one',
-        compensate: async (_input: unknown, output: string) => {
-          compensated.push(output);
-        },
-      };
-      const stepTwo: ActivityDefinition<unknown, string> = {
-        name: 'step-two',
-        execute: async () => {
-          throw new Error('step-two-failed');
-        },
-      };
-
-      try {
-        yield* (ctx as Context).saga([
-          { definition: stepOne, input: 'a' },
-          { definition: stepTwo, input: 'b' },
-        ]);
-        return 'no-error';
-      } catch {
-        return `compensated:${compensated.join(',')}`;
-      }
-    }),
-  );
+  registerScenarioHandlers(engine, 'saga-with-compensation');
 
   const handle = await engine.start('saga-with-compensation', null, {
     id: 'wf-saga-with-compensation',
@@ -330,18 +214,7 @@ async function runSagaWithCompensation(): Promise<ScenarioRun> {
 
 async function runPipeThreeStages(): Promise<ScenarioRun> {
   const engine = new TestEngine({ startTime: 0 });
-
-  engine.register(
-    workflow({ name: 'pipe-three-stages' }).execute(async function* (
-      ctx: WorkflowContext,
-      input: unknown,
-    ) {
-      return yield* ctx.pipe(['stage1', 'stage2', 'stage3'], input);
-    }),
-  );
-  engine.register(workflow({ name: 'stage1' }).execute(compileStepWorkflow(pipeStageOne)));
-  engine.register(workflow({ name: 'stage2' }).execute(compileStepWorkflow(pipeStageTwo)));
-  engine.register(workflow({ name: 'stage3' }).execute(compileStepWorkflow(pipeStageThree)));
+  registerScenarioHandlers(engine, 'pipe-three-stages');
 
   const handle = await engine.start('pipe-three-stages', 'start', {
     id: 'wf-pipe-three-stages',
@@ -353,15 +226,7 @@ async function runPipeThreeStages(): Promise<ScenarioRun> {
 
 async function runForkFromCheckpoint(): Promise<ScenarioRun> {
   const engine = new TestEngine({ startTime: 0 });
-
-  engine.register(
-    workflow({ name: 'fork-from-checkpoint' }).execute(async function* (ctx: WorkflowContext) {
-      const context = ctx as Context;
-      const phaseOne = yield* context.run(async () => 'phase-one');
-      const branch = yield* context.waitForSignal('branch');
-      return `${String(phaseOne)}:${String(branch)}`;
-    }),
-  );
+  registerScenarioHandlers(engine, 'fork-from-checkpoint');
 
   const original = await engine.start('fork-from-checkpoint', null, { id: 'wf-fork-original' });
   await waitForCheckpointStep(engine, original.id, 2);
@@ -377,19 +242,7 @@ async function runForkFromCheckpoint(): Promise<ScenarioRun> {
 
 async function runRecoveryAfterCrash(): Promise<ScenarioRun> {
   const engine = new TestEngine({ startTime: 0 });
-
-  const registerRecoveryWorkflow = (target: Engine): void => {
-    target.register(
-      workflow({ name: 'recovery-after-crash' }).execute(async function* (ctx: WorkflowContext) {
-        const context = ctx as Context;
-        const stepOne = yield* context.run(async () => 'checkpoint-me');
-        const stepTwo = yield* context.run(async () => `resumed:${String(stepOne)}`);
-        return stepTwo;
-      }),
-    );
-  };
-
-  registerRecoveryWorkflow(engine);
+  registerScenarioHandlers(engine, 'recovery-after-crash');
 
   const handle = await engine.start('recovery-after-crash', null, {
     id: 'wf-recovery-after-crash',
@@ -398,7 +251,7 @@ async function runRecoveryAfterCrash(): Promise<ScenarioRun> {
 
   const recovered = engine.recover();
   engine[Symbol.dispose]();
-  registerRecoveryWorkflow(recovered);
+  registerScenarioHandlers(recovered, 'recovery-after-crash');
 
   const recoveredHandles = await recovered.recoverAll();
   for (const recoveredHandle of recoveredHandles) {
@@ -467,6 +320,15 @@ const scenarios: ScenarioDefinition[] = [
   },
 ];
 
+function assertScenarioInventory(): void {
+  const generatorNames = scenarios.map(({ name }) => name).toSorted();
+  if (JSON.stringify(generatorNames) !== JSON.stringify(scenarioNames)) {
+    throw new Error(
+      `Generator scenarios do not match canonical scenarioNames. Generator: ${generatorNames.join(', ')}; canonical: ${scenarioNames.join(', ')}`,
+    );
+  }
+}
+
 async function writeScenarioFixture(scenario: ScenarioDefinition): Promise<void> {
   const { engine, workflowId, additionalTerminalWorkflowIds } = await withDeterministicRuntime(
     scenario.run,
@@ -517,6 +379,8 @@ async function writeScenarioFixture(scenario: ScenarioDefinition): Promise<void>
 
 async function main(): Promise<void> {
   const confirmed = Bun.argv.includes('--confirm');
+
+  assertScenarioInventory();
 
   const existingFixtureFiles = await findExistingFixtureFiles();
 
