@@ -48,6 +48,75 @@ async function yieldTurns(count: number): Promise<void> {
   }
 }
 
+type PendingHelperScenario = 'dispose' | 'cancel';
+
+type Deferred = {
+  promise: Promise<void>;
+  resolve: () => void;
+};
+
+function createDeferred(): Deferred {
+  let settle!: () => void;
+  const promise = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
+  return { promise, resolve: settle };
+}
+
+type PendingHelperSetup = {
+  storage: MemoryStorage;
+  engine: Engine;
+  handle: Awaited<ReturnType<Engine['start']>>;
+  activityStarted: Promise<void>;
+  activityAbortObserved: Promise<void>;
+};
+
+async function setupPendingHelper(scenario: PendingHelperScenario): Promise<PendingHelperSetup> {
+  const storage = new MemoryStorage();
+  const activityStarted = createDeferred();
+  const activityAbortObserved = createDeferred();
+  const slowTool = activity({
+    name: 'slowTool',
+    execute: async (_input: string, context?: ActivityContext) => {
+      activityStarted.resolve();
+      await new Promise<void>((resolve) => {
+        context?.signal.addEventListener(
+          'abort',
+          () => {
+            activityAbortObserved.resolve();
+            resolve();
+          },
+          { once: true },
+        );
+      });
+      return 'late-result';
+    },
+  });
+
+  const definition = workflow({ name: `${scenario}-pending-helper` })
+    .activities({ slowTool })
+    .execute(async function* (ctx: WorkflowContext) {
+      return yield* ctx.memo('step-0', async () => {
+        return durableActivity('slowTool', 'payload', { idempotencyKey: `${scenario}-pending` });
+      });
+    });
+
+  const engine = new Engine({ storage });
+  engine.register(definition);
+  const handle = await engine.start(`${scenario}-pending-helper`, null, {
+    id: `${scenario}-pending-helper-1`,
+  });
+
+  await activityStarted.promise;
+  return {
+    storage,
+    engine,
+    handle,
+    activityStarted: activityStarted.promise,
+    activityAbortObserved: activityAbortObserved.promise,
+  };
+}
+
 describe('ctx.memo durableActivity helper', () => {
   it('throws a targeted error outside a workflow activation', async () => {
     await expect(durableActivity('executeTool', { tool: 'outside' })).rejects.toThrow(
@@ -417,94 +486,26 @@ describe('ctx.memo durableActivity helper', () => {
   });
 
   it('does not commit a keyed helper result after engine disposal aborts a pending activity', async () => {
-    const storage = new MemoryStorage();
-    let activityStarted = false;
-    let activityAbortObserved = false;
-
-    const slowTool = activity({
-      name: 'slowTool',
-      execute: async (_input: string, context?: ActivityContext) => {
-        activityStarted = true;
-        await new Promise<void>((resolve) => {
-          context?.signal.addEventListener(
-            'abort',
-            () => {
-              activityAbortObserved = true;
-              resolve();
-            },
-            { once: true },
-          );
-        });
-        return 'late-result';
-      },
-    });
-
-    const definition = workflow({ name: 'dispose-pending-helper' })
-      .activities({ slowTool })
-      .execute(async function* (ctx: WorkflowContext) {
-        return yield* ctx.memo('step-0', async () => {
-          return durableActivity('slowTool', 'payload', { idempotencyKey: 'dispose-pending' });
-        });
-      });
-
-    const engine = new Engine({ storage });
-    engine.register(definition);
-    await engine.start('dispose-pending-helper', null, { id: 'dispose-pending-helper-1' });
-    await waitForCondition(() => activityStarted, { label: 'dispose-pending activity started' });
+    const { storage, engine, activityAbortObserved } = await setupPendingHelper('dispose');
 
     engine[Symbol.dispose]();
-    await waitForCondition(() => activityAbortObserved, {
-      label: 'dispose-pending activity abort observed',
-    });
+    await activityAbortObserved;
 
     const records = await readActivityReconciliationRecords(storage, 'dispose-pending-helper-1');
     expect(hasCompletedActivityRecord(records)).toBe(false);
   });
 
   it('does not commit a keyed helper result after workflow cancellation aborts a pending activity', async () => {
-    const storage = new MemoryStorage();
-    let activityStarted = false;
-    let activityAbortObserved = false;
+    const setup = await setupPendingHelper('cancel');
+    await using engine = setup.engine;
 
-    const slowTool = activity({
-      name: 'slowTool',
-      execute: async (_input: string, context?: ActivityContext) => {
-        activityStarted = true;
-        await new Promise<void>((resolve) => {
-          context?.signal.addEventListener(
-            'abort',
-            () => {
-              activityAbortObserved = true;
-              resolve();
-            },
-            { once: true },
-          );
-        });
-        return 'late-result';
-      },
-    });
+    await engine.cancel(setup.handle.id);
+    await setup.activityAbortObserved;
 
-    const definition = workflow({ name: 'cancel-pending-helper' })
-      .activities({ slowTool })
-      .execute(async function* (ctx: WorkflowContext) {
-        return yield* ctx.memo('step-0', async () => {
-          return durableActivity('slowTool', 'payload', { idempotencyKey: 'cancel-pending' });
-        });
-      });
-
-    await using engine = new Engine({ storage });
-    engine.register(definition);
-    const handle = await engine.start('cancel-pending-helper', null, {
-      id: 'cancel-pending-helper-1',
-    });
-    await waitForCondition(() => activityStarted, { label: 'cancel-pending activity started' });
-
-    await engine.cancel(handle.id);
-    await waitForCondition(() => activityAbortObserved, {
-      label: 'cancel-pending activity abort observed',
-    });
-
-    const records = await readActivityReconciliationRecords(storage, 'cancel-pending-helper-1');
+    const records = await readActivityReconciliationRecords(
+      setup.storage,
+      'cancel-pending-helper-1',
+    );
     expect(hasCompletedActivityRecord(records)).toBe(false);
   });
 
