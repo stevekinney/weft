@@ -143,6 +143,8 @@ describe('isAuthorizationScope', () => {
     expect(isAuthorizationScope('nonsense')).toBe(false);
     expect(isAuthorizationScope('')).toBe(false);
     expect(isAuthorizationScope('workflows')).toBe(false);
+    expect(isAuthorizationScope('budget:read')).toBe(false);
+    expect(isAuthorizationScope('budget:write')).toBe(false);
   });
 });
 
