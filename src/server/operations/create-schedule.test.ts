@@ -5,7 +5,9 @@ import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
+import { handleJsonRpcHttpRequest } from '../json-rpc-http.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
+import { anonymousPrincipal } from '../principal.ts';
 import { createScheduleOperation, createScheduleRestBinding } from './create-schedule.ts';
 import { invalidJsonRequest, jsonRequest } from './operation-test-helpers.test-support.ts';
 
@@ -113,6 +115,67 @@ describe('weft.schedules.create', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       error: 'Field "jitter" must be a duration string or a number of milliseconds',
+    });
+  });
+
+  it.each([
+    [
+      'soon',
+      'Field "jitter" is invalid: Invalid duration string: "soon". Expected a number or a string like "30s", "5 minutes", "1 hour", etc.',
+    ],
+    [
+      -1,
+      'Field "jitter" is invalid: Duration must resolve to a finite, non-negative number of milliseconds, got: -1',
+    ],
+    [0, 'Field "jitter" must resolve to a positive number of milliseconds'],
+    ['0s', 'Field "jitter" must resolve to a positive number of milliseconds'],
+  ] as const)('returns 400 for invalid typed jitter %j', async (jitter, error) => {
+    engine = createEngine();
+
+    const response = await handleRequest(
+      jsonRequest('POST', '/v1/schedules', {
+        type: 'echo',
+        cronExpression: '0 * * * *',
+        jitter,
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error });
+  });
+
+  it('returns InvalidParams over JSON-RPC for a malformed jitter duration', async () => {
+    engine = createEngine();
+
+    const response = await handleJsonRpcHttpRequest(
+      new Request('http://localhost/jsonrpc', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'weft.schedules.create',
+          params: {
+            type: 'echo',
+            cronExpression: '0 * * * *',
+            jitter: 'soon',
+          },
+        }),
+      }),
+      { registry, engine, principal: anonymousPrincipal() },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      jsonrpc: '2.0',
+      id: 1,
+      error: expect.objectContaining({
+        code: -32602,
+        message:
+          'Field "jitter" is invalid: Invalid duration string: "soon". Expected a number or a string like "30s", "5 minutes", "1 hour", etc.',
+      }),
     });
   });
 

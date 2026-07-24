@@ -5,18 +5,15 @@ import type { ScheduleOptions, ScheduleSpec } from '../../core/types.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
-import { mapScheduleErrorToFault, validateScheduleInputCadence } from './schedule-faults.ts';
+import {
+  mapScheduleErrorToFault,
+  validateScheduleInputCadence,
+  validateScheduleMutableOptions,
+} from './schedule-faults.ts';
 import {
   extractSharedScheduleRestFields,
   parseScheduleRestBodyRequestRecord,
 } from './schedule-rest-body.ts';
-
-const VALID_SCHEDULE_OVERLAP_POLICIES = new Set<NonNullable<ScheduleOptions['overlap']>>([
-  'skip',
-  'queue',
-  'cancel-running',
-  'allow',
-]);
 
 // Inputs are intentionally permissive at the schema boundary so REST
 // callers (and equivalent JSON-RPC callers) hit the same validation in
@@ -75,7 +72,16 @@ function validateRequiredScheduleFields(input: CreateScheduleInput): {
   return { type: input.type, spec: validateScheduleInputCadence(input) };
 }
 
-/** Validate optional schedule fields id, overlap, backfill, and jitter. */
+/** Validate the create-only schedule id. */
+function validateScheduleId(value: CreateScheduleInput['id']): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || value.length === 0) {
+    throw invalidParamsFault('Field "id" must be a non-empty string');
+  }
+  return value;
+}
+
+/** Validate create fields in order: id, then the shared mutable schedule options. */
 function validateOptionalScheduleFields(input: CreateScheduleInput): {
   id: string | undefined;
   description: string | undefined;
@@ -83,60 +89,21 @@ function validateOptionalScheduleFields(input: CreateScheduleInput): {
   backfill: boolean | undefined;
   jitter: ScheduleOptions['jitter'] | undefined;
 } {
-  let validatedId: string | undefined;
-  if (input.id !== undefined) {
-    if (typeof input.id !== 'string' || input.id.length === 0) {
-      throw invalidParamsFault('Field "id" must be a non-empty string');
-    }
-    validatedId = input.id;
-  }
-
-  let validatedDescription: string | undefined;
-  if (input.description !== undefined) {
-    if (typeof input.description !== 'string') {
-      throw invalidParamsFault('Field "description" must be a string');
-    }
-    validatedDescription = input.description;
-  }
-
-  let validatedOverlap: NonNullable<ScheduleOptions['overlap']> | undefined;
-  if (input.overlap !== undefined) {
-    if (typeof input.overlap !== 'string' || !isScheduleOverlapPolicy(input.overlap)) {
-      throw invalidParamsFault('Field "overlap" must be one of skip, queue, cancel-running, allow');
-    }
-    validatedOverlap = input.overlap;
-  }
-
-  let validatedBackfill: boolean | undefined;
-  if (input.backfill !== undefined) {
-    if (typeof input.backfill !== 'boolean') {
-      throw invalidParamsFault('Field "backfill" must be a boolean');
-    }
-    validatedBackfill = input.backfill;
-  }
-
-  let validatedJitter: ScheduleOptions['jitter'] | undefined;
-  if (input.jitter !== undefined) {
-    if (typeof input.jitter !== 'string' && typeof input.jitter !== 'number') {
-      throw invalidParamsFault(
-        'Field "jitter" must be a duration string or a number of milliseconds',
-      );
-    }
-    validatedJitter = input.jitter;
-  }
+  const validatedId = validateScheduleId(input.id);
+  const validatedOptions = validateScheduleMutableOptions(input);
 
   return {
     id: validatedId,
-    description: validatedDescription,
-    overlap: validatedOverlap,
-    backfill: validatedBackfill,
-    jitter: validatedJitter,
+    description: validatedOptions.description,
+    overlap: validatedOptions.overlap,
+    backfill: validatedOptions.backfill,
+    jitter: validatedOptions.jitter,
   };
 }
 
 /**
  * Validate `CreateScheduleInput` fields in order:
- * type → cadence (cronExpression or every) → id → overlap → backfill → jitter.
+ * type → cadence (cronExpression or every) → id → description → overlap → backfill → jitter.
  *
  * Throws an `InvalidParams` fault on the first invalid field so both REST and
  * JSON-RPC callers receive the same error messages.
@@ -170,7 +137,7 @@ export const createScheduleOperation = defineOperation<CreateScheduleInput, Crea
 
     // All field validation lives here so REST and JSON-RPC clients both
     // receive the same error messages verbatim. Validation order:
-    // type → cadence (cronExpression or every) → id → overlap → backfill → jitter.
+    // type → cadence (cronExpression or every) → id → description → overlap → backfill → jitter.
     const validated = validateCreateScheduleInput(input);
 
     const options: ScheduleOptions = {
@@ -196,10 +163,6 @@ export const createScheduleOperation = defineOperation<CreateScheduleInput, Crea
     }
   },
 });
-
-function isScheduleOverlapPolicy(value: string): value is NonNullable<ScheduleOptions['overlap']> {
-  return VALID_SCHEDULE_OVERLAP_POLICIES.has(value as NonNullable<ScheduleOptions['overlap']>);
-}
 
 export const createScheduleRestBinding: UnknownRestBinding = {
   method: 'POST',

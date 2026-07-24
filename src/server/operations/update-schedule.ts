@@ -1,12 +1,14 @@
 import { z } from 'zod';
 
 import type { Engine } from '../../core/engine.ts';
-import { normalizeScheduleUpdateOptions } from '../../core/engine/validation/schedule.ts';
-import type { ScheduleUpdateOptions } from '../../core/types.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
-import { mapScheduleErrorToFault, validateScheduleInputCadence } from './schedule-faults.ts';
+import { shapeRestFault } from './operation-helpers.ts';
+import {
+  mapScheduleErrorToFault,
+  validateScheduleInputCadence,
+  validateScheduleMutableOptions,
+} from './schedule-faults.ts';
 import {
   extractSharedScheduleRestFields,
   parseScheduleRestBodyRequestRecord,
@@ -41,76 +43,6 @@ const updateScheduleInput = z.object({
 
 export type UpdateScheduleInput = z.infer<typeof updateScheduleInput>;
 
-function isScheduleOverlapPolicy(
-  value: string,
-): value is NonNullable<ScheduleUpdateOptions['overlap']> {
-  return value === 'skip' || value === 'queue' || value === 'cancel-running' || value === 'allow';
-}
-
-function validateDescription(value: unknown): string | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== 'string') {
-    throw invalidParamsFault('Field "description" must be a string');
-  }
-  return value;
-}
-
-function validateOverlap(
-  value: unknown,
-): NonNullable<ScheduleUpdateOptions['overlap']> | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== 'string' || !isScheduleOverlapPolicy(value)) {
-    throw invalidParamsFault('Field "overlap" must be one of skip, queue, cancel-running, allow');
-  }
-  return value;
-}
-
-function validateBackfill(value: unknown): boolean | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== 'boolean') {
-    throw invalidParamsFault('Field "backfill" must be a boolean');
-  }
-  return value;
-}
-
-function formatJitterValidationMessage(message: string): string {
-  const enginePrefix = 'Invalid options.jitter: ';
-  const hasEnginePrefix = message.startsWith(enginePrefix);
-  const detail = hasEnginePrefix ? message.slice(enginePrefix.length) : message;
-  const wireDetail = detail.replaceAll('options.jitter', 'Field "jitter"');
-  return hasEnginePrefix ? `Field "jitter" is invalid: ${wireDetail}` : wireDetail;
-}
-
-function validateJitter(value: unknown): ScheduleUpdateOptions['jitter'] {
-  if (value === undefined) return undefined;
-  if (typeof value !== 'string' && typeof value !== 'number') {
-    throw invalidParamsFault(
-      'Field "jitter" must be a duration string or a number of milliseconds',
-    );
-  }
-  try {
-    normalizeScheduleUpdateOptions({ jitter: value });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw invalidParamsFault(formatJitterValidationMessage(message));
-  }
-  return value;
-}
-
-function validateScheduleUpdateOptions(input: UpdateScheduleInput): ScheduleUpdateOptions {
-  const description = validateDescription(input.description);
-  const overlap = validateOverlap(input.overlap);
-  const backfill = validateBackfill(input.backfill);
-  const jitter = validateJitter(input.jitter);
-
-  return {
-    ...(description !== undefined ? { description } : {}),
-    ...(overlap !== undefined ? { overlap } : {}),
-    ...(backfill !== undefined ? { backfill } : {}),
-    ...(jitter !== undefined ? { jitter } : {}),
-  };
-}
-
 export const updateScheduleOperation = defineOperation<UpdateScheduleInput, null>({
   name: 'weft.schedules.update',
   mcpExposable: false,
@@ -134,7 +66,7 @@ export const updateScheduleOperation = defineOperation<UpdateScheduleInput, null
 
     // Validate the cadence here so REST and JSON-RPC share one error path.
     const spec = validateScheduleInputCadence(input);
-    const options = validateScheduleUpdateOptions(input);
+    const options = validateScheduleMutableOptions(input);
 
     try {
       await typedEngine.updateSchedule(input.scheduleId, spec, options);
