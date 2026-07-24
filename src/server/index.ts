@@ -87,6 +87,8 @@ export { TaskQueue } from './task-queue.ts';
  * They are intentionally specific (no blanket `/*`) so they cannot shadow the
  * API served under the `/api` prefix or the root-stable discovery endpoints —
  * those fall through to the `fetch` handler.
+ * The supported page routes are `/`, `/workflows`, `/workflows/*`, `/reviews`,
+ * `/workers`, `/schedules`, `/storage`, and `/system`.
  *
  * @example
  * ```ts
@@ -103,6 +105,9 @@ export const DASHBOARD_PAGE_ROUTES = [
   '/workflows/*',
   '/reviews',
   '/workers',
+  '/schedules',
+  '/storage',
+  '/system',
 ] as const satisfies readonly string[];
 
 /**

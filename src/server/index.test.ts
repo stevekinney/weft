@@ -207,6 +207,11 @@ async function registerWebSocketWorker(
   webSocket: WebSocket,
   options: WebSocketWorkerRegistrationOptions,
 ): Promise<void> {
+  const registrationAck = waitForWorkerMessage(
+    webSocket,
+    (message) => message['type'] === 'registerAck' && message['workerId'] === options.workerId,
+    `registerAck for ${options.workerId}`,
+  );
   webSocket.send(
     JSON.stringify({
       type: 'register',
@@ -223,7 +228,7 @@ async function registerWebSocketWorker(
       ...(options.capabilities !== undefined ? { capabilities: options.capabilities } : {}),
     }),
   );
-  await waitForRealTimersForTesting(50);
+  await registrationAck;
 }
 
 const connectWorker = connectWebSocketWorker;
@@ -496,7 +501,23 @@ describe('serve', () => {
 
   it('serves a supplied dashboard shell at every supported page route', async () => {
     engine = createEngine();
-    server = serveTestServer({ engine, port: 0, dashboard: makeDashboard() });
+    server = serveTestServer({
+      engine,
+      port: 0,
+      dashboard: makeDashboard(),
+      publicOrigin: 'http://discovery.test',
+    });
+
+    expect(DASHBOARD_PAGE_ROUTES).toEqual([
+      '/',
+      '/workflows',
+      '/workflows/*',
+      '/reviews',
+      '/workers',
+      '/schedules',
+      '/storage',
+      '/system',
+    ]);
 
     // Enumerating DASHBOARD_PAGE_ROUTES pins the server-owned mount list used by
     // external dashboard packages.
@@ -506,6 +527,19 @@ describe('serve', () => {
       const response = await fetch(`${server.url}${path}`);
       expect(response.status).toBe(200);
       expect(await response.text()).toContain('dashboard');
+    }
+
+    for (const path of [
+      '/v1/health',
+      '/api/v1/health',
+      '/openapi.json',
+      '/openrpc.json',
+      '/asyncapi.json',
+      '/.well-known/mcp.json',
+    ]) {
+      const response = await fetch(`${server.url}${path}`);
+      expect(response.status).toBe(200);
+      expect(await response.text()).not.toContain('dashboard');
     }
   });
 
@@ -6719,14 +6753,18 @@ describe('retry policy respected on reassignment', () => {
       attempt: 2,
       retryPolicy: testRetryPolicy, // maxAttempts = 2, already at attempt 2
     });
-    await waitFor(() => server.registry.isAssigned('max-attempt-disconnect-op'), {
+    await waitFor(() => server.registry.isAssignedToWorker('max-attempt-disconnect-op', 'w1'), {
       label: 'max-attempt task assigned to w1 before disconnect',
     });
+    expect(server.registry.isAssignedToWorker('max-attempt-disconnect-op', 'w1')).toBe(true);
 
     // Disconnect w1 — task should NOT be reassigned to w2 since maxAttempts reached
     ws1.close();
-    // fixed delay: negative assertion (task must NOT be reassigned after maxAttempts)
-    await waitForRealTimersForTesting(200);
+
+    const inflightKey = KEYS.operationInflight('max-attempt-disconnect-op');
+    await waitFor(async () => (await storage.get(inflightKey)) === null, {
+      label: 'max-attempt-disconnect-op inflight record cleanup',
+    });
 
     const taskMessages = received.filter(
       (m) => m.type === 'task' && m.operationId === 'max-attempt-disconnect-op',
@@ -6734,7 +6772,6 @@ describe('retry policy respected on reassignment', () => {
     expect(taskMessages.length).toBe(0);
 
     // In-flight record should be cleaned up
-    const inflightKey = KEYS.operationInflight('max-attempt-disconnect-op');
     const record = await storage.get(inflightKey);
     expect(record).toBeNull();
 

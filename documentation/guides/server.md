@@ -165,7 +165,7 @@ A wildcard origin is allowed only for a public, non-credentialed API that does n
 
 ## External Dashboard Mounting
 
-Weft no longer bundles a dashboard, and the CLI starts a headless API server. Embedded servers can still pass an externally supplied dashboard shell to `serve({ dashboard })`; Weft mounts that shell at `/`, `/workflows`, `/workflows/*`, `/reviews`, and `/workers`, while `/api/...` and discovery routes continue to be handled by the API. `serve({ auth })` protects API calls made by that shell; it does not authenticate the shell route itself because Bun serves `routes` entries before Weft's fetch handler runs. For production, put an external dashboard behind a trusted reverse proxy or operator-only network when the shell itself must be access-controlled.
+Weft no longer bundles a dashboard, and the CLI starts a headless API server. Embedded servers can still pass an externally supplied dashboard shell to `serve({ dashboard })`; Weft mounts that shell at `/`, `/workflows`, `/workflows/*`, `/reviews`, `/workers`, `/schedules`, `/storage`, and `/system`, while `/api/...` and discovery routes continue to be handled by the API. `serve({ auth })` protects API calls made by that shell; it does not authenticate the shell route itself because Bun serves `routes` entries before Weft's fetch handler runs. For production, put an external dashboard behind a trusted reverse proxy or operator-only network when the shell itself must be access-controlled.
 
 ## The WeftServer handle
 

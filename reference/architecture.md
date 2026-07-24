@@ -2331,6 +2331,9 @@ const server = serve({
     '/workflows/*': (req) => new Response(Bun.file(dashboardHTML)),
     '/reviews': (req) => new Response(Bun.file(dashboardHTML)),
     '/workers': (req) => new Response(Bun.file(dashboardHTML)),
+    '/schedules': (req) => new Response(Bun.file(dashboardHTML)),
+    '/storage': (req) => new Response(Bun.file(dashboardHTML)),
+    '/system': (req) => new Response(Bun.file(dashboardHTML)),
   },
 
   // WebSocket upgrade handling
