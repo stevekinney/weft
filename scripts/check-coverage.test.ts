@@ -1,10 +1,10 @@
 import { describe, expect, it, mock, spyOn } from 'bun:test';
-import { randomUUID } from 'node:crypto';
 
 import {
   assembleAllowanceLayers,
   assertNoAllowanceKeyIsCoverageIgnored,
   buildAllowanceLayer,
+  checkCoverage,
   parseLcov,
   readCoveragePathIgnorePatterns,
 } from './check-coverage.ts';
@@ -173,50 +173,17 @@ describe('parseLcov', () => {
   });
 
   it('returns false immediately when a coverage shard exits non-zero', async () => {
-    mock.module('bun', () => ({
-      $: () => ({
-        quiet: () => ({
-          nothrow: async () => undefined,
-        }),
-      }),
+    const runCoverageShard = mock(async () => ({
+      exitCode: 1,
+      lcovPath: 'coverage/lcov.info',
     }));
-    mock.module('node:child_process', () => ({
-      execFileSync(command: string) {
-        if (command === 'rg') {
-          return 'src/example.test.ts\n';
-        }
-        throw new Error(`Unexpected command: ${command}`);
-      },
-    }));
-
     const errorSpy = mock((_message?: unknown, ..._args: unknown[]) => {});
 
-    try {
-      using consoleErrorSpy = spyOn(console, 'error').mockImplementation(errorSpy);
-      using spawnSpy = spyOn(Bun, 'spawn').mockImplementation(
-        () =>
-          ({
-            exited: Promise.resolve(1),
-            stderr: new ReadableStream<Uint8Array>({
-              start(controller) {
-                controller.close();
-              },
-            }),
-            stdout: new ReadableStream<Uint8Array>({
-              start(controller) {
-                controller.close();
-              },
-            }),
-          }) as ReturnType<typeof Bun.spawn>,
-      );
-      const { checkCoverage } = await import(`./check-coverage.ts?failure=${randomUUID()}`);
+    using consoleErrorSpy = spyOn(console, 'error').mockImplementation(errorSpy);
 
-      await expect(checkCoverage()).resolves.toBe(false);
-      expect(spawnSpy).toHaveBeenCalled();
-      expect(consoleErrorSpy).toHaveBeenCalledWith('Coverage execution failed.');
-    } finally {
-      mock.restore();
-    }
+    await expect(checkCoverage({ runCoverageShard })).resolves.toBe(false);
+    expect(runCoverageShard).toHaveBeenCalledTimes(1);
+    expect(consoleErrorSpy).toHaveBeenCalledWith('Coverage execution failed.');
   });
 });
 

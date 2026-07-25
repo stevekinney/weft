@@ -2526,6 +2526,10 @@ type CoverageShard = {
   parallelism?: number;
 };
 
+type CheckCoverageDependencies = {
+  runCoverageShard?: (shard: CoverageShard) => Promise<{ exitCode: number; lcovPath: string }>;
+};
+
 type CapturedOutputTail = {
   bytes: Uint8Array;
   truncatedBytes: number;
@@ -2638,12 +2642,14 @@ async function runCoverageShard(
  * Run the test suite with coverage, parse the lcov report, and return whether
  * every line and function is covered.
  */
-export async function checkCoverage(): Promise<boolean> {
+export async function checkCoverage(
+  dependencies: CheckCoverageDependencies = {},
+): Promise<boolean> {
   // Remove the entire coverage directory so we never read a previous run's report.
   await $`rm -rf coverage`.quiet().nothrow();
   const allTestFiles = await listCoverageTestFiles();
 
-  const shard = await runCoverageShard({
+  const shard = await (dependencies.runCoverageShard ?? runCoverageShard)({
     name: 'coverage',
     coverageDirectory: 'coverage',
     // Let Bun use its default coverage workers. Forcing this repository into one
