@@ -836,6 +836,35 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     storage[Symbol.dispose]?.();
   });
 
+  it('aborts a queued first turn before awaiting shutdown drain completion', async () => {
+    const storage = new MemoryStorage();
+    const signalObserved = Promise.withResolvers<void>();
+    const cooperativeWorkflow = workflow({ name: 'cooperative' }).execute(async function* (ctx) {
+      await new Promise<void>((resolve) => {
+        if (ctx.signal.aborted) {
+          resolve();
+          return;
+        }
+        ctx.signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+      signalObserved.resolve();
+      return 'stopped';
+    });
+    const engine = await Engine.create({
+      storage,
+      workflows: { cooperative: cooperativeWorkflow },
+      ownership: 'lease',
+    });
+
+    await engine.start('cooperative', null, { id: 'queued-cooperative-shutdown' });
+    const shutdown = engine.shutdown();
+
+    await signalObserved.promise;
+    await expect(shutdown).resolves.toBe(true);
+    expect(await readHolder(storage)).toBeNull();
+    storage[Symbol.dispose]?.();
+  });
+
   it('retains a deposition release result for later shutdown', async () => {
     const storage = new MemoryStorage();
     const engine = await Engine.create({

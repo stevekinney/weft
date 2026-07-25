@@ -2095,7 +2095,9 @@ export class Engine<
       let leaseReleased = true;
       let drainFailure: { error: unknown } | null = null;
       try {
-        await drainQueuedInlineWorkflowStartsForEngine(this);
+        await drainQueuedInlineWorkflowStartsForEngine(this, {
+          abortStartedWorkflows: true,
+        });
       } catch (error) {
         drainFailure = { error };
       } finally {

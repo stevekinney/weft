@@ -56,6 +56,7 @@ function settleDiscardedInlineStarts(
 export async function flushQueuedInlineWorkflowStarts(
   internals: EngineInternals,
   callbacks: InlineLaunchQueueCallbacks,
+  options?: { abortStartedWorkflows?: boolean },
 ): Promise<void> {
   if (internals.abortController.signal.aborted) {
     // The engine is tearing down. Discard the queue, but settle each start's
@@ -81,7 +82,7 @@ export async function flushQueuedInlineWorkflowStarts(
     // hanging their defer:false awaiters. swallowPromiseRejection contains the
     // failure; the per-start finally still fires onStarted.
     await callbacks.swallowPromiseRejection(
-      startQueuedInlineWorkflowExecution(internals, start, callbacks),
+      startQueuedInlineWorkflowExecution(internals, start, callbacks, options),
     );
   }
 }
@@ -111,6 +112,7 @@ export async function flushQueuedInlineWorkflowStartsDirectly(
 export async function drainQueuedInlineWorkflowStarts(
   internals: EngineInternals,
   callbacks: InlineLaunchQueueCallbacks,
+  options?: { abortStartedWorkflows?: boolean },
 ): Promise<void> {
   internals.queuedInlineWorkflowStartFlushScheduled = false;
   // Drain repeatedly: a started workflow can synchronously enqueue a child
@@ -130,7 +132,9 @@ export async function drainQueuedInlineWorkflowStarts(
     // whole drain — which, called from asyncDispose, would otherwise skip the
     // synchronous teardown and leave the engine half-disposed. Mirrors the
     // scheduled-flush path's swallowPromiseRejection wrapping.
-    await callbacks.swallowPromiseRejection(flushQueuedInlineWorkflowStarts(internals, callbacks));
+    await callbacks.swallowPromiseRejection(
+      flushQueuedInlineWorkflowStarts(internals, callbacks, options),
+    );
 
     // startWorkflowExecution() schedules the inline generator advance without
     // awaiting it. Async disposal must wait for that first advance before
@@ -155,6 +159,7 @@ async function startQueuedInlineWorkflowExecution(
   internals: EngineInternals,
   start: QueuedInlineWorkflowExecutionStart,
   callbacks: Pick<InlineLaunchQueueCallbacks, 'processPendingUpdatesAfterInlineAdvance'>,
+  options?: { abortStartedWorkflows?: boolean },
 ): Promise<void> {
   try {
     const state = await loadWorkflowState(internals, start.workflowId);
@@ -177,6 +182,14 @@ async function startQueuedInlineWorkflowExecution(
       start.executionDeadline,
       start.executionStateOwnerId,
     );
+
+    // Async disposal starts queued workflows so their first turns cannot fire
+    // later against torn-down state. Abort cooperatively after generator.next()
+    // has been scheduled, before awaiting either the advance or pending-update
+    // processing, so a first turn parked on ctx.signal can settle.
+    if (options?.abortStartedWorkflows === true) {
+      internals.inlineStrategy?.getAbortController(start.workflowId)?.abort();
+    }
 
     await callbacks.processPendingUpdatesAfterInlineAdvance(start.workflowId);
   } finally {

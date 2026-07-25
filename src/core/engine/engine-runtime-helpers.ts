@@ -97,10 +97,14 @@ export function createQueuedInlineWorkflowStartHandler<
 export async function drainQueuedInlineWorkflowStartsForEngine<
   TWorkflows extends object,
   TActivities extends object,
->(engine: Engine<TWorkflows, TActivities>): Promise<void> {
+>(
+  engine: Engine<TWorkflows, TActivities>,
+  options?: { abortStartedWorkflows?: boolean },
+): Promise<void> {
   await drainQueuedInlineWorkflowStarts(
     getInternals(engine),
     inlineLaunchQueueCallbacksForEngine(engine),
+    options,
   );
 }
 
