@@ -34,6 +34,7 @@ import {
   type GetTaskDiagnosticsOutput,
 } from './operations/get-task-diagnostics.ts';
 import { anonymousPrincipal, principalFromApiKey } from './principal.ts';
+import { API_PREFIX, DIRECT_HTTP_ROUTES } from './route-model.ts';
 import { minimalServerContext } from './runtime/server-context.test-support.ts';
 import { reconcileOrphanedRecords, scanExpiredTasks } from './runtime/task-reconciliation.ts';
 import { buildFetchHandler, buildServerContext, resolveNetworkConfig } from './serve-internals.ts';
@@ -598,6 +599,7 @@ describe('serve', () => {
         engine,
         port: 0,
         dashboard: makeDashboard(),
+        publicOrigin: 'http://discovery.test',
         dashboardAssets: { prefix: '/assets', directory },
       });
 
@@ -638,6 +640,12 @@ describe('serve', () => {
         expect(await response.text()).not.toContain('dashboard');
       }
 
+      for (const path of ['/.well-known/mcp.json', '/.well-known/api-catalog']) {
+        const response = await fetch(`${server.url}${path}`);
+        expect(response.status).toBe(200);
+        expect(await response.text()).not.toContain('dashboard');
+      }
+
       const encodedFilename = await fetch(`${server.url}/assets/%252e%252e.txt`);
       expect(encodedFilename.status).toBe(200);
       expect(await encodedFilename.text()).toBe('encoded filename');
@@ -649,14 +657,31 @@ describe('serve', () => {
   it('validates dashboard asset prefixes synchronously before binding', () => {
     const directory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
     try {
+      const directRoutePrefixes = DIRECT_HTTP_ROUTES.flatMap(({ path }) => {
+        const parent = path.slice(0, path.lastIndexOf('/'));
+        return parent.length > 0 ? [path, parent] : [path];
+      });
+      const dashboardRoutePrefixes = DASHBOARD_PAGE_ROUTES.flatMap((route) => {
+        if (route === '/') return [];
+        if (route.endsWith('/*')) {
+          const base = route.slice(0, -2);
+          return [base, `${base}/assets`];
+        }
+        return [route];
+      });
       for (const prefix of [
-        '/api/assets',
+        API_PREFIX,
+        `${API_PREFIX}/assets`,
+        '/v1',
         '/v1/assets',
-        '/openapi.json',
-        '/workflows/assets',
+        ...directRoutePrefixes,
+        ...dashboardRoutePrefixes,
+        '/.well-known',
         '/assets/',
         '/assets/*',
         '/assets/%2e%2e',
+        '/asset files',
+        '/café',
       ]) {
         const assetEngine = createEngine();
         expect(() =>
@@ -665,7 +690,9 @@ describe('serve', () => {
             port: 0,
             dashboardAssets: { prefix, directory },
           }),
-        ).toThrow();
+        ).toThrow(
+          prefix === '/asset files' || prefix === '/café' ? /URL serialization/ : undefined,
+        );
         assetEngine[Symbol.dispose]();
       }
 

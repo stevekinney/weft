@@ -1,6 +1,8 @@
 import { realpathSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
+import { API_PREFIX, DIRECT_HTTP_ROUTES, ROOT_API_PREFIX } from './route-model.ts';
+
 /**
  * Static files belonging to an externally supplied dashboard.
  *
@@ -27,24 +29,16 @@ export interface ResolvedDashboardAssets {
   directory: string;
 }
 
-const ROOT_API_PREFIXES = ['/api', '/v1'] as const;
-const DISCOVERY_DOCUMENTS = [
-  '/openapi.json',
-  '/openrpc.json',
-  '/asyncapi.json',
-  '/.well-known/mcp.json',
-] as const;
-
-function hasPathPrefix(path: string, prefix: string): boolean {
-  return path === prefix || path.startsWith(`${prefix}/`);
-}
-
 function overlapsDashboardPageRoute(prefix: string, route: string): boolean {
   if (route.endsWith('/*')) {
     const base = route.slice(0, -2);
     return prefix === base || prefix.startsWith(`${base}/`);
   }
   return prefix === route;
+}
+
+function overlapsWildcardRoute(prefix: string, route: string): boolean {
+  return prefix === route || prefix.startsWith(`${route}/`) || route.startsWith(`${prefix}/`);
 }
 
 function hasInvalidPrefixShape(prefix: string): boolean {
@@ -68,19 +62,29 @@ function validateAssetPrefixShape(prefix: string): void {
   if (segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..')) {
     throw new Error('dashboardAssets.prefix must contain only concrete, non-empty path segments');
   }
+
+  const serializedPathname = new URL(prefix, 'http://weft.invalid').pathname;
+  if (serializedPathname !== prefix) {
+    throw new Error(
+      `dashboardAssets.prefix must round-trip through URL serialization unchanged; ${prefix} serializes as ${serializedPathname}`,
+    );
+  }
 }
 
 function validateAssetPrefixReservations(prefix: string, pageRoutes: readonly string[]): void {
-  if (ROOT_API_PREFIXES.some((reserved) => hasPathPrefix(prefix, reserved))) {
-    throw new Error('dashboardAssets.prefix must not overlap the /api or /v1 route spaces');
+  const reservedRoutes = [
+    API_PREFIX,
+    ROOT_API_PREFIX,
+    ...DIRECT_HTTP_ROUTES.map(({ path }) => path),
+  ];
+  if (reservedRoutes.some((reserved) => overlapsWildcardRoute(prefix, reserved))) {
+    throw new Error(
+      'dashboardAssets.prefix must not overlap the /api, /v1, or direct HTTP route spaces',
+    );
   }
 
   if (pageRoutes.some((route) => overlapsDashboardPageRoute(prefix, route))) {
     throw new Error('dashboardAssets.prefix must not overlap dashboard page routes');
-  }
-
-  if (DISCOVERY_DOCUMENTS.some((document) => document === prefix)) {
-    throw new Error('dashboardAssets.prefix must not overlap a discovery document route');
   }
 }
 

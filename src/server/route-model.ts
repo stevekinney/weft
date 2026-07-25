@@ -40,6 +40,9 @@
  */
 export const API_PREFIX = '/api';
 
+/** Root-relative namespace for the functional REST and WebSocket API. */
+export const ROOT_API_PREFIX = '/v1';
+
 /**
  * Map a canonical, root-relative server path to its external (`/api`-prefixed)
  * form for emission in specs and discovery documents.
