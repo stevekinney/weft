@@ -150,7 +150,7 @@ const packageRootWelcome = workflow({ name: 'packageRootWelcome' })
   });
 
 const engine = new Engine().register(packageRootWelcome);
-const shutdownResult: Promise<void> = engine.shutdown();
+const shutdownResult: Promise<boolean> = engine.shutdown();
 void shutdownResult;
 const leaseSynchronousDisposeWarningName: 'WeftEngineLeaseSynchronousDisposeWarning' =
   ENGINE_LEASE_SYNCHRONOUS_DISPOSE_WARNING_NAME;
