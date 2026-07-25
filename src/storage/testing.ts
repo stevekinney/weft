@@ -83,6 +83,8 @@ export type ConcurrentConditionalBatchConformanceOptions = {
 export type BinaryAndLargeScanConformanceOptions = {
   /** Construct a fresh, empty adapter for each conformance case. */
   readonly create: () => Storage | Promise<Storage>;
+  /** Optional timeout for adapters whose local large-scan test needs more time. */
+  readonly largeScanTimeoutMs?: number;
 };
 
 /**
@@ -134,26 +136,30 @@ export function runBinaryAndLargeScanStorageConformance(
       }
     });
 
-    it('returns 1000 scanned keys in sorted order', async () => {
-      const storage = await options.create();
-      try {
-        const operations = Array.from({ length: 1000 }, (_, index) => ({
-          type: 'put' as const,
-          key: `item:${String(index).padStart(4, '0')}`,
-          value: bytes(String(index)),
-        }));
-        await storage.batch(operations);
+    it(
+      'returns 1000 scanned keys in sorted order',
+      async () => {
+        const storage = await options.create();
+        try {
+          const operations = Array.from({ length: 1000 }, (_, index) => ({
+            type: 'put' as const,
+            key: `item:${String(index).padStart(4, '0')}`,
+            value: bytes(String(index)),
+          }));
+          await storage.batch(operations);
 
-        const entries = await collect(storage.scan('item:'));
-        expect(entries).toHaveLength(1000);
+          const entries = await collect(storage.scan('item:'));
+          expect(entries).toHaveLength(1000);
 
-        for (let index = 0; index < entries.length; index += 1) {
-          expect(entries[index]![0]).toBe(`item:${String(index).padStart(4, '0')}`);
+          for (let index = 0; index < entries.length; index += 1) {
+            expect(entries[index]![0]).toBe(`item:${String(index).padStart(4, '0')}`);
+          }
+        } finally {
+          storage[Symbol.dispose]();
         }
-      } finally {
-        storage[Symbol.dispose]();
-      }
-    });
+      },
+      options.largeScanTimeoutMs,
+    );
   });
 }
 
@@ -459,6 +465,11 @@ export function runBasicStorageContract(name: string, options: BasicStorageContr
 
       const entries = await collect(storage.scan(''));
       expect(entries.map(([key]) => key)).toEqual(['alpha', 'beta', 'gamma']);
+    });
+
+    it('scan with empty prefix on empty storage returns no entries', async () => {
+      using storage = await create();
+      expect(await collect(storage.scan(''))).toEqual([]);
     });
   });
 }

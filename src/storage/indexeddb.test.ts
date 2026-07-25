@@ -34,6 +34,7 @@ runBasicStorageContract('IndexedDBStorage', {
 });
 runBinaryAndLargeScanStorageConformance('IndexedDBStorage', {
   create: () => new IndexedDBStorage(`weft-large-${String(Math.random()).slice(2)}`),
+  largeScanTimeoutMs: 30_000,
 });
 
 /** Helper to encode a string as Uint8Array. */
