@@ -755,6 +755,47 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     storage[Symbol.dispose]?.();
   });
 
+  it('shares a synchronous release started while shutdown drains queued work', async () => {
+    const storage = new MemoryStorage();
+    const drainStarted = Promise.withResolvers<void>();
+    const finishDrain = Promise.withResolvers<void>();
+    const drainingWorkflow = workflow({ name: 'draining' }).execute(async function* () {
+      drainStarted.resolve();
+      await finishDrain.promise;
+      return 'done';
+    });
+    const engine = await Engine.create({
+      storage,
+      workflows: { draining: drainingWorkflow },
+      ownership: 'lease',
+    });
+    const releaseStarted = Promise.withResolvers<void>();
+    const releaseStorage = Promise.withResolvers<void>();
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+    let releaseCalls = 0;
+    storage.conditionalBatch = async (conditions, operations) => {
+      if (operations.some((operation) => operation.type === 'delete')) {
+        releaseCalls += 1;
+        releaseStarted.resolve();
+        await releaseStorage.promise;
+      }
+      return originalConditionalBatch(conditions, operations);
+    };
+
+    await engine.start('draining', null, { id: 'queued-for-shutdown' });
+    const shutdown = engine.shutdown();
+    await drainStarted.promise;
+    engine[Symbol.dispose]();
+    await releaseStarted.promise;
+    finishDrain.resolve();
+    releaseStorage.resolve();
+
+    await expect(shutdown).resolves.toBe(true);
+    expect(releaseCalls).toBe(1);
+    expect(await readHolder(storage)).toBeNull();
+    storage[Symbol.dispose]?.();
+  });
+
   it('preserves an asyncDispose override when shutdown is called concurrently', async () => {
     let overrideCalls = 0;
     class OverrideEngine extends Engine {

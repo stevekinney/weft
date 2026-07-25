@@ -2098,7 +2098,9 @@ export class Engine<
         // writing. Awaiting makes `await using engine` a zero-overlap handoff, and
         // this is the single release on the async path. Idempotent if the parked
         // acquire's own `disposed`-branch already released.
-        leaseReleased = (await leaseManager?.release()) ?? true;
+        const releaseResult =
+          this.#synchronousDisposeResult ?? leaseManager?.release() ?? Promise.resolve(true);
+        leaseReleased = await releaseResult;
       }
       if (drainFailure !== null) {
         throw new EngineDisposalError(drainFailure.error, leaseReleased);
