@@ -908,7 +908,12 @@ export class Engine<
     if (internals.disposed) return;
     const leaseManager = internals.leaseManager;
     disposeEngine(internals);
-    void leaseManager?.release().catch(() => {});
+    if (this.#synchronousDisposeResult === null) {
+      this.#synchronousDisposeResult = (leaseManager?.release() ?? Promise.resolve(true)).catch(
+        () => false,
+      );
+    }
+    void this.#synchronousDisposeResult;
   }
 
   #startSecondInstanceDetection(): void {
@@ -2012,7 +2017,13 @@ export class Engine<
     if (this.#shutdownResult === null) {
       this.#shutdownResult = (async () => {
         await this[Symbol.asyncDispose]();
-        return (await this.#asyncDisposeResult) ?? true;
+        const baseResult = this.#asyncDisposeResult;
+        if (baseResult === null) return true;
+        try {
+          return await baseResult;
+        } catch (error) {
+          return error instanceof EngineDisposalError ? error.leaseReleased : true;
+        }
       })();
     }
     return this.#shutdownResult;

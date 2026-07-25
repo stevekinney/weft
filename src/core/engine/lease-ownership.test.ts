@@ -49,6 +49,28 @@ async function readEpoch(storage: Storage): Promise<number | null> {
   return Number(new DataView(raw.buffer, raw.byteOffset, raw.byteLength).getBigUint64(0, false));
 }
 
+function failNextQueuedStartDrain<TWorkflows extends object, TActivities extends object>(
+  engine: Engine<TWorkflows, TActivities>,
+  drainError: Error,
+): void {
+  const internals = getInternals(engine);
+  let firstRead = true;
+  let queuedStarts = internals.queuedInlineWorkflowStarts;
+  Object.defineProperty(internals, 'queuedInlineWorkflowStarts', {
+    configurable: true,
+    get: () => {
+      if (firstRead) {
+        firstRead = false;
+        throw drainError;
+      }
+      return queuedStarts;
+    },
+    set: (value: typeof queuedStarts) => {
+      queuedStarts = value;
+    },
+  });
+}
+
 type CapturedWarning = { name: string; message: string };
 
 function createLeasedPingEngine(storage: MemoryStorage, getNow: () => number) {
@@ -625,21 +647,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     });
     const internals = getInternals(engine);
     const drainError = new Error('drain failed');
-    let firstRead = true;
-    let queuedStarts = internals.queuedInlineWorkflowStarts;
-    Object.defineProperty(internals, 'queuedInlineWorkflowStarts', {
-      configurable: true,
-      get: () => {
-        if (firstRead) {
-          firstRead = false;
-          throw drainError;
-        }
-        return queuedStarts;
-      },
-      set: (value: typeof queuedStarts) => {
-        queuedStarts = value;
-      },
-    });
+    failNextQueuedStartDrain(engine, drainError);
 
     await expect(engine.shutdown()).rejects.toMatchObject({
       name: 'EngineDisposalError',
@@ -661,23 +669,8 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     storage.conditionalBatch = async () => {
       throw new Error('storage offline');
     };
-    const internals = getInternals(engine);
     const drainError = new Error('drain failed');
-    let firstRead = true;
-    let queuedStarts = internals.queuedInlineWorkflowStarts;
-    Object.defineProperty(internals, 'queuedInlineWorkflowStarts', {
-      configurable: true,
-      get: () => {
-        if (firstRead) {
-          firstRead = false;
-          throw drainError;
-        }
-        return queuedStarts;
-      },
-      set: (value: typeof queuedStarts) => {
-        queuedStarts = value;
-      },
-    });
+    failNextQueuedStartDrain(engine, drainError);
 
     try {
       await expect(engine.shutdown()).rejects.toMatchObject({
@@ -796,6 +789,31 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     storage[Symbol.dispose]?.();
   });
 
+  it('retains a deposition release result for later shutdown', async () => {
+    const storage = new MemoryStorage();
+    const engine = await Engine.create({
+      storage,
+      workflows: { ping: pingWorkflow },
+      ownership: 'lease',
+    });
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+    let releaseCalls = 0;
+    storage.conditionalBatch = async (conditions, operations) => {
+      if (operations.some((operation) => operation.type === 'delete')) {
+        releaseCalls += 1;
+        return false;
+      }
+      return originalConditionalBatch(conditions, operations);
+    };
+
+    getInternals(engine).tearDownAfterDeposition?.();
+
+    await expect(engine.shutdown()).resolves.toBe(false);
+    expect(releaseCalls).toBe(1);
+    expect(await readHolder(storage)).not.toBeNull();
+    storage[Symbol.dispose]?.();
+  });
+
   it('preserves an asyncDispose override when shutdown is called concurrently', async () => {
     let overrideCalls = 0;
     class OverrideEngine extends Engine {
@@ -809,6 +827,26 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     const results = await Promise.all([engine.shutdown(), engine.shutdown()]);
 
     expect(results).toEqual([true, true]);
+    expect(overrideCalls).toBe(1);
+  });
+
+  it('respects an asyncDispose override that handles a base disposal failure', async () => {
+    let overrideCalls = 0;
+    class HandlingOverrideEngine extends Engine {
+      override async [Symbol.asyncDispose](): Promise<void> {
+        overrideCalls += 1;
+        try {
+          await super[Symbol.asyncDispose]();
+        } catch {
+          // This override deliberately owns and handles base disposal failures.
+        }
+      }
+    }
+
+    const engine = new HandlingOverrideEngine();
+    failNextQueuedStartDrain(engine, new Error('handled drain failure'));
+
+    await expect(engine.shutdown()).resolves.toBe(true);
     expect(overrideCalls).toBe(1);
   });
 });
