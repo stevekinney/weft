@@ -219,7 +219,7 @@ describe('BunSQLiteStorage benchmark', () => {
     // Warm up
     await storage.put('warmup', value);
 
-    const totalWrites = integrityWorkload.individualPutTotal;
+    const totalWrites = benchmarkWorkload.individualPutTotal;
 
     // Pre-generate keys
     const keys = Array.from(
@@ -312,6 +312,14 @@ describe('BunSQLiteStorage benchmark', () => {
       );
 
       expect(operationsPerSecond).toBeGreaterThan(0);
+
+      const seedCount = totalOperations / 5;
+      expect(await storage.get('seed:0000000000')).toBeNull();
+      expect(await storage.get(`seed:${String(seedCount - 1).padStart(10, '0')}`)).toBeNull();
+      expect(await storage.get('mixed:0000000001')).toEqual(value);
+      expect(await storage.get(`mixed:${String(totalOperations - 1).padStart(10, '0')}`)).toEqual(
+        value,
+      );
 
       storage[Symbol.dispose]();
     },
