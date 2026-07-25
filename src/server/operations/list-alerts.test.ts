@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { ALERT_METRICS } from '../../alerting/types.ts';
 import { Engine } from '../../core/engine.ts';
 import { WorkflowFailedEvent } from '../../core/events.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
@@ -129,5 +130,37 @@ describe('weft.alerts.list', () => {
         ],
       },
     });
+  });
+
+  it('accepts every canonical metric and rejects unknown metrics', () => {
+    for (const metric of ALERT_METRICS) {
+      expect(
+        listAlertsOperation.outputSchema.safeParse({
+          items: [
+            {
+              metric,
+              threshold: 1,
+              currentValue: 1,
+              window: null,
+              firedAt: null,
+            },
+          ],
+        }).success,
+      ).toBe(true);
+    }
+
+    expect(
+      listAlertsOperation.outputSchema.safeParse({
+        items: [
+          {
+            metric: 'unknown.metric',
+            threshold: 1,
+            currentValue: 1,
+            window: null,
+            firedAt: null,
+          },
+        ],
+      }).success,
+    ).toBe(false);
   });
 });

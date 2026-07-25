@@ -8,17 +8,13 @@
 
 import { z } from 'zod';
 
-import type { AlertMetric } from '../../alerting/types.ts';
+import { ALERT_METRICS } from '../../alerting/types.ts';
 import type { Engine } from '../../core/engine.ts';
 import { shapeOperationFaultAsJson } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 
-const alertMetricSchema = z.enum([
-  'workflow.failure_rate',
-  'activity.p99_duration',
-  'storage.size',
-]) as z.ZodType<AlertMetric>;
+const alertMetricSchema = z.enum(ALERT_METRICS);
 
 const listAlertsInput = z.object({});
 const activeAlertSchema = z.object({

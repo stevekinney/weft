@@ -7,6 +7,13 @@
  */
 export type AlertAction = 'log' | 'webhook';
 
+/** Runtime vocabulary shared by alerting types and operation schemas. */
+export const ALERT_METRICS = [
+  'workflow.failure_rate',
+  'activity.p99_duration',
+  'storage.size',
+] as const;
+
 /**
  * Which built-in metric an {@link AlertRule} monitors.
  *
@@ -31,7 +38,7 @@ export type AlertAction = 'log' | 'webhook';
  * void rule;
  * ```
  */
-export type AlertMetric = 'workflow.failure_rate' | 'activity.p99_duration' | 'storage.size';
+export type AlertMetric = (typeof ALERT_METRICS)[number];
 
 /**
  * Defines a single alerting threshold applied to a named metric.
