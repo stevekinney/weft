@@ -1996,12 +1996,14 @@ export class Engine<
    *
    * Under `ownership: 'lease'`, this is the explicit prompt-handoff primitive:
    * it drains queued inline starts, tears down in-memory write paths, and awaits
-   * lease release before resolving. Synchronous disposal remains immediate and
-   * can make the next engine wait for `leaseTtl` if the process exits before its
-   * background release completes.
+   * lease release before resolving. The returned boolean is `true` when no lease
+   * needed release or the holder delete committed, and `false` when the delete
+   * did not commit. Synchronous disposal remains immediate and can make the next
+   * engine wait for `leaseTtl` if the process exits before its background release
+   * completes.
    */
-  async shutdown(): Promise<void> {
-    return this[Symbol.asyncDispose]();
+  async shutdown(): Promise<boolean> {
+    return this.#disposeAsyncWithLeaseResult();
   }
 
   /**
@@ -2038,7 +2040,7 @@ export class Engine<
    * teardown that always follows. Prefer this over the synchronous
    * {@link Engine[Symbol.dispose]} in async contexts and tests.
    */
-  async [Symbol.asyncDispose](): Promise<void> {
+  async #disposeAsyncWithLeaseResult(): Promise<boolean> {
     // Drain pending inline launches BEFORE synchronous disposal aborts the
     // signal (which would discard them). This makes a disposed engine leave no
     // dangling deferred-launch macrotask — the clean async teardown that lets
@@ -2051,6 +2053,7 @@ export class Engine<
       // Capture the lease manager before in-memory teardown detaches it; release it
       // LAST (see below).
       const leaseManager = getInternals(this).leaseManager;
+      let leaseReleased = true;
       try {
         await drainQueuedInlineWorkflowStartsForEngine(this);
       } finally {
@@ -2077,11 +2080,16 @@ export class Engine<
         // writing. Awaiting makes `await using engine` a zero-overlap handoff, and
         // this is the single release on the async path. Idempotent if the parked
         // acquire's own `disposed`-branch already released.
-        await leaseManager?.release();
+        leaseReleased = (await leaseManager?.release()) ?? true;
       }
-      return;
+      return leaseReleased;
     }
     this[Symbol.dispose]();
+    return true;
+  }
+
+  async [Symbol.asyncDispose](): Promise<void> {
+    await this.#disposeAsyncWithLeaseResult();
   }
   get storage(): WeftStorage {
     return getInternals(this).storage;

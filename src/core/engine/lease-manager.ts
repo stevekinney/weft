@@ -107,7 +107,8 @@ export type LeaseManagerOptions = {
  * - `currentEpochBytes()` returns the held epoch as bytes for Step-2 fencing
  *   conditions; `null` before a successful acquire. Synchronous and stable across
  *   renewals.
- * - `release()` best-effort relinquishes the lease (holder key only) on dispose.
+ * - `release()` best-effort relinquishes the lease (holder key only) on dispose
+ *   and resolves to whether the holder delete committed.
  */
 export type LeaseManager = {
   acquire(): Promise<void>;
@@ -116,7 +117,7 @@ export type LeaseManager = {
   currentEpochBytes(): Uint8Array | null;
   /** Return a defensive, synchronous view of this process's last-known lease state. */
   health(): LeaseManagerHealth;
-  release(): Promise<void>;
+  release(): Promise<boolean>;
   stop(): void;
 };
 
@@ -436,8 +437,8 @@ export function createLeaseManager(options: LeaseManagerOptions): LeaseManager {
    * high-water mark that a future boot re-acquires above (deleting it would let a
    * prior-generation zombie's cached epoch match a freshly re-minted `epoch=1`).
    * The CAS guard means a deposed instance (a successor already owns the holder)
-   * does not clobber the successor's record. A storage failure is swallowed:
-   * release must never reject during disposal.
+   * does not clobber the successor's record. A storage failure is swallowed and
+   * reported as `false`: release must never reject during disposal.
    *
    * `stopped`/`clearRenewal()` prevent any NEW renewal from starting, but a
    * renewal that began just before this call may still be mid-flight; we await it
@@ -447,14 +448,14 @@ export function createLeaseManager(options: LeaseManagerOptions): LeaseManager {
    * the CAS conditioned on `lastHolderBytes` — NOT a re-read-and-delete-whatever —
    * so a genuine successor's holder is never deleted out from under it.
    */
-  async function release(): Promise<void> {
+  async function release(): Promise<boolean> {
     stopped = true;
     clearRenewal();
     // Await any in-flight renewal so the CAS-delete conditions on the freshest holder
     // bytes. Safe for release's best-effort, never-reject contract: renewUnderGuard
     // already swallows renewal rejections, so `inFlightRenewal` never rejects.
     if (inFlightRenewal !== null) await inFlightRenewal;
-    if (lastHolderBytes === null) return;
+    if (lastHolderBytes === null) return true;
     try {
       const deleted = await storageConditionalBatch(
         storage,
@@ -465,8 +466,10 @@ export function createLeaseManager(options: LeaseManagerOptions): LeaseManager {
       // clean no-op instead of re-issuing a now-doomed CAS. (If the delete missed
       // because a successor took over, keep the bytes — we did not own the holder.)
       if (deleted) lastHolderBytes = null;
+      return deleted;
     } catch {
       // Best-effort: a failed release just leaves the lease to expire via TTL.
+      return false;
     }
   }
 

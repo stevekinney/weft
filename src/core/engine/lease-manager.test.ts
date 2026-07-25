@@ -171,18 +171,53 @@ describe('createLeaseManager', () => {
     });
   });
 
-  it('release deletes only the holder key; the epoch survives as a high-water mark', async () => {
+  it('release reports true when it deletes only the holder key', async () => {
     const storage = new MemoryStorage();
     const clock = makeClock();
     const manager = createLeaseManager(managerOptions({ storage, getNow: clock.now }));
 
     await manager.acquire();
-    await manager.release();
+    await expect(manager.release()).resolves.toBe(true);
 
     expect(await readHolder(storage)).toBeNull();
     // The epoch is NOT deleted — a future boot must re-acquire above it.
     expect(await readEpoch(storage)).toBe(1);
     expect(manager.health()).toEqual({ status: 'no-lease', holdsLease: false });
+  });
+
+  it('reports false when a successor wins the release CAS', async () => {
+    const storage = new MemoryStorage();
+    const clock = makeClock();
+    const incumbent = createLeaseManager(managerOptions({ storage, getNow: clock.now }));
+    await incumbent.acquire();
+
+    const successor = createLeaseManager(
+      managerOptions({ storage, getNow: clock.now, holderId: 'engine-b' }),
+    );
+    clock.advance(TTL_MS);
+    await successor.acquire();
+
+    await expect(incumbent.release()).resolves.toBe(false);
+    expect(await holderId(storage)).toBe('engine-b');
+    await successor.release();
+  });
+
+  it('reports false when the release storage operation fails', async () => {
+    const storage = new MemoryStorage();
+    const clock = makeClock();
+    const manager = createLeaseManager(managerOptions({ storage, getNow: clock.now }));
+    await manager.acquire();
+
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+    storage.conditionalBatch = async () => {
+      throw new Error('storage offline');
+    };
+    try {
+      await expect(manager.release()).resolves.toBe(false);
+    } finally {
+      storage.conditionalBatch = originalConditionalBatch;
+    }
+    expect(await holderId(storage)).toBe('engine-a');
   });
 
   it('re-acquires after a clean release at epoch+1, conditioning on the surviving epoch', async () => {
@@ -719,7 +754,7 @@ describe('createLeaseManager', () => {
       await new Promise((resolve) => setTimeout(resolve, 25));
       throwOnNow = false; // let release() compute its own clock value normally
       // release() awaits the (contained) in-flight renewal and must still resolve.
-      await expect(manager.release()).resolves.toBeUndefined();
+      await expect(manager.release()).resolves.toBe(true);
       await new Promise((resolve) => setImmediate(resolve));
       expect(unhandled).toEqual([]);
     } finally {

@@ -596,6 +596,26 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     storage[Symbol.dispose]?.();
   });
 
+  it('reports a failed lease release from async dispose without rejecting', async () => {
+    const storage = new MemoryStorage();
+    const engine = await Engine.create({
+      storage,
+      workflows: { ping: pingWorkflow },
+      ownership: 'lease',
+    });
+
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+    storage.conditionalBatch = async () => {
+      throw new Error('storage offline');
+    };
+    try {
+      await expect(engine.shutdown()).resolves.toBe(false);
+    } finally {
+      storage.conditionalBatch = originalConditionalBatch;
+      storage[Symbol.dispose]?.();
+    }
+  });
+
   it('shutdown durably releases the holder key', async () => {
     const storage = new BunSQLiteStorage(':memory:');
     const engine = await Engine.create({
@@ -604,7 +624,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
       ownership: 'lease',
     });
 
-    await engine.shutdown();
+    await expect(engine.shutdown()).resolves.toBe(true);
     expect(await readHolder(storage)).toBeNull();
     expect(await readEpoch(storage)).toBe(1);
     storage[Symbol.dispose]?.();
