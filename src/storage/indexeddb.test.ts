@@ -288,6 +288,35 @@ describe('IndexedDBStorage', () => {
     });
   });
 
+  it('keys uses openKeyCursor without opening value cursors', async () => {
+    let keyCursorCalls = 0;
+    let valueCursorCalls = 0;
+    const transaction = createFakeTransaction({
+      store: () => ({
+        openKeyCursor() {
+          keyCursorCalls++;
+          const cursorRequest = createFakeRequest<IDBCursor | null>({ result: null });
+          queueMicrotask(() => cursorRequest.fireSuccess());
+          return cursorRequest;
+        },
+        openCursor() {
+          valueCursorCalls++;
+          const cursorRequest = createFakeRequest<IDBCursorWithValue | null>({ result: null });
+          queueMicrotask(() => cursorRequest.fireSuccess());
+          return cursorRequest;
+        },
+      }),
+    });
+
+    await withFakeIndexedDb({ transaction }, async () => {
+      const storage = new IndexedDBStorage(`test-${crypto.randomUUID()}`);
+      expect(await collect(storage.keys('key:'))).toEqual([]);
+    });
+
+    expect(keyCursorCalls).toBe(1);
+    expect(valueCursorCalls).toBe(0);
+  });
+
   it('scan rejects when the IndexedDB transaction errors mid-cursor iteration', async () => {
     const transactionError = new Error('transaction failed');
 
@@ -381,6 +410,25 @@ describe('IndexedDBStorage', () => {
     // transaction/cursor would cause subsequent operations to hang or fail.
     const allEntries = await collect(storage.scan('k:'));
     expect(allEntries).toHaveLength(4);
+  });
+
+  it('early break from keys does not leak cursor or transaction', async () => {
+    const storage = new IndexedDBStorage(`test-${crypto.randomUUID()}`);
+    await storage.put('k:a', encode('a'));
+    await storage.put('k:b', encode('b'));
+    await storage.put('k:c', encode('c'));
+    await storage.put('k:d', encode('d'));
+
+    const collected: string[] = [];
+    for await (const key of storage.keys('k:')) {
+      collected.push(key);
+      if (collected.length === 1) break;
+    }
+
+    expect(collected).toEqual(['k:a']);
+
+    const allKeys = await collect(storage.keys('k:'));
+    expect(allKeys).toHaveLength(4);
   });
 
   it(

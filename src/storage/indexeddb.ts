@@ -116,6 +116,62 @@ function createCursorRequestAwaiter<TCursor extends IDBCursor | IDBCursorWithVal
   };
 }
 
+type CursorOpener<TCursor extends IDBCursor | IDBCursorWithValue> = (
+  store: IDBObjectStore,
+  range: IDBKeyRange,
+  direction: IDBCursorDirection,
+) => IDBRequest<TCursor | null>;
+
+async function* iterateCursor<TCursor extends IDBCursor | IDBCursorWithValue, TValue>(
+  database: IDBDatabase,
+  keyRangeFactory: IndexedDbRuntime['IDBKeyRange'],
+  prefix: string,
+  options: ScanOptions,
+  openCursor: CursorOpener<TCursor>,
+  project: (cursor: TCursor) => TValue,
+): AsyncIterable<TValue> {
+  const { limit, reverse } = options;
+  const prefixEnd = resolvePrefixRangeEnd(prefix);
+  const range = keyRangeFactory.bound(prefix, prefixEnd, false, true);
+  const direction: IDBCursorDirection = reverse ? 'prev' : 'next';
+
+  const transaction = database.transaction(STORE_NAME, 'readonly');
+  const store = transaction.objectStore(STORE_NAME);
+  const request = openCursor(store, range, direction);
+  const nextCursor = createCursorRequestAwaiter(request, transaction);
+
+  let count = 0;
+  let completed = false;
+  try {
+    let cursor = await nextCursor();
+
+    while (cursor) {
+      if (limit !== undefined && count >= limit) {
+        break;
+      }
+
+      const key = cursor.key as string;
+      if (matchesScanOptions(key, options)) {
+        yield project(cursor);
+        count++;
+      }
+
+      cursor.continue();
+      cursor = await nextCursor();
+    }
+
+    completed = true;
+  } finally {
+    if (!completed) {
+      try {
+        transaction.abort();
+      } catch {
+        // Transaction may already be finished
+      }
+    }
+  }
+}
+
 /**
  * IndexedDB-backed {@link Storage} implementation for browser and service-worker
  * environments.
@@ -297,52 +353,15 @@ export class IndexedDBStorage implements Storage {
   }
 
   async *scan(prefix: string, options: ScanOptions = {}): AsyncIterable<[string, Uint8Array]> {
-    const { limit, reverse } = options;
     const database = await this.#databasePromise;
-
-    const prefixEnd = resolvePrefixRangeEnd(prefix);
-    const range = this.#runtime.IDBKeyRange.bound(prefix, prefixEnd, false, true);
-    const direction: IDBCursorDirection = reverse ? 'prev' : 'next';
-
-    const transaction = database.transaction(STORE_NAME, 'readonly');
-    const store = transaction.objectStore(STORE_NAME);
-    const request = store.openCursor(range, direction);
-
-    let count = 0;
-    const nextCursor = createCursorRequestAwaiter(request, transaction);
-
-    // Track whether iteration ran to completion so we can abort the transaction
-    // on early termination (e.g., consumer breaks out of the loop), releasing the cursor.
-    let completed = false;
-    try {
-      // Get the first cursor position
-      let cursor = await nextCursor();
-
-      while (cursor) {
-        if (limit !== undefined && count >= limit) break;
-
-        const key = cursor.key as string;
-
-        if (matchesScanOptions(key, options)) {
-          yield [key, new Uint8Array(cursor.value)];
-          count++;
-        }
-
-        // Advance the cursor
-        cursor.continue();
-        cursor = await nextCursor();
-      }
-
-      completed = true;
-    } finally {
-      if (!completed) {
-        try {
-          transaction.abort();
-        } catch {
-          // Transaction may already be finished
-        }
-      }
-    }
+    yield* iterateCursor(
+      database,
+      this.#runtime.IDBKeyRange,
+      prefix,
+      options,
+      (store, range, direction) => store.openCursor(range, direction),
+      (cursor) => [cursor.key as string, new Uint8Array(cursor.value)],
+    );
   }
 
   async batch(operations: BatchOperation[]): Promise<void> {
@@ -460,49 +479,15 @@ export class IndexedDBStorage implements Storage {
   }
 
   async *keys(prefix: string, options: ScanOptions = {}): AsyncIterable<string> {
-    const { limit, reverse } = options;
     const database = await this.#databasePromise;
-    const prefixEnd = resolvePrefixRangeEnd(prefix);
-    const range = this.#runtime.IDBKeyRange.bound(prefix, prefixEnd, false, true);
-    const direction: IDBCursorDirection = reverse ? 'prev' : 'next';
-
-    const transaction = database.transaction(STORE_NAME, 'readonly');
-    const store = transaction.objectStore(STORE_NAME);
-    const request = store.openKeyCursor(range, direction);
-
-    let count = 0;
-    const nextCursor = createCursorRequestAwaiter(request, transaction);
-
-    let completed = false;
-    try {
-      let cursor = await nextCursor();
-
-      while (cursor) {
-        if (limit !== undefined && count >= limit) {
-          break;
-        }
-
-        const key = cursor.key as string;
-
-        if (matchesScanOptions(key, options)) {
-          yield key;
-          count++;
-        }
-
-        cursor.continue();
-        cursor = await nextCursor();
-      }
-
-      completed = true;
-    } finally {
-      if (!completed) {
-        try {
-          transaction.abort();
-        } catch {
-          // Transaction may already be finished
-        }
-      }
-    }
+    yield* iterateCursor(
+      database,
+      this.#runtime.IDBKeyRange,
+      prefix,
+      options,
+      (store, range, direction) => store.openKeyCursor(range, direction),
+      (cursor) => cursor.key as string,
+    );
   }
 
   async count(prefix: string): Promise<number> {
