@@ -300,9 +300,10 @@ export function runConcurrentConditionalBatchConformance(
 }
 
 /**
- * Register the basic key/value and scan contract that every storage adapter
- * must satisfy: get, put, overwrite, delete, prefix scans, limits, reverse
- * ordering, range bounds, and empty-prefix scans.
+ * Register the complete basic key/value and scan contract that every storage
+ * adapter must satisfy: get, put, overwrite, delete (including missing keys),
+ * prefix scans, limits, reverse ordering, exclusive and inclusive range
+ * bounds, no-match scans, empty-prefix scans, and put/delete batches.
  *
  * @example
  * ```ts
@@ -348,6 +349,12 @@ export function runBasicStorageContract(name: string, options: BasicStorageContr
       expect(result).toBeNull();
     });
 
+    it('delete on a missing key is a no-op', async () => {
+      using storage = await create();
+      await storage.delete('nonexistent');
+      expect(await storage.get('nonexistent')).toBeNull();
+    });
+
     it('scan with prefix returns only matching keys, sorted lexicographically', async () => {
       using storage = await create();
       await storage.put('wf:b', bytes('b'));
@@ -389,6 +396,59 @@ export function runBasicStorageContract(name: string, options: BasicStorageContr
 
       const entries = await collect(storage.scan('p:', { gt: 'p:a', lt: 'p:d' }));
       expect(entries.map(([key]) => key)).toEqual(['p:b', 'p:c']);
+    });
+
+    it('scan with inclusive gte/lte bounds', async () => {
+      using storage = await create();
+      await storage.put('p:a', bytes('a'));
+      await storage.put('p:b', bytes('b'));
+      await storage.put('p:c', bytes('c'));
+      await storage.put('p:d', bytes('d'));
+
+      const entries = await collect(storage.scan('p:', { gte: 'p:b', lte: 'p:c' }));
+      expect(entries.map(([key]) => key)).toEqual(['p:b', 'p:c']);
+    });
+
+    it('scan with no matching keys returns no entries', async () => {
+      using storage = await create();
+      await storage.put('other:a', bytes('a'));
+
+      expect(await collect(storage.scan('wf:'))).toHaveLength(0);
+    });
+
+    it('batch with multiple puts stores every value', async () => {
+      using storage = await create();
+      await storage.batch([
+        { type: 'put', key: 'a', value: bytes('1') },
+        { type: 'put', key: 'b', value: bytes('2') },
+        { type: 'put', key: 'c', value: bytes('3') },
+      ]);
+
+      expect(await storage.get('a')).toEqual(bytes('1'));
+      expect(await storage.get('b')).toEqual(bytes('2'));
+      expect(await storage.get('c')).toEqual(bytes('3'));
+    });
+
+    it('batch with mixed puts and deletes leaves the expected state', async () => {
+      using storage = await create();
+      await storage.put('keep', bytes('keep'));
+      await storage.put('remove', bytes('remove'));
+
+      await storage.batch([
+        { type: 'put', key: 'new', value: bytes('new') },
+        { type: 'delete', key: 'remove' },
+      ]);
+
+      expect(await storage.get('keep')).toEqual(bytes('keep'));
+      expect(await storage.get('remove')).toBeNull();
+      expect(await storage.get('new')).toEqual(bytes('new'));
+    });
+
+    it('batch with no operations is a no-op', async () => {
+      using storage = await create();
+      await storage.put('key', bytes('value'));
+      await storage.batch([]);
+      expect(await storage.get('key')).toEqual(bytes('value'));
     });
 
     it('scan with empty prefix returns all keys', async () => {

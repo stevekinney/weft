@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import { createDiskBackedTestFixture } from '../testing/storage-backends.test-support.ts';
 import { LMDBStorage } from './lmdb';
 import {
+  runBasicStorageContract,
   runBinaryAndLargeScanStorageConformance,
   runStorageCapabilityConformance,
 } from './storage-adapter.test-support.ts';
@@ -52,162 +53,13 @@ describe('LMDBStorage', () => {
   }
 
   runBinaryAndLargeScanStorageConformance('LMDBStorage', { create: createStorage });
+  runBasicStorageContract('LMDBStorage', { create: createStorage });
 
   afterEach(() => {
     for (const cleanup of fixtureCleanups) {
       cleanup();
     }
     fixtureCleanups.length = 0;
-  });
-
-  it('get on empty storage returns null', async () => {
-    const storage = createStorage();
-    const result = await storage.get('nonexistent');
-    expect(result).toBeNull();
-    storage[Symbol.dispose]();
-  });
-
-  it('put then get returns same bytes', async () => {
-    const storage = createStorage();
-    const value = encode('hello');
-    await storage.put('key', value);
-    const result = await storage.get('key');
-    expect(result).toEqual(value);
-    storage[Symbol.dispose]();
-  });
-
-  it('put with same key overwrites previous value', async () => {
-    const storage = createStorage();
-    await storage.put('key', encode('first'));
-    await storage.put('key', encode('second'));
-    const result = await storage.get('key');
-    expect(decode(result!)).toBe('second');
-    storage[Symbol.dispose]();
-  });
-
-  it('delete removes key, subsequent get returns null', async () => {
-    const storage = createStorage();
-    await storage.put('key', encode('value'));
-    await storage.delete('key');
-    const result = await storage.get('key');
-    expect(result).toBeNull();
-    storage[Symbol.dispose]();
-  });
-
-  it('delete on nonexistent key is a no-op', async () => {
-    const storage = createStorage();
-    await storage.delete('nonexistent');
-    const result = await storage.get('nonexistent');
-    expect(result).toBeNull();
-    storage[Symbol.dispose]();
-  });
-
-  it('scan with prefix returns only matching keys, sorted lexicographically', async () => {
-    const storage = createStorage();
-    await storage.put('wf:b', encode('b'));
-    await storage.put('wf:a', encode('a'));
-    await storage.put('wf:c', encode('c'));
-    await storage.put('other:x', encode('x'));
-
-    const entries = await collect(storage.scan('wf:'));
-    expect(entries.map(([key]) => key)).toEqual(['wf:a', 'wf:b', 'wf:c']);
-    storage[Symbol.dispose]();
-  });
-
-  it('scan with limit returns at most N entries', async () => {
-    const storage = createStorage();
-    await storage.put('p:a', encode('a'));
-    await storage.put('p:b', encode('b'));
-    await storage.put('p:c', encode('c'));
-
-    const entries = await collect(storage.scan('p:', { limit: 2 }));
-    expect(entries).toHaveLength(2);
-    expect(entries.map(([key]) => key)).toEqual(['p:a', 'p:b']);
-    storage[Symbol.dispose]();
-  });
-
-  it('scan with reverse returns in reverse order', async () => {
-    const storage = createStorage();
-    await storage.put('p:a', encode('a'));
-    await storage.put('p:b', encode('b'));
-    await storage.put('p:c', encode('c'));
-
-    const entries = await collect(storage.scan('p:', { reverse: true }));
-    expect(entries.map(([key]) => key)).toEqual(['p:c', 'p:b', 'p:a']);
-    storage[Symbol.dispose]();
-  });
-
-  it('scan with gt/lt bounds', async () => {
-    const storage = createStorage();
-    await storage.put('p:a', encode('a'));
-    await storage.put('p:b', encode('b'));
-    await storage.put('p:c', encode('c'));
-    await storage.put('p:d', encode('d'));
-
-    const entries = await collect(storage.scan('p:', { gt: 'p:a', lt: 'p:d' }));
-    expect(entries.map(([key]) => key)).toEqual(['p:b', 'p:c']);
-    storage[Symbol.dispose]();
-  });
-
-  it('scan with gte/lte bounds', async () => {
-    const storage = createStorage();
-    await storage.put('p:a', encode('a'));
-    await storage.put('p:b', encode('b'));
-    await storage.put('p:c', encode('c'));
-    await storage.put('p:d', encode('d'));
-
-    const entries = await collect(storage.scan('p:', { gte: 'p:b', lte: 'p:c' }));
-    expect(entries.map(([key]) => key)).toEqual(['p:b', 'p:c']);
-    storage[Symbol.dispose]();
-  });
-
-  it('scan with empty prefix returns all keys', async () => {
-    const storage = createStorage();
-    await storage.put('alpha', encode('a'));
-    await storage.put('beta', encode('b'));
-    await storage.put('gamma', encode('c'));
-
-    const entries = await collect(storage.scan(''));
-    expect(entries.map(([key]) => key)).toEqual(['alpha', 'beta', 'gamma']);
-    storage[Symbol.dispose]();
-  });
-
-  it('batch with multiple puts: all keys exist after', async () => {
-    const storage = createStorage();
-    await storage.batch([
-      { type: 'put', key: 'a', value: encode('1') },
-      { type: 'put', key: 'b', value: encode('2') },
-      { type: 'put', key: 'c', value: encode('3') },
-    ]);
-
-    expect(await storage.get('a')).toEqual(encode('1'));
-    expect(await storage.get('b')).toEqual(encode('2'));
-    expect(await storage.get('c')).toEqual(encode('3'));
-    storage[Symbol.dispose]();
-  });
-
-  it('batch with mixed puts and deletes: correct final state', async () => {
-    const storage = createStorage();
-    await storage.put('keep', encode('keep'));
-    await storage.put('remove', encode('remove'));
-
-    await storage.batch([
-      { type: 'put', key: 'new', value: encode('new') },
-      { type: 'delete', key: 'remove' },
-    ]);
-
-    expect(await storage.get('keep')).toEqual(encode('keep'));
-    expect(await storage.get('remove')).toBeNull();
-    expect(await storage.get('new')).toEqual(encode('new'));
-    storage[Symbol.dispose]();
-  });
-
-  it('batch with empty array is a no-op', async () => {
-    const storage = createStorage();
-    await storage.put('key', encode('value'));
-    await storage.batch([]);
-    expect(await storage.get('key')).toEqual(encode('value'));
-    storage[Symbol.dispose]();
   });
 
   it('conditionalBatch refreshes the read snapshot before the next read', async () => {

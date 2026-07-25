@@ -31,65 +31,6 @@ runBinaryAndLargeScanStorageConformance('BunSQLiteStorage', {
 });
 
 describe('BunSQLiteStorage', () => {
-  it('delete on nonexistent key is a no-op', async () => {
-    const storage = new BunSQLiteStorage(':memory:');
-    await storage.delete('nonexistent');
-    // Should not throw; storage still works fine.
-    const result = await storage.get('nonexistent');
-    expect(result).toBeNull();
-    storage[Symbol.dispose]();
-  });
-
-  it('scan with gte/lte bounds', async () => {
-    const storage = new BunSQLiteStorage(':memory:');
-    await storage.put('p:a', encode('a'));
-    await storage.put('p:b', encode('b'));
-    await storage.put('p:c', encode('c'));
-    await storage.put('p:d', encode('d'));
-
-    const entries = await collect(storage.scan('p:', { gte: 'p:b', lte: 'p:c' }));
-    expect(entries.map(([key]) => key)).toEqual(['p:b', 'p:c']);
-    storage[Symbol.dispose]();
-  });
-
-  it('batch with multiple puts: all keys exist after', async () => {
-    const storage = new BunSQLiteStorage(':memory:');
-    await storage.batch([
-      { type: 'put', key: 'a', value: encode('1') },
-      { type: 'put', key: 'b', value: encode('2') },
-      { type: 'put', key: 'c', value: encode('3') },
-    ]);
-
-    expect(await storage.get('a')).toEqual(encode('1'));
-    expect(await storage.get('b')).toEqual(encode('2'));
-    expect(await storage.get('c')).toEqual(encode('3'));
-    storage[Symbol.dispose]();
-  });
-
-  it('batch with mixed puts and deletes: correct final state', async () => {
-    const storage = new BunSQLiteStorage(':memory:');
-    await storage.put('keep', encode('keep'));
-    await storage.put('remove', encode('remove'));
-
-    await storage.batch([
-      { type: 'put', key: 'new', value: encode('new') },
-      { type: 'delete', key: 'remove' },
-    ]);
-
-    expect(await storage.get('keep')).toEqual(encode('keep'));
-    expect(await storage.get('remove')).toBeNull();
-    expect(await storage.get('new')).toEqual(encode('new'));
-    storage[Symbol.dispose]();
-  });
-
-  it('batch with empty array is a no-op', async () => {
-    const storage = new BunSQLiteStorage(':memory:');
-    await storage.put('key', encode('value'));
-    await storage.batch([]);
-    expect(await storage.get('key')).toEqual(encode('value'));
-    storage[Symbol.dispose]();
-  });
-
   it('[Symbol.dispose] closes database', () => {
     const storage = new BunSQLiteStorage(':memory:');
     storage[Symbol.dispose]();
