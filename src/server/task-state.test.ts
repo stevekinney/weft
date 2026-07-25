@@ -342,6 +342,17 @@ describe('state transitions', () => {
     expect(await getExclusiveTaskState(storage, 'op-1')).toBe('queued');
   });
 
+  it('keeps retryable requeue distinct from terminal resolution', async () => {
+    const storage = new MemoryStorage();
+    await markInflight(storage, makeInflightRecord({ attempt: 2 }));
+
+    await transitionInflightToQueued(storage, 'op-1', makeQueuedRecord({ attempt: 3 }));
+
+    expect(await storage.get(KEYS.operationResolved('op-1'))).toBeNull();
+    expect(await storage.get(KEYS.operationQueued('op-1'))).not.toBeNull();
+    expect(await getExclusiveTaskState(storage, 'op-1')).toBe('queued');
+  });
+
   it('full lifecycle: queued → inflight → resolved', async () => {
     const storage = new MemoryStorage();
 

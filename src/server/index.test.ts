@@ -6857,12 +6857,28 @@ describe('retry policy respected on reassignment', () => {
       { label: 'initial max-attempt-expiry-op dispatch' },
     );
 
-    // Wait for the visibility timeout to expire and the scanner to run
-    const inflightKey = KEYS.operationInflight('max-attempt-expiry-op');
-    await waitFor(async () => (await storage.get(inflightKey)) === null, {
+    // Wait for the terminal resolution rather than the intermediate removal
+    // of the in-flight record, which also occurs before retryable requeue.
+    const operationId = 'max-attempt-expiry-op';
+    const inflightKey = KEYS.operationInflight(operationId);
+    const queuedKey = KEYS.operationQueued(operationId);
+    const resolvedKey = KEYS.operationResolved(operationId);
+    await waitFor(async () => (await storage.get(resolvedKey)) !== null, {
       timeoutMs: 1000,
-      label: 'max-attempt-expiry-op inflight record cleanup',
+      label: 'max-attempt-expiry-op terminal resolution',
     });
+
+    const resolved = decode((await storage.get(resolvedKey))!) as ResolvedRecord;
+    expect(resolved).toMatchObject({
+      operationId,
+      status: 'failed',
+      resolutionReason: 'max-attempts-exceeded',
+      activityName: 'charge',
+      queue: 'default',
+      attempt: 2,
+    });
+    expect(await storage.get(inflightKey)).toBeNull();
+    expect(await storage.get(queuedKey)).toBeNull();
 
     // The task should NOT be re-dispatched — only the initial dispatch should exist
     const taskMessages = received.filter(
@@ -6870,10 +6886,6 @@ describe('retry policy respected on reassignment', () => {
     );
     expect(taskMessages.length).toBe(1);
     expect(taskMessages[0]?.attempt).toBe(2);
-
-    // In-flight record should be cleaned up
-    const record = await storage.get(inflightKey);
-    expect(record).toBeNull();
 
     ws.close();
     await waitForRealTimersForTesting(50);
@@ -6905,19 +6917,31 @@ describe('retry policy respected on reassignment', () => {
     // Disconnect w1 — task should NOT be reassigned to w2 since maxAttempts reached
     ws1.close();
 
-    const inflightKey = KEYS.operationInflight('max-attempt-disconnect-op');
-    await waitFor(async () => (await storage.get(inflightKey)) === null, {
-      label: 'max-attempt-disconnect-op inflight record cleanup',
+    const operationId = 'max-attempt-disconnect-op';
+    const inflightKey = KEYS.operationInflight(operationId);
+    const queuedKey = KEYS.operationQueued(operationId);
+    const resolvedKey = KEYS.operationResolved(operationId);
+    await waitFor(async () => (await storage.get(resolvedKey)) !== null, {
+      label: 'max-attempt-disconnect-op terminal resolution',
     });
+
+    const resolved = decode((await storage.get(resolvedKey))!) as ResolvedRecord;
+    expect(resolved).toMatchObject({
+      operationId,
+      status: 'failed',
+      resolutionReason: 'max-attempts-exceeded',
+      activityName: 'charge',
+      queue: 'default',
+      workerId: 'w1',
+      attempt: 2,
+    });
+    expect(await storage.get(inflightKey)).toBeNull();
+    expect(await storage.get(queuedKey)).toBeNull();
 
     const taskMessages = received.filter(
       (m) => m.type === 'task' && m.operationId === 'max-attempt-disconnect-op',
     );
     expect(taskMessages.length).toBe(0);
-
-    // In-flight record should be cleaned up
-    const record = await storage.get(inflightKey);
-    expect(record).toBeNull();
 
     ws2.close();
     await waitForRealTimersForTesting(50);
