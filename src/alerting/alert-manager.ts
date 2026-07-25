@@ -14,10 +14,28 @@ import {
 } from '../core/events';
 import { parseDuration } from '../core/scheduler';
 import { CounterWindow, HistogramWindow } from './sliding-window';
-import type { AlertRule, AlertState, AlertingOptions } from './types';
+import type { AlertRule, AlertStateSnapshot, AlertingOptions } from './types';
 
 /** Periodic re-evaluation interval in milliseconds. */
 const TICK_INTERVAL_MS = 10_000;
+
+type MutableAlertState = {
+  rule: AlertRule;
+  status: AlertStateSnapshot['status'];
+  currentValue: number;
+  lastFiredAt?: number;
+  lastResolvedAt?: number;
+};
+
+function snapshotAlertState(state: MutableAlertState): AlertStateSnapshot {
+  return {
+    rule: { ...state.rule },
+    status: state.status,
+    currentValue: state.currentValue,
+    ...(state.lastFiredAt === undefined ? {} : { lastFiredAt: state.lastFiredAt }),
+    ...(state.lastResolvedAt === undefined ? {} : { lastResolvedAt: state.lastResolvedAt }),
+  };
+}
 
 /**
  * Event-driven alert manager that evaluates metric-based rules against sliding
@@ -49,7 +67,7 @@ const TICK_INTERVAL_MS = 10_000;
 export class AlertManager implements Disposable {
   #target: EventTarget;
   #options: AlertingOptions;
-  #states: AlertState[];
+  #states: MutableAlertState[];
   #windows: Map<number, CounterWindow | HistogramWindow>;
   #listeners: Array<{ type: string; handler: EventListener }>;
   #latestStorageSize: number;
@@ -64,7 +82,18 @@ export class AlertManager implements Disposable {
     startBackgroundTick = true,
   ) {
     this.#target = target;
-    this.#options = options;
+    this.#options = {
+      ...options,
+      rules: options.rules.map((rule) => ({ ...rule })),
+      ...(options.webhooks === undefined
+        ? {}
+        : {
+            webhooks: options.webhooks.map((webhook) => ({
+              ...webhook,
+              events: [...webhook.events],
+            })),
+          }),
+    };
     this.#getNow = getNow;
     this.#latestStorageSize = 0;
     this.#pendingWebhooks = new Set();
@@ -72,7 +101,7 @@ export class AlertManager implements Disposable {
 
     // Initialize states for each rule (all start idle)
     this.#states = [];
-    for (const rule of options.rules) {
+    for (const rule of this.#options.rules) {
       this.#states.push({
         rule,
         status: 'idle' as const,
@@ -82,8 +111,8 @@ export class AlertManager implements Disposable {
 
     // Create windows for rules that specify one
     this.#windows = new Map();
-    for (let i = 0; i < options.rules.length; i++) {
-      const rule = options.rules[i]!;
+    for (let i = 0; i < this.#options.rules.length; i++) {
+      const rule = this.#options.rules[i]!;
       const windowMs = rule.window ? parseDuration(rule.window) : 60_000; // default 1m
 
       if (rule.metric === 'workflow.failure_rate') {
@@ -262,14 +291,14 @@ export class AlertManager implements Disposable {
     }
   }
 
-  /** Get current state of all alert rules (for debugging/testing). */
-  get states(): readonly AlertState[] {
-    return this.#states;
+  /** Get a detached snapshot of all alert rules (for debugging/testing). */
+  get states(): readonly AlertStateSnapshot[] {
+    return this.#states.map(snapshotAlertState);
   }
 
-  /** Get the alert rules that are currently firing. */
-  get activeStates(): readonly AlertState[] {
-    return this.#states.filter((state) => state.status === 'firing');
+  /** Get detached snapshots of the alert rules that are currently firing. */
+  get activeStates(): readonly AlertStateSnapshot[] {
+    return this.#states.filter((state) => state.status === 'firing').map(snapshotAlertState);
   }
 
   [Symbol.dispose](): void {

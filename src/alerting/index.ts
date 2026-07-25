@@ -3,7 +3,7 @@ export type {
   AlertAction,
   AlertMetric,
   AlertRule,
-  AlertState,
+  AlertStateSnapshot,
   AlertStatus,
   AlertingOptions,
   WebhookTarget,

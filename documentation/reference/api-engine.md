@@ -366,20 +366,20 @@ details.
 ### `getActiveAlerts()`
 
 ```ts
-import { Engine, type AlertState } from '@lostgradient/weft';
+import { Engine, type AlertStateSnapshot } from '@lostgradient/weft';
 
 const engine = new Engine({
   alerts: {
     rules: [{ metric: 'storage.size', threshold: 1_000_000, action: 'log' }],
   },
 });
-const active: readonly AlertState[] = engine.getActiveAlerts();
+const active: readonly AlertStateSnapshot[] = engine.getActiveAlerts();
 void active;
 engine[Symbol.dispose]();
 ```
 
-Returns the alert rules that are currently firing in this engine process.
-The snapshot is in-memory and read-only; resolved alerts and any acknowledged
+Returns detached, deeply read-only snapshots of the alert rules that are
+currently firing in this engine process. Resolved alerts and any acknowledged
 state are not included because the alert manager does not retain an
 acknowledged state.
 

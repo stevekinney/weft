@@ -136,7 +136,8 @@ export type AlertingOptions = {
  *
  * Transitions from `'idle'` to `'firing'` when the metric exceeds the
  * threshold and back to `'idle'` once the metric drops below it again.
- * Read this off an {@link AlertState} object to see the current state of a rule.
+ * Read this off an {@link AlertStateSnapshot} object to see the current state
+ * of a rule.
  *
  * @example
  * ```ts
@@ -154,17 +155,18 @@ export type AlertingOptions = {
 export type AlertStatus = 'idle' | 'firing';
 
 /**
- * Runtime tracking state for a single {@link AlertRule} managed by
- * {@link AlertManager}.
+ * Detached, deeply read-only observation of a single alert rule's runtime
+ * state. The manager returns a fresh snapshot for every getter call, so
+ * changing it cannot affect alert evaluation.
  *
- * Users observe this shape via `AlertManager.states` to see the current
- * metric value, firing status, and timestamps of the last transition.  It is
- * created and owned by the manager — callers do not construct it directly.
+ * Users observe this shape via `AlertManager.states` or
+ * `Engine.getActiveAlerts()` to see the current metric value, firing status,
+ * and timestamps of the last transition.
  */
-export type AlertState = {
-  rule: AlertRule;
-  status: AlertStatus;
-  currentValue: number;
-  lastFiredAt?: number;
-  lastResolvedAt?: number;
+export type AlertStateSnapshot = {
+  readonly rule: Readonly<AlertRule>;
+  readonly status: AlertStatus;
+  readonly currentValue: number;
+  readonly lastFiredAt?: number;
+  readonly lastResolvedAt?: number;
 };

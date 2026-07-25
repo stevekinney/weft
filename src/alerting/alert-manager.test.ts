@@ -22,6 +22,77 @@ describe('AlertManager', () => {
     time = 1000;
   });
 
+  it('returns detached alert snapshots that cannot change evaluation', () => {
+    const options: AlertingOptions = {
+      rules: [{ metric: 'storage.size', threshold: 100, action: 'log' }],
+    };
+    const manager = new AlertManager(target, options, getNow, false);
+    const states = manager.states as unknown as Array<Record<string, unknown>>;
+    const state = states[0]!;
+
+    states.pop();
+    Reflect.set(state, 'status', 'firing');
+    Reflect.set(state, 'currentValue', 999);
+    Reflect.set(state['rule'] as object, 'threshold', 1_000);
+    Reflect.set(state['rule'] as object, 'action', 'webhook');
+
+    const fired: AlertFiredEvent[] = [];
+    target.addEventListener('alert:fired', (event) => {
+      fired.push(event as AlertFiredEvent);
+    });
+    target.dispatchEvent(new StorageSizeReportedEvent(100));
+
+    expect(fired).toHaveLength(1);
+    expect(fired[0]!.threshold).toBe(100);
+    expect(manager.states).toEqual([
+      {
+        rule: options.rules[0]!,
+        status: 'firing',
+        currentValue: 100,
+        lastFiredAt: 1000,
+      },
+    ]);
+    expect(manager.states).not.toBe(manager.states);
+    expect(manager.states[0]!.rule).not.toBe(options.rules[0]);
+
+    manager[Symbol.dispose]();
+  });
+
+  it('owns configured rules and detaches active snapshots', () => {
+    const rule: AlertingOptions['rules'][number] = {
+      metric: 'storage.size',
+      threshold: 100,
+      action: 'log',
+    };
+    const manager = new AlertManager(target, { rules: [rule] }, getNow, false);
+    rule.threshold = 1_000;
+    rule.action = 'webhook';
+
+    const fired: AlertFiredEvent[] = [];
+    const resolved: AlertResolvedEvent[] = [];
+    target.addEventListener('alert:fired', (event) => fired.push(event as AlertFiredEvent));
+    target.addEventListener('alert:resolved', (event) =>
+      resolved.push(event as AlertResolvedEvent),
+    );
+    target.dispatchEvent(new StorageSizeReportedEvent(100));
+
+    const activeStates = manager.activeStates as unknown as Array<Record<string, unknown>>;
+    activeStates.pop();
+    const activeState = manager.activeStates[0]!;
+    Reflect.set(activeState, 'status', 'idle');
+    Reflect.set(activeState['rule'] as object, 'threshold', 1_000);
+    Reflect.set(activeState['rule'] as object, 'action', 'webhook');
+    target.dispatchEvent(new StorageSizeReportedEvent(50));
+
+    expect(fired).toHaveLength(1);
+    expect(fired[0]!.threshold).toBe(100);
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]!.threshold).toBe(100);
+    expect(manager.activeStates).toHaveLength(0);
+
+    manager[Symbol.dispose]();
+  });
+
   describe('workflow.failure_rate', () => {
     it('fires AlertFiredEvent when failure rate exceeds threshold', () => {
       const options: AlertingOptions = {

@@ -1,4 +1,9 @@
-import { createMetricsCollectorExporter, Engine, workflow } from '@lostgradient/weft';
+import {
+  createMetricsCollectorExporter,
+  Engine,
+  type AlertStateSnapshot,
+  workflow,
+} from '@lostgradient/weft';
 import {
   serve,
   TaskQueue,
@@ -31,6 +36,13 @@ import {
 
 const packageRootEngine = new Engine();
 const packageRootPrometheusExporter = createMetricsCollectorExporter(undefined);
+declare const alertSnapshot: AlertStateSnapshot;
+// @ts-expect-error The mutable alert state type was removed from the public API.
+type RemovedAlertState = import('@lostgradient/weft').AlertState;
+// @ts-expect-error Alert snapshots are deeply read-only.
+alertSnapshot.rule.threshold = 10;
+// @ts-expect-error Alert snapshots are deeply read-only.
+alertSnapshot.status = 'idle';
 
 const packageRootServeOptions: ServeOptions = {
   engine: packageRootEngine,
