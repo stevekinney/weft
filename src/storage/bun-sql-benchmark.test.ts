@@ -26,31 +26,64 @@ function generateCheckpointValue(): Uint8Array {
  */
 const TARGET_WRITES_PER_SECOND =
   isConstrainedCodexRunner() || isGitHubActionsRunner() ? 5_000 : 20_000;
-const BATCH_WRITE_SAMPLE_SIZE = 3;
-const runSQLiteArchitectureBenchmark =
-  process.env['WEFT_SQLITE_ARCHITECTURE_BENCHMARK'] === '1' ? it : it.skip;
+const runArchitectureBenchmark = process.env['WEFT_SQLITE_ARCHITECTURE_BENCHMARK'] === '1';
+
+type SQLiteBenchmarkWorkload = {
+  batchWriteBatchSize: number;
+  batchWriteSampleSize: number;
+  batchWriteTotal: number;
+  individualPutTotal: number;
+  mixedOperationBatchSize: number;
+  mixedOperationTotal: number;
+};
+
+const INTEGRITY_WORKLOAD: SQLiteBenchmarkWorkload = {
+  batchWriteBatchSize: 20,
+  batchWriteSampleSize: 1,
+  batchWriteTotal: 100,
+  individualPutTotal: 100,
+  mixedOperationBatchSize: 20,
+  mixedOperationTotal: 100,
+};
+
+const ARCHITECTURE_BENCHMARK_WORKLOAD: SQLiteBenchmarkWorkload = {
+  batchWriteBatchSize: 500,
+  batchWriteSampleSize: 3,
+  batchWriteTotal: 25_000,
+  individualPutTotal: 10_000,
+  mixedOperationBatchSize: 1_000,
+  mixedOperationTotal: 50_000,
+};
+
+export function selectSQLiteBenchmarkWorkload(
+  architectureBenchmark: boolean,
+): SQLiteBenchmarkWorkload {
+  return architectureBenchmark ? ARCHITECTURE_BENCHMARK_WORKLOAD : INTEGRITY_WORKLOAD;
+}
+
+const integrityWorkload = selectSQLiteBenchmarkWorkload(false);
+const benchmarkWorkload = selectSQLiteBenchmarkWorkload(runArchitectureBenchmark);
+const runSQLiteArchitectureBenchmark = runArchitectureBenchmark ? it : it.skip;
 
 function median(values: number[]): number {
   const sorted = values.toSorted((left, right) => left - right);
   return sorted[Math.floor(sorted.length / 2)]!;
 }
 
-const BATCH_WRITE_TOTAL = 25_000;
-const BATCH_WRITE_BATCH_SIZE = 500;
-
 /**
- * Run the shared batch-write workload used by both benchmark call sites and
- * return its measured throughput. This owns the workload so the two benchmarks
- * cannot drift: a 100-write warmup (excluded from timing) primes WAL mode and
- * prepared statements; every sample's batches are pre-generated before any
- * timing starts; `performance.now()` brackets only the `storage.batch` calls;
- * and each batch object is consumed exactly once. Both call sites measure the
- * same total writes, batch size, sample count, and `wf:{sample}:{n}:ckpt` key
- * pattern.
+ * Run the selected batch-write workload and return its measured throughput. A
+ * 100-write warmup (excluded from timing) primes WAL mode and prepared
+ * statements; every sample's batches are pre-generated before any timing
+ * starts; `performance.now()` brackets only the `storage.batch` calls; and
+ * each batch object is consumed exactly once.
  */
 async function runBatchWriteBenchmark(
   storage: BunSQLiteStorage,
   value: Uint8Array,
+  batchWriteWorkload: Pick<
+    SQLiteBenchmarkWorkload,
+    'batchWriteBatchSize' | 'batchWriteSampleSize' | 'batchWriteTotal'
+  >,
 ): Promise<{ medianWritesPerSecond: number; writesPerSecondSamples: number[] }> {
   // Warm up: small batch to trigger WAL mode and prime prepared statements.
   await storage.batch(
@@ -61,14 +94,17 @@ async function runBatchWriteBenchmark(
     })),
   );
 
-  const totalWrites = BATCH_WRITE_TOTAL;
-  const batchSize = BATCH_WRITE_BATCH_SIZE;
+  const {
+    batchWriteBatchSize: batchSize,
+    batchWriteSampleSize,
+    batchWriteTotal: totalWrites,
+  } = batchWriteWorkload;
   const batches = totalWrites / batchSize;
 
   // Pre-generate each sample's batch operations so timing reflects storage
   // throughput rather than key generation or object allocation.
   const sampleBatches: BatchOperation[][][] = Array.from(
-    { length: BATCH_WRITE_SAMPLE_SIZE },
+    { length: batchWriteSampleSize },
     (_sample, sampleIndex) =>
       Array.from({ length: batches }, (_batch, batchIndex) =>
         Array.from({ length: batchSize }, (_item, itemIndex) => ({
@@ -115,6 +151,12 @@ describe('BunSQLiteStorage benchmark', () => {
     fixtureCleanups.length = 0;
   });
 
+  it('selects integrity workloads by default and full workloads only when opted in', () => {
+    expect(selectSQLiteBenchmarkWorkload(false)).toEqual(INTEGRITY_WORKLOAD);
+    expect(selectSQLiteBenchmarkWorkload(true)).toEqual(ARCHITECTURE_BENCHMARK_WORKLOAD);
+    expect(selectSQLiteBenchmarkWorkload(false)).not.toEqual(selectSQLiteBenchmarkWorkload(true));
+  });
+
   it('records batch write throughput and verifies stored data', async () => {
     const storage = createStorage();
     const value = generateCheckpointValue();
@@ -122,14 +164,15 @@ describe('BunSQLiteStorage benchmark', () => {
     const { medianWritesPerSecond, writesPerSecondSamples } = await runBatchWriteBenchmark(
       storage,
       value,
+      integrityWorkload,
     );
 
     console.log(
       [
         `\n  SQLite batch write benchmark:`,
-        `    Total writes:    ${BATCH_WRITE_TOTAL.toLocaleString()}`,
+        `    Total writes:    ${integrityWorkload.batchWriteTotal.toLocaleString()}`,
         `    Value size:      ${value.byteLength} bytes`,
-        `    Batch size:      ${BATCH_WRITE_BATCH_SIZE.toLocaleString()}`,
+        `    Batch size:      ${integrityWorkload.batchWriteBatchSize.toLocaleString()}`,
         `    Samples:         ${writesPerSecondSamples.map((sample) => Math.round(sample).toLocaleString()).join(', ')}`,
         `    Median writes/sec:${medianWritesPerSecond.toLocaleString()}`,
         `    Target:          ${TARGET_WRITES_PER_SECOND.toLocaleString()}`,
@@ -140,12 +183,12 @@ describe('BunSQLiteStorage benchmark', () => {
     expect(medianWritesPerSecond).toBeGreaterThan(0);
 
     // Verify data integrity: spot-check a few entries from the final sample.
-    const lastSamplePrefix = `${BATCH_WRITE_SAMPLE_SIZE - 1}`;
+    const lastSamplePrefix = `${integrityWorkload.batchWriteSampleSize - 1}`;
     const first = await storage.get(`wf:${lastSamplePrefix}:0000000000:ckpt`);
     expect(first).toEqual(value);
 
     const last = await storage.get(
-      `wf:${lastSamplePrefix}:${String(BATCH_WRITE_TOTAL - 1).padStart(10, '0')}:ckpt`,
+      `wf:${lastSamplePrefix}:${String(integrityWorkload.batchWriteTotal - 1).padStart(10, '0')}:ckpt`,
     );
     expect(last).toEqual(value);
 
@@ -158,7 +201,11 @@ describe('BunSQLiteStorage benchmark', () => {
       const storage = createStorage();
       const value = generateCheckpointValue();
 
-      const { medianWritesPerSecond } = await runBatchWriteBenchmark(storage, value);
+      const { medianWritesPerSecond } = await runBatchWriteBenchmark(
+        storage,
+        value,
+        selectSQLiteBenchmarkWorkload(true),
+      );
       expect(medianWritesPerSecond).toBeGreaterThanOrEqual(TARGET_WRITES_PER_SECOND);
 
       storage[Symbol.dispose]();
@@ -172,7 +219,7 @@ describe('BunSQLiteStorage benchmark', () => {
     // Warm up
     await storage.put('warmup', value);
 
-    const totalWrites = 10_000;
+    const totalWrites = integrityWorkload.individualPutTotal;
 
     // Pre-generate keys
     const keys = Array.from(
@@ -211,24 +258,26 @@ describe('BunSQLiteStorage benchmark', () => {
     async () => {
       const storage = createStorage();
       const value = generateCheckpointValue();
+      const totalOperations = benchmarkWorkload.mixedOperationTotal;
+      const batchSize = benchmarkWorkload.mixedOperationBatchSize;
+      const batches = totalOperations / batchSize;
 
       // Seed data to delete
-      const seedOperations: BatchOperation[] = Array.from({ length: 10_000 }, (_, index) => ({
-        type: 'put' as const,
-        key: `seed:${String(index).padStart(10, '0')}`,
-        value,
-      }));
+      const seedOperations: BatchOperation[] = Array.from(
+        { length: totalOperations / 5 },
+        (_, index) => ({
+          type: 'put' as const,
+          key: `seed:${String(index).padStart(10, '0')}`,
+          value,
+        }),
+      );
       await storage.batch(seedOperations);
-
-      const totalOperations = 50_000;
-      const batchSize = 1_000;
-      const batches = totalOperations / batchSize;
 
       // Pre-generate mixed operations: 80% puts, 20% deletes
       const allBatches: BatchOperation[][] = Array.from({ length: batches }, (_b, batchIndex) =>
         Array.from({ length: batchSize }, (_i, itemIndex) => {
           const globalIndex = batchIndex * batchSize + itemIndex;
-          if (globalIndex % 5 === 0 && globalIndex / 5 < 10_000) {
+          if (globalIndex % 5 === 0 && globalIndex / 5 < totalOperations / 5) {
             return {
               type: 'delete' as const,
               key: `seed:${String(globalIndex / 5).padStart(10, '0')}`,
