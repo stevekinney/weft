@@ -125,11 +125,25 @@ export async function drainQueuedInlineWorkflowStarts(
     passes < maxPasses
   ) {
     passes += 1;
+    const workflowIds = internals.queuedInlineWorkflowStarts.map((start) => start.workflowId);
     // Swallow per-pass rejection so a single failing start cannot reject the
     // whole drain — which, called from asyncDispose, would otherwise skip the
     // synchronous teardown and leave the engine half-disposed. Mirrors the
     // scheduled-flush path's swallowPromiseRejection wrapping.
     await callbacks.swallowPromiseRejection(flushQueuedInlineWorkflowStarts(internals, callbacks));
+
+    // startWorkflowExecution() schedules the inline generator advance without
+    // awaiting it. Async disposal must wait for that first advance before
+    // releasing ownership; otherwise a successor can recover while the outgoing
+    // first turn is still running user code. The flush already awaits pending
+    // update processing. Do not await the emitted operation turn here: durable
+    // waits such as ctx.sleep() intentionally keep that turn pending.
+    for (const workflowId of workflowIds) {
+      const pendingAdvance = internals.inlineStrategy?.waitForWorkflowAdvance(workflowId);
+      if (pendingAdvance !== undefined) {
+        await callbacks.swallowPromiseRejection(pendingAdvance);
+      }
+    }
   }
   // The `passes < maxPasses` bound above is a backstop against a pathological
   // self-enqueueing run spinning teardown forever; in normal operation the abort

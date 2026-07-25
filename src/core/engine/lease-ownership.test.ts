@@ -788,7 +788,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     storage[Symbol.dispose]?.();
   });
 
-  it('shares a synchronous release started while shutdown drains queued work', async () => {
+  it('defers synchronous disposal release while shutdown drains queued work', async () => {
     const storage = new MemoryStorage();
     const drainStarted = Promise.withResolvers<void>();
     const finishDrain = Promise.withResolvers<void>();
@@ -807,7 +807,11 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     const originalConditionalBatch = storage.conditionalBatch.bind(storage);
     let releaseCalls = 0;
     storage.conditionalBatch = async (conditions, operations) => {
-      if (operations.some((operation) => operation.type === 'delete')) {
+      if (
+        operations.some(
+          (operation) => operation.type === 'delete' && operation.key === KEYS.leaseHolder(),
+        )
+      ) {
         releaseCalls += 1;
         releaseStarted.resolve();
         await releaseStorage.promise;
@@ -819,8 +823,11 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     const shutdown = engine.shutdown();
     await drainStarted.promise;
     engine[Symbol.dispose]();
-    await releaseStarted.promise;
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(releaseCalls).toBe(0);
+
     finishDrain.resolve();
+    await releaseStarted.promise;
     releaseStorage.resolve();
 
     await expect(shutdown).resolves.toBe(true);

@@ -2042,6 +2042,14 @@ export class Engine<
    * via `await using`.
    */
   [Symbol.dispose](): void {
+    // Async disposal owns the complete drain → teardown → lease-release
+    // sequence once it starts. A concurrent synchronous disposal must not abort
+    // that drain or release its holder early.
+    if (this.#asyncDisposeResult !== null) {
+      void this.#asyncDisposeResult;
+      return;
+    }
+
     // Capture the lease manager before disposeEngine() detaches it (disposeEngine
     // only stops renewals — it does NOT release the holder, so each disposal path
     // releases exactly once). Fire the holder release best-effort: synchronous
