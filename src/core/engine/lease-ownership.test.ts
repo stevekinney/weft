@@ -23,6 +23,7 @@ import {
 } from './index.ts';
 import { getInternals } from './internals.ts';
 import { createLeaseHolderReadProbeStorage } from './lease.test-support.ts';
+import { decodeWorkflowState } from './validation.ts';
 
 const pingWorkflow = workflow({ name: 'ping' }).execute(async function* () {
   return 'pong';
@@ -892,6 +893,64 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     await expect(engine.shutdown()).resolves.toBe(true);
     expect(signalObserved).toBe(true);
     expect(await readHolder(storage)).toBeNull();
+    storage[Symbol.dispose]?.();
+  });
+
+  it('waits for each cooperative queued turn when a sibling ignores abort', async () => {
+    const storage = new MemoryStorage();
+    const releaseNonCooperativeBody = Promise.withResolvers<void>();
+    const nonCooperativeWorkflow = workflow({ name: 'non-cooperative-sibling' }).execute(
+      async function* () {
+        await releaseNonCooperativeBody.promise;
+        return 'stopped';
+      },
+    );
+    const cooperativeWorkflow = workflow({ name: 'cooperative-sibling' }).execute(
+      async function* (ctx) {
+        await new Promise<void>((resolve) => {
+          if (ctx.signal.aborted) {
+            resolve();
+            return;
+          }
+          ctx.signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+        return 'stopped';
+      },
+    );
+    const engine = await Engine.create({
+      storage,
+      workflows: {
+        'non-cooperative-sibling': nonCooperativeWorkflow,
+        'cooperative-sibling': cooperativeWorkflow,
+      },
+      ownership: 'lease',
+    });
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+    let cooperativeStatusBeforeRelease: string | undefined;
+    storage.conditionalBatch = async (conditions, operations) => {
+      if (
+        operations.some(
+          (operation) => operation.type === 'delete' && operation.key === KEYS.leaseHolder(),
+        )
+      ) {
+        const stateBytes = await storage.get(KEYS.workflow('queued-cooperative-sibling'));
+        cooperativeStatusBeforeRelease =
+          stateBytes === null ? undefined : decodeWorkflowState(stateBytes).status;
+      }
+      return originalConditionalBatch(conditions, operations);
+    };
+
+    await engine.start('non-cooperative-sibling', null, {
+      id: 'queued-non-cooperative-sibling',
+    });
+    await engine.start('cooperative-sibling', null, { id: 'queued-cooperative-sibling' });
+
+    await expect(engine.shutdown()).resolves.toBe(true);
+    expect(cooperativeStatusBeforeRelease).toBe('completed');
+    expect(await readHolder(storage)).toBeNull();
+
+    releaseNonCooperativeBody.resolve();
+    await new Promise((resolve) => setImmediate(resolve));
     storage[Symbol.dispose]?.();
   });
 

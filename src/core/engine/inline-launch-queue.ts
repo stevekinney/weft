@@ -15,12 +15,19 @@ async function yieldQueuedShutdownAdvanceOpportunity(): Promise<void> {
   });
 }
 
-async function settleQueuedShutdownWork(pendingWork: Promise<unknown>[]): Promise<boolean> {
-  if (pendingWork.length === 0) return true;
-  return Promise.race([
-    Promise.all(pendingWork).then(() => true),
-    yieldQueuedShutdownAdvanceOpportunity().then(() => false),
-  ]);
+async function settleQueuedShutdownWork(
+  pendingWork: Array<{ workflowId: string; promise: Promise<unknown> | undefined }>,
+): Promise<string[]> {
+  if (pendingWork.length === 0) return [];
+  const opportunityElapsed = yieldQueuedShutdownAdvanceOpportunity().then(() => false);
+  const results = await Promise.all(
+    pendingWork.map(async ({ workflowId, promise }) => {
+      if (promise === undefined) return workflowId;
+      const settled = await Promise.race([promise.then(() => true), opportunityElapsed]);
+      return settled ? workflowId : null;
+    }),
+  );
+  return results.filter((workflowId): workflowId is string => workflowId !== null);
 }
 
 /** Queue a new inline workflow start and schedule a flush if one is not already scheduled. */
@@ -154,17 +161,25 @@ export async function drainQueuedInlineWorkflowStarts(
     // settle, but never let an arbitrary promise that ignores ctx.signal hold
     // disposal and lease release indefinitely. Pending updates are deliberately
     // left durable for a successor when shutdown starts these aborted turns.
-    const pendingAdvances = workflowIds.flatMap((workflowId) => {
+    const pendingAdvances = workflowIds.map((workflowId) => {
       const pendingAdvance = internals.inlineStrategy?.waitForWorkflowAdvance(workflowId);
-      return pendingAdvance === undefined
-        ? []
-        : [callbacks.swallowPromiseRejection(pendingAdvance)];
+      return {
+        workflowId,
+        promise:
+          pendingAdvance === undefined
+            ? undefined
+            : callbacks.swallowPromiseRejection(pendingAdvance),
+      };
     });
-    const advancesSettled = await settleQueuedShutdownWork(pendingAdvances);
-    if (advancesSettled) {
-      const pendingTurns = workflowIds.flatMap((workflowId) => {
+    const settledWorkflowIds = await settleQueuedShutdownWork(pendingAdvances);
+    if (settledWorkflowIds.length > 0) {
+      const pendingTurns = settledWorkflowIds.map((workflowId) => {
         const pendingTurn = internals.inlineStrategy?.waitForWorkflowTurn(workflowId);
-        return pendingTurn === undefined ? [] : [callbacks.swallowPromiseRejection(pendingTurn)];
+        return {
+          workflowId,
+          promise:
+            pendingTurn === undefined ? undefined : callbacks.swallowPromiseRejection(pendingTurn),
+        };
       });
       await settleQueuedShutdownWork(pendingTurns);
     }
