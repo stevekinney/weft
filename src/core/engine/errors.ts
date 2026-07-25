@@ -236,6 +236,31 @@ export class EngineDisposedError extends WeftError<'EngineDisposedError'> {
 }
 
 /**
+ * Thrown when queued inline workflow draining fails during asynchronous engine
+ * disposal. The engine is still fully torn down, and `leaseReleased` reports
+ * whether the final fenced lease delete committed. The original drain failure
+ * is available as `cause`.
+ *
+ * @example
+ * ```ts
+ * import { EngineDisposalError } from '@lostgradient/weft';
+ *
+ * function releaseSucceeded(error: unknown): boolean {
+ *   return error instanceof EngineDisposalError && error.leaseReleased;
+ * }
+ * void releaseSucceeded;
+ * ```
+ */
+export class EngineDisposalError extends WeftError<'EngineDisposalError'> {
+  readonly leaseReleased: boolean;
+
+  constructor(cause: unknown, leaseReleased: boolean) {
+    super('EngineDisposalError', 'Engine disposal failed while draining queued work', { cause });
+    this.leaseReleased = leaseReleased;
+  }
+}
+
+/**
  * Thrown by engine APIs that need a workflow to be present in storage but
  * cannot find one with the given ID. Inspect `workflowId` to identify the
  * missing record.

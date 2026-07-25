@@ -32,6 +32,7 @@ export type WeftErrorCode =
   | 'WorkflowTypeNotRegisteredForRecoveryError'
   | 'EngineCreateNameMismatchError'
   | 'EngineDisposedError'
+  | 'EngineDisposalError'
   | 'WorkflowNotFoundError'
   | 'WorkflowNotRegisteredError'
   | 'WorkflowConcurrencyLimitExceededError'
@@ -104,6 +105,7 @@ const publicWeftErrorCodeMap = {
   WorkflowTypeNotRegisteredForRecoveryError: true,
   EngineCreateNameMismatchError: true,
   EngineDisposedError: true,
+  EngineDisposalError: true,
   WorkflowNotFoundError: true,
   WorkflowNotRegisteredError: true,
   WorkflowConcurrencyLimitExceededError: true,

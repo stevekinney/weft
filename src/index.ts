@@ -51,6 +51,7 @@ export {
   ENGINE_LEASE_SYNCHRONOUS_DISPOSE_WARNING_NAME,
   Engine,
   EngineCreateNameMismatchError,
+  EngineDisposalError,
   EngineDisposedError,
   EngineLeaseAcquisitionTimeoutError,
   EngineLeaseCorruptedError,

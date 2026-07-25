@@ -483,7 +483,7 @@ import { Engine } from '@lostgradient/weft';
 const engine = new Engine();
 process.on('SIGTERM', () => {
   void engine.shutdown().then(
-    () => process.exit(0),
+    (leaseReleased) => process.exit(leaseReleased ? 0 : 1),
     () => process.exit(1),
   );
 });

@@ -596,7 +596,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     storage[Symbol.dispose]?.();
   });
 
-  it('reports a failed lease release from async dispose without rejecting', async () => {
+  it('reports a failed lease release from shutdown without rejecting', async () => {
     const storage = new MemoryStorage();
     const engine = await Engine.create({
       storage,
@@ -616,6 +616,81 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     }
   });
 
+  it('reports lease release outcome when shutdown drain fails', async () => {
+    const storage = new MemoryStorage();
+    const engine = await Engine.create({
+      storage,
+      workflows: { ping: pingWorkflow },
+      ownership: 'lease',
+    });
+    const internals = getInternals(engine);
+    const drainError = new Error('drain failed');
+    let firstRead = true;
+    let queuedStarts = internals.queuedInlineWorkflowStarts;
+    Object.defineProperty(internals, 'queuedInlineWorkflowStarts', {
+      configurable: true,
+      get: () => {
+        if (firstRead) {
+          firstRead = false;
+          throw drainError;
+        }
+        return queuedStarts;
+      },
+      set: (value: typeof queuedStarts) => {
+        queuedStarts = value;
+      },
+    });
+
+    await expect(engine.shutdown()).rejects.toMatchObject({
+      name: 'EngineDisposalError',
+      cause: drainError,
+      leaseReleased: true,
+    });
+    expect(internals.disposed).toBe(true);
+    storage[Symbol.dispose]?.();
+  });
+
+  it('reports a failed lease release when shutdown drain fails', async () => {
+    const storage = new MemoryStorage();
+    const engine = await Engine.create({
+      storage,
+      workflows: { ping: pingWorkflow },
+      ownership: 'lease',
+    });
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+    storage.conditionalBatch = async () => {
+      throw new Error('storage offline');
+    };
+    const internals = getInternals(engine);
+    const drainError = new Error('drain failed');
+    let firstRead = true;
+    let queuedStarts = internals.queuedInlineWorkflowStarts;
+    Object.defineProperty(internals, 'queuedInlineWorkflowStarts', {
+      configurable: true,
+      get: () => {
+        if (firstRead) {
+          firstRead = false;
+          throw drainError;
+        }
+        return queuedStarts;
+      },
+      set: (value: typeof queuedStarts) => {
+        queuedStarts = value;
+      },
+    });
+
+    try {
+      await expect(engine.shutdown()).rejects.toMatchObject({
+        name: 'EngineDisposalError',
+        cause: drainError,
+        leaseReleased: false,
+      });
+    } finally {
+      storage.conditionalBatch = originalConditionalBatch;
+      storage[Symbol.dispose]?.();
+    }
+  });
+
   it('shutdown durably releases the holder key', async () => {
     const storage = new BunSQLiteStorage(':memory:');
     const engine = await Engine.create({
@@ -628,5 +703,42 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     expect(await readHolder(storage)).toBeNull();
     expect(await readEpoch(storage)).toBe(1);
     storage[Symbol.dispose]?.();
+  });
+
+  it('shares one shutdown release result across concurrent callers', async () => {
+    const storage = new MemoryStorage();
+    const engine = await Engine.create({
+      storage,
+      workflows: { ping: pingWorkflow },
+      ownership: 'lease',
+    });
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+    let releaseCalls = 0;
+    storage.conditionalBatch = async (conditions, operations) => {
+      if (operations.some((operation) => operation.type === 'delete')) releaseCalls += 1;
+      return originalConditionalBatch(conditions, operations);
+    };
+
+    const results = await Promise.all([engine.shutdown(), engine.shutdown()]);
+
+    expect(results).toEqual([true, true]);
+    expect(releaseCalls).toBe(1);
+    storage[Symbol.dispose]?.();
+  });
+
+  it('preserves an asyncDispose override when shutdown is called concurrently', async () => {
+    let overrideCalls = 0;
+    class OverrideEngine extends Engine {
+      override async [Symbol.asyncDispose](): Promise<void> {
+        overrideCalls += 1;
+        await super[Symbol.asyncDispose]();
+      }
+    }
+
+    const engine = new OverrideEngine();
+    const results = await Promise.all([engine.shutdown(), engine.shutdown()]);
+
+    expect(results).toEqual([true, true]);
+    expect(overrideCalls).toBe(1);
   });
 });

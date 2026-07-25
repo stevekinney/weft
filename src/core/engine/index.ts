@@ -168,6 +168,7 @@ import {
 import type { EngineStateNamespace } from './engine-state-namespace.ts';
 import {
   EngineCreateNameMismatchError,
+  EngineDisposalError,
   EngineDisposedError,
   StartOrSignalConflictError,
 } from './errors.ts';
@@ -305,6 +306,7 @@ export {
   BulkDeleteRequiresTerminalWorkflowsError,
   BulkOperationConfirmationError,
   EngineCreateNameMismatchError,
+  EngineDisposalError,
   EngineDisposedError,
   IdempotencyKeyPurgedError,
   PersistedDataIncompatibleError,
@@ -442,6 +444,9 @@ export class Engine<
   extends EventTarget
   implements Disposable, AsyncDisposable, TypedEventTarget<WeftEventMap>
 {
+  #asyncDisposeResult: Promise<boolean> | null = null;
+  #shutdownResult: Promise<boolean> | null = null;
+
   /**
    * Construct and register an engine in one step. Activities are registered
    * before workflows. Recovery runs by default after all definitions are
@@ -2003,7 +2008,13 @@ export class Engine<
    * completes.
    */
   async shutdown(): Promise<boolean> {
-    return this.#disposeAsyncWithLeaseResult();
+    if (this.#shutdownResult === null) {
+      this.#shutdownResult = (async () => {
+        await this[Symbol.asyncDispose]();
+        return (await this.#asyncDisposeResult) ?? true;
+      })();
+    }
+    return this.#shutdownResult;
   }
 
   /**
@@ -2054,8 +2065,11 @@ export class Engine<
       // LAST (see below).
       const leaseManager = getInternals(this).leaseManager;
       let leaseReleased = true;
+      let drainFailure: { error: unknown } | null = null;
       try {
         await drainQueuedInlineWorkflowStartsForEngine(this);
+      } catch (error) {
+        drainFailure = { error };
       } finally {
         // Call disposeEngine DIRECTLY rather than this[Symbol.dispose](): the sync
         // path fires a best-effort release, which would double-release and race the
@@ -2082,6 +2096,9 @@ export class Engine<
         // acquire's own `disposed`-branch already released.
         leaseReleased = (await leaseManager?.release()) ?? true;
       }
+      if (drainFailure !== null) {
+        throw new EngineDisposalError(drainFailure.error, leaseReleased);
+      }
       return leaseReleased;
     }
     this[Symbol.dispose]();
@@ -2089,7 +2106,10 @@ export class Engine<
   }
 
   async [Symbol.asyncDispose](): Promise<void> {
-    await this.#disposeAsyncWithLeaseResult();
+    if (this.#asyncDisposeResult === null) {
+      this.#asyncDisposeResult = this.#disposeAsyncWithLeaseResult();
+    }
+    await this.#asyncDisposeResult;
   }
   get storage(): WeftStorage {
     return getInternals(this).storage;
