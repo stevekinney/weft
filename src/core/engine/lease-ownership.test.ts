@@ -741,6 +741,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
         releaseStarted.resolve();
         await releaseStorage.promise;
       }
+      if (operations.some((operation) => operation.type === 'delete')) return false;
       return originalConditionalBatch(conditions, operations);
     };
 
@@ -749,8 +750,8 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     const shutdown = engine.shutdown();
     releaseStorage.resolve();
 
-    await expect(shutdown).resolves.toBe(true);
-    expect(await readHolder(storage)).toBeNull();
+    await expect(shutdown).resolves.toBe(false);
+    expect(await readHolder(storage)).not.toBeNull();
     storage[Symbol.dispose]?.();
   });
 
