@@ -32,6 +32,8 @@ const ERROR_UNION_SOURCES = [
   { relativePath: 'src/core/weft-error.ts', unionName: 'WeftErrorCode' },
   { relativePath: 'src/core/fault-code.ts', unionName: 'FaultCode' },
 ] as const;
+const CURRENT_REFERENCE_ROOT = 'documentation/reference';
+const REMOVED_REFERENCE_NAMES = ['WorkflowRegistration'] as const;
 
 type VerificationOptions = {
   repositoryRoot?: string;
@@ -344,6 +346,24 @@ export function collectErrorReferenceFindings(repositoryRoot = REPOSITORY_ROOT):
   return findings;
 }
 
+export function collectRemovedReferenceFindings(files: DocumentationFile[]): Finding[] {
+  const findings: Finding[] = [];
+  for (const file of files) {
+    if (!file.relativePath.startsWith(`${CURRENT_REFERENCE_ROOT}/`)) continue;
+    for (const removedName of REMOVED_REFERENCE_NAMES) {
+      for (const [index, line] of file.text.split('\n').entries()) {
+        if (!line.includes(removedName)) continue;
+        findings.push({
+          file: file.relativePath,
+          line: index + 1,
+          message: `Removed ${removedName} must not appear in current reference documentation; use the workflow builder definition instead.`,
+        });
+      }
+    }
+  }
+  return findings;
+}
+
 export function collectBunClaimFindings(
   files: DocumentationFile[],
   minimumBunVersion: string,
@@ -419,6 +439,7 @@ export function verifyDocumentation(options: VerificationOptions = {}): {
     ...collectBunClaimFindings(files, minimumBunVersion),
     ...collectWorkflowBunVersionFindings(minimumBunVersion, repositoryRoot),
     ...collectErrorReferenceFindings(repositoryRoot),
+    ...collectRemovedReferenceFindings(files),
   ];
 
   return { filesChecked: files.length, findings };
@@ -440,7 +461,7 @@ export function runCli(repositoryRoot = REPOSITORY_ROOT, cliConsole: CliConsole 
   }
 
   cliConsole.log(
-    `verify-documentation: checked ${filesChecked} Markdown files, local links, anchors, Bun version claims, workflow Bun pins, and error-code references.`,
+    `verify-documentation: checked ${filesChecked} Markdown files, local links, anchors, Bun version claims, workflow Bun pins, error-code references, and removed reference declarations.`,
   );
   return 0;
 }

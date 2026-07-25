@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 
 import {
   collectErrorReferenceFindings,
+  collectRemovedReferenceFindings,
   parseMinimumBunVersion,
   runCli,
   runMain,
@@ -82,6 +83,34 @@ describe('verifyDocumentation', () => {
       line: 3,
       message: 'Broken local documentation link: missing.md',
     });
+  });
+
+  it('rejects removed interfaces from current reference documentation', async () => {
+    const repositoryRoot = await createFixtureRepository({
+      'documentation/reference/types.md':
+        '### `WorkflowRegistration`\n\ninterface WorkflowRegistration {}\n',
+    });
+
+    const result = verifyDocumentation({ repositoryRoot });
+
+    expect(result.findings).toContainEqual({
+      file: 'documentation/reference/types.md',
+      line: 1,
+      message:
+        'Removed WorkflowRegistration must not appear in current reference documentation; use the workflow builder definition instead.',
+    });
+  });
+
+  it('keeps historical references outside the current reference inventory', () => {
+    expect(
+      collectRemovedReferenceFindings([
+        {
+          absolutePath: '/tmp/CHANGELOG.md',
+          relativePath: 'CHANGELOG.md',
+          text: 'WorkflowRegistration was removed.',
+        },
+      ]),
+    ).toEqual([]);
   });
 
   it('validates duplicate heading anchors and ignores links inside fenced code blocks', async () => {

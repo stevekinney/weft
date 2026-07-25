@@ -317,20 +317,6 @@ interface WorkflowAtomicState<T> {
 }
 ```
 
-### `WorkflowRegistration`
-
-```ts partial
-interface WorkflowRegistration<TInput = unknown, TOutput = unknown> {
-  version?: string;
-  description?: string;
-  tags?: ReadonlyArray<string>;
-  inputSchema?: DefinitionSchema<unknown, TInput>;
-  outputSchema?: DefinitionSchema<unknown, TOutput>;
-  handler: WorkflowFunction<TInput, TOutput>;
-  searchAttributes?: SearchAttributeSchema;
-}
-```
-
 ### `RegisteredWorkflowDefinition`
 
 Read-only metadata returned by engine workflow-definition introspection.

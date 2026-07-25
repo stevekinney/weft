@@ -745,22 +745,6 @@ type WorkflowFunction<TInput = unknown, TOutput = unknown> = (
 
 See also `StepWorkflowFunction` in [types.md](./types.md) — the step-based variant that the engine auto-compiles to the generator form.
 
-### `WorkflowRegistration`
-
-```ts partial
-interface WorkflowRegistration<TInput = unknown, TOutput = unknown> {
-  version?: string;
-  description?: string;
-  tags?: ReadonlyArray<string>;
-  inputSchema?: DefinitionSchema<unknown, TInput>;
-  outputSchema?: DefinitionSchema<unknown, TOutput>;
-  handler: WorkflowFunction<TInput, TOutput>;
-  searchAttributes?: SearchAttributeSchema;
-}
-```
-
-`inputSchema` and `outputSchema` use [Standard Schema](https://standardschema.dev/) or [Standard JSON Schema](https://standardschema.dev/json-schema) compatible metadata. They are stored for introspection and adapter-level discovery; the engine does not enforce them during local execution.
-
 ### `Duration`
 
 ```ts partial
