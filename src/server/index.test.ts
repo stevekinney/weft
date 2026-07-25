@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, spyOn } from 'bun:test';
+import * as fileSystem from 'node:fs';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -24,6 +25,7 @@ import type { Storage as WeftStorage } from '../storage/interface.ts';
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { resetPublicOriginWarningForTesting } from './api-catalog.ts';
+import { createDashboardAssetRoute, resolveDashboardAssets } from './dashboard-assets.ts';
 import { DeadlineTracker } from './deadline-tracker.ts';
 import * as handlerModule from './handler.ts';
 import type { ServeOptions, WeftServer } from './index.ts';
@@ -719,20 +721,8 @@ describe('serve', () => {
     try {
       mkdirSync(directory);
       writeFileSync(outsideFile, 'outside asset');
-      try {
-        symlinkSync(outsideFile, join(directory, 'outside.txt'));
-        symlinkSync(join(directory, 'missing.txt'), join(directory, 'broken.txt'));
-      } catch (error) {
-        const errorCode =
-          typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined;
-        if (errorCode === 'EACCES' || errorCode === 'EPERM' || errorCode === 'ENOTSUP') {
-          console.warn(
-            `Skipping symlink asset test: platform rejected symlink creation (${errorCode})`,
-          );
-          return;
-        }
-        throw error;
-      }
+      symlinkSync(outsideFile, join(directory, 'outside.txt'));
+      symlinkSync(join(directory, 'missing.txt'), join(directory, 'broken.txt'));
 
       engine = createEngine();
       server = serveTestServer({
@@ -750,6 +740,110 @@ describe('serve', () => {
       expect(await brokenLinkResponse.text()).not.toContain(directory);
     } finally {
       rmSync(parentDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('does not serve a symlink installed after canonical validation', async () => {
+    const parentDirectory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
+    const directory = join(parentDirectory, 'assets');
+    const assetPath = join(directory, 'app.js');
+    const outsideFile = join(parentDirectory, 'outside.js');
+    try {
+      mkdirSync(directory);
+      writeFileSync(assetPath, 'validated asset');
+      writeFileSync(outsideFile, 'replacement asset');
+      const originalOpenSync = fileSystem.openSync;
+      let replaced = false;
+      const assetFileSystem = {
+        ...fileSystem,
+        openSync: (
+          path: Parameters<typeof fileSystem.openSync>[0],
+          flags: Parameters<typeof fileSystem.openSync>[1],
+          mode?: Parameters<typeof fileSystem.openSync>[2],
+        ) => {
+          if (String(path).endsWith('/app.js') && !replaced) {
+            rmSync(assetPath);
+            symlinkSync(outsideFile, assetPath);
+            replaced = true;
+          }
+          return originalOpenSync(path, flags, mode);
+        },
+      };
+      const assets = resolveDashboardAssets(
+        { prefix: '/assets', directory },
+        DASHBOARD_PAGE_ROUTES,
+      );
+      const route = createDashboardAssetRoute(assets, assetFileSystem);
+      const response = route.GET!(new Request('http://weft.test/assets/app.js'));
+      expect(response.status).toBe(404);
+      expect(await response.text()).not.toContain('replacement asset');
+    } finally {
+      rmSync(parentDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('closes dashboard asset descriptors for successful, rejected, and aborted requests', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
+    const originalOpenSync = fileSystem.openSync;
+    const originalCloseSync = fileSystem.closeSync;
+    const originalReadFileSync = fileSystem.readFileSync;
+    try {
+      writeFileSync(join(directory, 'app.js'), 'dashboard');
+      const assets = resolveDashboardAssets(
+        { prefix: '/assets', directory },
+        DASHBOARD_PAGE_ROUTES,
+      );
+      let opened = 0;
+      let closed = 0;
+      let readCount = 0;
+      let abortOnOpen = false;
+      let readFailure = false;
+      let activeAbortController: AbortController | undefined;
+      const assetFileSystem = {
+        ...fileSystem,
+        openSync: (
+          path: Parameters<typeof fileSystem.openSync>[0],
+          flags: Parameters<typeof fileSystem.openSync>[1],
+          mode?: Parameters<typeof fileSystem.openSync>[2],
+        ) => {
+          opened += 1;
+          if (abortOnOpen) activeAbortController?.abort();
+          return originalOpenSync(path, flags, mode);
+        },
+        closeSync: (descriptor: number) => {
+          closed += 1;
+          return originalCloseSync(descriptor);
+        },
+        readFileSync: (descriptor: number) => {
+          if (readFailure) throw new Error('asset read failed');
+          readCount += 1;
+          return originalReadFileSync(descriptor);
+        },
+      };
+      const route = createDashboardAssetRoute(assets, assetFileSystem);
+
+      for (let index = 0; index < 5; index += 1) {
+        expect(route.GET!(new Request('http://weft.test/assets/app.js')).status).toBe(200);
+        expect(
+          route.HEAD!(new Request('http://weft.test/assets/app.js', { method: 'HEAD' })).status,
+        ).toBe(200);
+      }
+      expect(readCount).toBe(5);
+      expect(route.GET!(new Request('http://weft.test/assets/missing.js')).status).toBe(404);
+      readFailure = true;
+      expect(route.GET!(new Request('http://weft.test/assets/app.js')).status).toBe(404);
+      readFailure = false;
+      abortOnOpen = true;
+      activeAbortController = new AbortController();
+      expect(
+        route.GET!(
+          new Request('http://weft.test/assets/app.js', { signal: activeAbortController.signal }),
+        ).status,
+      ).toBe(404);
+
+      expect(closed).toBe(opened);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
     }
   });
 

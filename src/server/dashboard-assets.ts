@@ -1,7 +1,20 @@
-import { realpathSync, statSync } from 'node:fs';
+import * as fileSystem from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { API_PREFIX, DIRECT_HTTP_ROUTES, ROOT_API_PREFIX } from './route-model.ts';
+
+type DashboardAssetFileSystem = {
+  constants: Pick<typeof fileSystem.constants, 'O_RDONLY' | 'O_NOFOLLOW'>;
+  realpathSync: (path: string) => string;
+  openSync: (
+    path: string,
+    flags: Parameters<typeof fileSystem.openSync>[1],
+    mode?: Parameters<typeof fileSystem.openSync>[2],
+  ) => number;
+  fstatSync: (descriptor: number) => fileSystem.Stats;
+  readFileSync: (descriptor: number) => Buffer;
+  closeSync: (descriptor: number) => void;
+};
 
 /**
  * Static files belonging to an externally supplied dashboard.
@@ -113,9 +126,9 @@ export function resolveDashboardAssets(
   validateAssetPrefix(prefix, pageRoutes);
 
   const resolvedDirectory = resolve(directory);
-  let directoryStats: ReturnType<typeof statSync>;
+  let directoryStats: ReturnType<typeof fileSystem.statSync>;
   try {
-    directoryStats = statSync(resolvedDirectory);
+    directoryStats = fileSystem.statSync(resolvedDirectory);
   } catch {
     throw new Error(`dashboardAssets.directory does not exist: ${directory}`);
   }
@@ -123,7 +136,7 @@ export function resolveDashboardAssets(
     throw new Error(`dashboardAssets.directory must be a directory: ${directory}`);
   }
 
-  return { prefix, directory: realpathSync(resolvedDirectory) };
+  return { prefix, directory: fileSystem.realpathSync(resolvedDirectory) };
 }
 
 function isWithinDirectory(directory: string, path: string): boolean {
@@ -136,7 +149,11 @@ function isWithinDirectory(directory: string, path: string): boolean {
   );
 }
 
-function assetResponse(directory: string, prefix: string, request: Request): Response {
+function resolveAssetPath(directory: string, prefix: string, request: Request): string | undefined {
+  if (request.signal.aborted) {
+    return undefined;
+  }
+
   const pathname = new URL(request.url).pathname;
   const rawWildcardPath = pathname.slice(prefix.length + 1);
   let wildcardPath: string;
@@ -144,42 +161,76 @@ function assetResponse(directory: string, prefix: string, request: Request): Res
     // Decode the URL suffix exactly once; never decode the result again.
     wildcardPath = decodeURIComponent(rawWildcardPath);
   } catch {
-    return new Response('Not Found', { status: 404 });
+    return undefined;
   }
   if (wildcardPath.length === 0) {
-    return new Response('Not Found', { status: 404 });
+    return undefined;
   }
 
   const pathSegments = wildcardPath.split(/[\\/]/);
   if (pathSegments.some((segment) => segment === '..' || segment.length === 0)) {
-    return new Response('Not Found', { status: 404 });
+    return undefined;
   }
 
   const assetPath = resolve(join(directory, ...pathSegments));
   if (!isWithinDirectory(directory, assetPath)) {
+    return undefined;
+  }
+
+  return assetPath;
+}
+
+function assetResponse(
+  directory: string,
+  prefix: string,
+  request: Request,
+  assetFileSystem: DashboardAssetFileSystem,
+): Response {
+  const assetPath = resolveAssetPath(directory, prefix, request);
+  if (assetPath === undefined) {
     return new Response('Not Found', { status: 404 });
   }
 
-  let realAssetPath: string;
+  let descriptor: number | undefined;
   try {
-    realAssetPath = realpathSync(assetPath);
-    if (!statSync(realAssetPath).isFile()) {
+    const realAssetPath = assetFileSystem.realpathSync(assetPath);
+    if (!isWithinDirectory(directory, realAssetPath)) {
       return new Response('Not Found', { status: 404 });
     }
+
+    descriptor = assetFileSystem.openSync(
+      realAssetPath,
+      assetFileSystem.constants.O_RDONLY | assetFileSystem.constants.O_NOFOLLOW,
+    );
+    const fileStats = assetFileSystem.fstatSync(descriptor);
+    if (request.signal.aborted || !fileStats.isFile()) {
+      return new Response('Not Found', { status: 404 });
+    }
+
+    const headers = {
+      'content-length': String(fileStats.size),
+      'content-type': Bun.file(realAssetPath).type,
+    };
+    if (request.method === 'HEAD') {
+      return new Response(null, { headers });
+    }
+
+    return new Response(assetFileSystem.readFileSync(descriptor), { headers });
   } catch {
     return new Response('Not Found', { status: 404 });
+  } finally {
+    if (descriptor !== undefined) {
+      assetFileSystem.closeSync(descriptor);
+    }
   }
-  if (!isWithinDirectory(directory, realAssetPath)) {
-    return new Response('Not Found', { status: 404 });
-  }
-
-  return new Response(Bun.file(realAssetPath));
 }
 
 export function createDashboardAssetRoute(
   assets: ResolvedDashboardAssets,
+  assetFileSystem?: DashboardAssetFileSystem,
 ): Partial<Record<'GET' | 'HEAD', (request: Request) => Response>> {
+  const fileSystemForAsset = assetFileSystem ?? fileSystem;
   const handler = (request: Request): Response =>
-    assetResponse(assets.directory, assets.prefix, request);
+    assetResponse(assets.directory, assets.prefix, request, fileSystemForAsset);
   return { GET: handler, HEAD: handler };
 }
