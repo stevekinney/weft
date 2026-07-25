@@ -9,6 +9,20 @@ export type InlineLaunchQueueCallbacks = {
   swallowPromiseRejection: (promise: Promise<unknown> | undefined) => Promise<void>;
 };
 
+async function yieldQueuedShutdownAdvanceOpportunity(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
+async function settleQueuedShutdownWork(pendingWork: Promise<unknown>[]): Promise<boolean> {
+  if (pendingWork.length === 0) return true;
+  return Promise.race([
+    Promise.all(pendingWork).then(() => true),
+    yieldQueuedShutdownAdvanceOpportunity().then(() => false),
+  ]);
+}
+
 /** Queue a new inline workflow start and schedule a flush if one is not already scheduled. */
 export function queueInlineWorkflowExecutionStart(
   internals: EngineInternals,
@@ -136,17 +150,23 @@ export async function drainQueuedInlineWorkflowStarts(
       flushQueuedInlineWorkflowStarts(internals, callbacks, options),
     );
 
-    // startWorkflowExecution() schedules the inline generator advance without
-    // awaiting it. Async disposal must wait for that first advance before
-    // releasing ownership; otherwise a successor can recover while the outgoing
-    // first turn is still running user code. The flush already awaits pending
-    // update processing. Do not await the emitted operation turn here: durable
-    // waits such as ctx.sleep() intentionally keep that turn pending.
-    for (const workflowId of workflowIds) {
+    // Give cooperatively-aborted first turns one scheduler opportunity to
+    // settle, but never let an arbitrary promise that ignores ctx.signal hold
+    // disposal and lease release indefinitely. Pending updates are deliberately
+    // left durable for a successor when shutdown starts these aborted turns.
+    const pendingAdvances = workflowIds.flatMap((workflowId) => {
       const pendingAdvance = internals.inlineStrategy?.waitForWorkflowAdvance(workflowId);
-      if (pendingAdvance !== undefined) {
-        await callbacks.swallowPromiseRejection(pendingAdvance);
-      }
+      return pendingAdvance === undefined
+        ? []
+        : [callbacks.swallowPromiseRejection(pendingAdvance)];
+    });
+    const advancesSettled = await settleQueuedShutdownWork(pendingAdvances);
+    if (advancesSettled) {
+      const pendingTurns = workflowIds.flatMap((workflowId) => {
+        const pendingTurn = internals.inlineStrategy?.waitForWorkflowTurn(workflowId);
+        return pendingTurn === undefined ? [] : [callbacks.swallowPromiseRejection(pendingTurn)];
+      });
+      await settleQueuedShutdownWork(pendingTurns);
     }
   }
   // The `passes < maxPasses` bound above is a backstop against a pathological
@@ -189,9 +209,9 @@ async function startQueuedInlineWorkflowExecution(
     // processing, so a first turn parked on ctx.signal can settle.
     if (options?.abortStartedWorkflows === true) {
       internals.inlineStrategy?.getAbortController(start.workflowId)?.abort();
+    } else {
+      await callbacks.processPendingUpdatesAfterInlineAdvance(start.workflowId);
     }
-
-    await callbacks.processPendingUpdatesAfterInlineAdvance(start.workflowId);
   } finally {
     internals.queuedInlineWorkflowStartIds.delete(start.workflowId);
     internals.queuedOrLaunchingInlineWorkflowStartIds.delete(start.workflowId);

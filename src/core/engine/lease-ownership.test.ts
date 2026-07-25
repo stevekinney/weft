@@ -791,10 +791,17 @@ describe("Engine.create({ ownership: 'lease' })", () => {
   it('defers synchronous disposal release while shutdown drains queued work', async () => {
     const storage = new MemoryStorage();
     const drainStarted = Promise.withResolvers<void>();
-    const finishDrain = Promise.withResolvers<void>();
-    const drainingWorkflow = workflow({ name: 'draining' }).execute(async function* () {
+    let signalObserved = false;
+    const drainingWorkflow = workflow({ name: 'draining' }).execute(async function* (ctx) {
       drainStarted.resolve();
-      await finishDrain.promise;
+      await new Promise<void>((resolve) => {
+        if (ctx.signal.aborted) {
+          resolve();
+          return;
+        }
+        ctx.signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+      signalObserved = true;
       return 'done';
     });
     const engine = await Engine.create({
@@ -802,10 +809,9 @@ describe("Engine.create({ ownership: 'lease' })", () => {
       workflows: { draining: drainingWorkflow },
       ownership: 'lease',
     });
-    const releaseStarted = Promise.withResolvers<void>();
-    const releaseStorage = Promise.withResolvers<void>();
     const originalConditionalBatch = storage.conditionalBatch.bind(storage);
     let releaseCalls = 0;
+    let signalObservedBeforeRelease = false;
     storage.conditionalBatch = async (conditions, operations) => {
       if (
         operations.some(
@@ -813,8 +819,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
         )
       ) {
         releaseCalls += 1;
-        releaseStarted.resolve();
-        await releaseStorage.promise;
+        signalObservedBeforeRelease = signalObserved;
       }
       return originalConditionalBatch(conditions, operations);
     };
@@ -823,22 +828,49 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     const shutdown = engine.shutdown();
     await drainStarted.promise;
     engine[Symbol.dispose]();
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(releaseCalls).toBe(0);
-
-    finishDrain.resolve();
-    await releaseStarted.promise;
-    releaseStorage.resolve();
 
     await expect(shutdown).resolves.toBe(true);
+    expect(signalObserved).toBe(true);
+    expect(signalObservedBeforeRelease).toBe(true);
     expect(releaseCalls).toBe(1);
     expect(await readHolder(storage)).toBeNull();
     storage[Symbol.dispose]?.();
   });
 
-  it('aborts a queued first turn before awaiting shutdown drain completion', async () => {
+  it('bounds shutdown when a queued first turn ignores its abort signal', async () => {
     const storage = new MemoryStorage();
-    const signalObserved = Promise.withResolvers<void>();
+    const bodyEntered = Promise.withResolvers<void>();
+    const releaseBody = Promise.withResolvers<void>();
+    const nonCooperativeWorkflow = workflow({ name: 'non-cooperative' }).execute(
+      async function* () {
+        bodyEntered.resolve();
+        await releaseBody.promise;
+        return 'stopped';
+      },
+    );
+    const engine = await Engine.create({
+      storage,
+      workflows: { 'non-cooperative': nonCooperativeWorkflow },
+      ownership: 'lease',
+    });
+
+    await engine.start('non-cooperative', null, { id: 'queued-non-cooperative-shutdown' });
+    const shutdown = engine.shutdown();
+
+    await bodyEntered.promise;
+    await expect(shutdown).resolves.toBe(true);
+    expect(await readHolder(storage)).toBeNull();
+
+    // Settle the deliberately non-cooperative body after disposal so the test
+    // leaves no retained pending generator promise.
+    releaseBody.resolve();
+    await new Promise((resolve) => setImmediate(resolve));
+    storage[Symbol.dispose]?.();
+  });
+
+  it('aborts a cooperative queued first turn before releasing the lease', async () => {
+    const storage = new MemoryStorage();
+    let signalObserved = false;
     const cooperativeWorkflow = workflow({ name: 'cooperative' }).execute(async function* (ctx) {
       await new Promise<void>((resolve) => {
         if (ctx.signal.aborted) {
@@ -847,7 +879,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
         }
         ctx.signal.addEventListener('abort', () => resolve(), { once: true });
       });
-      signalObserved.resolve();
+      signalObserved = true;
       return 'stopped';
     });
     const engine = await Engine.create({
@@ -857,10 +889,8 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     });
 
     await engine.start('cooperative', null, { id: 'queued-cooperative-shutdown' });
-    const shutdown = engine.shutdown();
-
-    await signalObserved.promise;
-    await expect(shutdown).resolves.toBe(true);
+    await expect(engine.shutdown()).resolves.toBe(true);
+    expect(signalObserved).toBe(true);
     expect(await readHolder(storage)).toBeNull();
     storage[Symbol.dispose]?.();
   });
