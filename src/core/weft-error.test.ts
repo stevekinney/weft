@@ -16,6 +16,7 @@ import {
   DurableActivityUnsupportedError,
   EffectReplayConflictError,
   EngineCreateNameMismatchError,
+  EngineDisposalError,
   EngineDisposedError,
   HttpClientError,
   IdempotencyKeyPurgedError,
@@ -85,6 +86,7 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
     }),
   EngineCreateNameMismatchError: () =>
     new EngineCreateNameMismatchError('workflow', 'expected', 'actual'),
+  EngineDisposalError: () => new EngineDisposalError(new Error('drain failed'), true),
   EngineDisposedError: () => new EngineDisposedError(),
   WorkflowNotFoundError: () => new WorkflowNotFoundError('wf-404'),
   WorkflowNotRegisteredError: () => new WorkflowNotRegisteredError('checkout'),
