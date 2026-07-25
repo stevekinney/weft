@@ -726,6 +726,34 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     storage[Symbol.dispose]?.();
   });
 
+  it('shares an in-flight synchronous release result with shutdown', async () => {
+    const storage = new MemoryStorage();
+    const engine = await Engine.create({
+      storage,
+      workflows: { ping: pingWorkflow },
+      ownership: 'lease',
+    });
+    const releaseStarted = Promise.withResolvers<void>();
+    const releaseStorage = Promise.withResolvers<void>();
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+    storage.conditionalBatch = async (conditions, operations) => {
+      if (operations.some((operation) => operation.type === 'delete')) {
+        releaseStarted.resolve();
+        await releaseStorage.promise;
+      }
+      return originalConditionalBatch(conditions, operations);
+    };
+
+    engine[Symbol.dispose]();
+    await releaseStarted.promise;
+    const shutdown = engine.shutdown();
+    releaseStorage.resolve();
+
+    await expect(shutdown).resolves.toBe(true);
+    expect(await readHolder(storage)).toBeNull();
+    storage[Symbol.dispose]?.();
+  });
+
   it('preserves an asyncDispose override when shutdown is called concurrently', async () => {
     let overrideCalls = 0;
     class OverrideEngine extends Engine {

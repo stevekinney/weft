@@ -446,6 +446,7 @@ export class Engine<
 {
   #asyncDisposeResult: Promise<boolean> | null = null;
   #shutdownResult: Promise<boolean> | null = null;
+  #synchronousDisposeResult: Promise<boolean> | null = null;
 
   /**
    * Construct and register an engine in one step. Activities are registered
@@ -2040,7 +2041,10 @@ export class Engine<
       );
     }
     disposeEngine(getInternals(this));
-    void leaseManager?.release();
+    if (this.#synchronousDisposeResult === null) {
+      this.#synchronousDisposeResult = leaseManager?.release() ?? Promise.resolve(true);
+    }
+    void this.#synchronousDisposeResult;
   }
   /**
    * Async teardown (`await using engine = ...`). Drains pending inline launches
@@ -2102,7 +2106,7 @@ export class Engine<
       return leaseReleased;
     }
     this[Symbol.dispose]();
-    return true;
+    return (await this.#synchronousDisposeResult) ?? true;
   }
 
   async [Symbol.asyncDispose](): Promise<void> {
