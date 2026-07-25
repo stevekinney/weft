@@ -4,15 +4,22 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { API_PREFIX, DIRECT_HTTP_ROUTES, ROOT_API_PREFIX } from './route-model.ts';
 
 type DashboardAssetFileSystem = {
-  constants: Pick<typeof fileSystem.constants, 'O_RDONLY' | 'O_NOFOLLOW'>;
+  constants: Pick<typeof fileSystem.constants, 'O_RDONLY' | 'O_NOFOLLOW' | 'O_NONBLOCK'>;
   realpathSync: (path: string) => string;
+  statSync: (path: string) => fileSystem.Stats;
   openSync: (
     path: string,
     flags: Parameters<typeof fileSystem.openSync>[1],
     mode?: Parameters<typeof fileSystem.openSync>[2],
   ) => number;
   fstatSync: (descriptor: number) => fileSystem.Stats;
-  readFileSync: (descriptor: number) => Buffer;
+  readSync: (
+    descriptor: number,
+    buffer: NodeJS.ArrayBufferView,
+    offset: number,
+    length: number,
+    position: number | null,
+  ) => number;
   closeSync: (descriptor: number) => void;
 };
 
@@ -180,6 +187,56 @@ function resolveAssetPath(directory: string, prefix: string, request: Request): 
   return assetPath;
 }
 
+function isVerifiedAssetFile(
+  request: Request,
+  canonicalStats: fileSystem.Stats,
+  openedStats: fileSystem.Stats,
+): boolean {
+  return (
+    !request.signal.aborted &&
+    canonicalStats.isFile() &&
+    openedStats.isFile() &&
+    openedStats.dev === canonicalStats.dev &&
+    openedStats.ino === canonicalStats.ino
+  );
+}
+
+function createAssetStream(
+  descriptor: number,
+  assetFileSystem: DashboardAssetFileSystem,
+): { stream: ReadableStream<Uint8Array>; close: () => void } {
+  let closed = false;
+  const close = (): void => {
+    if (!closed) {
+      closed = true;
+      assetFileSystem.closeSync(descriptor);
+    }
+  };
+
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      const buffer = Buffer.allocUnsafe(64 * 1024);
+      try {
+        const bytesRead = assetFileSystem.readSync(descriptor, buffer, 0, buffer.byteLength, null);
+        if (bytesRead === 0) {
+          close();
+          controller.close();
+          return;
+        }
+        controller.enqueue(buffer.subarray(0, bytesRead));
+      } catch (error) {
+        close();
+        controller.error(error);
+      }
+    },
+    cancel() {
+      close();
+    },
+  });
+
+  return { stream, close };
+}
+
 function assetResponse(
   directory: string,
   prefix: string,
@@ -198,12 +255,19 @@ function assetResponse(
       return new Response('Not Found', { status: 404 });
     }
 
+    const canonicalStats = assetFileSystem.statSync(realAssetPath);
     descriptor = assetFileSystem.openSync(
       realAssetPath,
-      assetFileSystem.constants.O_RDONLY | assetFileSystem.constants.O_NOFOLLOW,
+      assetFileSystem.constants.O_RDONLY |
+        assetFileSystem.constants.O_NOFOLLOW |
+        assetFileSystem.constants.O_NONBLOCK,
     );
     const fileStats = assetFileSystem.fstatSync(descriptor);
-    if (request.signal.aborted || !fileStats.isFile()) {
+    const postOpenAssetPath = assetFileSystem.realpathSync(realAssetPath);
+    if (
+      !isWithinDirectory(directory, postOpenAssetPath) ||
+      !isVerifiedAssetFile(request, canonicalStats, fileStats)
+    ) {
       return new Response('Not Found', { status: 404 });
     }
 
@@ -215,7 +279,16 @@ function assetResponse(
       return new Response(null, { headers });
     }
 
-    return new Response(assetFileSystem.readFileSync(descriptor), { headers });
+    const assetStream = createAssetStream(descriptor, assetFileSystem);
+    try {
+      const response = new Response(assetStream.stream, { headers });
+      descriptor = undefined;
+      return response;
+    } catch {
+      assetStream.close();
+      descriptor = undefined;
+      return new Response('Not Found', { status: 404 });
+    }
   } catch {
     return new Response('Not Found', { status: 404 });
   } finally {
