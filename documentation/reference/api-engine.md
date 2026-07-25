@@ -480,18 +480,16 @@ Awaited engine shutdown. This is equivalent to `await engine[Symbol.asyncDispose
 ```ts
 import { Engine } from '@lostgradient/weft';
 
-const leaseTtlMs = 10_000;
 const engine = new Engine({
   ownership: 'lease',
-  leaseTtl: leaseTtlMs,
 });
 process.on('SIGTERM', () => {
   void (async () => {
     try {
       if (!(await engine.shutdown())) {
         process.exitCode = 1;
-        // Renewals have stopped, but the holder can remain live until its TTL.
-        await Bun.sleep(leaseTtlMs);
+        // Handoff was not confirmed. Alert, but let replacement lease
+        // acquisition determine whether another engine already owns the lease.
       }
     } catch {
       process.exitCode = 1;
@@ -513,10 +511,12 @@ Clean up all engine resources — aborts the scheduler, clears active generators
 
 `shutdown()` returns `true` when no lease needed release or the holder delete committed, and `false` when a fenced release lost its compare-and-swap race or the storage delete failed. The standard `[Symbol.asyncDispose]()` protocol remains `Promise<void>`; both paths await the same release operation, and release failures remain non-throwing.
 
-After a `false` result, lease renewals have stopped but the existing holder can
-remain valid for up to the configured `leaseTtl`. Keep the old process alive for
-that interval, or delay replacement startup until the interval has elapsed, so
-the successor does not spend the same window waiting for ownership.
+Treat a `false` result as an unconfirmed handoff, not proof that the old holder
+still owns the lease. A fenced release can lose because a successor already
+owns it; a storage failure can instead leave the old holder valid until its
+configured `leaseTtl` expires. Alert on the result and let replacement lease
+acquisition distinguish those cases. Size `leaseWaitTimeout` to cover
+`leaseTtl` so replacement startup can wait out the storage-failure case.
 
 ```ts partial
 {
