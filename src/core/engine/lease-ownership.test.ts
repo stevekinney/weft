@@ -870,6 +870,44 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     expect(overrideCalls).toBe(1);
   });
 
+  it('retains a synchronous release result started by an asyncDispose override', async () => {
+    class SynchronousDelegatingOverrideEngine extends Engine {
+      override async [Symbol.asyncDispose](): Promise<void> {
+        super[Symbol.dispose]();
+      }
+    }
+
+    const storage = new MemoryStorage();
+    const engine = new SynchronousDelegatingOverrideEngine({ storage, ownership: 'lease' });
+    engine.register(pingWorkflow);
+    await engine.recoverAll();
+    const releaseStarted = Promise.withResolvers<void>();
+    const finishRelease = Promise.withResolvers<void>();
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+    storage.conditionalBatch = async (conditions, operations) => {
+      if (operations.some((operation) => operation.type === 'delete')) {
+        releaseStarted.resolve();
+        await finishRelease.promise;
+        return false;
+      }
+      return originalConditionalBatch(conditions, operations);
+    };
+
+    const shutdown = engine.shutdown();
+    await releaseStarted.promise;
+    let shutdownSettled = false;
+    void shutdown.finally(() => {
+      shutdownSettled = true;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(shutdownSettled).toBe(false);
+
+    finishRelease.resolve();
+    await expect(shutdown).resolves.toBe(false);
+    expect(await readHolder(storage)).not.toBeNull();
+    storage[Symbol.dispose]?.();
+  });
+
   it('respects an asyncDispose override that handles a base disposal failure', async () => {
     let overrideCalls = 0;
     class HandlingOverrideEngine extends Engine {

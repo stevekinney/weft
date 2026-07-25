@@ -2020,7 +2020,10 @@ export class Engine<
       this.#shutdownResult = (async () => {
         await this[Symbol.asyncDispose]();
         const baseResult = this.#asyncDisposeResult;
-        if (baseResult === null) return true;
+        if (baseResult === null) {
+          await getInternals(this).inFlightLeaseAcquire?.catch(() => {});
+          return (await this.#synchronousDisposeResult) ?? true;
+        }
         try {
           return await baseResult;
         } catch (error) {

@@ -480,12 +480,23 @@ Awaited engine shutdown. This is equivalent to `await engine[Symbol.asyncDispose
 ```ts
 import { Engine } from '@lostgradient/weft';
 
-const engine = new Engine();
+const leaseTtlMs = 10_000;
+const engine = new Engine({
+  ownership: 'lease',
+  leaseTtl: leaseTtlMs,
+});
 process.on('SIGTERM', () => {
-  void engine.shutdown().then(
-    (leaseReleased) => process.exit(leaseReleased ? 0 : 1),
-    () => process.exit(1),
-  );
+  void (async () => {
+    try {
+      if (!(await engine.shutdown())) {
+        process.exitCode = 1;
+        // Renewals have stopped, but the holder can remain live until its TTL.
+        await Bun.sleep(leaseTtlMs);
+      }
+    } catch {
+      process.exitCode = 1;
+    }
+  })();
 });
 ```
 
@@ -501,6 +512,11 @@ Clean up all engine resources — aborts the scheduler, clears active generators
 `[Symbol.dispose]()` is synchronous and immediate. With `ownership: 'lease'`, it can only start lease release in the background; if the process exits before that release completes, the next instance waits until the lease expires, bounded by `leaseWaitTimeout`. Use `await using`, `await engine.shutdown()`, or `await engine[Symbol.asyncDispose]()` for prompt lease handoff.
 
 `shutdown()` returns `true` when no lease needed release or the holder delete committed, and `false` when a fenced release lost its compare-and-swap race or the storage delete failed. The standard `[Symbol.asyncDispose]()` protocol remains `Promise<void>`; both paths await the same release operation, and release failures remain non-throwing.
+
+After a `false` result, lease renewals have stopped but the existing holder can
+remain valid for up to the configured `leaseTtl`. Keep the old process alive for
+that interval, or delay replacement startup until the interval has elapsed, so
+the successor does not spend the same window waiting for ownership.
 
 ```ts partial
 {

@@ -11,8 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 `Engine.shutdown()` now returns `Promise<boolean>` so process hosts can confirm
 whether an ownership-lease holder delete committed. Update callback and stored
-promise types that require `Promise<void>`, and branch on a `false` result before
-exiting so the next instance is not forced to wait for `leaseTtl`.
+promise types that require `Promise<void>`. When it returns `false`, renewals
+have stopped but the holder remains live; keep the process alive for the
+configured `leaseTtl` before exiting, or delay replacement startup until that
+window has elapsed.
 
 ## [0.8.0] - 2026-06-24
 
