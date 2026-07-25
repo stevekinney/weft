@@ -748,6 +748,46 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     storage[Symbol.dispose]?.();
   });
 
+  it('awaits acquisition cleanup after synchronous disposal before reporting shutdown', async () => {
+    const storage = new MemoryStorage();
+    const acquisitionCommitted = Promise.withResolvers<void>();
+    const finishAcquisition = Promise.withResolvers<void>();
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+    storage.conditionalBatch = async (conditions, operations) => {
+      const writesHolder = operations.some(
+        (operation) => operation.type === 'put' && operation.key === KEYS.leaseHolder(),
+      );
+      if (writesHolder) {
+        const committed = await originalConditionalBatch(conditions, operations);
+        acquisitionCommitted.resolve();
+        await finishAcquisition.promise;
+        return committed;
+      }
+      if (operations.some((operation) => operation.type === 'delete')) return false;
+      return originalConditionalBatch(conditions, operations);
+    };
+
+    const engine = new Engine({ storage, ownership: 'lease' });
+    engine.register(pingWorkflow);
+    const recovery = engine.recoverAll();
+    await acquisitionCommitted.promise;
+
+    engine[Symbol.dispose]();
+    const shutdown = engine.shutdown();
+    let shutdownSettled = false;
+    void shutdown.finally(() => {
+      shutdownSettled = true;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(shutdownSettled).toBe(false);
+
+    finishAcquisition.resolve();
+    await expect(recovery).rejects.toThrow('disposed');
+    await expect(shutdown).resolves.toBe(false);
+    expect(await readHolder(storage)).not.toBeNull();
+    storage[Symbol.dispose]?.();
+  });
+
   it('shares a synchronous release started while shutdown drains queued work', async () => {
     const storage = new MemoryStorage();
     const drainStarted = Promise.withResolvers<void>();

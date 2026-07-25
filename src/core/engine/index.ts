@@ -873,7 +873,9 @@ export class Engine<
         // and never let the caller (recoverAll / Engine.create) treat this as a
         // held lease and proceed into recovery. The throw is the contract: `await`
         // resolves only when the lease is genuinely held.
-        await manager.release();
+        const releaseResult = manager.release();
+        this.#synchronousDisposeResult = releaseResult;
+        await releaseResult;
         if (internals.leaseManager === manager) internals.leaseManager = null;
         throw new EngineDisposedError();
       }
@@ -2119,6 +2121,7 @@ export class Engine<
       return leaseReleased;
     }
     this[Symbol.dispose]();
+    await getInternals(this).inFlightLeaseAcquire?.catch(() => {});
     return (await this.#synchronousDisposeResult) ?? true;
   }
 
