@@ -790,12 +790,13 @@ describe('serve', () => {
       let replacementError: unknown;
       const assetFileSystem = {
         ...fileSystem,
+        read: async () => 0,
         openSync: (
           path: Parameters<typeof fileSystem.openSync>[0],
           flags: Parameters<typeof fileSystem.openSync>[1],
           mode?: Parameters<typeof fileSystem.openSync>[2],
         ) => {
-          if (String(path).endsWith('/app.js') && !replaced) {
+          if (String(path).endsWith(join('app.js')) && !replaced) {
             try {
               rmSync(assetPath);
               symlinkSync(outsideFile, assetPath);
@@ -839,12 +840,13 @@ describe('serve', () => {
       let replacementError: unknown;
       const assetFileSystem = {
         ...fileSystem,
+        read: async () => 0,
         openSync: (
           path: Parameters<typeof fileSystem.openSync>[0],
           flags: Parameters<typeof fileSystem.openSync>[1],
           mode?: Parameters<typeof fileSystem.openSync>[2],
         ) => {
-          if (String(path).endsWith('/nested/app.js') && !replaced) {
+          if (String(path).endsWith(join('nested', 'app.js')) && !replaced) {
             try {
               rmSync(nestedDirectory, { recursive: true });
               symlinkSync(outsideDirectory, nestedDirectory);
@@ -897,7 +899,7 @@ describe('serve', () => {
     const directory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
     const originalOpenSync = fileSystem.openSync;
     const originalCloseSync = fileSystem.closeSync;
-    const originalReadSync = fileSystem.readSync;
+    const originalRead = fileSystem.read;
     try {
       writeFileSync(join(directory, 'app.js'), 'dashboard');
       const assets = resolveDashboardAssets(
@@ -922,7 +924,7 @@ describe('serve', () => {
           closed += 1;
           return originalCloseSync(descriptor);
         },
-        readSync: (
+        read: async (
           descriptor: number,
           buffer: NodeJS.ArrayBufferView,
           offset: number,
@@ -931,7 +933,12 @@ describe('serve', () => {
         ) => {
           if (readFailure) throw new Error('asset read failed');
           readCount += 1;
-          return originalReadSync(descriptor, buffer, offset, length, position);
+          return await new Promise<number>((resolve, reject) => {
+            originalRead(descriptor, buffer, offset, length, position, (error, bytesRead) => {
+              if (error) reject(error);
+              else resolve(bytesRead);
+            });
+          });
         },
       };
       const route = createDashboardAssetRoute(assets, assetFileSystem);

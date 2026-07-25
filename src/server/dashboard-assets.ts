@@ -1,5 +1,5 @@
 import * as fileSystem from 'node:fs';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { isAbsolute, join, relative, resolve as resolvePath, sep } from 'node:path';
 
 import { API_PREFIX, DIRECT_HTTP_ROUTES, ROOT_API_PREFIX } from './route-model.ts';
 
@@ -13,13 +13,13 @@ type DashboardAssetFileSystem = {
     mode?: Parameters<typeof fileSystem.openSync>[2],
   ) => number;
   fstatSync: (descriptor: number) => fileSystem.Stats;
-  readSync: (
+  read: (
     descriptor: number,
     buffer: NodeJS.ArrayBufferView,
     offset: number,
     length: number,
     position: number | null,
-  ) => number;
+  ) => Promise<number>;
   closeSync: (descriptor: number) => void;
 };
 
@@ -132,7 +132,7 @@ export function resolveDashboardAssets(
 
   validateAssetPrefix(prefix, pageRoutes);
 
-  const resolvedDirectory = resolve(directory);
+  const resolvedDirectory = resolvePath(directory);
   let directoryStats: ReturnType<typeof fileSystem.statSync>;
   try {
     directoryStats = fileSystem.statSync(resolvedDirectory);
@@ -179,7 +179,7 @@ function resolveAssetPath(directory: string, prefix: string, request: Request): 
     return undefined;
   }
 
-  const assetPath = resolve(join(directory, ...pathSegments));
+  const assetPath = resolvePath(join(directory, ...pathSegments));
   if (!isWithinDirectory(directory, assetPath)) {
     return undefined;
   }
@@ -214,10 +214,16 @@ function createAssetStream(
   };
 
   const stream = new ReadableStream<Uint8Array>({
-    pull(controller) {
+    async pull(controller) {
       const buffer = Buffer.allocUnsafe(64 * 1024);
       try {
-        const bytesRead = assetFileSystem.readSync(descriptor, buffer, 0, buffer.byteLength, null);
+        const bytesRead = await assetFileSystem.read(
+          descriptor,
+          buffer,
+          0,
+          buffer.byteLength,
+          null,
+        );
         if (bytesRead === 0) {
           close();
           controller.close();
@@ -235,6 +241,21 @@ function createAssetStream(
   });
 
   return { stream, close };
+}
+
+function readAssetDescriptor(
+  descriptor: number,
+  buffer: NodeJS.ArrayBufferView,
+  offset: number,
+  length: number,
+  position: number | null,
+): Promise<number> {
+  return new Promise((_resolve, reject) => {
+    fileSystem.read(descriptor, buffer, offset, length, position, (error, bytesRead) => {
+      if (error) reject(error);
+      else _resolve(bytesRead);
+    });
+  });
 }
 
 function assetResponse(
@@ -302,7 +323,10 @@ export function createDashboardAssetRoute(
   assets: ResolvedDashboardAssets,
   assetFileSystem?: DashboardAssetFileSystem,
 ): Partial<Record<'GET' | 'HEAD', (request: Request) => Response>> {
-  const fileSystemForAsset = assetFileSystem ?? fileSystem;
+  const fileSystemForAsset = assetFileSystem ?? {
+    ...fileSystem,
+    read: readAssetDescriptor,
+  };
   const handler = (request: Request): Response =>
     assetResponse(assets.directory, assets.prefix, request, fileSystemForAsset);
   return { GET: handler, HEAD: handler };
