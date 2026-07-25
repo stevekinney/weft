@@ -478,10 +478,15 @@ declare class Engine {
 Awaited engine shutdown. This is equivalent to `await engine[Symbol.asyncDispose]()` and is useful in process signal handlers where `await using` cannot own the whole process lifetime directly. With `ownership: 'lease'`, `shutdown()` drains queued inline starts, tears down in-memory write paths, and awaits lease release before resolving. The returned boolean is `true` when no lease needed release or the holder delete committed, and `false` when the delete did not commit.
 
 ```ts
-import { Engine } from '@lostgradient/weft';
+import { Engine, workflow } from '@lostgradient/weft';
 
-const engine = new Engine({
+const engine = await Engine.create({
   ownership: 'lease',
+  workflows: {
+    orders: workflow({ name: 'orders' }).execute(async function* () {
+      return 'ready';
+    }),
+  },
 });
 process.on('SIGTERM', () => {
   void (async () => {

@@ -189,6 +189,44 @@ describe('InlineExecutionStrategy', () => {
       expect(strategy.waitForWorkflowAdvance('wf-1')).toBeUndefined();
     });
 
+    it('suppresses an operation yielded after a shutdown abort', async () => {
+      setup();
+
+      const bodyEntered = Promise.withResolvers<void>();
+      const releaseBody = Promise.withResolvers<void>();
+      registrations.set('shutdown-yield', {
+        handler: async function* () {
+          bodyEntered.resolve();
+          await releaseBody.promise;
+          yield {
+            type: 'activity',
+            operationId: 'suppressed-operation',
+            activityName: 'doWork',
+            input: null,
+          };
+        },
+        version: '1',
+      });
+
+      strategy.startWorkflow({
+        workflowId: 'wf-1',
+        workflowType: 'shutdown-yield',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+      const pendingAdvance = strategy.waitForWorkflowAdvance('wf-1');
+      expect(pendingAdvance).toBeDefined();
+      await bodyEntered.promise;
+
+      strategy.abortWorkflowAdvanceForShutdown('wf-1');
+      releaseBody.resolve();
+      await pendingAdvance;
+
+      expect(messages).toEqual([]);
+      expect(strategy.hasGenerator('wf-1')).toBe(true);
+      expect(strategy.waitForWorkflowTurn('wf-1')).toBeUndefined();
+    });
+
     it('clears tracked workflow turns after an async message handler settles', async () => {
       setup();
 

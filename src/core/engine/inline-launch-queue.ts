@@ -157,10 +157,12 @@ export async function drainQueuedInlineWorkflowStarts(
       flushQueuedInlineWorkflowStarts(internals, callbacks, options),
     );
 
-    // Give cooperatively-aborted first turns one scheduler opportunity to
-    // settle, but never let an arbitrary promise that ignores ctx.signal hold
-    // disposal and lease release indefinitely. Pending updates are deliberately
-    // left durable for a successor when shutdown starts these aborted turns.
+    // Give cooperatively-aborted first advances one scheduler opportunity to
+    // settle, but never let arbitrary user code that ignores ctx.signal hold
+    // disposal indefinitely. The inline strategy suppresses a new operation
+    // yielded after this shutdown abort, leaving it for successor recovery. A
+    // cooperative terminal return still emits a finite durable turn, which must
+    // commit before lease handoff.
     const pendingAdvances = workflowIds.map((workflowId) => {
       const pendingAdvance = internals.inlineStrategy?.waitForWorkflowAdvance(workflowId);
       return {
@@ -173,15 +175,14 @@ export async function drainQueuedInlineWorkflowStarts(
     });
     const settledWorkflowIds = await settleQueuedShutdownWork(pendingAdvances);
     if (settledWorkflowIds.length > 0) {
-      const pendingTurns = settledWorkflowIds.map((workflowId) => {
+      const terminalTurns = settledWorkflowIds.flatMap((workflowId) => {
+        if (internals.inlineStrategy?.hasGenerator(workflowId)) {
+          return [];
+        }
         const pendingTurn = internals.inlineStrategy?.waitForWorkflowTurn(workflowId);
-        return {
-          workflowId,
-          promise:
-            pendingTurn === undefined ? undefined : callbacks.swallowPromiseRejection(pendingTurn),
-        };
+        return pendingTurn === undefined ? [] : [callbacks.swallowPromiseRejection(pendingTurn)];
       });
-      await settleQueuedShutdownWork(pendingTurns);
+      await Promise.all(terminalTurns);
     }
   }
   // The `passes < maxPasses` bound above is a backstop against a pathological
@@ -221,9 +222,11 @@ async function startQueuedInlineWorkflowExecution(
     // Async disposal starts queued workflows so their first turns cannot fire
     // later against torn-down state. Abort cooperatively after generator.next()
     // has been scheduled, before awaiting either the advance or pending-update
-    // processing, so a first turn parked on ctx.signal can settle.
+    // processing, so a first turn parked on ctx.signal can settle. If the
+    // aborted advance yields another operation, the inline strategy suppresses
+    // it so nested work cannot begin during lease handoff.
     if (options?.abortStartedWorkflows === true) {
-      internals.inlineStrategy?.getAbortController(start.workflowId)?.abort();
+      internals.inlineStrategy?.abortWorkflowAdvanceForShutdown(start.workflowId);
     } else {
       await callbacks.processPendingUpdatesAfterInlineAdvance(start.workflowId);
     }

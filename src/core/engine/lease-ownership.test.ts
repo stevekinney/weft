@@ -896,6 +896,54 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     storage[Symbol.dispose]?.();
   });
 
+  it('awaits a cooperative queued durable turn before releasing the lease', async () => {
+    const storage = new MemoryStorage();
+    const terminalWriteEntered = Promise.withResolvers<void>();
+    const releaseTerminalWrite = Promise.withResolvers<void>();
+    const cooperativeWorkflow = workflow({ name: 'slow-terminal-write' }).execute(
+      async function* (ctx) {
+        await new Promise<void>((resolve) => {
+          if (ctx.signal.aborted) {
+            resolve();
+            return;
+          }
+          ctx.signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+        return 'stopped';
+      },
+    );
+    const engine = await Engine.create({
+      storage,
+      workflows: { 'slow-terminal-write': cooperativeWorkflow },
+      ownership: 'lease',
+    });
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+    storage.conditionalBatch = async (conditions, operations) => {
+      const terminalWrite = operations.find(
+        (operation) =>
+          operation.type === 'put' && operation.key === KEYS.workflow('slow-terminal-write-run'),
+      );
+      if (
+        terminalWrite?.type === 'put' &&
+        decodeWorkflowState(terminalWrite.value).status === 'completed'
+      ) {
+        terminalWriteEntered.resolve();
+        await releaseTerminalWrite.promise;
+      }
+      return originalConditionalBatch(conditions, operations);
+    };
+
+    await engine.start('slow-terminal-write', null, { id: 'slow-terminal-write-run' });
+    const shutdown = engine.shutdown();
+    await terminalWriteEntered.promise;
+
+    expect(await readHolder(storage)).not.toBeNull();
+    releaseTerminalWrite.resolve();
+    await expect(shutdown).resolves.toBe(true);
+    expect(await readHolder(storage)).toBeNull();
+    storage[Symbol.dispose]?.();
+  });
+
   it('waits for each cooperative queued turn when a sibling ignores abort', async () => {
     const storage = new MemoryStorage();
     const releaseNonCooperativeBody = Promise.withResolvers<void>();
@@ -951,6 +999,55 @@ describe("Engine.create({ ownership: 'lease' })", () => {
 
     releaseNonCooperativeBody.resolve();
     await new Promise((resolve) => setImmediate(resolve));
+    storage[Symbol.dispose]?.();
+  });
+
+  it('suppresses nested starts yielded after a queued shutdown abort', async () => {
+    const storage = new MemoryStorage();
+    let parentSignalObserved = false;
+    let childSignalObserved = false;
+    const childWorkflow = workflow({ name: 'shutdown-child' }).execute(async function* (ctx) {
+      await new Promise<void>((resolve) => {
+        if (ctx.signal.aborted) {
+          resolve();
+          return;
+        }
+        ctx.signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+      childSignalObserved = true;
+      return 'stopped';
+    });
+    const parentWorkflow = workflow({ name: 'shutdown-parent' }).execute(async function* (ctx) {
+      await new Promise<void>((resolve) => {
+        if (ctx.signal.aborted) {
+          resolve();
+          return;
+        }
+        ctx.signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+      parentSignalObserved = true;
+      yield* ctx.startChild('shutdown-child', null, {
+        id: 'nested-shutdown-child',
+        parentClosePolicy: 'abandon',
+      });
+      return 'stopped';
+    });
+    const engine = await Engine.create({
+      storage,
+      workflows: {
+        'shutdown-child': childWorkflow,
+        'shutdown-parent': parentWorkflow,
+      },
+      ownership: 'lease',
+    });
+
+    await engine.start('shutdown-parent', null, { id: 'queued-shutdown-parent' });
+    await expect(engine.shutdown()).resolves.toBe(true);
+
+    expect(parentSignalObserved).toBe(true);
+    expect(childSignalObserved).toBe(false);
+    expect(await storage.get(KEYS.workflow('nested-shutdown-child'))).toBeNull();
+    expect(await readHolder(storage)).toBeNull();
     storage[Symbol.dispose]?.();
   });
 

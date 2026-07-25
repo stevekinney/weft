@@ -37,6 +37,7 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
   readonly #parkedContexts: Map<string, Context>;
   readonly #workflowAdvances: Map<string, Promise<void>>;
   readonly #workflowTurns: Map<string, Promise<void>>;
+  readonly #shutdownAbortedWorkflowIds: Set<string>;
   #messageHandler: ((message: WorkerOutboundMessage) => void | Promise<void>) | null;
 
   constructor(dependencies: InlineExecutionDependencies) {
@@ -47,6 +48,7 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
     this.#parkedContexts = new Map();
     this.#workflowAdvances = new Map();
     this.#workflowTurns = new Map();
+    this.#shutdownAbortedWorkflowIds = new Set();
     this.#messageHandler = null;
   }
 
@@ -198,6 +200,11 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
     return this.#workflowTurns.get(workflowId);
   }
 
+  abortWorkflowAdvanceForShutdown(workflowId: string): void {
+    this.#shutdownAbortedWorkflowIds.add(workflowId);
+    this.#abortControllers.get(workflowId)?.abort();
+  }
+
   waitForWorkflowAdvance(workflowId: string): Promise<void> | undefined {
     return this.#workflowAdvances.get(workflowId);
   }
@@ -258,6 +265,7 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
     this.#parkedContexts.clear();
     this.#workflowAdvances.clear();
     this.#workflowTurns.clear();
+    this.#shutdownAbortedWorkflowIds.clear();
     this.#messageHandler = null;
   }
 
@@ -302,30 +310,7 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
           const abortController = this.#abortControllers.get(workflowId);
           if (abortController?.signal.aborted) return;
 
-          const iterationResult = await advance();
-
-          if (iterationResult.done) {
-            this.#cleanup(workflowId, {
-              preserveTrackedAdvance: true,
-              preserveTrackedTurn: true,
-            });
-            this.#emit({
-              type: 'completed',
-              workflowId,
-              result: iterationResult.value,
-            });
-            return;
-          }
-
-          // The yielded value is a ContextOperationRequest. Emit it as a
-          // checkpoint message so the engine can process the operation.
-          const operation = iterationResult.value as ContextOperationRequest;
-          this.#emit({
-            type: 'checkpoint',
-            workflowId,
-            checkpoint: new ArrayBuffer(0),
-            operationRequest: operation as never,
-          });
+          this.#handleIterationResult(workflowId, await advance());
         } catch (error) {
           this.#cleanup(workflowId, {
             preserveTrackedAdvance: true,
@@ -348,6 +333,39 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
         }
       })(),
     );
+  }
+
+  #handleIterationResult(
+    workflowId: string,
+    iterationResult: IteratorResult<unknown, unknown>,
+  ): void {
+    const shutdownAborted = this.#shutdownAbortedWorkflowIds.delete(workflowId);
+    if (!iterationResult.done && shutdownAborted) {
+      return;
+    }
+
+    if (iterationResult.done) {
+      this.#cleanup(workflowId, {
+        preserveTrackedAdvance: true,
+        preserveTrackedTurn: true,
+      });
+      this.#emit({
+        type: 'completed',
+        workflowId,
+        result: iterationResult.value,
+      });
+      return;
+    }
+
+    // The yielded value is a ContextOperationRequest. Emit it as a checkpoint
+    // message so the engine can process the operation.
+    const operation = iterationResult.value as ContextOperationRequest;
+    this.#emit({
+      type: 'checkpoint',
+      workflowId,
+      checkpoint: new ArrayBuffer(0),
+      operationRequest: operation as never,
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -402,5 +420,6 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
     if (!options?.preserveTrackedTurn) {
       this.#workflowTurns.delete(workflowId);
     }
+    this.#shutdownAbortedWorkflowIds.delete(workflowId);
   }
 }
