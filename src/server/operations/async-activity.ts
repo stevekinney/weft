@@ -15,7 +15,7 @@ import { raiseFault } from '../operation-catalog.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { readRestJsonBody } from '../rest-body.ts';
-import { invalidParamsFault, isOperationFault, shapeRestFault } from './operation-helpers.ts';
+import { invalidParamsFault, isOperationFault } from './operation-helpers.ts';
 
 /**
  * Async ("out-of-band") activity completion, exposed across every transport.
@@ -283,20 +283,6 @@ export const failAsyncActivityOperation = defineOperation<
   },
 });
 
-function shapeAsyncActivitySuccess(output: AsyncActivityOutput): Response {
-  return new Response(JSON.stringify(output), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  });
-}
-
-function shapePendingAsyncActivitiesSuccess(output: ListPendingAsyncActivitiesOutput): Response {
-  return new Response(JSON.stringify(output), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  });
-}
-
 export const listPendingAsyncActivitiesRestBinding: UnknownRestBinding = {
   method: 'GET',
   path: '/v1/workflows/:id/pending-async-activities',
@@ -318,9 +304,6 @@ export const listPendingAsyncActivitiesRestBinding: UnknownRestBinding = {
     };
   },
   success: { kind: 'json', status: 200 },
-  shapeSuccess: (output: ListPendingAsyncActivitiesOutput) =>
-    shapePendingAsyncActivitiesSuccess(output),
-  shapeFault: shapeRestFault,
 };
 
 async function readJsonObjectBody(
@@ -357,8 +340,6 @@ export const completeAsyncActivityRestBinding: UnknownRestBinding = {
     };
   },
   success: { kind: 'json', status: 200 },
-  shapeSuccess: (output: AsyncActivityOutput) => shapeAsyncActivitySuccess(output),
-  shapeFault: shapeRestFault,
 };
 
 export const failAsyncActivityRestBinding: UnknownRestBinding = {
@@ -379,6 +360,4 @@ export const failAsyncActivityRestBinding: UnknownRestBinding = {
     };
   },
   success: { kind: 'json', status: 200 },
-  shapeSuccess: (output: AsyncActivityOutput) => shapeAsyncActivitySuccess(output),
-  shapeFault: shapeRestFault,
 };

@@ -15,11 +15,8 @@ import {
   parseBulkOperationControlFromBody,
   readOptionalJsonBody,
 } from './bulk-filter-helpers.ts';
-import {
-  shapeBulkJsonSuccess,
-  validatedListFilterFromBulkInput,
-} from './bulk-operation-helpers.ts';
-import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
+import { validatedListFilterFromBulkInput } from './bulk-operation-helpers.ts';
+import { invalidParamsFault } from './operation-helpers.ts';
 
 const bulkSignalWorkflowsInput = bulkListFilterInputSchema
   .extend({
@@ -102,6 +99,4 @@ export const bulkSignalWorkflowsRestBinding: UnknownRestBinding = {
     };
   },
   success: { kind: 'json', status: 200 },
-  shapeSuccess: (output: BulkSignalWorkflowsOutput) => shapeBulkJsonSuccess(output),
-  shapeFault: shapeRestFault,
 };

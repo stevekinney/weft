@@ -5,7 +5,7 @@ import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { readRestTextBody } from '../rest-body.ts';
-import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
+import { invalidParamsFault } from './operation-helpers.ts';
 
 const queryWorkflowInput = z.object({
   workflowId: z.string().min(1),
@@ -53,7 +53,7 @@ export const queryWorkflowOperation = defineOperation<QueryWorkflowInput, QueryW
 
       // Carry the real engine message on the fault so JSON-RPC callers
       // still receive it; the REST surface masks `EngineFailure` to a
-      // generic "Internal server error" 500 via `shapeRestFault`, so the
+      // generic "Internal server error" 500 via the canonical REST fault path, so the
       // raw message never reaches REST clients.
       const fault: OperationFault = {
         code: 'EngineFailure',
@@ -64,13 +64,6 @@ export const queryWorkflowOperation = defineOperation<QueryWorkflowInput, QueryW
     }
   },
 });
-
-function shapeQueryWorkflowSuccess(result: QueryWorkflowOutput): Response {
-  return new Response(JSON.stringify(result), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  });
-}
 
 export const queryWorkflowRestBinding: UnknownRestBinding = {
   method: 'GET',
@@ -86,8 +79,6 @@ export const queryWorkflowRestBinding: UnknownRestBinding = {
     queryName: pathParams['name'] ?? '',
   }),
   success: { kind: 'json', status: 200 },
-  shapeSuccess: (output: QueryWorkflowOutput) => shapeQueryWorkflowSuccess(output),
-  shapeFault: shapeRestFault,
 };
 
 export const queryWorkflowWithInputRestBinding: UnknownRestBinding = {
@@ -128,6 +119,4 @@ export const queryWorkflowWithInputRestBinding: UnknownRestBinding = {
     };
   },
   success: { kind: 'json', status: 200 },
-  shapeSuccess: (output: QueryWorkflowOutput) => shapeQueryWorkflowSuccess(output),
-  shapeFault: shapeRestFault,
 };

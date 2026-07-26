@@ -5,7 +5,6 @@ import type { SearchAttributeValue } from '../../core/types.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { shapeRestFault } from './operation-helpers.ts';
 
 const getWorkflowAttributesInput = z.object({
   workflowId: z.string().min(1),
@@ -46,17 +45,6 @@ export const getWorkflowAttributesOperation = defineOperation<
   },
 });
 
-function shapeGetWorkflowAttributesSuccess(result: GetWorkflowAttributesOutput): Response {
-  return new Response(JSON.stringify(result), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  });
-}
-
-function shapeGetWorkflowAttributesFault(fault: OperationFault): Response {
-  return shapeRestFault(fault);
-}
-
 export const getWorkflowAttributesRestBinding: UnknownRestBinding = {
   method: 'GET',
   path: '/v1/workflows/:id/attributes',
@@ -67,6 +55,4 @@ export const getWorkflowAttributesRestBinding: UnknownRestBinding = {
   },
   extractInput: async (_request, pathParams) => ({ workflowId: pathParams['id'] ?? '' }),
   success: { kind: 'json', status: 200 },
-  shapeSuccess: (output: GetWorkflowAttributesOutput) => shapeGetWorkflowAttributesSuccess(output),
-  shapeFault: shapeGetWorkflowAttributesFault,
 };

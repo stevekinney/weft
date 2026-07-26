@@ -3,10 +3,8 @@ import { z } from 'zod';
 import type { Engine } from '../../core/engine.ts';
 import type { CheckpointSummary } from '../../core/types.ts';
 import { negotiatedResponse } from '../handler/response-helpers.ts';
-import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { shapeRestFault } from './operation-helpers.ts';
 
 const listCheckpointsInput = z.object({
   workflowId: z.string().min(1),
@@ -46,10 +44,6 @@ function shapeListCheckpointsSuccess(result: ListCheckpointsOutput, request: Req
   return negotiatedResponse(request, result, 200);
 }
 
-function shapeListCheckpointsFault(fault: OperationFault): Response {
-  return shapeRestFault(fault);
-}
-
 export const listCheckpointsRestBinding: UnknownRestBinding = {
   method: 'GET',
   path: '/v1/workflows/:id/checkpoints',
@@ -64,5 +58,4 @@ export const listCheckpointsRestBinding: UnknownRestBinding = {
   success: { kind: 'json', status: 200 },
   shapeSuccess: (output: ListCheckpointsOutput, request: Request) =>
     shapeListCheckpointsSuccess(output, request),
-  shapeFault: shapeListCheckpointsFault,
 };

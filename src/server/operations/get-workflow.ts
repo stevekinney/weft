@@ -3,8 +3,7 @@
  *
  * Returns a workflow's state by id. REST response shape preserves the
  * historical format: 200 with the serialized `WorkflowState`, or a 4xx/5xx
- * with the string `error` plus audited structured `data`, as emitted by
- * `shapeFault` below.
+ * with the string `error` plus audited structured `data`.
  *
  * @module server/operations/get-workflow
  */
@@ -16,7 +15,6 @@ import type { WorkflowState } from '../../core/types.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { shapeRestFault } from './operation-helpers.ts';
 
 const getWorkflowInput = z.object({
   workflowId: z.string().min(1),
@@ -78,18 +76,6 @@ export const getWorkflowOperation = defineOperation<GetWorkflowInput, GetWorkflo
 });
 
 /**
- * Shape a successful `weft.workflows.get` result as a 200 with the
- * serialized state. Content-Type is `application/json` (no charset
- * parameter).
- */
-function shapeGetWorkflowSuccess(state: WorkflowState): Response {
-  return new Response(JSON.stringify(state), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  });
-}
-
-/**
  * RestBinding for `GET /v1/workflows/:id`. Pulls the workflow id from
  * the path param, invokes the operation, maps success/fault to the
  * REST response shape.
@@ -97,10 +83,8 @@ function shapeGetWorkflowSuccess(state: WorkflowState): Response {
  * Typed as `UnknownRestBinding` at the module boundary so the router's
  * heterogeneous `ReadonlyArray<UnknownRestBinding>` storage doesn't
  * run into `exactOptionalPropertyTypes` contravariance on
- * `shapeSuccess`. The concrete `GetWorkflowOutput` typing remains at
- * the `shapeGetWorkflowSuccess` function signature above — that's
- * where real type checking matters (did the output come out wrong?).
- * The router itself only sees a shape-uniform `RestBinding<any, any>`.
+ * the binding shape. The router itself only sees a shape-uniform
+ * `RestBinding<any, any>`.
  */
 export const getWorkflowRestBinding: UnknownRestBinding = {
   method: 'GET',
@@ -112,13 +96,4 @@ export const getWorkflowRestBinding: UnknownRestBinding = {
   },
   extractInput: async (_request, pathParams) => ({ workflowId: pathParams['id'] ?? '' }),
   success: { kind: 'json', status: 200 },
-  // The cast converts the binding-level `any` back to `WorkflowState`
-  // for the shaping function below. `UnknownRestBinding` storage is
-  // `RestBinding<any, any>`, so `output` here is typed `any`; the cast
-  // is a no-op but communicates the concrete shape expected.
-  shapeSuccess: (output: WorkflowState) => shapeGetWorkflowSuccess(output),
-  // The only fault this operation emits under normal conditions is `NotFound`;
-  // the canonical `shapeRestFault` masks `EngineFailure` to a generic 500 and
-  // maps other codes to their status via `FAULT_CODE_TO_HTTP_STATUS`.
-  shapeFault: shapeRestFault,
 };

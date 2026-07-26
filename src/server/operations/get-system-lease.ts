@@ -14,7 +14,6 @@ import { z } from 'zod';
 import { type Engine, type EngineLeaseHealth } from '../../core/engine.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { shapeRestFault } from './operation-helpers.ts';
 
 const getSystemLeaseInput = z.object({});
 
@@ -67,10 +66,4 @@ export const getSystemLeaseRestBinding: UnknownRestBinding = {
   inputSources: {},
   extractInput: async () => ({}),
   success: { kind: 'json', status: 200 },
-  shapeSuccess: (output: GetSystemLeaseOutput) =>
-    new Response(JSON.stringify(output), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    }),
-  shapeFault: shapeRestFault,
 };

@@ -1,15 +1,6 @@
 import { assertScopedBulkWorkflowFilter } from '../../core/bulk-workflow-filter.ts';
 import { coerceStartWorkflowTags } from '../../core/start-workflow-validation.ts';
-import type {
-  BulkCancelResult,
-  BulkDeleteResult,
-  BulkOperationDryRunResult,
-  BulkRetryFailedResult,
-  BulkSignalResult,
-  BulkTagResult,
-  ListFilter,
-  PurgeResult,
-} from '../../core/types.ts';
+import type { ListFilter } from '../../core/types.ts';
 import {
   faultMessage,
   listFilterFromBulkInput,
@@ -30,7 +21,7 @@ import { invalidParamsFault } from './operation-helpers.ts';
  * runs.
  *
  * Not used by `purge-workflows.ts`: purge allows empty/unscoped filters and
- * shapes faults through `shapeRestFault` (sanitized) rather than passing
+ * uses the canonical REST fault fallback (sanitized) rather than passing
  * raw engine messages through unmasked.
  */
 export function validatedListFilterFromBulkInput(input: BulkListFilterInput): ListFilter {
@@ -52,26 +43,4 @@ export function validatedListFilterFromBulkInput(input: BulkListFilterInput): Li
   }
 
   return filter;
-}
-
-export type BulkOperationSuccessResult =
-  | BulkCancelResult
-  | BulkDeleteResult
-  | BulkRetryFailedResult
-  | BulkSignalResult
-  | BulkTagResult
-  | BulkOperationDryRunResult
-  | PurgeResult;
-
-/**
- * Standard JSON 200 response shape for bulk-workflow operations. Used by
- * every bulk operation's REST `shapeSuccess`; the result types are unioned
- * rather than left as `unknown` so the type system catches accidental
- * `undefined` / `Response` / `Error` arguments at the call site.
- */
-export function shapeBulkJsonSuccess(result: BulkOperationSuccessResult): Response {
-  return new Response(JSON.stringify(result), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  });
 }

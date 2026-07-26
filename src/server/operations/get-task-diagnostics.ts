@@ -33,7 +33,6 @@ import {
   type ResolvedRecord,
   type TaskState,
 } from '../task-state.ts';
-import { shapeRestFault } from './operation-helpers.ts';
 
 const DEFAULT_STALE_QUEUED_AFTER_MS = 60_000;
 const DEFAULT_STALE_HEARTBEAT_AFTER_MS = 60_000;
@@ -579,12 +578,6 @@ export const getTaskDiagnosticsRestBinding: UnknownRestBinding = {
     };
   },
   success: { kind: 'json', status: 200 },
-  shapeSuccess: (output: GetTaskDiagnosticsOutput) =>
-    new Response(JSON.stringify(output), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    }),
-  shapeFault: shapeRestFault,
 };
 
 export const clearTaskDeadLetterRestBinding: UnknownRestBinding = {
@@ -599,10 +592,4 @@ export const clearTaskDeadLetterRestBinding: UnknownRestBinding = {
     operationId: pathParams['operationId'] ?? '',
   }),
   success: { kind: 'json', status: 200 },
-  shapeSuccess: (output: ClearTaskDeadLetterOutput) =>
-    new Response(JSON.stringify(output), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    }),
-  shapeFault: shapeRestFault,
 };

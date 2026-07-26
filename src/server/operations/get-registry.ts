@@ -26,7 +26,6 @@ import {
 } from '../../core/registry-snapshot.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { shapeRestFault } from './operation-helpers.ts';
 
 const getRegistryInput = z.object({});
 
@@ -102,12 +101,6 @@ export const getRegistryRestBinding: UnknownRestBinding = {
   inputSources: {},
   extractInput: async () => ({}),
   success: { kind: 'json', status: 200 },
-  shapeSuccess: (output: GetRegistryOutput) =>
-    new Response(JSON.stringify(output), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    }),
   // `RegistrySchemaConversionError` details are logged in `invoke`; the
-  // shared REST shaper keeps the wire response masked.
-  shapeFault: shapeRestFault,
+  // shared REST fault path keeps the wire response masked.
 };

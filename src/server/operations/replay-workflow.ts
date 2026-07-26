@@ -20,7 +20,7 @@ import { negotiatedResponse } from '../handler/response-helpers.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
+import { invalidParamsFault } from './operation-helpers.ts';
 
 const replayWorkflowInput = z.object({
   workflowId: z.string().min(1),
@@ -89,10 +89,6 @@ export const replayWorkflowOperation = defineOperation<ReplayWorkflowInput, Repl
   },
 });
 
-function shapeReplayWorkflowFault(fault: OperationFault): Response {
-  return shapeRestFault(fault);
-}
-
 /**
  * Content-negotiate success: REST callers that `Accept: application/msgpack`
  * get msgpack encoding; everyone else gets JSON.
@@ -117,5 +113,4 @@ export const replayWorkflowRestBinding: UnknownRestBinding = {
   success: { kind: 'json', status: 200 },
   shapeSuccess: (output: ReplayWorkflowOutput, request: Request) =>
     shapeReplayWorkflowSuccess(output, request),
-  shapeFault: shapeReplayWorkflowFault,
 };

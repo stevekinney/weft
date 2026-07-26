@@ -17,10 +17,9 @@ import type {
   ScheduleStatus,
   ScheduleSummary,
 } from '../../core/types.ts';
-import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
+import { invalidParamsFault } from './operation-helpers.ts';
 
 const VALID_SCHEDULE_STATUSES = new Set<string>(['active', 'paused', 'cancelled']);
 
@@ -128,10 +127,6 @@ export const listSchedulesOperation = defineOperation<ListSchedulesInput, ListSc
   },
 });
 
-function shapeListSchedulesFault(fault: OperationFault): Response {
-  return shapeRestFault(fault);
-}
-
 export const listSchedulesRestBinding: UnknownRestBinding = {
   method: 'GET',
   path: '/v1/schedules',
@@ -166,5 +161,4 @@ export const listSchedulesRestBinding: UnknownRestBinding = {
     return result;
   },
   success: { kind: 'json', status: 200 },
-  shapeFault: shapeListSchedulesFault,
 };

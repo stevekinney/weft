@@ -4,7 +4,7 @@ import type { Engine } from '../../core/engine.ts';
 import type { ScheduleOptions, ScheduleSpec } from '../../core/types.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
+import { invalidParamsFault } from './operation-helpers.ts';
 import {
   mapScheduleErrorToFault,
   validateScheduleInputCadence,
@@ -190,5 +190,4 @@ export const createScheduleRestBinding: UnknownRestBinding = {
     };
   },
   success: { kind: 'json', status: 201 },
-  shapeFault: shapeRestFault,
 };

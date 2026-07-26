@@ -13,8 +13,7 @@ import {
   readOptionalJsonBody,
   type BulkListFilterInput,
 } from './bulk-filter-helpers.ts';
-import { shapeBulkJsonSuccess } from './bulk-operation-helpers.ts';
-import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
+import { invalidParamsFault } from './operation-helpers.ts';
 
 const purgeWorkflowsOutput = z.unknown();
 
@@ -36,8 +35,8 @@ export const purgeWorkflowsOperation = defineOperation<PurgeWorkflowsInput, Purg
     const e = engine as Engine;
 
     // purge intentionally keeps inline tag coercion + filter assembly
-    // local; it must allow empty filters (no scoped assert) and shape
-    // faults via `shapeRestFault` (sanitized), so
+    // local; it must allow empty filters (no scoped assert) and use the
+    // canonical REST fault fallback (sanitized), so
     // `validatedListFilterFromBulkInput` is not appropriate here.
     // Validating tags in `invoke` also ensures JSON-RPC / stdio callers
     // hit the same `coerceStartWorkflowTags` check the REST
@@ -75,6 +74,4 @@ export const purgeWorkflowsRestBinding: UnknownRestBinding = {
     }
   },
   success: { kind: 'json', status: 200 },
-  shapeSuccess: (output: PurgeWorkflowsOutput) => shapeBulkJsonSuccess(output),
-  shapeFault: shapeRestFault,
 };

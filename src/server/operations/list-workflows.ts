@@ -144,13 +144,6 @@ function extractListWorkflowsInput(request: Request): ListWorkflowsInput {
   return filter;
 }
 
-function shapeListWorkflowsSuccess(result: ListWorkflowsOutput): Response {
-  return new Response(JSON.stringify(result), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  });
-}
-
 function shapeListWorkflowsFault(fault: OperationFault): Response {
   // Workflow listing reports invalid filter values as 400 even when
   // the transport-neutral fault is `Unprocessable`.
@@ -181,6 +174,5 @@ export const listWorkflowsRestBinding: UnknownRestBinding = {
   },
   extractInput: async (request) => extractListWorkflowsInput(request),
   success: { kind: 'json', status: 200 },
-  shapeSuccess: (output: ListWorkflowsOutput) => shapeListWorkflowsSuccess(output),
   shapeFault: shapeListWorkflowsFault,
 };

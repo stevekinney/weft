@@ -249,6 +249,26 @@ describe('REST fault shaper regressions', () => {
     expect(violatingFiles).toEqual([]);
   });
 
+  it('rejects default-equivalent REST shapers in operation bindings', async () => {
+    const forbiddenPatterns = [
+      /function\s+shape[A-Za-z]+Fault\(fault:\s*OperationFault\):\s*Response\s*\{\s*return\s+shapeRestFault\(fault\);\s*\}/su,
+      /shapeFault:\s*shapeRestFault\b/u,
+      /function\s+shape[A-Za-z]+Success\([^)]*\):\s*Response\s*\{\s*return\s+new\s+Response\(JSON\.stringify\([^)]*\),\s*\{\s*status:\s*200,\s*headers:\s*\{\s*['"]Content-Type['"]:\s*['"]application\/json['"]\s*\},\s*\}\);\s*\}/su,
+      /shapeSuccess:\s*\([^)]*\)\s*=>\s*new\s+Response\(JSON\.stringify\([^)]*\),\s*\{\s*status:\s*200,\s*headers:\s*\{\s*['"]Content-Type['"]:\s*['"]application\/json['"]\s*\},\s*\}\)/su,
+      new RegExp(['shapeBulk', 'JsonSuccess'].join(''), 'u'),
+    ];
+    const violations: string[] = [];
+
+    for (const file of await operationSourceFiles()) {
+      const source = await Bun.file(new URL(file, operationsDirectory)).text();
+      for (const pattern of forbiddenPatterns) {
+        if (pattern.test(source)) violations.push(`${file}: ${pattern.source}`);
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
   it('keeps invalid-params fault construction in operation helpers', async () => {
     const source = await Bun.file(new URL('bulk-filter-helpers.ts', operationsDirectory)).text();
 

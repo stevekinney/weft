@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { isSignalIdWithinByteLimit } from '../../core/signal-id.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { readRestJsonBody } from '../rest-body.ts';
-import { isOperationFault, shapeRestFault } from './operation-helpers.ts';
+import { isOperationFault } from './operation-helpers.ts';
 import {
   createSingleWorkflowControlOperation,
   extractWorkflowIdFromPath,
@@ -53,13 +53,6 @@ export const signalWorkflowOperation = createSingleWorkflowControlOperation<
   },
 });
 
-function shapeSignalWorkflowSuccess(output: SignalWorkflowOutput): Response {
-  return new Response(JSON.stringify(output), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  });
-}
-
 export const signalWorkflowRestBinding: UnknownRestBinding = {
   method: 'POST',
   path: '/v1/workflows/:id/signal/:name',
@@ -92,6 +85,4 @@ export const signalWorkflowRestBinding: UnknownRestBinding = {
     };
   },
   success: { kind: 'json', status: 200 },
-  shapeSuccess: (output: SignalWorkflowOutput) => shapeSignalWorkflowSuccess(output),
-  shapeFault: shapeRestFault,
 };

@@ -5,7 +5,6 @@ import type { ReviewRequest } from '../../core/review/index.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { shapeRestFault } from './operation-helpers.ts';
 
 const getReviewInput = z.object({
   workflowId: z.string().min(1),
@@ -48,17 +47,6 @@ export const getReviewOperation = defineOperation<GetReviewInput, GetReviewOutpu
   },
 });
 
-function shapeGetReviewSuccess(result: GetReviewOutput): Response {
-  return new Response(JSON.stringify(result), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  });
-}
-
-function shapeGetReviewFault(fault: OperationFault): Response {
-  return shapeRestFault(fault);
-}
-
 export const getReviewRestBinding: UnknownRestBinding = {
   method: 'GET',
   path: '/v1/workflows/:id/review/:reviewId',
@@ -73,6 +61,4 @@ export const getReviewRestBinding: UnknownRestBinding = {
     reviewId: pathParams['reviewId'] ?? '',
   }),
   success: { kind: 'json', status: 200 },
-  shapeSuccess: (output: GetReviewOutput) => shapeGetReviewSuccess(output),
-  shapeFault: shapeGetReviewFault,
 };

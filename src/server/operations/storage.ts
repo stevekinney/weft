@@ -20,7 +20,7 @@ import { isAuthenticated, type Principal } from '../principal.ts';
 import type { RestInputContext } from '../rest-binding.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { readRestBodyBounded, readRestJsonBody } from '../rest-body.ts';
-import { invalidParamsFault, isOperationFault, shapeRestFault } from './operation-helpers.ts';
+import { invalidParamsFault, isOperationFault } from './operation-helpers.ts';
 
 const rawStorageAccess: AccessPolicy = {
   kind: 'scoped',
@@ -409,7 +409,6 @@ export const storageGetRestBinding: UnknownRestBinding = {
   extractInput: async (_request, pathParams) => ({ key: storageKeyFromPath(pathParams) }),
   success: { kind: 'streaming', mediaType: 'application/octet-stream' },
   shapeSuccess: (output: Uint8Array | null) => createBinaryResponse(output),
-  shapeFault: shapeRestFault,
 };
 
 export const storagePutRestBinding: UnknownRestBinding = {
@@ -427,7 +426,6 @@ export const storagePutRestBinding: UnknownRestBinding = {
   }),
   success: { kind: 'empty', status: 204 },
   shapeSuccess: createNoContentResponse,
-  shapeFault: shapeRestFault,
 };
 
 export const storageDeleteRestBinding: UnknownRestBinding = {
@@ -441,7 +439,6 @@ export const storageDeleteRestBinding: UnknownRestBinding = {
   extractInput: async (_request, pathParams) => ({ key: storageKeyFromPath(pathParams) }),
   success: { kind: 'empty', status: 204 },
   shapeSuccess: createNoContentResponse,
-  shapeFault: shapeRestFault,
 };
 
 export const storageScanRestBinding: UnknownRestBinding = {
@@ -461,7 +458,6 @@ export const storageScanRestBinding: UnknownRestBinding = {
   extractInput: async (request) => extractStorageScanInput(request),
   success: { kind: 'streaming', mediaType: 'application/x-ndjson' },
   shapeSuccess: (output: StorageScanOutput) => createNdjsonResponse(output),
-  shapeFault: shapeRestFault,
 };
 
 export const storageBatchRestBinding: UnknownRestBinding = {
@@ -476,7 +472,6 @@ export const storageBatchRestBinding: UnknownRestBinding = {
     readJsonRequestBody(request, context) as Promise<StorageBatchInput>,
   success: { kind: 'empty', status: 204 },
   shapeSuccess: createNoContentResponse,
-  shapeFault: shapeRestFault,
 };
 
 export const storageConditionalBatchRestBinding: UnknownRestBinding = {
@@ -492,5 +487,4 @@ export const storageConditionalBatchRestBinding: UnknownRestBinding = {
     readJsonRequestBody(request, context) as Promise<StorageConditionalBatchInput>,
   success: { kind: 'json', status: 200 },
   shapeSuccess: (output: StorageConditionalBatchOutput) => Response.json(output),
-  shapeFault: shapeRestFault,
 };

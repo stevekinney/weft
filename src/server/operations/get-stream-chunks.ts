@@ -2,11 +2,10 @@ import { z } from 'zod';
 
 import type { StoredStreamChunk } from '../../core/context.ts';
 import type { Engine } from '../../core/engine.ts';
-import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { parseOptionalSequenceCursor } from '../sequence-cursor.ts';
-import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
+import { invalidParamsFault } from './operation-helpers.ts';
 import { createStoredChunkSSEStream, SSE_RESPONSE_HEADERS } from './sse-stream.ts';
 
 // `after` is permissive at the schema boundary so REST and JSON-RPC clients
@@ -71,10 +70,6 @@ export const getStreamChunksOperation = defineOperation<
   },
 });
 
-function shapeGetStreamChunksFault(fault: OperationFault): Response {
-  return shapeRestFault(fault);
-}
-
 /**
  * Negotiate JSON vs SSE based on `Accept`. Prefer SSE when
  * `text/event-stream` is anywhere in `Accept`; otherwise return
@@ -118,5 +113,4 @@ export const getStreamChunksRestBinding: UnknownRestBinding = {
   },
   success: { kind: 'streaming', mediaType: 'text/event-stream' },
   shapeSuccess: shapeGetStreamChunksSuccess,
-  shapeFault: shapeGetStreamChunksFault,
 };

@@ -9,6 +9,8 @@
 import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
+import { faultToHttpResponse } from './fault-to-http.ts';
+import { defaultShapeSuccess } from './handler/response-helpers.ts';
 import { defineOperation } from './operation-registry.ts';
 import {
   bindingPathMatches,
@@ -79,6 +81,22 @@ describe('ResponseShape discriminated union', () => {
 });
 
 describe('RestBinding structural shape', () => {
+  it('pins the exact omitted-hook success and fault responses', async () => {
+    const success = defaultShapeSuccess({ count: 1 }, { kind: 'json', status: 200 });
+    expect(success.status).toBe(200);
+    expect(success.headers.get('Content-Type')).toBe('application/json');
+    expect(await success.text()).toBe('{"count":1}');
+
+    const fault = faultToHttpResponse({
+      code: 'EngineFailure',
+      message: 'private detail',
+      data: {},
+    });
+    expect(fault.status).toBe(500);
+    expect(fault.headers.get('Content-Type')).toBe('application/json');
+    expect(await fault.text()).toBe('{"error":"Internal server error"}');
+  });
+
   it('is generic over Input and Output and carries extractInput + shapeSuccess', () => {
     type In = { workflowType: string };
     type Out = { workflowId: string };

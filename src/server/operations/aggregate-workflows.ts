@@ -133,13 +133,6 @@ function extractAggregateWorkflowsInput(request: Request): AggregateWorkflowsInp
   } as AggregateWorkflowsInput;
 }
 
-function shapeAggregateWorkflowsSuccess(result: AggregateWorkflowsOutput): Response {
-  return new Response(JSON.stringify(result), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  });
-}
-
 function shapeAggregateWorkflowsFault(fault: OperationFault): Response {
   // Keep aggregate REST validation aligned with workflow listing: the
   // transport-neutral fault is `Unprocessable`, but the REST contract
@@ -166,6 +159,5 @@ export const aggregateWorkflowsRestBinding: UnknownRestBinding = {
   },
   extractInput: async (request) => extractAggregateWorkflowsInput(request),
   success: { kind: 'json', status: 200 },
-  shapeSuccess: (output: AggregateWorkflowsOutput) => shapeAggregateWorkflowsSuccess(output),
   shapeFault: shapeAggregateWorkflowsFault,
 };

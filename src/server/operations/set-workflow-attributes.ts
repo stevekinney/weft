@@ -6,7 +6,7 @@ import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { readRestJsonBody } from '../rest-body.ts';
-import { isOperationFault, shapeRestFault } from './operation-helpers.ts';
+import { isOperationFault } from './operation-helpers.ts';
 
 const setWorkflowAttributesInput = z.object({
   workflowId: z.string().min(1),
@@ -60,17 +60,6 @@ export const setWorkflowAttributesOperation = defineOperation<
   },
 });
 
-function shapeSetWorkflowAttributesSuccess(output: SetWorkflowAttributesOutput): Response {
-  return new Response(JSON.stringify(output), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  });
-}
-
-function shapeSetWorkflowAttributesFault(fault: OperationFault): Response {
-  return shapeRestFault(fault);
-}
-
 export const setWorkflowAttributesRestBinding: UnknownRestBinding = {
   method: 'PATCH',
   path: '/v1/workflows/:id/attributes',
@@ -97,6 +86,4 @@ export const setWorkflowAttributesRestBinding: UnknownRestBinding = {
     };
   },
   success: { kind: 'json', status: 200 },
-  shapeSuccess: (output: SetWorkflowAttributesOutput) => shapeSetWorkflowAttributesSuccess(output),
-  shapeFault: shapeSetWorkflowAttributesFault,
 };

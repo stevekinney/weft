@@ -4,6 +4,7 @@ import { Engine } from '../../core/engine.ts';
 import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { faultToHttpResponse } from '../fault-to-http.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
@@ -427,16 +428,15 @@ describe('operation coverage regressions', () => {
     for (const binding of bindings) {
       const usesConflictFault =
         binding === getStreamChunksRestBinding || binding === streamWorkflowSseRestBinding;
-      const response = binding.shapeFault?.(
-        usesConflictFault ? workflowConflictFault : fallbackFault,
-      );
+      const fault = usesConflictFault ? workflowConflictFault : fallbackFault;
+      const response = binding.shapeFault?.(fault) ?? faultToHttpResponse(fault);
       expect(response).toBeDefined();
 
       const expectedStatus = usesConflictFault ? 409 : 404;
       const expectedMessage = usesConflictFault ? 'workflow is busy' : 'missing resource';
 
       await expectJsonError(
-        response!,
+        response,
         expectedStatus,
         expectedMessage,
         usesConflictFault ? undefined : { resource: 'workflow', identifier: 'wf-missing' },

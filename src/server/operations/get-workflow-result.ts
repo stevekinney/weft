@@ -111,13 +111,6 @@ export const getWorkflowResultOperation = defineOperation<
   },
 });
 
-function shapeGetWorkflowResultSuccess(result: GetWorkflowResultOutput): Response {
-  return new Response(JSON.stringify(result), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  });
-}
-
 function shapeGetWorkflowResultFault(fault: OperationFault): Response {
   if (fault.code === 'Timeout') {
     return shapeRestFault(fault, { message: 'Timeout waiting for workflow result', status: 408 });
@@ -138,6 +131,5 @@ export const getWorkflowResultRestBinding: UnknownRestBinding = {
   },
   extractInput: async (_request, pathParams) => ({ workflowId: pathParams['id'] ?? '' }),
   success: { kind: 'json', status: 200 },
-  shapeSuccess: (output: GetWorkflowResultOutput) => shapeGetWorkflowResultSuccess(output),
   shapeFault: shapeGetWorkflowResultFault,
 };

@@ -104,16 +104,8 @@ export function createSingleWorkflowTagMutationRestBinding(
       };
     },
     success: { kind: 'json', status: 200 },
-    shapeSuccess: shapeSingleWorkflowTagMutationSuccess,
     shapeFault: shapeSingleWorkflowTagMutationFault,
   };
-}
-
-function shapeSingleWorkflowTagMutationSuccess(output: SingleWorkflowTagMutationOutput): Response {
-  return new Response(JSON.stringify(output), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  });
 }
 
 function shapeSingleWorkflowTagMutationFault(fault: OperationFault): Response {

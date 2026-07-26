@@ -3,7 +3,6 @@ import { z } from 'zod';
 import type { Engine } from '../../core/engine.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { shapeRestFault } from './operation-helpers.ts';
 import { mapScheduleErrorToFault } from './schedule-faults.ts';
 
 const cancelScheduleInput = z.object({
@@ -54,5 +53,4 @@ export const cancelScheduleRestBinding: UnknownRestBinding = {
     scheduleId: pathParams['id'] ?? '',
   }),
   success: { kind: 'empty', status: 204 },
-  shapeFault: shapeRestFault,
 };

@@ -1,10 +1,8 @@
 import { z } from 'zod';
 
 import type { Engine } from '../../core/engine.ts';
-import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { shapeRestFault } from './operation-helpers.ts';
 
 const getUpdateResultInput = z.object({
   updateId: z.string().min(1),
@@ -60,10 +58,6 @@ function shapeGetUpdateResultSuccess(result: GetUpdateResultOutput): Response {
   });
 }
 
-function shapeGetUpdateResultFault(fault: OperationFault): Response {
-  return shapeRestFault(fault);
-}
-
 export const getUpdateResultRestBinding: UnknownRestBinding = {
   method: 'GET',
   path: '/v1/updates/:updateId',
@@ -75,5 +69,4 @@ export const getUpdateResultRestBinding: UnknownRestBinding = {
   extractInput: async (_request, pathParams) => ({ updateId: pathParams['updateId'] ?? '' }),
   success: { kind: 'json', status: 200 },
   shapeSuccess: (output: GetUpdateResultOutput) => shapeGetUpdateResultSuccess(output),
-  shapeFault: shapeGetUpdateResultFault,
 };

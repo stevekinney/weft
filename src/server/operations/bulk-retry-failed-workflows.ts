@@ -17,11 +17,8 @@ import {
   type BulkListFilterInput,
   type BulkOperationControlInput,
 } from './bulk-filter-helpers.ts';
-import {
-  shapeBulkJsonSuccess,
-  validatedListFilterFromBulkInput,
-} from './bulk-operation-helpers.ts';
-import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
+import { validatedListFilterFromBulkInput } from './bulk-operation-helpers.ts';
+import { invalidParamsFault } from './operation-helpers.ts';
 
 const bulkRetryFailedWorkflowsInput = bulkListFilterInputSchema.merge(
   bulkOperationControlInputSchema,
@@ -86,6 +83,4 @@ export const bulkRetryFailedWorkflowsRestBinding: UnknownRestBinding = {
     }
   },
   success: { kind: 'json', status: 200 },
-  shapeSuccess: (output: BulkRetryFailedWorkflowsOutput) => shapeBulkJsonSuccess(output),
-  shapeFault: shapeRestFault,
 };

@@ -1,7 +1,6 @@
 import { z } from 'zod';
 
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { shapeRestFault } from './operation-helpers.ts';
 import {
   createSingleWorkflowControlOperation,
   extractWorkflowIdFromPath,
@@ -44,5 +43,4 @@ export const timeoutWorkflowRestBinding: UnknownRestBinding = {
   },
   extractInput: async (_request, pathParams) => extractWorkflowIdFromPath(pathParams),
   success: { kind: 'empty', status: 204 },
-  shapeFault: shapeRestFault,
 };

@@ -4,7 +4,6 @@ import type { Engine } from '../../core/engine.ts';
 import type { WorkflowFinalizerStatus, WorkflowScheduleProvenance } from '../../core/types.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { shapeRestFault } from './operation-helpers.ts';
 
 const workflowObservabilityInput = z.object({
   workflowId: z.string().min(1),
@@ -95,7 +94,6 @@ export const getWorkflowScheduleProvenanceRestBinding: UnknownRestBinding = {
   inputSources: { workflowId: { kind: 'path', pathParam: 'id' } },
   extractInput: async (_request, pathParams) => ({ workflowId: pathParams['id'] ?? '' }),
   success: { kind: 'json', status: 200 },
-  shapeFault: shapeRestFault,
 };
 
 export const getWorkflowFinalizerRestBinding: UnknownRestBinding = {
@@ -106,7 +104,6 @@ export const getWorkflowFinalizerRestBinding: UnknownRestBinding = {
   inputSources: { workflowId: { kind: 'path', pathParam: 'id' } },
   extractInput: async (_request, pathParams) => ({ workflowId: pathParams['id'] ?? '' }),
   success: { kind: 'json', status: 200 },
-  shapeFault: shapeRestFault,
 };
 
 export const workflowObservabilityRestBindings = [

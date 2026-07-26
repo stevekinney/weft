@@ -99,8 +99,9 @@ export type RestBinding<Input, Output> = {
   readonly success: ResponseShape;
   /**
    * Optional override for response construction. When absent, transport
-   * adapters default to `Response.json(output, { status: success.status })`
-   * (or `new Response(null, { status })` for `empty`). Provide this
+   * adapters default to `jsonResponse(output, success.status)`, which emits
+   * `JSON.stringify(output)` with `Content-Type: application/json` (or
+   * `new Response(null, { status })` for `empty`). Provide this
    * when the wire representation differs from `output` verbatim.
    *
    * Receives the original `Request` so REST-only response shaping —

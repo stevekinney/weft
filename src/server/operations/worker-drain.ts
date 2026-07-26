@@ -215,7 +215,6 @@ function createWorkerDrainRestBinding(method: 'POST' | 'DELETE', operationName: 
       ...(method === 'POST' ? await readDrainBody(request, context) : {}),
     }),
     success: { kind: 'json', status: 200 },
-    shapeSuccess: shapeDrainSuccess,
     shapeFault: shapeOperationFaultAsJson,
   } satisfies UnknownRestBinding;
 }
@@ -235,16 +234,8 @@ function createDeploymentDrainRestBinding(method: 'POST' | 'DELETE', operationNa
       ...(method === 'POST' ? await readDrainBody(request, context) : {}),
     }),
     success: { kind: 'json', status: 200 },
-    shapeSuccess: shapeDrainSuccess,
     shapeFault: shapeOperationFaultAsJson,
   } satisfies UnknownRestBinding;
-}
-
-function shapeDrainSuccess(output: WorkerDrainOutput): Response {
-  return new Response(JSON.stringify(output), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  });
 }
 
 async function readDrainBody(

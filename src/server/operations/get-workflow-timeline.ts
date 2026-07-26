@@ -6,7 +6,6 @@ import { negotiatedResponse } from '../handler/response-helpers.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { shapeRestFault } from './operation-helpers.ts';
 
 const getWorkflowTimelineInput = z.object({
   workflowId: z.string().min(1),
@@ -57,10 +56,6 @@ function shapeGetWorkflowTimelineSuccess(
   return negotiatedResponse(request, result, 200);
 }
 
-function shapeGetWorkflowTimelineFault(fault: OperationFault): Response {
-  return shapeRestFault(fault);
-}
-
 export const getWorkflowTimelineRestBinding: UnknownRestBinding = {
   method: 'GET',
   path: '/v1/workflows/:id/timeline',
@@ -75,5 +70,4 @@ export const getWorkflowTimelineRestBinding: UnknownRestBinding = {
   success: { kind: 'json', status: 200 },
   shapeSuccess: (output: GetWorkflowTimelineOutput, request: Request) =>
     shapeGetWorkflowTimelineSuccess(output, request),
-  shapeFault: shapeGetWorkflowTimelineFault,
 };

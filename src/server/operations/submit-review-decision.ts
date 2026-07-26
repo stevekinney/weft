@@ -6,7 +6,7 @@ import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { readRestJsonBody } from '../rest-body.ts';
-import { isOperationFault, shapeRestFault } from './operation-helpers.ts';
+import { isOperationFault } from './operation-helpers.ts';
 
 const VALID_DECISIONS = [
   'approved',
@@ -180,13 +180,6 @@ export const submitReviewDecisionOperation = defineOperation<
   },
 });
 
-function shapeSubmitReviewDecisionSuccess(output: SubmitReviewDecisionOutput): Response {
-  return new Response(JSON.stringify(output), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  });
-}
-
 export const submitReviewDecisionRestBinding: UnknownRestBinding = {
   method: 'POST',
   path: '/v1/reviews/:reviewId/decision',
@@ -220,6 +213,4 @@ export const submitReviewDecisionRestBinding: UnknownRestBinding = {
     };
   },
   success: { kind: 'json', status: 200 },
-  shapeSuccess: (output: SubmitReviewDecisionOutput) => shapeSubmitReviewDecisionSuccess(output),
-  shapeFault: shapeRestFault,
 };

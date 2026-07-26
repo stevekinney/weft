@@ -210,11 +210,6 @@ export function createListTaskQueuesRestBinding(): UnknownRestBinding {
     inputSources: {},
     extractInput: async () => ({}),
     success: { kind: 'json', status: 200 },
-    shapeSuccess: (output: ListTaskQueuesOutput) =>
-      new Response(JSON.stringify(output), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
     shapeFault: shapeOperationFaultAsJson,
   };
 }

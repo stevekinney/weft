@@ -13,7 +13,6 @@ import type { ScheduleSummary } from '../../core/types.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { shapeRestFault } from './operation-helpers.ts';
 
 const getScheduleInput = z.object({
   scheduleId: z.string().min(1),
@@ -56,10 +55,6 @@ export const getScheduleOperation = defineOperation<GetScheduleInput, GetSchedul
   },
 });
 
-function shapeGetScheduleFault(fault: OperationFault): Response {
-  return shapeRestFault(fault);
-}
-
 export const getScheduleRestBinding: UnknownRestBinding = {
   method: 'GET',
   path: '/v1/schedules/:id',
@@ -72,5 +67,4 @@ export const getScheduleRestBinding: UnknownRestBinding = {
     scheduleId: pathParams['id'] ?? '',
   }),
   success: { kind: 'json', status: 200 },
-  shapeFault: shapeGetScheduleFault,
 };

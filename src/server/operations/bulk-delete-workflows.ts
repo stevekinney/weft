@@ -22,11 +22,8 @@ import {
   type BulkListFilterInput,
   type BulkOperationControlInput,
 } from './bulk-filter-helpers.ts';
-import {
-  shapeBulkJsonSuccess,
-  validatedListFilterFromBulkInput,
-} from './bulk-operation-helpers.ts';
-import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
+import { validatedListFilterFromBulkInput } from './bulk-operation-helpers.ts';
+import { invalidParamsFault } from './operation-helpers.ts';
 
 const bulkDeleteWorkflowsInput = bulkListFilterInputSchema.merge(bulkOperationControlInputSchema);
 const bulkDeleteWorkflowsOutput = z.unknown();
@@ -92,6 +89,4 @@ export const bulkDeleteWorkflowsRestBinding: UnknownRestBinding = {
     }
   },
   success: { kind: 'json', status: 200 },
-  shapeSuccess: (output: BulkDeleteWorkflowsOutput) => shapeBulkJsonSuccess(output),
-  shapeFault: shapeRestFault,
 };

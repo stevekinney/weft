@@ -5,7 +5,7 @@ import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { readRestTextBody } from '../rest-body.ts';
-import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
+import { invalidParamsFault } from './operation-helpers.ts';
 
 // `fromStep` is intentionally `unknown` at the schema boundary. The exact
 // "Field 'fromStep' must be a non-negative safe integer" error path
@@ -144,5 +144,4 @@ export const forkWorkflowRestBinding: UnknownRestBinding = {
     };
   },
   success: { kind: 'json', status: 201 },
-  shapeFault: shapeRestFault,
 };

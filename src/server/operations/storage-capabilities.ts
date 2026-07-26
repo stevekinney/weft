@@ -3,7 +3,6 @@ import { z } from 'zod';
 import type { Engine } from '../../core/engine.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { shapeRestFault } from './operation-helpers.ts';
 
 const storageCapabilitiesInput = z.object({});
 const storageCapabilitiesOutput = z
@@ -50,5 +49,4 @@ export const storageCapabilitiesRestBinding: UnknownRestBinding = {
   extractInput: async () => ({}),
   success: { kind: 'json', status: 200 },
   shapeSuccess: (output: StorageCapabilitiesOutput) => Response.json(output),
-  shapeFault: shapeRestFault,
 };

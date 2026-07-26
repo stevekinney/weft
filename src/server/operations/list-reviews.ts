@@ -63,13 +63,6 @@ function extractListReviewsInput(request: Request): ListReviewsInput {
   return filter;
 }
 
-function shapeListReviewsSuccess(result: ListReviewsOutput): Response {
-  return new Response(JSON.stringify(result), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  });
-}
-
 export const listReviewsRestBinding: UnknownRestBinding = {
   method: 'GET',
   path: '/v1/reviews',
@@ -82,6 +75,5 @@ export const listReviewsRestBinding: UnknownRestBinding = {
   },
   extractInput: async (request) => extractListReviewsInput(request),
   success: { kind: 'json', status: 200 },
-  shapeSuccess: (output: ListReviewsOutput) => shapeListReviewsSuccess(output),
   shapeFault: shapeOperationFaultAsJson,
 };

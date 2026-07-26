@@ -6,7 +6,6 @@ import { negotiatedResponse } from '../handler/response-helpers.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { shapeRestFault } from './operation-helpers.ts';
 
 const getCheckpointAtInput = z.object({
   workflowId: z.string().min(1),
@@ -56,10 +55,6 @@ function shapeGetCheckpointAtSuccess(result: GetCheckpointAtOutput, request: Req
   return negotiatedResponse(request, result, 200);
 }
 
-function shapeGetCheckpointAtFault(fault: OperationFault): Response {
-  return shapeRestFault(fault);
-}
-
 export const getCheckpointAtRestBinding: UnknownRestBinding = {
   method: 'GET',
   path: '/v1/workflows/:id/checkpoints/:step',
@@ -107,5 +102,4 @@ export const getCheckpointAtRestBinding: UnknownRestBinding = {
   success: { kind: 'json', status: 200 },
   shapeSuccess: (output: GetCheckpointAtOutput, request: Request) =>
     shapeGetCheckpointAtSuccess(output, request),
-  shapeFault: shapeGetCheckpointAtFault,
 };

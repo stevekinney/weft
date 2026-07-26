@@ -3,7 +3,6 @@ import { z } from 'zod';
 import type { Engine } from '../../core/engine.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { shapeRestFault } from './operation-helpers.ts';
 import {
   mapScheduleErrorToFault,
   validateScheduleInputCadence,
@@ -99,5 +98,4 @@ export const updateScheduleRestBinding: UnknownRestBinding = {
     };
   },
   success: { kind: 'empty', status: 204 },
-  shapeFault: shapeRestFault,
 };
