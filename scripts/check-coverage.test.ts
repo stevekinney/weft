@@ -173,6 +173,7 @@ describe('parseLcov', () => {
   });
 
   it('returns false immediately when a coverage shard exits non-zero', async () => {
+    const listCoverageTestFiles = mock(async () => ['src/example.test.ts']);
     const runCoverageShard = mock(async () => ({
       exitCode: 1,
       lcovPath: 'coverage/lcov.info',
@@ -181,8 +182,14 @@ describe('parseLcov', () => {
 
     using consoleErrorSpy = spyOn(console, 'error').mockImplementation(errorSpy);
 
-    await expect(checkCoverage({ runCoverageShard })).resolves.toBe(false);
+    await expect(checkCoverage({ listCoverageTestFiles, runCoverageShard })).resolves.toBe(false);
+    expect(listCoverageTestFiles).toHaveBeenCalledTimes(1);
     expect(runCoverageShard).toHaveBeenCalledTimes(1);
+    expect(runCoverageShard).toHaveBeenCalledWith({
+      name: 'coverage',
+      coverageDirectory: 'coverage',
+      testFiles: ['src/example.test.ts'],
+    });
     expect(consoleErrorSpy).toHaveBeenCalledWith('Coverage execution failed.');
   });
 });

@@ -2527,6 +2527,7 @@ type CoverageShard = {
 };
 
 type CheckCoverageDependencies = {
+  listCoverageTestFiles?: () => Promise<string[]>;
   runCoverageShard?: (shard: CoverageShard) => Promise<{ exitCode: number; lcovPath: string }>;
 };
 
@@ -2647,7 +2648,7 @@ export async function checkCoverage(
 ): Promise<boolean> {
   // Remove the entire coverage directory so we never read a previous run's report.
   await $`rm -rf coverage`.quiet().nothrow();
-  const allTestFiles = await listCoverageTestFiles();
+  const allTestFiles = await (dependencies.listCoverageTestFiles ?? listCoverageTestFiles)();
 
   const shard = await (dependencies.runCoverageShard ?? runCoverageShard)({
     name: 'coverage',
