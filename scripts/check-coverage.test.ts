@@ -7,6 +7,7 @@ import {
   checkCoverage,
   parseLcov,
   readCoveragePathIgnorePatterns,
+  runCoverageShard,
 } from './check-coverage.ts';
 
 describe('parseLcov', () => {
@@ -174,7 +175,7 @@ describe('parseLcov', () => {
 
   it('returns false immediately when a coverage shard exits non-zero', async () => {
     const listCoverageTestFiles = mock(async () => ['src/example.test.ts']);
-    const runCoverageShard = mock(async () => ({
+    const runCoverageShardStub = mock(async () => ({
       exitCode: 1,
       lcovPath: 'coverage/lcov.info',
     }));
@@ -182,15 +183,53 @@ describe('parseLcov', () => {
 
     using consoleErrorSpy = spyOn(console, 'error').mockImplementation(errorSpy);
 
-    await expect(checkCoverage({ listCoverageTestFiles, runCoverageShard })).resolves.toBe(false);
+    await expect(
+      checkCoverage({
+        listCoverageTestFiles,
+        runCoverageShard: runCoverageShardStub,
+      }),
+    ).resolves.toBe(false);
     expect(listCoverageTestFiles).toHaveBeenCalledTimes(1);
-    expect(runCoverageShard).toHaveBeenCalledTimes(1);
-    expect(runCoverageShard).toHaveBeenCalledWith({
+    expect(runCoverageShardStub).toHaveBeenCalledTimes(1);
+    expect(runCoverageShardStub).toHaveBeenCalledWith({
       name: 'coverage',
       coverageDirectory: 'coverage',
       testFiles: ['src/example.test.ts'],
     });
     expect(consoleErrorSpy).toHaveBeenCalledWith('Coverage execution failed.');
+  });
+
+  it('propagates a non-zero child exit through the real coverage shard runner', async () => {
+    const spawnCoverageProcess = mock(() => ({
+      exited: Promise.resolve(7),
+      stderr: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.close();
+        },
+      }),
+      stdout: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.close();
+        },
+      }),
+    }));
+    using consoleErrorSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(
+      runCoverageShard(
+        {
+          name: 'synthetic',
+          coverageDirectory: 'coverage/synthetic',
+          testFiles: ['src/example.test.ts'],
+        },
+        { spawnCoverageProcess },
+      ),
+    ).resolves.toEqual({
+      exitCode: 7,
+      lcovPath: 'coverage/synthetic/lcov.info',
+    });
+    expect(spawnCoverageProcess).toHaveBeenCalledTimes(1);
+    expect(consoleErrorSpy).toHaveBeenCalledWith('synthetic coverage shard exited with code 7.');
   });
 });
 

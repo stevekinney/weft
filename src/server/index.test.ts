@@ -1,7 +1,15 @@
 import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import * as fileSystem from 'node:fs';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  mkdirSync,
+  mkdtempSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { waitForParityCondition as waitFor } from '../core/parity/real-timer-wait.test-support.ts';
@@ -869,6 +877,150 @@ describe('serve', () => {
       expect(response.status).toBe(404);
     } finally {
       rmSync(parentDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('does not serve an outside descriptor when an ancestor is restored after opening', async () => {
+    const parentDirectory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
+    const directory = join(parentDirectory, 'assets');
+    const nestedDirectory = join(directory, 'nested');
+    const savedDirectory = join(directory, 'saved-nested');
+    const outsideDirectory = join(parentDirectory, 'outside');
+    try {
+      mkdirSync(nestedDirectory, { recursive: true });
+      mkdirSync(outsideDirectory);
+      writeFileSync(join(nestedDirectory, 'app.js'), 'validated asset');
+      writeFileSync(join(outsideDirectory, 'app.js'), 'outside asset');
+      if (!supportsSymlinks(parentDirectory)) return;
+
+      const originalStatSync = fileSystem.statSync;
+      const originalOpenSync = fileSystem.openSync;
+      let ancestorSwapped = false;
+      const assetFileSystem = {
+        ...fileSystem,
+        read: async () => 0,
+        statSync: (path: Parameters<typeof fileSystem.statSync>[0]) => {
+          if (String(path).endsWith(join('nested', 'app.js')) && !ancestorSwapped) {
+            renameSync(nestedDirectory, savedDirectory);
+            symlinkSync(outsideDirectory, nestedDirectory);
+            ancestorSwapped = true;
+          }
+          return originalStatSync(path);
+        },
+        openSync: (
+          path: Parameters<typeof fileSystem.openSync>[0],
+          flags: Parameters<typeof fileSystem.openSync>[1],
+          mode?: Parameters<typeof fileSystem.openSync>[2],
+        ) => {
+          const descriptor = originalOpenSync(path, flags, mode);
+          if (String(path).endsWith(join('nested', 'app.js')) && ancestorSwapped) {
+            rmSync(nestedDirectory);
+            renameSync(savedDirectory, nestedDirectory);
+          }
+          return descriptor;
+        },
+      };
+      const assets = resolveDashboardAssets(
+        { prefix: '/assets', directory },
+        DASHBOARD_PAGE_ROUTES,
+      );
+      const route = createDashboardAssetRoute(assets, assetFileSystem);
+      const response = route.GET!(new Request('http://weft.test/assets/nested/app.js'));
+
+      expect(response.status).toBe(404);
+      expect(await response.text()).not.toContain('outside asset');
+    } finally {
+      rmSync(parentDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('streams only the file size verified before reading starts', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
+    const assetPath = join(directory, 'app.js');
+    const originalRead = fileSystem.read;
+    try {
+      writeFileSync(assetPath, 'safe');
+      let appended = false;
+      const assetFileSystem = {
+        ...fileSystem,
+        read: async (
+          descriptor: number,
+          buffer: NodeJS.ArrayBufferView,
+          offset: number,
+          length: number,
+          position: number | null,
+        ) => {
+          if (!appended) {
+            appendFileSync(assetPath, ' outside');
+            appended = true;
+          }
+          return await new Promise<number>((resolve, reject) => {
+            originalRead(descriptor, buffer, offset, length, position, (error, bytesRead) => {
+              if (error) reject(error);
+              else resolve(bytesRead);
+            });
+          });
+        },
+      };
+      const assets = resolveDashboardAssets(
+        { prefix: '/assets', directory },
+        DASHBOARD_PAGE_ROUTES,
+      );
+      const route = createDashboardAssetRoute(assets, assetFileSystem);
+      const response = route.GET!(new Request('http://weft.test/assets/app.js'));
+
+      expect(response.headers.get('content-length')).toBe('4');
+      expect(await response.text()).toBe('safe');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('waits for an in-flight asset read before closing on cancellation', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
+    const originalCloseSync = fileSystem.closeSync;
+    try {
+      writeFileSync(join(directory, 'app.js'), 'dashboard');
+      let closed = 0;
+      let resolveRead!: (bytesRead: number) => void;
+      let markReadStarted!: () => void;
+      const readStarted = new Promise<void>((resolve) => {
+        markReadStarted = resolve;
+      });
+      const pendingRead = new Promise<number>((resolve) => {
+        resolveRead = resolve;
+      });
+      const assetFileSystem = {
+        ...fileSystem,
+        closeSync: (descriptor: number) => {
+          closed += 1;
+          return originalCloseSync(descriptor);
+        },
+        read: async () => {
+          markReadStarted();
+          return await pendingRead;
+        },
+      };
+      const assets = resolveDashboardAssets(
+        { prefix: '/assets', directory },
+        DASHBOARD_PAGE_ROUTES,
+      );
+      const route = createDashboardAssetRoute(assets, assetFileSystem);
+      const response = route.GET!(new Request('http://weft.test/assets/app.js'));
+      const reader = response.body!.getReader();
+      const read = reader.read();
+      await readStarted;
+
+      const cancellation = reader.cancel();
+      await Promise.resolve();
+      expect(closed).toBe(0);
+
+      resolveRead(0);
+      await cancellation;
+      await read;
+      expect(closed).toBe(1);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
     }
   });
 

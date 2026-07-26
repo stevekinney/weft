@@ -201,11 +201,30 @@ function isVerifiedAssetFile(
   );
 }
 
+function resolveOpenedDescriptorPath(
+  descriptor: number,
+  assetFileSystem: DashboardAssetFileSystem,
+): string | undefined {
+  for (const descriptorPath of [`/proc/self/fd/${descriptor}`, `/dev/fd/${descriptor}`]) {
+    try {
+      return assetFileSystem.realpathSync(descriptorPath);
+    } catch {
+      // Linux exposes descriptor targets through /proc; Darwin and BSD use /dev.
+    }
+  }
+  return undefined;
+}
+
 function createAssetStream(
   descriptor: number,
+  verifiedSize: number,
   assetFileSystem: DashboardAssetFileSystem,
 ): { stream: ReadableStream<Uint8Array>; close: () => void } {
   let closed = false;
+  let cancelled = false;
+  let position = 0;
+  let remainingBytes = verifiedSize;
+  let inFlightRead: Promise<number> | undefined;
   const close = (): void => {
     if (!closed) {
       closed = true;
@@ -215,27 +234,50 @@ function createAssetStream(
 
   const stream = new ReadableStream<Uint8Array>({
     async pull(controller) {
-      const buffer = Buffer.allocUnsafe(64 * 1024);
+      if (cancelled) return;
+      if (remainingBytes === 0) {
+        close();
+        controller.close();
+        return;
+      }
+
+      const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, remainingBytes));
+      const read = assetFileSystem.read(descriptor, buffer, 0, buffer.byteLength, position);
+      inFlightRead = read;
       try {
-        const bytesRead = await assetFileSystem.read(
-          descriptor,
-          buffer,
-          0,
-          buffer.byteLength,
-          null,
-        );
+        const bytesRead = await read;
+        if (cancelled) {
+          close();
+          return;
+        }
         if (bytesRead === 0) {
           close();
           controller.close();
           return;
         }
-        controller.enqueue(buffer.subarray(0, bytesRead));
+
+        const boundedBytesRead = Math.min(bytesRead, remainingBytes);
+        position += boundedBytesRead;
+        remainingBytes -= boundedBytesRead;
+        controller.enqueue(buffer.subarray(0, boundedBytesRead));
+        if (remainingBytes === 0) {
+          close();
+          controller.close();
+        }
       } catch (error) {
         close();
-        controller.error(error);
+        if (!cancelled) controller.error(error);
+      } finally {
+        if (inFlightRead === read) inFlightRead = undefined;
       }
     },
-    cancel() {
+    async cancel() {
+      cancelled = true;
+      try {
+        await inFlightRead;
+      } catch {
+        // The pull path owns read failures; cancellation only waits for settlement.
+      }
       close();
     },
   });
@@ -284,9 +326,10 @@ function assetResponse(
         assetFileSystem.constants.O_NONBLOCK,
     );
     const fileStats = assetFileSystem.fstatSync(descriptor);
-    const postOpenAssetPath = assetFileSystem.realpathSync(realAssetPath);
+    const openedAssetPath = resolveOpenedDescriptorPath(descriptor, assetFileSystem);
     if (
-      !isWithinDirectory(directory, postOpenAssetPath) ||
+      openedAssetPath === undefined ||
+      !isWithinDirectory(directory, openedAssetPath) ||
       !isVerifiedAssetFile(request, canonicalStats, fileStats)
     ) {
       return new Response('Not Found', { status: 404 });
@@ -300,7 +343,7 @@ function assetResponse(
       return new Response(null, { headers });
     }
 
-    const assetStream = createAssetStream(descriptor, assetFileSystem);
+    const assetStream = createAssetStream(descriptor, fileStats.size, assetFileSystem);
     try {
       const response = new Response(assetStream.stream, { headers });
       descriptor = undefined;
