@@ -1973,12 +1973,13 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
     ],
     [
       'src/server/operations/aggregate-workflows.ts',
-      { functions: 2, lines: new Set([85, 107, 108, 117, 118, 119, 136, 137, 138, 139, 149]) },
+      {
+        functions: 2,
+        lines: new Set([85, 107, 108, 117, 118, 119, 142]),
+        requireUncoveredLines: true,
+      },
     ],
-    [
-      'src/server/operations/get-task-diagnostics.ts',
-      { lines: new Set([229, 230, 231, 232, 233]) },
-    ],
+    ['src/server/operations/get-task-diagnostics.ts', { lines: new Set() }],
     ['src/server/operations/schedule-faults.ts', { lines: new Set([65, 70, 71, 72]) }],
     [
       'src/server/operations/start-workflow.ts',
@@ -1994,7 +1995,11 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
     ['src/server/operations/update-workflow.ts', { lines: new Set([92, 93, 94, 95, 96, 97]) }],
     [
       'src/server/operations/worker-drain.ts',
-      { functions: 2, lines: new Set([260, 267, 268, 269, 273, 274, 275, 276, 277]) },
+      {
+        functions: 2,
+        lines: new Set([256, 263, 264, 265, 269, 270, 271, 272, 273]),
+        requireUncoveredLines: true,
+      },
     ],
     ['src/server/runtime/cors.ts', { lines: new Set([304]) }],
     ['src/server/runtime/request-gate.ts', { lines: new Set([118, 119]) }],
@@ -2267,9 +2272,15 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
         ]),
       },
     ],
-    ['src/server/operations/bulk-retry-failed-workflows.ts', { lines: new Set([84]) }],
+    [
+      'src/server/operations/bulk-retry-failed-workflows.ts',
+      { lines: new Set([81]), requireUncoveredLines: true },
+    ],
     ['src/server/operations/create-schedule.ts', { lines: createLineSet(104, 106) }],
-    ['src/server/operations/get-task-diagnostics.ts', { lines: createLineSet(305, 309) }],
+    [
+      'src/server/operations/get-task-diagnostics.ts',
+      { lines: createLineSet(304, 308), requireUncoveredLines: true },
+    ],
     [
       'src/server/operations/storage.ts',
       {
@@ -2281,10 +2292,6 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       },
     ],
     ['src/server/operations/update-workflow.ts', { lines: new Set([98]) }],
-    [
-      'src/server/operations/worker-drain.ts',
-      { lines: createMergedLineSet(new Set([265, 272]), createLineSet(278, 282)) },
-    ],
     [
       'src/server/rest-body.ts',
       {
