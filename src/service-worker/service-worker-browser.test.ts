@@ -216,6 +216,9 @@ async function buildSetupServiceWorkerBundle(databaseName: string): Promise<stri
     entrypoint,
     `
 /// <reference lib="webworker" />
+import {
+  ENGINE_SLEEP_RESOLVER_COUNT_FOR_TESTING,
+} from ${JSON.stringify(engineModulePath)};
 import { activity, workflow } from ${JSON.stringify(typesModulePath)};
 import { IndexedDBStorage } from ${JSON.stringify(indexedDatabaseStorageModulePath)};
 import { setupServiceWorker } from ${JSON.stringify(setupModulePath)};
@@ -223,7 +226,6 @@ import { setupServiceWorker } from ${JSON.stringify(setupModulePath)};
 const serviceWorker = self;
 const instanceId = crypto.randomUUID();
 let activityCount = 0;
-const sleepReplayReady = Promise.withResolvers();
 
 const storage = new IndexedDBStorage(${JSON.stringify(databaseName)});
 
@@ -246,10 +248,6 @@ const waitForSignalWorkflow = workflow({ name: 'wait-for-signal' }).execute(asyn
 });
 
 const sleepThenFinishWorkflow = workflow({ name: 'sleep-then-finish' }).execute(async function* (ctx) {
-  // Resolve once per Service Worker instance. After a restart this proves the
-  // recovered generator has replayed far enough to register its sleep operation,
-  // so the test's single synthetic periodic-sync tick cannot race recovery.
-  sleepReplayReady.resolve();
   yield* ctx.sleep(60 * 60 * 1000);
   return 'slept-then-finished';
 });
@@ -302,13 +300,15 @@ serviceWorker.addEventListener('message', (event) => {
       // sleep deadline so the durable timer fires deterministically without a
       // real wall-clock wait. setupServiceWorker's own periodicsync listener
       // ticks at real Date.now(); driving the returned scheduler directly with
-      // an explicit future time keeps the test hermetic. Recovery intentionally
-      // retains a timer when it fires before its generator is ready; await the
-      // generator-owned readiness signal so this one synthetic tick represents
-      // the later periodic-sync delivery that can consume the retained timer.
-      await sleepReplayReady.promise;
+      // an explicit future time keeps the test hermetic.
       await scheduler.tick(Date.now() + 2 * 60 * 60 * 1000);
       port.postMessage({ ticked: true });
+      return;
+    }
+    if (message.type === 'weft:test:sleep-resolver-count') {
+      port.postMessage({
+        count: engine[ENGINE_SLEEP_RESOLVER_COUNT_FOR_TESTING](),
+      });
       return;
     }
     if (message.type === 'weft:test:timer-state') {
@@ -465,6 +465,19 @@ async function waitForTimerArmed(page: Page): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error('Timed out waiting for the durable sleep timer to be armed');
+}
+
+async function waitForSleepResolverReady(page: Page): Promise<void> {
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    const { count } = await sendWorkerMessage<{ count: number }>(page, {
+      type: 'weft:test:sleep-resolver-count',
+    });
+    if (count === 1) return;
+    if (attempt < 5) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  throw new Error('Recovered workflow did not register its sleep resolver');
 }
 
 async function waitForActivityCount(origin: string, expectedCount: number): Promise<void> {
@@ -819,6 +832,12 @@ describe('Service Worker browser smoke', () => {
         type: 'weft:test:instance',
       });
       expect(instanceAfterStop.instanceId).not.toBe(instanceBeforeStop.instanceId);
+
+      // setupServiceWorker's ready promise proves recoverAll() completed its scan,
+      // but the recovered generator advances asynchronously after that promise.
+      // Wait for the engine's actual sleep resolver instead of sampling an
+      // earlier workflow-body marker that can run before ctx.sleep() yields.
+      await waitForSleepResolverReady(page);
 
       // Drive a periodic-sync tick with the scheduler clock advanced past the
       // timer deadline. The recovered worker must fire the re-armed timer and
