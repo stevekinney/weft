@@ -74,6 +74,14 @@ import type { OperationOutcome, WorkerOutboundMessage } from './types.ts';
 
 export interface ExecutionStrategy extends Disposable, AsyncDisposable {
   /**
+   * Internal test seam for selecting a load-tolerant timeout around one
+   * intentionally wedged Worker turn. Production construction never sets it.
+   */
+  setWorkflowTurnTimeoutResolverForTesting?: (
+    resolver: (turn: { workflowId: string; kind: 'run' | 'resume' }) => number,
+  ) => void;
+
+  /**
    * Start a new workflow execution from the beginning.
    */
   startWorkflow(parameters: {

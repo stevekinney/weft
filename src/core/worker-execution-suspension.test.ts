@@ -4,7 +4,12 @@ import { waitForCondition, withTimeout } from '../testing/fake-timers.test-suppo
 import { encodeStorageKeyComponent, KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { deserializeCheckpoint } from './checkpoint/serialization.ts';
-import { Engine, ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING, type WorkflowHandle } from './engine.ts';
+import {
+  Engine,
+  ENGINE_SET_WORKER_TURN_TIMEOUT_RESOLVER_FOR_TESTING,
+  ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING,
+  type WorkflowHandle,
+} from './engine.ts';
 import { hydrateCheckpointReplayState } from './engine/checkpoint-replay.ts';
 import { WorkflowCompletedEvent } from './events.ts';
 import type { WorkflowContext } from './types.ts';
@@ -83,16 +88,14 @@ describe('worker execution signal suspension', () => {
     return workerEngine;
   }
 
-  function createHardenedWorkerEngine(storage = new MemoryStorage()): Engine {
-    const workerEngine = new Engine({
-      storage,
-      workflowExecutionMode: 'worker',
-      workerExecution: { workerUrl, poolSize: 1, workflowTurnTimeoutMs: 100 },
-    });
-    registerWorkerExecutionTestWorkflows(workerEngine);
-    engine = workerEngine;
-    return workerEngine;
-  }
+  it('rejects the Worker timeout test seam in inline execution mode', () => {
+    const inlineEngine = new Engine({ storage: new MemoryStorage() });
+    engine = inlineEngine;
+
+    expect(() =>
+      inlineEngine[ENGINE_SET_WORKER_TURN_TIMEOUT_RESOLVER_FOR_TESTING](() => 100),
+    ).toThrow('Worker turn timeout resolver is only available in Worker execution mode');
+  });
 
   async function waitForSignalWaiter(workerEngine: Engine): Promise<void> {
     await waitForCondition(() => workerEngine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]() === 1, {
@@ -178,11 +181,11 @@ describe('worker execution signal suspension', () => {
     expect(workerEngine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]()).toBe(0);
   });
 
-  // These integration cases prove the watchdog can terminate a real wedged Worker.
-  // Replacement-worker dispatch is covered deterministically with fake timers in
-  // worker-execution-strategy.test.ts so a healthy turn never shares this 100ms budget.
-  it('times out a real infinite-loop Worker workflow', async () => {
-    const workerEngine = createHardenedWorkerEngine();
+  it('times out a real infinite-loop Worker workflow and runs a later workflow', async () => {
+    const workerEngine = createWorkerEngine();
+    workerEngine[ENGINE_SET_WORKER_TURN_TIMEOUT_RESOLVER_FOR_TESTING](({ workflowId }) =>
+      workflowId === 'worker-infinite-loop' ? 100 : 30_000,
+    );
 
     const loopingHandle = await workerEngine.start('infinite-loop', null, {
       id: 'worker-infinite-loop',
@@ -195,10 +198,23 @@ describe('worker execution signal suspension', () => {
         'infinite-loop timeout',
       ),
     ).rejects.toThrow('Worker workflow turn timed out');
+
+    const simpleHandle = await workerEngine.start(
+      'simple',
+      { label: 'after-loop' },
+      { id: 'worker-after-loop' },
+    );
+    await expect(simpleHandle.result()).resolves.toEqual({
+      input: { label: 'after-loop' },
+      computed: 42,
+    });
   });
 
   it('times out a real Worker workflow that loops after resume', async () => {
-    const workerEngine = createHardenedWorkerEngine();
+    const workerEngine = createWorkerEngine();
+    workerEngine[ENGINE_SET_WORKER_TURN_TIMEOUT_RESOLVER_FOR_TESTING](({ workflowId, kind }) =>
+      workflowId === 'worker-infinite-loop-after-resume' && kind === 'resume' ? 100 : 30_000,
+    );
 
     const loopingHandle = await workerEngine.start(
       'infinite-loop-after-resume',

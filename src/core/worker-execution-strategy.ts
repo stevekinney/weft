@@ -27,7 +27,11 @@ import {
 import { WorkerProtocolGuard } from './worker-protocol-guard.ts';
 import { isWorkerLogMessage } from './worker-protocol-log.ts';
 import { WORKER_PROTOCOL_VERSION } from './worker-protocol.ts';
-import { WorkerTurnWatchdog, type WorkerTurnState } from './worker-turn-watchdog.ts';
+import {
+  WorkerTurnWatchdog,
+  type WorkerTurnState,
+  type WorkerTurnTimeoutResolverForTesting,
+} from './worker-turn-watchdog.ts';
 
 export class WorkerExecutionStrategy implements ExecutionStrategy {
   readonly #pool: WorkerPool;
@@ -49,7 +53,6 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
   #nextTurnId: number;
 
   constructor(pool: WorkerPool, options?: WorkerExecutionStrategyOptions) {
-    // Destructure-with-defaults once so constructor reads are plain (low complexity).
     const {
       workflowTurnTimeoutMs,
       maxProtocolMessageBytes,
@@ -119,6 +122,10 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
 
   onMessage(handler: (message: WorkerOutboundMessage) => void | Promise<void>): void {
     this.#messageHandler = handler;
+  }
+
+  setWorkflowTurnTimeoutResolverForTesting(resolver: WorkerTurnTimeoutResolverForTesting): void {
+    this.#turnWatchdog.setTimeoutResolverForTesting(resolver);
   }
 
   startWorkflow(parameters: {
@@ -261,8 +268,7 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
   }
 
   async #handleWorkerMessage(worker: Worker, message: unknown): Promise<void> {
-    // A `log` bypasses the strict gate and watchdog (#529); the gate delivers it and returns
-    // discard options only on sustained abuse (#545). See ForwardedLogGate for the lane.
+    // Logs bypass the strict gate; ForwardedLogGate handles sustained abuse.
     if (isWorkerLogMessage(message)) {
       const owns = (id: string): boolean => this.#ownership.getTargetWorker(id) === worker;
       const abuseDiscard = this.#forwardedLogGate.handle(worker, message, owns);
@@ -427,7 +433,7 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
     this.#discardWorkerAndFailWorkflows(turn.worker, {
       targetWorkflowId: turn.workflowId,
       targetCategory: 'timeout',
-      targetError: `Worker workflow turn timed out after ${this.#workflowTurnTimeoutMs}ms`,
+      targetError: `Worker workflow turn timed out after ${turn.timeoutMs}ms`,
       otherCategory: 'timeout',
       otherError: `Worker discarded after workflow turn timed out: ${turn.workflowId}`,
     });
@@ -446,11 +452,8 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
   ): void {
     const workflowIds = this.#ownership.workflowIdsForWorker(worker);
     if (workflowIds.length === 0) {
-      // Redundant/already-cleaned-up case. Every discard trigger (timeout, crash, cancel,
-      // #545 log-abuse) owns >= 1 workflow when it fires — log-abuse runs only from
-      // #handleWorkerMessage, which needs an attached listener (>= 1 owned workflow); see the
-      // "cannot flood-count a worker that owns no workflows" test. Does NOT discard here: a
-      // fully-released worker may already be re-acquired for another workflow.
+      // Every discard trigger owns >= 1 workflow when it fires. Do not discard here:
+      // a fully released worker may already be re-acquired for another workflow.
       this.#turnWatchdog.clear(worker);
       this.#forwardedLogGate.forget(worker);
       return;
@@ -483,17 +486,14 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
   #handleBroadcastMessage(data: Record<string, unknown>): void {
     if (data['type'] === 'signal:received' && typeof data['workflowId'] === 'string') {
       const targetWorker = this.#ownership.getTargetWorker(data['workflowId']);
-      if (targetWorker) {
-        targetWorker.postMessage(data);
-      }
+      if (targetWorker) targetWorker.postMessage(data);
     }
   }
 
   #emit(message: WorkerOutboundMessage): void {
     const result = this.#messageHandler?.(message);
     if (result instanceof Promise) {
-      // Worker strategy callers do not await handler turns, so observe
-      // rejections here to prevent unhandled rejection noise.
+      // Observe the unawaited handler turn so rejections never become process noise.
       void result.catch(() => {});
     }
   }

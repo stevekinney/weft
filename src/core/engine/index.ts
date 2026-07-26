@@ -357,6 +357,9 @@ export const ENGINE_SLEEP_RESOLVER_COUNT_FOR_TESTING = Symbol('engineSleepResolv
 export const ENGINE_WAIT_FOR_SLEEP_RESOLVER_FOR_TESTING = Symbol(
   'engineWaitForSleepResolverForTesting',
 );
+export const ENGINE_SET_WORKER_TURN_TIMEOUT_RESOLVER_FOR_TESTING = Symbol(
+  'engineSetWorkerTurnTimeoutResolverForTesting',
+);
 
 /**
  * The `name` of the `process` warning emitted when a lease-owning engine is
@@ -1579,6 +1582,15 @@ export class Engine<
     }
     waiters.add(resolve);
     await promise;
+  }
+  [ENGINE_SET_WORKER_TURN_TIMEOUT_RESOLVER_FOR_TESTING](
+    resolver: (turn: { workflowId: string; kind: 'run' | 'resume' }) => number,
+  ): void {
+    const strategy = getInternals(this).strategy;
+    if (strategy.setWorkflowTurnTimeoutResolverForTesting === undefined) {
+      throw new Error('Worker turn timeout resolver is only available in Worker execution mode');
+    }
+    strategy.setWorkflowTurnTimeoutResolverForTesting(resolver);
   }
   async signal(workflowId: string, name: SignalDefinition): Promise<void>;
   async signal<TInput>(
