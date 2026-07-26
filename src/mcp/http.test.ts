@@ -10,7 +10,7 @@ import { MemoryStorage } from '../storage/memory.ts';
 import { waitForCondition } from '../testing/fake-timers.test-support.ts';
 import { handleMcpHttpRequest } from './http.ts';
 import { createMcpSessionManager, McpSession, type McpSessionManager } from './session.ts';
-import { callMcpTool } from './tools.ts';
+import { callMcpTool, listMcpTools } from './tools.ts';
 
 const MCP_PROTOCOL_VERSION = '2025-11-25';
 const enginesToDispose: Engine[] = [];
@@ -515,6 +515,153 @@ describe('MCP Streamable HTTP transport', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toBe('Tool execution failed');
+  });
+
+  it('shapes unknown and malformed workflow-tool arguments as tool errors', async () => {
+    const engine = createEngine();
+    const session = new McpSession('argument-errors-session', anonymousPrincipal());
+    const context = {
+      engine,
+      session,
+      principal: anonymousPrincipal(),
+      authRequired: false,
+      requestId: 'argument-errors',
+    };
+
+    await expect(callMcpTool('missing_tool', {}, context)).resolves.toMatchObject({
+      isError: true,
+      content: [{ text: 'Unknown tool: missing_tool' }],
+    });
+    await expect(callMcpTool('start_workflow', [], context)).resolves.toMatchObject({
+      isError: true,
+      content: [{ text: 'Tool arguments must be a JSON object' }],
+    });
+    await expect(callMcpTool('greet_customer', [], context)).resolves.toMatchObject({
+      isError: false,
+      content: [{ text: expect.stringContaining('undefined') }],
+    });
+    await expect(
+      callMcpTool('greet_customer', { input: { name: 'Ada' }, timeoutMs: 0 }, context),
+    ).resolves.toMatchObject({
+      isError: true,
+      content: [{ text: 'Tool argument "timeoutMs" must be an integer from 1 to 2147483647' }],
+    });
+  });
+
+  it('cancels a workflow when the request is cancelled after start', async () => {
+    const engine = createEngine();
+    const session = new McpSession('post-start-cancellation-session', anonymousPrincipal());
+    const originalStart = engine.start.bind(engine);
+    engine.start = async (...argumentsValue: Parameters<Engine['start']>) => {
+      const handle = await originalStart(...argumentsValue);
+      session.cancelRequest('post-start-cancellation');
+      return handle;
+    };
+
+    const result = await callMcpTool(
+      'hold_for_cancel',
+      { input: { label: 'cancel-after-start' } },
+      {
+        engine,
+        session,
+        principal: anonymousPrincipal(),
+        authRequired: false,
+        requestId: 'post-start-cancellation',
+      },
+    );
+
+    expect(result).toMatchObject({
+      isError: true,
+      content: [{ text: 'Workflow cancelled' }],
+    });
+  });
+
+  it('shapes a workflow result cancellation error as a tool error', async () => {
+    const engine = createEngine();
+    const originalStart = engine.start.bind(engine);
+    engine.start = async (...argumentsValue: Parameters<Engine['start']>) => {
+      const handle = await originalStart(...argumentsValue);
+      handle.result = async () => {
+        throw new Error('Workflow cancelled');
+      };
+      return handle;
+    };
+
+    const result = await callMcpTool(
+      'greet_customer',
+      { input: { name: 'Ada' } },
+      {
+        engine,
+        session: new McpSession('result-cancellation-session', anonymousPrincipal()),
+        principal: anonymousPrincipal(),
+        authRequired: false,
+        requestId: 'result-cancellation',
+      },
+    );
+
+    expect(result).toMatchObject({
+      isError: true,
+      content: [{ text: 'Workflow cancelled' }],
+    });
+  });
+
+  it('lists and cancels workflows through the built-in tools', async () => {
+    const engine = createEngine();
+    server = serve({ engine, port: 0 });
+    const sessionId = await initialize(server);
+    const handle = await engine.start('hold-for-cancel', { label: 'built-in-tools' });
+    await waitForStatus(engine, handle.id, 'running');
+
+    const listed = await mcpJson(server, sessionId, {
+      jsonrpc: '2.0',
+      id: 'list-workflows',
+      method: 'tools/call',
+      params: { name: 'list_workflows', arguments: { status: 'running' } },
+    });
+    expect(parseToolText(listed.result)).toMatchObject({
+      items: [expect.objectContaining({ id: handle.id, status: 'running' })],
+    });
+
+    const invalidList = await mcpJson(server, sessionId, {
+      jsonrpc: '2.0',
+      id: 'invalid-list-workflows',
+      method: 'tools/call',
+      params: { name: 'list_workflows', arguments: { limit: -1 } },
+    });
+    expect(invalidList.result).toMatchObject({
+      isError: true,
+      content: [{ text: 'List filter limit must be a non-negative integer' }],
+    });
+
+    const cancelled = await mcpJson(server, sessionId, {
+      jsonrpc: '2.0',
+      id: 'cancel-workflow',
+      method: 'tools/call',
+      params: { name: 'cancel_workflow', arguments: { workflowId: handle.id } },
+    });
+    expect(parseToolText(cancelled.result)).toEqual({ ok: true });
+    await waitForStatus(engine, handle.id, 'cancelled');
+  });
+
+  it('uses fallback names and reports workflow schema conversion failures', async () => {
+    const engine = trackEngine(new Engine({ storage: new MemoryStorage() }));
+    engine.register(
+      workflow({ name: '_', inputSchema: z.object({}) }).execute(async function* () {
+        return { ok: true };
+      }),
+    );
+    expect(listMcpTools(engine).map((tool) => tool.name)).toContain('workflow_unnamed');
+
+    const brokenEngine = trackEngine(new Engine({ storage: new MemoryStorage() }));
+    brokenEngine.register(
+      workflow({
+        name: 'broken-workflow-schema',
+        inputSchema: makeBrokenSchema('workflow'),
+      }).execute(async function* () {
+        return { ok: true };
+      }),
+    );
+    expect(() => listMcpTools(brokenEngine)).toThrow();
   });
 
   it('reads workflow resources and emits resource update notifications for subscriptions', async () => {

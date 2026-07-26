@@ -173,6 +173,22 @@ describe('parseLcov', () => {
     expect(coverage.uncoveredFiles).toEqual([]);
   });
 
+  it('preserves strict uncovered-line checks when a top-off is assembled', () => {
+    expect(() =>
+      parseLcov(
+        [
+          'SF:src/server/runtime/websocket-worker.ts',
+          'FNF:0',
+          'FNH:0',
+          'DA:430,1',
+          'end_of_record',
+        ].join('\n'),
+      ),
+    ).toThrow(
+      'Coverage allowance for src/server/runtime/websocket-worker.ts:430 points at a covered line',
+    );
+  });
+
   it('returns false immediately when a coverage shard exits non-zero', async () => {
     const listCoverageTestFiles = mock(async () => ['src/example.test.ts']);
     const runCoverageShardStub = mock(async () => ({

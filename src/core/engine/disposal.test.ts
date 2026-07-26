@@ -106,6 +106,25 @@ describe('disposeEngine', () => {
     expect(internals.nextRetentionSweepAt).toBeNull();
   });
 
+  it('settles and clears sleep resolver readiness waiters', () => {
+    const engine = new Engine();
+    const internals = getInternals(engine);
+    let notified = 0;
+    internals.sleepResolverReadyWaitersForTesting?.set(
+      'wf-sleep',
+      new Set([
+        () => {
+          notified += 1;
+        },
+      ]),
+    );
+
+    disposeEngine(internals);
+
+    expect(notified).toBe(1);
+    expect(internals.sleepResolverReadyWaitersForTesting?.size).toBe(0);
+  });
+
   it('rejects pending result waiters before clearing them so callers do not hang', async () => {
     const engine = new Engine();
     const internals = getInternals(engine);

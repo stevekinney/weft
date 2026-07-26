@@ -7,6 +7,21 @@ import { serve } from '../server/index.ts';
 import type { WorkflowCommand } from './types.ts';
 import { executeWorkflow } from './workflow-commands.ts';
 
+function createJsonRpcFixtureServer(resultFor: (method: string) => unknown) {
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const body = (await request.json()) as { id: string; method: string };
+      return Response.json({
+        jsonrpc: '2.0',
+        id: body.id,
+        result: resultFor(body.method),
+      });
+    },
+  });
+  return { url: server.url.toString(), stop: () => server.stop() };
+}
+
 const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (
   _ctx: WorkflowContext,
   input: unknown,
@@ -36,6 +51,56 @@ const base = {
 };
 
 describe('weft workflow start/get/events', () => {
+  it('filters malformed workflow summaries and handles a missing items collection', async () => {
+    let listCalls = 0;
+    const server = createJsonRpcFixtureServer((method) =>
+      method === 'weft.workflows.list'
+        ? ++listCalls === 1
+          ? { items: [{ id: 'only-id' }] }
+          : {}
+        : {},
+    );
+    try {
+      const malformed = await executeWorkflow({
+        ...base,
+        action: 'ls',
+        server: server.url,
+      } satisfies WorkflowCommand);
+      expect(malformed).toEqual({ stdout: 'No workflows found.', exitCode: 0 });
+
+      const missingItems = await executeWorkflow({
+        ...base,
+        action: 'ls',
+        server: server.url,
+      } satisfies WorkflowCommand);
+      expect(missingItems).toEqual({ stdout: 'No workflows found.', exitCode: 0 });
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it('formats human-readable event lines and non-record events', async () => {
+    const server = createJsonRpcFixtureServer((method) =>
+      method === 'weft.workflows.events.list'
+        ? [null, { type: 'started', timestamp: 0 }, { timestamp: 'unknown' }]
+        : {},
+    );
+    try {
+      const result = await executeWorkflow({
+        ...base,
+        action: 'events',
+        server: server.url,
+        workflowId: 'wf-events',
+      } satisfies WorkflowCommand);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('null');
+      expect(result.stdout).toContain('started');
+      expect(result.stdout).toContain('event');
+    } finally {
+      await server.stop();
+    }
+  });
+
   it('starts a workflow, then get and events surface it', async () => {
     const served = createServedEngine();
     try {
@@ -191,6 +256,41 @@ describe('weft workflow cancel (destructive gate)', () => {
         configurable: true,
       });
       await served.stop();
+    }
+  });
+
+  it('returns a denied result when an interactive confirmation is declined', async () => {
+    const server = createJsonRpcFixtureServer(() => ({ ok: true }));
+    const priorIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+    const priorStream = Bun.stdin.stream;
+    Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
+    Bun.stdin.stream = (() =>
+      new ReadableStream<Uint8Array<ArrayBuffer>>({
+        start(controller) {
+          const input = new Uint8Array(new ArrayBuffer(2));
+          input.set([110, 10]);
+          controller.enqueue(input);
+          controller.close();
+        },
+      })) as unknown as typeof Bun.stdin.stream;
+    try {
+      const result = await executeWorkflow({
+        ...base,
+        action: 'cancel',
+        server: server.url,
+        workflowId: 'wf-denied',
+        yes: false,
+        dryRun: false,
+      } satisfies WorkflowCommand);
+      expect(result).toEqual({ stdout: 'Cancelled (no action taken).', exitCode: 1 });
+    } finally {
+      Bun.stdin.stream = priorStream;
+      if (priorIsTtyDescriptor === undefined) {
+        Reflect.deleteProperty(process.stdin, 'isTTY');
+      } else {
+        Object.defineProperty(process.stdin, 'isTTY', priorIsTtyDescriptor);
+      }
+      await server.stop();
     }
   });
 

@@ -1038,7 +1038,10 @@ describe('crash recovery', () => {
       }),
     );
 
-    const handle = await engine.start('stepping', null, { id: 'wf-step' });
+    // This case pins checkpoint accounting, not deferred launch scheduling. Start
+    // synchronously so coverage instrumentation load cannot strand the assertion
+    // behind the MessageChannel launch queue.
+    const handle = await engine.start('stepping', null, { id: 'wf-step', defer: false });
     await handle.result();
 
     // The checkpoint should reflect the final state

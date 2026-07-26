@@ -249,6 +249,17 @@ describe('verifyDocumentation', () => {
     expect(collectErrorReferenceFindings(repositoryRoot)).toEqual([]);
   });
 
+  it('reports malformed exported error unions', async () => {
+    const repositoryRoot = await createFixtureRepository({
+      'src/core/weft-error.ts': 'export const notAUnion = true;\n',
+      'src/core/fault-code.ts': "export type FaultCode = 'NotFound';\n",
+    });
+
+    expect(() => collectErrorReferenceFindings(repositoryRoot)).toThrow(
+      'Could not find exported WeftErrorCode union.',
+    );
+  });
+
   it('reports a missing error reference page after source union files are present', async () => {
     const repositoryRoot = await createFixtureRepository({
       'src/core/weft-error.ts': "export type WeftErrorCode = 'WorkflowNotFoundError';\n",

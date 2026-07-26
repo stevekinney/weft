@@ -149,6 +149,18 @@ describe('operation coverage regressions', () => {
         { attributes: [{ key: 'amount', gt: ['low', 'high'] }] },
       ]),
     ).toThrow('Field "filter.attributes[].gt" must be a string, number, or boolean');
+    expect(() =>
+      Reflect.apply(listFilterFromBulkInput, undefined, [
+        { attributes: [{ key: 'amount', value: { nested: true } }] },
+      ]),
+    ).toThrow(
+      'Field "filter.attributes[].value" must be a string, number, boolean, or scalar array',
+    );
+    expect(() =>
+      Reflect.apply(listFilterFromBulkInput, undefined, [
+        { attributes: [{ key: 'amount', lte: ['low', 'high'] }] },
+      ]),
+    ).toThrow('Field "filter.attributes[].lte" must be a string, number, or boolean');
 
     expect(parseBulkOperationControlFromBody(undefined)).toEqual({});
     expect(() => parseBulkOperationControlFromBody(null)).toThrow(

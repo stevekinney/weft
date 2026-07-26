@@ -118,6 +118,43 @@ describe('weft.schedules.create', () => {
     });
   });
 
+  it('returns 400 when both schedule cadence fields are supplied', async () => {
+    engine = createEngine();
+
+    const response = await handleRequest(
+      jsonRequest('POST', '/v1/schedules', {
+        type: 'echo',
+        cronExpression: '0 * * * *',
+        every: '5m',
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: 'Provide exactly one of cronExpression or every, not both',
+    });
+  });
+
+  it('returns 400 when every has an invalid type', async () => {
+    engine = createEngine();
+
+    const response = await handleRequest(
+      jsonRequest('POST', '/v1/schedules', {
+        type: 'echo',
+        every: false,
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: 'Field "every" must be a duration string or a number of milliseconds',
+    });
+  });
+
   it.each([
     [
       'soon',

@@ -657,9 +657,21 @@ describe('serve', () => {
       expect(missing.status).toBe(404);
       expect(await missing.text()).not.toContain(directory);
 
+      const malformedEncoding = await fetch(`${server.url}/assets/%`);
+      expect(malformedEncoding.status).toBe(404);
+
+      const emptyAssetPath = join(directory, 'empty.txt');
+      writeFileSync(emptyAssetPath, '');
+      const emptyAsset = await fetch(`${server.url}/assets/empty.txt`);
+      expect(emptyAsset.status).toBe(200);
+      expect(await emptyAsset.text()).toBe('');
+
       const traversal = await fetch(`${server.url}/assets/%2e%2e/%2e%2e/secret.txt`);
       expect(traversal.status).toBe(404);
       expect(await traversal.text()).not.toContain(directory);
+
+      const repeatedSeparator = await fetch(`${server.url}/assets//app-abc123.js`);
+      expect(repeatedSeparator.status).toBe(404);
 
       const post = await fetch(`${server.url}/assets/app-abc123.js`, { method: 'POST' });
       expect(post.status).toBe(404);
@@ -709,6 +721,9 @@ describe('serve', () => {
         ...dashboardRoutePrefixes,
         '/.well-known',
         '/assets/',
+        '/assets//',
+        '/assets/.',
+        '/assets/..',
         '/assets/*',
         '/assets/%2e%2e',
         '/asset files',
@@ -739,6 +754,89 @@ describe('serve', () => {
       ).toThrow();
       fileEngine[Symbol.dispose]();
     } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects malformed dashboard asset configuration before filesystem access', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
+    try {
+      for (const value of [null, [], 'assets', 42]) {
+        expect(() => resolveDashboardAssets(value, DASHBOARD_PAGE_ROUTES)).toThrow(
+          'dashboardAssets must be an object with prefix and directory strings',
+        );
+      }
+
+      expect(() => resolveDashboardAssets({ prefix: '/assets' }, DASHBOARD_PAGE_ROUTES)).toThrow(
+        'dashboardAssets.prefix and dashboardAssets.directory must be strings',
+      );
+      expect(() => resolveDashboardAssets({ directory }, DASHBOARD_PAGE_ROUTES)).toThrow(
+        'dashboardAssets.prefix and dashboardAssets.directory must be strings',
+      );
+      expect(() =>
+        resolveDashboardAssets({ prefix: 42, directory }, DASHBOARD_PAGE_ROUTES),
+      ).toThrow('dashboardAssets.prefix and dashboardAssets.directory must be strings');
+      expect(() =>
+        resolveDashboardAssets({ prefix: '/assets', directory: 42 }, DASHBOARD_PAGE_ROUTES),
+      ).toThrow('dashboardAssets.prefix and dashboardAssets.directory must be strings');
+      expect(() =>
+        resolveDashboardAssets(
+          { prefix: '/assets', directory: join(directory, 'missing') },
+          DASHBOARD_PAGE_ROUTES,
+        ),
+      ).toThrow(`dashboardAssets.directory does not exist: ${join(directory, 'missing')}`);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('returns not found for an aborted dashboard asset request', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
+    try {
+      writeFileSync(join(directory, 'app.js'), 'dashboard');
+      const assets = resolveDashboardAssets(
+        { prefix: '/assets', directory },
+        DASHBOARD_PAGE_ROUTES,
+      );
+      const route = createDashboardAssetRoute(assets);
+      const controller = new AbortController();
+      controller.abort();
+
+      const emptyPathResponse = route.GET!(new Request('http://weft.test/assets/'));
+      expect(emptyPathResponse.status).toBe(404);
+
+      const response = route.GET!(
+        new Request('http://weft.test/assets/app.js', { signal: controller.signal }),
+      );
+      expect(response.status).toBe(404);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('closes the descriptor when constructing an asset response fails', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
+    const originalResponse = globalThis.Response;
+    try {
+      writeFileSync(join(directory, 'app.js'), 'dashboard');
+      const assets = resolveDashboardAssets(
+        { prefix: '/assets', directory },
+        DASHBOARD_PAGE_ROUTES,
+      );
+      const route = createDashboardAssetRoute(assets);
+      globalThis.Response = class extends originalResponse {
+        constructor(body?: BodyInit | null, init?: ResponseInit) {
+          if (body instanceof ReadableStream) {
+            throw new Error('response construction failed');
+          }
+          super(body, init);
+        }
+      };
+
+      const response = route.GET!(new Request('http://weft.test/assets/app.js'));
+      expect(response.status).toBe(404);
+    } finally {
+      globalThis.Response = originalResponse;
       rmSync(directory, { recursive: true, force: true });
     }
   });

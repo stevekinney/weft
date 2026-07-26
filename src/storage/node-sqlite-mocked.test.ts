@@ -232,6 +232,14 @@ describe('NodeSQLiteStorage with mocked better-sqlite3', () => {
     ).toBe(false);
     expect(await storage.get('conditional:miss')).toBeNull();
 
+    expect(
+      await storage.conditionalBatch(
+        [{ key: 'a:2', expectedValue: new Uint8Array([2]) }],
+        [{ type: 'delete', key: 'a:2' }],
+      ),
+    ).toBe(true);
+    expect(await storage.get('a:2')).toBeNull();
+
     expect(await storage.get('batch:new')).toEqual(new Uint8Array([9]));
     expect(await storage.get('a:1')).toBeNull();
 
