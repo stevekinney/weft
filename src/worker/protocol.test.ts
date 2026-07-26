@@ -36,14 +36,33 @@ describe('RemoteWorker protocol contract', () => {
     expect(JSON.stringify(REMOTE_WORKER_PROTOCOL_JSON_SCHEMA)).toBe(
       JSON.stringify(REMOTE_WORKER_PROTOCOL_JSON_SCHEMA),
     );
+
+    expect(REMOTE_WORKER_MESSAGE_SCHEMAS.register.properties.protocolVersion).toEqual({
+      const: REMOTE_WORKER_PROTOCOL_VERSION,
+    });
+    expect(REMOTE_WORKER_MESSAGE_SCHEMAS.registerAck.properties.protocolVersion).toEqual({
+      const: REMOTE_WORKER_PROTOCOL_VERSION,
+    });
+    expect(
+      REMOTE_WORKER_MESSAGE_SCHEMAS.registerError.properties.supportedProtocolVersions,
+    ).toEqual({
+      type: 'array',
+      items: { const: REMOTE_WORKER_PROTOCOL_VERSION },
+    });
+    expect(REMOTE_WORKER_PROTOCOL_JSON_SCHEMA.$id).toBe(
+      `https://weft.dev/schemas/remote-worker-protocol.v${String(REMOTE_WORKER_PROTOCOL_VERSION)}.json`,
+    );
+    expect(REMOTE_WORKER_PROTOCOL_JSON_SCHEMA.title).toBe(
+      `Weft RemoteWorker Protocol v${String(REMOTE_WORKER_PROTOCOL_VERSION)}`,
+    );
   });
 
-  it('accepts a valid v1 register message', () => {
+  it('accepts a valid current register message', () => {
     const result = parseWorkerToServerMessage({
       type: 'register',
       protocolVersion: 2,
       workerId: 'worker-1',
-      activities: ['charge'],
+      activities: ['payments.charge'],
       concurrency: 4,
       queue: 'default',
     });
@@ -54,19 +73,19 @@ describe('RemoteWorker protocol contract', () => {
         type: 'register',
         protocolVersion: 2,
         workerId: 'worker-1',
-        activities: ['charge'],
+        activities: ['payments.charge'],
         concurrency: 4,
         queue: 'default',
       },
     });
   });
 
-  it('accepts optional deployment identity fields on v1 register messages', () => {
+  it('accepts optional deployment identity fields on current register messages', () => {
     const result = parseWorkerToServerMessage({
       type: 'register',
       protocolVersion: 2,
       workerId: 'worker-1',
-      activities: ['charge'],
+      activities: ['payments.charge'],
       deploymentName: 'payments',
       buildId: 'build-2026-05-12',
       runtimeVersion: 'bun-1.2.13',
@@ -86,7 +105,7 @@ describe('RemoteWorker protocol contract', () => {
         type: 'register',
         protocolVersion: 2,
         workerId: 'worker-1',
-        activities: ['charge'],
+        activities: ['payments.charge'],
         deploymentName: 'payments',
         buildId: 'build-2026-05-12',
         runtimeVersion: 'bun-1.2.13',
@@ -783,5 +802,31 @@ describe('RemoteWorker protocol contract', () => {
     );
 
     expect(documentedMessages).toEqual(Object.keys(REMOTE_WORKER_MESSAGE_SCHEMAS));
+
+    expect(documentation).toContain(
+      `- **Protocol version**: v${String(REMOTE_WORKER_PROTOCOL_VERSION)}.`,
+    );
+    expect(documentation).toContain(`"protocolVersion": ${String(REMOTE_WORKER_PROTOCOL_VERSION)}`);
+    expect(documentation).toContain(
+      `"supportedProtocolVersions": [${REMOTE_WORKER_SUPPORTED_PROTOCOL_VERSIONS.join(', ')}]`,
+    );
+
+    const apiWorkers = await Bun.file('documentation/reference/api-workers.md').text();
+    expect(apiWorkers).toContain(`sends a v${String(REMOTE_WORKER_PROTOCOL_VERSION)} registration`);
+
+    const remoteWorkersGuide = await Bun.file('documentation/guides/remote-workers.md').text();
+    expect(remoteWorkersGuide).toContain(
+      `The v${String(REMOTE_WORKER_PROTOCOL_VERSION)} task transport`,
+    );
+    expect(remoteWorkersGuide).toContain(
+      `sends a v${String(REMOTE_WORKER_PROTOCOL_VERSION)} \`register\` message`,
+    );
+
+    const architectureDecision = await Bun.file(
+      'documentation/contributing/architecture-decisions/0001-workflows-typescript-only.md',
+    ).text();
+    expect(architectureDecision).toContain(
+      `v${String(REMOTE_WORKER_PROTOCOL_VERSION)} requires \`register.protocolVersion: ${String(REMOTE_WORKER_PROTOCOL_VERSION)}\``,
+    );
   });
 });

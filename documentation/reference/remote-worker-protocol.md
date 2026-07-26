@@ -8,7 +8,7 @@ JSON Schemas instead of reverse-engineering the source.
 
 ## At a glance
 
-- **Protocol version**: v1. `register.protocolVersion` is required and must be exactly `1`.
+- **Protocol version**: v2. `register.protocolVersion` is required and must be exactly `2`.
 - **Transport**: WebSocket text frames containing JSON objects.
 - **Endpoint**: `/api/v1/tasks/:queue/stream` on the Weft server. Connect to one queue per WebSocket.
 - **Direction**: bidirectional. Workers send `register`, `heartbeat`, `taskResult`. Server sends `task`, `cancel`, `shutdown`, `registerAck`, `registerError`, `protocolError`.
@@ -94,7 +94,7 @@ Worker                              Server
   |   <-------- close 1008 --------   |
 ```
 
-Malformed JSON, malformed message shapes, worker-to-server message types not defined by v1, and `heartbeat` or `taskResult` before registration are fatal protocol errors:
+Malformed JSON, malformed message shapes, worker-to-server message types not defined by v2, and `heartbeat` or `taskResult` before registration are fatal protocol errors:
 
 ```text
 Worker                              Server
@@ -122,9 +122,9 @@ Sent immediately after the WebSocket opens.
 ```json
 {
   "type": "register",
-  "protocolVersion": 1,
+  "protocolVersion": 2,
   "workerId": "<string>",
-  "activities": ["<activity-name>"],
+  "activities": ["notifications.sendEmail"],
   "concurrency": 10,
   "queue": "default",
   "deploymentName": "payments",
@@ -141,7 +141,7 @@ Sent immediately after the WebSocket opens.
 | Field             | Type                         | Required | Description                                                                                                                                                                           |
 | ----------------- | ---------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `type`            | `"register"`                 | Yes      | Message discriminator.                                                                                                                                                                |
-| `protocolVersion` | `1`                          | Yes      | Required v1 protocol version. Missing or unsupported versions receive `registerError`.                                                                                                |
+| `protocolVersion` | `2`                          | Yes      | Required v2 protocol version. Missing or unsupported versions receive `registerError`.                                                                                                |
 | `workerId`        | string                       | Yes      | Stable identifier for this worker. Must be non-empty.                                                                                                                                 |
 | `activities`      | string[]                     | Yes      | Names of activities this worker can execute, each in `${workflowType}.${activityName}` form when produced by the TypeScript SDK's `workflows` map. Entries must be non-empty strings. |
 | `concurrency`     | number                       | No       | Maximum concurrent tasks. Server clamps finite numbers to `[1, 1000]`. Defaults to `10`.                                                                                              |
@@ -306,10 +306,10 @@ Server acknowledgement that registration succeeded.
 ```json
 {
   "type": "registerAck",
-  "protocolVersion": 1,
+  "protocolVersion": 2,
   "workerId": "<string>",
   "queue": "default",
-  "activities": ["<activity-name>"],
+  "activities": ["notifications.sendEmail"],
   "concurrency": 10
 }
 ```
@@ -317,7 +317,7 @@ Server acknowledgement that registration succeeded.
 | Field             | Type            | Required | Description                                                            |
 | ----------------- | --------------- | -------- | ---------------------------------------------------------------------- |
 | `type`            | `"registerAck"` | Yes      | Message discriminator.                                                 |
-| `protocolVersion` | `1`             | Yes      | Effective protocol version.                                            |
+| `protocolVersion` | `2`             | Yes      | Effective protocol version.                                            |
 | `workerId`        | string          | Yes      | Accepted worker identifier.                                            |
 | `queue`           | string          | Yes      | Effective queue from the WebSocket URL.                                |
 | `activities`      | string[]        | Yes      | Accepted activity names.                                               |
@@ -333,9 +333,9 @@ Server rejection of registration. The server sends this message, then closes the
 {
   "type": "registerError",
   "code": "unsupported_protocol_version",
-  "message": "Unsupported RemoteWorker protocol version: 2",
-  "supportedProtocolVersions": [1],
-  "requestedProtocolVersion": 2
+  "message": "Unsupported RemoteWorker protocol version: 1",
+  "supportedProtocolVersions": [2],
+  "requestedProtocolVersion": 1
 }
 ```
 
@@ -344,7 +344,7 @@ Server rejection of registration. The server sends this message, then closes the
 | `type`                      | `"registerError"`                                          | Yes      | Message discriminator.                                     |
 | `code`                      | `"invalid_registration" \| "unsupported_protocol_version"` | Yes      | Machine-readable registration failure.                     |
 | `message`                   | string                                                     | Yes      | Human-readable diagnostic.                                 |
-| `supportedProtocolVersions` | number[]                                                   | Yes      | Supported protocol versions. For v1 this is exactly `[1]`. |
+| `supportedProtocolVersions` | number[]                                                   | Yes      | Supported protocol versions. For v2 this is exactly `[2]`. |
 | `requestedProtocolVersion`  | number                                                     | No       | Version sent by the worker when it was a finite number.    |
 
 #### `protocolError`
@@ -380,7 +380,7 @@ The command starts a localhost Weft server and launches the worker command with 
 | `WEFT_WORKER_URL`              | WebSocket URL for the temporary worker endpoint. |
 | `WEFT_WORKER_QUEUE`            | Queue name the worker should register for.       |
 | `WEFT_WORKER_ACTIVITIES`       | Comma-separated activity names to implement.     |
-| `WEFT_WORKER_PROTOCOL_VERSION` | Current protocol version, `1`.                   |
+| `WEFT_WORKER_PROTOCOL_VERSION` | Current protocol version, `2`.                   |
 
 The conformance runner verifies registration acknowledgement, echo task completion, heartbeat-preserved work, cancellation, in-flight reassignment after disconnect, graceful shutdown, and failure of a deliberately broken worker fixture. `--json` returns a stable machine-readable report. Without `--json`, each check prints as `PASS` or `FAIL`.
 

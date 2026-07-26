@@ -206,8 +206,8 @@ export const REMOTE_WORKER_MESSAGE_SCHEMAS = {
  */
 export const REMOTE_WORKER_PROTOCOL_JSON_SCHEMA = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
-  $id: 'https://weft.dev/schemas/remote-worker-protocol.v1.json',
-  title: 'Weft RemoteWorker Protocol v1',
+  $id: `https://weft.dev/schemas/remote-worker-protocol.v${String(REMOTE_WORKER_PROTOCOL_VERSION)}.json`,
+  title: `Weft RemoteWorker Protocol v${String(REMOTE_WORKER_PROTOCOL_VERSION)}`,
   oneOf: Object.keys(REMOTE_WORKER_MESSAGE_SCHEMAS).map((messageType) => ({
     $ref: `#/$defs/messages/${messageType}`,
   })),

@@ -105,7 +105,7 @@ If `signal` is already aborted when called, returns a failed result immediately 
 
 ### `RemoteWorker`
 
-WebSocket-based remote worker client. Connects to the Weft server, sends a v1 registration, waits for `registerAck`, and then processes tasks dispatched by the server. Implements `Disposable`.
+WebSocket-based remote worker client. Connects to the Weft server, sends a v2 registration, waits for `registerAck`, and then processes tasks dispatched by the server. Implements `Disposable`.
 
 ```ts partial
 class RemoteWorker implements Disposable {
