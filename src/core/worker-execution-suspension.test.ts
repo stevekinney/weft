@@ -178,7 +178,10 @@ describe('worker execution signal suspension', () => {
     expect(workerEngine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]()).toBe(0);
   });
 
-  it('times out a real infinite-loop Worker workflow and runs a later workflow', async () => {
+  // These integration cases prove the watchdog can terminate a real wedged Worker.
+  // Replacement-worker dispatch is covered deterministically with fake timers in
+  // worker-execution-strategy.test.ts so a healthy turn never shares this 100ms budget.
+  it('times out a real infinite-loop Worker workflow', async () => {
     const workerEngine = createHardenedWorkerEngine();
 
     const loopingHandle = await workerEngine.start('infinite-loop', null, {
@@ -192,21 +195,9 @@ describe('worker execution signal suspension', () => {
         'infinite-loop timeout',
       ),
     ).rejects.toThrow('Worker workflow turn timed out');
-
-    const simpleHandle = await workerEngine.start(
-      'simple',
-      { label: 'after-loop' },
-      { id: 'worker-after-loop' },
-    );
-    await expect(
-      withTimeout(simpleHandle.result(), 1000, 'post-timeout workflow'),
-    ).resolves.toEqual({
-      input: { label: 'after-loop' },
-      computed: 42,
-    });
   });
 
-  it('times out a real Worker workflow that loops after resume and runs a later workflow', async () => {
+  it('times out a real Worker workflow that loops after resume', async () => {
     const workerEngine = createHardenedWorkerEngine();
 
     const loopingHandle = await workerEngine.start(
@@ -238,18 +229,6 @@ describe('worker execution signal suspension', () => {
       throw new Error('Expected the resumed Worker timeout to reject with an Error');
     }
     expect(outcome.error.message).toBe('Worker workflow turn timed out after 100ms');
-
-    const simpleHandle = await workerEngine.start(
-      'simple',
-      { label: 'after-resume-loop' },
-      { id: 'worker-after-resume-loop' },
-    );
-    await expect(
-      withTimeout(simpleHandle.result(), 1000, 'post-resume-timeout workflow'),
-    ).resolves.toEqual({
-      input: { label: 'after-resume-loop' },
-      computed: 42,
-    });
   });
 
   it('recovers a parked Worker workflow without re-running a cached failed activity', async () => {
