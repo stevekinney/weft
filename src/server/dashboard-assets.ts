@@ -156,6 +156,10 @@ function isWithinDirectory(directory: string, path: string): boolean {
   );
 }
 
+function hasSameFileIdentity(left: fileSystem.Stats, right: fileSystem.Stats): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
 function resolveAssetPath(directory: string, prefix: string, request: Request): string | undefined {
   if (request.signal.aborted) {
     return undefined;
@@ -187,17 +191,24 @@ function resolveAssetPath(directory: string, prefix: string, request: Request): 
   return assetPath;
 }
 
-function isVerifiedAssetFile(
+function isVerifiedAssetDescriptor(
   request: Request,
+  directory: string,
   canonicalStats: fileSystem.Stats,
   openedStats: fileSystem.Stats,
+  postOpenStats: fileSystem.Stats,
+  postOpenAssetPath: string,
+  openedAssetPath: string | undefined,
 ): boolean {
   return (
     !request.signal.aborted &&
+    isWithinDirectory(directory, postOpenAssetPath) &&
+    (openedAssetPath === undefined || isWithinDirectory(directory, openedAssetPath)) &&
     canonicalStats.isFile() &&
     openedStats.isFile() &&
-    openedStats.dev === canonicalStats.dev &&
-    openedStats.ino === canonicalStats.ino
+    postOpenStats.isFile() &&
+    hasSameFileIdentity(openedStats, canonicalStats) &&
+    hasSameFileIdentity(openedStats, postOpenStats)
   );
 }
 
@@ -252,7 +263,9 @@ function createAssetStream(
         }
         if (bytesRead === 0) {
           close();
-          controller.close();
+          controller.error(
+            new Error('Dashboard asset ended before its verified content length was read.'),
+          );
           return;
         }
 
@@ -326,11 +339,19 @@ function assetResponse(
         assetFileSystem.constants.O_NONBLOCK,
     );
     const fileStats = assetFileSystem.fstatSync(descriptor);
+    const postOpenAssetPath = assetFileSystem.realpathSync(realAssetPath);
+    const postOpenStats = assetFileSystem.statSync(postOpenAssetPath);
     const openedAssetPath = resolveOpenedDescriptorPath(descriptor, assetFileSystem);
     if (
-      openedAssetPath === undefined ||
-      !isWithinDirectory(directory, openedAssetPath) ||
-      !isVerifiedAssetFile(request, canonicalStats, fileStats)
+      !isVerifiedAssetDescriptor(
+        request,
+        directory,
+        canonicalStats,
+        fileStats,
+        postOpenStats,
+        postOpenAssetPath,
+        openedAssetPath,
+      )
     ) {
       return new Response('Not Found', { status: 404 });
     }
