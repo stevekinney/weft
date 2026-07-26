@@ -297,19 +297,21 @@ serviceWorker.addEventListener('message', (event) => {
       return;
     }
     if (message.type === 'weft:test:periodic-sync') {
+      // Keep resolver readiness and timer delivery inside one message event.
+      // Splitting them across messages releases the first event's waitUntil
+      // lease and lets Chromium evict this Service Worker before the tick.
+      await engine[ENGINE_WAIT_FOR_SLEEP_RESOLVER_FOR_TESTING]('setup-timer-workflow');
+      const sleepResolverCount = engine[ENGINE_SLEEP_RESOLVER_COUNT_FOR_TESTING]();
       // Tick the scheduler with the clock advanced two hours past the one-hour
       // sleep deadline so the durable timer fires deterministically without a
       // real wall-clock wait. setupServiceWorker's own periodicsync listener
       // ticks at real Date.now(); driving the returned scheduler directly with
       // an explicit future time keeps the test hermetic.
       await scheduler.tick(Date.now() + 2 * 60 * 60 * 1000);
-      port.postMessage({ ticked: true });
-      return;
-    }
-    if (message.type === 'weft:test:sleep-resolver-count') {
-      await engine[ENGINE_WAIT_FOR_SLEEP_RESOLVER_FOR_TESTING]('setup-timer-workflow');
       port.postMessage({
-        count: engine[ENGINE_SLEEP_RESOLVER_COUNT_FOR_TESTING](),
+        instanceId,
+        sleepResolverCount,
+        ticked: true,
       });
       return;
     }
@@ -467,15 +469,6 @@ async function waitForTimerArmed(page: Page): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error('Timed out waiting for the durable sleep timer to be armed');
-}
-
-async function waitForSleepResolverReady(page: Page): Promise<void> {
-  const { count } = await sendWorkerMessage<{ count: number }>(page, {
-    type: 'weft:test:sleep-resolver-count',
-  });
-  if (count !== 1) {
-    throw new Error(`Recovered workflow registered ${count} sleep resolvers instead of one`);
-  }
 }
 
 async function waitForActivityCount(origin: string, expectedCount: number): Promise<void> {
@@ -831,19 +824,22 @@ describe('Service Worker browser smoke', () => {
       });
       expect(instanceAfterStop.instanceId).not.toBe(instanceBeforeStop.instanceId);
 
-      // setupServiceWorker's ready promise proves recoverAll() completed its scan,
-      // but the recovered generator advances asynchronously after that promise.
-      // Wait for the engine's actual sleep resolver instead of sampling an
-      // earlier workflow-body marker that can run before ctx.sleep() yields.
-      await waitForSleepResolverReady(page);
-
       // Drive a periodic-sync tick with the scheduler clock advanced past the
-      // timer deadline. The recovered worker must fire the re-armed timer and
-      // let the workflow run to completion.
-      const tickResult = await sendWorkerMessage<{ ticked: boolean }>(page, {
+      // timer deadline. The same recovered worker instance must wait for the
+      // re-armed sleep resolver, fire the timer, and run to completion under
+      // one message event's waitUntil lease.
+      const tickResult = await sendWorkerMessage<{
+        instanceId: string;
+        sleepResolverCount: number;
+        ticked: boolean;
+      }>(page, {
         type: 'weft:test:periodic-sync',
       });
-      expect(tickResult).toEqual({ ticked: true });
+      expect(tickResult).toEqual({
+        instanceId: instanceAfterStop.instanceId,
+        sleepResolverCount: 1,
+        ticked: true,
+      });
 
       // engine.fireTimer() acknowledges a sleep timer only after the awakened
       // workflow commits later durable progress. This workflow terminates
