@@ -107,15 +107,6 @@ export const LOAD_SENSITIVE_TEST_PATHS = [
   // parallel run; CI runs it in the full suite (CI's runner does not reproduce
   // the local parallel-load contention).
   'src/core/worker-execution-suspension.test.ts',
-  // Drives a real serve() instance, a real WebSocket worker, and the real 20ms
-  // visibility poll racing a real task deadline. Under CPU contention the
-  // heartbeat round-trip can land after the original deadline expires, so the
-  // poll reclaims the task early and the [1] → [1, 2] attempt-sequence assertion
-  // flakes. The deadline-extension invariant is deterministic; the
-  // attempt-sequence invariant is real-time by construction. Excluded from the
-  // pre-commit parallel run; CI runs it in the full suite (CI's runner does not
-  // reproduce the local parallel-load contention).
-  'src/core/parity/remote-task-heartbeat-reclaim.parity.test.ts',
   // Bundles src/index.ts with Bun.build({ target: 'browser', format: 'esm' })
   // and spawns a fresh `bun` process to import the result — proven reproducibly
   // (not merely occasionally) load-sensitive: 6/6 consecutive full-suite runs

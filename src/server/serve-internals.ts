@@ -53,6 +53,8 @@ const RECONCILIATION_MULTIPLIER = 12;
 const DEFAULT_WORKER_RECONNECT_GRACE_PERIOD_MS = 2_000;
 const MAX_WORKER_RECONNECT_GRACE_PERIOD_MS = 5_000;
 
+const MANUAL_TASK_RECONCILIATION_FOR_TESTING = Symbol.for('weft.manual-task-reconciliation');
+
 /**
  * Hard ceiling on the raw WebSocket frame size for every connection (worker
  * stream, `/watch`, token `/stream`, and JSON-RPC). Bun's default is 16 MiB;
@@ -383,23 +385,28 @@ export function registerStackDisposers(
     ),
   );
 
-  const visibilityPollHandle = setInterval(() => {
-    void scanExpiredTasks(context, options, onOperationCleanup);
-  }, context.visibilityPollMs);
+  const schedulesTaskReconciliation = !(MANUAL_TASK_RECONCILIATION_FOR_TESTING in options);
+  const visibilityPollHandle = schedulesTaskReconciliation
+    ? setInterval(() => {
+        void scanExpiredTasks(context, options, onOperationCleanup);
+      }, context.visibilityPollMs)
+    : undefined;
 
   // Periodic full-storage reconciliation to catch orphaned inflight records
   // that were never tracked in the heap (e.g., written by another process or
   // left over from a crash). Runs at 12x the visibility poll interval to keep
   // cost low while still providing a safety net.
   const reconciliationIntervalMs = context.visibilityPollMs * RECONCILIATION_MULTIPLIER;
-  const reconciliationHandle = setInterval(() => {
-    void reconcileOrphanedRecords(context, options, onOperationCleanup);
-  }, reconciliationIntervalMs);
+  const reconciliationHandle = schedulesTaskReconciliation
+    ? setInterval(() => {
+        void reconcileOrphanedRecords(context, options, onOperationCleanup);
+      }, reconciliationIntervalMs)
+    : undefined;
 
   // Registered last — disposed first: clear all intervals and pending timers.
   stack.defer(() => {
-    clearInterval(visibilityPollHandle);
-    clearInterval(reconciliationHandle);
+    if (visibilityPollHandle !== undefined) clearInterval(visibilityPollHandle);
+    if (reconciliationHandle !== undefined) clearInterval(reconciliationHandle);
     context.deadlineTracker.clear();
     // Clear all pending backoff-delay timers to prevent callbacks firing
     // against a stopped server.
