@@ -212,7 +212,6 @@ describe('worker execution signal suspension', () => {
       (error: unknown) => ({ status: 'rejected' as const, error }),
     );
 
-    await waitForSignalWaiter(workerEngine);
     await workerEngine.signal('worker-infinite-loop-after-resume', 'resume', { status: 'go' });
 
     const outcome = await withTimeout(
