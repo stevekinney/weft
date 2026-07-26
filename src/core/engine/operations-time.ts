@@ -166,6 +166,12 @@ export function registerSleepResolver(
     internals.sleepResolversByWorkflow.set(workflowId, workflowOperations);
   }
   workflowOperations.add(operationId);
+
+  const readinessWaiters = internals.sleepResolverReadyWaitersForTesting?.get(workflowId);
+  if (readinessWaiters !== undefined) {
+    internals.sleepResolverReadyWaitersForTesting?.delete(workflowId);
+    for (const notifyReady of readinessWaiters) notifyReady();
+  }
 }
 
 export async function startDelayedWorkflow(

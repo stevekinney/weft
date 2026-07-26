@@ -354,6 +354,9 @@ export const ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING = Symbol(
 );
 export const ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING = Symbol('engineSignalWaiterCountForTesting');
 export const ENGINE_SLEEP_RESOLVER_COUNT_FOR_TESTING = Symbol('engineSleepResolverCountForTesting');
+export const ENGINE_WAIT_FOR_SLEEP_RESOLVER_FOR_TESTING = Symbol(
+  'engineWaitForSleepResolverForTesting',
+);
 
 /**
  * The `name` of the `process` warning emitted when a lease-owning engine is
@@ -601,6 +604,7 @@ export class Engine<
     getInternals(this).updateWaitersByWorkflow = new Map();
     getInternals(this).sleepResolvers = new Map();
     getInternals(this).sleepResolversByWorkflow = new Map();
+    getInternals(this).sleepResolverReadyWaitersForTesting = new Map();
     getInternals(this).sleepTimerAcknowledgementWaiters = new Map();
     getInternals(this).durableInlineOperations = new Map();
     getInternals(this).sleepTimersFiredWithoutResolver = new Map();
@@ -1562,6 +1566,19 @@ export class Engine<
   }
   [ENGINE_SLEEP_RESOLVER_COUNT_FOR_TESTING](): number {
     return getInternals(this).sleepResolvers.size;
+  }
+  async [ENGINE_WAIT_FOR_SLEEP_RESOLVER_FOR_TESTING](workflowId: string): Promise<void> {
+    const internals = getInternals(this);
+    if (internals.sleepResolversByWorkflow.has(workflowId)) return;
+
+    const { promise, resolve } = Promise.withResolvers<void>();
+    let waiters = internals.sleepResolverReadyWaitersForTesting?.get(workflowId);
+    if (waiters === undefined) {
+      waiters = new Set();
+      internals.sleepResolverReadyWaitersForTesting?.set(workflowId, waiters);
+    }
+    waiters.add(resolve);
+    await promise;
   }
   async signal(workflowId: string, name: SignalDefinition): Promise<void>;
   async signal<TInput>(

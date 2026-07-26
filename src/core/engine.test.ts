@@ -18,6 +18,8 @@ import {
   Engine,
   ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING,
   ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING,
+  ENGINE_SLEEP_RESOLVER_COUNT_FOR_TESTING,
+  ENGINE_WAIT_FOR_SLEEP_RESOLVER_FOR_TESTING,
   EngineCreateNameMismatchError,
   WorkflowHandle,
 } from './engine.ts';
@@ -231,6 +233,39 @@ describe('Engine', () => {
     expect(engine.scheduler).toBeDefined();
 
     engine[Symbol.dispose]();
+  });
+
+  it('waits for resolver registration before reporting test-only sleep readiness', async () => {
+    const workflowId = 'wait-for-sleep-readiness';
+    const workflowStarted = Promise.withResolvers<void>();
+    const allowSleep = Promise.withResolvers<void>();
+    const engine = new Engine();
+    engine.register(
+      workflow({ name: 'wait-for-sleep-readiness' }).execute(async function* (ctx) {
+        workflowStarted.resolve();
+        await allowSleep.promise;
+        yield* ctx.sleep(60_000);
+      }),
+    );
+
+    try {
+      await engine.start('wait-for-sleep-readiness', null, { id: workflowId });
+      await workflowStarted.promise;
+
+      let barrierSettled = false;
+      const barrier = engine[ENGINE_WAIT_FOR_SLEEP_RESOLVER_FOR_TESTING](workflowId).then(() => {
+        barrierSettled = true;
+      });
+      await Promise.resolve();
+      expect(barrierSettled).toBe(false);
+
+      allowSleep.resolve();
+      await barrier;
+      expect(engine[ENGINE_SLEEP_RESOLVER_COUNT_FOR_TESTING]()).toBe(1);
+    } finally {
+      allowSleep.resolve();
+      await engine[Symbol.asyncDispose]();
+    }
   });
 
   it('fireTimer tolerates a sleep timer that has no registered resolver', async () => {

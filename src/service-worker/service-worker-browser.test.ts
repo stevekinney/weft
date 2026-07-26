@@ -218,6 +218,7 @@ async function buildSetupServiceWorkerBundle(databaseName: string): Promise<stri
 /// <reference lib="webworker" />
 import {
   ENGINE_SLEEP_RESOLVER_COUNT_FOR_TESTING,
+  ENGINE_WAIT_FOR_SLEEP_RESOLVER_FOR_TESTING,
 } from ${JSON.stringify(engineModulePath)};
 import { activity, workflow } from ${JSON.stringify(typesModulePath)};
 import { IndexedDBStorage } from ${JSON.stringify(indexedDatabaseStorageModulePath)};
@@ -306,6 +307,7 @@ serviceWorker.addEventListener('message', (event) => {
       return;
     }
     if (message.type === 'weft:test:sleep-resolver-count') {
+      await engine[ENGINE_WAIT_FOR_SLEEP_RESOLVER_FOR_TESTING]('setup-timer-workflow');
       port.postMessage({
         count: engine[ENGINE_SLEEP_RESOLVER_COUNT_FOR_TESTING](),
       });
@@ -468,16 +470,12 @@ async function waitForTimerArmed(page: Page): Promise<void> {
 }
 
 async function waitForSleepResolverReady(page: Page): Promise<void> {
-  for (let attempt = 1; attempt <= 5; attempt++) {
-    const { count } = await sendWorkerMessage<{ count: number }>(page, {
-      type: 'weft:test:sleep-resolver-count',
-    });
-    if (count === 1) return;
-    if (attempt < 5) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
+  const { count } = await sendWorkerMessage<{ count: number }>(page, {
+    type: 'weft:test:sleep-resolver-count',
+  });
+  if (count !== 1) {
+    throw new Error(`Recovered workflow registered ${count} sleep resolvers instead of one`);
   }
-  throw new Error('Recovered workflow did not register its sleep resolver');
 }
 
 async function waitForActivityCount(origin: string, expectedCount: number): Promise<void> {

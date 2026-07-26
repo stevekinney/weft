@@ -218,7 +218,11 @@ function resolveOpenedDescriptorPath(
 ): string | undefined {
   for (const descriptorPath of [`/proc/self/fd/${descriptor}`, `/dev/fd/${descriptor}`]) {
     try {
-      return assetFileSystem.realpathSync(descriptorPath);
+      const resolvedPath = assetFileSystem.realpathSync(descriptorPath);
+      if (resolvedPath.startsWith('/proc/self/fd/') || resolvedPath.startsWith('/dev/fd/')) {
+        continue;
+      }
+      return resolvedPath;
     } catch {
       // Linux exposes descriptor targets through /proc; Darwin and BSD use /dev.
     }

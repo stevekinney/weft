@@ -4,6 +4,13 @@ import { disposeQueuedInlineWorkflowStarts } from './inline-launch-queue.ts';
 import type { EngineInternals } from './internals.ts';
 import { rejectAllSleepTimerAcknowledgements } from './sleep-timer-acknowledgements.ts';
 
+function settleSleepResolverReadyWaitersForTesting(internals: EngineInternals): void {
+  for (const waiters of internals.sleepResolverReadyWaitersForTesting?.values() ?? []) {
+    for (const notifyReady of waiters) notifyReady();
+  }
+  internals.sleepResolverReadyWaitersForTesting?.clear();
+}
+
 /**
  * Synchronous teardown for an {@link Engine}. Moved verbatim from
  * `Engine[Symbol.dispose]` — the operation order is correctness-sensitive
@@ -66,6 +73,7 @@ export function disposeEngine(internals: EngineInternals): void {
   internals.pendingWebhooks.clear();
   internals.sleepResolvers.clear();
   internals.sleepResolversByWorkflow.clear();
+  settleSleepResolverReadyWaitersForTesting(internals);
   internals.sleepTimerAcknowledgementWaiters.clear();
   internals.durableInlineOperations.clear();
   internals.sleepTimersFiredWithoutResolver.clear();

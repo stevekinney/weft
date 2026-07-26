@@ -984,6 +984,51 @@ describe('serve', () => {
     }
   });
 
+  it('serves verified assets when descriptor aliases resolve to their namespace paths', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
+    try {
+      writeFileSync(join(directory, 'app.js'), 'dashboard');
+      const assetFileSystem = {
+        ...fileSystem,
+        read: async (
+          descriptor: number,
+          buffer: NodeJS.ArrayBufferView,
+          offset: number,
+          length: number,
+          position: number | null,
+        ) =>
+          await new Promise<number>((resolve, reject) => {
+            fileSystem.read(descriptor, buffer, offset, length, position, (error, bytesRead) => {
+              if (error) reject(error);
+              else resolve(bytesRead);
+            });
+          }),
+        realpathSync: (path: Parameters<typeof fileSystem.realpathSync>[0]) => {
+          const value = String(path);
+          if (value.startsWith('/proc/self/fd/')) {
+            throw new Error('Linux descriptor path alias is unavailable');
+          }
+          if (value.startsWith('/dev/fd/')) {
+            return value;
+          }
+          return fileSystem.realpathSync(path);
+        },
+      };
+      const assets = resolveDashboardAssets(
+        { prefix: '/assets', directory },
+        DASHBOARD_PAGE_ROUTES,
+      );
+      const route = createDashboardAssetRoute(assets, assetFileSystem);
+
+      const response = route.GET!(new Request('http://weft.test/assets/app.js'));
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe('dashboard');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('streams only the file size verified before reading starts', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
     const assetPath = join(directory, 'app.js');
