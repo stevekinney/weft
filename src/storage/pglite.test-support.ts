@@ -31,29 +31,36 @@ export type PGliteTestFixture = {
   reset(): Promise<void>;
 };
 
+type PGliteTestLifecycle = {
+  beforeAll(callback: () => void | Promise<void>): void;
+  afterAll(callback: () => void | Promise<void>): void;
+};
+
 /**
  * Own a shared in-memory Postgres for a test file. Booting PGlite is expensive,
  * so cases reuse one database and reset the shared `kv` table between runs.
  */
-export function createPGliteTestFixture(): PGliteTestFixture {
+export function createPGliteTestFixture(
+  lifecycle: PGliteTestLifecycle = { afterAll, beforeAll },
+): PGliteTestFixture {
   let database: PGlite | undefined;
 
-  beforeAll(async () => {
+  lifecycle.beforeAll(async () => {
     database = await new PGlite();
     await database.query('SELECT 1');
   });
 
-  afterAll(async () => {
+  lifecycle.afterAll(async () => {
     await database?.close();
     database = undefined;
   });
 
-  const getDatabase = (): PGlite => {
+  function getDatabase(): PGlite {
     if (!database) {
       throw new Error('PGlite test fixture is not running');
     }
     return database;
-  };
+  }
 
   return {
     get database() {

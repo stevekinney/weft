@@ -2,20 +2,22 @@ import { describe, expect, it, spyOn } from 'bun:test';
 
 import { serve, type ServeOptions, type WeftServer } from '../../server/index.ts';
 import type { ServerContext } from '../../server/runtime/context.ts';
-import { scanExpiredTasks } from '../../server/runtime/task-reconciliation.ts';
+import {
+  scanExpiredTasks,
+  useManualTaskReconciliationForTesting,
+} from '../../server/runtime/task-reconciliation.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { decode } from '../codec.ts';
 import { Engine } from '../engine.ts';
 import { waitForParityCondition } from './real-timer-wait.test-support.ts';
 
-const MANUAL_TASK_RECONCILIATION_FOR_TESTING = Symbol.for('weft.manual-task-reconciliation');
 const SERVER_CONTEXT_FOR_TESTING = Symbol.for('weft.server-context-for-testing');
 
 /**
  * This case is intentionally separated from the rest of the failure-handling
  * parity suite. It drives a real {@link serve} instance, a real WebSocket
  * worker connection, and the real heartbeat persistence path. Periodic task
- * reconciliation is disabled through an internal test-only symbol so the test
+ * reconciliation is disabled through an internal test-only option marker so the test
  * can drive stale-deadline and expired-deadline scans explicitly. This keeps
  * the production transport boundary without making correctness depend on CPU
  * scheduling or wall-clock polling.
@@ -29,14 +31,11 @@ describe('Temporal failure-handling parity (remote-task heartbeat reclaim)', () 
     const taskAttempts: number[] = [];
 
     try {
-      const serverOptions = {
+      const serverOptions = useManualTaskReconciliationForTesting({
         engine,
         port: 0,
         unauthenticatedAccess: 'allow',
-        [MANUAL_TASK_RECONCILIATION_FOR_TESTING]: true,
-      } satisfies ServeOptions & {
-        readonly [MANUAL_TASK_RECONCILIATION_FOR_TESTING]: true;
-      };
+      } satisfies ServeOptions);
       server = serve(serverOptions);
 
       socket = new WebSocket(`ws://localhost:${server.port}/v1/tasks/default/stream`);
@@ -128,7 +127,11 @@ describe('Temporal failure-handling parity (remote-task heartbeat reclaim)', () 
       const reassigned = decode(
         (await engine.storage.get(KEYS.operationInflight('parity-heartbeating-task')))!,
       ) as { attempt?: number };
+      await waitForParityCondition(() => taskAttempts.includes(2), {
+        label: 'reclaimed attempt delivery',
+      });
       expect(reassigned.attempt).toBe(2);
+      expect(taskAttempts).toEqual([1, 2]);
       expect(server.registry.isAssigned('parity-heartbeating-task')).toBe(true);
     } finally {
       socket?.close();

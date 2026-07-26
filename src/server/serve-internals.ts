@@ -37,13 +37,16 @@ import {
   type EventBroadcastingHandle,
 } from './runtime/event-broadcasting.ts';
 import { shutdownAllWorkers } from './runtime/shutdown.ts';
-import { reconcileOrphanedRecords, scanExpiredTasks } from './runtime/task-reconciliation.ts';
+import {
+  consumeManualTaskReconciliationForTesting,
+  reconcileOrphanedRecords,
+  scanExpiredTasks,
+} from './runtime/task-reconciliation.ts';
 import { DEFAULT_MAX_STREAM_CONNECTIONS_PER_WORKFLOW } from './runtime/websocket-stream.ts';
 import { isInflightRecord, withRetry } from './runtime/websocket-worker.ts';
 import { TaskQueue } from './task-queue.ts';
 import { createWorkflowEventFeed } from './workflow-event-feed.ts';
 
-// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -52,8 +55,6 @@ const RECONCILIATION_MULTIPLIER = 12;
 
 const DEFAULT_WORKER_RECONNECT_GRACE_PERIOD_MS = 2_000;
 const MAX_WORKER_RECONNECT_GRACE_PERIOD_MS = 5_000;
-
-const MANUAL_TASK_RECONCILIATION_FOR_TESTING = Symbol.for('weft.manual-task-reconciliation');
 
 /**
  * Hard ceiling on the raw WebSocket frame size for every connection (worker
@@ -385,7 +386,7 @@ export function registerStackDisposers(
     ),
   );
 
-  const schedulesTaskReconciliation = !(MANUAL_TASK_RECONCILIATION_FOR_TESTING in options);
+  const schedulesTaskReconciliation = !consumeManualTaskReconciliationForTesting(options);
   const visibilityPollHandle = schedulesTaskReconciliation
     ? setInterval(() => {
         void scanExpiredTasks(context, options, onOperationCleanup);

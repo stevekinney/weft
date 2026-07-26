@@ -1941,16 +1941,6 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/mcp/dispatcher.ts',
       { functions: 9, lines: new Set([112, 113, 116, 212, 213, 214, 261, 262, 266]) },
     ],
-    [
-      'src/storage/pglite.test-support.ts',
-      {
-        // The shared fixture lifecycle initializes the database before every consumer.
-        // Bun reports the defensive inactive-fixture guard as one missed callback.
-        functions: 1,
-        lines: new Set([53]),
-        requireUncoveredLines: true,
-      },
-    ],
     ['src/server/authentication/index.ts', { lines: new Set([154]) }],
     [
       'src/server/authentication/rotating-api-key-store.ts',

@@ -817,13 +817,28 @@ describe('serve', () => {
   it('closes the descriptor when constructing an asset response fails', () => {
     const directory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
     const originalResponse = globalThis.Response;
+    const originalCloseSync = fileSystem.closeSync;
     try {
       writeFileSync(join(directory, 'app.js'), 'dashboard');
       const assets = resolveDashboardAssets(
         { prefix: '/assets', directory },
         DASHBOARD_PAGE_ROUTES,
       );
-      const route = createDashboardAssetRoute(assets);
+      let closeCount = 0;
+      const route = createDashboardAssetRoute(assets, {
+        ...fileSystem,
+        closeSync: (descriptor: number) => {
+          closeCount += 1;
+          return originalCloseSync(descriptor);
+        },
+        read: async (descriptor, buffer, offset, length, position) =>
+          await new Promise<number>((resolve, reject) => {
+            fileSystem.read(descriptor, buffer, offset, length, position, (error, bytesRead) => {
+              if (error) reject(error);
+              else resolve(bytesRead);
+            });
+          }),
+      });
       globalThis.Response = class extends originalResponse {
         constructor(body?: BodyInit | null, init?: ResponseInit) {
           if (body instanceof ReadableStream) {
@@ -835,6 +850,7 @@ describe('serve', () => {
 
       const response = route.GET!(new Request('http://weft.test/assets/app.js'));
       expect(response.status).toBe(404);
+      expect(closeCount).toBe(1);
     } finally {
       globalThis.Response = originalResponse;
       rmSync(directory, { recursive: true, force: true });

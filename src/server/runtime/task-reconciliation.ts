@@ -21,6 +21,21 @@ import {
 } from './task-metrics.ts';
 import { isInflightRecord } from './websocket-worker.ts';
 
+const manualTaskReconciliationOptionsForTesting = new WeakSet<ServeOptions>();
+
+/** @internal Restricts manual reconciliation to explicitly marked test options. */
+export function useManualTaskReconciliationForTesting(options: ServeOptions): ServeOptions {
+  manualTaskReconciliationOptionsForTesting.add(options);
+  return options;
+}
+
+/** @internal Consumes the one-shot test override before a server starts. */
+export function consumeManualTaskReconciliationForTesting(options: ServeOptions): boolean {
+  const usesManualReconciliation = manualTaskReconciliationOptionsForTesting.has(options);
+  manualTaskReconciliationOptionsForTesting.delete(options);
+  return usesManualReconciliation;
+}
+
 /**
  * Given a persisted inflight record, either permanently fail the task (if
  * retry attempts are exhausted) or transition it back to queued and
