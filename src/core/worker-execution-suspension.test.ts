@@ -77,7 +77,7 @@ describe('worker execution signal suspension', () => {
   function createWorkerEngine(storage = new MemoryStorage()): Engine {
     // These suspension/recovery tests are not about turn-timeout enforcement, so
     // use a generous per-turn budget that no individual run/resume turn here
-    // approaches. (Turn-timeout behavior is covered by createHardenedWorkerEngine.)
+    // approaches. The watchdog cases below override only the deliberately wedged turn.
     const workerEngine = new Engine({
       storage,
       workflowExecutionMode: 'worker',
