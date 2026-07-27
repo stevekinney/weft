@@ -123,12 +123,12 @@ describe('Temporal failure-handling parity (remote-task heartbeat reclaim)', () 
         afterHeartbeat.deadline,
         afterHeartbeat.deadline + 1,
       );
-      const reassigned = decode(
-        (await engine.storage.get(KEYS.operationInflight('parity-heartbeating-task')))!,
-      ) as { attempt?: number };
       await waitForParityCondition(() => taskAttempts.includes(2), {
         label: 'reclaimed attempt delivery',
       });
+      const reassigned = decode(
+        (await engine.storage.get(KEYS.operationInflight('parity-heartbeating-task')))!,
+      ) as { attempt?: number };
       expect(reassigned.attempt).toBe(2);
       expect(taskAttempts).toEqual([1, 2]);
       expect(server.registry.isAssigned('parity-heartbeating-task')).toBe(true);

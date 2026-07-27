@@ -1269,13 +1269,6 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
       },
     ],
     [
-      'src/mcp/tools.ts',
-      {
-        functions: 1,
-        lines: new Set([67, 124, 125, 158, 178, 179, 292, 293, 294, 295, 296, 352, 353, 379]),
-      },
-    ],
-    [
       'src/server/api-catalog.ts',
       { lines: new Set([161, 162, 166, 167, 169, 170, 171, 172, 174, 176]) },
     ],
@@ -1540,16 +1533,6 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       },
     ],
     ['src/mcp/protocol.ts', { functions: 4, lines: new Set([89, 94, 95, 96, 101, 106]) }],
-    [
-      'src/mcp/tools.ts',
-      {
-        functions: 2,
-        lines: new Set([
-          67, 124, 125, 160, 180, 181, 294, 295, 296, 297, 298, 314, 315, 316, 317, 318, 354, 355,
-          381,
-        ]),
-      },
-    ],
     ['src/core/worker-execution-ownership.ts', { functions: 1 }],
     ['src/core/worker-listener-registry.ts', { functions: 1 }],
     [
@@ -1993,7 +1976,6 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
     ],
     ['src/server/runtime/cors.ts', { lines: new Set([304]) }],
     ['src/server/runtime/request-gate.ts', { lines: new Set([118, 119]) }],
-    ['src/server/serve-internals.ts', { lines: new Set([236, 279, 334]) }],
   ],
 );
 
@@ -2234,19 +2216,6 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/mcp/protocol.ts',
       { lines: createMergedLineSet(new Set([92, 104, 109]), createLineSet(97, 99)) },
     ],
-    [
-      'src/mcp/tools.ts',
-      {
-        lines: createMergedLineSet(
-          new Set([83, 94, 176, 202, 203, 233, 234, 262, 508]),
-          createLineSet(140, 141),
-          createLineSet(251, 254),
-          createLineSet(421, 425),
-          createLineSet(441, 445),
-          createLineSet(481, 482),
-        ),
-      },
-    ],
     ['src/server/authentication/index.ts', { lines: new Set([158]) }],
     [
       'src/server/authentication/rotating-api-key-store.ts',
@@ -2305,7 +2274,6 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
         ),
       },
     ],
-    ['src/server/runtime/task-reconciliation.ts', { lines: new Set([183]) }],
     ['src/server/runtime/task-result-resolution.ts', { functions: 1, lines: new Set([42]) }],
     ['src/server/runtime/websocket-stream.ts', { lines: new Set([48, 78]) }],
     [
