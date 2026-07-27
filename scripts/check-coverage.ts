@@ -1965,7 +1965,7 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/server/operations/aggregate-workflows.ts',
       {
         functions: 2,
-        lines: new Set([85, 107, 108, 117, 118, 119, 142]),
+        lines: new Set([107, 108, 117, 118, 119]),
         requireUncoveredLines: true,
       },
     ],

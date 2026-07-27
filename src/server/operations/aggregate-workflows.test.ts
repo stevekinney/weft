@@ -88,4 +88,25 @@ describe('weft.workflows.aggregate', () => {
 
     engine[Symbol.dispose]();
   });
+
+  it('masks unexpected aggregate failures in REST responses', async () => {
+    const engine = new Engine({ storage: new MemoryStorage() });
+    engine.aggregate = async () => {
+      throw new Error('secret aggregate failure');
+    };
+
+    const response = await handleRequest(
+      new Request('http://localhost/v1/workflows/aggregate?group_by=status', {
+        method: 'GET',
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get('content-type')).toBe('application/json');
+    expect(await response.json()).toEqual({ error: 'Internal server error' });
+
+    engine[Symbol.dispose]();
+  });
 });

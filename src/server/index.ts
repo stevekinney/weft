@@ -43,8 +43,6 @@ import {
 import type { SchedulingPolicy } from './task-queue-types.ts';
 import { TaskQueue } from './task-queue.ts';
 
-const SERVER_CONTEXT_FOR_TESTING = Symbol.for('weft.server-context-for-testing');
-
 export {
   wireEventBroadcasting,
   type EventBroadcastingHandle,
@@ -555,15 +553,12 @@ export function serve(options: ServeOptions): WeftServer {
   const resolvedHostname = server.hostname ?? hostname;
   const scheme = tlsOptions ? 'https' : 'http';
 
-  const weftServer: WeftServer & {
-    readonly [SERVER_CONTEXT_FOR_TESTING]: ReturnType<typeof buildServerContext>;
-  } = {
+  const weftServer: WeftServer = {
     port: resolvedPort,
     hostname: resolvedHostname,
     url: `${scheme}://${resolvedHostname}:${resolvedPort}`,
     registry: context.registry,
     taskQueue: context.taskQueue,
-    [SERVER_CONTEXT_FOR_TESTING]: context,
     async stop() {
       await stack[Symbol.asyncDispose]();
     },

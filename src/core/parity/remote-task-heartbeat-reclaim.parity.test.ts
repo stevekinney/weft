@@ -1,17 +1,11 @@
-import { describe, expect, it, spyOn } from 'bun:test';
+import { describe, expect, it } from 'bun:test';
 
 import { serve, type ServeOptions, type WeftServer } from '../../server/index.ts';
-import type { ServerContext } from '../../server/runtime/context.ts';
-import {
-  scanExpiredTasks,
-  useManualTaskReconciliationForTesting,
-} from '../../server/runtime/task-reconciliation.ts';
+import { useManualTaskReconciliationForTesting } from '../../server/runtime/task-reconciliation.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { decode } from '../codec.ts';
 import { Engine } from '../engine.ts';
 import { waitForParityCondition } from './real-timer-wait.test-support.ts';
-
-const SERVER_CONTEXT_FOR_TESTING = Symbol.for('weft.server-context-for-testing');
 
 /**
  * This case is intentionally separated from the rest of the failure-handling
@@ -24,6 +18,21 @@ const SERVER_CONTEXT_FOR_TESTING = Symbol.for('weft.server-context-for-testing')
  */
 
 describe('Temporal failure-handling parity (remote-task heartbeat reclaim)', () => {
+  it('rejects manual scans before the test server registers its options', () => {
+    const engine = new Engine();
+    const manualReconciliation = useManualTaskReconciliationForTesting({
+      engine,
+      port: 0,
+      unauthenticatedAccess: 'allow',
+    } satisfies ServeOptions);
+
+    expect(() => manualReconciliation.scanAt('unregistered-task', 1, 2)).toThrow(
+      'Manual task reconciliation requires a running test server',
+    );
+
+    engine[Symbol.dispose]();
+  });
+
   it('keeps a heartbeating remote task assigned while reclaiming one that stops heartbeating', async () => {
     const engine = new Engine();
     let server: WeftServer | undefined;
@@ -31,12 +40,12 @@ describe('Temporal failure-handling parity (remote-task heartbeat reclaim)', () 
     const taskAttempts: number[] = [];
 
     try {
-      const serverOptions = useManualTaskReconciliationForTesting({
+      const manualReconciliation = useManualTaskReconciliationForTesting({
         engine,
         port: 0,
         unauthenticatedAccess: 'allow',
       } satisfies ServeOptions);
-      server = serve(serverOptions);
+      server = serve(manualReconciliation.options);
 
       socket = new WebSocket(`ws://localhost:${server.port}/v1/tasks/default/stream`);
       socket.addEventListener('open', () => {
@@ -99,15 +108,7 @@ describe('Temporal failure-handling parity (remote-task heartbeat reclaim)', () 
         (await engine.storage.get(KEYS.operationInflight('parity-heartbeating-task')))!,
       ) as { deadline: number };
 
-      const serverContext = (
-        server as WeftServer & {
-          readonly [SERVER_CONTEXT_FOR_TESTING]: ServerContext;
-        }
-      )[SERVER_CONTEXT_FOR_TESTING];
-
-      await scanAt(
-        serverContext,
-        serverOptions,
+      await manualReconciliation.scanAt(
         'parity-heartbeating-task',
         beforeHeartbeat.deadline,
         beforeHeartbeat.deadline + 1,
@@ -117,9 +118,7 @@ describe('Temporal failure-handling parity (remote-task heartbeat reclaim)', () 
       expect(taskAttempts).toEqual([1]);
       expect(server.registry.isAssigned('parity-heartbeating-task')).toBe(true);
 
-      await scanAt(
-        serverContext,
-        serverOptions,
+      await manualReconciliation.scanAt(
         'parity-heartbeating-task',
         afterHeartbeat.deadline,
         afterHeartbeat.deadline + 1,
@@ -140,19 +139,3 @@ describe('Temporal failure-handling parity (remote-task heartbeat reclaim)', () 
     }
   });
 });
-
-async function scanAt(
-  context: ServerContext,
-  options: ServeOptions,
-  operationId: string,
-  trackedDeadline: number,
-  now: number,
-): Promise<void> {
-  context.deadlineTracker.add({ operationId, deadline: trackedDeadline });
-  const dateNow = spyOn(Date, 'now').mockReturnValue(now);
-  try {
-    await scanExpiredTasks(context, options, () => {});
-  } finally {
-    dateNow.mockRestore();
-  }
-}

@@ -38,7 +38,7 @@ import {
 } from './runtime/event-broadcasting.ts';
 import { shutdownAllWorkers } from './runtime/shutdown.ts';
 import {
-  consumeManualTaskReconciliationForTesting,
+  consumeManualTaskReconciliationForTesting as consumeManual,
   reconcileOrphanedRecords,
   scanExpiredTasks,
 } from './runtime/task-reconciliation.ts';
@@ -386,7 +386,7 @@ export function registerStackDisposers(
     ),
   );
 
-  const schedulesTaskReconciliation = !consumeManualTaskReconciliationForTesting(options);
+  const schedulesTaskReconciliation = !consumeManual(options, context, onOperationCleanup);
   const visibilityPollHandle = schedulesTaskReconciliation
     ? setInterval(() => {
         void scanExpiredTasks(context, options, onOperationCleanup);

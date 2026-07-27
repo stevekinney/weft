@@ -21,19 +21,52 @@ import {
 } from './task-metrics.ts';
 import { isInflightRecord } from './websocket-worker.ts';
 
-const manualTaskReconciliationOptionsForTesting = new WeakSet<ServeOptions>();
-
-/** @internal Restricts manual reconciliation to explicitly marked test options. */
-export function useManualTaskReconciliationForTesting(options: ServeOptions): ServeOptions {
-  manualTaskReconciliationOptionsForTesting.add(options);
-  return options;
+interface ManualTaskReconciliationRegistration {
+  scanAt?: (operationId: string, trackedDeadline: number, now: number) => Promise<void>;
 }
 
-/** @internal Consumes the one-shot test override before a server starts. */
-export function consumeManualTaskReconciliationForTesting(options: ServeOptions): boolean {
-  const usesManualReconciliation = manualTaskReconciliationOptionsForTesting.has(options);
-  manualTaskReconciliationOptionsForTesting.delete(options);
-  return usesManualReconciliation;
+interface ManualTaskReconciliationForTesting {
+  readonly options: ServeOptions;
+  scanAt(operationId: string, trackedDeadline: number, now: number): Promise<void>;
+}
+
+const manualTaskReconciliationRegistrations = new WeakMap<
+  ServeOptions,
+  ManualTaskReconciliationRegistration
+>();
+
+/** @internal Restricts manual reconciliation to explicitly marked test options. */
+export function useManualTaskReconciliationForTesting(
+  options: ServeOptions,
+): ManualTaskReconciliationForTesting {
+  const registration: ManualTaskReconciliationRegistration = {};
+  manualTaskReconciliationRegistrations.set(options, registration);
+  return {
+    options,
+    scanAt(operationId, trackedDeadline, now) {
+      if (registration.scanAt === undefined) {
+        throw new Error('Manual task reconciliation requires a running test server');
+      }
+      return registration.scanAt(operationId, trackedDeadline, now);
+    },
+  };
+}
+
+/** @internal Installs the narrow one-shot test controller before a server starts. */
+export function consumeManualTaskReconciliationForTesting(
+  options: ServeOptions,
+  context: ServerContext,
+  cleanupWorkflowIndex: (operationId: string) => void,
+): boolean {
+  const registration = manualTaskReconciliationRegistrations.get(options);
+  manualTaskReconciliationRegistrations.delete(options);
+  if (registration === undefined) return false;
+
+  registration.scanAt = async (operationId, trackedDeadline, now) => {
+    context.deadlineTracker.add({ operationId, deadline: trackedDeadline });
+    await scanExpiredTasks(context, options, cleanupWorkflowIndex, now);
+  };
+  return true;
 }
 
 /**
@@ -166,11 +199,11 @@ export async function scanExpiredTasks(
   context: ServerContext,
   options: ServeOptions,
   cleanupWorkflowIndex: (operationId: string) => void,
+  now = Date.now(),
 ): Promise<void> {
   if (context.scanRunning) return;
   context.scanRunning = true;
   try {
-    const now = Date.now();
     const expired = context.deadlineTracker.drainExpired(now);
 
     for (const { operationId, deadline } of expired) {
