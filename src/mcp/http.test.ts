@@ -537,8 +537,8 @@ describe('MCP Streamable HTTP transport', () => {
       content: [{ text: 'Tool arguments must be a JSON object' }],
     });
     await expect(callMcpTool('greet_customer', [], context)).resolves.toMatchObject({
-      isError: false,
-      content: [{ text: expect.stringContaining('undefined') }],
+      isError: true,
+      content: [{ text: 'Tool arguments must be a JSON object' }],
     });
     await expect(
       callMcpTool('greet_customer', { input: { name: 'Ada' }, timeoutMs: 0 }, context),

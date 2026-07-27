@@ -221,15 +221,7 @@ function withWorkflowToolTimeoutParameter(
 }
 
 function parseWorkflowToolArguments(argumentsValue: unknown): WorkflowToolArguments {
-  if (
-    argumentsValue === null ||
-    typeof argumentsValue !== 'object' ||
-    Array.isArray(argumentsValue)
-  ) {
-    return { input: argumentsValue, timeoutMs: DEFAULT_WORKFLOW_TOOL_TIMEOUT_MS };
-  }
-
-  const record = argumentsValue as Record<string, unknown>;
+  const record = requireObject(argumentsValue);
   const timeoutMs = parseWorkflowToolTimeoutMs(record['timeoutMs']);
   return { input: record['input'], timeoutMs };
 }
