@@ -1952,6 +1952,9 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
         requireUncoveredLines: true,
       },
     ],
+    // Intentionally shadows the stale [228..232] main-override entry. Removing
+    // this empty refresh would silently reactivate those unrelated line allowances;
+    // the strict audit-backlog top-off below owns the current [304..308] misses.
     ['src/server/operations/get-task-diagnostics.ts', { lines: new Set() }],
     ['src/server/operations/schedule-faults.ts', { lines: new Set([65, 70, 71, 72]) }],
     [
