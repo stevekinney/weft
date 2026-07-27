@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterAll, afterEach, describe, expect, it } from 'bun:test';
 import { mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -25,7 +25,8 @@ const schedulerModulePath = fileURLToPath(
 const setupModulePath = fileURLToPath(new URL('src/service-worker/setup.ts', repositoryRoot));
 
 const createdDirectories: string[] = [];
-const browsers: Browser[] = [];
+const contexts: BrowserContext[] = [];
+let sharedBrowser: Browser | null = null;
 let server: Bun.Server<unknown> | null = null;
 
 afterEach(async () => {
@@ -33,10 +34,19 @@ afterEach(async () => {
     await Promise.resolve(server.stop(true));
     server = null;
   }
-  await Promise.all(browsers.splice(0).map((browser) => browser.close()));
+  // Close contexts, not the browser: a context is an in-process teardown, while
+  // closing a browser tears down an OS process and the next test then pays a
+  // full cold launch. A fresh context is still a fresh storage partition, so
+  // Service Worker registrations and IndexedDB stay isolated between tests.
+  await Promise.all(contexts.splice(0).map((context) => context.close()));
   for (const directory of createdDirectories.splice(0)) {
     rmSync(directory, { force: true, recursive: true });
   }
+});
+
+afterAll(async () => {
+  await sharedBrowser?.close();
+  sharedBrowser = null;
 });
 
 function createTemporaryDirectory(name: string): string {
@@ -380,16 +390,55 @@ function createSmokeServer(serviceWorkerSource: string): { origin: string } {
   return { origin: server.url.href.replace(/\/$/, '') };
 }
 
-async function launchBrowser(): Promise<Browser> {
+/**
+ * One Chromium process for the whole file, matching the other browser smoke
+ * suites (`indexeddb-browser`, `http-client-browser`), which launch in
+ * `beforeAll` and close in `afterAll`. Each test still gets its own context.
+ *
+ * The explicit `timeout` is deliberately below this file's 30 s per-test
+ * timeout. Playwright's own default launch timeout is 30 s — the same value —
+ * so a launch slow enough to matter expires no earlier than the test deadline
+ * and Bun reports only "this test timed out", naming nothing. Failing the
+ * launch first produces an error that says which step ran out of time.
+ */
+async function createIsolatedContext(): Promise<BrowserContext> {
+  if (sharedBrowser === null) {
+    try {
+      sharedBrowser = await chromium.launch({ timeout: 20_000 });
+    } catch (error) {
+      throw new Error(
+        'Chromium failed to launch for Playwright. If it is not installed, run `bunx playwright install chromium` and retry with WEFT_BROWSER_SMOKE=1.',
+        { cause: error },
+      );
+    }
+  }
+
+  const context = await sharedBrowser.newContext();
+  contexts.push(context);
+  return context;
+}
+
+/**
+ * Bound one step of a smoke test and name it on expiry.
+ *
+ * Chromium control, Service Worker registration, and page `fetch` round trips
+ * are all unbounded awaits. When one of them stalls on a loaded two-core CI
+ * runner, the suite reports nothing but "this test timed out after 30000ms" —
+ * no phase, no stack, nothing to triage from a log. Bounding each step below
+ * the per-test deadline turns that into a failure that says which step stalled.
+ * These bounds only ever *shorten* how long a wedged step is tolerated; the
+ * per-test timeout itself is unchanged.
+ */
+async function withinPhase<T>(phase: string, operation: Promise<T>): Promise<T> {
+  let expire: ReturnType<typeof setTimeout> | undefined;
+  const expiry = new Promise<never>((_resolve, reject) => {
+    expire = setTimeout(() => reject(new Error(`Browser smoke phase timed out: ${phase}`)), 15_000);
+  });
+
   try {
-    const browser = await chromium.launch();
-    browsers.push(browser);
-    return browser;
-  } catch (error) {
-    throw new Error(
-      'Chromium is not installed for Playwright. Run `bunx playwright install chromium` and retry with WEFT_BROWSER_SMOKE=1.',
-      { cause: error },
-    );
+    return await Promise.race([operation, expiry]);
+  } finally {
+    clearTimeout(expire);
   }
 }
 
@@ -398,21 +447,24 @@ async function registerServiceWorker(
   origin: string,
   diagnostics: string[],
 ): Promise<void> {
-  await page.goto(origin);
+  await withinPhase('page.goto', page.goto(origin));
   try {
-    await page.evaluate(async () => {
-      const registration = await navigator.serviceWorker.register('/service-worker.js', {
-        type: 'module',
-      });
-      await navigator.serviceWorker.ready;
-      if (navigator.serviceWorker.controller !== null) return;
-      await new Promise<void>((resolve) => {
-        navigator.serviceWorker.addEventListener('controllerchange', () => resolve(), {
-          once: true,
+    await withinPhase(
+      'service worker registration',
+      page.evaluate(async () => {
+        const registration = await navigator.serviceWorker.register('/service-worker.js', {
+          type: 'module',
         });
-        void registration.update();
-      });
-    });
+        await navigator.serviceWorker.ready;
+        if (navigator.serviceWorker.controller !== null) return;
+        await new Promise<void>((resolve) => {
+          navigator.serviceWorker.addEventListener('controllerchange', () => resolve(), {
+            once: true,
+          });
+          void registration.update();
+        });
+      }),
+    );
   } catch (error) {
     throw new Error(
       `Service Worker registration failed. Browser diagnostics:\n${diagnostics.join('\n')}`,
@@ -527,10 +579,10 @@ async function waitForPageWorkflowStatus(
 }
 
 async function stopServiceWorkers(context: BrowserContext, page: Page): Promise<void> {
-  const session = await context.newCDPSession(page);
-  await session.send('ServiceWorker.enable');
-  await session.send('ServiceWorker.stopAllWorkers');
-  await session.detach();
+  const session = await withinPhase('CDP session', context.newCDPSession(page));
+  await withinPhase('ServiceWorker.enable', session.send('ServiceWorker.enable'));
+  await withinPhase('ServiceWorker.stopAllWorkers', session.send('ServiceWorker.stopAllWorkers'));
+  await withinPhase('CDP detach', session.detach());
 }
 
 describe('Service Worker browser smoke', () => {
@@ -541,8 +593,7 @@ describe('Service Worker browser smoke', () => {
         `weft-browser-smoke-${crypto.randomUUID()}`,
       );
       const { origin } = createSmokeServer(serviceWorkerSource);
-      const browser = await launchBrowser();
-      const context = await browser.newContext();
+      const context = await createIsolatedContext();
       const page = await context.newPage();
       const browserDiagnostics: string[] = [];
       page.on('console', (message) => browserDiagnostics.push(`console:${message.text()}`));
@@ -673,8 +724,7 @@ describe('Service Worker browser smoke', () => {
         `weft-setup-smoke-${crypto.randomUUID()}`,
       );
       const { origin } = createSmokeServer(serviceWorkerSource);
-      const browser = await launchBrowser();
-      const context = await browser.newContext();
+      const context = await createIsolatedContext();
       const page = await context.newPage();
       const browserDiagnostics: string[] = [];
       page.on('console', (message) => browserDiagnostics.push(`console:${message.text()}`));
@@ -766,8 +816,7 @@ describe('Service Worker browser smoke', () => {
         `weft-setup-timer-smoke-${crypto.randomUUID()}`,
       );
       const { origin } = createSmokeServer(serviceWorkerSource);
-      const browser = await launchBrowser();
-      const context = await browser.newContext();
+      const context = await createIsolatedContext();
       const page = await context.newPage();
       const browserDiagnostics: string[] = [];
       page.on('console', (message) => browserDiagnostics.push(`console:${message.text()}`));
@@ -783,23 +832,26 @@ describe('Service Worker browser smoke', () => {
       // path from the signal-parked case: a sleeping workflow only advances when
       // a periodic-sync tick fires the durable timer — there is no external
       // signal to drive it. Recovery must re-arm that timer in the new worker.
-      const timerWorkflow = await page.evaluate(async () => {
-        const response = await fetch('/weft/v1/workflows', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            type: 'sleep-then-finish',
-            input: null,
-            id: 'setup-timer-workflow',
-          }),
-        });
-        if (!response.ok) {
-          throw new Error(
-            `timer workflow start failed: ${response.status} ${await response.text()}`,
-          );
-        }
-        return (await response.json()) as { id: string };
-      });
+      const timerWorkflow = await withinPhase(
+        'start sleeping workflow',
+        page.evaluate(async () => {
+          const response = await fetch('/weft/v1/workflows', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              type: 'sleep-then-finish',
+              input: null,
+              id: 'setup-timer-workflow',
+            }),
+          });
+          if (!response.ok) {
+            throw new Error(
+              `timer workflow start failed: ${response.status} ${await response.text()}`,
+            );
+          }
+          return (await response.json()) as { id: string };
+        }),
+      );
       expect(timerWorkflow.id).toBe('setup-timer-workflow');
       await waitForPageWorkflowStatus(page, timerWorkflow.id, 'running');
       // 'running' alone does not prove the ctx.sleep timer is durable. Wait for
@@ -855,10 +907,13 @@ describe('Service Worker browser smoke', () => {
       });
 
       await expect(
-        page.evaluate(async () => {
-          const response = await fetch('/weft/v1/workflows/setup-timer-workflow/result');
-          return response.json();
-        }),
+        withinPhase(
+          'read sleeping workflow result',
+          page.evaluate(async () => {
+            const response = await fetch('/weft/v1/workflows/setup-timer-workflow/result');
+            return response.json();
+          }),
+        ),
       ).resolves.toEqual({ result: 'slept-then-finished' });
 
       // This workflow runs no activity, so the counter must still be exactly 0 —
