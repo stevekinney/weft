@@ -252,7 +252,6 @@ import {
   createSecondInstanceDetector,
 } from './second-instance-detector.ts';
 import { signal as signalWorkflow } from './signals.ts';
-import { waitForSleepResolverReadyForTesting } from './sleep-resolver-readiness-for-testing.ts';
 import {
   loadScheduleState,
   loadWorkflowState,
@@ -361,6 +360,21 @@ export const ENGINE_WAIT_FOR_SLEEP_RESOLVER_FOR_TESTING = Symbol(
 export const ENGINE_SET_WORKER_TURN_TIMEOUT_RESOLVER_FOR_TESTING = Symbol(
   'engineSetWorkerTurnTimeoutResolverForTesting',
 );
+
+/**
+ * Bound for `ENGINE_WAIT_FOR_SLEEP_RESOLVER_FOR_TESTING`.
+ *
+ * The only production-adjacent consumer awaits that hook inside the
+ * `weft:test:periodic-sync` Service Worker message handler in
+ * service-worker-browser.test.ts, and that file bounds each message round trip
+ * at 5s (`sendWorkerMessage`), each phase at 15s, and each test at 30s. This
+ * bound has to be strictly tighter than the innermost of those — at 5s it would
+ * tie with the message bound and the generic "Service Worker message timed out"
+ * could win the race, hiding the diagnostic this bound exists to produce. 3s
+ * expires first, and the handler posts the rejection back over the port so the
+ * workflow-naming error is what reaches CI.
+ */
+export const SLEEP_RESOLVER_READY_WAIT_TIMEOUT_MS_FOR_TESTING = 3_000;
 
 /**
  * The `name` of the `process` warning emitted when a lease-owning engine is
@@ -1572,7 +1586,39 @@ export class Engine<
     return getInternals(this).sleepResolvers.size;
   }
   async [ENGINE_WAIT_FOR_SLEEP_RESOLVER_FOR_TESTING](workflowId: string): Promise<void> {
-    return waitForSleepResolverReadyForTesting(getInternals(this), workflowId);
+    const internals = getInternals(this);
+    if (internals.sleepResolversByWorkflow.has(workflowId)) return;
+
+    const { promise, resolve, reject } = Promise.withResolvers<void>();
+    let waiters = internals.sleepResolverReadyWaitersForTesting?.get(workflowId);
+    if (waiters === undefined) {
+      waiters = new Set();
+      internals.sleepResolverReadyWaitersForTesting?.set(workflowId, waiters);
+    }
+    waiters.add(resolve);
+
+    // Only two things ever settle a waiter: registerSleepResolver() when the
+    // generator reaches ctx.sleep() (operations-time.ts), and engine disposal
+    // (disposal.ts). A workflow that goes terminal without ever sleeping, or
+    // parks on a signal instead, settles neither — so this await has to be
+    // bounded or it hangs silently for the life of the engine.
+    const expiry = setTimeout(() => {
+      const pendingWaiters = internals.sleepResolverReadyWaitersForTesting?.get(workflowId);
+      if (pendingWaiters !== undefined) {
+        pendingWaiters.delete(resolve);
+        if (pendingWaiters.size === 0) {
+          internals.sleepResolverReadyWaitersForTesting?.delete(workflowId);
+        }
+      }
+
+      reject(
+        new Error(
+          `Timed out after ${SLEEP_RESOLVER_READY_WAIT_TIMEOUT_MS_FOR_TESTING}ms waiting for workflow "${workflowId}" to register a sleep resolver`,
+        ),
+      );
+    }, SLEEP_RESOLVER_READY_WAIT_TIMEOUT_MS_FOR_TESTING);
+
+    return await promise.finally(() => clearTimeout(expiry));
   }
   [ENGINE_SET_WORKER_TURN_TIMEOUT_RESOLVER_FOR_TESTING](
     resolver: (turn: { workflowId: string; kind: 'run' | 'resume' }) => number,

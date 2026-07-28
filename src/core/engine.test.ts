@@ -27,9 +27,9 @@ import {
   ENGINE_SLEEP_RESOLVER_COUNT_FOR_TESTING,
   ENGINE_WAIT_FOR_SLEEP_RESOLVER_FOR_TESTING,
   EngineCreateNameMismatchError,
+  SLEEP_RESOLVER_READY_WAIT_TIMEOUT_MS_FOR_TESTING,
   WorkflowHandle,
 } from './engine.ts';
-import { SLEEP_RESOLVER_READY_WAIT_TIMEOUT_MS_FOR_TESTING } from './engine/sleep-resolver-readiness-for-testing.ts';
 import {
   CheckpointSizeWarningEvent,
   CleanupWarningEvent,

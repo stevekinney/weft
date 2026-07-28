@@ -156,7 +156,7 @@ serviceWorker.addEventListener('message', (event) => {
   const port = event.ports[0];
   if (port === undefined) return;
   const message = event.data ?? {};
-  event.waitUntil((async () => {
+  const handled = (async () => {
     await recoveryReady;
     if (message.type === 'weft:test:lifecycle') {
       port.postMessage({ lifecycleEvents });
@@ -191,7 +191,17 @@ serviceWorker.addEventListener('message', (event) => {
       return;
     }
     port.postMessage({ error: 'unknown message type' });
-  })());
+  })();
+  // Every await above can reject. Without this the handler would simply never
+  // reply, and sendWorkerMessage would report its generic 5s "Service Worker
+  // message timed out" instead of the real cause — which is exactly how a
+  // bounded readiness rejection would otherwise be lost. Posting { error }
+  // reaches the caller because sendWorkerMessage rejects on that shape.
+  event.waitUntil(
+    handled.catch((error) => {
+      port.postMessage({ error: error instanceof Error ? error.message : String(error) });
+    }),
+  );
 });
 `,
   );
@@ -282,7 +292,7 @@ serviceWorker.addEventListener('message', (event) => {
   const port = event.ports[0];
   if (port === undefined) return;
   const message = event.data ?? {};
-  event.waitUntil((async () => {
+  const handled = (async () => {
     // Await the setup promise (which includes recovery) before replying.
     // This makes weft:test:instance a reliable recovery-completion barrier.
     const { engine, scheduler, storage } = await setup;
@@ -338,7 +348,17 @@ serviceWorker.addEventListener('message', (event) => {
       return;
     }
     port.postMessage({ error: 'unknown message type' });
-  })());
+  })();
+  // Every await above can reject. Without this the handler would simply never
+  // reply, and sendWorkerMessage would report its generic 5s "Service Worker
+  // message timed out" instead of the real cause — which is exactly how a
+  // bounded readiness rejection would otherwise be lost. Posting { error }
+  // reaches the caller because sendWorkerMessage rejects on that shape.
+  event.waitUntil(
+    handled.catch((error) => {
+      port.postMessage({ error: error instanceof Error ? error.message : String(error) });
+    }),
+  );
 });
 `,
   );
