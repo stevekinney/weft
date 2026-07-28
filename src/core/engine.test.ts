@@ -1,5 +1,11 @@
-import { describe, expect, it, mock, spyOn } from 'bun:test';
-import { sleepForTesting, withTimeout } from '../testing/fake-timers.test-support.ts';
+import { describe, expect, it, jest, mock, spyOn } from 'bun:test';
+import {
+  advanceTimersByTime,
+  restoreRealTimers,
+  sleepForTesting,
+  useFakeTimers,
+  withTimeout,
+} from '../testing/fake-timers.test-support.ts';
 
 import type {
   BatchOperation,
@@ -23,6 +29,7 @@ import {
   EngineCreateNameMismatchError,
   WorkflowHandle,
 } from './engine.ts';
+import { SLEEP_RESOLVER_READY_WAIT_TIMEOUT_MS_FOR_TESTING } from './engine/sleep-resolver-readiness-for-testing.ts';
 import {
   CheckpointSizeWarningEvent,
   CleanupWarningEvent,
@@ -265,6 +272,108 @@ describe('Engine', () => {
     } finally {
       allowSleep.resolve();
       await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('does not arm a timeout when a sleep resolver is already registered', async () => {
+    const workflowId = 'wait-for-sleep-readiness-already-registered';
+    const workflowStarted = Promise.withResolvers<void>();
+    const allowSleep = Promise.withResolvers<void>();
+    useFakeTimers();
+    const engine = new Engine();
+    engine.register(
+      workflow({ name: 'wait-for-sleep-readiness-already-registered' }).execute(
+        async function* (ctx) {
+          workflowStarted.resolve();
+          await allowSleep.promise;
+          yield* ctx.sleep(60_000);
+        },
+      ),
+    );
+
+    try {
+      await engine.start('wait-for-sleep-readiness-already-registered', null, { id: workflowId });
+      await workflowStarted.promise;
+
+      allowSleep.resolve();
+      await engine[ENGINE_WAIT_FOR_SLEEP_RESOLVER_FOR_TESTING](workflowId);
+      expect(engine[ENGINE_SLEEP_RESOLVER_COUNT_FOR_TESTING]()).toBe(1);
+
+      const timerCountBefore = jest.getTimerCount();
+      await engine[ENGINE_WAIT_FOR_SLEEP_RESOLVER_FOR_TESTING](workflowId);
+
+      // The happy path (resolver already registered) must resolve without
+      // arming a timeout timer — no new timer should be pending.
+      expect(jest.getTimerCount()).toBe(timerCountBefore);
+    } finally {
+      allowSleep.resolve();
+      await engine[Symbol.asyncDispose]();
+      restoreRealTimers();
+    }
+  });
+
+  it('clears the readiness timeout once a sleep resolver registers, leaking no pending timer', async () => {
+    const workflowId = 'wait-for-sleep-readiness-clears-timeout';
+    const workflowStarted = Promise.withResolvers<void>();
+    const allowSleep = Promise.withResolvers<void>();
+    useFakeTimers();
+    const engine = new Engine();
+    engine.register(
+      workflow({ name: 'wait-for-sleep-readiness-clears-timeout' }).execute(async function* (ctx) {
+        workflowStarted.resolve();
+        await allowSleep.promise;
+        yield* ctx.sleep(60_000);
+      }),
+    );
+
+    try {
+      await engine.start('wait-for-sleep-readiness-clears-timeout', null, { id: workflowId });
+      await workflowStarted.promise;
+
+      const barrier = engine[ENGINE_WAIT_FOR_SLEEP_RESOLVER_FOR_TESTING](workflowId);
+      const timerCountAfterArming = jest.getTimerCount();
+
+      allowSleep.resolve();
+      await barrier;
+
+      // The readiness timeout timer armed above must be cleared on the
+      // resolve path — exactly one fewer pending timer than while armed.
+      expect(jest.getTimerCount()).toBe(timerCountAfterArming - 1);
+    } finally {
+      allowSleep.resolve();
+      await engine[Symbol.asyncDispose]();
+      restoreRealTimers();
+    }
+  });
+
+  it('rejects with a diagnostic when a workflow never registers a sleep resolver within the readiness bound', async () => {
+    const workflowId = 'wait-for-sleep-readiness-timeout';
+    const workflowStarted = Promise.withResolvers<void>();
+    useFakeTimers();
+    const engine = new Engine();
+    engine.register(
+      workflow({ name: 'wait-for-sleep-readiness-timeout' }).execute(async function* (ctx) {
+        workflowStarted.resolve();
+        // Parks on a signal that never arrives — never reaches ctx.sleep()
+        // and never reaches a terminal state, so only the readiness bound
+        // itself can settle a waiter registered against this workflow.
+        yield* ctx.waitForSignal('never-arrives');
+      }),
+    );
+
+    try {
+      await engine.start('wait-for-sleep-readiness-timeout', null, { id: workflowId });
+      await workflowStarted.promise;
+
+      const barrier = engine[ENGINE_WAIT_FOR_SLEEP_RESOLVER_FOR_TESTING](workflowId);
+      await advanceTimersByTime(SLEEP_RESOLVER_READY_WAIT_TIMEOUT_MS_FOR_TESTING);
+
+      await expect(barrier).rejects.toThrow(
+        `Timed out after ${SLEEP_RESOLVER_READY_WAIT_TIMEOUT_MS_FOR_TESTING}ms waiting for workflow "${workflowId}" to register a sleep resolver`,
+      );
+    } finally {
+      await engine[Symbol.asyncDispose]();
+      restoreRealTimers();
     }
   });
 

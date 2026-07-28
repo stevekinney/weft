@@ -252,6 +252,7 @@ import {
   createSecondInstanceDetector,
 } from './second-instance-detector.ts';
 import { signal as signalWorkflow } from './signals.ts';
+import { waitForSleepResolverReadyForTesting } from './sleep-resolver-readiness-for-testing.ts';
 import {
   loadScheduleState,
   loadWorkflowState,
@@ -1571,17 +1572,7 @@ export class Engine<
     return getInternals(this).sleepResolvers.size;
   }
   async [ENGINE_WAIT_FOR_SLEEP_RESOLVER_FOR_TESTING](workflowId: string): Promise<void> {
-    const internals = getInternals(this);
-    if (internals.sleepResolversByWorkflow.has(workflowId)) return;
-
-    const { promise, resolve } = Promise.withResolvers<void>();
-    let waiters = internals.sleepResolverReadyWaitersForTesting?.get(workflowId);
-    if (waiters === undefined) {
-      waiters = new Set();
-      internals.sleepResolverReadyWaitersForTesting?.set(workflowId, waiters);
-    }
-    waiters.add(resolve);
-    await promise;
+    return waitForSleepResolverReadyForTesting(getInternals(this), workflowId);
   }
   [ENGINE_SET_WORKER_TURN_TIMEOUT_RESOLVER_FOR_TESTING](
     resolver: (turn: { workflowId: string; kind: 'run' | 'resume' }) => number,
