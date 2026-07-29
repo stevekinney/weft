@@ -43,6 +43,7 @@ description: >-
 3. Reject or settle pending promises when the owner goes away; never leave callers waiting for an event that can no longer arrive.
 4. Prefer virtual time, explicit signals, and observable conditions over fixed `Bun.sleep()` delays.
 5. Cap polling and retry loops, then surface the final state when the cap is reached.
+   For cross-context test waits, keep the inner readiness timeout strictly shorter than the outer transport timeout, clear timers and waiters on every settlement path, and catch Service Worker message-handler rejections so the reply port posts `{ error }` instead of leaving the caller to report a generic timeout.
 6. Check `signal.aborted` before registering listeners or claiming work; an already-aborted signal will not fire another abort event.
 7. On server shutdown, clear timers, resolve parked waiters, and avoid invoking callbacks that would re-enter disposed engine or storage state.
 8. For pending updates, wait for registered update handlers before draining durable requests. A resumed or inline-advanced workflow must not reject a valid persisted update merely because the handler registry has not caught up yet.
@@ -105,5 +106,6 @@ description: >-
 - For attempt-token work, cover same-worker stale completion rejection over WebSocket, long-poll stale-token rejection, malformed echoed tokens, token-less records, absent echoes from older workers, and server-restart restoration of token-bearing in-flight records.
 - For workflow execution-token work, cover token stability across recovery, rotation on `start-new` replacement, propagation into inline and worker activity contexts, finalizer token exposure, and stale external-write rejection scenarios that use both the run token and the attempt token.
 - For fleet event subscriptions, cover replay caps, workflow and event-kind filters, worker connect/disconnect events, purge cleanup, and request/response dispatch rejection for subscription-only operations.
+- For cross-context readiness waits, test the already-ready fast path without arming a timer, timer and waiter cleanup after resolution or expiry, the exact diagnostic propagated through the reply port, and the real-browser Service Worker smoke path.
 - Prove no test depends on unbounded waits or real-time sleeps.
 - Run the focused lifecycle or worker tests plus `bun run verify:no-test-sleeps` when relevant.
