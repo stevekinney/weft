@@ -430,9 +430,24 @@ function createSmokeServer(serviceWorkerSource: string): { origin: string } {
  */
 async function createIsolatedContext(withinPhase: PhaseRunner): Promise<BrowserContext> {
   if (sharedBrowser === null) {
+    const launch = chromium.launch({ timeout: 20_000 });
+    let launchAbandoned = false;
+    // A launch that lands between the phase ceiling and its own 20 s timeout
+    // resolves after the wrapper already rejected, so it is never assigned to
+    // `sharedBrowser` and `afterAll` cannot close it — leaking a Chromium
+    // process that can outlive the job. Close it on arrival instead.
+    void launch.then(
+      (browser) => {
+        if (launchAbandoned) void browser.close();
+      },
+      // A rejected launch has no process to close; the failure surfaces below.
+      () => {},
+    );
+
     try {
-      sharedBrowser = await withinPhase('chromium launch', chromium.launch({ timeout: 20_000 }));
+      sharedBrowser = await withinPhase('chromium launch', launch);
     } catch (error) {
+      launchAbandoned = true;
       throw new Error(
         'Chromium failed to launch for Playwright. If it is not installed, run `bunx playwright install chromium` and retry with WEFT_BROWSER_SMOKE=1.',
         { cause: error },
