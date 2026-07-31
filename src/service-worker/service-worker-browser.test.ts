@@ -473,7 +473,7 @@ type PhaseRunner = <T>(phase: string, operation: Promise<T>) => Promise<T>;
  * before it. These bounds only ever *shorten* how long a wedged step is
  * tolerated; the per-test timeout itself is unchanged.
  */
-function beginPhaseBudget(): PhaseRunner {
+function beginPhaseBudget(diagnostics: string[]): PhaseRunner {
   const budgetExpiresAt = Date.now() + SMOKE_TEST_TIMEOUT_MS - PHASE_REPORTING_RESERVE_MS;
 
   return async function withinPhase<T>(phase: string, operation: Promise<T>): Promise<T> {
@@ -487,7 +487,12 @@ function beginPhaseBudget(): PhaseRunner {
         () =>
           reject(
             new Error(
-              `Browser smoke phase timed out: ${phase} (bound ${boundMs} ms; ${remainingBudgetMs} ms of the test budget remained)`,
+              `Browser smoke phase timed out: ${phase} (bound ${boundMs} ms; ${remainingBudgetMs} ms of the test budget remained)` +
+                // The `serviceworker` / `serviceworker-close` entries are the
+                // evidence that says whether Chromium evicted the worker out
+                // from under the stalled step, which is the leading hypothesis
+                // for #883. Without this they are collected and thrown away.
+                `\nBrowser diagnostics:\n${diagnostics.length === 0 ? '<none captured>' : diagnostics.join('\n')}`,
             ),
           ),
         boundMs,
@@ -505,33 +510,25 @@ function beginPhaseBudget(): PhaseRunner {
 async function registerServiceWorker(
   page: Page,
   origin: string,
-  diagnostics: string[],
   withinPhase: PhaseRunner,
 ): Promise<void> {
   await withinPhase('page.goto', page.goto(origin));
-  try {
-    await withinPhase(
-      'service worker registration',
-      page.evaluate(async () => {
-        const registration = await navigator.serviceWorker.register('/service-worker.js', {
-          type: 'module',
+  await withinPhase(
+    'service worker registration',
+    page.evaluate(async () => {
+      const registration = await navigator.serviceWorker.register('/service-worker.js', {
+        type: 'module',
+      });
+      await navigator.serviceWorker.ready;
+      if (navigator.serviceWorker.controller !== null) return;
+      await new Promise<void>((resolve) => {
+        navigator.serviceWorker.addEventListener('controllerchange', () => resolve(), {
+          once: true,
         });
-        await navigator.serviceWorker.ready;
-        if (navigator.serviceWorker.controller !== null) return;
-        await new Promise<void>((resolve) => {
-          navigator.serviceWorker.addEventListener('controllerchange', () => resolve(), {
-            once: true,
-          });
-          void registration.update();
-        });
-      }),
-    );
-  } catch (error) {
-    throw new Error(
-      `Service Worker registration failed. Browser diagnostics:\n${diagnostics.join('\n')}`,
-      { cause: error },
-    );
-  }
+        void registration.update();
+      });
+    }),
+  );
 }
 
 async function sendWorkerMessage<T>(page: Page, message: Record<string, unknown>): Promise<T> {
@@ -687,7 +684,10 @@ describe('Service Worker browser smoke', () => {
   browserSmokeTest(
     'runs lifecycle, fetch, periodic-sync, and restart recovery in Chromium',
     async () => {
-      const withinPhase = beginPhaseBudget();
+      // Declared before the budget so a phase timeout can report whatever the
+      // page and worker had logged by then; the listeners below append to it.
+      const browserDiagnostics: string[] = [];
+      const withinPhase = beginPhaseBudget(browserDiagnostics);
       const serviceWorkerSource = await withinPhase(
         'bundle build',
         buildServiceWorkerBundle(`weft-browser-smoke-${crypto.randomUUID()}`),
@@ -695,7 +695,6 @@ describe('Service Worker browser smoke', () => {
       const { origin } = createSmokeServer(serviceWorkerSource);
       const context = await createIsolatedContext(withinPhase);
       const page = await withinPhase('page creation', context.newPage());
-      const browserDiagnostics: string[] = [];
       page.on('console', (message) => browserDiagnostics.push(`console:${message.text()}`));
       page.on('pageerror', (error) => browserDiagnostics.push(`pageerror:${error.message}`));
       context.on('serviceworker', (worker) => {
@@ -703,7 +702,7 @@ describe('Service Worker browser smoke', () => {
         worker.on('close', () => browserDiagnostics.push(`serviceworker-close:${worker.url()}`));
       });
 
-      await registerServiceWorker(page, origin, browserDiagnostics, withinPhase);
+      await registerServiceWorker(page, origin, withinPhase);
 
       const lifecycle = await sendWorkerMessage<{ lifecycleEvents: string[] }>(page, {
         type: 'weft:test:lifecycle',
@@ -838,7 +837,10 @@ describe('Service Worker browser smoke', () => {
   browserSmokeTest(
     'setupServiceWorker({ recover: true }) auto-recovers a parked workflow after SW restart',
     async () => {
-      const withinPhase = beginPhaseBudget();
+      // Declared before the budget so a phase timeout can report whatever the
+      // page and worker had logged by then; the listeners below append to it.
+      const browserDiagnostics: string[] = [];
+      const withinPhase = beginPhaseBudget(browserDiagnostics);
       const serviceWorkerSource = await withinPhase(
         'bundle build',
         buildSetupServiceWorkerBundle(`weft-setup-smoke-${crypto.randomUUID()}`),
@@ -846,7 +848,6 @@ describe('Service Worker browser smoke', () => {
       const { origin } = createSmokeServer(serviceWorkerSource);
       const context = await createIsolatedContext(withinPhase);
       const page = await withinPhase('page creation', context.newPage());
-      const browserDiagnostics: string[] = [];
       page.on('console', (message) => browserDiagnostics.push(`console:${message.text()}`));
       page.on('pageerror', (error) => browserDiagnostics.push(`pageerror:${error.message}`));
       context.on('serviceworker', (worker) => {
@@ -854,7 +855,7 @@ describe('Service Worker browser smoke', () => {
         worker.on('close', () => browserDiagnostics.push(`serviceworker-close:${worker.url()}`));
       });
 
-      await registerServiceWorker(page, origin, browserDiagnostics, withinPhase);
+      await registerServiceWorker(page, origin, withinPhase);
 
       // Start a workflow that parks on a signal (after running one activity).
       const parkedWorkflow = await withinPhase(
@@ -941,7 +942,10 @@ describe('Service Worker browser smoke', () => {
   browserSmokeTest(
     'setupServiceWorker({ recover: true }) resumes a sleeping timer workflow via periodic sync after SW restart',
     async () => {
-      const withinPhase = beginPhaseBudget();
+      // Declared before the budget so a phase timeout can report whatever the
+      // page and worker had logged by then; the listeners below append to it.
+      const browserDiagnostics: string[] = [];
+      const withinPhase = beginPhaseBudget(browserDiagnostics);
       const serviceWorkerSource = await withinPhase(
         'bundle build',
         buildSetupServiceWorkerBundle(`weft-setup-timer-smoke-${crypto.randomUUID()}`),
@@ -949,7 +953,6 @@ describe('Service Worker browser smoke', () => {
       const { origin } = createSmokeServer(serviceWorkerSource);
       const context = await createIsolatedContext(withinPhase);
       const page = await withinPhase('page creation', context.newPage());
-      const browserDiagnostics: string[] = [];
       page.on('console', (message) => browserDiagnostics.push(`console:${message.text()}`));
       page.on('pageerror', (error) => browserDiagnostics.push(`pageerror:${error.message}`));
       context.on('serviceworker', (worker) => {
@@ -957,7 +960,7 @@ describe('Service Worker browser smoke', () => {
         worker.on('close', () => browserDiagnostics.push(`serviceworker-close:${worker.url()}`));
       });
 
-      await registerServiceWorker(page, origin, browserDiagnostics, withinPhase);
+      await registerServiceWorker(page, origin, withinPhase);
 
       // Start a workflow that parks on ctx.sleep(). This is a DISTINCT recovery
       // path from the signal-parked case: a sleeping workflow only advances when
