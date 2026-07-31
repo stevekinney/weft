@@ -434,8 +434,8 @@ async function createIsolatedContext(withinPhase: PhaseRunner): Promise<BrowserC
     let launchAbandoned = false;
     // A launch that lands between the phase ceiling and its own 20 s timeout
     // resolves after the wrapper already rejected, so it is never assigned to
-    // `sharedBrowser` and `afterAll` cannot close it — leaking a Chromium
-    // process that can outlive the job. Close it on arrival instead.
+    // `sharedBrowser` and `afterAll` cannot close it — stranding a Chromium
+    // process for the rest of the run. Close it on arrival instead.
     void launch.then(
       (browser) => {
         if (launchAbandoned) void browser.close();
@@ -455,7 +455,28 @@ async function createIsolatedContext(withinPhase: PhaseRunner): Promise<BrowserC
     }
   }
 
-  const context = await withinPhase('browser context creation', sharedBrowser.newContext());
+  const creation = sharedBrowser.newContext();
+  let creationAbandoned = false;
+  // Same hazard as the launch, and worse than bookkeeping here: a context that
+  // arrives after its phase expired never reaches `contexts`, so `afterEach`
+  // cannot close it and it keeps its storage partition and Service Worker
+  // registration alive until `afterAll`. These tests rely on per-context
+  // isolation, so a stray one can reach the tests that follow.
+  void creation.then(
+    (late) => {
+      if (creationAbandoned) void late.close();
+    },
+    () => {},
+  );
+
+  let context: BrowserContext;
+  try {
+    context = await withinPhase('browser context creation', creation);
+  } catch (error) {
+    creationAbandoned = true;
+    throw error;
+  }
+
   contexts.push(context);
   return context;
 }
@@ -543,7 +564,10 @@ function beginPhaseBudget(diagnostics: string[]): PhaseRunner {
       // console, not through the Playwright error. Attaching them here covers
       // every phase, which is why `registerServiceWorker` no longer needs its
       // own catch.
-      if (error instanceof Error && error.message.startsWith('Browser smoke phase timed out:')) {
+      // Phases nest (`waitForTimerArmed` wraps `sendWorkerMessage`), so skip
+      // anything this runner already annotated — otherwise the inner failure
+      // gets a second wrapper and the diagnostics block prints twice.
+      if (error instanceof Error && error.message.startsWith('Browser smoke phase ')) {
         throw error;
       }
       throw new Error(`Browser smoke phase failed: ${phase}${describeDiagnostics()}`, {
