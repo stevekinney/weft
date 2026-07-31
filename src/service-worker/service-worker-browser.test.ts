@@ -481,6 +481,13 @@ type PhaseRunner = <T>(phase: string, operation: Promise<T>) => Promise<T>;
 function beginPhaseBudget(diagnostics: string[]): PhaseRunner {
   const budgetExpiresAt = Date.now() + SMOKE_TEST_TIMEOUT_MS - PHASE_REPORTING_RESERVE_MS;
 
+  // The `serviceworker` / `serviceworker-close` entries are the evidence that
+  // says whether Chromium evicted the worker out from under a failing step,
+  // which is the leading hypothesis for #883. Read at throw time so entries
+  // logged during the phase are included.
+  const describeDiagnostics = (): string =>
+    `\nBrowser diagnostics:\n${diagnostics.length === 0 ? '<none captured>' : diagnostics.join('\n')}`;
+
   return async function withinPhase<T>(phase: string, operation: Promise<T>): Promise<T> {
     const remainingBudgetMs = Math.max(0, budgetExpiresAt - Date.now());
     // A zero bound still rejects (on the next tick) naming the phase, which is
@@ -493,11 +500,7 @@ function beginPhaseBudget(diagnostics: string[]): PhaseRunner {
           reject(
             new Error(
               `Browser smoke phase timed out: ${phase} (bound ${boundMs} ms; ${remainingBudgetMs} ms of the test budget remained)` +
-                // The `serviceworker` / `serviceworker-close` entries are the
-                // evidence that says whether Chromium evicted the worker out
-                // from under the stalled step, which is the leading hypothesis
-                // for #883. Without this they are collected and thrown away.
-                `\nBrowser diagnostics:\n${diagnostics.length === 0 ? '<none captured>' : diagnostics.join('\n')}`,
+                describeDiagnostics(),
             ),
           ),
         boundMs,
@@ -506,6 +509,18 @@ function beginPhaseBudget(diagnostics: string[]): PhaseRunner {
 
     try {
       return await Promise.race([operation, expiry]);
+    } catch (error) {
+      // Diagnostics matter just as much when a phase fails *promptly* — a
+      // rejected Service Worker script reports the real cause through the page
+      // console, not through the Playwright error. Attaching them here covers
+      // every phase, which is why `registerServiceWorker` no longer needs its
+      // own catch.
+      if (error instanceof Error && error.message.startsWith('Browser smoke phase timed out:')) {
+        throw error;
+      }
+      throw new Error(`Browser smoke phase failed: ${phase}${describeDiagnostics()}`, {
+        cause: error,
+      });
     } finally {
       clearTimeout(expire);
     }
@@ -536,8 +551,16 @@ async function registerServiceWorker(
   );
 }
 
-async function sendWorkerMessage<T>(page: Page, message: Record<string, unknown>): Promise<T> {
-  return page.evaluate(
+// The internal 5 s transport bound is fixed, so it does not account for time
+// already spent: with less than 5 s of the test budget left, a stalled message
+// reaches Bun's deadline before its own timeout fires. Routing every message
+// through the phase runner caps it by whatever budget remains.
+async function sendWorkerMessage<T>(
+  page: Page,
+  message: Record<string, unknown>,
+  withinPhase: PhaseRunner,
+): Promise<T> {
+  const roundTrip = page.evaluate(
     (workerMessage) =>
       new Promise<T>((resolve, reject) => {
         const controller = navigator.serviceWorker.controller;
@@ -565,6 +588,7 @@ async function sendWorkerMessage<T>(page: Page, message: Record<string, unknown>
       }),
     message,
   );
+  return withinPhase(`worker message: ${String(message['type'])}`, roundTrip);
 }
 
 // Poll the worker until a durable timer deadline has been checkpointed. The
@@ -584,9 +608,11 @@ async function waitForTimerArmed(page: Page, withinPhase: PhaseRunner): Promise<
     (async () => {
       let attempts = 0;
       while (attempts++ < 200) {
-        const { armed } = await sendWorkerMessage<{ armed: boolean }>(page, {
-          type: 'weft:test:timer-armed',
-        });
+        const { armed } = await sendWorkerMessage<{ armed: boolean }>(
+          page,
+          { type: 'weft:test:timer-armed' },
+          withinPhase,
+        );
         if (armed) return;
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
@@ -709,9 +735,11 @@ describe('Service Worker browser smoke', () => {
 
       await registerServiceWorker(page, origin, withinPhase);
 
-      const lifecycle = await sendWorkerMessage<{ lifecycleEvents: string[] }>(page, {
-        type: 'weft:test:lifecycle',
-      });
+      const lifecycle = await sendWorkerMessage<{ lifecycleEvents: string[] }>(
+        page,
+        { type: 'weft:test:lifecycle' },
+        withinPhase,
+      );
       expect(lifecycle.lifecycleEvents).toContain('install');
       expect(lifecycle.lifecycleEvents).toContain('activate');
 
@@ -725,9 +753,11 @@ describe('Service Worker browser smoke', () => {
           };
         }),
       );
-      const directHealth = await sendWorkerMessage<{ status: number; body: string }>(page, {
-        type: 'weft:test:direct-health',
-      });
+      const directHealth = await sendWorkerMessage<{ status: number; body: string }>(
+        page,
+        { type: 'weft:test:direct-health' },
+        withinPhase,
+      );
       expect(delegatedHealth).toEqual(directHealth);
 
       const timerWorkflow = await withinPhase(
@@ -752,7 +782,7 @@ describe('Service Worker browser smoke', () => {
       );
       expect(timerWorkflow.id).toBe('timer-workflow');
       await waitForPageWorkflowStatus(page, timerWorkflow.id, 'running', withinPhase);
-      await sendWorkerMessage(page, { type: 'weft:test:periodic-sync' });
+      await sendWorkerMessage(page, { type: 'weft:test:periodic-sync' }, withinPhase);
       await expect(
         withinPhase(
           'read timer workflow result',
@@ -787,9 +817,11 @@ describe('Service Worker browser smoke', () => {
       await waitForPageWorkflowStatus(page, parkedWorkflow.id, 'running', withinPhase);
       await waitForActivityCount(origin, 1, withinPhase);
 
-      const instanceBeforeStop = await sendWorkerMessage<{ instanceId: string }>(page, {
-        type: 'weft:test:instance',
-      });
+      const instanceBeforeStop = await sendWorkerMessage<{ instanceId: string }>(
+        page,
+        { type: 'weft:test:instance' },
+        withinPhase,
+      );
       await stopServiceWorkers(context, page, withinPhase);
 
       // Confirm a new worker identity (and therefore completed recovery) BEFORE
@@ -798,9 +830,11 @@ describe('Service Worker browser smoke', () => {
       // new worker has finished `engine.recoverAll()` and the resumed generator
       // is live. Sending the signal before this barrier risked delivering it
       // before the parked workflow was re-activated in the new worker.
-      const instanceAfterStop = await sendWorkerMessage<{ instanceId: string }>(page, {
-        type: 'weft:test:instance',
-      });
+      const instanceAfterStop = await sendWorkerMessage<{ instanceId: string }>(
+        page,
+        { type: 'weft:test:instance' },
+        withinPhase,
+      );
       expect(instanceAfterStop.instanceId).not.toBe(instanceBeforeStop.instanceId);
 
       await withinPhase(
@@ -889,9 +923,11 @@ describe('Service Worker browser smoke', () => {
       await waitForActivityCount(origin, 1, withinPhase);
 
       // Record the current worker identity before stopping.
-      const instanceBeforeStop = await sendWorkerMessage<{ instanceId: string }>(page, {
-        type: 'weft:test:instance',
-      });
+      const instanceBeforeStop = await sendWorkerMessage<{ instanceId: string }>(
+        page,
+        { type: 'weft:test:instance' },
+        withinPhase,
+      );
 
       // Kill the Service Worker via CDP — simulates the browser evicting the worker.
       await stopServiceWorkers(context, page, withinPhase);
@@ -901,9 +937,11 @@ describe('Service Worker browser smoke', () => {
       // `engine.recoverAll()` via `recover: true`), a successful
       // `weft:test:instance` reply is proof that recovery completed and the
       // parked workflow's generator is live in the new worker.
-      const instanceAfterStop = await sendWorkerMessage<{ instanceId: string }>(page, {
-        type: 'weft:test:instance',
-      });
+      const instanceAfterStop = await sendWorkerMessage<{ instanceId: string }>(
+        page,
+        { type: 'weft:test:instance' },
+        withinPhase,
+      );
       expect(instanceAfterStop.instanceId).not.toBe(instanceBeforeStop.instanceId);
 
       // Send the signal — the recovered worker must be ready to resume.
@@ -1001,18 +1039,22 @@ describe('Service Worker browser smoke', () => {
       await waitForTimerArmed(page, withinPhase);
 
       // Record the current worker identity before stopping.
-      const instanceBeforeStop = await sendWorkerMessage<{ instanceId: string }>(page, {
-        type: 'weft:test:instance',
-      });
+      const instanceBeforeStop = await sendWorkerMessage<{ instanceId: string }>(
+        page,
+        { type: 'weft:test:instance' },
+        withinPhase,
+      );
 
       // Kill the Service Worker via CDP while the workflow is still sleeping.
       await stopServiceWorkers(context, page, withinPhase);
 
       // A new worker identity proves recovery (via recover: true) completed and
       // the sleeping workflow's durable timer was re-armed in the fresh worker.
-      const instanceAfterStop = await sendWorkerMessage<{ instanceId: string }>(page, {
-        type: 'weft:test:instance',
-      });
+      const instanceAfterStop = await sendWorkerMessage<{ instanceId: string }>(
+        page,
+        { type: 'weft:test:instance' },
+        withinPhase,
+      );
       expect(instanceAfterStop.instanceId).not.toBe(instanceBeforeStop.instanceId);
 
       // Drive a periodic-sync tick with the scheduler clock advanced past the
@@ -1023,9 +1065,7 @@ describe('Service Worker browser smoke', () => {
         instanceId: string;
         sleepResolverCount: number;
         ticked: boolean;
-      }>(page, {
-        type: 'weft:test:periodic-sync',
-      });
+      }>(page, { type: 'weft:test:periodic-sync' }, withinPhase);
       expect(tickResult).toEqual({
         instanceId: instanceAfterStop.instanceId,
         sleepResolverCount: 1,
@@ -1039,7 +1079,7 @@ describe('Service Worker browser smoke', () => {
       const timerState = await sendWorkerMessage<{
         remainingTimerCount: number;
         workflowStatus: string | null;
-      }>(page, { type: 'weft:test:timer-state' });
+      }>(page, { type: 'weft:test:timer-state' }, withinPhase);
       expect(timerState).toEqual({
         remainingTimerCount: 0,
         workflowStatus: 'completed',
