@@ -508,6 +508,16 @@ function beginPhaseBudget(diagnostics: string[]): PhaseRunner {
     // A zero bound still rejects (on the next tick) naming the phase, which is
     // strictly better than yielding the remainder to an anonymous timeout.
     const boundMs = Math.min(MAXIMUM_PHASE_MS, remainingBudgetMs);
+    // Several steps nest a tighter, more specific bound inside their phase: the
+    // 5 s `sendWorkerMessage` transport timeout, and inside the periodic-sync
+    // message, the 3 s sleep-resolver readiness bound that names the workflow
+    // (SLEEP_RESOLVER_READY_WAIT_TIMEOUT_MS_FOR_TESTING). Those produce better
+    // messages than a phase name, and they normally win. When the budget is
+    // nearly spent the outer bound necessarily preempts them — there is no way
+    // to hold a 3 s inner window open inside 1 s of remaining budget. Say so,
+    // so the failure reads as "the budget was gone before this step" rather
+    // than "this step hung".
+    const budgetLimited = boundMs < MAXIMUM_PHASE_MS;
     let expire: ReturnType<typeof setTimeout> | undefined;
     const expiry = new Promise<never>((_resolve, reject) => {
       expire = setTimeout(
@@ -515,6 +525,9 @@ function beginPhaseBudget(diagnostics: string[]): PhaseRunner {
           reject(
             new Error(
               `Browser smoke phase timed out: ${phase} (bound ${boundMs} ms; ${remainingBudgetMs} ms of the test budget remained)` +
+                (budgetLimited
+                  ? '\nThe bound was shortened by the remaining test budget, not by this step — earlier phases consumed it, and any tighter timeout nested inside this phase may have been preempted. Look at what ran before this.'
+                  : '') +
                 describeDiagnostics(),
             ),
           ),

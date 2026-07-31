@@ -367,12 +367,20 @@ export const ENGINE_SET_WORKER_TURN_TIMEOUT_RESOLVER_FOR_TESTING = Symbol(
  * The only production-adjacent consumer awaits that hook inside the
  * `weft:test:periodic-sync` Service Worker message handler in
  * service-worker-browser.test.ts, and that file bounds each message round trip
- * at 5s (`sendWorkerMessage`), each phase at 15s, and each test at 30s. This
- * bound has to be strictly tighter than the innermost of those — at 5s it would
- * tie with the message bound and the generic "Service Worker message timed out"
- * could win the race, hiding the diagnostic this bound exists to produce. 3s
- * expires first, and the handler posts the rejection back over the port so the
- * workflow-naming error is what reaches CI.
+ * at 5s (`sendWorkerMessage`), each phase at 15s or whatever remains of the
+ * test budget, and each test at 30s. This bound has to be strictly tighter than
+ * the innermost of those — at 5s it would tie with the message bound and the
+ * generic "Service Worker message timed out" could win the race, hiding the
+ * diagnostic this bound exists to produce. 3s expires first, and the handler
+ * posts the rejection back over the port so the workflow-naming error is what
+ * reaches CI.
+ *
+ * The ordering holds whenever the phase bound is the 15s ceiling. It cannot
+ * hold once a test has burned all but a few seconds of its 30s budget, because
+ * no inner window survives an outer bound shorter than itself. That case is
+ * reported rather than papered over: the phase error says the bound was
+ * shortened by the remaining budget and that a nested timeout may have been
+ * preempted, which points at the earlier phases that actually consumed it.
  */
 export const SLEEP_RESOLVER_READY_WAIT_TIMEOUT_MS_FOR_TESTING = 3_000;
 
