@@ -418,13 +418,20 @@ function createSmokeServer(serviceWorkerSource: string): { origin: string } {
  * The explicit `timeout` is deliberately below this file's 30 s per-test
  * timeout. Playwright's own default launch timeout is 30 s — the same value —
  * so a launch slow enough to matter expires no earlier than the test deadline
- * and Bun reports only "this test timed out", naming nothing. Failing the
- * launch first produces an error that says which step ran out of time.
+ * and Bun reports only "this test timed out", naming nothing.
+ *
+ * That 20 s is a *backstop*, not the guarantee: it is independent of the test
+ * budget, so a slow bundle build followed by a hung launch still overruns the
+ * 30 s deadline (an 11 s build plus a 20 s launch is 31 s). Only the phase
+ * budget accounts for time already spent, so the launch is wrapped too. The
+ * catch is kept because the failure it explains — Chromium not installed —
+ * needs an actionable message either way; the phase error arrives as its
+ * `cause`.
  */
 async function createIsolatedContext(withinPhase: PhaseRunner): Promise<BrowserContext> {
   if (sharedBrowser === null) {
     try {
-      sharedBrowser = await chromium.launch({ timeout: 20_000 });
+      sharedBrowser = await withinPhase('chromium launch', chromium.launch({ timeout: 20_000 }));
     } catch (error) {
       throw new Error(
         'Chromium failed to launch for Playwright. If it is not installed, run `bunx playwright install chromium` and retry with WEFT_BROWSER_SMOKE=1.',
@@ -433,8 +440,6 @@ async function createIsolatedContext(withinPhase: PhaseRunner): Promise<BrowserC
     }
   }
 
-  // `chromium.launch` above carries its own bound and its own diagnostic, so it
-  // is left unwrapped. `newContext` has neither.
   const context = await withinPhase('browser context creation', sharedBrowser.newContext());
   contexts.push(context);
   return context;
