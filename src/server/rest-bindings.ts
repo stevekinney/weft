@@ -6,6 +6,11 @@
  * direct meta and discovery routes first; remaining requests then match
  * these operation-backed bindings.
  *
+ * Statically-configured operations and bindings live in
+ * `operations/static-registrations.ts`; this module owns the heterogeneous
+ * binding type, the per-server factory wiring (metrics, workers, task
+ * queues, diagnostics), and the composed live registry/binding builders.
+ *
  * @module server/rest-bindings
  */
 
@@ -13,111 +18,13 @@ import type { MetricsCollector } from '../observability/metrics.ts';
 import type { WorkerRegistry } from '../worker/registry.ts';
 import { createOperationRegistry, type OperationRegistry } from './operation-catalog.ts';
 import {
-  addWorkflowTagsOperation,
-  addWorkflowTagsRestBinding,
-} from './operations/add-workflow-tags.ts';
-import {
-  aggregateWorkflowsOperation,
-  aggregateWorkflowsRestBinding,
-} from './operations/aggregate-workflows.ts';
-import * as asyncActivity from './operations/async-activity.ts';
-import {
-  bulkCancelWorkflowsOperation,
-  bulkCancelWorkflowsRestBinding,
-} from './operations/bulk-cancel-workflows.ts';
-import {
-  bulkDeleteWorkflowsOperation,
-  bulkDeleteWorkflowsRestBinding,
-} from './operations/bulk-delete-workflows.ts';
-import {
-  bulkMutateWorkflowTagsOperation,
-  bulkMutateWorkflowTagsRestBinding,
-} from './operations/bulk-mutate-workflow-tags.ts';
-import {
-  bulkRetryFailedWorkflowsOperation,
-  bulkRetryFailedWorkflowsRestBinding,
-} from './operations/bulk-retry-failed-workflows.ts';
-import {
-  bulkSignalWorkflowsOperation,
-  bulkSignalWorkflowsRestBinding,
-} from './operations/bulk-signal-workflows.ts';
-import {
-  cancelScheduleOperation,
-  cancelScheduleRestBinding,
-} from './operations/cancel-schedule.ts';
-import {
-  cancelWorkflowOperation,
-  cancelWorkflowRestBinding,
-} from './operations/cancel-workflow.ts';
-import {
-  createScheduleOperation,
-  createScheduleRestBinding,
-} from './operations/create-schedule.ts';
-import {
-  fleetEventsSseOperation,
-  fleetEventsSseRestBinding,
-} from './operations/fleet-events-sse.ts';
-import { fleetEventsSubscriptionOperation } from './operations/fleet-events-subscription.ts';
-import { forkWorkflowOperation, forkWorkflowRestBinding } from './operations/fork-workflow.ts';
-import {
-  getCheckpointAtOperation,
-  getCheckpointAtRestBinding,
-} from './operations/get-checkpoint-at.ts';
-import { getRegistryOperation, getRegistryRestBinding } from './operations/get-registry.ts';
-import {
-  getRetentionOverviewOperation,
-  getRetentionOverviewRestBinding,
-} from './operations/get-retention-overview.ts';
-import { getReviewOperation, getReviewRestBinding } from './operations/get-review.ts';
-import { getScheduleOperation, getScheduleRestBinding } from './operations/get-schedule.ts';
-import {
-  getStreamChunksOperation,
-  getStreamChunksRestBinding,
-} from './operations/get-stream-chunks.ts';
-import {
-  getSystemLeaseOperation,
-  getSystemLeaseRestBinding,
-} from './operations/get-system-lease.ts';
-import {
   createGetSystemMetricsOperation,
   createGetSystemMetricsRestBinding,
 } from './operations/get-system-metrics.ts';
 import {
-  clearTaskDeadLetterOperation,
-  clearTaskDeadLetterRestBinding,
   createGetTaskDiagnosticsOperation,
   getTaskDiagnosticsOperation,
-  getTaskDiagnosticsRestBinding,
 } from './operations/get-task-diagnostics.ts';
-import {
-  getUpdateResultOperation,
-  getUpdateResultRestBinding,
-} from './operations/get-update-result.ts';
-import {
-  getWorkflowAttributesOperation,
-  getWorkflowAttributesRestBinding,
-} from './operations/get-workflow-attributes.ts';
-import {
-  getWorkflowEventsOperation,
-  getWorkflowEventsRestBinding,
-} from './operations/get-workflow-events.ts';
-import * as workflowObservability from './operations/get-workflow-observability.ts';
-import {
-  getWorkflowResultOperation,
-  getWorkflowResultRestBinding,
-} from './operations/get-workflow-result.ts';
-import {
-  getWorkflowTimelineOperation,
-  getWorkflowTimelineRestBinding,
-} from './operations/get-workflow-timeline.ts';
-import { getWorkflowOperation, getWorkflowRestBinding } from './operations/get-workflow.ts';
-import { listAlertsOperation, listAlertsRestBinding } from './operations/list-alerts.ts';
-import {
-  listCheckpointsOperation,
-  listCheckpointsRestBinding,
-} from './operations/list-checkpoints.ts';
-import { listReviewsOperation, listReviewsRestBinding } from './operations/list-reviews.ts';
-import { listSchedulesOperation, listSchedulesRestBinding } from './operations/list-schedules.ts';
 import {
   createListTaskQueuesOperation,
   createListTaskQueuesRestBinding,
@@ -128,86 +35,7 @@ import {
   createListWorkersRestBinding,
   listWorkersOperation,
 } from './operations/list-workers.ts';
-import { listWorkflowsOperation, listWorkflowsRestBinding } from './operations/list-workflows.ts';
-import { pauseScheduleOperation, pauseScheduleRestBinding } from './operations/pause-schedule.ts';
-import {
-  purgeWorkflowsOperation,
-  purgeWorkflowsRestBinding,
-} from './operations/purge-workflows.ts';
-import {
-  queryWorkflowOperation,
-  queryWorkflowRestBinding,
-  queryWorkflowWithInputRestBinding,
-} from './operations/query-workflow.ts';
-import { recoverAllOperation, recoverAllRestBinding } from './operations/recover-all.ts';
-import {
-  removeWorkflowTagsOperation,
-  removeWorkflowTagsRestBinding,
-} from './operations/remove-workflow-tags.ts';
-import {
-  replayWorkflowOperation,
-  replayWorkflowRestBinding,
-} from './operations/replay-workflow.ts';
-import {
-  resumeScheduleOperation,
-  resumeScheduleRestBinding,
-} from './operations/resume-schedule.ts';
-import {
-  resumeWorkflowOperation,
-  resumeWorkflowRestBinding,
-} from './operations/resume-workflow.ts';
-import {
-  setWorkflowAttributesOperation,
-  setWorkflowAttributesRestBinding,
-} from './operations/set-workflow-attributes.ts';
-import {
-  signalWorkflowOperation,
-  signalWorkflowRestBinding,
-} from './operations/signal-workflow.ts';
-import {
-  startOrSignalWorkflowOperation,
-  startOrSignalWorkflowRestBinding,
-} from './operations/start-or-signal-workflow.ts';
-import { startWorkflowOperation, startWorkflowRestBinding } from './operations/start-workflow.ts';
-import * as storageCapabilities from './operations/storage-capabilities.ts';
-import {
-  storageBatchOperation,
-  storageBatchRestBinding,
-  storageConditionalBatchOperation,
-  storageConditionalBatchRestBinding,
-  storageDeleteOperation,
-  storageDeleteRestBinding,
-  storageGetOperation,
-  storageGetRestBinding,
-  storagePutOperation,
-  storagePutRestBinding,
-  storageScanOperation,
-  storageScanRestBinding,
-} from './operations/storage.ts';
-import {
-  streamWorkflowSseOperation,
-  streamWorkflowSseRestBinding,
-} from './operations/stream-workflow-sse.ts';
-import {
-  submitReviewDecisionOperation,
-  submitReviewDecisionRestBinding,
-} from './operations/submit-review-decision.ts';
-import {
-  suspendWorkflowOperation,
-  suspendWorkflowRestBinding,
-} from './operations/suspend-workflow.ts';
-import {
-  timeoutWorkflowOperation,
-  timeoutWorkflowRestBinding,
-} from './operations/timeout-workflow.ts';
-import {
-  updateScheduleOperation,
-  updateScheduleRestBinding,
-} from './operations/update-schedule.ts';
-import {
-  updateWorkflowOperation,
-  updateWorkflowRestBinding,
-} from './operations/update-workflow.ts';
+import { STATIC_OPERATIONS, STATIC_REST_BINDINGS } from './operations/static-registrations.ts';
 import {
   clearDeploymentDrainOperation,
   clearWorkerDrainOperation,
@@ -222,11 +50,6 @@ import {
   drainDeploymentOperation,
   drainWorkerOperation,
 } from './operations/worker-drain.ts';
-import {
-  workflowEventsSseOperation,
-  workflowEventsSseRestBinding,
-} from './operations/workflow-events-sse.ts';
-import { workflowEventsSubscriptionOperation } from './operations/workflow-events-subscription.ts';
 import type { RestBinding } from './rest-binding.ts';
 import type { TaskQueue } from './task-queue.ts';
 
@@ -251,72 +74,7 @@ export type UnknownRestBinding = RestBinding<any, any>;
  * factory receives the per-server metrics collector.
  * Use `createLiveRestBindings()` to get the full set for a given server.
  */
-export const REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = [
-  listAlertsRestBinding,
-  startWorkflowRestBinding,
-  startOrSignalWorkflowRestBinding,
-  recoverAllRestBinding,
-  listWorkflowsRestBinding,
-  aggregateWorkflowsRestBinding,
-  purgeWorkflowsRestBinding,
-  bulkCancelWorkflowsRestBinding,
-  bulkSignalWorkflowsRestBinding,
-  bulkRetryFailedWorkflowsRestBinding,
-  bulkDeleteWorkflowsRestBinding,
-  bulkMutateWorkflowTagsRestBinding,
-  getWorkflowRestBinding,
-  cancelWorkflowRestBinding,
-  getWorkflowResultRestBinding,
-  getWorkflowAttributesRestBinding,
-  ...workflowObservability.workflowObservabilityRestBindings,
-  getWorkflowEventsRestBinding,
-  setWorkflowAttributesRestBinding,
-  signalWorkflowRestBinding,
-  asyncActivity.listPendingAsyncActivitiesRestBinding,
-  asyncActivity.completeAsyncActivityRestBinding,
-  asyncActivity.failAsyncActivityRestBinding,
-  queryWorkflowRestBinding,
-  queryWorkflowWithInputRestBinding,
-  resumeWorkflowRestBinding,
-  suspendWorkflowRestBinding,
-  forkWorkflowRestBinding,
-  timeoutWorkflowRestBinding,
-  updateWorkflowRestBinding,
-  createScheduleRestBinding,
-  updateScheduleRestBinding,
-  getRegistryRestBinding,
-  getSystemLeaseRestBinding,
-  getRetentionOverviewRestBinding,
-  getUpdateResultRestBinding,
-  listReviewsRestBinding,
-  getReviewRestBinding,
-  listCheckpointsRestBinding,
-  getCheckpointAtRestBinding,
-  getWorkflowTimelineRestBinding,
-  addWorkflowTagsRestBinding,
-  removeWorkflowTagsRestBinding,
-  submitReviewDecisionRestBinding,
-  cancelScheduleRestBinding,
-  pauseScheduleRestBinding,
-  resumeScheduleRestBinding,
-  getStreamChunksRestBinding,
-  streamWorkflowSseRestBinding,
-  workflowEventsSseRestBinding,
-  fleetEventsSseRestBinding,
-  getTaskDiagnosticsRestBinding,
-  clearTaskDeadLetterRestBinding,
-  // Operation-catalog-backed routes
-  listSchedulesRestBinding,
-  getScheduleRestBinding,
-  replayWorkflowRestBinding,
-  storageCapabilities.storageCapabilitiesRestBinding,
-  storageGetRestBinding,
-  storagePutRestBinding,
-  storageDeleteRestBinding,
-  storageScanRestBinding,
-  storageBatchRestBinding,
-  storageConditionalBatchRestBinding,
-];
+export const REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = STATIC_REST_BINDINGS;
 
 /**
  * Build the full REST binding set for a server instance. Appends the
@@ -423,71 +181,8 @@ export function createLiveOperationRegistry(
 ): OperationRegistry {
   const resolved: LiveOperationRegistryOptions = options ?? {};
   return createOperationRegistry([
-    startWorkflowOperation,
-    startOrSignalWorkflowOperation,
-    recoverAllOperation,
-    listWorkflowsOperation,
-    aggregateWorkflowsOperation,
-    purgeWorkflowsOperation,
-    bulkCancelWorkflowsOperation,
-    bulkSignalWorkflowsOperation,
-    bulkRetryFailedWorkflowsOperation,
-    bulkDeleteWorkflowsOperation,
-    bulkMutateWorkflowTagsOperation,
-    getWorkflowOperation,
-    cancelWorkflowOperation,
-    getWorkflowResultOperation,
-    getWorkflowAttributesOperation,
-    ...workflowObservability.workflowObservabilityOperations,
-    getWorkflowEventsOperation,
-    setWorkflowAttributesOperation,
-    signalWorkflowOperation,
-    asyncActivity.listPendingAsyncActivitiesOperation,
-    asyncActivity.completeAsyncActivityOperation,
-    asyncActivity.failAsyncActivityOperation,
-    queryWorkflowOperation,
-    resumeWorkflowOperation,
-    suspendWorkflowOperation,
-    forkWorkflowOperation,
-    timeoutWorkflowOperation,
-    updateWorkflowOperation,
-    createScheduleOperation,
-    updateScheduleOperation,
-    getRegistryOperation,
-    getSystemLeaseOperation,
-    getRetentionOverviewOperation,
-    getUpdateResultOperation,
-    listReviewsOperation,
-    getReviewOperation,
-    listCheckpointsOperation,
-    getCheckpointAtOperation,
-    getWorkflowTimelineOperation,
-    addWorkflowTagsOperation,
-    removeWorkflowTagsOperation,
-    submitReviewDecisionOperation,
-    cancelScheduleOperation,
-    pauseScheduleOperation,
-    resumeScheduleOperation,
-    getStreamChunksOperation,
-    streamWorkflowSseOperation,
-    workflowEventsSseOperation,
-    fleetEventsSseOperation,
-    workflowEventsSubscriptionOperation,
-    fleetEventsSubscriptionOperation,
+    ...STATIC_OPERATIONS,
     buildTaskDiagnosticsOperationForRegistry(resolved),
-    clearTaskDeadLetterOperation,
-    // Operation-catalog-backed routes
-    listSchedulesOperation,
-    listAlertsOperation,
-    getScheduleOperation,
-    replayWorkflowOperation,
-    storageCapabilities.storageCapabilitiesOperation,
-    storageGetOperation,
-    storagePutOperation,
-    storageDeleteOperation,
-    storageScanOperation,
-    storageBatchOperation,
-    storageConditionalBatchOperation,
     buildSystemMetricsOperation(resolved),
     buildListWorkersOperationForRegistry(resolved),
     buildDrainWorkerOperationForRegistry(resolved),

@@ -52,6 +52,14 @@ export type { DashboardAssets } from './dashboard-assets.ts';
 export type { CorsOptions } from './runtime/cors.ts';
 
 export {
+  AUTHORIZATION_SCOPES,
+  isAuthorizationScope,
+  type AuthorizationScope,
+} from './authorization-scope.ts';
+
+export type { GetPrincipalOutput } from './operations/get-principal.ts';
+
+export {
   createRateLimiter,
   createRotatingApiKeyStore,
   defaultAuthAuditSink,

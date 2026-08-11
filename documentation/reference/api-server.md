@@ -458,6 +458,21 @@ included in this operator-facing diagnostic shape. The operation requires
 `system:read` and is read-only. There is no acknowledge operation because the
 current alert manager model has no acknowledged state distinct from resolved.
 
+### Principal Introspection
+
+`weft.system.principal` and `GET /v1/principal` report the caller's own
+resolved principal: `method` (`'jwt'`, `'api-key'`, `'mtls'`, `'stdio-local'`,
+or `'unauthenticated'`), `subject` (`null` when the credential carries none),
+and `scopes` (sorted; empty for anonymous callers). Access is public by
+design: an unauthenticated caller receives `method: 'unauthenticated'` with an
+empty scope list rather than an error, so clients can distinguish "no
+credential" from "credential with few scopes" without probing other
+operations. The response reflects only the request's credential — server auth
+configuration (key inventory, `unauthenticatedAccess` posture, JWT issuers) is
+never exposed. The canonical scope vocabulary itself is exported as
+`AUTHORIZATION_SCOPES` (with the `AuthorizationScope` union and the
+`isAuthorizationScope` guard) from `@lostgradient/weft/server`.
+
 ### MCP Server
 
 The MCP server exposes Weft workflows to [Model Context Protocol](https://modelcontextprotocol.io/) clients. It is not a fifth operation-catalog transport: `tools/list`, `tools/call`, and `resources/read` are MCP methods that adapt registered workflows and workflow resources into the MCP protocol.

@@ -28,6 +28,7 @@ export const CATALOG_OPERATION_NAMES = [
   'weft.storage.capabilities',
   'weft.system.lease',
   'weft.system.metrics',
+  'weft.system.principal',
   'weft.system.registry',
   'weft.task.queues.list',
   'weft.tasks.diagnostics',
@@ -93,6 +94,7 @@ export const CLIENT_OPERATION_NAMES = [
   'weft.storage.capabilities',
   'weft.system.lease',
   'weft.system.metrics',
+  'weft.system.principal',
   'weft.system.registry',
   'weft.task.queues.list',
   'weft.tasks.diagnostics',
@@ -351,6 +353,37 @@ export type ClientOperationTypes = {
   'weft.system.metrics': {
     readonly input: {};
     readonly output: unknown;
+    readonly faults: never;
+  };
+  'weft.system.principal': {
+    readonly input: {};
+    readonly output: {
+      readonly method: 'jwt' | 'api-key' | 'mtls' | 'stdio-local' | 'unauthenticated';
+      readonly scopes: ReadonlyArray<
+        | 'workflows:read'
+        | 'workflows:write'
+        | 'workflows:admin'
+        | 'schedules:read'
+        | 'schedules:write'
+        | 'signals:write'
+        | 'updates:write'
+        | 'queries:read'
+        | 'reviews:read'
+        | 'reviews:write'
+        | 'attributes:read'
+        | 'attributes:write'
+        | 'tags:write'
+        | 'streams:read'
+        | 'events:read'
+        | 'storage:read'
+        | 'storage:write'
+        | 'storage:admin'
+        | 'workers:write'
+        | 'system:read'
+        | 'system:admin'
+      >;
+      readonly subject: unknown;
+    };
     readonly faults: never;
   };
   'weft.system.registry': {

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — principal introspection
+
+New `weft.system.principal` operation (`GET /v1/principal`) reports the
+caller's own resolved principal: authentication method, normalized subject,
+and granted scopes (sorted). Public access by design — anonymous callers
+receive `method: 'unauthenticated'` with an empty scope list instead of an
+error, so dashboards can resolve their credential state without probing other
+operations. The canonical scope vocabulary is now a public export:
+`AUTHORIZATION_SCOPES`, `AuthorizationScope`, and `isAuthorizationScope` from
+`@lostgradient/weft/server`, alongside the `GetPrincipalOutput` type.
+
 ### Changed — awaited lease shutdown result
 
 `Engine.shutdown()` now returns `Promise<boolean>` so process hosts can confirm

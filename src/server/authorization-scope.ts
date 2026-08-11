@@ -16,6 +16,16 @@
  * imply `workflows:read` or `workflows:write`. Operation authors must declare
  * the exact scope they require. Scope-implication semantics (if any) are a
  * future track.
+ *
+ * Public export so dashboards and API-key provisioning tooling can consume
+ * the canonical vocabulary instead of hand-copying it.
+ *
+ * @example
+ * ```ts
+ * import { AUTHORIZATION_SCOPES } from '@lostgradient/weft/server';
+ *
+ * console.log(AUTHORIZATION_SCOPES.includes('workflows:read'));
+ * ```
  */
 export const AUTHORIZATION_SCOPES = [
   'workflows:read',
@@ -41,12 +51,32 @@ export const AUTHORIZATION_SCOPES = [
   'system:admin',
 ] as const;
 
-/** String-literal union of every authorization scope. */
+/**
+ * String-literal union of every authorization scope.
+ *
+ * @example
+ * ```ts
+ * import { type AuthorizationScope } from '@lostgradient/weft/server';
+ *
+ * const scope: AuthorizationScope = 'workflows:read';
+ * console.log(scope);
+ * ```
+ */
 export type AuthorizationScope = (typeof AUTHORIZATION_SCOPES)[number];
 
 const SCOPE_LOOKUP = new Set<string>(AUTHORIZATION_SCOPES);
 
-/** Runtime type guard for the `AuthorizationScope` union. */
+/**
+ * Runtime type guard for the `AuthorizationScope` union.
+ *
+ * @example
+ * ```ts
+ * import { isAuthorizationScope } from '@lostgradient/weft/server';
+ *
+ * console.log(isAuthorizationScope('workflows:read'));
+ * console.log(isAuthorizationScope('not-a-scope'));
+ * ```
+ */
 export function isAuthorizationScope(value: string): value is AuthorizationScope {
   return SCOPE_LOOKUP.has(value);
 }

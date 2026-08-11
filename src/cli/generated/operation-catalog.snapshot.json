@@ -1404,6 +1404,79 @@
       "outputSchema": {}
     },
     {
+      "name": "weft.system.principal",
+      "kind": "unary",
+      "summary": "Report the caller's resolved principal and granted scopes",
+      "description": "Report the caller's own resolved principal: the authentication method ('jwt', 'api-key', 'mtls', 'stdio-local', or 'unauthenticated'), the normalized subject when one exists, and the granted authorization scopes, sorted. Public access: an unauthenticated caller receives method 'unauthenticated' with an empty scope list rather than an error, so clients can distinguish \"no credential\" from \"credential with few scopes\" without probing other operations. Reflects only the request credential — never server auth configuration.",
+      "tags": ["System"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "method": {
+            "enum": ["jwt", "api-key", "mtls", "stdio-local", "unauthenticated"],
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "enum": [
+                "workflows:read",
+                "workflows:write",
+                "workflows:admin",
+                "schedules:read",
+                "schedules:write",
+                "signals:write",
+                "updates:write",
+                "queries:read",
+                "reviews:read",
+                "reviews:write",
+                "attributes:read",
+                "attributes:write",
+                "tags:write",
+                "streams:read",
+                "events:read",
+                "storage:read",
+                "storage:write",
+                "storage:admin",
+                "workers:write",
+                "system:read",
+                "system:admin"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": ["method", "subject", "scopes"],
+        "type": "object"
+      }
+    },
+    {
       "name": "weft.system.registry",
       "kind": "unary",
       "summary": "Get a snapshot of registered workflows and activities with their JSON Schemas",
