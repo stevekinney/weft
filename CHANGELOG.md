@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-08-11
+
 ### Added — principal introspection
 
 New `weft.system.principal` operation (`GET /v1/principal`) reports the
@@ -17,6 +19,8 @@ error, so dashboards can resolve their credential state without probing other
 operations. The canonical scope vocabulary is now a public export:
 `AUTHORIZATION_SCOPES`, `AuthorizationScope`, and `isAuthorizationScope` from
 `@lostgradient/weft/server`, alongside the `GetPrincipalOutput` type.
+
+## [0.17.0] - 2026-07-27
 
 ### Changed — awaited lease shutdown result
 
