@@ -98,7 +98,7 @@ jobs:
         run: bunx playwright install --with-deps chromium
       - if: steps.playwright-cache.outputs.cache-hit == 'true'
         run: bunx playwright install-deps chromium
-      - run: bun run test:browser-smoke
+      - run: exit 1 # WFT-75 disposable required-check proof
   build:
     runs-on: ubuntu-latest
     steps:
