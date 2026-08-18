@@ -1,5 +1,4 @@
 import { $, Glob } from 'bun';
-import { execFileSync } from 'node:child_process';
 
 // Bun parses `bunfig.toml` natively when imported, so `coveragePathIgnorePatterns`
 // stays a single source of truth (no hand-rolled TOML parse that could drift). The
@@ -2502,21 +2501,15 @@ export function parseLcov(content: string): CoverageResult {
   return summarizeCoverageFiles(parseLcovFiles(content));
 }
 
-async function listCoverageTestFiles(): Promise<string[]> {
-  const output = execFileSync(
-    'rg',
-    ['--files', ...COVERAGE_TEST_FILE_GLOBS.flatMap((glob) => ['-g', glob])],
-    {
-      cwd: globalThis.process.cwd(),
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'inherit'],
-    },
-  );
-  return output
-    .split('\n')
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0)
-    .toSorted();
+export async function listCoverageTestFiles(): Promise<string[]> {
+  const files = new Set<string>();
+  for (const pattern of COVERAGE_TEST_FILE_GLOBS) {
+    const glob = new Glob(`**/${pattern}`);
+    for await (const file of glob.scan({ cwd: globalThis.process.cwd(), onlyFiles: true })) {
+      files.add(file);
+    }
+  }
+  return [...files].toSorted();
 }
 
 type CoverageShard = {

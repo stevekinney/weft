@@ -5,10 +5,22 @@ import {
   assertNoAllowanceKeyIsCoverageIgnored,
   buildAllowanceLayer,
   checkCoverage,
+  listCoverageTestFiles,
   parseLcov,
   readCoveragePathIgnorePatterns,
   runCoverageShard,
 } from './check-coverage.ts';
+
+describe('listCoverageTestFiles', () => {
+  it('discovers test files without depending on an external repository search command', async () => {
+    const files = await listCoverageTestFiles();
+
+    expect(files).toContain('scripts/check-coverage.test.ts');
+    expect(files).toContain('scripts/ci-workflows.test.ts');
+    expect(files).not.toContain('scripts/check-coverage.ts');
+    expect(files).toEqual(files.toSorted());
+  });
+});
 
 describe('parseLcov', () => {
   it('accepts DA lines with the optional checksum field', () => {
