@@ -276,6 +276,7 @@ describe('renderTestOutcome', () => {
   it('reports a wall-clock timeout with incomplete files and the retained report directory', () => {
     const result = renderTestOutcome({
       kind: 'timedOut',
+      phase: 'full',
       timeoutMs: FULL_SUITE_TIMEOUT_MS,
       incompleteTestFiles: ['src/b.test.ts'],
       output: { stdout: '', stderr: '' },
@@ -403,6 +404,7 @@ describe('runTestSuite (injected dependencies)', () => {
 
     expect(outcome).toEqual({
       kind: 'timedOut',
+      phase: 'full',
       timeoutMs: FULL_SUITE_TIMEOUT_MS,
       incompleteTestFiles: ['src/b.test.ts'],
       output: { stdout: '', stderr: 'terminated' },
@@ -439,6 +441,29 @@ describe('runTestSuite (injected dependencies)', () => {
       expect(outcome.isolationOutput).toBeDefined();
       expect(outcome.retainedDirectory).toBe('/tmp/run');
     }
+  });
+
+  it('classifies a timed-out isolation run before considering its exit code', async () => {
+    const fullReport = suite(
+      testcase({ name: 'slow', file: 'src/a.test.ts' }, '<failure type="TimeoutError" />'),
+      testcase({ name: 'slow', file: 'src/b.test.ts' }, '<failure type="TimeoutError" />'),
+    );
+    const isolationReport = suite(testcase({ name: 'completed', file: 'src/a.test.ts' }));
+    const { dependencies } = makeDependencies({
+      runResults: [{ exitCode: 1 }, { exitCode: 0, timedOut: true, stderr: 'terminated' }],
+      reports: { full: fullReport, isolation: isolationReport },
+    });
+
+    expect(await runTestSuite(['src/a.test.ts', 'src/b.test.ts'], dependencies)).toEqual({
+      kind: 'timedOut',
+      phase: 'isolation',
+      timeoutMs: FULL_SUITE_TIMEOUT_MS,
+      incompleteTestFiles: ['src/b.test.ts'],
+      output: { stdout: '', stderr: '' },
+      reportContent: fullReport,
+      isolationOutput: { stdout: '', stderr: 'terminated' },
+      retainedDirectory: '/tmp/run',
+    });
   });
 
   it('skips isolation when failures have no parseable file attribute', async () => {
@@ -579,6 +604,30 @@ describe('real dependency helpers', () => {
       );
       expect(result.timedOut).toBe(true);
       expect(result.exitCode).not.toBe(0);
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+  });
+
+  it('runCommand terminates descendants that keep inherited output pipes open', async () => {
+    const dependencies = createRealDependencies();
+    const stderrWrite = mock((_chunk: string) => true);
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = stderrWrite as typeof process.stderr.write;
+
+    try {
+      const result = await dependencies.runCommand(
+        [
+          '-e',
+          'const child = Bun.spawn(["bun", "-e", "process.on(\\"SIGTERM\\", () => {}); await new Promise(() => {})"], { stdout: "inherit", stderr: "inherit" }); console.log(child.pid); process.on("SIGTERM", () => {}); await new Promise(() => {})',
+        ],
+        50,
+      );
+      expect(result.timedOut).toBe(true);
+      expect(result.exitCode).not.toBe(0);
+      const childPid = Number.parseInt(result.stdout.trim(), 10);
+      expect(Number.isSafeInteger(childPid)).toBe(true);
+      expect(() => process.kill(childPid, 0)).toThrow();
     } finally {
       process.stderr.write = originalWrite;
     }

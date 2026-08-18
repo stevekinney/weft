@@ -47,11 +47,14 @@ export type TestRunOutcome =
   | { kind: 'passed' }
   | {
       kind: 'timedOut';
+      phase: 'full' | 'isolation';
       timeoutMs: number;
       incompleteTestFiles: string[];
       output: CapturedOutput;
       /** The partial full-run JUnit report, when Bun flushed one before termination. */
       reportContent?: string;
+      /** Isolation output, present when the isolation run timed out. */
+      isolationOutput?: CapturedOutput;
       /** Absolute path of the retained per-run directory. */
       retainedDirectory: string;
     }
@@ -141,6 +144,7 @@ export const BROWSER_SMOKE_TEST_PATHS = [
   'src/service-worker/service-worker-browser.test.ts',
   'src/storage/indexeddb-browser.test.ts',
   'src/storage/web-extension-browser.test.ts',
+  'src/client/http-client-browser.test.ts',
 ] as const;
 
 function normalizedTestPath(file: string): string {
@@ -376,8 +380,9 @@ export function renderTestOutcome(outcome: TestRunOutcome): { ok: boolean; lines
   }
 
   if (outcome.kind === 'timedOut') {
+    const phase = outcome.phase === 'full' ? 'Full' : 'Isolation';
     const lines = [
-      `Full test subprocess exceeded the ${outcome.timeoutMs}ms wall-clock timeout and was killed.`,
+      `${phase} test subprocess exceeded the ${outcome.timeoutMs}ms wall-clock timeout and was killed.`,
       'Test files without a completed JUnit testcase:',
       ...outcome.incompleteTestFiles.map((file) => `  ${file}`),
       `Partial reports retained at: ${outcome.retainedDirectory}`,
@@ -433,34 +438,66 @@ export type RunTestSuiteDependencies = {
   sweepStaleDirectories: () => Promise<void>;
 };
 
+async function readCapturedStream(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<string> {
+  const decoder = new TextDecoder();
+  let text = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) return text + decoder.decode();
+    text += decoder.decode(value, { stream: true });
+  }
+}
+
 export function createRealDependencies(): RunTestSuiteDependencies {
   return {
     runCommand: async (args, timeoutMs) => {
-      // The run is captured (`.quiet()`), so output appears only on failure. Emit
+      // The run is captured through piped streams, so output appears only on failure. Emit
       // a heartbeat dot every few seconds so the longest hook step doesn't look
       // like a hung process while it runs.
       const heartbeat = setInterval(() => process.stderr.write('.'), 3000);
       const subprocess = Bun.spawn(['bun', ...args], {
+        detached: true,
         stdout: 'pipe',
         stderr: 'pipe',
       });
+      const stdoutReader = subprocess.stdout.getReader();
+      const stderrReader = subprocess.stderr.getReader();
+      const stdout = readCapturedStream(stdoutReader);
+      const stderr = readCapturedStream(stderrReader);
+      const signalProcessGroup = (signal: NodeJS.Signals): void => {
+        if (process.platform === 'win32') {
+          subprocess.kill(signal);
+          return;
+        }
+        try {
+          process.kill(-subprocess.pid, signal);
+        } catch {
+          subprocess.kill(signal);
+        }
+      };
       let timedOut = false;
       let forceKill: ReturnType<typeof setTimeout> | undefined;
       const timeout = setTimeout(() => {
         timedOut = true;
-        subprocess.kill('SIGTERM');
-        forceKill = setTimeout(() => subprocess.kill('SIGKILL'), TERMINATION_GRACE_MS);
+        signalProcessGroup('SIGTERM');
+        forceKill = setTimeout(() => {
+          signalProcessGroup('SIGKILL');
+          void stdoutReader.cancel();
+          void stderrReader.cancel();
+        }, TERMINATION_GRACE_MS);
       }, timeoutMs);
       try {
-        const [exitCode, stdout, stderr] = await Promise.all([
+        const [exitCode, capturedStdout, capturedStderr] = await Promise.all([
           subprocess.exited,
-          new Response(subprocess.stdout).text(),
-          new Response(subprocess.stderr).text(),
+          stdout,
+          stderr,
         ]);
         return {
           exitCode,
-          stdout,
-          stderr,
+          stdout: capturedStdout,
+          stderr: capturedStderr,
           timedOut,
         };
       } finally {
@@ -544,6 +581,7 @@ export async function runTestSuite(
       const completedFiles = parseJunitCompletedFiles(fullReport ?? '');
       return {
         kind: 'timedOut',
+        phase: 'full',
         timeoutMs: FULL_SUITE_TIMEOUT_MS,
         incompleteTestFiles: testFiles.filter(
           (file) => !completedFiles.has(normalizedTestPath(file)),
@@ -593,6 +631,23 @@ export async function runTestSuite(
       stdout: isolation.stdout,
       stderr: isolation.stderr,
     };
+
+    if (isolation.timedOut) {
+      const isolationReport = await dependencies.readReport(isolationReportPath);
+      const completedFiles = parseJunitCompletedFiles(isolationReport ?? '');
+      return {
+        kind: 'timedOut',
+        phase: 'isolation',
+        timeoutMs: FULL_SUITE_TIMEOUT_MS,
+        incompleteTestFiles: failingFiles.filter(
+          (file) => !completedFiles.has(normalizedTestPath(file)),
+        ),
+        output,
+        reportContent: fullReport,
+        isolationOutput,
+        retainedDirectory: runDirectory,
+      };
+    }
 
     if (isolation.exitCode === 0) {
       return {
