@@ -1,5 +1,4 @@
 import { $, Glob } from 'bun';
-import { execFileSync } from 'node:child_process';
 
 // Bun parses `bunfig.toml` natively when imported, so `coveragePathIgnorePatterns`
 // stays a single source of truth (no hand-rolled TOML parse that could drift). The
@@ -2502,20 +2501,20 @@ export function parseLcov(content: string): CoverageResult {
   return summarizeCoverageFiles(parseLcovFiles(content));
 }
 
-async function listCoverageTestFiles(): Promise<string[]> {
-  const output = execFileSync(
-    'rg',
-    ['--files', ...COVERAGE_TEST_FILE_GLOBS.flatMap((glob) => ['-g', glob])],
-    {
-      cwd: globalThis.process.cwd(),
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'inherit'],
-    },
-  );
-  return output
-    .split('\n')
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0)
+export async function listCoverageTestFiles(): Promise<string[]> {
+  // Git supplies the repository ownership boundary that `rg --files` previously
+  // provided: tracked files plus untracked, non-ignored files. A root Bun.Glob scan
+  // does not honor `.gitignore` and therefore discovers dependency-owned tests under
+  // node_modules after `bun install`.
+  const repositoryFileOutput = await $`git ls-files --cached --others --exclude-standard`.text();
+  const repositoryFiles = repositoryFileOutput.split('\n').filter(Boolean);
+  const testFileGlobs = COVERAGE_TEST_FILE_GLOBS.map((pattern) => new Glob(pattern));
+
+  return repositoryFiles
+    .filter((file) => {
+      const basename = file.slice(file.lastIndexOf('/') + 1);
+      return testFileGlobs.some((glob) => glob.match(basename));
+    })
     .toSorted();
 }
 

@@ -5,10 +5,24 @@ import {
   assertNoAllowanceKeyIsCoverageIgnored,
   buildAllowanceLayer,
   checkCoverage,
+  listCoverageTestFiles,
   parseLcov,
   readCoveragePathIgnorePatterns,
   runCoverageShard,
 } from './check-coverage.ts';
+
+describe('listCoverageTestFiles', () => {
+  it('discovers only repository-owned test files without depending on ripgrep', async () => {
+    const files = await listCoverageTestFiles();
+
+    expect(files).toContain('scripts/check-coverage.test.ts');
+    expect(files).toContain('scripts/ci-workflows.test.ts');
+    expect(files).not.toContain('scripts/check-coverage.ts');
+    expect(files.some((file) => file.includes('node_modules/'))).toBe(false);
+    expect(files.some((file) => file.startsWith('coverage/'))).toBe(false);
+    expect(files).toEqual(files.toSorted());
+  });
+});
 
 describe('parseLcov', () => {
   it('accepts DA lines with the optional checksum field', () => {
@@ -190,7 +204,7 @@ describe('parseLcov', () => {
   });
 
   it('returns false immediately when a coverage shard exits non-zero', async () => {
-    const listCoverageTestFiles = mock(async () => ['src/example.test.ts']);
+    const listCoverageTestFilesStub = mock(async () => ['src/example.test.ts']);
     const runCoverageShardStub = mock(async () => ({
       exitCode: 1,
       lcovPath: 'coverage/lcov.info',
@@ -201,11 +215,11 @@ describe('parseLcov', () => {
 
     await expect(
       checkCoverage({
-        listCoverageTestFiles,
+        listCoverageTestFiles: listCoverageTestFilesStub,
         runCoverageShard: runCoverageShardStub,
       }),
     ).resolves.toBe(false);
-    expect(listCoverageTestFiles).toHaveBeenCalledTimes(1);
+    expect(listCoverageTestFilesStub).toHaveBeenCalledTimes(1);
     expect(runCoverageShardStub).toHaveBeenCalledTimes(1);
     expect(runCoverageShardStub).toHaveBeenCalledWith({
       name: 'coverage',
