@@ -2502,14 +2502,20 @@ export function parseLcov(content: string): CoverageResult {
 }
 
 export async function listCoverageTestFiles(): Promise<string[]> {
-  const files = new Set<string>();
-  for (const pattern of COVERAGE_TEST_FILE_GLOBS) {
-    const glob = new Glob(`**/${pattern}`);
-    for await (const file of glob.scan({ cwd: globalThis.process.cwd(), onlyFiles: true })) {
-      files.add(file);
-    }
-  }
-  return [...files].toSorted();
+  // Git supplies the repository ownership boundary that `rg --files` previously
+  // provided: tracked files plus untracked, non-ignored files. A root Bun.Glob scan
+  // does not honor `.gitignore` and therefore discovers dependency-owned tests under
+  // node_modules after `bun install`.
+  const repositoryFileOutput = await $`git ls-files --cached --others --exclude-standard`.text();
+  const repositoryFiles = repositoryFileOutput.split('\n').filter(Boolean);
+  const testFileGlobs = COVERAGE_TEST_FILE_GLOBS.map((pattern) => new Glob(pattern));
+
+  return repositoryFiles
+    .filter((file) => {
+      const basename = file.slice(file.lastIndexOf('/') + 1);
+      return testFileGlobs.some((glob) => glob.match(basename));
+    })
+    .toSorted();
 }
 
 type CoverageShard = {
