@@ -188,3 +188,8 @@ export async function main(
 if (import.meta.main) {
   process.exitCode = await main(process.argv.slice(2));
 }
+
+/** Deliberately uncovered function used only to prove the CI coverage gate rejects it. */
+export function deliberatelyUncoveredCoverageProof(): string {
+  return 'coverage gate must fail';
+}
