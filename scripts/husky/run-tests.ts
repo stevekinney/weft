@@ -12,7 +12,6 @@
  * injectable dependencies so the classification logic can be unit-tested without
  * spawning Bun. The parsing/formatting/decision helpers are pure.
  */
-import { $ } from 'bun';
 import { mkdtemp, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -46,6 +45,16 @@ export type CapturedOutput = { stdout: string; stderr: string };
  */
 export type TestRunOutcome =
   | { kind: 'passed' }
+  | {
+      kind: 'timedOut';
+      timeoutMs: number;
+      incompleteTestFiles: string[];
+      output: CapturedOutput;
+      /** The partial full-run JUnit report, when Bun flushed one before termination. */
+      reportContent?: string;
+      /** Absolute path of the retained per-run directory. */
+      retainedDirectory: string;
+    }
   | {
       kind: 'failed';
       failures: FailingTest[];
@@ -121,6 +130,19 @@ export const LOAD_SENSITIVE_TEST_PATHS = [
   'src/core/context/durable-activity.portability.test.ts',
 ] as const;
 
+/**
+ * Real-browser suites owned by CI's dedicated `browser-smoke` job.
+ *
+ * The main CI test job excludes these files because importing Playwright and
+ * browser-only harnesses does not add signal when `WEFT_BROWSER_SMOKE` is unset.
+ * Pre-commit uses the same boundary so local discovery cannot drift from CI.
+ */
+export const BROWSER_SMOKE_TEST_PATHS = [
+  'src/service-worker/service-worker-browser.test.ts',
+  'src/storage/indexeddb-browser.test.ts',
+  'src/storage/web-extension-browser.test.ts',
+] as const;
+
 function normalizedTestPath(file: string): string {
   return file.replace(/^\.\//, '').replace(/\/+/g, '/');
 }
@@ -143,6 +165,8 @@ export async function discoverTestFiles(): Promise<string[]> {
       LOAD_SENSITIVE_TEST_PATHS.includes(normalized as (typeof LOAD_SENSITIVE_TEST_PATHS)[number])
     )
       continue;
+    if (BROWSER_SMOKE_TEST_PATHS.includes(normalized as (typeof BROWSER_SMOKE_TEST_PATHS)[number]))
+      continue;
     testFiles.push(file);
   }
   return testFiles;
@@ -150,6 +174,12 @@ export async function discoverTestFiles(): Promise<string[]> {
 
 /** Per-test timeout (ms) for the full and isolation runs. Matches the hook's historical value. */
 export const TEST_TIMEOUT_MS = 15_000;
+
+/** Overall wall-clock budget for each Bun test subprocess launched by the hook. */
+export const FULL_SUITE_TIMEOUT_MS = 10 * 60 * 1000;
+
+/** Grace period between terminating a timed-out subprocess and force-killing it. */
+const TERMINATION_GRACE_MS = 1_000;
 
 /**
  * If failures span at least this many distinct files, skip the isolation re-run:
@@ -259,6 +289,16 @@ export function parseJunitFailures(xml: string): FailingTest[] {
   return failures;
 }
 
+/** Return the normalized test-file paths represented by any JUnit testcase. */
+export function parseJunitCompletedFiles(xml: string): Set<string> {
+  const files = new Set<string>();
+  for (const { openingTag } of iterateTestcases(xml)) {
+    const file = readAttribute(openingTag, 'file');
+    if (file) files.add(normalizedTestPath(file));
+  }
+  return files;
+}
+
 /** Format failing tests as `file > name` lines, with fallbacks for missing fields. */
 export function formatFailingTests(failures: FailingTest[]): string[] {
   return failures.map((failure) => {
@@ -335,6 +375,16 @@ export function renderTestOutcome(outcome: TestRunOutcome): { ok: boolean; lines
     return { ok: true, lines: ['test passed'] };
   }
 
+  if (outcome.kind === 'timedOut') {
+    const lines = [
+      `Full test subprocess exceeded the ${outcome.timeoutMs}ms wall-clock timeout and was killed.`,
+      'Test files without a completed JUnit testcase:',
+      ...outcome.incompleteTestFiles.map((file) => `  ${file}`),
+      `Partial reports retained at: ${outcome.retainedDirectory}`,
+    ];
+    return { ok: false, lines };
+  }
+
   const lines: string[] = [];
   const summary = formatFailingTests(outcome.failures);
   if (summary.length > 0) {
@@ -369,7 +419,10 @@ export function renderTestOutcome(outcome: TestRunOutcome): { ok: boolean; lines
  */
 export type RunTestSuiteDependencies = {
   /** Run `bun <args>` and capture output without throwing on non-zero exit. */
-  runCommand: (args: string[]) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
+  runCommand: (
+    args: string[],
+    timeoutMs: number,
+  ) => Promise<{ exitCode: number; stdout: string; stderr: string; timedOut: boolean }>;
   /** Create a fresh per-run directory and return its absolute path. */
   makeRunDirectory: () => Promise<string>;
   /** Read a file as text, or return undefined when it does not exist / cannot be read. */
@@ -382,19 +435,37 @@ export type RunTestSuiteDependencies = {
 
 export function createRealDependencies(): RunTestSuiteDependencies {
   return {
-    runCommand: async (args) => {
+    runCommand: async (args, timeoutMs) => {
       // The run is captured (`.quiet()`), so output appears only on failure. Emit
       // a heartbeat dot every few seconds so the longest hook step doesn't look
       // like a hung process while it runs.
       const heartbeat = setInterval(() => process.stderr.write('.'), 3000);
+      const subprocess = Bun.spawn(['bun', ...args], {
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      let timedOut = false;
+      let forceKill: ReturnType<typeof setTimeout> | undefined;
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        subprocess.kill('SIGTERM');
+        forceKill = setTimeout(() => subprocess.kill('SIGKILL'), TERMINATION_GRACE_MS);
+      }, timeoutMs);
       try {
-        const result = await $`bun ${args}`.quiet().nothrow();
+        const [exitCode, stdout, stderr] = await Promise.all([
+          subprocess.exited,
+          new Response(subprocess.stdout).text(),
+          new Response(subprocess.stderr).text(),
+        ]);
         return {
-          exitCode: result.exitCode,
-          stdout: result.stdout.toString(),
-          stderr: result.stderr.toString(),
+          exitCode,
+          stdout,
+          stderr,
+          timedOut,
         };
       } finally {
+        clearTimeout(timeout);
+        if (forceKill !== undefined) clearTimeout(forceKill);
         clearInterval(heartbeat);
         process.stderr.write('\n');
       }
@@ -465,8 +536,23 @@ export async function runTestSuite(
     const fullReportPath = join(runDirectory, FULL_REPORT);
     const full = await dependencies.runCommand(
       buildTestCommand(testFiles, fullReportPath, options),
+      FULL_SUITE_TIMEOUT_MS,
     );
     const output: CapturedOutput = { stdout: full.stdout, stderr: full.stderr };
+    if (full.timedOut) {
+      const fullReport = await dependencies.readReport(fullReportPath);
+      const completedFiles = parseJunitCompletedFiles(fullReport ?? '');
+      return {
+        kind: 'timedOut',
+        timeoutMs: FULL_SUITE_TIMEOUT_MS,
+        incompleteTestFiles: testFiles.filter(
+          (file) => !completedFiles.has(normalizedTestPath(file)),
+        ),
+        output,
+        ...(fullReport === undefined ? {} : { reportContent: fullReport }),
+        retainedDirectory: runDirectory,
+      };
+    }
     if (full.exitCode === 0) {
       succeeded = true;
       return { kind: 'passed' };
@@ -501,6 +587,7 @@ export async function runTestSuite(
     const isolationReportPath = join(runDirectory, ISOLATION_REPORT);
     const isolation = await dependencies.runCommand(
       buildTestCommand(failingFiles, isolationReportPath, options),
+      FULL_SUITE_TIMEOUT_MS,
     );
     const isolationOutput: CapturedOutput = {
       stdout: isolation.stdout,

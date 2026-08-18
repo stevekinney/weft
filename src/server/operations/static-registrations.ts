@@ -13,10 +13,7 @@
 
 import type { RegistrableOperation } from '../operation-catalog.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import {
-  addWorkflowTagsOperation,
-  addWorkflowTagsRestBinding,
-} from './add-workflow-tags.ts';
+import { addWorkflowTagsOperation, addWorkflowTagsRestBinding } from './add-workflow-tags.ts';
 import {
   aggregateWorkflowsOperation,
   aggregateWorkflowsRestBinding,
@@ -69,15 +66,9 @@ import {
   getWorkflowAttributesOperation,
   getWorkflowAttributesRestBinding,
 } from './get-workflow-attributes.ts';
-import {
-  getWorkflowEventsOperation,
-  getWorkflowEventsRestBinding,
-} from './get-workflow-events.ts';
+import { getWorkflowEventsOperation, getWorkflowEventsRestBinding } from './get-workflow-events.ts';
 import * as workflowObservability from './get-workflow-observability.ts';
-import {
-  getWorkflowResultOperation,
-  getWorkflowResultRestBinding,
-} from './get-workflow-result.ts';
+import { getWorkflowResultOperation, getWorkflowResultRestBinding } from './get-workflow-result.ts';
 import {
   getWorkflowTimelineOperation,
   getWorkflowTimelineRestBinding,
@@ -128,10 +119,7 @@ import {
   storageScanOperation,
   storageScanRestBinding,
 } from './storage.ts';
-import {
-  streamWorkflowSseOperation,
-  streamWorkflowSseRestBinding,
-} from './stream-workflow-sse.ts';
+import { streamWorkflowSseOperation, streamWorkflowSseRestBinding } from './stream-workflow-sse.ts';
 import {
   submitReviewDecisionOperation,
   submitReviewDecisionRestBinding,
@@ -140,10 +128,7 @@ import { suspendWorkflowOperation, suspendWorkflowRestBinding } from './suspend-
 import { timeoutWorkflowOperation, timeoutWorkflowRestBinding } from './timeout-workflow.ts';
 import { updateScheduleOperation, updateScheduleRestBinding } from './update-schedule.ts';
 import { updateWorkflowOperation, updateWorkflowRestBinding } from './update-workflow.ts';
-import {
-  workflowEventsSseOperation,
-  workflowEventsSseRestBinding,
-} from './workflow-events-sse.ts';
+import { workflowEventsSseOperation, workflowEventsSseRestBinding } from './workflow-events-sse.ts';
 import { workflowEventsSubscriptionOperation } from './workflow-events-subscription.ts';
 
 /**

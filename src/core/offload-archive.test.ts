@@ -81,7 +81,7 @@ describe('offload, load, and archive', () => {
 
   it('rejects forged cross-workflow offload references', async () => {
     const storage = new MemoryStorage();
-    const engine = new Engine({ storage });
+    await using engine = new Engine({ storage });
 
     let trustedReference: OffloadReference | undefined;
 
@@ -105,7 +105,16 @@ describe('offload, load, and archive', () => {
     await engine.start('producer', {}).then((handle) => handle.result());
     const consumerHandle = await engine.start('consumer', {});
 
-    await expect(consumerHandle.result()).rejects.toThrow(
+    // Bun 1.3.14 can leave `.rejects.toThrow()` pending for this already-failed
+    // workflow and then keep the runner alive after its per-test timeout. Adopt
+    // the rejection directly so this regression remains bounded (oven-sh/bun#39584).
+    const rejection = await consumerHandle.result().then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
+    expect(rejection).toBeInstanceOf(Error);
+    if (!(rejection instanceof Error)) throw new Error('Expected workflow rejection');
+    expect(rejection.message).toBe(
       'ctx.load() can only read offloaded data from the current workflow',
     );
   });

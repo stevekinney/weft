@@ -177,7 +177,7 @@ function isGeneratedCoverageArtifact(filePath: string): boolean {
   // fixture names, so a non-fixture temp file is not caught.
   if (
     /(?:\.\.\/)+(?:private\/)?(?:var\/folders\/|tmp\/)/.test(filePath) &&
-    /(?:\/weft-(?:schedule(?:-lmdb)?-(?:workflows|input)|cli-edge-workflows)-[^/]+\.ts$|\/weft-validate-[^/]+\/[^/]+\.ts$|\/weft-validate-(?:json-invalid|mixed-(?:clean|invalid)|multi-[ab])-[^/]+\.ts$)/.test(
+    /(?:\/weft-(?:schedule(?:-lmdb)?-(?:workflows|input)|cli-edge-workflows)-[^/]+(?:\.ts|\/module\.ts)$|\/weft-validate-[^/]+\/[^/]+\.ts$|\/weft-validate-(?:json-invalid|mixed-(?:clean|invalid)|multi-[ab])-[^/]+\.ts$)/.test(
       filePath,
     )
   ) {
@@ -1402,12 +1402,6 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       },
     ],
     [
-      'scripts/husky/run-tests.ts',
-      {
-        functions: 3,
-      },
-    ],
-    [
       'src/cli/conformance.ts',
       {
         functions: 1,
@@ -1726,6 +1720,31 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
         // and only contributes coverage from a child process.
         functions: 1,
         lines: createLineSet(12, 32),
+      },
+    ],
+    [
+      'scripts/husky/pre-commit.ts',
+      {
+        // Stash success and interruption behavior is covered through real Git
+        // repositories and child processes. Bun cannot attribute the child-process
+        // signal handlers or the executable hook body to the parent LCOV report.
+        functions: 8,
+        lines: createMergedLineSet(
+          new Set([
+            29, 30, 50, 51, 86, 87, 88, 97, 104, 105, 106, 112, 113, 114, 118, 137, 138, 139, 140,
+            141, 142, 143, 144,
+          ]),
+          createLineSet(163, 385),
+        ),
+        requireUncoveredLines: true,
+      },
+    ],
+    [
+      'scripts/husky/run-tests.ts',
+      {
+        // Direct dependency tests cover every line, including SIGKILL escalation.
+        // Bun still reports three anonymous callback functions as unhit.
+        functions: 3,
       },
     ],
     ['src/cli/api-arguments.ts', { lines: new Set([55, 58]) }],

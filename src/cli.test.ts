@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'bun:test';
 import { waitForCondition } from './testing/fake-timers.test-support.ts';
 
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import {
   type CliCommand,
@@ -34,6 +34,14 @@ import { KEYS } from './storage/interface.ts';
 import { VERSION } from './version.ts';
 
 const publicEntryPointUrl = new URL('./index.ts', import.meta.url).href;
+
+function createTemporaryTypeScriptPath(prefix: string): string {
+  return join(mkdtempSync(join(tmpdir(), `${prefix}-`)), 'module.ts');
+}
+
+function removeTemporaryTypeScriptPath(filePath: string): void {
+  rmSync(dirname(filePath), { force: true, recursive: true });
+}
 
 type ServeCommand = Extract<CliCommand, { command: 'serve' }>;
 type DoctorCommand = Extract<CliCommand, { command: 'doctor' }>;
@@ -932,7 +940,7 @@ describe('executeVersionCheck', () => {
 
   it('returns a JSON report for a valid workflows module', async () => {
     const database = join(tmpdir(), `weft-version-check-${crypto.randomUUID()}.db`);
-    const workflows = join(tmpdir(), `weft-workflows-${crypto.randomUUID()}.ts`);
+    const workflows = createTemporaryTypeScriptPath('weft-workflows');
     const storage = await createStorage('sqlite', database);
 
     try {
@@ -992,7 +1000,7 @@ describe('executeVersionCheck', () => {
       });
     } finally {
       storage[Symbol.dispose]();
-      rmSync(workflows, { force: true });
+      removeTemporaryTypeScriptPath(workflows);
       rmSync(database, { force: true });
     }
   });
@@ -1537,7 +1545,7 @@ describe('executeValidate', () => {
 
   it('returns exitCode 0 and stdout with no-issues message for a clean module', async () => {
     const { loadRegistrationsFromModule } = await import('./diagnostics/validate.ts');
-    const entryPath = join(tmpdir(), `weft-validate-clean-${crypto.randomUUID()}.ts`);
+    const entryPath = createTemporaryTypeScriptPath('weft-validate-clean');
     try {
       await Bun.write(
         entryPath,
@@ -1557,13 +1565,13 @@ describe('executeValidate', () => {
       const iterator = loaded.registrations['myWorkflow']!.handler({} as never, undefined);
       await expect(iterator.next()).resolves.toEqual({ value: 'done', done: true });
     } finally {
-      rmSync(entryPath, { force: true });
+      removeTemporaryTypeScriptPath(entryPath);
     }
   });
 
   it('returns exitCode 1 when an activity has unbounded retry', async () => {
     const { loadRegistrationsFromModule } = await import('./diagnostics/validate.ts');
-    const entryPath = join(tmpdir(), `weft-validate-error-${crypto.randomUUID()}.ts`);
+    const entryPath = createTemporaryTypeScriptPath('weft-validate-error');
     try {
       await Bun.write(
         entryPath,
@@ -1584,13 +1592,13 @@ describe('executeValidate', () => {
       const loaded = await loadRegistrationsFromModule(entryPath);
       await expect(loaded.activities[0]!.execute('payload')).resolves.toBe('payload');
     } finally {
-      rmSync(entryPath, { force: true });
+      removeTemporaryTypeScriptPath(entryPath);
     }
   });
 
   it('returns valid JSON when json: true', async () => {
     const { loadRegistrationsFromModule } = await import('./diagnostics/validate.ts');
-    const entryPath = join(tmpdir(), `weft-validate-json-${crypto.randomUUID()}.ts`);
+    const entryPath = createTemporaryTypeScriptPath('weft-validate-json');
     try {
       await Bun.write(
         entryPath,
@@ -1623,13 +1631,13 @@ describe('executeValidate', () => {
       const iterator = loaded.registrations['myWorkflow']!.handler({} as never, undefined);
       await expect(iterator.next()).resolves.toEqual({ value: 'done', done: true });
     } finally {
-      rmSync(entryPath, { force: true });
+      removeTemporaryTypeScriptPath(entryPath);
     }
   });
 
   it('returns exitCode 0 when multiple clean entry files validate', async () => {
-    const firstEntryPath = join(tmpdir(), `weft-validate-multi-a-${crypto.randomUUID()}.ts`);
-    const secondEntryPath = join(tmpdir(), `weft-validate-multi-b-${crypto.randomUUID()}.ts`);
+    const firstEntryPath = createTemporaryTypeScriptPath('weft-validate-multi-a');
+    const secondEntryPath = createTemporaryTypeScriptPath('weft-validate-multi-b');
 
     try {
       await Bun.write(
@@ -1663,8 +1671,8 @@ describe('executeValidate', () => {
       expect(result.stdout).toContain(secondEntryPath);
       expect(result.stdout).toContain('No issues found.');
     } finally {
-      rmSync(firstEntryPath, { force: true });
-      rmSync(secondEntryPath, { force: true });
+      removeTemporaryTypeScriptPath(firstEntryPath);
+      removeTemporaryTypeScriptPath(secondEntryPath);
     }
   });
 
@@ -1903,7 +1911,7 @@ describe('executeValidate', () => {
   });
 
   it('returns exitCode 2 when a clean entry and a missing entry are validated together', async () => {
-    const cleanEntryPath = join(tmpdir(), `weft-validate-mixed-clean-${crypto.randomUUID()}.ts`);
+    const cleanEntryPath = createTemporaryTypeScriptPath('weft-validate-mixed-clean');
 
     try {
       await Bun.write(
@@ -1927,16 +1935,13 @@ describe('executeValidate', () => {
       expect(result.stdout).toContain('No issues found.');
       expect(result.stderr).toContain('/does/not/exist/entry.ts');
     } finally {
-      rmSync(cleanEntryPath, { force: true });
+      removeTemporaryTypeScriptPath(cleanEntryPath);
     }
   });
 
   it('returns exitCode 1 when a clean entry and an invalid entry are validated together', async () => {
-    const cleanEntryPath = join(tmpdir(), `weft-validate-mixed-clean-${crypto.randomUUID()}.ts`);
-    const invalidEntryPath = join(
-      tmpdir(),
-      `weft-validate-mixed-invalid-${crypto.randomUUID()}.ts`,
-    );
+    const cleanEntryPath = createTemporaryTypeScriptPath('weft-validate-mixed-clean');
+    const invalidEntryPath = createTemporaryTypeScriptPath('weft-validate-mixed-invalid');
 
     try {
       await Bun.write(
@@ -1979,13 +1984,13 @@ describe('executeValidate', () => {
       expect(result.stdout).toContain('stateful-without-compensator');
       expect(result.stderr).toBeUndefined();
     } finally {
-      rmSync(cleanEntryPath, { force: true });
-      rmSync(invalidEntryPath, { force: true });
+      removeTemporaryTypeScriptPath(cleanEntryPath);
+      removeTemporaryTypeScriptPath(invalidEntryPath);
     }
   });
 
   it('returns a stable JSON envelope for mixed load and validation outcomes', async () => {
-    const invalidEntryPath = join(tmpdir(), `weft-validate-json-invalid-${crypto.randomUUID()}.ts`);
+    const invalidEntryPath = createTemporaryTypeScriptPath('weft-validate-json-invalid');
 
     try {
       await Bun.write(
@@ -2035,7 +2040,7 @@ describe('executeValidate', () => {
         ],
       });
     } finally {
-      rmSync(invalidEntryPath, { force: true });
+      removeTemporaryTypeScriptPath(invalidEntryPath);
     }
   });
 });
@@ -2238,7 +2243,7 @@ describe('executeTimeline', () => {
 describe('executeSchedule', () => {
   it('lists, creates, pauses, resumes, and cancels schedules against a SQLite database', async () => {
     const database = join(tmpdir(), `weft-schedule-${crypto.randomUUID()}.db`);
-    const workflows = join(tmpdir(), `weft-schedule-workflows-${crypto.randomUUID()}.ts`);
+    const workflows = createTemporaryTypeScriptPath('weft-schedule-workflows');
 
     await Bun.write(
       workflows,
@@ -2359,14 +2364,14 @@ describe('executeSchedule', () => {
         verificationStorage[Symbol.dispose]();
       }
     } finally {
-      rmSync(workflows, { force: true });
+      removeTemporaryTypeScriptPath(workflows);
       rmSync(database, { force: true });
     }
   });
 
   it('uses the selected storage backend for schedule commands', async () => {
     const database = join(tmpdir(), `weft-schedule-lmdb-${crypto.randomUUID()}`);
-    const workflows = join(tmpdir(), `weft-schedule-lmdb-workflows-${crypto.randomUUID()}.ts`);
+    const workflows = createTemporaryTypeScriptPath('weft-schedule-lmdb-workflows');
 
     await Bun.write(
       workflows,
@@ -2427,7 +2432,7 @@ describe('executeSchedule', () => {
         storage[Symbol.dispose]();
       }
     } finally {
-      rmSync(workflows, { force: true });
+      removeTemporaryTypeScriptPath(workflows);
       rmSync(database, { recursive: true, force: true });
     }
   });
@@ -2528,7 +2533,7 @@ describe('executeSchedule', () => {
 
   it('returns an error when schedule create input is not valid JSON', async () => {
     const database = join(tmpdir(), `weft-schedule-input-${crypto.randomUUID()}.db`);
-    const workflows = join(tmpdir(), `weft-schedule-input-${crypto.randomUUID()}.ts`);
+    const workflows = createTemporaryTypeScriptPath('weft-schedule-input');
 
     await Bun.write(
       workflows,
@@ -2563,14 +2568,14 @@ describe('executeSchedule', () => {
       expect(result.stdout).toBe('');
       expect(result.stderr).toContain('Error: could not parse --input JSON:');
     } finally {
-      rmSync(workflows, { force: true });
+      removeTemporaryTypeScriptPath(workflows);
       rmSync(database, { force: true });
     }
   });
 
   it('surfaces schedule execution failures through the shared schedule error path', async () => {
     const database = join(tmpdir(), `weft-schedule-error-${crypto.randomUUID()}.db`);
-    const workflows = join(tmpdir(), `weft-schedule-error-${crypto.randomUUID()}.ts`);
+    const workflows = createTemporaryTypeScriptPath('weft-schedule-error');
 
     await Bun.write(workflows, 'export default {};');
 
@@ -2593,7 +2598,7 @@ describe('executeSchedule', () => {
       expect(result.stdout).toBe('');
       expect(result.stderr).toBe('Error: No workflow registered with name "scheduledEcho"');
     } finally {
-      rmSync(workflows, { force: true });
+      removeTemporaryTypeScriptPath(workflows);
       rmSync(database, { force: true });
     }
   });
@@ -2602,7 +2607,7 @@ describe('executeSchedule', () => {
 describe('loadRegistrationsFromModule', () => {
   it('extracts WorkflowDefinition from named exports', async () => {
     const { loadRegistrationsFromModule } = await import('./diagnostics/validate.ts');
-    const entryPath = join(tmpdir(), `weft-load-named-${crypto.randomUUID()}.ts`);
+    const entryPath = createTemporaryTypeScriptPath('weft-load-named');
     try {
       await Bun.write(
         entryPath,
@@ -2620,13 +2625,13 @@ describe('loadRegistrationsFromModule', () => {
       const iterator = result.registrations['myWorkflow']!.handler({} as never, undefined);
       await expect(iterator.next()).resolves.toEqual({ value: 'done', done: true });
     } finally {
-      rmSync(entryPath, { force: true });
+      removeTemporaryTypeScriptPath(entryPath);
     }
   });
 
   it('extracts ActivityDefinition from named exports', async () => {
     const { loadRegistrationsFromModule } = await import('./diagnostics/validate.ts');
-    const entryPath = join(tmpdir(), `weft-load-activity-${crypto.randomUUID()}.ts`);
+    const entryPath = createTemporaryTypeScriptPath('weft-load-activity');
     try {
       await Bun.write(
         entryPath,
@@ -2643,7 +2648,7 @@ describe('loadRegistrationsFromModule', () => {
       expect(result.activities[0]!.name).toBe('sendEmail');
       await expect(result.activities[0]!.execute('payload')).resolves.toBe('payload');
     } finally {
-      rmSync(entryPath, { force: true });
+      removeTemporaryTypeScriptPath(entryPath);
     }
   });
 
@@ -2654,14 +2659,14 @@ describe('loadRegistrationsFromModule', () => {
 
   it('returns empty registrations and activities for a module with no matching exports', async () => {
     const { loadRegistrationsFromModule } = await import('./diagnostics/validate.ts');
-    const entryPath = join(tmpdir(), `weft-load-empty-${crypto.randomUUID()}.ts`);
+    const entryPath = createTemporaryTypeScriptPath('weft-load-empty');
     try {
       await Bun.write(entryPath, 'export const foo = 42;\n');
       const result = await loadRegistrationsFromModule(entryPath);
       expect(Object.keys(result.registrations)).toHaveLength(0);
       expect(result.activities).toHaveLength(0);
     } finally {
-      rmSync(entryPath, { force: true });
+      removeTemporaryTypeScriptPath(entryPath);
     }
   });
 });

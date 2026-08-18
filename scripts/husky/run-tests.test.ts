@@ -4,11 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  BROWSER_SMOKE_TEST_PATHS,
   buildTestCommand,
   createRealDependencies,
   discoverTestFiles,
   extractJunitFailureExcerpts,
   formatFailingTests,
+  FULL_SUITE_TIMEOUT_MS,
   ISOLATION_SKIP_FILE_THRESHOLD,
   LOAD_SENSITIVE_TEST_PATHS,
   parseJunitFailures,
@@ -270,6 +272,21 @@ describe('renderTestOutcome', () => {
     expect(result.ok).toBe(false);
     expect(result.lines.join('\n')).toContain('Isolation run failed but its JUnit was unavailable');
   });
+
+  it('reports a wall-clock timeout with incomplete files and the retained report directory', () => {
+    const result = renderTestOutcome({
+      kind: 'timedOut',
+      timeoutMs: FULL_SUITE_TIMEOUT_MS,
+      incompleteTestFiles: ['src/b.test.ts'],
+      output: { stdout: '', stderr: '' },
+      retainedDirectory: '/tmp/run',
+    });
+    const rendered = result.lines.join('\n');
+    expect(result.ok).toBe(false);
+    expect(rendered).toContain(`${FULL_SUITE_TIMEOUT_MS}ms`);
+    expect(rendered).toContain('src/b.test.ts');
+    expect(rendered).toContain('/tmp/run');
+  });
 });
 
 describe('discoverTestFiles', () => {
@@ -278,6 +295,13 @@ describe('discoverTestFiles', () => {
     expect(files.length).toBeGreaterThan(0);
     expect(files.some((file) => file.includes('/benchmarks/'))).toBe(false);
     for (const excluded of LOAD_SENSITIVE_TEST_PATHS) {
+      expect(files).not.toContain(excluded);
+    }
+  });
+
+  it('excludes the browser-smoke files omitted by the main CI test job', async () => {
+    const files = await discoverTestFiles();
+    for (const excluded of BROWSER_SMOKE_TEST_PATHS) {
       expect(files).not.toContain(excluded);
     }
   });
@@ -301,23 +325,36 @@ describe('discoverTestFiles', () => {
 describe('runTestSuite (injected dependencies)', () => {
   function makeDependencies(
     overrides: Partial<RunTestSuiteDependencies> & {
-      runResults?: Array<{ exitCode: number; stdout?: string; stderr?: string }>;
+      runResults?: Array<{
+        exitCode: number;
+        stdout?: string;
+        stderr?: string;
+        timedOut?: boolean;
+      }>;
       reports?: Record<string, string>;
     } = {},
-  ): { dependencies: RunTestSuiteDependencies; commands: string[][]; removed: string[] } {
+  ): {
+    dependencies: RunTestSuiteDependencies;
+    commands: string[][];
+    removed: string[];
+    timeouts: number[];
+  } {
     const commands: string[][] = [];
     const removed: string[] = [];
+    const timeouts: number[] = [];
     const runResults = overrides.runResults ?? [];
     const reports = overrides.reports ?? {};
     let runIndex = 0;
     const dependencies: RunTestSuiteDependencies = {
-      runCommand: async (args) => {
+      runCommand: async (args, timeoutMs) => {
         commands.push(args);
+        timeouts.push(timeoutMs);
         const result = runResults[runIndex++] ?? { exitCode: 0 };
         return {
           exitCode: result.exitCode,
           stdout: result.stdout ?? '',
           stderr: result.stderr ?? '',
+          timedOut: result.timedOut ?? false,
         };
       },
       makeRunDirectory: async () => '/tmp/run',
@@ -331,7 +368,7 @@ describe('runTestSuite (injected dependencies)', () => {
       sweepStaleDirectories: async () => {},
       ...overrides,
     };
-    return { dependencies, commands, removed };
+    return { dependencies, commands, removed, timeouts };
   }
 
   it('returns passed without spawning when there are no files', async () => {
@@ -341,9 +378,39 @@ describe('runTestSuite (injected dependencies)', () => {
   });
 
   it('returns passed and removes the run dir on a clean run', async () => {
-    const { dependencies, removed } = makeDependencies({ runResults: [{ exitCode: 0 }] });
+    const { dependencies, removed, timeouts } = makeDependencies({
+      runResults: [{ exitCode: 0 }],
+    });
     expect(await runTestSuite(['src/a.test.ts'], dependencies)).toEqual({ kind: 'passed' });
     expect(removed).toEqual(['/tmp/run']);
+    expect(timeouts).toEqual([FULL_SUITE_TIMEOUT_MS]);
+  });
+
+  it('kills a timed-out full run and attributes incomplete files from the partial report', async () => {
+    const partialReport = suite(
+      testcase({ name: 'completed', file: 'src/a.test.ts' }),
+      testcase({ name: 'also completed', file: 'src/c.test.ts' }),
+    );
+    const { dependencies, commands, removed } = makeDependencies({
+      runResults: [{ exitCode: 143, timedOut: true, stderr: 'terminated' }],
+      reports: { full: partialReport },
+    });
+
+    const outcome = await runTestSuite(
+      ['src/a.test.ts', 'src/b.test.ts', 'src/c.test.ts'],
+      dependencies,
+    );
+
+    expect(outcome).toEqual({
+      kind: 'timedOut',
+      timeoutMs: FULL_SUITE_TIMEOUT_MS,
+      incompleteTestFiles: ['src/b.test.ts'],
+      output: { stdout: '', stderr: 'terminated' },
+      reportContent: partialReport,
+      retainedDirectory: '/tmp/run',
+    });
+    expect(commands).toHaveLength(1);
+    expect(removed).toEqual([]);
   });
 
   it('passes --parallel=1 when a serial run is requested', async () => {
@@ -465,17 +532,53 @@ describe('real dependency helpers', () => {
     process.stderr.write = stderrWrite as typeof process.stderr.write;
 
     try {
-      const result = await dependencies.runCommand([
-        '-e',
-        'console.log("stdout-line"); console.error("stderr-line"); process.exit(7);',
-      ]);
+      const result = await dependencies.runCommand(
+        ['-e', 'console.log("stdout-line"); console.error("stderr-line"); process.exit(7);'],
+        1_000,
+      );
 
       expect(result).toEqual({
         exitCode: 7,
         stdout: 'stdout-line\n',
         stderr: 'stderr-line\n',
+        timedOut: false,
       });
       expect(stderrWrite).toHaveBeenCalledWith('\n');
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+  });
+
+  it('runCommand terminates a subprocess at its wall-clock deadline', async () => {
+    const dependencies = createRealDependencies();
+    const stderrWrite = mock((_chunk: string) => true);
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = stderrWrite as typeof process.stderr.write;
+
+    try {
+      // fixed delay: hang guard on a real subprocess
+      const result = await dependencies.runCommand(['-e', 'await new Promise(() => {})'], 50);
+      expect(result.timedOut).toBe(true);
+      expect(result.exitCode).not.toBe(0);
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+  });
+
+  it('runCommand force-kills a subprocess that ignores graceful termination', async () => {
+    const dependencies = createRealDependencies();
+    const stderrWrite = mock((_chunk: string) => true);
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = stderrWrite as typeof process.stderr.write;
+
+    try {
+      // fixed delay: hang guard on a real subprocess that deliberately ignores SIGTERM
+      const result = await dependencies.runCommand(
+        ['-e', 'process.on("SIGTERM", () => {}); await new Promise(() => {})'],
+        50,
+      );
+      expect(result.timedOut).toBe(true);
+      expect(result.exitCode).not.toBe(0);
     } finally {
       process.stderr.write = originalWrite;
     }

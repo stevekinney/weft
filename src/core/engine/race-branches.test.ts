@@ -624,7 +624,18 @@ describe('#679 ctx.raceKeyed winner metadata', () => {
 
     const duplicateSignalHandle = await engine.start('keyed-race-duplicate-signal', null);
 
-    await expect(duplicateSignalHandle.result()).rejects.toThrow(
+    // Bun 1.3.14 can leave `.rejects.toThrow()` pending for this already-failed
+    // workflow and then keep the runner alive after its per-test timeout. Adopt
+    // the rejection directly so this regression remains bounded (oven-sh/bun#39584).
+    const duplicateSignalRejection = await duplicateSignalHandle.result().then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
+    expect(duplicateSignalRejection).toBeInstanceOf(Error);
+    if (!(duplicateSignalRejection instanceof Error)) {
+      throw new Error('Expected duplicate-signal workflow rejection');
+    }
+    expect(duplicateSignalRejection.message).toContain(
       'cannot have two branches waiting on the same signal',
     );
   });
