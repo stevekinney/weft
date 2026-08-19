@@ -293,12 +293,40 @@ export function parseJunitFailures(xml: string): FailingTest[] {
   return failures;
 }
 
-/** Return the normalized test-file paths represented by any JUnit testcase. */
+/** Return normalized paths whose outer file-level JUnit suite closed completely. */
 export function parseJunitCompletedFiles(xml: string): Set<string> {
   const files = new Set<string>();
-  for (const { openingTag } of iterateTestcases(xml)) {
-    const file = readAttribute(openingTag, 'file');
-    if (file) files.add(normalizedTestPath(file));
+  const suiteStack: Array<{ openingTag: string; contentStart: number }> = [];
+  const suiteTagPattern = /<(\/?)testsuite\b([^>]*?)(\/?)>/g;
+  let match: RegExpExecArray | null;
+  while ((match = suiteTagPattern.exec(xml)) !== null) {
+    const closing = match[1] === '/';
+    if (closing) {
+      const suite = suiteStack.pop();
+      if (suite === undefined || suiteStack.length > 0) continue;
+      const suiteFile = readAttribute(suite.openingTag, 'file');
+      if (suiteFile) {
+        files.add(normalizedTestPath(suiteFile));
+        continue;
+      }
+      const suiteBody = xml.slice(suite.contentStart, match.index);
+      for (const { openingTag } of iterateTestcases(suiteBody)) {
+        const testcaseFile = readAttribute(openingTag, 'file');
+        if (testcaseFile) files.add(normalizedTestPath(testcaseFile));
+      }
+      continue;
+    }
+
+    const attributes = match[2] ?? '';
+    const openingTag = `<testsuite${attributes}>`;
+    if (match[3] === '/') {
+      if (suiteStack.length === 0) {
+        const suiteFile = readAttribute(openingTag, 'file');
+        if (suiteFile) files.add(normalizedTestPath(suiteFile));
+      }
+      continue;
+    }
+    suiteStack.push({ openingTag, contentStart: suiteTagPattern.lastIndex });
   }
   return files;
 }
@@ -480,13 +508,35 @@ export function createRealDependencies(): RunTestSuiteDependencies {
       let timedOut = false;
       let interruptedSignal: 'SIGINT' | 'SIGTERM' | undefined;
       let forceKill: ReturnType<typeof setTimeout> | undefined;
+      let forceKillPromise: Promise<void> | undefined;
       const forceKillProcessGroup = (): void => {
         signalProcessGroup('SIGKILL');
         void stdoutReader.cancel();
         void stderrReader.cancel();
       };
       const scheduleForceKill = (): void => {
-        forceKill ??= setTimeout(forceKillProcessGroup, TERMINATION_GRACE_MS);
+        forceKillPromise ??= new Promise((resolve) => {
+          forceKill = setTimeout(() => {
+            forceKillProcessGroup();
+            resolve();
+          }, TERMINATION_GRACE_MS);
+        });
+      };
+      const processGroupIsAlive = (): boolean => {
+        if (process.platform === 'win32') return true;
+        try {
+          process.kill(-subprocess.pid, 0);
+          return true;
+        } catch (cause) {
+          return !(cause instanceof Error && 'code' in cause && cause.code === 'ESRCH');
+        }
+      };
+      const waitForProcessGroupExit = async (): Promise<void> => {
+        if (process.platform === 'win32') return;
+        const deadline = Date.now() + TERMINATION_GRACE_MS;
+        while (processGroupIsAlive() && Date.now() < deadline) {
+          await Bun.sleep(10);
+        }
       };
       const forwardSignal = (signal: 'SIGINT' | 'SIGTERM'): void => {
         interruptedSignal ??= signal;
@@ -508,6 +558,10 @@ export function createRealDependencies(): RunTestSuiteDependencies {
           stdout,
           stderr,
         ]);
+        if (forceKillPromise !== undefined && processGroupIsAlive()) {
+          await forceKillPromise;
+          await waitForProcessGroupExit();
+        }
         return {
           exitCode,
           stdout: capturedStdout,

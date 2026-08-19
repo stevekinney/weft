@@ -1731,10 +1731,10 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
         functions: 8,
         lines: createMergedLineSet(
           new Set([
-            54, 55, 91, 92, 93, 104, 115, 116, 117, 123, 124, 125, 143, 144, 145, 152, 153, 154,
-            157, 159, 160, 161, 164, 192, 193, 194, 195, 196, 197, 198, 199,
+            54, 55, 84, 85, 86, 99, 100, 101, 112, 123, 124, 125, 131, 132, 133, 151, 152, 153, 160,
+            161, 162, 165, 167, 168, 169, 172, 200, 201, 202, 203, 204, 205, 206, 207,
           ]),
-          createLineSet(218, 440),
+          createLineSet(229, 451),
         ),
         requireUncoveredLines: true,
       },
@@ -1746,8 +1746,8 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
         // descendant SIGKILL behavior, but those paths execute in child Bun
         // processes outside the parent LCOV report. The Windows branch and the
         // process-group fallback are platform-specific defensive paths.
-        functions: 7,
-        lines: new Set([471, 472, 476, 483, 484, 485, 491, 492, 493, 525]),
+        functions: 6,
+        lines: new Set([499, 500, 504, 541, 542, 543, 579]),
       },
     ],
     ['src/cli/api-arguments.ts', { lines: new Set([55, 58]) }],

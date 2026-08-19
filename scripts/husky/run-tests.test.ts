@@ -14,6 +14,7 @@ import {
   FULL_SUITE_TIMEOUT_MS,
   ISOLATION_SKIP_FILE_THRESHOLD,
   LOAD_SENSITIVE_TEST_PATHS,
+  parseJunitCompletedFiles,
   parseJunitFailures,
   renderTestOutcome,
   runTestSuite,
@@ -33,6 +34,10 @@ function testcase(attributes: Record<string, string>, child?: string): string {
 
 function suite(...cases: string[]): string {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<testsuites>\n<testsuite name="s">\n${cases.join('\n')}\n</testsuite>\n</testsuites>`;
+}
+
+function fileSuite(file: string, ...cases: string[]): string {
+  return `<testsuite name="${file}" file="${file}">\n${cases.join('\n')}\n</testsuite>`;
 }
 
 describe('parseJunitFailures', () => {
@@ -140,6 +145,27 @@ describe('parseJunitFailures', () => {
       { file: 'src/a.test.ts', name: 'dup', line: '5' },
       { file: 'src/a.test.ts', name: 'dup', line: '6' },
     ]);
+  });
+});
+
+describe('parseJunitCompletedFiles', () => {
+  it('treats a self-closing file-level suite as complete', () => {
+    expect(
+      parseJunitCompletedFiles(
+        '<testsuites><testsuite name="empty.test.ts" file="src/empty.test.ts" /></testsuites>',
+      ),
+    ).toEqual(new Set(['src/empty.test.ts']));
+  });
+
+  it('requires the file-level suite to close before treating its testcases as complete', () => {
+    const xml = `<testsuites>
+${fileSuite('src/completed.test.ts', testcase({ name: 'done', file: 'src/completed.test.ts' }))}
+<testsuite name="src/partial.test.ts" file="src/partial.test.ts">
+  <testsuite name="nested" file="src/partial.test.ts">
+    ${testcase({ name: 'finished before the hang', file: 'src/partial.test.ts' })}
+  </testsuite>`;
+
+    expect(parseJunitCompletedFiles(xml)).toEqual(new Set(['src/completed.test.ts']));
   });
 });
 
@@ -389,10 +415,11 @@ describe('runTestSuite (injected dependencies)', () => {
   });
 
   it('kills a timed-out full run and attributes incomplete files from the partial report', async () => {
-    const partialReport = suite(
-      testcase({ name: 'completed', file: 'src/a.test.ts' }),
-      testcase({ name: 'also completed', file: 'src/c.test.ts' }),
-    );
+    const partialReport = `<testsuites>
+${fileSuite('src/a.test.ts', testcase({ name: 'completed', file: 'src/a.test.ts' }))}
+${fileSuite('src/c.test.ts', testcase({ name: 'also completed', file: 'src/c.test.ts' }))}
+<testsuite name="src/b.test.ts" file="src/b.test.ts">
+  ${testcase({ name: 'completed before teardown hung', file: 'src/b.test.ts' })}`;
     const { dependencies, commands, removed } = makeDependencies({
       runResults: [{ exitCode: 143, timedOut: true, stderr: 'terminated' }],
       reports: { full: partialReport },
@@ -628,6 +655,41 @@ describe('real dependency helpers', () => {
       expect(result.exitCode).not.toBe(0);
     } finally {
       process.stderr.write = originalWrite;
+    }
+  });
+
+  it('runCommand force-kills a surviving descendant with independent output pipes', async () => {
+    if (process.platform === 'win32') return;
+    const dependencies = createRealDependencies();
+    const directory = await mkdtemp(join(tmpdir(), 'weft-run-tests-descendant-'));
+    cleanupPaths.add(directory);
+    const processIdPath = join(directory, 'descendant-pid.txt');
+    const stderrWrite = mock((_chunk: string) => true);
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = stderrWrite as typeof process.stderr.write;
+    let descendantProcessId: number | undefined;
+
+    try {
+      const result = await dependencies.runCommand(
+        [
+          '-e',
+          `const child = Bun.spawn(['bun', '-e', 'process.on("SIGTERM", () => {}); await new Promise(() => {})'], { stdout: 'ignore', stderr: 'ignore' }); await Bun.write(${JSON.stringify(processIdPath)}, String(child.pid)); await new Promise(() => {});`,
+        ],
+        500,
+      );
+      descendantProcessId = Number.parseInt(await Bun.file(processIdPath).text(), 10);
+
+      expect(result.timedOut).toBe(true);
+      expect(() => process.kill(descendantProcessId, 0)).toThrow();
+    } finally {
+      process.stderr.write = originalWrite;
+      if (descendantProcessId !== undefined) {
+        try {
+          process.kill(descendantProcessId, 'SIGKILL');
+        } catch {
+          // The expected path already removed the process.
+        }
+      }
     }
   });
 

@@ -86,6 +86,51 @@ describe('markdown ratchet stash lifecycle', () => {
     expect(await stashList(repositoryRoot)).toBe(before);
   });
 
+  it('recovers the marker identity when the first post-push list is interrupted', async () => {
+    const repositoryRoot = await createRepository();
+    await Bun.write(join(repositoryRoot, 'tracked.txt'), 'base\nunstaged\n');
+    let listAttempts = 0;
+    const executeGit = async (root: string, arguments_: string[]) => {
+      if (arguments_[0] === 'stash' && arguments_[1] === 'list') {
+        listAttempts += 1;
+        if (listAttempts === 1) {
+          return { exitCode: 130, stdout: '', stderr: 'interrupted' };
+        }
+      }
+      return runGitCommand(root, arguments_);
+    };
+
+    await withRatchetStash(repositoryRoot, async () => {}, {
+      create: (root) => createRatchetStash(root, executeGit),
+    });
+
+    expect(listAttempts).toBe(2);
+    expect(await Bun.file(join(repositoryRoot, 'tracked.txt')).text()).toBe('base\nunstaged\n');
+    expect(await stashList(repositoryRoot)).not.toContain(RATCHET_STASH_MESSAGE);
+  });
+
+  it('recovers the marker identity when stash push completes before reporting interruption', async () => {
+    const repositoryRoot = await createRepository();
+    await Bun.write(join(repositoryRoot, 'tracked.txt'), 'base\nunstaged\n');
+    let interruptedPush = false;
+    const executeGit = async (root: string, arguments_: string[]) => {
+      const result = await runGitCommand(root, arguments_);
+      if (!interruptedPush && arguments_[0] === 'stash' && arguments_[1] === 'push') {
+        interruptedPush = true;
+        return { ...result, exitCode: 130, stderr: 'interrupted after write' };
+      }
+      return result;
+    };
+
+    await withRatchetStash(repositoryRoot, async () => {}, {
+      create: (root) => createRatchetStash(root, executeGit),
+    });
+
+    expect(interruptedPush).toBe(true);
+    expect(await Bun.file(join(repositoryRoot, 'tracked.txt')).text()).toBe('base\nunstaged\n');
+    expect(await stashList(repositoryRoot)).not.toContain(RATCHET_STASH_MESSAGE);
+  });
+
   it('restores and drops its own SHA when another stash becomes the stack head', async () => {
     const repositoryRoot = await createRepository();
     await Bun.write(join(repositoryRoot, 'tracked.txt'), 'base\nratchet change\n');
@@ -205,6 +250,94 @@ await withRatchetStash('/unused', async () => {
     subprocess.kill('SIGINT');
     subprocess.send('release');
     expect(await subprocess.exited).toBe(130);
+  });
+
+  it('keeps signal handlers installed when the interrupted operation rejects during cleanup', async () => {
+    const repositoryRoot = await createRepository();
+    const fixturePath = join(repositoryRoot, 'rejecting-signal-fixture.ts');
+    const preCommitPath = fileURLToPath(new URL('./pre-commit.ts', import.meta.url));
+    await Bun.write(
+      fixturePath,
+      `import { withRatchetStash } from ${JSON.stringify(preCommitPath)};
+let inspectRestore;
+let finishRestore;
+const inspectGate = new Promise((resolve) => { inspectRestore = resolve; });
+const restoreGate = new Promise((resolve) => { finishRestore = resolve; });
+process.on('message', (message) => {
+  if (message === 'inspect') inspectRestore();
+  if (message === 'release') finishRestore();
+});
+let rejectOperation;
+const operationGate = new Promise((_resolve, reject) => { rejectOperation = reject; });
+try {
+  await withRatchetStash('/unused', async () => {
+    process.once('SIGINT', () => {
+      rejectOperation(new Error('interrupted operation'));
+      process.send?.('operation-rejected');
+    });
+    process.send?.('ready');
+    return await operationGate;
+  }, {
+    create: async () => ({ marker: 'marker', sha: 'sha' }),
+    restore: async () => {
+      process.send?.('restore-started');
+      await inspectGate;
+      process.send?.({ type: 'listener-count', count: process.listenerCount('SIGINT') });
+      await restoreGate;
+    },
+  });
+} catch {}
+`,
+    );
+
+    let markReady: (() => void) | undefined;
+    let markRestoreStarted: (() => void) | undefined;
+    let markOperationRejected: (() => void) | undefined;
+    let markListenerCount: ((count: number) => void) | undefined;
+    const ready = new Promise<void>((resolve) => {
+      markReady = resolve;
+    });
+    const restoreStarted = new Promise<void>((resolve) => {
+      markRestoreStarted = resolve;
+    });
+    const operationRejected = new Promise<void>((resolve) => {
+      markOperationRejected = resolve;
+    });
+    const listenerCount = new Promise<number>((resolve) => {
+      markListenerCount = resolve;
+    });
+    const subprocess = Bun.spawn(['bun', fixturePath], {
+      cwd: repositoryRoot,
+      stdout: 'pipe',
+      stderr: 'pipe',
+      ipc(message) {
+        if (message === 'ready') markReady?.();
+        if (message === 'restore-started') markRestoreStarted?.();
+        if (message === 'operation-rejected') markOperationRejected?.();
+        if (
+          typeof message === 'object' &&
+          message !== null &&
+          'type' in message &&
+          message.type === 'listener-count' &&
+          'count' in message &&
+          typeof message.count === 'number'
+        ) {
+          markListenerCount?.(message.count);
+        }
+      },
+    });
+
+    try {
+      await ready;
+      subprocess.kill('SIGINT');
+      await Promise.all([restoreStarted, operationRejected]);
+      subprocess.send('inspect');
+      expect(await listenerCount).toBe(1);
+      subprocess.send('release');
+      expect(await subprocess.exited).toBe(130);
+    } finally {
+      subprocess.kill('SIGKILL');
+    }
   });
 
   for (const [signal, expectedExitCode] of [

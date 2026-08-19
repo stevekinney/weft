@@ -59,24 +59,32 @@ function describeGitFailure(arguments_: string[], result: GitResult): string {
 /** Stash unstaged and untracked files, returning only this invocation's identity. */
 export async function createRatchetStash(
   repositoryRoot: string,
+  executeGit: GitCommand = runGitCommand,
 ): Promise<RatchetStash | undefined> {
   const marker = `${RATCHET_STASH_MESSAGE}:${crypto.randomUUID()}`;
   const pushArguments = ['stash', 'push', '--keep-index', '-u', '-m', marker];
-  const pushed = await runGitCommand(repositoryRoot, pushArguments);
-  if (pushed.exitCode !== 0) throw new Error(describeGitFailure(pushArguments, pushed));
-
+  const pushed = await executeGit(repositoryRoot, pushArguments);
   const listArguments = ['stash', 'list', '--format=%H %gs'];
-  const listed = await runGitCommand(repositoryRoot, listArguments);
-  if (listed.exitCode !== 0) throw new Error(describeGitFailure(listArguments, listed));
-
-  for (const line of listed.stdout.split('\n')) {
-    const separator = line.indexOf(' ');
-    if (separator === -1) continue;
-    const sha = line.slice(0, separator);
-    const subject = line.slice(separator + 1);
-    if (subject.endsWith(marker)) return { marker, sha };
+  let lastListFailure: GitResult | undefined;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const listed = await executeGit(repositoryRoot, listArguments);
+    if (listed.exitCode !== 0) {
+      lastListFailure = listed;
+      continue;
+    }
+    for (const line of listed.stdout.split('\n')) {
+      const separator = line.indexOf(' ');
+      if (separator === -1) continue;
+      const sha = line.slice(0, separator);
+      const subject = line.slice(separator + 1);
+      if (subject.endsWith(marker)) return { marker, sha };
+    }
+    if (pushed.exitCode !== 0) throw new Error(describeGitFailure(pushArguments, pushed));
+    return undefined;
   }
-  return undefined;
+  throw new Error(
+    `Could not recover the ratchet stash identity after five attempts${pushed.exitCode === 0 ? '' : ` after ${describeGitFailure(pushArguments, pushed)}`}. ${describeGitFailure(listArguments, lastListFailure ?? { exitCode: 1, stdout: '', stderr: 'stash list unavailable' })}`,
+  );
 }
 
 /** Restore and remove one exact stash entry without consulting stack position. */
@@ -209,9 +217,12 @@ export async function withRatchetStash<T>(
     if (interrupted) return await new Promise<T>(() => {});
     return await operation();
   } finally {
-    process.removeListener('SIGINT', onInterrupt);
-    process.removeListener('SIGTERM', onTerminate);
-    await cleanup();
+    try {
+      await cleanup();
+    } finally {
+      process.removeListener('SIGINT', onInterrupt);
+      process.removeListener('SIGTERM', onTerminate);
+    }
   }
 }
 
