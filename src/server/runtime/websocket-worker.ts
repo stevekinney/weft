@@ -183,11 +183,6 @@ function onHeartbeatMessage(
 type ParseResult = { ok: true; message: WorkerToServerMessage } | { ok: false };
 
 /**
- * Parse and validate an incoming WebSocket frame from a worker.
- * Rejects the connection if the frame is malformed or fails protocol validation.
- * Returns the parsed message on success or `{ ok: false }` if the connection was closed.
- */
-/**
  * Best-effort `workerId` extraction from a frame that failed protocol
  * parsing. The frame may still carry a syntactically valid `workerId` even
  * though some other field failed validation — used only to enrich the
@@ -222,6 +217,11 @@ function recordAndRejectRegistrationFrame(
   rejectRegistration(ws, code, message, requestedProtocolVersion);
 }
 
+/**
+ * Parse and validate an incoming WebSocket frame from a worker.
+ * Rejects the connection if the frame is malformed or fails protocol validation.
+ * Returns the parsed message on success or `{ ok: false }` if the connection was closed.
+ */
 function parseAndValidateWorkerFrame(
   context: ServerContext,
   ws: ServerWebSocket<WebSocketData>,
