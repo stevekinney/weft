@@ -182,6 +182,21 @@ describe('handleTaskResultRequest', () => {
     expect(result).toBeNull();
   });
 
+  it('returns 503 when startup task-ledger recovery failed', async () => {
+    const rejection = Promise.reject(new Error('recovery scan failed'));
+    rejection.catch(() => {});
+    const context = { ...createMinimalContext(), taskLedgerRecovery: { ready: rejection } };
+    const options = createMinimalOptions();
+    const request = makePostRequest({ operationId: 'op-1', status: 'completed', value: 1 });
+
+    const response = await handleTaskResultRequest(context, options, request, makeUrl());
+
+    expect(response?.status).toBe(503);
+    const body = (await response?.json()) as { error?: string };
+    expect(body.error).toContain('Startup task-ledger recovery failed');
+    expect(body.error).toContain('recovery scan failed');
+  });
+
   it('returns null when path does not match task result pattern', async () => {
     const context = createMinimalContext();
     const options = createMinimalOptions();
@@ -502,6 +517,24 @@ describe('handleTaskPollRequest', () => {
 
     expect(response?.status).toBe(403);
     expect(await response?.json()).toEqual({ error: 'Forbidden' });
+  });
+
+  it('returns 503 when startup task-ledger recovery failed', async () => {
+    const rejection = Promise.reject(new Error('recovery scan failed'));
+    rejection.catch(() => {});
+    const context = { ...minimalServerContext(), taskLedgerRecovery: { ready: rejection } };
+    const options = minimalServeOptions();
+    const request = new Request('http://localhost/v1/tasks/default?activity=charge&timeout=0', {
+      method: 'GET',
+    });
+    const url = new URL(request.url);
+
+    const response = await handleTaskPollRequest(context, options, request, url, WORKER_PRINCIPAL);
+
+    expect(response?.status).toBe(503);
+    const body = (await response?.json()) as { error?: string };
+    expect(body.error).toContain('Startup task-ledger recovery failed');
+    expect(body.error).toContain('recovery scan failed');
   });
 
   it('threads request.signal into poll so a disconnected client settles with 204', async () => {

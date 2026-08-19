@@ -5,7 +5,6 @@
  * @internal
  */
 
-import { decode } from '../core/codec.ts';
 import type { Engine } from '../core/engine.ts';
 import { getEnginePayloadSizeMaxBytes } from '../core/engine/payload-size-policy.ts';
 import { createMcpSessionManager } from '../mcp/session.ts';
@@ -37,13 +36,13 @@ import {
   type EventBroadcastingHandle,
 } from './runtime/event-broadcasting.ts';
 import { shutdownAllWorkers } from './runtime/shutdown.ts';
+import { runTaskLedgerRecovery } from './runtime/task-ledger-recovery.ts';
 import {
   consumeManualTaskReconciliationForTesting as consumeManual,
   reconcileOrphanedRecords,
   scanExpiredTasks,
 } from './runtime/task-reconciliation.ts';
 import { DEFAULT_MAX_STREAM_CONNECTIONS_PER_WORKFLOW } from './runtime/websocket-stream.ts';
-import { isInflightRecord, withRetry } from './runtime/websocket-worker.ts';
 import { TaskQueue } from './task-queue.ts';
 import { createWorkflowEventFeed } from './workflow-event-feed.ts';
 
@@ -209,6 +208,15 @@ export function resolveNetworkConfig(options: ServeOptions): ResolvedNetworkConf
 /**
  * Builds the initial `ServerContext` from resolved options. All mutable state
  * maps and the metrics collector are allocated here so `serve()` stays linear.
+ *
+ * Also starts startup task-ledger recovery (WFT-23) against the fully
+ * constructed context before returning it. Recovery runs asynchronously —
+ * this function itself stays synchronous, same as `serve()` — but its
+ * outcome is captured into `context.taskLedgerRecovery.ready` immediately,
+ * before any request can reach a gated entry point, rather than in a
+ * separate call `serve()` makes later (as the retired `restoreInflightTasks`
+ * required): starting it here minimizes the window between context
+ * construction and recovery beginning.
  */
 export function buildServerContext(
   options: ResolvedServeOptions,
@@ -228,7 +236,26 @@ export function buildServerContext(
   // behavior.
   const engine = options.engine as Engine;
   const eventFeedBackend = createEngineEventFeedBackend(engine);
-  return {
+
+  // Deferred-promise gate for startup task-ledger recovery. Constructed
+  // before `context` so it can be embedded in the object literal below, then
+  // wired to the actual recovery run once `context` itself exists (recovery
+  // needs the live registry/deadlineTracker/taskQueue to rehydrate into).
+  // Mirrors `ServerHolder`'s same bootstrapping pattern elsewhere in this
+  // file: a container the value isn't ready to fill in yet.
+  let resolveTaskLedgerRecovery!: () => void;
+  let rejectTaskLedgerRecovery!: (error: unknown) => void;
+  const taskLedgerRecoveryReady = new Promise<void>((resolve, reject) => {
+    resolveTaskLedgerRecovery = resolve;
+    rejectTaskLedgerRecovery = reject;
+  });
+  // Attach a handler immediately so a recovery failure before the first
+  // gated caller awaits `context.taskLedgerRecovery.ready` never surfaces as
+  // an unhandled rejection — every later `await` on the same promise still
+  // observes the rejection independently.
+  taskLedgerRecoveryReady.catch(() => {});
+
+  const context: ServerContext = {
     registry: workerRegistry,
     taskQueue,
     workerSockets: new Map(),
@@ -272,7 +299,16 @@ export function buildServerContext(
     scanRunning: false,
     processingOperations: new Set(),
     reconciliationRunning: false,
+    taskLedgerRecovery: { ready: taskLedgerRecoveryReady },
+    stopping: false,
   };
+
+  void runTaskLedgerRecovery(context, options).then(
+    resolveTaskLedgerRecovery,
+    rejectTaskLedgerRecovery,
+  );
+
+  return context;
 }
 
 /**
@@ -406,6 +442,11 @@ export function registerStackDisposers(
 
   // Registered last — disposed first: clear all intervals and pending timers.
   stack.defer(() => {
+    // Set first: a still-running startup recovery scan (or a reconciliation
+    // pass racing shutdown) checks this before arming a new timer or issuing
+    // a durable write, so it stops making progress instead of doing work
+    // against a stopped server after this disposer returns.
+    context.stopping = true;
     if (visibilityPollHandle !== undefined) clearInterval(visibilityPollHandle);
     if (reconciliationHandle !== undefined) clearInterval(reconciliationHandle);
     context.deadlineTracker.clear();
@@ -428,73 +469,4 @@ export function registerStackDisposers(
     // Release the rate limiter's per-key window map.
     context.rateLimiter?.dispose();
   });
-}
-
-/**
- * Restores persisted in-flight task records from storage into the in-memory
- * context. Records whose deadline has already elapsed are removed from storage;
- * the engine will retry them on the next dispatch cycle.
- */
-export function restoreInflightTasks(context: ServerContext, options: ServeOptions): void {
-  void withRetry(async () => {
-    for await (const [key, value] of options.engine.storage.scan('op:inflight:')) {
-      const decoded = decode(value);
-      if (!isInflightRecord(decoded)) {
-        console.error(`[weft] Corrupt inflight record at "${key}" during restore — skipping`);
-        continue;
-      }
-      const record = decoded;
-      const now = Date.now();
-      if (record.deadline <= now) {
-        // Expired while the server was down — remove from storage.
-        void options.engine.storage.delete(key);
-        continue;
-      }
-      // Still within the visibility window — use remaining time so the
-      // deadline matches the original persisted value. Then patch the
-      // stored visibilityTimeout to the original value so future heartbeat
-      // extensions use the full duration, not the diminished remainder.
-      const remaining = record.deadline - now;
-      // Carry the durable record's attemptToken into the rehydrated registry
-      // entry so the stale-attempt guard survives a server restart.
-      context.registry.assignTask(
-        record.workerId,
-        record.operationId,
-        remaining,
-        undefined,
-        record.attemptToken,
-      );
-      context.deadlineTracker.add({ operationId: record.operationId, deadline: record.deadline });
-      const tracked = context.registry
-        .getWorkerTasks(record.workerId)
-        .find((t) => t.operationId === record.operationId);
-      if (tracked) {
-        tracked.visibilityTimeout = record.visibilityTimeout;
-      }
-      // Rebuild workflow→operations reverse index so WorkflowCancelledEvent
-      // can propagate cancels to tasks restored from storage after a restart.
-      rebuildWorkflowIndex(context, record.operationId, record.workflowId);
-    }
-  }, 'restore in-flight tasks from storage').catch((error) => {
-    console.error('[weft] Failed to restore in-flight tasks from storage:', error);
-  });
-}
-
-/**
- * Rebuilds the workflow→operations reverse index for a single restored
- * in-flight record. Only invoked when the record has a `workflowId`.
- */
-function rebuildWorkflowIndex(
-  context: ServerContext,
-  operationId: string,
-  workflowId: string | undefined,
-): void {
-  if (!workflowId) return;
-  let opIds = context.workflowOperations.get(workflowId);
-  if (!opIds) {
-    opIds = new Set();
-    context.workflowOperations.set(workflowId, opIds);
-  }
-  opIds.add(operationId);
-  context.operationToWorkflow.set(operationId, workflowId);
 }

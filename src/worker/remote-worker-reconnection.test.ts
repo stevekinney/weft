@@ -752,11 +752,13 @@ process.on('SIGINT', () => void stop(0));
     const dispatchResponse = await fetch(`${testDispatchUrl}/__test__/dispatch`, {
       method: 'POST',
       // visibilityTimeout has to comfortably exceed the subprocess restart
-      // wall-clock window. `restoreInflightTasks` deletes inflight records
-      // whose deadline has elapsed while the server was down; a tight
-      // timeout here would result in the task being silently dropped on
-      // reboot under CI load. 5_000ms gives Bun.spawn + serve + restore the
-      // time it needs even on a slow runner.
+      // wall-clock window. Startup task-ledger recovery (`runTaskLedgerRecovery`)
+      // requeues a `leased` record whose deadline has already elapsed while
+      // the server was down rather than restoring it as still-owned; a tight
+      // timeout here would let that requeue race the reboot instead of
+      // exercising the "still within its lease" restore path this scenario
+      // means to test. 5_000ms gives Bun.spawn + serve + recovery the time it
+      // needs even on a slow runner.
       body: JSON.stringify({ operationId, value: 'restart-value', visibilityTimeout: 5_000 }),
       headers: { 'content-type': 'application/json' },
     });
@@ -783,8 +785,9 @@ process.on('SIGINT', () => void stop(0));
     await workerB.nextServerMessage((m) => m.type === 'registerAck', { timeoutMs: 2_000 });
 
     // worker-A's task carries the original visibilityTimeout (5_000ms). After
-    // reboot, `restoreInflightTasks` keeps the inflight record alive until
-    // that deadline elapses, at which point the scanner re-dispatches to
+    // reboot, startup task-ledger recovery rehydrates the still-`leased`
+    // record's registry ownership and deadline tracking until that deadline
+    // elapses, at which point the visibility scanner re-dispatches to
     // worker-B. Wait window must comfortably exceed the remaining deadline
     // budget (post-reboot elapsed time + grace) — 15_000ms is conservative.
     const dispatchToB = await workerB.nextServerMessage(isTask, { timeoutMs: 15_000 });

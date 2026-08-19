@@ -198,6 +198,7 @@ interface WeftServer extends AsyncDisposable {
   readonly url: string;
   readonly registry: WorkerRegistry;
   readonly taskQueue: TaskQueue;
+  readonly ready: Promise<void>;
   stop(): Promise<void>;
   dispatchTask(task: TaskDispatch): Promise<boolean>;
   shutdownWorker(workerId: string, options?: { timeoutMs?: number }): Promise<boolean>;
@@ -205,6 +206,8 @@ interface WeftServer extends AsyncDisposable {
   cancelTask(operationId: string): boolean;
 }
 ```
+
+`ready` resolves once startup task-ledger recovery has reconstructed every non-terminal task's in-memory registry, deadline-tracker, and task-queue state from durable storage after a restart; it rejects if the recovery scan itself failed. `dispatchTask`, long-poll claim/result handling, and worker registration all await this internally before touching the ledger, so a scan failure blocks new task claims and worker registrations with an actionable error rather than silently continuing with partial indexes. Awaiting `ready` explicitly is optional — it exists for callers (health checks, orchestration) that want to observe readiness without dispatching a probe task.
 
 ```typescript partial
 {

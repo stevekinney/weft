@@ -16,6 +16,18 @@ import type { WorkflowEventFeed } from '../workflow-event-feed.ts';
 import type { ResolvedCorsPolicy } from './cors.ts';
 
 /**
+ * Startup task-ledger recovery gate (WFT-23). `ready` resolves once every
+ * non-terminal ledger record has been reconstructed into the in-memory
+ * registry, deadline tracker, and task queue indexes; it rejects
+ * (permanently — a settled promise replays the same outcome to every future
+ * awaiter) if the recovery scan itself failed. Task-plane entry points
+ * (`dispatchTaskImpl`, long-poll claim/result, and worker registration) await
+ * this before touching the ledger, so a scan failure blocks new claims with
+ * an actionable error instead of silently continuing with partial indexes.
+ */
+export type TaskLedgerRecoveryGate = Readonly<{ ready: Promise<void> }>;
+
+/**
  * Internal closure state for a single `serve()` invocation.
  *
  * Extracted runtime helpers receive this record explicitly so they do not
@@ -79,4 +91,14 @@ export interface ServerContext {
   readonly processingOperations: Set<string>;
   /** Mutex: prevents concurrent reconciliation scans from running simultaneously. */
   reconciliationRunning: boolean;
+  /** Startup task-ledger recovery gate — see {@link TaskLedgerRecoveryGate}. */
+  readonly taskLedgerRecovery: TaskLedgerRecoveryGate;
+  /**
+   * Set once `server.stop()`'s timer-clearing disposer has run. Startup
+   * recovery's scan loop and `scheduleDelayedDispatch` both check this before
+   * doing further work so a still-running recovery scan (or a reconciliation
+   * pass racing shutdown) cannot arm a new timer or issue a durable write
+   * after `pendingTimers` has already been cleared.
+   */
+  stopping: boolean;
 }

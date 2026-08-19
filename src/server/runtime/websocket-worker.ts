@@ -33,13 +33,6 @@ function isWorkerConnection(pathname: string): boolean {
   return WORKER_STREAM_RE.test(pathname);
 }
 
-/**
- * Re-exported for `serve-internals.ts`'s startup restore, which still reads
- * pre-cutover `InflightRecord`s even though nothing in this module writes
- * that shape anymore.
- */
-export { isInflightRecord } from '../task-state.ts';
-
 export { withRetry } from './retry.ts';
 
 function resolveTaskResultStatus(message: TaskResultMessage): 'completed' | 'failed' {
