@@ -10,6 +10,7 @@ import {
   createRealDependencies,
   discoverTestFiles,
   extractJunitFailureExcerpts,
+  forceKillProcessTree,
   formatFailingTests,
   FULL_SUITE_TIMEOUT_MS,
   ISOLATION_SKIP_FILE_THRESHOLD,
@@ -569,6 +570,27 @@ ${fileSuite('src/c.test.ts', testcase({ name: 'also completed', file: 'src/c.tes
 });
 
 describe('real dependency helpers', () => {
+  it('forceKillProcessTree uses taskkill to terminate a Windows process tree', async () => {
+    const killDirectProcess = mock(() => {});
+    const executeCommand = mock(async (_command: string[]) => {});
+
+    await forceKillProcessTree(1234, 'win32', killDirectProcess, executeCommand);
+
+    expect(executeCommand).toHaveBeenCalledWith(['taskkill', '/PID', '1234', '/T', '/F']);
+    expect(killDirectProcess).not.toHaveBeenCalled();
+  });
+
+  it('forceKillProcessTree falls back to the direct process when taskkill fails', async () => {
+    const killDirectProcess = mock(() => {});
+    const executeCommand = mock(async (_command: string[]) => {
+      throw new Error('taskkill unavailable');
+    });
+
+    await forceKillProcessTree(1234, 'win32', killDirectProcess, executeCommand);
+
+    expect(killDirectProcess).toHaveBeenCalledTimes(1);
+  });
+
   const cleanupPaths = new Set<string>();
 
   afterEach(async () => {

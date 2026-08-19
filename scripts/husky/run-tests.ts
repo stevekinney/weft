@@ -154,7 +154,7 @@ function normalizedTestPath(file: string): string {
 /**
  * Discover the test files the pre-commit full-suite step runs: every
  * `{src,tests}/**\/*.test.ts` except `/benchmarks/` files and the
- * {@link LOAD_SENSITIVE_TEST_PATHS} entries.
+ * {@link LOAD_SENSITIVE_TEST_PATHS} and {@link BROWSER_SMOKE_TEST_PATHS} entries.
  * Shared by the hook and its verification so the two cannot drift.
  */
 export async function discoverTestFiles(): Promise<string[]> {
@@ -478,6 +478,44 @@ async function readCapturedStream(
   }
 }
 
+type ProcessTreeCommandExecutor = (command: string[]) => Promise<void>;
+
+async function executeProcessTreeCommand(command: string[]): Promise<void> {
+  const subprocess = Bun.spawn(command, { stdout: 'ignore', stderr: 'ignore' });
+  const exitCode = await subprocess.exited;
+  if (exitCode !== 0) throw new Error(`${command[0]} exited with code ${exitCode}`);
+}
+
+/** Force-kill a subprocess and its descendants on the current platform. */
+export async function forceKillProcessTree(
+  processId: number,
+  platform: NodeJS.Platform,
+  killDirectProcess: () => void,
+  executeCommand: ProcessTreeCommandExecutor = executeProcessTreeCommand,
+): Promise<void> {
+  if (platform === 'win32') {
+    try {
+      await executeCommand(['taskkill', '/PID', String(processId), '/T', '/F']);
+      return;
+    } catch {
+      // Fall through to the direct-process best effort when taskkill is unavailable.
+    }
+  } else {
+    try {
+      process.kill(-processId, 'SIGKILL');
+      return;
+    } catch {
+      // Fall through when process-group signaling is unavailable or the group exited.
+    }
+  }
+
+  try {
+    killDirectProcess();
+  } catch {
+    // The process may have exited between the tree-kill attempt and this fallback.
+  }
+}
+
 export function createRealDependencies(): RunTestSuiteDependencies {
   return {
     runCommand: async (args, timeoutMs) => {
@@ -494,9 +532,14 @@ export function createRealDependencies(): RunTestSuiteDependencies {
       const stderrReader = subprocess.stderr.getReader();
       const stdout = readCapturedStream(stdoutReader);
       const stderr = readCapturedStream(stderrReader);
+      let windowsTreeTerminationPromise: Promise<void> | undefined;
       const signalProcessGroup = (signal: NodeJS.Signals): void => {
         if (process.platform === 'win32') {
-          subprocess.kill(signal);
+          windowsTreeTerminationPromise ??= forceKillProcessTree(
+            subprocess.pid,
+            process.platform,
+            () => subprocess.kill(signal),
+          );
           return;
         }
         try {
@@ -509,21 +552,22 @@ export function createRealDependencies(): RunTestSuiteDependencies {
       let interruptedSignal: 'SIGINT' | 'SIGTERM' | undefined;
       let forceKill: ReturnType<typeof setTimeout> | undefined;
       let forceKillPromise: Promise<void> | undefined;
-      const forceKillProcessGroup = (): void => {
-        signalProcessGroup('SIGKILL');
+      const forceKillProcessGroup = async (): Promise<void> => {
+        await forceKillProcessTree(subprocess.pid, process.platform, () =>
+          subprocess.kill('SIGKILL'),
+        );
         void stdoutReader.cancel();
         void stderrReader.cancel();
       };
       const scheduleForceKill = (): void => {
         forceKillPromise ??= new Promise((resolve) => {
           forceKill = setTimeout(() => {
-            forceKillProcessGroup();
-            resolve();
+            void forceKillProcessGroup().then(resolve);
           }, TERMINATION_GRACE_MS);
         });
       };
       const processGroupIsAlive = (): boolean => {
-        if (process.platform === 'win32') return true;
+        if (process.platform === 'win32') return false;
         try {
           process.kill(-subprocess.pid, 0);
           return true;
@@ -558,6 +602,7 @@ export function createRealDependencies(): RunTestSuiteDependencies {
           stdout,
           stderr,
         ]);
+        if (windowsTreeTerminationPromise !== undefined) await windowsTreeTerminationPromise;
         if (forceKillPromise !== undefined && processGroupIsAlive()) {
           await forceKillPromise;
           await waitForProcessGroupExit();

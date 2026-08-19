@@ -39,7 +39,8 @@ jobs:
             --path-ignore-patterns 'examples/checkout/**' \
             --path-ignore-patterns 'src/service-worker/service-worker-browser.test.ts' \
             --path-ignore-patterns 'src/storage/indexeddb-browser.test.ts' \
-            --path-ignore-patterns 'src/storage/web-extension-browser.test.ts'
+            --path-ignore-patterns 'src/storage/web-extension-browser.test.ts' \
+            --path-ignore-patterns 'src/client/http-client-browser.test.ts'
   # Keep adjusted coverage separate from the ordinary test job. Coverage mode
   # deliberately skips timing-sensitive cases that the ordinary job still runs,
   # while this job enforces the LCOV-backed 100 percent adjusted threshold.

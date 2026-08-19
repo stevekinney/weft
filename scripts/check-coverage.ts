@@ -1746,8 +1746,8 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
         // descendant SIGKILL behavior, but those paths execute in child Bun
         // processes outside the parent LCOV report. The Windows branch and the
         // process-group fallback are platform-specific defensive paths.
-        functions: 6,
-        lines: new Set([499, 500, 504, 541, 542, 543, 579]),
+        functions: 9,
+        lines: new Set([478, 483, 484, 485, 538, 539, 540, 542, 543, 547, 556, 585, 586, 587, 624]),
       },
     ],
     ['src/cli/api-arguments.ts', { lines: new Set([55, 58]) }],
