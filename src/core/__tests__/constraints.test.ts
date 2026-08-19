@@ -6,7 +6,7 @@
  * per `onViolation`: 'fail' | 'compensate' | 'warn'.
  */
 
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, spyOn } from 'bun:test';
 
 import type { ConstraintCheckState } from '../constraint.ts';
 import { constraint } from '../constraint.ts';
@@ -294,6 +294,39 @@ describe('constraint primitive', () => {
     expect(violationEvents[0]!.onViolation).toBe('warn');
 
     engine[Symbol.dispose]();
+  });
+
+  it('treats a throwing constraint check as a warned violation', async () => {
+    const warning = spyOn(console, 'warn').mockImplementation(() => {});
+    const engine = new Engine();
+    const throwingConstraint = constraint({
+      name: 'throwing-check',
+      scope: 'advisory',
+      check: () => {
+        throw new Error('constraint dependency unavailable');
+      },
+      onViolation: 'warn',
+    });
+    const step = makeActivity({ name: 'throwing-check-step', execute: () => 'done' });
+    const constrainedWorkflow = workflow({
+      name: 'throwing-check-workflow',
+      constraints: [throwingConstraint],
+    }).execute(async function* (ctx: WorkflowContext) {
+      return yield* ctx.saga([{ definition: step, input: undefined }]);
+    });
+    engine.register(constrainedWorkflow);
+
+    try {
+      const handle = await engine.start('throwing-check-workflow', null);
+      await expect(handle.result()).resolves.toBe('done');
+      expect(warning).toHaveBeenCalledWith(
+        '[weft] Constraint "throwing-check" check() threw an error:',
+        expect.objectContaining({ message: 'constraint dependency unavailable' }),
+      );
+    } finally {
+      warning.mockRestore();
+      engine[Symbol.dispose]();
+    }
   });
 
   // ---------------------------------------------------------------------------

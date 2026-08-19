@@ -12,9 +12,12 @@ import { buildIndexOperations } from '../search-attributes.ts';
 import type { WorkflowState } from '../types.ts';
 import { workflow } from '../types/workflow-function.ts';
 import { getInternals } from './internals.ts';
+import { assertWorkflowListScanWithinCap, streamWorkflowStateBatches } from './listing.ts';
 import {
+  MAX_LIST_SCAN_ROWS,
   WORKFLOW_VISIBILITY_INDEX_VERSION,
   WORKFLOW_VISIBILITY_WATERMARK_CACHE_TTL_MS,
+  WorkflowListScanCapExceededError,
 } from './workflow-indexes.ts';
 
 const applicationFailureWorkflow = workflow({ name: 'application-failure' }).execute(
@@ -93,6 +96,71 @@ async function createFailedWorkflows(engine: Engine): Promise<void> {
 }
 
 describe('resolveListCandidateIds', () => {
+  it('routes every visibility-index dimension and supports an unconstrained indexed list', async () => {
+    const storage = new ScanCountingStorage();
+    const engine = new Engine({ storage });
+    const indexedWorkflow = workflow({ name: 'indexed-dimensions' }).execute(async function* (ctx) {
+      yield* ctx.waitForSignal('finish');
+      return 'done';
+    });
+    engine.register(indexedWorkflow);
+
+    try {
+      await engine.start('indexed-dimensions', null, {
+        id: 'indexed-dimensions-1',
+        executionTimeout: 60_000,
+      });
+      const stateBytes = await storage.get(KEYS.workflow('indexed-dimensions-1'));
+      expect(stateBytes).not.toBeNull();
+      const state = decode(stateBytes!) as WorkflowState;
+      expect(state.executionDeadline).toBeDefined();
+
+      const report = await runWorkflowVisibilityBackfill(storage, {
+        onWatermarkWritten: () => {
+          getInternals(engine).workflowVisibilityWatermark = undefined;
+        },
+      });
+      expect(report.watermarkWritten).toBe(true);
+      storage.resetObservations();
+
+      const result = await engine.list({
+        type: 'indexed-dimensions',
+        createdAt: { gte: state.createdAt, lte: state.createdAt },
+        updatedAt: { gte: state.updatedAt, lte: state.updatedAt },
+        executionDeadline: {
+          gte: state.executionDeadline!,
+          lte: state.executionDeadline!,
+        },
+        idPrefix: 'indexed-dimensions-',
+      });
+      const unconstrained = await engine.list();
+
+      expect(result.items.map((item) => item.id)).toEqual(['indexed-dimensions-1']);
+      expect(unconstrained.items.map((item) => item.id)).toEqual(['indexed-dimensions-1']);
+      expect(storage.countScans('wf:')).toBe(1);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('enforces the workflow list scan cap at the exact boundary', () => {
+    expect(() => assertWorkflowListScanWithinCap(MAX_LIST_SCAN_ROWS)).not.toThrow();
+    expect(() => assertWorkflowListScanWithinCap(MAX_LIST_SCAN_ROWS + 1)).toThrow(
+      WorkflowListScanCapExceededError,
+    );
+  });
+
+  it('returns no bulk batches when the requested window is already exhausted', async () => {
+    const engine = new Engine();
+    try {
+      expect(
+        await Array.fromAsync(streamWorkflowStateBatches(getInternals(engine), { limit: 0 })),
+      ).toEqual([]);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
   it('caches visibility watermark reads across list and aggregate until backfill invalidates it', async () => {
     const storage = new ScanCountingStorage();
     const engine = new Engine({ storage });

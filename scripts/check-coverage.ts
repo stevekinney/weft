@@ -296,15 +296,6 @@ const COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer('COVERAGE_ALLOWANCE_OVE
     },
   ],
   [
-    'src/core/engine/operations-state.ts',
-    {
-      reason:
-        'The remaining operation-state lines are defensive invariant failures for state combinations prevented by the operation coordinator.',
-      lines: new Set([44, 45, 46, 47, 48, 49, 50, 51, 52]),
-      requireUncoveredLines: true,
-    },
-  ],
-  [
     'src/core/engine/queries.ts',
     {
       reason:
@@ -629,25 +620,6 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       },
     ],
     [
-      'src/core/engine/constraints.ts',
-      {
-        reason:
-          'The remaining constraint lines guard an invalid internal option combination rejected earlier by engine option validation.',
-        lines: new Set([93, 94, 95]),
-        requireUncoveredLines: true,
-      },
-    ],
-    [
-      'src/core/engine/list-candidate-resolution.ts',
-      {
-        reason:
-          'The remaining candidate-resolution branches are storage-index inconsistency fallbacks exercised structurally but unreachable from valid indexed writes.',
-        functions: 4,
-        lines: new Set([53, 54, 55, 56, 60, 61, 62, 63, 67, 68, 69, 70, 74, 75, 76, 77, 159]),
-        requireUncoveredLines: true,
-      },
-    ],
-    [
       'src/core/engine/termination/finalizer-claim.ts',
       {
         reason:
@@ -661,16 +633,6 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
         reason:
           'The residual cron-occurrence line handles an invalid calendar rollover excluded by validated cron fields.',
         lines: new Set([217]),
-        requireUncoveredLines: true,
-      },
-    ],
-    [
-      'src/core/search-attributes.ts',
-      {
-        reason:
-          'The remaining search-attribute branches reject runtime value kinds that the public attribute schema and decoder exclude.',
-        functions: 1,
-        lines: new Set([162, 163, 202, 203, 204, 205, 206]),
         requireUncoveredLines: true,
       },
     ],
@@ -1050,25 +1012,6 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
         requireUncoveredLines: true,
       },
     ],
-    [
-      'src/server/operations/worker-drain.ts',
-      {
-        reason:
-          'Transport disconnect and concurrency exits are behaviorally tested, but Bun does not deterministically attribute these residual paths.',
-        functions: 2,
-        lines: new Set([256, 263, 264, 265, 269, 270, 271, 272, 273]),
-        requireUncoveredLines: true,
-      },
-    ],
-    [
-      'src/server/runtime/request-gate.ts',
-      {
-        reason:
-          'The residual request-gate lines are disconnect cleanup after an admitted request has already settled.',
-        lines: new Set([118, 119]),
-        requireUncoveredLines: true,
-      },
-    ],
   ],
 );
 
@@ -1116,15 +1059,6 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
         reason:
           'Process-entry and failure-exit behavior runs in child processes whose hits are not attributed to the parent Bun LCOV report.',
         lines: new Set([76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87]),
-        requireUncoveredLines: true,
-      },
-    ],
-    [
-      'src/core/checkpoint/serialization.ts',
-      {
-        reason:
-          'The remaining serializer branches reject malformed checkpoint tags and payload shapes that cannot be emitted by registered serializers.',
-        lines: new Set([147, 179, 184, 185, 186, 187, 188, 236, 237, 238]),
         requireUncoveredLines: true,
       },
     ],
@@ -1257,8 +1191,8 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/core/engine/listing.ts',
       {
         reason:
-          'The remaining listing lines are stale-index and malformed-summary fallbacks unreachable from valid indexed workflow writes.',
-        lines: new Set([84, 134, 235, 255]),
+          'The remaining line is the equality tiebreaker after both strict id-order branches have been exercised; distinct workflow ids cannot reach it.',
+        lines: new Set([237]),
         requireUncoveredLines: true,
       },
     ],
@@ -1354,24 +1288,6 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       },
     ],
     [
-      'src/server/operations/get-task-diagnostics.ts',
-      {
-        reason:
-          'The remaining diagnostic lines are queue and worker race fallbacks for records disappearing during the bounded snapshot.',
-        lines: new Set([304, 305, 306, 307, 308]),
-        requireUncoveredLines: true,
-      },
-    ],
-    [
-      'src/server/operations/update-workflow.ts',
-      {
-        reason:
-          'The remaining update lines handle a terminal transition racing the validated update commit.',
-        lines: new Set([93, 94, 95, 96, 97, 98]),
-        requireUncoveredLines: true,
-      },
-    ],
-    [
       'src/server/rest-body.ts',
       {
         reason:
@@ -1385,7 +1301,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/server/runtime/task-result-resolution.ts',
       {
         reason:
-          'The residual task-result line guards an internal resolution variant excluded by the worker protocol decoder.',
+          'A direct unit test calls taskResultPayloadSizeError with an oversized completion and asserts the returned PayloadSizeExceededError, but Bun LCOV still reports the catch-block closing brace and one aggregate function as missed.',
         functions: 1,
         lines: new Set([42]),
         requireUncoveredLines: true,

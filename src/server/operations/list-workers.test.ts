@@ -410,6 +410,76 @@ describe('worker drain operations', () => {
     expect(workerRegistry.getWorkerSummaries(2000)[0]?.health).toBe('active');
   });
 
+  it('rejects primitive worker drain JSON bodies', async () => {
+    engine = createOperationTestEngine();
+    const workerRegistry = new WorkerRegistry();
+    workerRegistry.register({
+      id: 'worker-1',
+      queue: 'default',
+      activities: ['charge'],
+      concurrency: 2,
+    });
+
+    const response = await handleRequest(
+      new Request('http://localhost/v1/workers/worker-1/drain', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '42',
+      }),
+      engine,
+      {
+        operationRegistry: createOperationRegistry([
+          createDrainWorkerOperation({ workerRegistry, clock: () => 1000 }),
+        ]),
+        restBindings: [createDrainWorkerRestBinding()],
+        ...systemAdminAuthContext(),
+      },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: '' });
+    expect(workerRegistry.getWorkerSummaries(2000)[0]?.health).toBe('active');
+  });
+
+  it('reports discovery-only and missing-worker drain failures', async () => {
+    engine = createOperationTestEngine();
+    const principal = principalFromApiKey({ subject: 'test', scopes: ['system:admin'] });
+
+    const discoveryOnlyResult = await executeOperation(
+      'weft.workers.drain',
+      { workerId: 'missing-worker' },
+      {
+        principal,
+        engine,
+        transport: 'jsonRpcStdio',
+        registry: createOperationRegistry([createDrainWorkerOperation()]),
+      },
+    );
+    expect(discoveryOnlyResult.ok).toBe(false);
+    if (discoveryOnlyResult.ok) throw new Error('expected discovery-only rejection');
+    expect(discoveryOnlyResult.fault).toMatchObject({ code: 'EngineFailure' });
+
+    const missingWorkerResult = await executeOperation(
+      'weft.workers.drain',
+      { workerId: 'missing-worker' },
+      {
+        principal,
+        engine,
+        transport: 'jsonRpcStdio',
+        registry: createOperationRegistry([
+          createDrainWorkerOperation({ workerRegistry: new WorkerRegistry() }),
+        ]),
+      },
+    );
+    expect(missingWorkerResult.ok).toBe(false);
+    if (missingWorkerResult.ok) throw new Error('expected missing-worker rejection');
+    expect(missingWorkerResult.fault).toEqual({
+      code: 'NotFound',
+      message: 'Worker not found: missing-worker',
+      data: { resource: 'worker', identifier: 'missing-worker' },
+    });
+  });
+
   it('marks and clears deployment drain state for all matching workers', async () => {
     engine = createOperationTestEngine();
     const workerRegistry = new WorkerRegistry();
