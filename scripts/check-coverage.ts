@@ -1371,16 +1371,6 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       },
     ],
     [
-      'src/mcp/protocol.ts',
-      {
-        reason:
-          'The remaining protocol branches reject malformed JSON-RPC shapes already excluded by MCP request boundary validation.',
-        functions: 4,
-        lines: new Set([92, 97, 98, 99, 104, 109]),
-        requireUncoveredLines: true,
-      },
-    ],
-    [
       'src/server/authentication/index.ts',
       {
         reason:
