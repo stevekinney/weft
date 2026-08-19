@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { waitForCondition } from '../../src/testing/fake-timers.test-support.ts';
 import {
   BROWSER_SMOKE_TEST_PATHS,
   buildTestCommand,
@@ -736,11 +737,11 @@ await createRealDependencies().runCommand([
         'utf8',
       );
       const fixture = Bun.spawn(['bun', fixturePath], { stdout: 'ignore', stderr: 'ignore' });
-      const deadline = Date.now() + 2_000;
-      while (!(await Bun.file(processIdsPath).exists())) {
-        if (Date.now() >= deadline) throw new Error('Signal-forwarding fixture did not start');
-        await Bun.sleep(10);
-      }
+      await waitForCondition(() => Bun.file(processIdsPath).exists(), {
+        timeoutMs: 2_000,
+        intervalMs: 10,
+        label: 'the signal-forwarding fixture to write its process-ids file',
+      });
       const processIdsText = await Bun.file(processIdsPath).text();
       const processIds = processIdsText
         .trim()
