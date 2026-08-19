@@ -179,6 +179,13 @@ async function buildWorkflowContract(
   const workflowVersion = workflowVersionsByType.get(workflowType) as string;
 
   const contractHash = await sha256Hex(canonicalJsonStringify(workflowContractPayload(entry)));
+  // Deliberately the FULL entry (description and tags included), not
+  // workflowContractPayload(entry) — contractHash answers "which public
+  // payload contract," workflowRevision answers "which exact definition was
+  // loaded" (see the manifest field table in worker/manifest/types.ts), a
+  // strictly broader identity. A description/tag edit changing
+  // workflowRevision but not contractHash is the intended, distinguishing
+  // behavior between these two fields, not drift in either one.
   const workflowRevision = await sha256Hex(
     canonicalJsonStringify({ ...entry, version: workflowVersion }),
   );
