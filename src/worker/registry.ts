@@ -11,6 +11,11 @@ import {
 } from './registry/drain.ts';
 import { FairShareCounters } from './registry/fair-share.ts';
 import {
+  appendRegistrationRejection,
+  recentRegistrationRejections,
+  type RegistrationRejectionEntry,
+} from './registry/rejections.ts';
+import {
   matchesWorkerCapabilities,
   pickFairShare,
   pickLeastLoaded,
@@ -35,6 +40,7 @@ import type {
   WorkerSummary,
 } from './registry/types.ts';
 
+export type { RegistrationRejectionEntry } from './registry/rejections.ts';
 export type { WorkerDeploymentSummary } from './registry/summary.ts';
 export type {
   InFlightTask,
@@ -94,6 +100,8 @@ export class WorkerRegistry {
   #fairShareCounts: FairShareCounters;
   /** One `(deploymentName, buildId)` pair never registers two artifact digests. */
   #deploymentConsistency: DeploymentConsistencyGuard;
+  /** Bounded, in-memory log of declined `register` attempts (WFT-29). */
+  #rejections: RegistrationRejectionEntry[];
 
   constructor(options?: WorkerRegistryOptions) {
     this.#workers = new Map();
@@ -103,6 +111,7 @@ export class WorkerRegistry {
     this.#roundRobinCursor = new Map();
     this.#fairShareCounts = new FairShareCounters();
     this.#deploymentConsistency = new DeploymentConsistencyGuard();
+    this.#rejections = [];
   }
 
   /** The routing policy this registry was configured with. */
@@ -368,6 +377,16 @@ export class WorkerRegistry {
   /** Get all registered workers. */
   getAll(): WorkerInfo[] {
     return [...this.#workers.values()];
+  }
+
+  /** Record one declined `register` attempt, evicting the oldest once the bounded log is full. */
+  recordRejection(entry: RegistrationRejectionEntry): void {
+    appendRegistrationRejection(this.#rejections, entry);
+  }
+
+  /** Return the `limit` most recently recorded rejections, newest first. */
+  getRecentRejections(limit: number): RegistrationRejectionEntry[] {
+    return recentRegistrationRejections(this.#rejections, limit);
   }
 
   /** Mark one connected worker as draining so routing excludes it from new tasks. */

@@ -35,8 +35,10 @@ export const CATALOG_OPERATION_NAMES = [
   'weft.updates.result.get',
   'weft.worker.deployments.drain',
   'weft.worker.deployments.resume',
+  'weft.workers.diagnostics',
   'weft.workers.drain',
   'weft.workers.list',
+  'weft.workers.rejections',
   'weft.workers.resume',
   'weft.workflows.activities.pending.list',
   'weft.workflows.aggregate',
@@ -102,8 +104,10 @@ export const CLIENT_OPERATION_NAMES = [
   'weft.updates.result.get',
   'weft.worker.deployments.drain',
   'weft.worker.deployments.resume',
+  'weft.workers.diagnostics',
   'weft.workers.drain',
   'weft.workers.list',
+  'weft.workers.rejections',
   'weft.workers.resume',
   'weft.workflows.activities.pending.list',
   'weft.workflows.aggregate',
@@ -479,6 +483,11 @@ export type ClientOperationTypes = {
     readonly output: unknown;
     readonly faults: never;
   };
+  'weft.workers.diagnostics': {
+    readonly input: { readonly workerId: string };
+    readonly output: { readonly worker: unknown };
+    readonly faults: never;
+  };
   'weft.workers.drain': {
     readonly input: { readonly reason?: string; readonly workerId: string };
     readonly output: unknown;
@@ -517,6 +526,25 @@ export type ClientOperationTypes = {
         readonly startedAt: number;
       }>;
       readonly routingPolicy: 'least-loaded' | 'round-robin' | 'fair-share';
+    };
+    readonly faults: never;
+  };
+  'weft.workers.rejections': {
+    readonly input: { readonly limit: number };
+    readonly output: {
+      readonly items: ReadonlyArray<{
+        readonly buildId?: string;
+        readonly code:
+          | 'invalid_registration'
+          | 'unsupported_protocol_version'
+          | 'deployment_conflict'
+          | 'registration_rejected';
+        readonly deploymentName?: string;
+        readonly queue?: string;
+        readonly rejectedAt: number;
+        readonly workerId?: string;
+      }>;
+      readonly limit: number;
     };
     readonly faults: never;
   };

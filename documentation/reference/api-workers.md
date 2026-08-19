@@ -133,21 +133,22 @@ class RemoteWorker implements Disposable {
 
 #### `RemoteWorkerOptions`
 
-| Field                 | Type                                                                                                                                  | Default                  | Description                                                                                                                                                                                                                                     |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `serverUrl`           | `string`                                                                                                                              | --                       | WebSocket URL of the Weft server                                                                                                                                                                                                                |
-| `workerId`            | `string`                                                                                                                              | `crypto.randomUUID()`    | Unique worker identifier                                                                                                                                                                                                                        |
-| `workflows`           | `Record<string, { name: string; activities: Record<string, (input: unknown, context?: RemoteActivityContext) => Promise<unknown>> }>` | (required)               | Maps each workflow type to its activity implementations; the SDK advertises each as `${workflowType}.${activityName}` and validates the key matches `workflow.name`. Activities may accept an optional `RemoteActivityContext` second parameter |
-| `concurrency`         | `number`                                                                                                                              | `10`                     | Maximum concurrent tasks                                                                                                                                                                                                                        |
-| `queue`               | `string`                                                                                                                              | `'default'`              | Task queue to subscribe to. Conflicts with a `serverUrl` that already encodes a different queue throw at construction time                                                                                                                      |
-| `disconnectTimeoutMs` | `number`                                                                                                                              | `30_000`                 | Time to wait for in-flight tasks before force-closing on disconnect                                                                                                                                                                             |
-| `interceptors`        | `ActivityInterceptor[]`                                                                                                               | `[]`                     | Activity interceptors applied to all tasks processed by this worker                                                                                                                                                                             |
-| `deploymentName`      | `string`                                                                                                                              | (required)               | Logical service this worker instance belongs to, included in its manifest                                                                                                                                                                       |
-| `buildId`             | `string`                                                                                                                              | (required)               | Operator-visible release this worker instance is running, included in its manifest                                                                                                                                                              |
-| `artifactDigest`      | `string`                                                                                                                              | derived                  | Trusted digest of the executable artifact. When omitted, a placeholder tagged `declared-shape:<hash>` is derived from the declared workflow and activity names                                                                                  |
-| `runtimeVersion`      | `string`                                                                                                                              | `detectRuntimeVersion()` | Runtime or SDK version reported during registration                                                                                                                                                                                             |
-| `startedAt`           | `number`                                                                                                                              | `Date.now()`             | Worker process start time in epoch milliseconds                                                                                                                                                                                                 |
-| `capabilities`        | `Record<string, JSON value>`                                                                                                          | `{}`                     | JSON metadata such as region, hardware class, or feature flags                                                                                                                                                                                  |
+| Field                 | Type                                                                                                                                  | Default                  | Description                                                                                                                                                                                                                                                                                             |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `serverUrl`           | `string`                                                                                                                              | --                       | WebSocket URL of the Weft server                                                                                                                                                                                                                                                                        |
+| `workerId`            | `string`                                                                                                                              | `crypto.randomUUID()`    | Unique worker identifier                                                                                                                                                                                                                                                                                |
+| `workflows`           | `Record<string, { name: string; activities: Record<string, (input: unknown, context?: RemoteActivityContext) => Promise<unknown>> }>` | (required)               | Maps each workflow type to its activity implementations; the SDK advertises each as `${workflowType}.${activityName}` and validates the key matches `workflow.name`. Activities may accept an optional `RemoteActivityContext` second parameter                                                         |
+| `concurrency`         | `number`                                                                                                                              | `10`                     | Maximum concurrent tasks                                                                                                                                                                                                                                                                                |
+| `queue`               | `string`                                                                                                                              | `'default'`              | Task queue to subscribe to. Conflicts with a `serverUrl` that already encodes a different queue throw at construction time                                                                                                                                                                              |
+| `disconnectTimeoutMs` | `number`                                                                                                                              | `30_000`                 | Time to wait for in-flight tasks before force-closing on disconnect                                                                                                                                                                                                                                     |
+| `interceptors`        | `ActivityInterceptor[]`                                                                                                               | `[]`                     | Activity interceptors applied to all tasks processed by this worker                                                                                                                                                                                                                                     |
+| `deploymentName`      | `string`                                                                                                                              | (required)               | Logical service this worker instance belongs to, included in its manifest                                                                                                                                                                                                                               |
+| `buildId`             | `string`                                                                                                                              | (required)               | Operator-visible release this worker instance is running, included in its manifest                                                                                                                                                                                                                      |
+| `artifactDigest`      | `string`                                                                                                                              | derived                  | Trusted digest of the executable artifact. When omitted, a placeholder tagged `declared-shape:<hash>` is derived from the declared workflow and activity names. Ignored when `manifest` is supplied                                                                                                     |
+| `manifest`            | `WorkerManifest`                                                                                                                      | derived                  | A complete, real manifest — typically from [`buildWorkerManifestFromRegistry`](#buildworkermanifestfromregistryengine-options) — advertised verbatim instead of the `declared-shape:` placeholder. `manifest.workflows` must declare exactly the workflow types in `workflows`, checked at construction |
+| `runtimeVersion`      | `string`                                                                                                                              | `detectRuntimeVersion()` | Runtime or SDK version reported during registration                                                                                                                                                                                                                                                     |
+| `startedAt`           | `number`                                                                                                                              | `Date.now()`             | Worker process start time in epoch milliseconds                                                                                                                                                                                                                                                         |
+| `capabilities`        | `Record<string, JSON value>`                                                                                                          | `{}`                     | JSON metadata such as region, hardware class, or feature flags                                                                                                                                                                                                                                          |
 
 The worker sends heartbeats every 10 seconds after registration is acknowledged and handles server-initiated `shutdown` messages gracefully. `connect()` rejects if the server sends `registerError` or if the socket closes before acknowledgement.
 
@@ -498,6 +499,32 @@ This is a content digest rather than one of the package's FNV-1a helpers, which 
 
 Use `digestCanonicalWorkerManifest()` when a canonical serialization is already in hand — `parseWorkerManifest()` returns one — to avoid serializing twice.
 
+### `buildWorkerManifestFromRegistry(engine, options)`
+
+Builds a real manifest from an engine's canonical workflow and activity registrations, replacing the `declared-shape:`-tagged placeholders `RemoteWorker` and the internal Worker realm derive by default. Intended for a build script: construct an `Engine` with every workflow the artifact bundles registered (never started), call this function, and pass the result as [`RemoteWorkerOptions.manifest`](#remoteworkeroptions).
+
+```ts
+import { buildWorkerManifestFromRegistry, Engine, workflow } from '@lostgradient/weft';
+
+const engine = new Engine();
+engine.register(workflow({ name: 'checkout', version: '2.1.0' }).execute(async function* () {}));
+
+const manifest = await buildWorkerManifestFromRegistry(engine, {
+  workflows: { checkout: [] },
+  deployment: { name: 'billing', buildId: '2026.08.18-3', artifactDigest: 'sha256:41d0e2' },
+  runtime: { name: 'bun', version: '1.3.14' },
+});
+
+console.log(manifest.workflows['checkout']?.workflowVersion); // '2.1.0'
+engine[Symbol.dispose]();
+```
+
+`options.workflows` maps each workflow type to the activity names that instance can execute — the one association the registry cannot supply on its own, since the engine's activity registry is a flat namespace rather than partitioned per workflow. Every key must name a workflow the source `Engine` has registered, and every activity name must be one the same `Engine` has registered; an unregistered name throws `WorkerManifestBuildError` rather than silently omitting the entry.
+
+`contractHash` is a real `sha256:`-tagged digest of the workflow's payload schemas (input, output, signals, updates, queries) — `description` and `tags` are excluded so a documentation edit never changes contract identity. `workflowRevision` answers a broader question — "which exact definition was loaded" — so it digests the full registry entry (schemas, `description`, and `tags`) plus the registered `version`; a description/tag edit or a version bump changes `workflowRevision` without necessarily changing `contractHash`, which is the intended distinction between the two fields, not drift in either one. `implementationRevision` on each activity contract is set to `options.deployment.buildId`: a schema identifies the contract, not the code behind it, so there is no honest schema-derived source for "which implementation" is bound.
+
+`options.deployment` and `options.runtime` are required, never derived — a build script knows its own deploy target; live runtime detection at build time would assert the wrong identity when the build and deploy environments differ.
+
 ## Fleet and queue observability
 
 Two operator-facing endpoints expose the live worker fleet and the
@@ -629,6 +656,80 @@ Clears the deployment-level drain marker. Requires `system:admin`. Any
 worker-specific drain markers remain in effect.
 
 The JSON-RPC operation name is `weft.worker.deployments.resume`.
+
+### `GET /api/v1/workers/:workerId/diagnostics`
+
+Bounded instance and deployment-version diagnostics for one connected worker (WFT-29). Requires `system:read`. Returns `{ worker: null }` when `workerId` is not currently connected.
+
+The response splits into two structurally distinct parts, mirroring the manifest's own split between "which process" and "which build":
+
+```ts
+type WorkerDiagnosticsResponse = {
+  worker: {
+    instance: {
+      workerId: string;
+      queue: string;
+      health: WorkerHealth;
+      connectedAt: number; // epoch ms
+      startedAt: number; // epoch ms
+      lastHeartbeatAt: number; // epoch ms
+      heartbeatAgeMs: number;
+    };
+    deploymentVersion: {
+      deploymentName: string;
+      buildId: string;
+      artifactDigest: string;
+      runtimeName: string;
+      runtimeVersion: string;
+      sdkVersion: string;
+      manifestVersion: number;
+      protocolVersion: number;
+      manifestDigest: string;
+      workflows: Record<
+        string,
+        {
+          workflowVersion: string;
+          workflowRevision: string;
+          contractHash: string;
+          activities: Record<string, { contractHash: string; implementationRevision: string }>;
+        }
+      >;
+    };
+  } | null;
+};
+```
+
+Deliberately excludes `capabilities` and every raw payload schema backing a `contractHash` — this surfaces identity for drift detection, not a schema dump.
+
+The JSON-RPC operation name is `weft.workers.diagnostics`.
+
+### `GET /api/v1/workers/registration-rejections`
+
+Bounded, most-recent-first log of declined `register` attempts (WFT-29). Requires `system:read`. Accepts an optional `limit` query parameter (default `20`, max `100`).
+
+```ts
+type RegistrationRejectionCode =
+  | 'invalid_registration'
+  | 'unsupported_protocol_version'
+  | 'deployment_conflict'
+  | 'registration_rejected';
+
+type ListWorkerRegistrationRejectionsResponse = {
+  items: Array<{
+    code: RegistrationRejectionCode;
+    workerId?: string; // absent when the frame failed to parse before a workerId could be read
+    rejectedAt: number; // epoch ms
+    queue?: string;
+    deploymentName?: string;
+    buildId?: string;
+  }>;
+  limit: number;
+};
+```
+
+Deliberately excludes the free-text rejection message and any manifest content — this is a bounded, auditable event log, not a diagnostic dump. The log is in-memory and capped at the 200 most recent entries per server process; it is not persisted.
+
+The JSON-RPC operation name is `weft.workers.rejections`.
 
 ### `GET /api/v1/task-queues`
 

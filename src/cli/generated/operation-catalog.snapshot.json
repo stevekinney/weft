@@ -2057,6 +2057,185 @@
       }
     },
     {
+      "name": "weft.workers.diagnostics",
+      "kind": "unary",
+      "summary": "Get bounded instance and deployment-version diagnostics for one connected worker",
+      "description": "Report one connected worker's identity split into two parts: `instance` (this live connection — queue, health, connection timestamps) and `deploymentVersion` (the artifact it loaded — SDK/runtime identity, manifest digest, and every advertised workflow's version, revision, and contract hash). Returns `worker: null` when the workerId is not currently connected. Excludes capabilities and raw payload schemas.",
+      "tags": ["Observability"],
+      "destructive": false,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["system:read"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "workerId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workerId"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "worker": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "deploymentVersion": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "artifactDigest": {
+                        "type": "string"
+                      },
+                      "buildId": {
+                        "type": "string"
+                      },
+                      "deploymentName": {
+                        "type": "string"
+                      },
+                      "manifestDigest": {
+                        "type": "string"
+                      },
+                      "manifestVersion": {
+                        "type": "number"
+                      },
+                      "protocolVersion": {
+                        "type": "number"
+                      },
+                      "runtimeName": {
+                        "type": "string"
+                      },
+                      "runtimeVersion": {
+                        "type": "string"
+                      },
+                      "sdkVersion": {
+                        "type": "string"
+                      },
+                      "workflows": {
+                        "additionalProperties": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "activities": {
+                              "additionalProperties": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "contractHash": {
+                                    "type": "string"
+                                  },
+                                  "implementationRevision": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["contractHash", "implementationRevision"],
+                                "type": "object"
+                              },
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "type": "object"
+                            },
+                            "contractHash": {
+                              "type": "string"
+                            },
+                            "workflowRevision": {
+                              "type": "string"
+                            },
+                            "workflowVersion": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "workflowVersion",
+                            "workflowRevision",
+                            "contractHash",
+                            "activities"
+                          ],
+                          "type": "object"
+                        },
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "deploymentName",
+                      "buildId",
+                      "artifactDigest",
+                      "runtimeName",
+                      "runtimeVersion",
+                      "sdkVersion",
+                      "manifestVersion",
+                      "protocolVersion",
+                      "manifestDigest",
+                      "workflows"
+                    ],
+                    "type": "object"
+                  },
+                  "instance": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "connectedAt": {
+                        "type": "number"
+                      },
+                      "health": {
+                        "enum": ["active", "draining", "drained"],
+                        "type": "string"
+                      },
+                      "heartbeatAgeMs": {
+                        "type": "number"
+                      },
+                      "lastHeartbeatAt": {
+                        "type": "number"
+                      },
+                      "queue": {
+                        "type": "string"
+                      },
+                      "startedAt": {
+                        "type": "number"
+                      },
+                      "workerId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "workerId",
+                      "queue",
+                      "health",
+                      "connectedAt",
+                      "startedAt",
+                      "lastHeartbeatAt",
+                      "heartbeatAgeMs"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": ["instance", "deploymentVersion"],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": ["worker"],
+        "type": "object"
+      }
+    },
+    {
       "name": "weft.workers.drain",
       "kind": "unary",
       "summary": "Mark a connected worker as draining",
@@ -2366,6 +2545,84 @@
           }
         },
         "required": ["items", "deployments", "routingPolicy"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "weft.workers.rejections",
+      "kind": "unary",
+      "summary": "List recently declined worker registration attempts",
+      "description": "Bounded, most-recent-first log of declined `register` attempts: rejection code, attempted workerId when known, and whatever deployment/queue identity had already been parsed by the time the rejecting gate ran. No free-text message and no manifest content.",
+      "tags": ["Observability"],
+      "destructive": false,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["system:read"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": ["limit"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "buildId": {
+                  "type": "string"
+                },
+                "code": {
+                  "enum": [
+                    "invalid_registration",
+                    "unsupported_protocol_version",
+                    "deployment_conflict",
+                    "registration_rejected"
+                  ],
+                  "type": "string"
+                },
+                "deploymentName": {
+                  "type": "string"
+                },
+                "queue": {
+                  "type": "string"
+                },
+                "rejectedAt": {
+                  "type": "number"
+                },
+                "workerId": {
+                  "type": "string"
+                }
+              },
+              "required": ["code", "rejectedAt"],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": ["items", "limit"],
         "type": "object"
       }
     },

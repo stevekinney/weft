@@ -226,7 +226,7 @@ const BASE_COVERAGE_ALLOWANCES = buildAllowanceLayer('BASE_COVERAGE_ALLOWANCES',
       reason:
         'Process-entry and failure-exit behavior runs in child processes whose hits are not attributed to the parent Bun LCOV report.',
       functions: 1,
-      lines: new Set([383, 384]),
+      lines: new Set([389, 390]),
       requireUncoveredLines: true,
     },
   ],
@@ -1322,19 +1322,20 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/server/runtime/websocket-worker.ts',
       // The closed WorkerToServerMessage union makes this default branch
       // unreachable at runtime; it exists solely as a compile-time
-      // exhaustiveness guard: `case 'heartbeat': {` / its closing `}` (272,
-      // 275), `default: {` (276), and the two dead statements inside it,
-      // `const _exhaustive` / `return _exhaustive` (279, 280). Only 279 and
-      // 280 are deterministically 0 across every run; the four case-label
-      // and brace lines around them (271, 272, 275, 276) flip between hit
-      // and unhit run to run with byte-identical source — a switch-statement
+      // exhaustiveness guard: the `}` closing the preceding `taskResult`
+      // case (315), `case 'heartbeat': {` / its closing `}` (316, 319),
+      // `default: {` (320), and the two dead statements inside it,
+      // `const _exhaustive` / `return _exhaustive` (323, 324). Only 323 and
+      // 324 are deterministically 0 across every run; the other four
+      // case-label and brace lines around them flip between hit and unhit
+      // run to run with byte-identical source — a switch-statement
       // coverage-attribution artifact, not a real reachability signal — so
       // `requireUncoveredLines` is intentionally omitted here rather than
       // chasing whichever subset happens to be 0 in a given run.
       {
         reason:
           'Transport disconnect and concurrency exits are behaviorally tested, but Bun does not deterministically attribute these residual paths.',
-        lines: new Set([271, 272, 275, 276, 279, 280]),
+        lines: new Set([315, 316, 319, 320, 323, 324]),
       },
     ],
     [

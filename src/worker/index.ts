@@ -12,6 +12,7 @@ import {
 } from './execute-with-interceptors.ts';
 import { HeartbeatManager } from './heartbeat.ts';
 import {
+  assertManifestMatchesWorkflows,
   buildRegisterMessage,
   snapshotWorkflows,
   type InternalRemoteWorkerOptions,
@@ -206,6 +207,9 @@ export class RemoteWorker implements Disposable {
 
   constructor(options: InternalRemoteWorkerOptions) {
     this.#activityTable = resolveActivityTable(options);
+    if (options.manifest !== undefined) {
+      assertManifestMatchesWorkflows(options.manifest, options.workflows);
+    }
     this.#workerId = options.workerId ?? crypto.randomUUID();
     const resolvedConnection = resolveWorkerConnectUrl(options.serverUrl, options.queue);
     this.#connectUrl = resolvedConnection.url;

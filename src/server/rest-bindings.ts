@@ -26,10 +26,20 @@ import {
   getTaskDiagnosticsOperation,
 } from './operations/get-task-diagnostics.ts';
 import {
+  createGetWorkerDiagnosticsOperation,
+  createGetWorkerDiagnosticsRestBinding,
+  getWorkerDiagnosticsOperation,
+} from './operations/get-worker-diagnostics.ts';
+import {
   createListTaskQueuesOperation,
   createListTaskQueuesRestBinding,
   listTaskQueuesOperation,
 } from './operations/list-task-queues.ts';
+import {
+  createListWorkerRegistrationRejectionsOperation,
+  createListWorkerRegistrationRejectionsRestBinding,
+  listWorkerRegistrationRejectionsOperation,
+} from './operations/list-worker-registration-rejections.ts';
 import {
   createListWorkersOperation,
   createListWorkersRestBinding,
@@ -93,6 +103,8 @@ export function createLiveRestBindings(): ReadonlyArray<UnknownRestBinding> {
     createDrainDeploymentRestBinding(),
     createClearDeploymentDrainRestBinding(),
     createListTaskQueuesRestBinding(),
+    createGetWorkerDiagnosticsRestBinding(),
+    createListWorkerRegistrationRejectionsRestBinding(),
   ];
 }
 
@@ -176,6 +188,23 @@ function buildTaskDiagnosticsOperationForRegistry(options: LiveOperationRegistry
   });
 }
 
+function buildWorkerDiagnosticsOperationForRegistry(options: LiveOperationRegistryOptions) {
+  if (options.workerRegistry === undefined) return getWorkerDiagnosticsOperation;
+  return createGetWorkerDiagnosticsOperation({
+    workerRegistry: options.workerRegistry,
+    ...(options.clock !== undefined ? { clock: options.clock } : {}),
+  });
+}
+
+function buildWorkerRegistrationRejectionsOperationForRegistry(
+  options: LiveOperationRegistryOptions,
+) {
+  if (options.workerRegistry === undefined) return listWorkerRegistrationRejectionsOperation;
+  return createListWorkerRegistrationRejectionsOperation({
+    workerRegistry: options.workerRegistry,
+  });
+}
+
 export function createLiveOperationRegistry(
   options?: LiveOperationRegistryOptions,
 ): OperationRegistry {
@@ -190,5 +219,7 @@ export function createLiveOperationRegistry(
     buildDrainDeploymentOperationForRegistry(resolved),
     buildClearDeploymentDrainOperationForRegistry(resolved),
     buildListTaskQueuesOperationForRegistry(resolved),
+    buildWorkerDiagnosticsOperationForRegistry(resolved),
+    buildWorkerRegistrationRejectionsOperationForRegistry(resolved),
   ]);
 }

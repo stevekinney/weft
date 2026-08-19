@@ -53,9 +53,25 @@ export interface RemoteWorkerOptions {
    * Trusted digest of the executable artifact this instance loaded. When
    * omitted, a placeholder digest is derived from the declared workflow and
    * activity names — tagged `declared-shape:...` so it is never mistaken for
-   * a real content digest. Real build tooling should supply this.
+   * a real content digest. Real build tooling should supply this. Ignored
+   * when `manifest` is supplied, which carries its own `deployment.artifactDigest`.
    */
   artifactDigest?: string;
+  /**
+   * A complete, real manifest built ahead of time — typically by
+   * `buildWorkerManifestFromRegistry` (WFT-29) from the engine's canonical
+   * workflow registry. When supplied, it is advertised verbatim at
+   * registration instead of the `declared-shape:` placeholder this module
+   * otherwise derives from `workflows`, and every other manifest-shaping
+   * option (`deploymentName`, `buildId`, `artifactDigest`, `runtimeVersion`,
+   * `capabilities`) is ignored.
+   *
+   * The constructor requires `manifest.workflows` to declare exactly the
+   * same set of workflow types as `workflows` — a manifest advertising
+   * contracts this instance's dispatch table cannot execute (or omitting
+   * ones it can) is rejected at construction rather than at registration.
+   */
+  manifest?: WorkerManifest;
   /** Runtime version string. Defaults to `detectRuntimeVersion()`. */
   runtimeVersion?: string;
   startedAt?: number;
@@ -151,8 +167,45 @@ function deriveArtifactDigest(workflows: Record<string, RemoteWorkerWorkflowDefi
   return declaredShapeDigest(qualifiedNames.join(','));
 }
 
+/**
+ * Assert that a caller-supplied real manifest (`options.manifest`) declares
+ * exactly the workflow types the SDK's own `workflows` dispatch table
+ * declares — no more, no fewer. Called once, at construction, so a mismatch
+ * between build-tool output and the live dispatch table fails fast rather
+ * than surfacing later as a confusing registration rejection or a routed
+ * task this instance cannot actually execute.
+ */
+export function assertManifestMatchesWorkflows(
+  manifest: WorkerManifest,
+  workflows: Record<string, RemoteWorkerWorkflowDefinition>,
+): void {
+  const manifestTypes = new Set(Object.keys(manifest.workflows));
+  const declaredTypes = new Set(Object.keys(workflows));
+
+  const missingFromManifest = [...declaredTypes]
+    .filter((type) => !manifestTypes.has(type))
+    .toSorted();
+  const extraInManifest = [...manifestTypes].filter((type) => !declaredTypes.has(type)).toSorted();
+
+  if (missingFromManifest.length === 0 && extraInManifest.length === 0) return;
+
+  const parts: string[] = [];
+  if (missingFromManifest.length > 0) {
+    parts.push(`missing from manifest: ${missingFromManifest.join(', ')}`);
+  }
+  if (extraInManifest.length > 0) {
+    parts.push(`not in workflows: ${extraInManifest.join(', ')}`);
+  }
+  throw new Error(
+    `RemoteWorkerOptions.manifest.workflows must declare exactly the workflow types in ` +
+      `\`workflows\` (${parts.join('; ')}).`,
+  );
+}
+
 /** Build the manifest this worker instance advertises at registration. */
 function buildManifest(options: RemoteWorkerOptions): WorkerManifest {
+  if (options.manifest !== undefined) return options.manifest;
+
   const workflows: Record<string, WorkerWorkflowContract> = {};
   for (const [workflowType, workflow] of Object.entries(options.workflows)) {
     workflows[workflowType] = buildWorkflowContract(workflowType, workflow);

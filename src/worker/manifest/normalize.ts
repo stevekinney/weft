@@ -13,6 +13,7 @@
  */
 
 import type { JSONValue } from '../../core/json.ts';
+import { canonicalJsonStringify } from './canonical-json.ts';
 import type { WorkerActivityContract, WorkerManifest, WorkerWorkflowContract } from './types.ts';
 
 /**
@@ -122,27 +123,6 @@ export function normalizeWorkerManifest(manifest: WorkerManifest): WorkerManifes
 // Canonical serialization
 // ---------------------------------------------------------------------------
 
-/**
- * Serialize an arbitrary JSON value with object keys sorted at every depth.
- *
- * Only reached for `capabilities` values, which are open-ended by design. The
- * manifest parser has already proven the value is a bounded `JSONValue`, so
- * there is no cycle or `undefined` case left to handle here.
- */
-function canonicalJsonValue(value: JSONValue): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value);
-
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => canonicalJsonValue(entry)).join(',')}]`;
-  }
-
-  const record = value as { readonly [key: string]: JSONValue };
-  const entries = sortedKeys(record).map(
-    (key) => `${JSON.stringify(key)}:${canonicalJsonValue(record[key] as JSONValue)}`,
-  );
-  return `{${entries.join(',')}}`;
-}
-
 function canonicalActivityJson(activity: WorkerActivityContract): string {
   return `{"contractHash":${JSON.stringify(activity.contractHash)},"implementationRevision":${JSON.stringify(activity.implementationRevision)}}`;
 }
@@ -198,7 +178,7 @@ export function canonicalWorkerManifestJson(manifest: WorkerManifest): string {
   const capabilities = sortedKeys(manifest.capabilities)
     .map(
       (key) =>
-        `${JSON.stringify(key)}:${canonicalJsonValue(manifest.capabilities[key] as JSONValue)}`,
+        `${JSON.stringify(key)}:${canonicalJsonStringify(manifest.capabilities[key] as JSONValue)}`,
     )
     .join(',');
 
