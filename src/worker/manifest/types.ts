@@ -261,6 +261,8 @@ export type WorkerExecutionIdentity = Readonly<{
   buildId: string;
   /** Executable artifact the instance loaded. */
   artifactDigest: string;
+  /** Workflow that executed the attempt. */
+  workflowType: string;
   /** Workflow definition revision that executed the attempt. */
   workflowRevision: string;
   /** Activity that executed the attempt. */

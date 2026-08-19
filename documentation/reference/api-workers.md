@@ -461,6 +461,7 @@ const identity: WorkerExecutionIdentity = {
   deploymentName: 'billing',
   buildId: '2026.08.18-3',
   artifactDigest: 'sha256:41d0e2',
+  workflowType: 'checkout',
   workflowRevision: 'rev-88',
   activityName: 'charge',
   activityContractHash: 'sha256:2b1f',

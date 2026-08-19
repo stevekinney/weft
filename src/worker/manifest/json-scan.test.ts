@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import { findDuplicateJsonKey } from './json-scan.ts';
+import { MAX_JSON_SCAN_NESTING_DEPTH } from './limits.ts';
 
 describe('findDuplicateJsonKey', () => {
   it('finds a duplicate key in a flat object', () => {
@@ -84,5 +85,18 @@ describe('findDuplicateJsonKey', () => {
 
   it('resumes key detection after a nested array closes', () => {
     expect(findDuplicateJsonKey('{"a":[1,2],"a":3}')).toBe('a');
+  });
+
+  it('bails out on structural nesting deeper than the ceiling instead of allocating without bound', () => {
+    // Far beyond MAX_JSON_SCAN_NESTING_DEPTH — proves the scan aborts before
+    // the open-container stack grows anywhere near this length, rather than
+    // allocating one Set per '{' all the way down.
+    expect(findDuplicateJsonKey('{'.repeat(1_000_000))).toBeUndefined();
+  });
+
+  it('still finds duplicates at nesting exactly at the ceiling', () => {
+    const opens = '{"outer":'.repeat(MAX_JSON_SCAN_NESTING_DEPTH - 1);
+    const closes = '}'.repeat(MAX_JSON_SCAN_NESTING_DEPTH - 1);
+    expect(findDuplicateJsonKey(`${opens}{"a":1,"a":2}${closes}`)).toBe('a');
   });
 });

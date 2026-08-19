@@ -41,6 +41,28 @@ function sortedRecord<In, Out>(
   return normalized;
 }
 
+/**
+ * Recursively rebuild a `JSONValue` so no array or object inside it is
+ * shared with the caller-owned input.
+ *
+ * Without this, a capability array or nested object survives normalization
+ * by reference: mutating the caller's original value after a successful
+ * parse would then change `result.manifest` while `result.canonicalJson` and
+ * any digest computed from it still describe the pre-mutation content,
+ * letting stored manifest data and its asserted identity diverge.
+ */
+function cloneJsonValue(value: JSONValue): JSONValue {
+  if (value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map((entry) => cloneJsonValue(entry));
+
+  const record = value as { readonly [key: string]: JSONValue };
+  const cloned: Record<string, JSONValue> = Object.create(null) as Record<string, JSONValue>;
+  for (const key of Object.keys(record)) {
+    cloned[key] = cloneJsonValue(record[key] as JSONValue);
+  }
+  return cloned;
+}
+
 function normalizeActivity(activity: WorkerActivityContract): WorkerActivityContract {
   return {
     contractHash: activity.contractHash,
@@ -92,7 +114,7 @@ export function normalizeWorkerManifest(manifest: WorkerManifest): WorkerManifes
       artifactDigest: manifest.deployment.artifactDigest,
     },
     workflows: sortedRecord(manifest.workflows, normalizeWorkflow),
-    capabilities: sortedRecord(manifest.capabilities, (value: JSONValue) => value),
+    capabilities: sortedRecord(manifest.capabilities, cloneJsonValue),
   };
 }
 

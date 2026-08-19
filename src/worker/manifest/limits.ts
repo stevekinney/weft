@@ -125,3 +125,22 @@ export const MAX_MANIFEST_CAPABILITY_STRING_BYTES = 4096;
  * ```
  */
 export const MAX_NORMALIZED_MANIFEST_BYTES = 262_144;
+
+/**
+ * Maximum structural nesting depth the pre-parse duplicate-key scanner will
+ * follow into raw JSON text.
+ *
+ * The scanner pushes one entry onto an open-container stack per `{`/`[`
+ * encountered, before `JSON.parse` ever runs. Without a ceiling here, a run
+ * of open-brace characters well under the transport frame limit forces
+ * millions of allocations. No legitimate manifest — workflows, activities,
+ * and an 8-deep `capabilities` value — nests anywhere close to this bound.
+ *
+ * @example
+ * ```ts
+ * import { MAX_JSON_SCAN_NESTING_DEPTH } from '@lostgradient/weft';
+ *
+ * console.log(MAX_JSON_SCAN_NESTING_DEPTH >= 16); // true
+ * ```
+ */
+export const MAX_JSON_SCAN_NESTING_DEPTH = 64;

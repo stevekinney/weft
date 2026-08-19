@@ -22,6 +22,7 @@ const identity: WorkerExecutionIdentity = {
   deploymentName: 'billing',
   buildId: 'b3',
   artifactDigest: 'sha256:41d0',
+  workflowType: 'checkout',
   workflowRevision: 'rev-8',
   activityName: 'charge',
   activityContractHash: 'sha256:bb',
@@ -42,6 +43,43 @@ describe('buildWorkerExecutionIdentity', () => {
     expect(
       buildWorkerExecutionIdentity({ ...source, activityName: 'not-advertised' }),
     ).toBeUndefined();
+  });
+
+  it('distinguishes two workflows that share revision, activity name, and contract hash', () => {
+    const sharedActivity = { contractHash: 'sha256:bb', implementationRevision: 'r1' };
+    const manifest = singleWorkflowManifest({
+      workflows: {
+        welcome: {
+          workflowVersion: '1.0.0',
+          workflowRevision: 'rev-8',
+          contractHash: 'sha256:aa',
+          activities: { send: sharedActivity },
+        },
+        farewell: {
+          workflowVersion: '1.0.0',
+          workflowRevision: 'rev-8',
+          contractHash: 'sha256:aa',
+          activities: { send: sharedActivity },
+        },
+      },
+    });
+
+    const welcome = buildWorkerExecutionIdentity({
+      ...source,
+      manifest,
+      workflowType: 'welcome',
+      activityName: 'send',
+    });
+    const farewell = buildWorkerExecutionIdentity({
+      ...source,
+      manifest,
+      workflowType: 'farewell',
+      activityName: 'send',
+    });
+
+    expect(welcome).not.toEqual(farewell);
+    expect(welcome?.workflowType).toBe('welcome');
+    expect(farewell?.workflowType).toBe('farewell');
   });
 });
 

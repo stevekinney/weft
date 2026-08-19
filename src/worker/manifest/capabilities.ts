@@ -13,6 +13,7 @@
 import { isJSONValue, type JSONValue } from '../../core/json.ts';
 import type { ManifestValidationFailure } from './failure.ts';
 import { manifestFailure } from './failure.ts';
+import { isRecord } from './is-record.ts';
 import {
   MAX_MANIFEST_CAPABILITY_COUNT,
   MAX_MANIFEST_CAPABILITY_DEPTH,
@@ -21,30 +22,39 @@ import {
 import { utf8ByteLength } from './utf8.ts';
 
 /**
- * Walk a proven `JSONValue` enforcing depth and string-size ceilings.
+ * Bound recursion depth before any unbounded walk of untrusted structure
+ * runs. Stops descending the instant `depth` exceeds `limit`, so a value
+ * nested far deeper than `limit` (a stack-overflow attempt disguised as a
+ * manifest capability) only ever costs `limit + 1` stack frames — the
+ * recursion never reaches the attacker-controlled depth.
+ */
+function exceedsCapabilityDepth(value: unknown, depth: number, limit: number): boolean {
+  if (depth > limit) return true;
+  if (Array.isArray(value)) {
+    return value.some((entry) => exceedsCapabilityDepth(entry, depth + 1, limit));
+  }
+  if (value !== null && typeof value === 'object') {
+    return Object.values(value).some((entry) => exceedsCapabilityDepth(entry, depth + 1, limit));
+  }
+  return false;
+}
+
+/**
+ * Walk a proven `JSONValue` enforcing the string-size ceiling.
  *
  * Returns the first violation, or `undefined` when the whole value is within
- * bounds. `isJSONValue()` has already ruled out cycles, so the recursion
- * terminates on structure alone and the depth counter is a policy bound rather
- * than a safety net.
+ * bounds. Depth is not re-checked here: {@link exceedsCapabilityDepth} has
+ * already bounded the same tree before this walk starts, so a redundant
+ * per-node check here could never fire.
  */
 function checkCapabilityValue(
   value: JSONValue,
   path: string,
-  depth: number,
 ): ManifestValidationFailure | undefined {
-  if (depth > MAX_MANIFEST_CAPABILITY_DEPTH) {
-    return manifestFailure(
-      'capability_too_deep',
-      `exceeds the maximum capability nesting depth of ${MAX_MANIFEST_CAPABILITY_DEPTH}`,
-      path,
-    );
-  }
-
   if (typeof value === 'string') return checkCapabilityString(value, path);
-  if (Array.isArray(value)) return checkCapabilityArray(value, path, depth);
+  if (Array.isArray(value)) return checkCapabilityArray(value, path);
   if (value !== null && typeof value === 'object') {
-    return checkCapabilityObject(value as { readonly [key: string]: JSONValue }, path, depth);
+    return checkCapabilityObject(value as { readonly [key: string]: JSONValue }, path);
   }
 
   return undefined;
@@ -65,10 +75,9 @@ function checkCapabilityString(value: string, path: string): ManifestValidationF
 function checkCapabilityArray(
   value: readonly JSONValue[],
   path: string,
-  depth: number,
 ): ManifestValidationFailure | undefined {
   for (const [index, entry] of value.entries()) {
-    const failure = checkCapabilityValue(entry, `${path}[${String(index)}]`, depth + 1);
+    const failure = checkCapabilityValue(entry, `${path}[${String(index)}]`);
     if (failure !== undefined) return failure;
   }
   return undefined;
@@ -77,10 +86,13 @@ function checkCapabilityArray(
 function checkCapabilityObject(
   record: { readonly [key: string]: JSONValue },
   path: string,
-  depth: number,
 ): ManifestValidationFailure | undefined {
   for (const key of Object.keys(record)) {
-    const failure = checkCapabilityValue(record[key] as JSONValue, `${path}.${key}`, depth + 1);
+    const keyPath = `${path}.${key}`;
+    const keyFailure = checkCapabilityString(key, keyPath);
+    if (keyFailure !== undefined) return keyFailure;
+
+    const failure = checkCapabilityValue(record[key] as JSONValue, keyPath);
     if (failure !== undefined) return failure;
   }
   return undefined;
@@ -97,11 +109,11 @@ export function parseManifestCapabilities(
   value: unknown,
   path: string,
 ): { ok: true; capabilities: Readonly<Record<string, JSONValue>> } | ManifestValidationFailure {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return manifestFailure('invalid_field', 'must be a JSON object', path);
   }
 
-  const record = value as Readonly<Record<string, unknown>>;
+  const record = value;
   const keys = Object.keys(record);
   if (keys.length > MAX_MANIFEST_CAPABILITY_COUNT) {
     return manifestFailure(
@@ -114,11 +126,24 @@ export function parseManifestCapabilities(
   const capabilities: Record<string, JSONValue> = Object.create(null) as Record<string, JSONValue>;
   for (const key of keys) {
     const entry = record[key];
-    if (!isJSONValue(entry)) {
-      return manifestFailure('invalid_capability_value', 'must be a JSON value', `${path}.${key}`);
+    const keyPath = `${path}.${key}`;
+
+    const keyFailure = checkCapabilityString(key, keyPath);
+    if (keyFailure !== undefined) return keyFailure;
+
+    if (exceedsCapabilityDepth(entry, 1, MAX_MANIFEST_CAPABILITY_DEPTH)) {
+      return manifestFailure(
+        'capability_too_deep',
+        `exceeds the maximum capability nesting depth of ${MAX_MANIFEST_CAPABILITY_DEPTH}`,
+        keyPath,
+      );
     }
 
-    const failure = checkCapabilityValue(entry, `${path}.${key}`, 1);
+    if (!isJSONValue(entry)) {
+      return manifestFailure('invalid_capability_value', 'must be a JSON value', keyPath);
+    }
+
+    const failure = checkCapabilityValue(entry, keyPath);
     if (failure !== undefined) return failure;
 
     capabilities[key] = entry;

@@ -65,6 +65,18 @@ describe('normalizeWorkerManifest', () => {
     expect(Object.keys(source.capabilities)).toEqual(['zeta', 'alpha']);
   });
 
+  it('deep-clones nested capability values so mutating the input cannot change the output', () => {
+    const tags = ['a', 'b'];
+    const source = emptyManifest({ capabilities: { tags, meta: { note: 'x' } } });
+    const normalized = normalizeWorkerManifest(source);
+
+    tags.push('c');
+    (source.capabilities['meta'] as { note: string }).note = 'y';
+
+    expect(normalized.capabilities['tags']).toEqual(['a', 'b']);
+    expect(normalized.capabilities['meta']).toEqual({ note: 'x' });
+  });
+
   it('copies every declared field through unchanged', () => {
     const normalized = normalizeWorkerManifest(singleWorkflowManifest());
 

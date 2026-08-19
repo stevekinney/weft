@@ -331,6 +331,19 @@ describe('parseWorkerManifest — workflow rejection', () => {
     expect(failure.reason).toBe('identifier_too_long');
   });
 
+  it('rejects a workflow key containing the qualified-name separator', () => {
+    const failure = expectRejection(manifestInput({ workflows: { 'a.b': validWorkflow() } }));
+
+    expect(failure.reason).toBe('invalid_field');
+  });
+
+  it('rejects a workflows record that is not a plain object', () => {
+    const failure = expectRejection(manifestInput({ workflows: new Date() }));
+
+    expect(failure.reason).toBe('invalid_field');
+    expect(failure.path).toBe('manifest.workflows');
+  });
+
   it('rejects a non-object workflow entry', () => {
     const failure = expectRejection(manifestInput({ workflows: { checkout: 'nope' } }));
 
@@ -402,6 +415,20 @@ describe('parseWorkerManifest — workflow rejection', () => {
     );
 
     expect(failure.reason).toBe('identifier_too_long');
+  });
+
+  it('rejects an activity key containing the qualified-name separator', () => {
+    const failure = expectRejection(
+      manifestInput({
+        workflows: {
+          checkout: validWorkflow({
+            'charge.tip': { contractHash: 'h', implementationRevision: 'r' },
+          }),
+        },
+      }),
+    );
+
+    expect(failure.reason).toBe('invalid_field');
   });
 
   it('rejects a non-object activity entry', () => {
@@ -484,6 +511,39 @@ describe('parseWorkerManifest — capability rejection', () => {
     const failure = expectRejection(manifestInput({ capabilities: { deep: nested } }));
 
     expect(failure.reason).toBe('capability_too_deep');
+  });
+
+  it('rejects nesting far beyond the ceiling without a stack overflow', () => {
+    let nested: unknown = 'leaf';
+    for (let depth = 0; depth < 20_000; depth++) {
+      nested = { inner: nested };
+    }
+
+    const failure = expectRejection(manifestInput({ capabilities: { deep: nested } }));
+
+    expect(failure.reason).toBe('capability_too_deep');
+  });
+
+  it('rejects an oversized capability key', () => {
+    const failure = expectRejection(
+      manifestInput({
+        capabilities: { [asciiOfLength(MAX_MANIFEST_CAPABILITY_STRING_BYTES + 1)]: true },
+      }),
+    );
+
+    expect(failure.reason).toBe('capability_string_too_long');
+  });
+
+  it('rejects an oversized key nested inside a capability object', () => {
+    const failure = expectRejection(
+      manifestInput({
+        capabilities: {
+          meta: { [asciiOfLength(MAX_MANIFEST_CAPABILITY_STRING_BYTES + 1)]: true },
+        },
+      }),
+    );
+
+    expect(failure.reason).toBe('capability_string_too_long');
   });
 
   it('rejects an oversized capability string', () => {

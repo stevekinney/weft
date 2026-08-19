@@ -14,6 +14,8 @@
  * @module worker/manifest/json-scan
  */
 
+import { MAX_JSON_SCAN_NESTING_DEPTH } from './limits.ts';
+
 /**
  * Read a JSON string literal starting at the opening quote.
  *
@@ -74,7 +76,9 @@ function readString(text: string, start: number): { value: string; next: number 
  *
  * Malformed text yields `undefined` rather than a diagnosis: this pass only
  * answers the duplicate-key question, and `JSON.parse` gives a better message
- * for everything else.
+ * for everything else. Text nested deeper than
+ * {@link MAX_JSON_SCAN_NESTING_DEPTH} is treated the same way — the scan
+ * bails before the open-container stack can grow without bound.
  */
 export function findDuplicateJsonKey(text: string): string | undefined {
   // One key set per open object. Arrays push a placeholder so depth tracking
@@ -101,6 +105,10 @@ export function findDuplicateJsonKey(text: string): string | undefined {
 
       index = parsed.next;
       continue;
+    }
+
+    if ((char === '{' || char === '[') && stack.length >= MAX_JSON_SCAN_NESTING_DEPTH) {
+      return undefined;
     }
 
     expectKey = applyStructuralCharacter(char, stack, expectKey);

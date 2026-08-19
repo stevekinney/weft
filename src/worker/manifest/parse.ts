@@ -11,8 +11,10 @@
  * @module worker/manifest/parse
  */
 
+import { validateWorkflowOrActivityName, type NameKind } from '../../core/types/name-grammar.ts';
 import { parseManifestCapabilities } from './capabilities.ts';
 import { manifestFailure, type ManifestValidationFailure } from './failure.ts';
+import { isRecord } from './is-record.ts';
 import {
   MAX_MANIFEST_ACTIVITY_COUNT,
   MAX_MANIFEST_IDENTIFIER_BYTES,
@@ -79,10 +81,6 @@ export type WorkerManifestParseSuccess = Readonly<{
  */
 export type WorkerManifestParseResult = WorkerManifestParseSuccess | ManifestValidationFailure;
 
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 /**
  * Validate one identifier-shaped string: present, non-empty, and within the
  * shared byte ceiling.
@@ -114,7 +112,11 @@ function parseIdentifier(
  * labels downstream, so an unbounded key is as dangerous as an unbounded
  * value.
  */
-function checkKey(key: string, path: string): ManifestValidationFailure | undefined {
+function checkKey(
+  key: string,
+  kind: NameKind,
+  path: string,
+): ManifestValidationFailure | undefined {
   if (key.length === 0) {
     return manifestFailure('invalid_field', 'must not be an empty string', path);
   }
@@ -124,6 +126,16 @@ function checkKey(key: string, path: string): ManifestValidationFailure | undefi
     return manifestFailure(
       'identifier_too_long',
       `is ${bytes} bytes, exceeding the maximum identifier size of ${MAX_MANIFEST_IDENTIFIER_BYTES}`,
+      path,
+    );
+  }
+
+  try {
+    validateWorkflowOrActivityName(key, kind);
+  } catch (error) {
+    return manifestFailure(
+      'invalid_field',
+      error instanceof Error ? error.message : 'is not a wire-safe name',
       path,
     );
   }
@@ -245,7 +257,7 @@ function parseActivities(
     WorkerActivityContract
   >;
   for (const name of names) {
-    const keyFailure = checkKey(name, `${path} key ${JSON.stringify(name)}`);
+    const keyFailure = checkKey(name, 'activity', `${path} key ${JSON.stringify(name)}`);
     if (keyFailure !== undefined) return keyFailure;
 
     const activity = parseActivity(value[name], `${path}.${name}`);
@@ -307,7 +319,7 @@ function parseWorkflows(
     WorkerWorkflowContract
   >;
   for (const name of names) {
-    const keyFailure = checkKey(name, `${path} key ${JSON.stringify(name)}`);
+    const keyFailure = checkKey(name, 'workflow', `${path} key ${JSON.stringify(name)}`);
     if (keyFailure !== undefined) return keyFailure;
 
     const workflow = parseWorkflow(value[name], `${path}.${name}`);
