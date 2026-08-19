@@ -16,6 +16,10 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import { Engine } from '../../core/engine.ts';
+import {
+  TEST_ACCEPTED_MANIFEST_DIGEST,
+  testWorkerManifest,
+} from '../../worker/registry-fixtures.test-support.ts';
 import { WorkerRegistry } from '../../worker/registry.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
@@ -67,12 +71,16 @@ describe('weft.workers.list — REST GET /v1/workers', () => {
     engine = createOperationTestEngine();
     const workerRegistry = new WorkerRegistry();
     workerRegistry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'charlie',
       queue: 'default',
       activities: ['process'],
       concurrency: 3,
     });
     workerRegistry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'alpha',
       queue: 'mail',
       activities: ['send'],
@@ -129,6 +137,8 @@ describe('weft.workers.list — REST GET /v1/workers', () => {
     engine = createOperationTestEngine();
     const workerRegistry = new WorkerRegistry();
     workerRegistry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'active-worker',
       queue: 'payments',
       activities: ['charge'],
@@ -136,11 +146,12 @@ describe('weft.workers.list — REST GET /v1/workers', () => {
       deploymentName: 'payments',
       buildId: 'build-1',
       runtimeVersion: 'bun-1.2.13',
-      gitSha: 'abc',
       startedAt: 100,
       capabilities: { region: 'us-west' },
     });
     workerRegistry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'draining-worker',
       queue: 'payments',
       activities: ['charge'],
@@ -148,7 +159,6 @@ describe('weft.workers.list — REST GET /v1/workers', () => {
       deploymentName: 'payments',
       buildId: 'build-1',
       runtimeVersion: 'bun-1.2.13',
-      gitSha: 'abc',
       startedAt: 200,
     });
     workerRegistry.assignTask('draining-worker', 'op-draining', 30_000, undefined, 'attempt-token');
@@ -178,7 +188,6 @@ describe('weft.workers.list — REST GET /v1/workers', () => {
       deploymentName: 'payments',
       buildId: 'build-1',
       runtimeVersion: 'bun-1.2.13',
-      gitSha: 'abc',
       startedAt: 100,
       capabilities: { region: 'us-west' },
       health: 'active',
@@ -257,6 +266,8 @@ describe('worker drain operations', () => {
     engine = createOperationTestEngine();
     const workerRegistry = new WorkerRegistry();
     workerRegistry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-1',
       queue: 'default',
       activities: ['charge'],
@@ -318,6 +329,8 @@ describe('worker drain operations', () => {
     engine = createOperationTestEngine();
     const workerRegistry = new WorkerRegistry();
     workerRegistry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-1',
       queue: 'default',
       activities: ['charge'],
@@ -344,6 +357,8 @@ describe('worker drain operations', () => {
     engine = createOperationTestEngine();
     const workerRegistry = new WorkerRegistry();
     workerRegistry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-1',
       queue: 'default',
       activities: ['charge'],
@@ -384,6 +399,8 @@ describe('worker drain operations', () => {
     engine = createOperationTestEngine();
     const workerRegistry = new WorkerRegistry();
     workerRegistry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-1',
       queue: 'default',
       activities: ['charge'],
@@ -414,6 +431,8 @@ describe('worker drain operations', () => {
     engine = createOperationTestEngine();
     const workerRegistry = new WorkerRegistry();
     workerRegistry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-1',
       queue: 'default',
       activities: ['charge'],
@@ -484,6 +503,8 @@ describe('worker drain operations', () => {
     engine = createOperationTestEngine();
     const workerRegistry = new WorkerRegistry();
     workerRegistry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-a',
       queue: 'default',
       activities: ['charge'],
@@ -491,6 +512,8 @@ describe('worker drain operations', () => {
       deploymentName: 'payments',
     });
     workerRegistry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-b',
       queue: 'default',
       activities: ['charge'],
@@ -555,8 +578,22 @@ describe('worker drain operations', () => {
 describe('weft.workers.list — operation behavior', () => {
   it('invokes the clock exactly once per request, applying the same now to every worker', async () => {
     const workerRegistry = new WorkerRegistry();
-    workerRegistry.register({ id: 'a', queue: 'q', activities: ['x'], concurrency: 1 });
-    workerRegistry.register({ id: 'b', queue: 'q', activities: ['x'], concurrency: 1 });
+    workerRegistry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'a',
+      queue: 'q',
+      activities: ['x'],
+      concurrency: 1,
+    });
+    workerRegistry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'b',
+      queue: 'q',
+      activities: ['x'],
+      concurrency: 1,
+    });
     workerRegistry.getWorker('a')!.lastHeartbeat = 10;
     workerRegistry.getWorker('b')!.lastHeartbeat = 20;
 

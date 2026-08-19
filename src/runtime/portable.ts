@@ -103,6 +103,30 @@ export function detectRuntime(): RuntimeKind {
   return 'edge';
 }
 
+/**
+ * Detect the current runtime's version string, matching {@link detectRuntime}'s
+ * detection precedence. A browser or edge runtime exposes no version, so an
+ * empty string is a truthful answer rather than a missing field.
+ *
+ * @example
+ * ```ts
+ * import { detectRuntimeVersion } from '@lostgradient/weft';
+ *
+ * const version = detectRuntimeVersion();
+ * console.log(typeof version); // 'string'
+ * ```
+ */
+export function detectRuntimeVersion(): string {
+  switch (detectRuntime()) {
+    case 'bun':
+      return getBunGlobal()?.version ?? '';
+    case 'node':
+      return getProcess()?.versions?.node ?? '';
+    default:
+      return '';
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Environment variables
 // ---------------------------------------------------------------------------

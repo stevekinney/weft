@@ -11,12 +11,16 @@
 /**
  * Current RemoteWorker wire protocol version.
  *
- * **Version 2** (Phase 4 of the workflow-builder refactor) bumps the semantics
- * of the `activities: string[]` field in the register message. Each entry is
- * now a qualified `${workflowType}.${activityName}` name rather than a bare
- * activity name, so the server can dispatch the correct workflow's activity
- * implementation when the same activity key is used by multiple workflows. The
- * wire shape did not change; only the meaning of the strings.
+ * **Version 3** (Canonical Worker Manifest, WFT-27) replaces the register
+ * message's parallel top-level identity fields (`activities`, `queue`,
+ * `deploymentName`, `buildId`, `runtimeVersion`, `gitSha`, `capabilities`)
+ * with a single `manifest: WorkerManifest` field, and the ack echoes
+ * `acceptedManifestDigest` plus `serverCapabilities` instead of echoing
+ * `activities` back. Both directions of the handshake reshape — a strictly
+ * larger change than version 2's same-shape/different-semantics bump — so
+ * this is a clean break rather than a negotiated one: a v2 peer gets the
+ * canonical `WorkerProtocolIncompatibleError`, not a confusing
+ * `invalid_registration`.
  *
  * @example
  * ```ts
@@ -25,7 +29,7 @@
  * const registration = { type: 'register', protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION };
  * ```
  */
-export const REMOTE_WORKER_PROTOCOL_VERSION = 2;
+export const REMOTE_WORKER_PROTOCOL_VERSION = 3;
 
 /**
  * Lowest RemoteWorker protocol version accepted by this package.
@@ -34,10 +38,10 @@ export const REMOTE_WORKER_PROTOCOL_VERSION = 2;
  * ```ts
  * import { REMOTE_WORKER_MIN_PROTOCOL_VERSION } from '@lostgradient/weft/worker-protocol';
  *
- * const supportsCurrentVersion = REMOTE_WORKER_MIN_PROTOCOL_VERSION === 2;
+ * const supportsCurrentVersion = REMOTE_WORKER_MIN_PROTOCOL_VERSION === 3;
  * ```
  */
-export const REMOTE_WORKER_MIN_PROTOCOL_VERSION = 2;
+export const REMOTE_WORKER_MIN_PROTOCOL_VERSION = 3;
 
 /**
  * Highest RemoteWorker protocol version accepted by this package.
@@ -46,10 +50,10 @@ export const REMOTE_WORKER_MIN_PROTOCOL_VERSION = 2;
  * ```ts
  * import { REMOTE_WORKER_MAX_PROTOCOL_VERSION } from '@lostgradient/weft/worker-protocol';
  *
- * const canUseRequestedVersion = 2 <= REMOTE_WORKER_MAX_PROTOCOL_VERSION;
+ * const canUseRequestedVersion = 3 <= REMOTE_WORKER_MAX_PROTOCOL_VERSION;
  * ```
  */
-export const REMOTE_WORKER_MAX_PROTOCOL_VERSION = 2;
+export const REMOTE_WORKER_MAX_PROTOCOL_VERSION = 3;
 
 /**
  * Explicit supported RemoteWorker protocol versions.
@@ -58,7 +62,7 @@ export const REMOTE_WORKER_MAX_PROTOCOL_VERSION = 2;
  * ```ts
  * import { REMOTE_WORKER_SUPPORTED_PROTOCOL_VERSIONS } from '@lostgradient/weft/worker-protocol';
  *
- * const supported = REMOTE_WORKER_SUPPORTED_PROTOCOL_VERSIONS.includes(2);
+ * const supported = REMOTE_WORKER_SUPPORTED_PROTOCOL_VERSIONS.includes(3);
  * ```
  */
 export const REMOTE_WORKER_SUPPORTED_PROTOCOL_VERSIONS = [REMOTE_WORKER_PROTOCOL_VERSION] as const;
@@ -70,7 +74,7 @@ export const REMOTE_WORKER_SUPPORTED_PROTOCOL_VERSIONS = [REMOTE_WORKER_PROTOCOL
  * ```ts
  * import type { RemoteWorkerProtocolVersion } from '@lostgradient/weft/worker-protocol';
  *
- * const version: RemoteWorkerProtocolVersion = 2;
+ * const version: RemoteWorkerProtocolVersion = 3;
  * ```
  */
 export type RemoteWorkerProtocolVersion =

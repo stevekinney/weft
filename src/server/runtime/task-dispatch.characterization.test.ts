@@ -8,6 +8,10 @@
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import {
+  TEST_ACCEPTED_MANIFEST_DIGEST,
+  testWorkerManifest,
+} from '../../worker/registry-fixtures.test-support.ts';
 import { minimalServeOptions, minimalServerContext } from './server-context.test-support.ts';
 import { dispatchTaskImpl } from './task-dispatch.ts';
 
@@ -73,6 +77,8 @@ describe('dispatchTaskImpl', () => {
     };
 
     context.registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: workerId,
       queue: 'default',
       activities: ['doWork'],
@@ -102,6 +108,8 @@ describe('dispatchTaskImpl', () => {
 
     const workerId = 'worker-2';
     context.registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: workerId,
       queue: 'default',
       activities: ['assignMe'],
@@ -125,6 +133,8 @@ describe('dispatchTaskImpl', () => {
 
     const workerId = 'worker-affinity';
     context.registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: workerId,
       queue: 'default',
       activities: ['affinityWork'],
@@ -164,6 +174,8 @@ describe('dispatchTaskImpl', () => {
 
     const workerId = 'worker-deadline';
     context.registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: workerId,
       queue: 'default',
       activities: ['deadlineWork'],

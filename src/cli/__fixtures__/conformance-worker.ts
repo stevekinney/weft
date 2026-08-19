@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
 
+import { conformanceManifest } from './conformance-manifest.ts';
+
 export type ConformanceWorkerFixture = 'conforming';
 
 type InFlightTask = {
@@ -13,8 +15,7 @@ type InFlightTask = {
 };
 
 const serverUrl = Bun.env['WEFT_WORKER_URL'];
-const queue = Bun.env['WEFT_WORKER_QUEUE'] ?? 'conformance';
-const protocolVersion = Number(Bun.env['WEFT_WORKER_PROTOCOL_VERSION'] ?? '2');
+const protocolVersion = Number(Bun.env['WEFT_WORKER_PROTOCOL_VERSION'] ?? '3');
 const activities = (Bun.env['WEFT_WORKER_ACTIVITIES'] ?? '')
   .split(',')
   .map((activity) => activity.trim())
@@ -105,14 +106,14 @@ function handleTask(message: Record<string, unknown>): void {
   const attemptToken = message['attemptToken'];
   if (typeof attemptToken !== 'string' || attemptToken.length === 0) return;
 
-  if (activityName === 'weft.conformance.echo') {
+  if (activityName === 'conformance.echo') {
     complete(operationId, message['input'], attemptToken);
     return;
   }
 
   const tokenField = { attemptToken };
 
-  if (activityName === 'weft.conformance.sleep') {
+  if (activityName === 'conformance.sleep') {
     const timeout = setTimeout(
       () => complete(operationId, message['input'], attemptToken),
       millisecondsFromInput(message['input']),
@@ -121,7 +122,7 @@ function handleTask(message: Record<string, unknown>): void {
     return;
   }
 
-  if (activityName === 'weft.conformance.cancel') {
+  if (activityName === 'conformance.cancel') {
     const timeout = setTimeout(
       () => fail(operationId, 'Cancel was not delivered', attemptToken),
       millisecondsFromInput(message['input']),
@@ -138,9 +139,8 @@ socket.addEventListener('open', () => {
     type: 'register',
     protocolVersion,
     workerId,
-    activities,
+    manifest: conformanceManifest(activities),
     concurrency: 3,
-    queue,
   });
 });
 

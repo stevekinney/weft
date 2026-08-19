@@ -3,6 +3,8 @@ import { describe, expect, it } from 'bun:test';
 import { serve, type ServeOptions, type WeftServer } from '../../server/index.ts';
 import { useManualTaskReconciliationForTesting } from '../../server/runtime/task-reconciliation.ts';
 import { KEYS } from '../../storage/interface.ts';
+import { REMOTE_WORKER_PROTOCOL_VERSION } from '../../worker/protocol.ts';
+import { manifestForActivities } from '../../worker/registry-fixtures.test-support.ts';
 import { decode } from '../codec.ts';
 import { Engine } from '../engine.ts';
 import { waitForParityCondition } from './real-timer-wait.test-support.ts';
@@ -53,9 +55,9 @@ describe('Temporal failure-handling parity (remote-task heartbeat reclaim)', () 
           JSON.stringify({
             type: 'register',
             workerId: 'parity-heartbeat-worker',
-            activities: ['parityRemoteActivity'],
+            manifest: manifestForActivities(['parityRemoteActivity']),
             concurrency: 1,
-            protocolVersion: 2,
+            protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
           }),
         );
       });
@@ -75,7 +77,7 @@ describe('Temporal failure-handling parity (remote-task heartbeat reclaim)', () 
 
       await server.dispatchTask({
         operationId: 'parity-heartbeating-task',
-        activityName: 'parityRemoteActivity',
+        activityName: 'test.parityRemoteActivity',
         input: null,
         visibilityTimeout: 120,
       });

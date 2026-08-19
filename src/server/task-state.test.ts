@@ -7,6 +7,8 @@ import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types.ts';
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { REMOTE_WORKER_PROTOCOL_VERSION } from '../worker/protocol.ts';
+import { manifestForActivities } from '../worker/registry-fixtures.test-support.ts';
 import type { WeftServer } from './index.ts';
 import { serve } from './index.ts';
 import type { InflightRecord, QueuedRecord, ResolvedRecord } from './task-state.ts';
@@ -116,9 +118,9 @@ async function connectAndRegisterWorker(
   ws.send(
     JSON.stringify({
       type: 'register',
-      protocolVersion: 2,
+      protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
       workerId: options.workerId,
-      activities: options.activities,
+      manifest: manifestForActivities(options.activities),
       concurrency: options.concurrency ?? 10,
     }),
   );
@@ -525,10 +527,10 @@ describe('task state invariant (server integration)', () => {
     setup();
     const ws = await connectAndRegisterWorker(server, {
       workerId: 'w1',
-      activities: ['charge'],
+      activities: ['test.charge'],
     });
 
-    await server.dispatchTask({ operationId: 'ws-op-1', activityName: 'charge', input: null });
+    await server.dispatchTask({ operationId: 'ws-op-1', activityName: 'test.charge', input: null });
     await sleepForTesting(50);
 
     const state = await getExclusiveTaskState(storage, 'ws-op-1');
@@ -557,7 +559,7 @@ describe('task state invariant (server integration)', () => {
     setup();
     const ws = await connectAndRegisterWorker(server, {
       workerId: 'w1',
-      activities: ['charge'],
+      activities: ['test.charge'],
     });
 
     // Auto-respond with a completed result
@@ -580,7 +582,11 @@ describe('task state invariant (server integration)', () => {
       }
     });
 
-    await server.dispatchTask({ operationId: 'ws-resolve-1', activityName: 'charge', input: null });
+    await server.dispatchTask({
+      operationId: 'ws-resolve-1',
+      activityName: 'test.charge',
+      input: null,
+    });
 
     await waitForCondition(
       async () => (await getExclusiveTaskState(storage, 'ws-resolve-1')) === 'resolved',
@@ -598,10 +604,14 @@ describe('task state invariant (server integration)', () => {
     setup();
     const ws = await connectAndRegisterWorker(server, {
       workerId: 'w1',
-      activities: ['charge'],
+      activities: ['test.charge'],
     });
 
-    await server.dispatchTask({ operationId: 'excl-op-1', activityName: 'charge', input: null });
+    await server.dispatchTask({
+      operationId: 'excl-op-1',
+      activityName: 'test.charge',
+      input: null,
+    });
     await sleepForTesting(50);
 
     // Task should be in exactly one state (inflight)
@@ -680,10 +690,10 @@ describe('task state invariant (server integration)', () => {
     setup({ workerReconnectGracePeriodMs: 100 });
     const ws = await connectAndRegisterWorker(server, {
       workerId: 'w-disconnect',
-      activities: ['charge'],
+      activities: ['test.charge'],
     });
 
-    await server.dispatchTask({ operationId: 'dc-op-1', activityName: 'charge', input: null });
+    await server.dispatchTask({ operationId: 'dc-op-1', activityName: 'test.charge', input: null });
     await sleepForTesting(50);
 
     expect(await getTaskState(storage, 'dc-op-1')).toBe('inflight');
@@ -706,11 +716,11 @@ describe('task state invariant (server integration)', () => {
     // Test both paths: WS dispatch and long-poll dispatch
     const ws = await connectAndRegisterWorker(server, {
       workerId: 'w-find',
-      activities: ['ship'],
+      activities: ['test.ship'],
     });
 
     // WS task
-    await server.dispatchTask({ operationId: 'find-ws-1', activityName: 'ship', input: null });
+    await server.dispatchTask({ operationId: 'find-ws-1', activityName: 'test.ship', input: null });
     // Long-poll task (no WS worker for 'charge')
     await server.dispatchTask({ operationId: 'find-lp-1', activityName: 'charge', input: null });
     await sleepForTesting(50);

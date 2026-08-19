@@ -16,7 +16,7 @@ socket.addEventListener('open', () => {
     JSON.stringify({
       type: 'register',
       workerId: 'broken-conformance-worker',
-      activities: ['weft.conformance.echo'],
+      activities: ['conformance.echo'],
       concurrency: 1,
     }),
   );

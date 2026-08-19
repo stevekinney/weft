@@ -22,6 +22,10 @@ import { Engine } from '../core/engine.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import {
+  TEST_ACCEPTED_MANIFEST_DIGEST,
+  testWorkerManifest,
+} from '../worker/registry-fixtures.test-support.ts';
 import { WorkerRegistry } from '../worker/registry.ts';
 import { handleRequest, type HandlerOptions } from './handler.ts';
 import { defaultOperationRegistry } from './handler/route-dispatch.ts';
@@ -172,6 +176,8 @@ describe('handler pipeline — live worker infrastructure', () => {
     const workerRegistry = new WorkerRegistry();
     using taskQueue = new TaskQueue({ pendingTaskTimeToLive: Infinity });
     workerRegistry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-729',
       queue: 'workers',
       activities: ['charge'],

@@ -24,7 +24,6 @@ export type WorkerSnapshot = {
   deploymentName?: string | undefined;
   buildId?: string | undefined;
   runtimeVersion?: string | undefined;
-  gitSha?: string | undefined;
 };
 
 /**
@@ -51,7 +50,6 @@ export function projectWorkerSummary(snapshot: WorkerSnapshot, now: number): Wor
     ...(snapshot.deploymentName !== undefined ? { deploymentName: snapshot.deploymentName } : {}),
     ...(snapshot.buildId !== undefined ? { buildId: snapshot.buildId } : {}),
     ...(snapshot.runtimeVersion !== undefined ? { runtimeVersion: snapshot.runtimeVersion } : {}),
-    ...(snapshot.gitSha !== undefined ? { gitSha: snapshot.gitSha } : {}),
   };
 }
 
@@ -78,7 +76,6 @@ export type WorkerDeploymentSummary = {
   deploymentName: string | null;
   buildId: string | null;
   runtimeVersion: string | null;
-  gitSha: string | null;
   health: WorkerHealth;
   workers: number;
   activeWorkers: number;
@@ -92,7 +89,6 @@ type WorkerDeploymentIdentity = {
   deploymentName?: string | null | undefined;
   buildId?: string | null | undefined;
   runtimeVersion?: string | null | undefined;
-  gitSha?: string | null | undefined;
 };
 
 /** Stable composite key for grouping workers by deployment identity. */
@@ -101,7 +97,6 @@ export function deploymentIdentityKey(identity: WorkerDeploymentIdentity): strin
     identity.deploymentName ?? '',
     identity.buildId ?? '',
     identity.runtimeVersion ?? '',
-    identity.gitSha ?? '',
   ].join('\u{1f}');
 }
 
@@ -156,7 +151,6 @@ export function projectDeploymentSummary(
     deploymentName: first?.deploymentName ?? null,
     buildId: first?.buildId ?? null,
     runtimeVersion: first?.runtimeVersion ?? null,
-    gitSha: first?.gitSha ?? null,
     health: deploymentHealth(healthValues, drainActive),
     workers: workers.length,
     activeWorkers: healthCounts.active,

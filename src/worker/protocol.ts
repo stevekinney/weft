@@ -21,7 +21,6 @@ import {
   isFiniteNumber,
   isNonEmptyString,
   isRecord,
-  isRemoteWorkerCapabilities,
   isRemoteWorkerJsonValue,
   isStringArray,
   isStringRecord,
@@ -145,18 +144,15 @@ function validateRegisterProtocolVersion(
 
 // Field specs mirror the documented schema fields one-to-one, in schema order.
 // Reviewers can read this table top-to-bottom alongside the register schema.
+// `manifest` is proven only as a JSON object here — deep manifest validation
+// (parseWorkerManifest) runs where the manifest is accepted, not at this
+// wire-shape trust boundary.
 // prettier-ignore
 const REGISTER_FIELD_SPECS: readonly FieldSpec[] = [
-  ['workerId',       true,  isNonEmptyString,           'register.workerId must be a non-empty string'],
-  ['activities',     true,  isStringArray,              'register.activities must be an array of non-empty strings'],
-  ['concurrency',    false, isFiniteNumber,             'register.concurrency must be a finite number'],
-  ['queue',          false, isNonEmptyString,           'register.queue must be a non-empty string'],
-  ['deploymentName', false, isNonEmptyString,           'register.deploymentName must be a non-empty string when present'],
-  ['buildId',        false, isNonEmptyString,           'register.buildId must be a non-empty string when present'],
-  ['runtimeVersion', false, isNonEmptyString,           'register.runtimeVersion must be a non-empty string when present'],
-  ['gitSha',         false, isNonEmptyString,           'register.gitSha must be a non-empty string when present'],
-  ['startedAt',      false, isFiniteNumber,             'register.startedAt must be a finite number when present'],
-  ['capabilities',   false, isRemoteWorkerCapabilities, 'register.capabilities must be a JSON object when present'],
+  ['workerId',    true,  isNonEmptyString, 'register.workerId must be a non-empty string'],
+  ['manifest',    true,  isRecord,         'register.manifest must be a JSON object'],
+  ['concurrency', false, isFiniteNumber,   'register.concurrency must be a finite number'],
+  ['startedAt',   false, isFiniteNumber,   'register.startedAt must be a finite number when present'],
 ];
 
 function parseRegisterMessage(
@@ -247,25 +243,52 @@ function parseRegisterAckMessage(
 
   const workerId = record['workerId'];
   const queue = record['queue'];
-  const activities = record['activities'];
   const concurrency = record['concurrency'];
+  const acceptedManifestDigest = record['acceptedManifestDigest'];
+  const serverCapabilities = record['serverCapabilities'];
   if (!isNonEmptyString(workerId)) {
     return protocolFailure('invalid_message', 'registerAck.workerId must be a non-empty string');
   }
   if (!isNonEmptyString(queue)) {
     return protocolFailure('invalid_message', 'registerAck.queue must be a non-empty string');
   }
-  if (!isStringArray(activities)) {
-    return protocolFailure('invalid_message', 'registerAck.activities must be a string array');
-  }
   if (typeof concurrency !== 'number' || !Number.isFinite(concurrency)) {
     return protocolFailure('invalid_message', 'registerAck.concurrency must be a finite number');
+  }
+  if (!isNonEmptyString(acceptedManifestDigest)) {
+    return protocolFailure(
+      'invalid_message',
+      'registerAck.acceptedManifestDigest must be a non-empty string',
+    );
+  }
+  if (!isStringArray(serverCapabilities)) {
+    return protocolFailure(
+      'invalid_message',
+      'registerAck.serverCapabilities must be an array of non-empty strings',
+    );
   }
 
   return {
     ok: true,
-    message: { type: 'registerAck', protocolVersion, workerId, queue, activities, concurrency },
+    message: {
+      type: 'registerAck',
+      protocolVersion,
+      workerId,
+      queue,
+      concurrency,
+      acceptedManifestDigest,
+      serverCapabilities,
+    },
   };
+}
+
+function isRegisterErrorCode(value: unknown): value is RegisterErrorMessage['code'] {
+  return (
+    value === 'invalid_registration' ||
+    value === 'unsupported_protocol_version' ||
+    value === 'deployment_conflict' ||
+    value === 'registration_rejected'
+  );
 }
 
 function parseRegisterErrorMessage(
@@ -276,15 +299,20 @@ function parseRegisterErrorMessage(
   const supportedProtocolVersions = record['supportedProtocolVersions'];
   const requestedProtocolVersion = record['requestedProtocolVersion'];
 
-  if (code !== 'invalid_registration' && code !== 'unsupported_protocol_version') {
+  if (!isRegisterErrorCode(code)) {
     return protocolFailure('invalid_message', 'registerError.code is not recognized');
   }
   if (typeof message !== 'string') {
     return protocolFailure('invalid_message', 'registerError.message must be a string');
   }
+  // supportedProtocolVersions describes the *other* peer's versions, not this
+  // package's own — validated as any array of finite integers so a v3 client
+  // can still parse a rejection from a v2 (or v17) server. Checking against
+  // REMOTE_WORKER_SUPPORTED_PROTOCOL_VERSIONS here would make a mismatched
+  // rejection unparseable, defeating the diagnostic the field exists for.
   if (
     !Array.isArray(supportedProtocolVersions) ||
-    !supportedProtocolVersions.every((version) => version === REMOTE_WORKER_PROTOCOL_VERSION)
+    !supportedProtocolVersions.every((version) => isFiniteNumber(version))
   ) {
     return protocolFailure('invalid_message', 'registerError.supportedProtocolVersions is invalid');
   }

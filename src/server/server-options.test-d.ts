@@ -18,6 +18,9 @@ import {
   type ServeOptions,
   type TaskDispatch,
   type WeftServer,
+  type WorkerAdmissionDecision,
+  type WorkerAdmissionPolicy,
+  type WorkerAdmissionRequest,
 } from './index.ts';
 
 const engine = new Engine({ storage: new MemoryStorage() });
@@ -87,6 +90,17 @@ const discoveryInfo: DiscoveryInfo = { description: 'Example API' };
 const reexportedExporter: PrometheusExporter = prometheusExporter;
 const auth: AuthConfig = { apiKeys: ['secret'] };
 
+// WorkerAdmissionRequest and WorkerAdmissionDecision are nameable from the
+// same '@lostgradient/weft/server' entry as WorkerAdmissionPolicy, so a
+// consumer can type its own policy function without reaching into internals.
+const workerAdmissionPolicy: WorkerAdmissionPolicy = (request: WorkerAdmissionRequest) => {
+  const decision: WorkerAdmissionDecision =
+    request.manifest.deployment.name === 'billing'
+      ? { status: 'accepted' }
+      : { status: 'rejected', reason: 'only the billing deployment may register' };
+  return decision;
+};
+
 const fullyTypedServeOptions: ServeOptions = {
   engine,
   auth,
@@ -97,6 +111,7 @@ const fullyTypedServeOptions: ServeOptions = {
   schedulingPolicy,
   discoveryInfo,
   prometheusExporter: reexportedExporter,
+  workerAdmissionPolicy,
 };
 void fullyTypedServeOptions;
 

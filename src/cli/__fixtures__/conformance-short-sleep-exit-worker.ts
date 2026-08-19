@@ -1,10 +1,11 @@
 #!/usr/bin/env bun
 
+import { conformanceManifest } from './conformance-manifest.ts';
+
 export type ConformanceShortSleepExitWorkerFixture = 'short-sleep-exit';
 
 const serverUrl = Bun.env['WEFT_WORKER_URL'];
-const queue = Bun.env['WEFT_WORKER_QUEUE'] ?? 'conformance';
-const protocolVersion = Number(Bun.env['WEFT_WORKER_PROTOCOL_VERSION'] ?? '2');
+const protocolVersion = Number(Bun.env['WEFT_WORKER_PROTOCOL_VERSION'] ?? '3');
 const mode = Bun.env['WEFT_SHORT_SLEEP_EXIT_MODE'] ?? 'default';
 const launchStateFile = Bun.env['WEFT_SHORT_SLEEP_EXIT_STATE_FILE'];
 const activities = (Bun.env['WEFT_WORKER_ACTIVITIES'] ?? '')
@@ -60,7 +61,7 @@ function handleTaskMessage(parsed: Record<string, unknown>): void {
   if (!isNonEmptyString(attemptToken)) return;
   taskTokens.set(operationId, attemptToken);
 
-  if (activityName === 'weft.conformance.echo') {
+  if (activityName === 'conformance.echo') {
     send({
       type: 'taskResult',
       operationId,
@@ -71,7 +72,7 @@ function handleTaskMessage(parsed: Record<string, unknown>): void {
     return;
   }
 
-  if (activityName !== 'weft.conformance.sleep') {
+  if (activityName !== 'conformance.sleep') {
     return;
   }
 
@@ -128,9 +129,8 @@ socket.addEventListener('open', () => {
     type: 'register',
     protocolVersion,
     workerId,
-    activities,
+    manifest: conformanceManifest(activities),
     concurrency: 1,
-    queue,
   });
 });
 

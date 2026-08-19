@@ -21,6 +21,10 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import { Engine } from '../../core/engine.ts';
+import {
+  TEST_ACCEPTED_MANIFEST_DIGEST,
+  testWorkerManifest,
+} from '../../worker/registry-fixtures.test-support.ts';
 import { WorkerRegistry } from '../../worker/registry.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
@@ -68,6 +72,8 @@ describe('weft.task.queues.list — REST GET /v1/task-queues', () => {
 
     // queue-a: has backlog + a connected worker carrying one in-flight task.
     workerRegistry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'w-a',
       queue: 'queue-a',
       activities: ['activity-A'],
@@ -81,6 +87,8 @@ describe('weft.task.queues.list — REST GET /v1/task-queues', () => {
     // consume any pending task. Worker on queue-b is registered too so
     // connectedWorkers > 0.
     workerRegistry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'w-b',
       queue: 'queue-b',
       activities: ['activity-B'],
@@ -96,6 +104,8 @@ describe('weft.task.queues.list — REST GET /v1/task-queues', () => {
 
     // queue-c: idle queue with a connected worker, no backlog, no waiters.
     workerRegistry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'w-c',
       queue: 'queue-c',
       activities: ['activity-C'],

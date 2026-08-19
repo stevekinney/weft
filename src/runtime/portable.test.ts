@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import {
   detectRuntime,
+  detectRuntimeVersion,
   fileSize,
   gunzipSync,
   gzipSync,
@@ -59,6 +60,48 @@ describe('portable runtime helpers', () => {
         },
         async () => {
           expect(detectRuntime()).toBe('edge');
+        },
+      );
+    });
+  });
+
+  describe('detectRuntimeVersion', () => {
+    it('returns Bun.version under Bun', () => {
+      expect(detectRuntimeVersion()).toBe(Bun.version);
+    });
+
+    it('returns process.versions.node when Bun is unavailable but Node is present', async () => {
+      await withRuntimeOverrides(
+        { bun: undefined, process: { versions: { node: '20.11.0' } } as typeof globalThis.process },
+        async () => {
+          expect(detectRuntimeVersion()).toBe('20.11.0');
+        },
+      );
+    });
+
+    it('returns an empty string under a browser runtime', async () => {
+      await withRuntimeOverrides(
+        {
+          bun: undefined,
+          process: undefined,
+          window: {} as typeof globalThis.window,
+        },
+        async () => {
+          expect(detectRuntimeVersion()).toBe('');
+        },
+      );
+    });
+
+    it('returns an empty string under an edge runtime', async () => {
+      await withRuntimeOverrides(
+        {
+          bun: undefined,
+          process: undefined,
+          window: undefined,
+          document: undefined,
+        },
+        async () => {
+          expect(detectRuntimeVersion()).toBe('');
         },
       );
     });

@@ -45,8 +45,14 @@ export type RemoteWorkerCapabilities = Readonly<Record<string, RemoteWorkerJsonV
 /**
  * Worker registration message sent immediately after opening a worker stream.
  *
- * Each entry of `activities` is a qualified `${workflowType}.${activityName}`
- * name; bare activity names were retired in protocol v2.
+ * Protocol v3 replaced the parallel top-level identity fields
+ * (`activities`, `queue`, `deploymentName`, `buildId`, `runtimeVersion`,
+ * `gitSha`, `capabilities`) with a single `manifest`. The server derives
+ * routing activities from `manifest.workflows`, reads the queue from the
+ * worker-stream URL rather than a field a worker could disagree with, and
+ * validates every other identity claim through `parseWorkerManifest()`.
+ * `manifest` is `unknown` here deliberately — this module only proves wire
+ * shape; deep manifest validation happens where the manifest is accepted.
  *
  * @example
  * ```ts
@@ -54,9 +60,9 @@ export type RemoteWorkerCapabilities = Readonly<Record<string, RemoteWorkerJsonV
  *
  * const message: RegisterMessage = {
  *   type: 'register',
- *   protocolVersion: 2,
+ *   protocolVersion: 3,
  *   workerId: 'worker-1',
- *   activities: ['welcome.sendEmail'],
+ *   manifest: { manifestVersion: 1 },
  * };
  * ```
  */
@@ -64,15 +70,9 @@ export type RegisterMessage = {
   readonly type: 'register';
   readonly protocolVersion: RemoteWorkerProtocolVersion;
   readonly workerId: string;
-  readonly activities: readonly string[];
+  readonly manifest: unknown;
   readonly concurrency?: number;
-  readonly queue?: string;
-  readonly deploymentName?: string;
-  readonly buildId?: string;
-  readonly runtimeVersion?: string;
-  readonly gitSha?: string;
   readonly startedAt?: number;
-  readonly capabilities?: RemoteWorkerCapabilities;
 };
 
 /**
@@ -170,17 +170,24 @@ export type CancelledTaskResultMessage = {
 /**
  * Registration acknowledgement sent after a worker is accepted.
  *
+ * `acceptedManifestDigest` is the digest of the canonical manifest the server
+ * actually stored — a worker can confirm the server saw the manifest it
+ * intended to send. `serverCapabilities` replaces echoing `activities` back
+ * (the worker already knows what it sent); it is a bounded list of
+ * server-side capability names, currently always empty.
+ *
  * @example
  * ```ts
  * import type { RegisterAckMessage } from '@lostgradient/weft/worker-protocol';
  *
  * const message: RegisterAckMessage = {
  *   type: 'registerAck',
- *   protocolVersion: 2,
+ *   protocolVersion: 3,
  *   workerId: 'worker-1',
  *   queue: 'default',
- *   activities: ['welcome.sendEmail'],
  *   concurrency: 10,
+ *   acceptedManifestDigest: 'sha256:41d0e2',
+ *   serverCapabilities: [],
  * };
  * ```
  */
@@ -189,12 +196,21 @@ export type RegisterAckMessage = {
   readonly protocolVersion: RemoteWorkerProtocolVersion;
   readonly workerId: string;
   readonly queue: string;
-  readonly activities: readonly string[];
   readonly concurrency: number;
+  readonly acceptedManifestDigest: string;
+  readonly serverCapabilities: readonly string[];
 };
 
 /**
  * Registration rejection sent before closing an unsupported worker stream.
+ *
+ * `deployment_conflict` means the manifest's `(deploymentName, buildId)` pair
+ * was already registered with a different `artifactDigest`.
+ * `registration_rejected` means a configured `WorkerAdmissionPolicy` refused
+ * the worker. `supportedProtocolVersions` describes the *other* peer's
+ * supported versions — for a worker parsing a rejection from a server
+ * running a different release, that is deliberately not narrowed to
+ * `RemoteWorkerProtocolVersion`.
  *
  * @example
  * ```ts
@@ -204,16 +220,20 @@ export type RegisterAckMessage = {
  *   type: 'registerError',
  *   code: 'unsupported_protocol_version',
  *   message: 'Unsupported RemoteWorker protocol version: 1',
- *   supportedProtocolVersions: [2],
+ *   supportedProtocolVersions: [3],
  *   requestedProtocolVersion: 1,
  * };
  * ```
  */
 export type RegisterErrorMessage = {
   readonly type: 'registerError';
-  readonly code: 'invalid_registration' | 'unsupported_protocol_version';
+  readonly code:
+    | 'invalid_registration'
+    | 'unsupported_protocol_version'
+    | 'deployment_conflict'
+    | 'registration_rejected';
   readonly message: string;
-  readonly supportedProtocolVersions: readonly RemoteWorkerProtocolVersion[];
+  readonly supportedProtocolVersions: readonly number[];
   readonly requestedProtocolVersion?: number;
 };
 

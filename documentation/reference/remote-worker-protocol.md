@@ -8,7 +8,7 @@ JSON Schemas instead of reverse-engineering the source.
 
 ## At a glance
 
-- **Protocol version**: v2. `register.protocolVersion` is required and must be exactly `2`.
+- **Protocol version**: v3. `register.protocolVersion` is required and must be exactly `3`.
 - **Transport**: WebSocket text frames containing JSON objects.
 - **Endpoint**: `/api/v1/tasks/:queue/stream` on the Weft server. Connect to one queue per WebSocket.
 - **Direction**: bidirectional. Workers send `register`, `heartbeat`, `taskResult`. Server sends `task`, `cancel`, `shutdown`, `registerAck`, `registerError`, `protocolError`.
@@ -48,6 +48,8 @@ using worker = new RemoteWorker({
   workflows: { notifications: { name: 'notifications', activities: { sendEmail } } },
   concurrency: 5,
   queue: 'default',
+  deploymentName: 'notifications',
+  buildId: '2026.08.19-1',
 });
 await worker.connect();
 ```
@@ -94,7 +96,7 @@ Worker                              Server
   |   <-------- close 1008 --------   |
 ```
 
-Malformed JSON, malformed message shapes, worker-to-server message types not defined by v2, and `heartbeat` or `taskResult` before registration are fatal protocol errors:
+Malformed JSON, malformed message shapes, worker-to-server message types not defined by v3, and `heartbeat` or `taskResult` before registration are fatal protocol errors:
 
 ```text
 Worker                              Server
@@ -122,36 +124,48 @@ Sent immediately after the WebSocket opens.
 ```json
 {
   "type": "register",
-  "protocolVersion": 2,
+  "protocolVersion": 3,
   "workerId": "<string>",
-  "activities": ["notifications.sendEmail"],
+  "manifest": {
+    "manifestVersion": 1,
+    "protocolVersion": 3,
+    "sdkVersion": "0.18.0",
+    "runtime": { "name": "bun", "version": "1.3.14" },
+    "deployment": {
+      "name": "payments",
+      "buildId": "2026-05-12.1",
+      "artifactDigest": "sha256:41d0e2"
+    },
+    "workflows": {
+      "notifications": {
+        "workflowVersion": "0.0.0",
+        "workflowRevision": "declared-shape:9f1c2a7b3e4d5f60",
+        "contractHash": "declared-shape:9f1c2a7b3e4d5f60",
+        "activities": {
+          "sendEmail": {
+            "contractHash": "declared-shape:1a2b3c4d5e6f7081",
+            "implementationRevision": "declared-shape:1a2b3c4d5e6f7081"
+          }
+        }
+      }
+    },
+    "capabilities": { "region": "us-west" }
+  },
   "concurrency": 10,
-  "queue": "default",
-  "deploymentName": "payments",
-  "buildId": "2026-05-12.1",
-  "runtimeVersion": "bun-1.3.13",
-  "gitSha": "abc1234",
-  "startedAt": 1778608949187,
-  "capabilities": {
-    "region": "us-west"
-  }
+  "startedAt": 1778608949187
 }
 ```
 
-| Field             | Type                         | Required | Description                                                                                                                                                                           |
-| ----------------- | ---------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `type`            | `"register"`                 | Yes      | Message discriminator.                                                                                                                                                                |
-| `protocolVersion` | `2`                          | Yes      | Required v2 protocol version. Missing or unsupported versions receive `registerError`.                                                                                                |
-| `workerId`        | string                       | Yes      | Stable identifier for this worker. Must be non-empty.                                                                                                                                 |
-| `activities`      | string[]                     | Yes      | Names of activities this worker can execute, each in `${workflowType}.${activityName}` form when produced by the TypeScript SDK's `workflows` map. Entries must be non-empty strings. |
-| `concurrency`     | number                       | No       | Maximum concurrent tasks. Server clamps finite numbers to `[1, 1000]`. Defaults to `10`.                                                                                              |
-| `queue`           | string                       | No       | Informational queue name. The server uses the queue derived from the worker-stream URL instead.                                                                                       |
-| `deploymentName`  | string                       | No       | Operator-defined deployment group. Drain operations can target all workers with this name.                                                                                            |
-| `buildId`         | string                       | No       | Build or release identifier shown in fleet summaries.                                                                                                                                 |
-| `runtimeVersion`  | string                       | No       | Runtime or SDK version reported by the worker.                                                                                                                                        |
-| `gitSha`          | string                       | No       | Source revision reported by the worker.                                                                                                                                               |
-| `startedAt`       | number                       | No       | Worker process start time in epoch milliseconds. Defaults to registration time when omitted.                                                                                          |
-| `capabilities`    | `Record<string, JSON value>` | No       | JSON object of capability metadata such as region, hardware class, or feature flags.                                                                                                  |
+| Field             | Type             | Required | Description                                                                                                                                                                                                                                                                                                                                           |
+| ----------------- | ---------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `type`            | `"register"`     | Yes      | Message discriminator.                                                                                                                                                                                                                                                                                                                                |
+| `protocolVersion` | `3`              | Yes      | Required v3 protocol version. Missing or unsupported versions receive `registerError`.                                                                                                                                                                                                                                                                |
+| `workerId`        | string           | Yes      | Stable identifier for this worker. Must be non-empty.                                                                                                                                                                                                                                                                                                 |
+| `manifest`        | `WorkerManifest` | Yes      | Canonical worker manifest — deployment, runtime, workflows, activities, and capabilities. Deeply validated by `parseWorkerManifest()` server-side, not by this wire-shape layer; see [Canonical worker manifest](api-workers.md#canonical-worker-manifest). Routing `activities` are derived from `manifest.workflows`, not sent as a separate field. |
+| `concurrency`     | number           | No       | Maximum concurrent tasks. Server clamps finite numbers to `[1, 1000]`. Defaults to `10`.                                                                                                                                                                                                                                                              |
+| `startedAt`       | number           | No       | Worker process start time in epoch milliseconds. Defaults to registration time when omitted.                                                                                                                                                                                                                                                          |
+
+`queue`, `deploymentName`, `buildId`, `runtimeVersion`, `gitSha`, and `capabilities` are no longer top-level `register` fields as of protocol v3 — deployment and runtime identity live inside `manifest`, `gitSha` was retired entirely, and the effective queue always comes from the worker-stream URL rather than a field a worker could disagree with.
 
 The server processes `register` only on worker-stream paths (`/api/v1/tasks/:queue/stream`). On other WebSocket endpoints, worker protocol messages are ignored or handled by that endpoint's own protocol.
 
@@ -306,24 +320,26 @@ Server acknowledgement that registration succeeded.
 ```json
 {
   "type": "registerAck",
-  "protocolVersion": 2,
+  "protocolVersion": 3,
   "workerId": "<string>",
   "queue": "default",
-  "activities": ["notifications.sendEmail"],
-  "concurrency": 10
+  "concurrency": 10,
+  "acceptedManifestDigest": "sha256:41d0e2",
+  "serverCapabilities": []
 }
 ```
 
-| Field             | Type            | Required | Description                                                            |
-| ----------------- | --------------- | -------- | ---------------------------------------------------------------------- |
-| `type`            | `"registerAck"` | Yes      | Message discriminator.                                                 |
-| `protocolVersion` | `2`             | Yes      | Effective protocol version.                                            |
-| `workerId`        | string          | Yes      | Accepted worker identifier.                                            |
-| `queue`           | string          | Yes      | Effective queue from the WebSocket URL.                                |
-| `activities`      | string[]        | Yes      | Accepted activity names.                                               |
-| `concurrency`     | number          | Yes      | Effective concurrency after server clamping to the supported capacity. |
+| Field                    | Type            | Required | Description                                                                               |
+| ------------------------ | --------------- | -------- | ----------------------------------------------------------------------------------------- |
+| `type`                   | `"registerAck"` | Yes      | Message discriminator.                                                                    |
+| `protocolVersion`        | `3`             | Yes      | Effective protocol version.                                                               |
+| `workerId`               | string          | Yes      | Accepted worker identifier.                                                               |
+| `queue`                  | string          | Yes      | Effective queue from the WebSocket URL.                                                   |
+| `concurrency`            | number          | Yes      | Effective concurrency after server clamping to the supported capacity.                    |
+| `acceptedManifestDigest` | string          | Yes      | Digest of the canonical manifest the server stored, from `computeWorkerManifestDigest()`. |
+| `serverCapabilities`     | string[]        | Yes      | Bounded list of server-side capability names. Currently always empty.                     |
 
-Workers should not start heartbeats or report `connect()` success until this message arrives.
+`registerAck` no longer echoes `activities` — the worker already knows what it sent, and routing activities are derived server-side from the accepted manifest. Workers should not start heartbeats or report `connect()` success until this message arrives.
 
 #### `registerError`
 
@@ -334,18 +350,18 @@ Server rejection of registration. The server sends this message, then closes the
   "type": "registerError",
   "code": "unsupported_protocol_version",
   "message": "Unsupported RemoteWorker protocol version: 1",
-  "supportedProtocolVersions": [2],
+  "supportedProtocolVersions": [3],
   "requestedProtocolVersion": 1
 }
 ```
 
-| Field                       | Type                                                       | Required | Description                                                |
-| --------------------------- | ---------------------------------------------------------- | -------- | ---------------------------------------------------------- |
-| `type`                      | `"registerError"`                                          | Yes      | Message discriminator.                                     |
-| `code`                      | `"invalid_registration" \| "unsupported_protocol_version"` | Yes      | Machine-readable registration failure.                     |
-| `message`                   | string                                                     | Yes      | Human-readable diagnostic.                                 |
-| `supportedProtocolVersions` | number[]                                                   | Yes      | Supported protocol versions. For v2 this is exactly `[2]`. |
-| `requestedProtocolVersion`  | number                                                     | No       | Version sent by the worker when it was a finite number.    |
+| Field                       | Type                                                                                                           | Required | Description                                                                                                                                                                                                                                                    |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `type`                      | `"registerError"`                                                                                              | Yes      | Message discriminator.                                                                                                                                                                                                                                         |
+| `code`                      | `"invalid_registration" \| "unsupported_protocol_version" \| "deployment_conflict" \| "registration_rejected"` | Yes      | Machine-readable registration failure. `deployment_conflict` means the manifest's `(deploymentName, buildId)` was already registered with a different `artifactDigest`; `registration_rejected` means a configured `WorkerAdmissionPolicy` refused the worker. |
+| `message`                   | string                                                                                                         | Yes      | Human-readable diagnostic.                                                                                                                                                                                                                                     |
+| `supportedProtocolVersions` | number[]                                                                                                       | Yes      | The _server's_ supported protocol versions — not narrowed to the requesting worker's own, so a mismatched value can still be parsed and diagnosed.                                                                                                             |
+| `requestedProtocolVersion`  | number                                                                                                         | No       | Version sent by the worker when it was a finite number.                                                                                                                                                                                                        |
 
 #### `protocolError`
 
@@ -380,7 +396,7 @@ The command starts a localhost Weft server and launches the worker command with 
 | `WEFT_WORKER_URL`              | WebSocket URL for the temporary worker endpoint. |
 | `WEFT_WORKER_QUEUE`            | Queue name the worker should register for.       |
 | `WEFT_WORKER_ACTIVITIES`       | Comma-separated activity names to implement.     |
-| `WEFT_WORKER_PROTOCOL_VERSION` | Current protocol version, `2`.                   |
+| `WEFT_WORKER_PROTOCOL_VERSION` | Current protocol version, `3`.                   |
 
 The conformance runner verifies registration acknowledgement, echo task completion, heartbeat-preserved work, cancellation, in-flight reassignment after disconnect, graceful shutdown, and failure of a deliberately broken worker fixture. `--json` returns a stable machine-readable report. Without `--json`, each check prints as `PASS` or `FAIL`.
 

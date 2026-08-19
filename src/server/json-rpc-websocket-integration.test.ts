@@ -11,6 +11,8 @@ import { WorkflowSuspendedEvent } from '../core/events.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { REMOTE_WORKER_PROTOCOL_VERSION } from '../worker/protocol.ts';
+import { manifestForActivities } from '../worker/registry-fixtures.test-support.ts';
 import { serve, type WeftServer } from './index.ts';
 import { openWebSocket, waitForMessage } from './json-rpc-websocket-client.test-support.ts';
 import {
@@ -95,9 +97,9 @@ function registerWorker(
   socket.send(
     JSON.stringify({
       type: 'register',
-      protocolVersion: 2,
+      protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
       workerId: options.workerId,
-      activities: options.activities,
+      manifest: manifestForActivities(options.activities),
       concurrency: options.concurrency ?? 10,
     }),
   );

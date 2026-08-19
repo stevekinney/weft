@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
 
+import { conformanceManifest } from './conformance-manifest.ts';
+
 export type ConformanceWrongActivitiesWorkerFixture = 'wrong-activities';
 
 const serverUrl = Bun.env['WEFT_WORKER_URL'];
@@ -15,11 +17,10 @@ socket.addEventListener('open', () => {
   socket.send(
     JSON.stringify({
       type: 'register',
-      protocolVersion: Number(Bun.env['WEFT_WORKER_PROTOCOL_VERSION'] ?? '2'),
+      protocolVersion: Number(Bun.env['WEFT_WORKER_PROTOCOL_VERSION'] ?? '3'),
       workerId: 'wrong-activities-worker',
-      activities: ['weft.other.activity'],
+      manifest: conformanceManifest(['other.activity']),
       concurrency: 1,
-      queue: Bun.env['WEFT_WORKER_QUEUE'] ?? 'conformance',
     }),
   );
 });

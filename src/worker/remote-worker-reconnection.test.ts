@@ -32,7 +32,54 @@ import {
   type FaultInjectingWorker,
 } from '../testing/worker-fault-injection.test-support.ts';
 import { RemoteWorker } from './index.ts';
+import type { WorkerManifest, WorkerWorkflowContract } from './manifest/index.ts';
+import { WORKER_MANIFEST_VERSION } from './manifest/index.ts';
 import type { ServerToWorkerMessage, TaskMessage } from './protocol.ts';
+import { REMOTE_WORKER_PROTOCOL_VERSION } from './protocol.ts';
+
+/**
+ * Build a minimal manifest advertising exactly the given activity names. Each
+ * name may be `${workflowType}.${activityName}` (matching real dispatch
+ * routing in tests that assert on a specific qualified name) or a bare name,
+ * which is grouped under a synthetic `test` workflow.
+ */
+function manifestForActivities(
+  activities: readonly string[],
+  overrides: Partial<WorkerManifest> = {},
+): WorkerManifest {
+  const activityNamesByWorkflow: Record<string, Set<string>> = {};
+  for (const qualifiedName of activities) {
+    const dotIndex = qualifiedName.indexOf('.');
+    const workflowType = dotIndex === -1 ? 'test' : qualifiedName.slice(0, dotIndex);
+    const activityName = dotIndex === -1 ? qualifiedName : qualifiedName.slice(dotIndex + 1);
+    (activityNamesByWorkflow[workflowType] ??= new Set()).add(activityName);
+  }
+
+  const workflows: Record<string, WorkerWorkflowContract> = {};
+  for (const [workflowType, activityNames] of Object.entries(activityNamesByWorkflow)) {
+    const workflowActivities: Record<string, WorkerWorkflowContract['activities'][string]> = {};
+    for (const activityName of activityNames) {
+      workflowActivities[activityName] = { contractHash: 'hash', implementationRevision: 'rev' };
+    }
+    workflows[workflowType] = {
+      workflowVersion: '0.0.0',
+      workflowRevision: 'rev',
+      contractHash: 'hash',
+      activities: workflowActivities,
+    };
+  }
+
+  return {
+    manifestVersion: WORKER_MANIFEST_VERSION,
+    protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
+    sdkVersion: '0.18.0',
+    runtime: { name: 'bun', version: '1.3.14' },
+    deployment: { name: 'test-deployment', buildId: 'test-build', artifactDigest: 'sha256:test' },
+    workflows,
+    capabilities: {},
+    ...overrides,
+  };
+}
 
 type Setup = {
   engine: Engine;
@@ -86,19 +133,24 @@ function createSetup(overrides: Partial<Omit<ServeOptions, 'engine'>> = {}): Set
 async function connectAndRegisterWorker(
   setup: Setup,
   workerId: string,
-  options: { activities?: string[]; concurrency?: number } = {},
+  options: {
+    activities?: string[];
+    concurrency?: number;
+    manifestOverrides?: Partial<WorkerManifest>;
+  } = {},
 ): Promise<FaultInjectingWorker> {
   const worker = await connectFaultInjectingWorker({ url: setup.workerUrl, workerId });
   sockets.push(worker);
   worker.send({
     type: 'register',
-    protocolVersion: 2,
+    protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
     workerId,
-    activities: options.activities ?? ['echo'],
+    manifest: manifestForActivities(options.activities ?? ['echo'], options.manifestOverrides),
     concurrency: options.concurrency ?? 1,
-    queue: 'default',
   });
-  await worker.nextServerMessage((m) => m.type === 'registerAck', { timeoutMs: 1_000 });
+  // Registration now awaits a real async manifest digest server-side (protocol
+  // v3), so this margin is wider than the old fully-synchronous handshake needed.
+  await worker.nextServerMessage((m) => m.type === 'registerAck', { timeoutMs: 3_000 });
   return worker;
 }
 
@@ -138,7 +190,7 @@ describe('RemoteWorker durability — scanner-driven takeover', () => {
     const operationId = 'scenario-1-op';
     void setup.server.dispatchTask({
       operationId,
-      activityName: 'echo',
+      activityName: 'test.echo',
       input: { value: 'v' },
       // The visibilityTimeout governs BOTH worker-a's expiry (drives the
       // takeover) and worker-b's expiry (after takeover B has this long to
@@ -213,7 +265,7 @@ describe('RemoteWorker durability — idempotent duplicate completion (different
     const operationId = 'scenario-2-op';
     void setup.server.dispatchTask({
       operationId,
-      activityName: 'echo',
+      activityName: 'test.echo',
       input: { value: 'real' },
       visibilityTimeout: 30_000, // long — we drive takeover via hardClose
     });
@@ -305,7 +357,7 @@ describe('RemoteWorker durability — same-worker stale attempt (attempt token)'
     const operationId = 'same-worker-stale-op';
     void setup.server.dispatchTask({
       operationId,
-      activityName: 'echo',
+      activityName: 'test.echo',
       input: { value: 'v' },
       // Short enough that attempt 1 expires and the scanner (20ms poll) re-
       // dispatches to the only worker as attempt 2, but long enough that the
@@ -395,7 +447,7 @@ describe('RemoteWorker durability — transient reconnect continuity', () => {
     const operationId = 'scenario-3-op';
     void setup.server.dispatchTask({
       operationId,
-      activityName: 'echo',
+      activityName: 'test.echo',
       input: { value: 'v' },
       visibilityTimeout: 30_000,
     });
@@ -446,6 +498,8 @@ describe('RemoteWorker durability — backpressure decline is redelivered', () =
     using workerA = new RemoteWorker({
       serverUrl: setup.workerUrl,
       workerId: 'sdk-worker-a',
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       maxBufferedResults: 0,
       workflows: {
         orders: {
@@ -463,9 +517,19 @@ describe('RemoteWorker durability — backpressure decline is redelivered', () =
 
     // Worker B is registered before dispatch so the no-grace requeue has a
     // live WebSocket target. Round-robin preserves the first attempt for A
-    // because A registered first.
+    // because A registered first. B gets its own deployment identity: it is a
+    // different worker build than the SDK-based worker A, and sharing A's
+    // (deploymentName, buildId) with a different declared shape would trip
+    // the deployment-consistency guard's conflict detection.
     const workerB = await connectAndRegisterWorker(setup, 'worker-b', {
       activities: ['orders.echo'],
+      manifestOverrides: {
+        deployment: {
+          name: 'test-deployment-b',
+          buildId: 'test-build-b',
+          artifactDigest: 'sha256:test-b',
+        },
+      },
     });
     const taskForB = workerB.nextServerMessage(isTask, { timeoutMs: 5_000 });
 
@@ -605,7 +669,7 @@ const testServer = Bun.serve({
       const body = (await request.json());
       const ok = await server.dispatchTask({
         operationId: body.operationId,
-        activityName: 'echo',
+        activityName: 'test.echo',
         input: { value: body.value },
         visibilityTimeout: body.visibilityTimeout,
       });
@@ -649,11 +713,10 @@ process.on('SIGINT', () => void stop(0));
     sockets.push(workerA);
     workerA.send({
       type: 'register',
-      protocolVersion: 2,
+      protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
       workerId: 'worker-a',
-      activities: ['echo'],
+      manifest: manifestForActivities(['echo']),
       concurrency: 1,
-      queue: 'default',
     });
     await workerA.nextServerMessage((m) => m.type === 'registerAck', { timeoutMs: 2_000 });
 
@@ -685,11 +748,10 @@ process.on('SIGINT', () => void stop(0));
     sockets.push(workerB);
     workerB.send({
       type: 'register',
-      protocolVersion: 2,
+      protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
       workerId: 'worker-b',
-      activities: ['echo'],
+      manifest: manifestForActivities(['echo']),
       concurrency: 1,
-      queue: 'default',
     });
     await workerB.nextServerMessage((m) => m.type === 'registerAck', { timeoutMs: 2_000 });
 

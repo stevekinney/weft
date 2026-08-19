@@ -9,6 +9,10 @@
  */
 import { describe, expect, it } from 'bun:test';
 
+import {
+  TEST_ACCEPTED_MANIFEST_DIGEST,
+  testWorkerManifest,
+} from './registry-fixtures.test-support.ts';
 import { WorkerRegistry } from './registry.ts';
 import { compareScores, FairShareCounters, scoreWorker } from './registry/fair-share.ts';
 import { projectWorkerSummaries } from './registry/summary.ts';
@@ -20,8 +24,22 @@ import { projectWorkerSummaries } from './registry/summary.ts';
 describe('findWorker characterization', () => {
   it('drained workers are never eligible', () => {
     const registry = new WorkerRegistry();
-    registry.register({ id: 'drained', queue: 'q', activities: ['a'], concurrency: 5 });
-    registry.register({ id: 'active', queue: 'q', activities: ['a'], concurrency: 5 });
+    registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'drained',
+      queue: 'q',
+      activities: ['a'],
+      concurrency: 5,
+    });
+    registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'active',
+      queue: 'q',
+      activities: ['a'],
+      concurrency: 5,
+    });
     registry.markWorkerDraining('drained', { updatedAt: 1000 });
 
     expect(registry.findWorker('a', { queue: 'q' })?.id).toBe('active');
@@ -29,8 +47,22 @@ describe('findWorker characterization', () => {
 
   it('capacity-zero workers are excluded before policy selection', () => {
     const registry = new WorkerRegistry();
-    registry.register({ id: 'full', queue: 'q', activities: ['a'], concurrency: 1 });
-    registry.register({ id: 'spare', queue: 'q', activities: ['a'], concurrency: 1 });
+    registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'full',
+      queue: 'q',
+      activities: ['a'],
+      concurrency: 1,
+    });
+    registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'spare',
+      queue: 'q',
+      activities: ['a'],
+      concurrency: 1,
+    });
     registry.taskAssigned('full'); // full is now at concurrency limit
 
     expect(registry.findWorker('a', { queue: 'q' })?.id).toBe('spare');
@@ -38,8 +70,22 @@ describe('findWorker characterization', () => {
 
   it('share-scope (queue) filter excludes workers on other queues', () => {
     const registry = new WorkerRegistry();
-    registry.register({ id: 'wrong-queue', queue: 'other', activities: ['a'], concurrency: 5 });
-    registry.register({ id: 'right-queue', queue: 'target', activities: ['a'], concurrency: 5 });
+    registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'wrong-queue',
+      queue: 'other',
+      activities: ['a'],
+      concurrency: 5,
+    });
+    registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'right-queue',
+      queue: 'target',
+      activities: ['a'],
+      concurrency: 5,
+    });
 
     expect(registry.findWorker('a', { queue: 'target' })?.id).toBe('right-queue');
     expect(registry.findWorker('a', { queue: 'other' })?.id).toBe('wrong-queue');
@@ -47,8 +93,22 @@ describe('findWorker characterization', () => {
 
   it('activity-set superset: only workers advertising the activity are eligible', () => {
     const registry = new WorkerRegistry();
-    registry.register({ id: 'partial', queue: 'q', activities: ['b', 'c'], concurrency: 5 });
-    registry.register({ id: 'has-it', queue: 'q', activities: ['a', 'b'], concurrency: 5 });
+    registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'partial',
+      queue: 'q',
+      activities: ['b', 'c'],
+      concurrency: 5,
+    });
+    registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'has-it',
+      queue: 'q',
+      activities: ['a', 'b'],
+      concurrency: 5,
+    });
 
     expect(registry.findWorker('a')?.id).toBe('has-it');
     expect(registry.findWorker('c')?.id).toBe('partial');
@@ -57,8 +117,17 @@ describe('findWorker characterization', () => {
 
   it('queue-set membership: worker with matching queue wins over queue-less search', () => {
     const registry = new WorkerRegistry();
-    registry.register({ id: 'billing', queue: 'billing', activities: ['charge'], concurrency: 5 });
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'billing',
+      queue: 'billing',
+      activities: ['charge'],
+      concurrency: 5,
+    });
+    registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'shipping',
       queue: 'shipping',
       activities: ['charge'],
@@ -75,8 +144,22 @@ describe('findWorker characterization', () => {
 
   it('sticky wins regardless of load when within capacity', () => {
     const registry = new WorkerRegistry();
-    registry.register({ id: 'w-a', queue: 'q', activities: ['x'], concurrency: 10 });
-    registry.register({ id: 'w-b', queue: 'q', activities: ['x'], concurrency: 10 });
+    registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'w-a',
+      queue: 'q',
+      activities: ['x'],
+      concurrency: 10,
+    });
+    registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'w-b',
+      queue: 'q',
+      activities: ['x'],
+      concurrency: 10,
+    });
     // Load w-b heavily — sticky should still pick it
     for (let index = 0; index < 7; index += 1) registry.taskAssigned('w-b');
 
@@ -85,8 +168,22 @@ describe('findWorker characterization', () => {
 
   it('sticky falls back to policy when sticky worker is at capacity', () => {
     const registry = new WorkerRegistry();
-    registry.register({ id: 'w-a', queue: 'q', activities: ['x'], concurrency: 1 });
-    registry.register({ id: 'w-b', queue: 'q', activities: ['x'], concurrency: 1 });
+    registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'w-a',
+      queue: 'q',
+      activities: ['x'],
+      concurrency: 1,
+    });
+    registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'w-b',
+      queue: 'q',
+      activities: ['x'],
+      concurrency: 1,
+    });
     registry.taskAssigned('w-a'); // fill sticky target
 
     expect(registry.findWorker('x', { sticky: 'w-a' })?.id).toBe('w-b');
@@ -94,8 +191,22 @@ describe('findWorker characterization', () => {
 
   it('sticky falls back to policy when sticky worker is draining', () => {
     const registry = new WorkerRegistry();
-    registry.register({ id: 'sticky-drain', queue: 'q', activities: ['x'], concurrency: 5 });
-    registry.register({ id: 'available', queue: 'q', activities: ['x'], concurrency: 5 });
+    registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'sticky-drain',
+      queue: 'q',
+      activities: ['x'],
+      concurrency: 5,
+    });
+    registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'available',
+      queue: 'q',
+      activities: ['x'],
+      concurrency: 5,
+    });
     registry.markWorkerDraining('sticky-drain', { updatedAt: 1000 });
 
     expect(registry.findWorker('x', { sticky: 'sticky-drain' })?.id).toBe('available');
@@ -110,9 +221,30 @@ describe('pickFairShare characterization', () => {
   it('equal-score tie-breaker: lowest inFlight wins, then lexicographic id', () => {
     const registry = new WorkerRegistry({ policy: 'fair-share' });
     // All three have keyLoad=0 for 'share-x'; inFlight differs
-    registry.register({ id: 'w-c', queue: 'q', activities: ['a'], concurrency: 10 });
-    registry.register({ id: 'w-a', queue: 'q', activities: ['a'], concurrency: 10 });
-    registry.register({ id: 'w-b', queue: 'q', activities: ['a'], concurrency: 10 });
+    registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'w-c',
+      queue: 'q',
+      activities: ['a'],
+      concurrency: 10,
+    });
+    registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'w-a',
+      queue: 'q',
+      activities: ['a'],
+      concurrency: 10,
+    });
+    registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'w-b',
+      queue: 'q',
+      activities: ['a'],
+      concurrency: 10,
+    });
     registry.taskAssigned('w-c'); // 1 in-flight
     // w-a and w-b both at 0 — w-a wins by id
 
@@ -121,8 +253,22 @@ describe('pickFairShare characterization', () => {
 
   it('drained workers are not scored', () => {
     const registry = new WorkerRegistry({ policy: 'fair-share' });
-    registry.register({ id: 'drained', queue: 'q', activities: ['a'], concurrency: 5 });
-    registry.register({ id: 'active', queue: 'q', activities: ['a'], concurrency: 5 });
+    registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'drained',
+      queue: 'q',
+      activities: ['a'],
+      concurrency: 5,
+    });
+    registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'active',
+      queue: 'q',
+      activities: ['a'],
+      concurrency: 5,
+    });
     registry.markWorkerDraining('drained', { updatedAt: 1000 });
 
     expect(registry.findWorker('a', { fairShareKey: 'share-x' })?.id).toBe('active');
@@ -130,8 +276,22 @@ describe('pickFairShare characterization', () => {
 
   it('capacity boundary: full workers are excluded from scoring', () => {
     const registry = new WorkerRegistry({ policy: 'fair-share' });
-    registry.register({ id: 'full', queue: 'q', activities: ['a'], concurrency: 1 });
-    registry.register({ id: 'spare', queue: 'q', activities: ['a'], concurrency: 5 });
+    registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'full',
+      queue: 'q',
+      activities: ['a'],
+      concurrency: 1,
+    });
+    registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'spare',
+      queue: 'q',
+      activities: ['a'],
+      concurrency: 5,
+    });
     registry.taskAssigned('full');
 
     expect(registry.findWorker('a', { fairShareKey: 'share-x' })?.id).toBe('spare');
@@ -139,8 +299,22 @@ describe('pickFairShare characterization', () => {
 
   it('score function over curated workload snapshot: key-load dominates', () => {
     const registry = new WorkerRegistry({ policy: 'fair-share' });
-    registry.register({ id: 'heavy-key', queue: 'q', activities: ['a'], concurrency: 10 });
-    registry.register({ id: 'light-key', queue: 'q', activities: ['a'], concurrency: 10 });
+    registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'heavy-key',
+      queue: 'q',
+      activities: ['a'],
+      concurrency: 10,
+    });
+    registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'light-key',
+      queue: 'q',
+      activities: ['a'],
+      concurrency: 10,
+    });
 
     // heavy-key has 2 tasks for share-alpha but only 2 overall
     registry.assignTask('heavy-key', 'op-1', 30_000, 'share-alpha', 'attempt-token');
@@ -157,8 +331,22 @@ describe('pickFairShare characterization', () => {
 
   it('fair-share degrades to least-loaded when fairShareKey is omitted', () => {
     const registry = new WorkerRegistry({ policy: 'fair-share' });
-    registry.register({ id: 'loaded', queue: 'q', activities: ['a'], concurrency: 10 });
-    registry.register({ id: 'idle', queue: 'q', activities: ['a'], concurrency: 10 });
+    registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'loaded',
+      queue: 'q',
+      activities: ['a'],
+      concurrency: 10,
+    });
+    registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'idle',
+      queue: 'q',
+      activities: ['a'],
+      concurrency: 10,
+    });
     registry.taskAssigned('loaded');
     registry.taskAssigned('loaded');
 
@@ -242,6 +430,8 @@ describe('projectWorkerSummaries characterization', () => {
     const registry = new WorkerRegistry();
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'charlie',
       queue: 'default',
       activities: ['a'],
@@ -249,15 +439,18 @@ describe('projectWorkerSummaries characterization', () => {
       deploymentName: 'deploy-c',
       buildId: 'build-c',
       runtimeVersion: '1.0.0',
-      gitSha: 'ccc',
     });
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'alpha',
       queue: 'mail',
       activities: ['send'],
       concurrency: 2,
     });
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'bravo',
       queue: 'default',
       activities: ['a', 'b'],
@@ -292,7 +485,6 @@ describe('projectWorkerSummaries characterization', () => {
       deploymentName: worker.deploymentName,
       buildId: worker.buildId,
       runtimeVersion: worker.runtimeVersion,
-      gitSha: worker.gitSha,
     }));
 
     const projected = projectWorkerSummaries(snapshots, now);

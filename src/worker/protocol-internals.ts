@@ -13,7 +13,6 @@
 import type {
   ProtocolErrorMessage,
   RegisterErrorMessage,
-  RemoteWorkerCapabilities,
   RemoteWorkerJsonValue,
 } from './protocol-messages.ts';
 
@@ -99,11 +98,6 @@ export function isStringArray(value: unknown): value is string[] {
 export function isStringRecord(value: unknown): value is Record<string, string> {
   if (!isRecord(value)) return false;
   return Object.values(value).every((entry) => typeof entry === 'string');
-}
-
-export function isRemoteWorkerCapabilities(value: unknown): value is RemoteWorkerCapabilities {
-  if (!isRecord(value)) return false;
-  return Object.values(value).every(isRemoteWorkerJsonValue);
 }
 
 export function isFiniteNumber(value: unknown): value is number {

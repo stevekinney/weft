@@ -493,7 +493,6 @@ export type ClientOperationTypes = {
         readonly deploymentName: unknown;
         readonly drainedWorkers: number;
         readonly drainingWorkers: number;
-        readonly gitSha: unknown;
         readonly health: 'active' | 'draining' | 'drained';
         readonly inFlight: number;
         readonly oldestStartedAt: unknown;
@@ -508,7 +507,6 @@ export type ClientOperationTypes = {
         readonly concurrency: number;
         readonly connectedAt: number;
         readonly deploymentName?: string;
-        readonly gitSha?: string;
         readonly health: 'active' | 'draining' | 'drained';
         readonly heartbeatAgeMs: number;
         readonly id: string;

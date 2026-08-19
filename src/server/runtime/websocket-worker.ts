@@ -1,24 +1,17 @@
 import type { ServerWebSocket } from 'bun';
 
 import { decode, encode } from '../../core/codec.ts';
-import { WorkerConnectedEvent } from '../../core/events.ts';
 import { KEYS } from '../../storage/interface.ts';
 import {
   REMOTE_WORKER_PROTOCOL_VERSION,
-  REMOTE_WORKER_SUPPORTED_PROTOCOL_VERSIONS,
   parseWorkerToServerMessage,
   type HeartbeatMessage,
-  type ProtocolErrorMessage,
-  type RegisterErrorMessage,
-  type RegisterMessage,
   type TaskResultMessage,
   type WorkerToServerMessage,
 } from '../../worker/protocol.ts';
-import type { WorkerRegistrationInfo } from '../../worker/registry.ts';
 import { workerProtocolIncompatibleMessage } from '../../worker/worker-protocol-incompatible-error.ts';
 import type { ServeOptions } from '../index.ts';
 import type { WebSocketData } from '../json-rpc-websocket-runtime.ts';
-import { isAuthenticated } from '../principal.ts';
 import { isInflightRecord, readInflightRecord } from '../task-state.ts';
 import type { ServerContext } from './context.ts';
 import { withRetry } from './retry.ts';
@@ -28,11 +21,12 @@ import {
   transitionTaskResultToResolvedWithRetry,
 } from './task-result-resolution.ts';
 import { WORKER_STREAM_RE } from './websocket-upgrade.ts';
-
-const MAX_WORKER_CONCURRENCY = 1_000;
-const DEFAULT_WORKER_CONCURRENCY = 10;
-const WORKER_PROTOCOL_CLOSE_CODE = 1002;
-const WORKER_REGISTRATION_CLOSE_CODE = 1008;
+import {
+  rejectProtocolMessage,
+  rejectRegistration,
+  sendWorkerProtocolMessage,
+} from './websocket-worker-messaging.ts';
+import { registerWorker } from './websocket-worker-registration.ts';
 
 function isWorkerConnection(pathname: string): boolean {
   return WORKER_STREAM_RE.test(pathname);
@@ -41,165 +35,6 @@ function isWorkerConnection(pathname: string): boolean {
 export { isInflightRecord } from '../task-state.ts';
 
 export { withRetry } from './retry.ts';
-
-function sendWorkerProtocolMessage(
-  ws: ServerWebSocket<WebSocketData>,
-  message: ProtocolErrorMessage | RegisterErrorMessage | Record<string, unknown>,
-): void {
-  ws.send(JSON.stringify(message));
-}
-
-function closeWorkerSocket(ws: ServerWebSocket<WebSocketData>, code: number, reason: string): void {
-  try {
-    ws.unsubscribe(ws.data.pathname);
-  } catch {
-    // The socket may already be detached from the subscription set.
-  }
-  ws.close(code, reason);
-  setTimeout(() => {
-    try {
-      ws.terminate();
-    } catch {
-      // The peer may have already completed the close handshake.
-    }
-  }, 10);
-}
-
-function rejectRegistration(
-  ws: ServerWebSocket<WebSocketData>,
-  code: RegisterErrorMessage['code'],
-  message: string,
-  requestedProtocolVersion?: number,
-): void {
-  sendWorkerProtocolMessage(ws, {
-    type: 'registerError',
-    code,
-    message,
-    supportedProtocolVersions: REMOTE_WORKER_SUPPORTED_PROTOCOL_VERSIONS,
-    ...(requestedProtocolVersion !== undefined ? { requestedProtocolVersion } : {}),
-  });
-  closeWorkerSocket(ws, WORKER_REGISTRATION_CLOSE_CODE, code);
-}
-
-function rejectProtocolMessage(
-  ws: ServerWebSocket<WebSocketData>,
-  code: ProtocolErrorMessage['code'],
-  message: string,
-): void {
-  sendWorkerProtocolMessage(ws, { type: 'protocolError', code, message });
-  closeWorkerSocket(ws, WORKER_PROTOCOL_CLOSE_CODE, code);
-}
-
-/**
- * Whether the connection's principal is allowed to register a worker. An
- * absent principal means authentication is disabled on this server, so the
- * registration is allowed; a present principal must carry `workers:write`.
- */
-function principalMayRegisterWorker(principal: WebSocketData['principal']): boolean {
-  if (principal === undefined) return true;
-  return isAuthenticated(principal) && principal.hasScope('workers:write');
-}
-
-/**
- * Build the registry descriptor from a register message, including only the
- * optional metadata fields the worker actually supplied so the registry never
- * stores `undefined` values.
- */
-function buildWorkerRegistrationInfo(
-  message: RegisterMessage,
-  queue: string,
-  concurrency: number,
-): WorkerRegistrationInfo {
-  return {
-    id: message.workerId,
-    queue,
-    activities: [...message.activities],
-    concurrency,
-    ...(message.deploymentName !== undefined ? { deploymentName: message.deploymentName } : {}),
-    ...(message.buildId !== undefined ? { buildId: message.buildId } : {}),
-    ...(message.runtimeVersion !== undefined ? { runtimeVersion: message.runtimeVersion } : {}),
-    ...(message.gitSha !== undefined ? { gitSha: message.gitSha } : {}),
-    ...(message.startedAt !== undefined ? { startedAt: message.startedAt } : {}),
-    ...(message.capabilities !== undefined ? { capabilities: message.capabilities } : {}),
-  };
-}
-
-function registerWorker(
-  context: ServerContext,
-  options: ServeOptions,
-  ws: ServerWebSocket<WebSocketData>,
-  message: RegisterMessage,
-): void {
-  if (!principalMayRegisterWorker(ws.data.principal)) {
-    rejectRegistration(
-      ws,
-      'invalid_registration',
-      'Worker registration requires the workers:write scope',
-      message.protocolVersion,
-    );
-    return;
-  }
-
-  const rawConcurrency = message.concurrency ?? DEFAULT_WORKER_CONCURRENCY;
-  const clampedConcurrency = Math.min(
-    Math.max(1, Math.floor(rawConcurrency)),
-    MAX_WORKER_CONCURRENCY,
-  );
-  const queue = ws.data.queue ?? 'default';
-
-  // Cancel any pending deferred-requeue for this workerId. The previous socket
-  // closed and scheduled a requeue inside the grace period; the worker is
-  // reconnecting before that fires, so we hold its in-flight tasks instead of
-  // reassigning them.
-  const pendingRequeue = context.pendingWorkerRequeues.get(message.workerId);
-  const isGracePeriodReconnect = pendingRequeue !== undefined;
-  if (isGracePeriodReconnect) {
-    clearTimeout(pendingRequeue);
-    context.pendingWorkerRequeues.delete(message.workerId);
-  }
-
-  // Guard against workerId hijacking. A `workerSockets` entry for this ID held
-  // by a DIFFERENT live socket means another connection already owns it — but
-  // only block when the previous socket never disconnected (no pending-requeue
-  // entry existed). Two registrations are intentionally allowed:
-  //   - The same socket re-registering (identity match) to refresh its metadata;
-  //     `WorkerRegistry.register` is built to refresh an existing id.
-  //   - A grace-period reconnect: the old socket's close event already fired
-  //     (that is what created the pending-requeue entry, since it was still the
-  //     owner at close so the stale-socket guard did not trip), and it will not
-  //     fire again. That path is made safe just above and below — the deferred-
-  //     requeue timer was cleared, and the `workerSockets.set` below overwrites
-  //     the stale entry — not by the close handler.
-  // A different unauthenticated or malicious client claiming an actively-
-  // connected workerId (no pending requeue) is rejected here instead.
-  const existingSocket = context.workerSockets.get(message.workerId);
-  if (!isGracePeriodReconnect && existingSocket !== undefined && existingSocket !== ws) {
-    rejectRegistration(
-      ws,
-      'invalid_registration',
-      'workerId is already registered to an active connection',
-      message.protocolVersion,
-    );
-    return;
-  }
-
-  ws.data.workerId = message.workerId;
-  ws.data.workerRegistered = true;
-  ws.data.workerProtocolVersion = message.protocolVersion;
-  context.registry.register(buildWorkerRegistrationInfo(message, queue, clampedConcurrency));
-  context.workerSockets.set(message.workerId, ws);
-  sendWorkerProtocolMessage(ws, {
-    type: 'registerAck',
-    protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
-    workerId: message.workerId,
-    queue,
-    activities: [...message.activities],
-    concurrency: clampedConcurrency,
-  });
-  options.engine.dispatchEvent(
-    new WorkerConnectedEvent(message.workerId, queue, [...message.activities], clampedConcurrency),
-  );
-}
 
 function resolveTaskResultStatus(message: TaskResultMessage): 'completed' | 'failed' {
   return message.status === 'completed' ? 'completed' : 'failed';
@@ -367,9 +202,17 @@ function parseAndValidateWorkerFrame(
 
   const result = parseWorkerToServerMessage(parsed);
   if (!result.ok) {
+    // deployment_conflict and registration_rejected can never actually come
+    // from wire-shape parsing — only registerWorker() decides those, after
+    // deep manifest validation succeeds — but they share RegisterErrorMessage's
+    // code union, so they are routed through rejectRegistration here too to
+    // keep this narrowing exhaustive against that type rather than relying on
+    // a runtime guarantee the type checker cannot see.
     if (
       result.error.code === 'invalid_registration' ||
-      result.error.code === 'unsupported_protocol_version'
+      result.error.code === 'unsupported_protocol_version' ||
+      result.error.code === 'deployment_conflict' ||
+      result.error.code === 'registration_rejected'
     ) {
       // Phase 4: a worker advertising an older protocol version (the v1 wire
       // semantics, which sent bare activity names) is rejected with the
@@ -417,7 +260,9 @@ export function handleWorkerWebSocketMessage(
 
   switch (message.type) {
     case 'register': {
-      registerWorker(context, options, ws, message);
+      void registerWorker(context, options, ws, message).catch((error: unknown) => {
+        console.error(`[weft] Failed to register worker "${message.workerId}":`, error);
+      });
       break;
     }
     case 'taskResult': {

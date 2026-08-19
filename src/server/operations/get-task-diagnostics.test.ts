@@ -6,6 +6,10 @@ import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
 import { KEYS, type ScanOptions } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import {
+  TEST_ACCEPTED_MANIFEST_DIGEST,
+  testWorkerManifest,
+} from '../../worker/registry-fixtures.test-support.ts';
 import { WorkerRegistry } from '../../worker/registry.ts';
 import type { AuthorizationScope } from '../authorization-scope.ts';
 import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
@@ -185,6 +189,8 @@ describe('weft.tasks.diagnostics', () => {
     await putResolvedRecord(storage, retryStorm);
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-capacity',
       queue: 'payments',
       activities: ['charge'],

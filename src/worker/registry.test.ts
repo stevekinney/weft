@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'bun:test';
+import {
+  TEST_ACCEPTED_MANIFEST_DIGEST,
+  testWorkerManifest,
+} from './registry-fixtures.test-support.ts';
 import { WorkerRegistry } from './registry.ts';
 
 describe('WorkerRegistry', () => {
@@ -6,6 +10,8 @@ describe('WorkerRegistry', () => {
     const registry = new WorkerRegistry();
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-1',
       queue: 'default',
       activities: ['processOrder', 'sendEmail'],
@@ -19,6 +25,8 @@ describe('WorkerRegistry', () => {
     const registry = new WorkerRegistry();
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-1',
       queue: 'default',
       activities: ['processOrder'],
@@ -42,12 +50,16 @@ describe('WorkerRegistry', () => {
     const registry = new WorkerRegistry({ policy: 'fair-share' });
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-doomed',
       queue: 'default',
       activities: ['runAgent'],
       concurrency: 5,
     });
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-survivor',
       queue: 'default',
       activities: ['runAgent'],
@@ -87,6 +99,8 @@ describe('WorkerRegistry', () => {
     const registry = new WorkerRegistry();
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-1',
       queue: 'default',
       activities: ['processOrder'],
@@ -112,6 +126,8 @@ describe('WorkerRegistry', () => {
     const registry = new WorkerRegistry();
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-1',
       queue: 'default',
       activities: ['processOrder'],
@@ -129,6 +145,8 @@ describe('WorkerRegistry', () => {
     const registry = new WorkerRegistry();
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-1',
       queue: 'default',
       activities: ['processOrder'],
@@ -147,6 +165,8 @@ describe('WorkerRegistry', () => {
     const registry = new WorkerRegistry();
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-1',
       queue: 'default',
       activities: ['processOrder'],
@@ -163,6 +183,8 @@ describe('WorkerRegistry', () => {
     const registry = new WorkerRegistry();
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-1',
       queue: 'default',
       activities: ['processOrder'],
@@ -170,6 +192,8 @@ describe('WorkerRegistry', () => {
     });
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-2',
       queue: 'default',
       activities: ['processOrder'],
@@ -191,6 +215,8 @@ describe('WorkerRegistry', () => {
     const registry = new WorkerRegistry();
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-1',
       queue: 'default',
       activities: ['processOrder'],
@@ -198,6 +224,8 @@ describe('WorkerRegistry', () => {
     });
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-2',
       queue: 'default',
       activities: ['processOrder'],
@@ -214,6 +242,8 @@ describe('WorkerRegistry', () => {
     const registry = new WorkerRegistry();
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-1',
       queue: 'default',
       activities: ['processOrder'],
@@ -221,6 +251,8 @@ describe('WorkerRegistry', () => {
     });
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-2',
       queue: 'default',
       activities: ['processOrder'],
@@ -246,6 +278,8 @@ describe('WorkerRegistry', () => {
     const registry = new WorkerRegistry();
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-1',
       queue: 'default',
       activities: ['processOrder'],
@@ -263,6 +297,8 @@ describe('WorkerRegistry', () => {
     expect(registry.size).toBe(0);
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-1',
       queue: 'default',
       activities: ['processOrder'],
@@ -272,6 +308,8 @@ describe('WorkerRegistry', () => {
     expect(registry.size).toBe(1);
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-2',
       queue: 'default',
       activities: ['sendEmail'],
@@ -288,6 +326,8 @@ describe('WorkerRegistry', () => {
     const registry = new WorkerRegistry();
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-1',
       queue: 'default',
       activities: ['processOrder'],
@@ -295,6 +335,8 @@ describe('WorkerRegistry', () => {
     });
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-2',
       queue: 'default',
       activities: ['sendEmail'],
@@ -314,6 +356,8 @@ describe('WorkerRegistry', () => {
     const before = Date.now();
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-1',
       queue: 'default',
       activities: ['processOrder'],
@@ -334,6 +378,8 @@ describe('WorkerRegistry', () => {
     const registry = new WorkerRegistry();
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-1',
       queue: 'default',
       activities: ['processOrder'],
@@ -360,6 +406,8 @@ describe('WorkerRegistry', () => {
     const registry = new WorkerRegistry();
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-1',
       queue: 'default',
       activities: ['processOrder'],
@@ -380,6 +428,8 @@ describe('WorkerRegistry', () => {
     const registry = new WorkerRegistry();
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-1',
       queue: 'default',
       activities: ['processOrder'],
@@ -401,6 +451,8 @@ describe('WorkerRegistry', () => {
     const registry = new WorkerRegistry();
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-1',
       queue: 'default',
       activities: ['compute'],
@@ -408,6 +460,8 @@ describe('WorkerRegistry', () => {
     });
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-2',
       queue: 'default',
       activities: ['compute'],
@@ -428,6 +482,8 @@ describe('WorkerRegistry', () => {
     const registry = new WorkerRegistry();
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-1',
       queue: 'default',
       activities: ['compute'],
@@ -435,6 +491,8 @@ describe('WorkerRegistry', () => {
     });
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-2',
       queue: 'default',
       activities: ['compute'],
@@ -460,6 +518,8 @@ describe('WorkerRegistry', () => {
     const registry = new WorkerRegistry();
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'heavy',
       queue: 'default',
       activities: ['compute'],
@@ -467,6 +527,8 @@ describe('WorkerRegistry', () => {
     });
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'medium',
       queue: 'default',
       activities: ['compute'],
@@ -474,6 +536,8 @@ describe('WorkerRegistry', () => {
     });
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'light',
       queue: 'default',
       activities: ['compute'],
@@ -494,6 +558,8 @@ describe('WorkerRegistry', () => {
     const registry = new WorkerRegistry();
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-a',
       queue: 'default',
       activities: ['process'],
@@ -501,6 +567,8 @@ describe('WorkerRegistry', () => {
     });
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-b',
       queue: 'default',
       activities: ['process'],
@@ -526,6 +594,8 @@ describe('WorkerRegistry', () => {
     const registry = new WorkerRegistry();
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'billing-worker',
       queue: 'billing',
       activities: ['charge'],
@@ -533,6 +603,8 @@ describe('WorkerRegistry', () => {
     });
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'shipping-worker',
       queue: 'shipping',
       activities: ['charge'],
@@ -552,6 +624,8 @@ describe('WorkerRegistry', () => {
     const registry = new WorkerRegistry();
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'billing-worker',
       queue: 'billing',
       activities: ['charge'],
@@ -566,6 +640,8 @@ describe('WorkerRegistry', () => {
     const registry = new WorkerRegistry();
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'billing-worker',
       queue: 'billing',
       activities: ['charge'],
@@ -581,6 +657,8 @@ describe('WorkerRegistry', () => {
     const registry = new WorkerRegistry();
 
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id: 'worker-1',
       queue: 'billing',
       activities: ['charge'],
@@ -598,7 +676,14 @@ describe('WorkerRegistry', () => {
   describe('visibility timeout', () => {
     it('assignTask tracks in-flight task with deadline', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
 
       const now = Date.now();
       registry.assignTask('w1', 'op-1', 30_000, undefined, 'attempt-token');
@@ -610,7 +695,14 @@ describe('WorkerRegistry', () => {
 
     it('checkExpiredTasks returns overdue tasks', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
 
       registry.assignTask('w1', 'op-1', 500, undefined, 'attempt-token');
 
@@ -623,7 +715,14 @@ describe('WorkerRegistry', () => {
 
     it('checkExpiredTasks removes expired tasks from in-flight tracking', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
 
       registry.assignTask('w1', 'op-1', 500, undefined, 'attempt-token');
       expect(registry.isAssigned('op-1')).toBe(true);
@@ -636,7 +735,14 @@ describe('WorkerRegistry', () => {
 
     it('checkExpiredTasks removes expired tasks from tracking', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
 
       registry.assignTask('w1', 'op-1', 500, undefined, 'attempt-token');
       registry.assignTask('w1', 'op-2', 500, undefined, 'attempt-token');
@@ -649,7 +755,14 @@ describe('WorkerRegistry', () => {
 
     it('checkExpiredTasks returns nothing on second call for same tasks', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
 
       registry.assignTask('w1', 'op-1', 500, undefined, 'attempt-token');
 
@@ -662,7 +775,14 @@ describe('WorkerRegistry', () => {
 
     it('extendVisibility extends the deadline', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
 
       registry.assignTask('w1', 'op-1', 500, undefined, 'attempt-token');
 
@@ -677,8 +797,22 @@ describe('WorkerRegistry', () => {
 
     it('non-expired tasks are not returned by checkExpiredTasks', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
-      registry.register({ id: 'w2', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w2',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
 
       registry.assignTask('w1', 'op-1', 60_000, undefined, 'attempt-token'); // expires in 60s
       registry.assignTask('w2', 'op-2', 100, undefined, 'attempt-token'); // expires in 100ms
@@ -697,7 +831,14 @@ describe('WorkerRegistry', () => {
 
     it('assignTask also increments worker inFlight count', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
 
       registry.assignTask('w1', 'op-1', 30_000, undefined, 'attempt-token');
 
@@ -707,7 +848,14 @@ describe('WorkerRegistry', () => {
 
     it('assignTask stores visibilityTimeout on the in-flight task', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
 
       registry.assignTask('w1', 'op-1', 15_000, undefined, 'attempt-token');
 
@@ -729,7 +877,14 @@ describe('WorkerRegistry', () => {
 
     it('returns all in-flight tasks assigned to the worker', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
 
       registry.assignTask('w1', 'op-1', 30_000, undefined, 'attempt-token');
       registry.assignTask('w1', 'op-2', 30_000, undefined, 'attempt-token');
@@ -744,8 +899,22 @@ describe('WorkerRegistry', () => {
 
     it('does not include tasks assigned to other workers', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
-      registry.register({ id: 'w2', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w2',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
 
       registry.assignTask('w1', 'op-1', 30_000, undefined, 'attempt-token');
       registry.assignTask('w2', 'op-2', 30_000, undefined, 'attempt-token');
@@ -757,7 +926,14 @@ describe('WorkerRegistry', () => {
 
     it('does not include completed tasks', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
 
       registry.assignTask('w1', 'op-1', 30_000, undefined, 'attempt-token');
       registry.assignTask('w1', 'op-2', 30_000, undefined, 'attempt-token');
@@ -776,7 +952,14 @@ describe('WorkerRegistry', () => {
   describe('heartbeat extends visibility', () => {
     it('extendVisibility resets deadline using stored visibilityTimeout', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
 
       registry.assignTask('w1', 'op-1', 5_000, undefined, 'attempt-token');
 
@@ -798,7 +981,14 @@ describe('WorkerRegistry', () => {
 
     it('heartbeat extends deadlines for multiple in-flight tasks', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
 
       registry.assignTask('w1', 'op-1', 2_000, undefined, 'attempt-token');
       registry.assignTask('w1', 'op-2', 2_000, undefined, 'attempt-token');
@@ -815,8 +1005,22 @@ describe('WorkerRegistry', () => {
 
     it('heartbeat only extends tasks for the specific worker', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
-      registry.register({ id: 'w2', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w2',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
 
       // w1 gets a long timeout, w2 gets a short one
       registry.assignTask('w1', 'op-1', 30_000, undefined, 'attempt-token');
@@ -841,22 +1045,50 @@ describe('WorkerRegistry', () => {
   describe('isAssignedToWorker', () => {
     it('returns true when an operation is assigned to the named worker', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
       registry.assignTask('w1', 'op-1', 30_000, undefined, 'attempt-token');
       expect(registry.isAssignedToWorker('op-1', 'w1')).toBe(true);
     });
 
     it('returns false when the assignment is to a different worker', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
-      registry.register({ id: 'w2', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w2',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
       registry.assignTask('w1', 'op-1', 30_000, undefined, 'attempt-token');
       expect(registry.isAssignedToWorker('op-1', 'w2')).toBe(false);
     });
 
     it('returns false for an unknown operationId', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
       expect(registry.isAssignedToWorker('nonexistent', 'w1')).toBe(false);
     });
   });
@@ -864,20 +1096,41 @@ describe('WorkerRegistry', () => {
   describe('isAssignedToAttempt', () => {
     it('returns false for an unknown operationId', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
       expect(registry.isAssignedToAttempt('nonexistent', 'w1', 'token-1')).toBe(false);
     });
 
     it('returns false when the assignment is to a different worker', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
       registry.assignTask('w1', 'op-1', 30_000, undefined, 'token-1');
       expect(registry.isAssignedToAttempt('op-1', 'w2', 'token-1')).toBe(false);
     });
 
     it('requires the exact token stored with the in-flight task', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
       registry.assignTask('w1', 'op-1', 30_000, undefined, 'token-1');
       expect(registry.isAssignedToAttempt('op-1', 'w1', 'token-1')).toBe(true);
       expect(registry.isAssignedToAttempt('op-1', 'w1', 'token-stale')).toBe(false);
@@ -887,7 +1140,14 @@ describe('WorkerRegistry', () => {
       // The defended case: a stale earlier attempt echoes the OLD token it was
       // dispatched with — present and wrong — and must be rejected.
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
       registry.assignTask('w1', 'op-1', 30_000, undefined, 'token-1');
       expect(registry.isAssignedToAttempt('op-1', 'w1', 'token-1')).toBe(true);
       expect(registry.isAssignedToAttempt('op-1', 'w1', 'token-stale')).toBe(false);
@@ -901,20 +1161,41 @@ describe('WorkerRegistry', () => {
     // concurrency.
     it('re-derives inFlight from the in-flight task map when called again for the same workerId', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
       registry.assignTask('w1', 'op-1', 30_000, undefined, 'attempt-token');
       registry.assignTask('w1', 'op-2', 30_000, undefined, 'attempt-token');
       expect(registry.getWorker('w1')?.inFlight).toBe(2);
 
       // Reconnect: register is called again without an intervening unregister.
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
 
       expect(registry.getWorker('w1')?.inFlight).toBe(2);
     });
 
     it('starts inFlight at 0 when a fresh worker registers with no pre-existing tasks', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
       expect(registry.getWorker('w1')?.inFlight).toBe(0);
     });
   });
@@ -927,7 +1208,14 @@ describe('WorkerRegistry', () => {
 
     it('returns true after assignTask', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
 
       registry.assignTask('w1', 'op-1', 30_000, undefined, 'attempt-token');
 
@@ -936,7 +1224,14 @@ describe('WorkerRegistry', () => {
 
     it('returns false after the task is completed via completeTask', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
 
       registry.assignTask('w1', 'op-1', 30_000, undefined, 'attempt-token');
       registry.completeTask('op-1');
@@ -952,7 +1247,14 @@ describe('WorkerRegistry', () => {
   describe('completeTask', () => {
     it('removes the in-flight task and decrements worker inFlight', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
 
       registry.assignTask('w1', 'op-1', 30_000, undefined, 'attempt-token');
       expect(registry.getWorker('w1')!.inFlight).toBe(1);
@@ -972,7 +1274,14 @@ describe('WorkerRegistry', () => {
 
     it('returns undefined when completing a task whose worker was already unregistered', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
 
       registry.assignTask('w1', 'op-1', 30_000, undefined, 'attempt-token');
       registry.unregister('w1');
@@ -985,7 +1294,14 @@ describe('WorkerRegistry', () => {
 
     it('handles multiple tasks completing independently', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
 
       registry.assignTask('w1', 'op-1', 30_000, undefined, 'attempt-token');
       registry.assignTask('w1', 'op-2', 30_000, undefined, 'attempt-token');
@@ -1004,9 +1320,30 @@ describe('WorkerRegistry', () => {
   describe('getWorkerSummaries', () => {
     it('returns a stable, sorted-by-id snapshot with derived ages and capacity', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'charlie', queue: 'default', activities: ['a'], concurrency: 3 });
-      registry.register({ id: 'alpha', queue: 'mail', activities: ['send'], concurrency: 2 });
-      registry.register({ id: 'bravo', queue: 'default', activities: ['a', 'b'], concurrency: 4 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'charlie',
+        queue: 'default',
+        activities: ['a'],
+        concurrency: 3,
+      });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'alpha',
+        queue: 'mail',
+        activities: ['send'],
+        concurrency: 2,
+      });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'bravo',
+        queue: 'default',
+        activities: ['a', 'b'],
+        concurrency: 4,
+      });
 
       // Pin lastHeartbeat to known values so the test asserts exact math
       // rather than wall-clock proximity.
@@ -1035,7 +1372,14 @@ describe('WorkerRegistry', () => {
 
     it('clamps availableCapacity at zero when inFlight exceeds concurrency', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', queue: 'q', activities: ['a'], concurrency: 1 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'q',
+        activities: ['a'],
+        concurrency: 1,
+      });
       // Simulate the rare in-flight-overflow case without using internal APIs:
       // bumping `inFlight` past `concurrency` only happens under bugs, but the
       // derivation must still be defensive.
@@ -1049,7 +1393,14 @@ describe('WorkerRegistry', () => {
     it('returns activities as a defensive copy', () => {
       const registry = new WorkerRegistry();
       const activities = ['process', 'send'];
-      registry.register({ id: 'w1', queue: 'q', activities, concurrency: 1 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'w1',
+        queue: 'q',
+        activities,
+        concurrency: 1,
+      });
 
       const summary = registry.getWorkerSummaries(0)[0]!;
       summary.activities.push('mutated');
@@ -1059,6 +1410,8 @@ describe('WorkerRegistry', () => {
     it('includes deployment identity, capabilities, start time, and active health', () => {
       const registry = new WorkerRegistry();
       registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
         id: 'identity-worker',
         queue: 'payments',
         activities: ['charge'],
@@ -1066,7 +1419,6 @@ describe('WorkerRegistry', () => {
         deploymentName: 'payments',
         buildId: 'build-1',
         runtimeVersion: 'bun-1.2.13',
-        gitSha: '0123456789abcdef',
         startedAt: 1_778_608_000_000,
         capabilities: { region: 'us-west', canary: true },
       });
@@ -1076,7 +1428,6 @@ describe('WorkerRegistry', () => {
         deploymentName: 'payments',
         buildId: 'build-1',
         runtimeVersion: 'bun-1.2.13',
-        gitSha: '0123456789abcdef',
         startedAt: 1_778_608_000_000,
         capabilities: { region: 'us-west', canary: true },
         health: 'active',
@@ -1088,6 +1439,8 @@ describe('WorkerRegistry', () => {
     it('excludes draining workers from routing without clearing in-flight tasks', () => {
       const registry = new WorkerRegistry();
       registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
         id: 'draining-worker',
         queue: 'default',
         activities: ['charge'],
@@ -1095,6 +1448,8 @@ describe('WorkerRegistry', () => {
         deploymentName: 'payments',
       });
       registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
         id: 'active-worker',
         queue: 'default',
         activities: ['charge'],
@@ -1131,6 +1486,8 @@ describe('WorkerRegistry', () => {
     it('reports a drained worker once drain is active and no tasks remain', () => {
       const registry = new WorkerRegistry();
       registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
         id: 'drained-worker',
         queue: 'default',
         activities: ['charge'],
@@ -1154,6 +1511,8 @@ describe('WorkerRegistry', () => {
     it('applies deployment drains to current and future workers with that deployment name', () => {
       const registry = new WorkerRegistry();
       registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
         id: 'current',
         queue: 'default',
         activities: ['charge'],
@@ -1167,6 +1526,8 @@ describe('WorkerRegistry', () => {
         updatedAt: 1000,
       });
       registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
         id: 'future',
         queue: 'default',
         activities: ['charge'],
@@ -1216,6 +1577,8 @@ describe('WorkerRegistry', () => {
     it('aggregates deployment health by deployment identity', () => {
       const registry = new WorkerRegistry();
       registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
         id: 'active',
         queue: 'default',
         activities: ['charge'],
@@ -1223,11 +1586,12 @@ describe('WorkerRegistry', () => {
         deploymentName: 'payments',
         buildId: 'build-1',
         runtimeVersion: 'bun-1.2.13',
-        gitSha: 'abc',
         startedAt: 100,
         capabilities: { region: 'us-west' },
       });
       registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
         id: 'draining',
         queue: 'default',
         activities: ['charge'],
@@ -1235,7 +1599,6 @@ describe('WorkerRegistry', () => {
         deploymentName: 'payments',
         buildId: 'build-1',
         runtimeVersion: 'bun-1.2.13',
-        gitSha: 'abc',
         startedAt: 200,
       });
       registry.assignTask('draining', 'op-1', 30_000, undefined, 'attempt-token');
@@ -1246,7 +1609,6 @@ describe('WorkerRegistry', () => {
           deploymentName: 'payments',
           buildId: 'build-1',
           runtimeVersion: 'bun-1.2.13',
-          gitSha: 'abc',
           health: 'draining',
           workers: 2,
           activeWorkers: 1,

@@ -1,10 +1,11 @@
 #!/usr/bin/env bun
 
+import { conformanceManifest } from './conformance-manifest.ts';
+
 export type ConformanceRegisterExitWorkerFixture = 'register-exit';
 
 const serverUrl = Bun.env['WEFT_WORKER_URL'];
-const queue = Bun.env['WEFT_WORKER_QUEUE'] ?? 'conformance';
-const protocolVersion = Number(Bun.env['WEFT_WORKER_PROTOCOL_VERSION'] ?? '2');
+const protocolVersion = Number(Bun.env['WEFT_WORKER_PROTOCOL_VERSION'] ?? '3');
 const activities = (Bun.env['WEFT_WORKER_ACTIVITIES'] ?? '')
   .split(',')
   .map((activity) => activity.trim())
@@ -29,9 +30,8 @@ socket.addEventListener('open', () => {
     type: 'register',
     protocolVersion,
     workerId,
-    activities,
+    manifest: conformanceManifest(activities),
     concurrency: 1,
-    queue,
   });
 });
 
@@ -46,7 +46,7 @@ socket.addEventListener('message', (event) => {
 
   const operationId = parsed['operationId'];
   const activityName = parsed['activityName'];
-  if (typeof operationId !== 'string' || activityName !== 'weft.conformance.echo') {
+  if (typeof operationId !== 'string' || activityName !== 'conformance.echo') {
     return;
   }
 
