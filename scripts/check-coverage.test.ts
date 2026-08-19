@@ -64,7 +64,7 @@ describe('parseLcov', () => {
     const coverage = parseLcov(
       [
         'SF:src/core/context/parallel-operations.ts',
-        'FNF:1',
+        'FNF:0',
         'FNH:0',
         'DA:19,0',
         'DA:20,0',
@@ -171,13 +171,12 @@ describe('parseLcov', () => {
     }
   });
 
-  it('unions audit-backlog top-off allowances with the assembled base allowances', () => {
+  it('applies the audited workflow-runner allowance from the top-off layer', () => {
     const coverage = parseLcov(
       [
         'SF:src/workers/workflow-runner.ts',
-        'FNF:4',
+        'FNF:1',
         'FNH:0',
-        'DA:101,0',
         'DA:500,0',
         'DA:999,1',
         'end_of_record',
@@ -266,16 +265,21 @@ describe('parseLcov', () => {
   });
 });
 
+const documentedAllowance = <T extends object>(allowance: T) => ({
+  reason: 'Synthetic allowance used to verify layer assembly behavior.',
+  ...allowance,
+});
+
 describe('buildAllowanceLayer', () => {
   it('builds a map from unique entries, preserving each allowance value', () => {
     const layer = buildAllowanceLayer('SYNTHETIC_LAYER', [
-      ['src/alpha.ts', { lines: new Set([1, 2, 3]) }],
-      ['src/beta.ts', { functions: 2 }],
+      ['src/alpha.ts', documentedAllowance({ lines: new Set([1, 2, 3]) })],
+      ['src/beta.ts', documentedAllowance({ functions: 2 })],
     ]);
 
     expect(layer.size).toBe(2);
-    expect(layer.get('src/alpha.ts')).toEqual({ lines: new Set([1, 2, 3]) });
-    expect(layer.get('src/beta.ts')).toEqual({ functions: 2 });
+    expect(layer.get('src/alpha.ts')).toEqual(documentedAllowance({ lines: new Set([1, 2, 3]) }));
+    expect(layer.get('src/beta.ts')).toEqual(documentedAllowance({ functions: 2 }));
   });
 
   it('throws on a duplicate key within a single layer, naming the layer and key', () => {
@@ -284,9 +288,9 @@ describe('buildAllowanceLayer', () => {
     // that copy-paste mistake into a build-time error.
     expect(() =>
       buildAllowanceLayer('DUPLICATED_LAYER', [
-        ['src/repeated.ts', { lines: new Set([10]) }],
-        ['src/other.ts', { lines: new Set([20]) }],
-        ['src/repeated.ts', { lines: new Set([30]) }],
+        ['src/repeated.ts', documentedAllowance({ lines: new Set([10]) })],
+        ['src/other.ts', documentedAllowance({ lines: new Set([20]) })],
+        ['src/repeated.ts', documentedAllowance({ lines: new Set([30]) })],
       ]),
     ).toThrow(/^Duplicate coverage-allowance key "src\/repeated\.ts" within DUPLICATED_LAYER\./);
   });
@@ -308,12 +312,12 @@ describe('assembleAllowanceLayers', () => {
     // Base/override layering is the legitimate mechanic: the override layer wins
     // for a shared key. Only refresh-layer-vs-refresh-layer collisions are barred.
     const base = buildAllowanceLayer('BASE', [
-      ['src/shared.ts', { lines: new Set([1]) }],
-      ['src/base-only.ts', { lines: new Set([2]) }],
+      ['src/shared.ts', documentedAllowance({ lines: new Set([1]) })],
+      ['src/base-only.ts', documentedAllowance({ lines: new Set([2]) })],
     ]);
     const override = buildAllowanceLayer('OVERRIDE', [
-      ['src/shared.ts', { lines: new Set([99]) }],
-      ['src/override-only.ts', { lines: new Set([3]) }],
+      ['src/shared.ts', documentedAllowance({ lines: new Set([99]) })],
+      ['src/override-only.ts', documentedAllowance({ lines: new Set([3]) })],
     ]);
 
     const assembled = assembleAllowanceLayers(
@@ -325,9 +329,11 @@ describe('assembleAllowanceLayers', () => {
     );
 
     expect(assembled.size).toBe(3);
-    expect(assembled.get('src/shared.ts')).toEqual({ lines: new Set([99]) });
-    expect(assembled.get('src/base-only.ts')).toEqual({ lines: new Set([2]) });
-    expect(assembled.get('src/override-only.ts')).toEqual({ lines: new Set([3]) });
+    expect(assembled.get('src/shared.ts')).toEqual(documentedAllowance({ lines: new Set([99]) }));
+    expect(assembled.get('src/base-only.ts')).toEqual(documentedAllowance({ lines: new Set([2]) }));
+    expect(assembled.get('src/override-only.ts')).toEqual(
+      documentedAllowance({ lines: new Set([3]) }),
+    );
   });
 
   it('applies last-layer-wins across three or more layers, identical to a Map spread', () => {
@@ -335,14 +341,16 @@ describe('assembleAllowanceLayers', () => {
     // layers exactly as `new Map([...layerA, ...layerB, ...layerC])` would, so the
     // refactor away from the old spread assembly cannot silently change ordering.
     const layerA = buildAllowanceLayer('A', [
-      ['src/shared.ts', { lines: new Set([1]) }],
-      ['src/a-only.ts', { lines: new Set([10]) }],
+      ['src/shared.ts', documentedAllowance({ lines: new Set([1]) })],
+      ['src/a-only.ts', documentedAllowance({ lines: new Set([10]) })],
     ]);
     const layerB = buildAllowanceLayer('B', [
-      ['src/shared.ts', { lines: new Set([2]) }],
-      ['src/b-only.ts', { lines: new Set([20]) }],
+      ['src/shared.ts', documentedAllowance({ lines: new Set([2]) })],
+      ['src/b-only.ts', documentedAllowance({ lines: new Set([20]) })],
     ]);
-    const layerC = buildAllowanceLayer('C', [['src/shared.ts', { lines: new Set([3]) }]]);
+    const layerC = buildAllowanceLayer('C', [
+      ['src/shared.ts', documentedAllowance({ lines: new Set([3]) })],
+    ]);
 
     const assembled = assembleAllowanceLayers(
       [
@@ -355,7 +363,7 @@ describe('assembleAllowanceLayers', () => {
     const spread = new Map([...layerA, ...layerB, ...layerC]);
 
     // The last layer (C) wins for the thrice-shared key.
-    expect(assembled.get('src/shared.ts')).toEqual({ lines: new Set([3]) });
+    expect(assembled.get('src/shared.ts')).toEqual(documentedAllowance({ lines: new Set([3]) }));
     expect(assembled).toEqual(spread);
   });
 
@@ -363,10 +371,10 @@ describe('assembleAllowanceLayers', () => {
     // The two refresh layers must partition their keys: a twin in both means
     // removing one row silently reactivates the other (often stale) allowance.
     const mainRefresh = buildAllowanceLayer('MAIN_REFRESH', [
-      ['src/twin.ts', { lines: new Set([1]) }],
+      ['src/twin.ts', documentedAllowance({ lines: new Set([1]) })],
     ]);
     const branchRefresh = buildAllowanceLayer('BRANCH_REFRESH', [
-      ['src/twin.ts', { lines: new Set([2]) }],
+      ['src/twin.ts', documentedAllowance({ lines: new Set([2]) })],
     ]);
 
     expect(() =>
@@ -388,9 +396,11 @@ describe('assembleAllowanceLayers', () => {
   it('allows a key shared between a non-exclusive layer and a refresh layer', () => {
     // Only the two refresh layers are mutually exclusive. A base/override layer
     // may still legitimately shadow a refresh layer's key.
-    const base = buildAllowanceLayer('BASE', [['src/shared.ts', { lines: new Set([1]) }]]);
+    const base = buildAllowanceLayer('BASE', [
+      ['src/shared.ts', documentedAllowance({ lines: new Set([1]) })],
+    ]);
     const branchRefresh = buildAllowanceLayer('BRANCH_REFRESH', [
-      ['src/shared.ts', { lines: new Set([2]) }],
+      ['src/shared.ts', documentedAllowance({ lines: new Set([2]) })],
     ]);
     const mainRefresh = buildAllowanceLayer('MAIN_REFRESH', []);
 
@@ -407,7 +417,7 @@ describe('assembleAllowanceLayers', () => {
     );
 
     // BRANCH_REFRESH is the terminal layer, so its value wins over BASE.
-    expect(assembled.get('src/shared.ts')).toEqual({ lines: new Set([2]) });
+    expect(assembled.get('src/shared.ts')).toEqual(documentedAllowance({ lines: new Set([2]) }));
   });
 });
 
