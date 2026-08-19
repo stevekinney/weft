@@ -20,6 +20,11 @@ import type {
   RemoteTaskQueued,
   RemoteTaskTerminal,
 } from './task-ledger-types.ts';
+import {
+  decodeRemoteTaskRecord,
+  encodeRemoteTaskRecord,
+  isRemoteTaskRecord,
+} from './task-ledger.ts';
 
 const EXECUTION_IDENTITY: WorkerExecutionIdentity = {
   workerId: 'worker-1',
@@ -601,5 +606,69 @@ describe('canDeleteRetainedTerminalTask', () => {
       expectedRetentionGeneration: 0,
     });
     expect(result.ok).toBe(false);
+  });
+});
+
+describe('synthesized resultDigest round-trips through the codec', () => {
+  // commitCancellation, requeueExpiredAttempt's exhaustion branch, and
+  // recordCancellationIntent's queued-origin branch each synthesize
+  // resultDigest by concatenating operationId and attemptToken — every
+  // record produced from otherwise-valid, max-length inputs must still pass
+  // decodeRemoteTaskRecord(encodeRemoteTaskRecord(...)).
+  const maxLengthId = 'x'.repeat(512);
+
+  it('round-trips a cancelled-from-leased terminal record with max-length identifiers', () => {
+    const cancelling = cancellingFixture({
+      operationId: maxLengthId,
+      attemptToken: maxLengthId,
+    });
+    const result = commitCancellation(cancelling, { attemptToken: maxLengthId }, 4_000);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(isRemoteTaskRecord(result.nextRecord)).toBe(true);
+    expect(decodeRemoteTaskRecord(encodeRemoteTaskRecord(result.nextRecord))).toEqual(
+      result.nextRecord,
+    );
+  });
+
+  it('round-trips a cancelled-from-queued terminal record with a max-length operationId', () => {
+    const queued = queuedFixture({ operationId: maxLengthId });
+    const result = recordCancellationIntent(
+      queued,
+      { expectedGeneration: 0, expectedAttempt: 1, cancellationReason: 'user requested' },
+      2_000,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(isRemoteTaskRecord(result.nextRecord)).toBe(true);
+    expect(decodeRemoteTaskRecord(encodeRemoteTaskRecord(result.nextRecord))).toEqual(
+      result.nextRecord,
+    );
+  });
+
+  it('round-trips a retry-exhausted terminal record with max-length identifiers', () => {
+    const leased = leasedFixture({
+      operationId: maxLengthId,
+      attemptToken: maxLengthId,
+      attempt: 5,
+      leaseDeadline: 10_000,
+      retryPolicy: {
+        maxAttempts: 5,
+        initialBackoff: '1s',
+        backoffMultiplier: 2,
+        maxBackoff: '30s',
+      },
+    });
+    const result = requeueExpiredAttempt(
+      leased,
+      { attemptToken: maxLengthId, requeueReason: 'visibility-timeout' },
+      10_000,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(isRemoteTaskRecord(result.nextRecord)).toBe(true);
+    expect(decodeRemoteTaskRecord(encodeRemoteTaskRecord(result.nextRecord))).toEqual(
+      result.nextRecord,
+    );
   });
 });

@@ -23,6 +23,7 @@ import {
   MAX_TASK_HEADER_VALUE_BYTES,
   MAX_TASK_IDENTIFIER_BYTES,
   MAX_TASK_REASON_BYTES,
+  MAX_TASK_RESULT_DIGEST_BYTES,
   utf8ByteLength,
 } from './task-ledger-limits.ts';
 import type {
@@ -267,7 +268,7 @@ export function isRemoteTaskCancelling(value: unknown): value is RemoteTaskCance
 function isValidTerminalCommon(value: Record<string, unknown>): boolean {
   return (
     isFiniteNumber(value['attempt']) &&
-    isBoundedIdentifier(value['resultDigest']) &&
+    isBoundedIdentifier(value['resultDigest'], MAX_TASK_RESULT_DIGEST_BYTES) &&
     isFiniteNumber(value['terminalAt']) &&
     typeof value['adopted'] === 'boolean' &&
     isOptionalFiniteNumber(value['adoptedAt']) &&

@@ -30,3 +30,15 @@ export const MAX_TASK_HEADER_VALUE_BYTES = 4096;
 
 /** Maximum UTF-8 byte length of a single free-text reason/error string. */
 export const MAX_TASK_REASON_BYTES = 4096;
+
+/**
+ * Maximum UTF-8 byte length of a terminal record's `resultDigest`.
+ *
+ * Wider than {@link MAX_TASK_IDENTIFIER_BYTES} because the ledger's own
+ * cancellation and retry-exhaustion transitions synthesize this field by
+ * concatenating an `operationId` and an `attemptToken` — each independently
+ * bounded to {@link MAX_TASK_IDENTIFIER_BYTES} — plus a short literal prefix.
+ * A tighter bound here would let two individually-valid identifiers combine
+ * into a `resultDigest` the codec's own decoder then rejects.
+ */
+export const MAX_TASK_RESULT_DIGEST_BYTES = 2 * MAX_TASK_IDENTIFIER_BYTES + 64;
