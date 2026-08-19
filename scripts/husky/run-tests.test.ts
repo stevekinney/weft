@@ -2,15 +2,20 @@ import { afterEach, describe, expect, it, mock } from 'bun:test';
 import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
+  BROWSER_SMOKE_TEST_PATHS,
   buildTestCommand,
   createRealDependencies,
   discoverTestFiles,
   extractJunitFailureExcerpts,
+  forceKillProcessTree,
   formatFailingTests,
+  FULL_SUITE_TIMEOUT_MS,
   ISOLATION_SKIP_FILE_THRESHOLD,
   LOAD_SENSITIVE_TEST_PATHS,
+  parseJunitCompletedFiles,
   parseJunitFailures,
   renderTestOutcome,
   runTestSuite,
@@ -30,6 +35,10 @@ function testcase(attributes: Record<string, string>, child?: string): string {
 
 function suite(...cases: string[]): string {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<testsuites>\n<testsuite name="s">\n${cases.join('\n')}\n</testsuite>\n</testsuites>`;
+}
+
+function fileSuite(file: string, ...cases: string[]): string {
+  return `<testsuite name="${file}" file="${file}">\n${cases.join('\n')}\n</testsuite>`;
 }
 
 describe('parseJunitFailures', () => {
@@ -137,6 +146,27 @@ describe('parseJunitFailures', () => {
       { file: 'src/a.test.ts', name: 'dup', line: '5' },
       { file: 'src/a.test.ts', name: 'dup', line: '6' },
     ]);
+  });
+});
+
+describe('parseJunitCompletedFiles', () => {
+  it('treats a self-closing file-level suite as complete', () => {
+    expect(
+      parseJunitCompletedFiles(
+        '<testsuites><testsuite name="empty.test.ts" file="src/empty.test.ts" /></testsuites>',
+      ),
+    ).toEqual(new Set(['src/empty.test.ts']));
+  });
+
+  it('requires the file-level suite to close before treating its testcases as complete', () => {
+    const xml = `<testsuites>
+${fileSuite('src/completed.test.ts', testcase({ name: 'done', file: 'src/completed.test.ts' }))}
+<testsuite name="src/partial.test.ts" file="src/partial.test.ts">
+  <testsuite name="nested" file="src/partial.test.ts">
+    ${testcase({ name: 'finished before the hang', file: 'src/partial.test.ts' })}
+  </testsuite>`;
+
+    expect(parseJunitCompletedFiles(xml)).toEqual(new Set(['src/completed.test.ts']));
   });
 });
 
@@ -270,6 +300,22 @@ describe('renderTestOutcome', () => {
     expect(result.ok).toBe(false);
     expect(result.lines.join('\n')).toContain('Isolation run failed but its JUnit was unavailable');
   });
+
+  it('reports a wall-clock timeout with incomplete files and the retained report directory', () => {
+    const result = renderTestOutcome({
+      kind: 'timedOut',
+      phase: 'full',
+      timeoutMs: FULL_SUITE_TIMEOUT_MS,
+      incompleteTestFiles: ['src/b.test.ts'],
+      output: { stdout: '', stderr: '' },
+      retainedDirectory: '/tmp/run',
+    });
+    const rendered = result.lines.join('\n');
+    expect(result.ok).toBe(false);
+    expect(rendered).toContain(`${FULL_SUITE_TIMEOUT_MS}ms`);
+    expect(rendered).toContain('src/b.test.ts');
+    expect(rendered).toContain('/tmp/run');
+  });
 });
 
 describe('discoverTestFiles', () => {
@@ -278,6 +324,13 @@ describe('discoverTestFiles', () => {
     expect(files.length).toBeGreaterThan(0);
     expect(files.some((file) => file.includes('/benchmarks/'))).toBe(false);
     for (const excluded of LOAD_SENSITIVE_TEST_PATHS) {
+      expect(files).not.toContain(excluded);
+    }
+  });
+
+  it('excludes the browser-smoke files omitted by the main CI test job', async () => {
+    const files = await discoverTestFiles();
+    for (const excluded of BROWSER_SMOKE_TEST_PATHS) {
       expect(files).not.toContain(excluded);
     }
   });
@@ -301,23 +354,36 @@ describe('discoverTestFiles', () => {
 describe('runTestSuite (injected dependencies)', () => {
   function makeDependencies(
     overrides: Partial<RunTestSuiteDependencies> & {
-      runResults?: Array<{ exitCode: number; stdout?: string; stderr?: string }>;
+      runResults?: Array<{
+        exitCode: number;
+        stdout?: string;
+        stderr?: string;
+        timedOut?: boolean;
+      }>;
       reports?: Record<string, string>;
     } = {},
-  ): { dependencies: RunTestSuiteDependencies; commands: string[][]; removed: string[] } {
+  ): {
+    dependencies: RunTestSuiteDependencies;
+    commands: string[][];
+    removed: string[];
+    timeouts: number[];
+  } {
     const commands: string[][] = [];
     const removed: string[] = [];
+    const timeouts: number[] = [];
     const runResults = overrides.runResults ?? [];
     const reports = overrides.reports ?? {};
     let runIndex = 0;
     const dependencies: RunTestSuiteDependencies = {
-      runCommand: async (args) => {
+      runCommand: async (args, timeoutMs) => {
         commands.push(args);
+        timeouts.push(timeoutMs);
         const result = runResults[runIndex++] ?? { exitCode: 0 };
         return {
           exitCode: result.exitCode,
           stdout: result.stdout ?? '',
           stderr: result.stderr ?? '',
+          timedOut: result.timedOut ?? false,
         };
       },
       makeRunDirectory: async () => '/tmp/run',
@@ -331,7 +397,7 @@ describe('runTestSuite (injected dependencies)', () => {
       sweepStaleDirectories: async () => {},
       ...overrides,
     };
-    return { dependencies, commands, removed };
+    return { dependencies, commands, removed, timeouts };
   }
 
   it('returns passed without spawning when there are no files', async () => {
@@ -341,9 +407,41 @@ describe('runTestSuite (injected dependencies)', () => {
   });
 
   it('returns passed and removes the run dir on a clean run', async () => {
-    const { dependencies, removed } = makeDependencies({ runResults: [{ exitCode: 0 }] });
+    const { dependencies, removed, timeouts } = makeDependencies({
+      runResults: [{ exitCode: 0 }],
+    });
     expect(await runTestSuite(['src/a.test.ts'], dependencies)).toEqual({ kind: 'passed' });
     expect(removed).toEqual(['/tmp/run']);
+    expect(timeouts).toEqual([FULL_SUITE_TIMEOUT_MS]);
+  });
+
+  it('kills a timed-out full run and attributes incomplete files from the partial report', async () => {
+    const partialReport = `<testsuites>
+${fileSuite('src/a.test.ts', testcase({ name: 'completed', file: 'src/a.test.ts' }))}
+${fileSuite('src/c.test.ts', testcase({ name: 'also completed', file: 'src/c.test.ts' }))}
+<testsuite name="src/b.test.ts" file="src/b.test.ts">
+  ${testcase({ name: 'completed before teardown hung', file: 'src/b.test.ts' })}`;
+    const { dependencies, commands, removed } = makeDependencies({
+      runResults: [{ exitCode: 143, timedOut: true, stderr: 'terminated' }],
+      reports: { full: partialReport },
+    });
+
+    const outcome = await runTestSuite(
+      ['src/a.test.ts', 'src/b.test.ts', 'src/c.test.ts'],
+      dependencies,
+    );
+
+    expect(outcome).toEqual({
+      kind: 'timedOut',
+      phase: 'full',
+      timeoutMs: FULL_SUITE_TIMEOUT_MS,
+      incompleteTestFiles: ['src/b.test.ts'],
+      output: { stdout: '', stderr: 'terminated' },
+      reportContent: partialReport,
+      retainedDirectory: '/tmp/run',
+    });
+    expect(commands).toHaveLength(1);
+    expect(removed).toEqual([]);
   });
 
   it('passes --parallel=1 when a serial run is requested', async () => {
@@ -372,6 +470,29 @@ describe('runTestSuite (injected dependencies)', () => {
       expect(outcome.isolationOutput).toBeDefined();
       expect(outcome.retainedDirectory).toBe('/tmp/run');
     }
+  });
+
+  it('classifies a timed-out isolation run before considering its exit code', async () => {
+    const fullReport = suite(
+      testcase({ name: 'slow', file: 'src/a.test.ts' }, '<failure type="TimeoutError" />'),
+      testcase({ name: 'slow', file: 'src/b.test.ts' }, '<failure type="TimeoutError" />'),
+    );
+    const isolationReport = suite(testcase({ name: 'completed', file: 'src/a.test.ts' }));
+    const { dependencies } = makeDependencies({
+      runResults: [{ exitCode: 1 }, { exitCode: 0, timedOut: true, stderr: 'terminated' }],
+      reports: { full: fullReport, isolation: isolationReport },
+    });
+
+    expect(await runTestSuite(['src/a.test.ts', 'src/b.test.ts'], dependencies)).toEqual({
+      kind: 'timedOut',
+      phase: 'isolation',
+      timeoutMs: FULL_SUITE_TIMEOUT_MS,
+      incompleteTestFiles: ['src/b.test.ts'],
+      output: { stdout: '', stderr: '' },
+      reportContent: fullReport,
+      isolationOutput: { stdout: '', stderr: 'terminated' },
+      retainedDirectory: '/tmp/run',
+    });
   });
 
   it('skips isolation when failures have no parseable file attribute', async () => {
@@ -449,6 +570,27 @@ describe('runTestSuite (injected dependencies)', () => {
 });
 
 describe('real dependency helpers', () => {
+  it('forceKillProcessTree uses taskkill to terminate a Windows process tree', async () => {
+    const killDirectProcess = mock(() => {});
+    const executeCommand = mock(async (_command: string[]) => {});
+
+    await forceKillProcessTree(1234, 'win32', killDirectProcess, executeCommand);
+
+    expect(executeCommand).toHaveBeenCalledWith(['taskkill', '/PID', '1234', '/T', '/F']);
+    expect(killDirectProcess).not.toHaveBeenCalled();
+  });
+
+  it('forceKillProcessTree falls back to the direct process when taskkill fails', async () => {
+    const killDirectProcess = mock(() => {});
+    const executeCommand = mock(async (_command: string[]) => {
+      throw new Error('taskkill unavailable');
+    });
+
+    await forceKillProcessTree(1234, 'win32', killDirectProcess, executeCommand);
+
+    expect(killDirectProcess).toHaveBeenCalledTimes(1);
+  });
+
   const cleanupPaths = new Set<string>();
 
   afterEach(async () => {
@@ -465,21 +607,155 @@ describe('real dependency helpers', () => {
     process.stderr.write = stderrWrite as typeof process.stderr.write;
 
     try {
-      const result = await dependencies.runCommand([
-        '-e',
-        'console.log("stdout-line"); console.error("stderr-line"); process.exit(7);',
-      ]);
+      const result = await dependencies.runCommand(
+        ['-e', 'console.log("stdout-line"); console.error("stderr-line"); process.exit(7);'],
+        1_000,
+      );
 
       expect(result).toEqual({
         exitCode: 7,
         stdout: 'stdout-line\n',
         stderr: 'stderr-line\n',
+        timedOut: false,
       });
       expect(stderrWrite).toHaveBeenCalledWith('\n');
     } finally {
       process.stderr.write = originalWrite;
     }
   });
+
+  it('runCommand terminates a subprocess at its wall-clock deadline', async () => {
+    const dependencies = createRealDependencies();
+    const stderrWrite = mock((_chunk: string) => true);
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = stderrWrite as typeof process.stderr.write;
+
+    try {
+      // fixed delay: hang guard on a real subprocess
+      const result = await dependencies.runCommand(['-e', 'await new Promise(() => {})'], 50);
+      expect(result.timedOut).toBe(true);
+      expect(result.exitCode).not.toBe(0);
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+  });
+
+  it('runCommand force-kills a subprocess that ignores graceful termination', async () => {
+    const dependencies = createRealDependencies();
+    const stderrWrite = mock((_chunk: string) => true);
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = stderrWrite as typeof process.stderr.write;
+
+    try {
+      // fixed delay: hang guard on a real subprocess that deliberately ignores SIGTERM
+      const result = await dependencies.runCommand(
+        ['-e', 'process.on("SIGTERM", () => {}); await new Promise(() => {})'],
+        50,
+      );
+      expect(result.timedOut).toBe(true);
+      expect(result.exitCode).not.toBe(0);
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+  });
+
+  it('runCommand returns when descendants keep inherited output pipes open', async () => {
+    const dependencies = createRealDependencies();
+    const stderrWrite = mock((_chunk: string) => true);
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = stderrWrite as typeof process.stderr.write;
+
+    try {
+      const result = await dependencies.runCommand(
+        [
+          '-e',
+          'Bun.spawn(["bun", "-e", "process.on(\\"SIGTERM\\", () => {}); await new Promise(() => {})"], { stdout: "inherit", stderr: "inherit" }); process.on("SIGTERM", () => {}); await new Promise(() => {})',
+        ],
+        50,
+      );
+      expect(result.timedOut).toBe(true);
+      expect(result.exitCode).not.toBe(0);
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+  });
+
+  it('runCommand force-kills a surviving descendant with independent output pipes', async () => {
+    if (process.platform === 'win32') return;
+    const dependencies = createRealDependencies();
+    const directory = await mkdtemp(join(tmpdir(), 'weft-run-tests-descendant-'));
+    cleanupPaths.add(directory);
+    const processIdPath = join(directory, 'descendant-pid.txt');
+    const stderrWrite = mock((_chunk: string) => true);
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = stderrWrite as typeof process.stderr.write;
+    let descendantProcessId: number | undefined;
+
+    try {
+      const result = await dependencies.runCommand(
+        [
+          '-e',
+          `const child = Bun.spawn(['bun', '-e', 'process.on("SIGTERM", () => {}); await new Promise(() => {})'], { stdout: 'ignore', stderr: 'ignore' }); await Bun.write(${JSON.stringify(processIdPath)}, String(child.pid)); await new Promise(() => {});`,
+        ],
+        500,
+      );
+      descendantProcessId = Number.parseInt(await Bun.file(processIdPath).text(), 10);
+
+      expect(result.timedOut).toBe(true);
+      expect(() => process.kill(descendantProcessId, 0)).toThrow();
+    } finally {
+      process.stderr.write = originalWrite;
+      if (descendantProcessId !== undefined) {
+        try {
+          process.kill(descendantProcessId, 'SIGKILL');
+        } catch {
+          // The expected path already removed the process.
+        }
+      }
+    }
+  });
+
+  for (const [signal, expectedExitCode] of [
+    ['SIGINT', 130],
+    ['SIGTERM', 143],
+  ] as const) {
+    it(`runCommand forwards ${signal} to its detached subprocess group`, async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'weft-run-tests-signal-'));
+      cleanupPaths.add(directory);
+      const processIdsPath = join(directory, 'process-ids.txt');
+      const fixturePath = join(directory, 'fixture.ts');
+      const runTestsPath = fileURLToPath(new URL('./run-tests.ts', import.meta.url));
+      await writeFile(
+        fixturePath,
+        `import { createRealDependencies } from ${JSON.stringify(runTestsPath)};
+await createRealDependencies().runCommand([
+  '-e',
+  ${JSON.stringify(`const child = Bun.spawn(['bun', '-e', 'process.on("${signal}", () => {}); await new Promise(() => {})'], { stdout: 'inherit', stderr: 'inherit' }); await Bun.write(${JSON.stringify(processIdsPath)}, process.pid + '\\n' + child.pid + '\\n'); process.on('${signal}', () => {}); await new Promise(() => {})`)},
+], 60_000);
+`,
+        'utf8',
+      );
+      const fixture = Bun.spawn(['bun', fixturePath], { stdout: 'ignore', stderr: 'ignore' });
+      const deadline = Date.now() + 2_000;
+      while (!(await Bun.file(processIdsPath).exists())) {
+        if (Date.now() >= deadline) throw new Error('Signal-forwarding fixture did not start');
+        await Bun.sleep(10);
+      }
+      const processIdsText = await Bun.file(processIdsPath).text();
+      const processIds = processIdsText
+        .trim()
+        .split('\n')
+        .map((value) => Number.parseInt(value, 10));
+
+      fixture.kill(signal);
+      const exitCode = await fixture.exited;
+
+      expect(exitCode).toBe(expectedExitCode);
+      for (const processId of processIds) {
+        expect(() => process.kill(processId, 0)).toThrow();
+      }
+    });
+  }
 
   it('readReport returns file text and undefined for missing files', async () => {
     const dependencies = createRealDependencies();

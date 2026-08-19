@@ -90,6 +90,9 @@ describe('parseLcov', () => {
       'weft-schedule-lmdb-input-example.ts',
       'weft-cli-edge-workflows-example.ts',
       'weft-validate-TA9zHl/conflict.ts',
+      'weft-schedule-workflows-2KvtDp/module.ts',
+      'weft-schedule-input-onrb4t/module.ts',
+      'weft-schedule-lmdb-workflows-gyHZF8/module.ts',
     ];
     const generatedPrefixes = [
       '../../../../../../var/folders/x_/tmp',

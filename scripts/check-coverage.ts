@@ -177,7 +177,7 @@ function isGeneratedCoverageArtifact(filePath: string): boolean {
   // fixture names, so a non-fixture temp file is not caught.
   if (
     /(?:\.\.\/)+(?:private\/)?(?:var\/folders\/|tmp\/)/.test(filePath) &&
-    /(?:\/weft-(?:schedule(?:-lmdb)?-(?:workflows|input)|cli-edge-workflows)-[^/]+\.ts$|\/weft-validate-[^/]+\/[^/]+\.ts$|\/weft-validate-(?:json-invalid|mixed-(?:clean|invalid)|multi-[ab])-[^/]+\.ts$)/.test(
+    /(?:\/weft-(?:schedule(?:-lmdb)?-(?:workflows|input)|cli-edge-workflows)-[^/]+(?:\.ts|\/module\.ts)$|\/weft-validate-[^/]+\/[^/]+\.ts$|\/weft-validate-(?:json-invalid|mixed-(?:clean|invalid)|multi-[ab])-[^/]+\.ts$)/.test(
       filePath,
     )
   ) {
@@ -1402,12 +1402,6 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       },
     ],
     [
-      'scripts/husky/run-tests.ts',
-      {
-        functions: 3,
-      },
-    ],
-    [
       'src/cli/conformance.ts',
       {
         functions: 1,
@@ -1726,6 +1720,34 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
         // and only contributes coverage from a child process.
         functions: 1,
         lines: createLineSet(12, 32),
+      },
+    ],
+    [
+      'scripts/husky/pre-commit.ts',
+      {
+        // Stash success and interruption behavior is covered through real Git
+        // repositories and child processes. Bun cannot attribute the child-process
+        // signal handlers or the executable hook body to the parent LCOV report.
+        functions: 8,
+        lines: createMergedLineSet(
+          new Set([
+            54, 55, 84, 85, 86, 99, 100, 101, 112, 123, 124, 125, 131, 132, 133, 151, 152, 153, 160,
+            161, 162, 165, 167, 168, 169, 172, 200, 201, 202, 203, 204, 205, 206, 207,
+          ]),
+          createLineSet(229, 451),
+        ),
+        requireUncoveredLines: true,
+      },
+    ],
+    [
+      'scripts/husky/run-tests.ts',
+      {
+        // Real subprocess fixtures cover signal forwarding, parent exit, and
+        // descendant SIGKILL behavior, but those paths execute in child Bun
+        // processes outside the parent LCOV report. The Windows branch and the
+        // process-group fallback are platform-specific defensive paths.
+        functions: 9,
+        lines: new Set([478, 483, 484, 485, 538, 539, 540, 542, 543, 547, 556, 585, 586, 587, 624]),
       },
     ],
     ['src/cli/api-arguments.ts', { lines: new Set([55, 58]) }],
