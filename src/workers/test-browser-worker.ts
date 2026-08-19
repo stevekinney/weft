@@ -193,4 +193,4 @@ function signalNameFromInput(input: unknown): string {
 // Wire up the real worker message loop
 // ---------------------------------------------------------------------------
 
-initializeWorkerMessageLoop((type) => registrations.get(type));
+initializeWorkerMessageLoop(Object.fromEntries(registrations));

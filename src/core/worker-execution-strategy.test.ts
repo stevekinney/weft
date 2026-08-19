@@ -6,6 +6,7 @@ import {
   useFakeTimers,
 } from '../testing/fake-timers.test-support.ts';
 
+import { buildInternalRealmManifest } from '../worker/manifest/internal-realm.ts';
 import type { WorkerPool } from '../workers/pool.ts';
 import type { WorkerOutboundMessage } from './types.ts';
 import { WorkerExecutionStrategy } from './worker-execution-strategy.ts';
@@ -2440,6 +2441,326 @@ describe('WorkerExecutionStrategy', () => {
       }
       expect(sink.mock.calls.length).toBe(sinkCallsBefore);
       expect(mockPool.discard).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('realm-ready handshake (WFT-28)', () => {
+    function readyMessage(
+      overrides: Partial<{
+        protocolVersion: number;
+        realmGeneration: string;
+        manifest: unknown;
+      }> = {},
+    ): Record<string, unknown> {
+      return {
+        type: 'ready',
+        protocolVersion: WORKER_PROTOCOL_VERSION,
+        realmGeneration: 'test-realm-generation',
+        manifest: buildInternalRealmManifest(['test']),
+        ...overrides,
+      };
+    }
+
+    function dispatchReady(
+      worker: MockWorker,
+      overrides?: Partial<{
+        protocolVersion: number;
+        realmGeneration: string;
+        manifest: unknown;
+      }>,
+    ): void {
+      dispatchToMockWorker(
+        worker,
+        'message',
+        new MessageEvent('message', { data: readyMessage(overrides) }),
+      );
+    }
+
+    it('throws when requireRealmReady is true but getExpectedWorkflowTypes is not provided', () => {
+      mockWorkers = [createMockWorker()];
+      mockPool = createMockPool(mockWorkers);
+      expect(() => new WorkerExecutionStrategy(mockPool, { requireRealmReady: true })).toThrow(
+        'getExpectedWorkflowTypes is required',
+      );
+    });
+
+    it('swallows a ready message under default config without discarding the worker', async () => {
+      setup();
+
+      strategy.startWorkflow({
+        workflowId: 'wf-default-config',
+        workflowType: 'test',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+      await sleepForTesting(10);
+
+      const worker = firstWorker();
+      // Default config sends `run` immediately (no handshake required); a `ready`
+      // arriving anyway must be swallowed, not reach the strict per-turn gate that
+      // would otherwise discard the worker for a message with no `workflowId`.
+      expect(worker.postMessage).toHaveBeenCalledTimes(1);
+      dispatchReady(worker);
+      await sleepForTesting(10);
+
+      expect(mockPool.discard).not.toHaveBeenCalled();
+      expect(messages.some((message) => message.type === 'failed')).toBe(false);
+    });
+
+    it('waits for the ready handshake before sending the first run message', async () => {
+      setup(1, { requireRealmReady: true, getExpectedWorkflowTypes: () => ['test'] });
+
+      strategy.startWorkflow({
+        workflowId: 'wf-waits',
+        workflowType: 'test',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+      await sleepForTesting(10);
+
+      const worker = firstWorker();
+      expect(worker.postMessage).not.toHaveBeenCalled();
+
+      dispatchReady(worker);
+      await sleepForTesting(10);
+
+      expect(worker.postMessage).toHaveBeenCalledTimes(1);
+      expect(worker.postMessage.mock.calls[0]![0]).toMatchObject({
+        type: 'run',
+        workflowId: 'wf-waits',
+      });
+    });
+
+    it('skips the wait for a worker that already completed its handshake', async () => {
+      setup(1, { requireRealmReady: true, getExpectedWorkflowTypes: () => ['test'] });
+
+      strategy.startWorkflow({
+        workflowId: 'wf-first',
+        workflowType: 'test',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+      await sleepForTesting(10);
+      const worker = firstWorker();
+      dispatchReady(worker);
+      await sleepForTesting(10);
+      expect(worker.postMessage).toHaveBeenCalledTimes(1);
+
+      const runTurnId = (worker.postMessage.mock.calls[0]![0] as { turnId?: number }).turnId ?? 0;
+      dispatchToMockWorker(
+        worker,
+        'message',
+        new MessageEvent('message', {
+          data: { type: 'completed', turnId: runTurnId, workflowId: 'wf-first', result: 'done' },
+        }),
+      );
+      await sleepForTesting(10);
+
+      strategy.startWorkflow({
+        workflowId: 'wf-second',
+        workflowType: 'test',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+      await sleepForTesting(10);
+
+      // Recycled worker: the second run is sent without waiting for another ready.
+      expect(worker.postMessage).toHaveBeenCalledTimes(2);
+      expect(worker.postMessage.mock.calls[1]![0]).toMatchObject({
+        type: 'run',
+        workflowId: 'wf-second',
+      });
+    });
+
+    it('discards the worker and fails the workflow when the ready manifest disagrees with the expected workflow types', async () => {
+      setup(1, { requireRealmReady: true, getExpectedWorkflowTypes: () => ['test'] });
+
+      strategy.startWorkflow({
+        workflowId: 'wf-manifest-mismatch',
+        workflowType: 'test',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+      await sleepForTesting(10);
+      const worker = firstWorker();
+
+      dispatchReady(worker, { manifest: buildInternalRealmManifest(['a-different-workflow']) });
+      await sleepForTesting(10);
+
+      expect(worker.postMessage).not.toHaveBeenCalled();
+      expect(mockPool.discard).toHaveBeenCalledWith(worker);
+      expect(lastMessage()).toMatchObject({ type: 'failed', workflowId: 'wf-manifest-mismatch' });
+    });
+
+    it('discards the worker and fails the workflow when the ready protocolVersion disagrees', async () => {
+      setup(1, { requireRealmReady: true, getExpectedWorkflowTypes: () => ['test'] });
+
+      strategy.startWorkflow({
+        workflowId: 'wf-protocol-mismatch',
+        workflowType: 'test',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+      await sleepForTesting(10);
+      const worker = firstWorker();
+
+      dispatchReady(worker, { protocolVersion: WORKER_PROTOCOL_VERSION + 1 });
+      await sleepForTesting(10);
+
+      expect(worker.postMessage).not.toHaveBeenCalled();
+      expect(mockPool.discard).toHaveBeenCalledWith(worker);
+      expect(lastMessage()).toMatchObject({ type: 'failed', workflowId: 'wf-protocol-mismatch' });
+    });
+
+    it('discards the worker and fails the workflow when the realm never sends ready before the timeout', async () => {
+      useFakeTimers();
+      setup(1, {
+        requireRealmReady: true,
+        getExpectedWorkflowTypes: () => ['test'],
+        realmReadyTimeoutMs: 5,
+      });
+
+      strategy.startWorkflow({
+        workflowId: 'wf-ready-timeout',
+        workflowType: 'test',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+      await sleepForTesting(0);
+      await advanceTimersByTime(5);
+
+      const worker = firstWorker();
+      expect(worker.postMessage).not.toHaveBeenCalled();
+      expect(mockPool.discard).toHaveBeenCalledWith(worker);
+      expect(lastMessage()).toMatchObject({
+        type: 'failed',
+        workflowId: 'wf-ready-timeout',
+        failureCategory: 'timeout',
+      });
+    });
+
+    it('does not double-discard when a worker crashes while the ready handshake is pending', async () => {
+      useFakeTimers();
+      setup(1, {
+        requireRealmReady: true,
+        getExpectedWorkflowTypes: () => ['test'],
+        realmReadyTimeoutMs: 50,
+      });
+
+      strategy.startWorkflow({
+        workflowId: 'wf-crash-during-wait',
+        workflowType: 'test',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+      await sleepForTesting(0);
+      const worker = firstWorker();
+
+      dispatchToMockWorker(worker, 'error', new ErrorEvent('error', { message: 'boom' }));
+      await sleepForTesting(0);
+
+      expect(worker.postMessage).not.toHaveBeenCalled();
+      expect(mockPool.discard).toHaveBeenCalledTimes(1);
+      expect(messages.filter((message) => message.type === 'failed')).toHaveLength(1);
+
+      // The crash already settled the pending waiter (via `forget`, which clears
+      // the timeout); the original ready-timeout must not fire a second discard.
+      await advanceTimersByTime(50);
+      await sleepForTesting(0);
+
+      expect(mockPool.discard).toHaveBeenCalledTimes(1);
+      expect(messages.filter((message) => message.type === 'failed')).toHaveLength(1);
+    });
+
+    it('settles a pending ready wait without hanging or double-discarding when the strategy is disposed mid-handshake', async () => {
+      setup(1, { requireRealmReady: true, getExpectedWorkflowTypes: () => ['test'] });
+
+      strategy.startWorkflow({
+        workflowId: 'wf-disposed-during-wait',
+        workflowType: 'test',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+      await sleepForTesting(0);
+      const worker = firstWorker();
+
+      strategy[Symbol.dispose]();
+      await sleepForTesting(10);
+
+      expect(worker.postMessage).not.toHaveBeenCalled();
+    });
+
+    it('discards the worker when the ready message exceeds the protocol size limit', async () => {
+      setup(1, {
+        requireRealmReady: true,
+        getExpectedWorkflowTypes: () => ['test'],
+        maxProtocolMessageBytes: 256,
+      });
+
+      strategy.startWorkflow({
+        workflowId: 'wf-oversize-ready',
+        workflowType: 'test',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+      await sleepForTesting(10);
+      const worker = firstWorker();
+
+      const oversizeManifest = buildInternalRealmManifest(
+        Array.from({ length: 50 }, (_, index) => `workflow-type-${index}`),
+      );
+      dispatchReady(worker, { manifest: oversizeManifest });
+      await sleepForTesting(10);
+
+      expect(worker.postMessage).not.toHaveBeenCalled();
+      expect(mockPool.discard).toHaveBeenCalledWith(worker);
+      expect(lastMessage()).toMatchObject({
+        type: 'failed',
+        workflowId: 'wf-oversize-ready',
+        failureCategory: 'resource',
+      });
+    });
+
+    it('discards the worker when the ready message has an empty realmGeneration', async () => {
+      setup(1, { requireRealmReady: true, getExpectedWorkflowTypes: () => ['test'] });
+
+      strategy.startWorkflow({
+        workflowId: 'wf-empty-generation',
+        workflowType: 'test',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+      await sleepForTesting(10);
+      const worker = firstWorker();
+
+      dispatchReady(worker, { realmGeneration: '' });
+      await sleepForTesting(10);
+
+      expect(worker.postMessage).not.toHaveBeenCalled();
+      expect(mockPool.discard).toHaveBeenCalledWith(worker);
+      expect(lastMessage()).toMatchObject({ type: 'failed', workflowId: 'wf-empty-generation' });
+    });
+
+    it('discards the worker when the ready message manifest fails to parse', async () => {
+      setup(1, { requireRealmReady: true, getExpectedWorkflowTypes: () => ['test'] });
+
+      strategy.startWorkflow({
+        workflowId: 'wf-bad-manifest',
+        workflowType: 'test',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+      await sleepForTesting(10);
+      const worker = firstWorker();
+
+      dispatchReady(worker, { manifest: 42 });
+      await sleepForTesting(10);
+
+      expect(worker.postMessage).not.toHaveBeenCalled();
+      expect(mockPool.discard).toHaveBeenCalledWith(worker);
+      const failure = lastMessage() as WorkerOutboundMessage & { error: string };
+      expect(failure).toMatchObject({ type: 'failed', workflowId: 'wf-bad-manifest' });
+      expect(failure.error).toContain('rejected');
     });
   });
 });

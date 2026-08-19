@@ -4,8 +4,9 @@
 
 import type { ActivityInterceptor } from '../core/interceptor.ts';
 import { DEFAULT_WORKFLOW_VERSION } from '../core/versioning.ts';
-import { detectRuntime, detectRuntimeVersion, hashString } from '../runtime/portable.ts';
+import { detectRuntime, detectRuntimeVersion } from '../runtime/portable.ts';
 import { VERSION } from '../version.ts';
+import { declaredShapeDigest } from './manifest/declared-shape-digest.ts';
 import type {
   WorkerActivityContract,
   WorkerManifest,
@@ -107,17 +108,6 @@ export function snapshotWorkflows(
     snapshot[workflowType] = { name: workflow.name, activities: { ...workflow.activities } };
   }
   return snapshot;
-}
-
-/**
- * Tag a derived placeholder value so it is never mistaken for a real,
- * build-tool-supplied content digest. `hashString` is FNV-1a — cache-key
- * quality, not cryptographic — which is exactly why the tag exists: a reader
- * (or WFT-29's future builder) can tell a `declared-shape:` value apart from
- * a trusted `sha256:` one at a glance.
- */
-function declaredShapeDigest(input: string): string {
-  return `declared-shape:${hashString(input)}`;
 }
 
 /**

@@ -394,6 +394,7 @@ describe('normalizeWorkerExecutionConfiguration', () => {
       development: false,
       broadcastEvents: false,
       getRegistration: () => undefined,
+      listRegisteredWorkflowTypes: () => [],
       resolveWorkflowType: (target) => String(target),
     });
 
@@ -416,6 +417,7 @@ describe('normalizeWorkerExecutionConfiguration', () => {
         development: false,
         broadcastEvents: false,
         getRegistration: () => undefined,
+        listRegisteredWorkflowTypes: () => [],
         resolveWorkflowType: (target) => String(target),
         getLogSink: () => sink,
       }),
