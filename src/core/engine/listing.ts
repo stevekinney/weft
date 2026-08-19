@@ -80,9 +80,7 @@ async function collectSummariesFromConstrainedIds(
   options: ListOptions | undefined,
 ): Promise<WorkflowSummary[]> {
   const orderedIds = [...constrainedIds];
-  if (orderedIds.length > MAX_LIST_SCAN_ROWS) {
-    throw new WorkflowListScanCapExceededError(MAX_LIST_SCAN_ROWS);
-  }
+  assertWorkflowListScanWithinCap(orderedIds.length);
 
   const items: WorkflowSummary[] = [];
   for (let start = 0; start < orderedIds.length; start += CONSTRAINED_ID_CHUNK_SIZE) {
@@ -130,9 +128,7 @@ async function collectSummariesFromFullScan(
     if (!isTopLevelWorkflowStateKey(key)) continue;
 
     scanned += 1;
-    if (scanned > MAX_LIST_SCAN_ROWS) {
-      throw new WorkflowListScanCapExceededError(MAX_LIST_SCAN_ROWS);
-    }
+    assertWorkflowListScanWithinCap(scanned);
 
     const state = decodeWorkflowState(value);
     const searchAttributes = await readSearchAttributesForFilter(
@@ -150,6 +146,12 @@ async function collectSummariesFromFullScan(
     items.push(summaryFromState(state, failureCategoryFromAttributeBytes(attributeBytes)));
   }
   return items;
+}
+
+export function assertWorkflowListScanWithinCap(scannedRows: number): void {
+  if (scannedRows > MAX_LIST_SCAN_ROWS) {
+    throw new WorkflowListScanCapExceededError(MAX_LIST_SCAN_ROWS);
+  }
 }
 
 async function summariesFromStates(

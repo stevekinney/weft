@@ -301,6 +301,16 @@ describe('search-attributes', () => {
       expect(() => validateAttributeType('priority', 42, { type: 'number' })).not.toThrow();
     });
 
+    it('accepts integers and rejects fractional or non-number integer values', () => {
+      expect(() => validateAttributeType('attempt', 42, { type: 'integer' })).not.toThrow();
+      expect(() => validateAttributeType('attempt', 42.5, { type: 'integer' })).toThrow(
+        'declared as "integer" but received number',
+      );
+      expect(() => validateAttributeType('attempt', '42', { type: 'integer' })).toThrow(
+        'declared as "integer" but received string',
+      );
+    });
+
     it('rejects a string value for a number declaration', () => {
       expect(() => validateAttributeType('priority', 'high', { type: 'number' })).toThrow(
         'declared as "number" but received string',

@@ -92,6 +92,38 @@ async function putResolvedRecord(storage: MemoryStorage, record: ResolvedRecord)
 }
 
 describe('weft.tasks.diagnostics', () => {
+  it('loads a resolved task directly by operation id', async () => {
+    const storage = new ScanCountingStorage();
+    const engine = createEngine(storage);
+    const registry = new WorkerRegistry();
+    const taskQueue = new TaskQueue();
+
+    await putResolvedRecord(storage, {
+      operationId: 'resolved-by-id',
+      workflowId: 'workflow-history',
+      activityName: 'charge',
+      queue: 'default',
+      status: 'failed',
+      resolvedAt: 9_000,
+      retryCount: 3,
+      requeueCount: 3,
+      resolutionReason: 'max-attempts-exceeded',
+    });
+
+    const result = await runDiagnostics({
+      engine,
+      registry,
+      taskQueue,
+      input: { operationId: 'resolved-by-id', retryStormMinimumAttempts: 3 },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected diagnostics result');
+    const diagnostics = result.value as GetTaskDiagnosticsOutput;
+    expect(diagnostics.items.map((item) => item.operationId)).toEqual(['resolved-by-id']);
+    expect(storage.scannedEntryCount(KEYS.operationResolvedByTimePrefix())).toBe(0);
+  });
+
   it('identifies stuck queued tasks, stale inflight tasks, retry storms, and capacity saturation', async () => {
     const storage = new MemoryStorage();
     const engine = createEngine(storage);

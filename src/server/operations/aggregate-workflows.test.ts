@@ -15,6 +15,22 @@ const registry = createOperationRegistry([aggregateWorkflowsOperation]);
 const bindings = [aggregateWorkflowsRestBinding];
 
 describe('weft.workflows.aggregate', () => {
+  it('rejects an unknown REST grouping parameter', async () => {
+    const engine = new Engine({ storage: new MemoryStorage() });
+
+    const response = await handleRequest(
+      new Request('http://localhost/v1/workflows/aggregate?group_by=unknown', { method: 'GET' }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: 'group_by must be one of "status", "type", "failureCategory", or "attribute:<name>"',
+    });
+    engine[Symbol.dispose]();
+  });
+
   it('passes the REST schedule filter to engine.aggregate', async () => {
     const engine = new Engine({ storage: new MemoryStorage() });
     engine.aggregate = async (filter, options) => {

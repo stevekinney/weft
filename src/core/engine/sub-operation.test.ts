@@ -1,6 +1,7 @@
 import { describe, expect, it, mock } from 'bun:test';
 
 import { MemoryStorage } from '../../storage/memory.ts';
+import { processStateCommitOperation } from './operations-state.ts';
 import { executeSubOperation, processWaitReviewOperation } from './sub-operation.ts';
 
 function createSubOperationCallbacks() {
@@ -16,6 +17,54 @@ function createSubOperationCallbacks() {
 }
 
 describe('engine sub-operations', () => {
+  it('commits execution-scoped state deletes through the operation callback path', async () => {
+    const storage = new MemoryStorage();
+    const results: unknown[] = [];
+    const ensureTerminalCleanupTracked = mock(async () => {});
+    const callbacks = {
+      ensureTerminalCleanupTracked,
+      runOperationWithResult: mock(async (_workflowId, _operation, execute) => {
+        results.push(await execute());
+      }),
+    };
+    const scope = { ownerWorkflowId: 'workflow-state-owner', type: 'execution' } as const;
+
+    await processStateCommitOperation(
+      { storage } as never,
+      'workflow-state-owner',
+      {
+        expectedVersion: 0,
+        key: 'counter',
+        mode: 'set',
+        operationId: 'state-commit:set',
+        scope,
+        type: 'state-commit',
+        value: 2,
+      },
+      callbacks,
+    );
+    await processStateCommitOperation(
+      { storage } as never,
+      'workflow-state-owner',
+      {
+        expectedVersion: 1,
+        key: 'counter',
+        mode: 'delete',
+        operationId: 'state-commit:delete',
+        scope,
+        type: 'state-commit',
+      },
+      callbacks,
+    );
+
+    expect(results).toEqual([
+      { applied: true, value: 2, version: 1 },
+      { applied: true, value: undefined, version: 2 },
+    ]);
+    expect(ensureTerminalCleanupTracked).toHaveBeenCalledTimes(2);
+    expect(ensureTerminalCleanupTracked).toHaveBeenLastCalledWith('workflow-state-owner');
+  });
+
   it('processes wait-review operations through the review callback', async () => {
     const processReviewOperation = mock(async () => {});
     const runOperationWithoutResult = mock(async (_workflowId, _operation, execute) => execute());

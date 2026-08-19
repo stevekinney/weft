@@ -7,6 +7,8 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import type { AuthAuditEvent } from '../authentication.ts';
 import { signJWT } from '../authentication.ts';
 import { serve, type WeftServer } from '../index.ts';
+import { gateRequest } from './request-gate.ts';
+import { minimalServerContext } from './server-context.test-support.ts';
 
 const TEST_JWT_SECRET = 'rate-limit-test-secret-must-be-long-enough!';
 
@@ -184,6 +186,29 @@ describe('serve() with rate limiting', () => {
     const throttled = statuses.filter((status) => status === 429);
     expect(rejected.length).toBe(2);
     expect(throttled.length).toBe(4);
+  });
+});
+
+describe('request rate-limit keying', () => {
+  it('uses the shared unidentified bucket when no subject or client address exists', async () => {
+    const checkedKeys: string[] = [];
+    const context = {
+      ...minimalServerContext(),
+      rateLimiter: {
+        check: (key: string) => {
+          checkedKeys.push(key);
+          return { allowed: true, limit: 1, remaining: 0, retryAfterSeconds: 60 };
+        },
+        dispose: () => {},
+      },
+    };
+    // The request gate only consults requestIP; the remaining Bun server methods are inert here.
+    const server = { requestIP: () => null } as unknown as ReturnType<typeof Bun.serve>;
+
+    const result = await gateRequest(server, context, new Request('http://localhost/v1/workflows'));
+
+    expect(result.response).toBeNull();
+    expect(checkedKeys).toEqual(['unidentified']);
   });
 });
 

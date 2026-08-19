@@ -3,7 +3,11 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import { Engine } from '../../core/engine.ts';
 import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
-import { UpdateTimeoutError, WorkflowTerminalError } from '../../core/updates.ts';
+import {
+  UpdateTimeoutError,
+  UpdateValidationError,
+  WorkflowTerminalError,
+} from '../../core/updates.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
@@ -173,6 +177,30 @@ describe('weft.workflows.update', () => {
       expect(await response.json()).toEqual({
         error:
           'Cannot send update to workflow "workflow-123": workflow is in terminal state "completed"',
+      });
+    } finally {
+      engine.submitCoordinatedUpdate = originalSubmit;
+    }
+  });
+
+  it('returns the validation diagnostic when an update validator rejects the payload', async () => {
+    engine = createEngine();
+    const originalSubmit = engine.submitCoordinatedUpdate.bind(engine);
+
+    try {
+      engine.submitCoordinatedUpdate = async () => {
+        throw new UpdateValidationError('rename', [{ message: 'name must be a string' }]);
+      };
+
+      const response = await handleRequest(
+        jsonRequest('POST', '/v1/workflows/workflow-123/update/rename', { payload: {} }),
+        engine,
+        { operationRegistry: registry, restBindings: bindings },
+      );
+
+      expect(response.status).toBe(422);
+      expect(await response.json()).toEqual({
+        error: 'Update "rename" rejected by validator: name must be a string',
       });
     } finally {
       engine.submitCoordinatedUpdate = originalSubmit;

@@ -15,7 +15,10 @@ import { principalFromApiKey } from '../principal.ts';
 import { markInflight, type InflightRecord, type ResolvedRecord } from '../task-state.ts';
 import { minimalServeOptions, minimalServerContext } from './server-context.test-support.ts';
 import { handleTaskPollRequest, handleTaskResultRequest } from './task-polling.ts';
-import { transitionTaskResultToResolvedWithRetry } from './task-result-resolution.ts';
+import {
+  taskResultPayloadSizeError,
+  transitionTaskResultToResolvedWithRetry,
+} from './task-result-resolution.ts';
 
 /** handleTaskResultRequest never consults the worker registry, so use a null one. */
 function createMinimalContext() {
@@ -98,6 +101,20 @@ async function readResolvedRecord(
 }
 
 describe('handleTaskResultRequest', () => {
+  it('returns the payload-size diagnostic for an oversized completion value', () => {
+    const error = taskResultPayloadSizeError(
+      {
+        operationId: 'oversized-direct',
+        status: 'completed',
+        resolutionReason: 'completed',
+        value: { blob: 'x'.repeat(200) },
+      },
+      64,
+    );
+
+    expect(error?.message).toContain('activity result exceeds');
+  });
+
   it('returns null for non-POST requests', async () => {
     const context = createMinimalContext();
     const options = createMinimalOptions();

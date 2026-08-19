@@ -759,6 +759,47 @@ describe('validateCheckpointShape (via deserializeCheckpoint)', () => {
     }
   });
 
+  it('accepts every current Worker replay failure category', () => {
+    const failureCategories = [
+      'application',
+      'cancellation',
+      'resource',
+      'system',
+      'timeout',
+    ] as const;
+
+    for (const failureCategory of failureCategories) {
+      const checkpoint: Checkpoint = {
+        ...createCheckpoint(`wf-${failureCategory}`, '1.0.0'),
+        workerReplayFailures: [
+          [
+            0,
+            {
+              status: 'failed',
+              error: 'activity failed',
+              failureCategory,
+            },
+          ],
+        ],
+      };
+
+      expect(deserializeCheckpoint(serializeCheckpoint(checkpoint))).toMatchObject({
+        workerReplayFailures: checkpoint.workerReplayFailures,
+      });
+    }
+  });
+
+  it('rejects malformed accumulated-result replay watermarks', () => {
+    for (const accumulatedResultReplayWatermark of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      const bytes = serializeCheckpoint({
+        ...createCheckpoint('wf-invalid-watermark', '1.0.0'),
+        accumulatedResultReplayWatermark,
+      });
+
+      expect(() => deserializeCheckpoint(bytes)).toThrow('accumulatedResultReplayWatermark');
+    }
+  });
+
   it('throws when schemaVersion is not an integer number', () => {
     const { encode } = require('./codec.ts');
     const bytes = encode({
