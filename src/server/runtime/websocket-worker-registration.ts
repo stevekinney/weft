@@ -16,6 +16,7 @@ import type { WorkerManifest } from '../../worker/manifest/index.ts';
 import { digestCanonicalWorkerManifest, parseWorkerManifest } from '../../worker/manifest/index.ts';
 import {
   REMOTE_WORKER_PROTOCOL_VERSION,
+  type RegisterErrorMessage,
   type RegisterMessage,
   type RemoteWorkerCapabilities,
 } from '../../worker/protocol.ts';
@@ -33,6 +34,33 @@ import { rejectRegistration, sendWorkerProtocolMessage } from './websocket-worke
 
 const MAX_WORKER_CONCURRENCY = 1_000;
 const DEFAULT_WORKER_CONCURRENCY = 10;
+
+/**
+ * Record one declined `register` attempt in the registry's bounded rejection
+ * log (WFT-29), then send the `registerError` frame and close the socket.
+ * `identity` carries whatever deployment fields had already been parsed by
+ * the time the calling gate rejected the attempt — most gates run before a
+ * `WorkerManifest` exists, so it is usually absent.
+ */
+function rejectAndRecordRegistration(
+  context: ServerContext,
+  ws: ServerWebSocket<WebSocketData>,
+  code: RegisterErrorMessage['code'],
+  message: string,
+  workerId: string | undefined,
+  requestedProtocolVersion: number | undefined,
+  identity?: { deploymentName?: string; buildId?: string },
+): void {
+  context.registry.recordRejection({
+    code,
+    ...(workerId !== undefined ? { workerId } : {}),
+    rejectedAt: Date.now(),
+    queue: ws.data.queue ?? 'default',
+    ...(identity?.deploymentName !== undefined ? { deploymentName: identity.deploymentName } : {}),
+    ...(identity?.buildId !== undefined ? { buildId: identity.buildId } : {}),
+  });
+  rejectRegistration(ws, code, message, requestedProtocolVersion);
+}
 
 /**
  * Whether the connection's principal is allowed to register a worker. An
@@ -118,6 +146,7 @@ function admitReconnectingSocket(
   context: ServerContext,
   ws: ServerWebSocket<WebSocketData>,
   message: RegisterMessage,
+  manifest: WorkerManifest,
 ): boolean {
   const pendingRequeue = context.pendingWorkerRequeues.get(message.workerId);
   const isGracePeriodReconnect = pendingRequeue !== undefined;
@@ -128,11 +157,14 @@ function admitReconnectingSocket(
 
   const existingSocket = context.workerSockets.get(message.workerId);
   if (!isGracePeriodReconnect && existingSocket !== undefined && existingSocket !== ws) {
-    rejectRegistration(
+    rejectAndRecordRegistration(
+      context,
       ws,
       'invalid_registration',
       'workerId is already registered to an active connection',
+      message.workerId,
       message.protocolVersion,
+      { deploymentName: manifest.deployment.name, buildId: manifest.deployment.buildId },
     );
     return false;
   }
@@ -196,16 +228,19 @@ function commitWorkerRegistration(
     manifest.deployment.artifactDigest,
   );
   if (!consistency.ok) {
-    rejectRegistration(
+    rejectAndRecordRegistration(
+      context,
       ws,
       'deployment_conflict',
       `Deployment "${manifest.deployment.name}" build "${manifest.deployment.buildId}" is already registered with a different artifact digest`,
+      message.workerId,
       message.protocolVersion,
+      { deploymentName: manifest.deployment.name, buildId: manifest.deployment.buildId },
     );
     return;
   }
 
-  if (!admitReconnectingSocket(context, ws, message)) return;
+  if (!admitReconnectingSocket(context, ws, message, manifest)) return;
 
   context.registry.recordDeploymentConsistency(
     manifest.deployment.name,
@@ -272,10 +307,12 @@ export async function registerWorker(
   message: RegisterMessage,
 ): Promise<void> {
   if (!principalMayRegisterWorker(ws.data.principal)) {
-    rejectRegistration(
+    rejectAndRecordRegistration(
+      context,
       ws,
       'invalid_registration',
       'Worker registration requires the workers:write scope',
+      message.workerId,
       message.protocolVersion,
     );
     return;
@@ -283,17 +320,27 @@ export async function registerWorker(
 
   const parsedManifest = parseWorkerManifest(message.manifest);
   if (!parsedManifest.ok) {
-    rejectRegistration(ws, 'invalid_registration', parsedManifest.message, message.protocolVersion);
+    rejectAndRecordRegistration(
+      context,
+      ws,
+      'invalid_registration',
+      parsedManifest.message,
+      message.workerId,
+      message.protocolVersion,
+    );
     return;
   }
   const { manifest, canonicalJson } = parsedManifest;
 
   if (manifest.protocolVersion !== message.protocolVersion) {
-    rejectRegistration(
+    rejectAndRecordRegistration(
+      context,
       ws,
       'invalid_registration',
       `Manifest declares protocolVersion ${String(manifest.protocolVersion)}, which does not match the register message's protocolVersion ${String(message.protocolVersion)}`,
+      message.workerId,
       message.protocolVersion,
+      { deploymentName: manifest.deployment.name, buildId: manifest.deployment.buildId },
     );
     return;
   }
@@ -308,7 +355,15 @@ export async function registerWorker(
       manifest,
     });
     if (decision.status === 'rejected') {
-      rejectRegistration(ws, 'registration_rejected', decision.reason, message.protocolVersion);
+      rejectAndRecordRegistration(
+        context,
+        ws,
+        'registration_rejected',
+        decision.reason,
+        message.workerId,
+        message.protocolVersion,
+        { deploymentName: manifest.deployment.name, buildId: manifest.deployment.buildId },
+      );
       return;
     }
   }

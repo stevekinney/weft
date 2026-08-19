@@ -6,6 +6,7 @@ import {
   REMOTE_WORKER_PROTOCOL_VERSION,
   parseWorkerToServerMessage,
   type HeartbeatMessage,
+  type RegisterErrorMessage,
   type TaskResultMessage,
   type WorkerToServerMessage,
 } from '../../worker/protocol.ts';
@@ -186,7 +187,43 @@ type ParseResult = { ok: true; message: WorkerToServerMessage } | { ok: false };
  * Rejects the connection if the frame is malformed or fails protocol validation.
  * Returns the parsed message on success or `{ ok: false }` if the connection was closed.
  */
+/**
+ * Best-effort `workerId` extraction from a frame that failed protocol
+ * parsing. The frame may still carry a syntactically valid `workerId` even
+ * though some other field failed validation — used only to enrich the
+ * bounded rejection log, never to authorize or route anything.
+ */
+function extractOptionalWorkerId(parsed: unknown): string | undefined {
+  if (typeof parsed !== 'object' || parsed === null) return undefined;
+  const workerId = (parsed as Record<string, unknown>)['workerId'];
+  return typeof workerId === 'string' && workerId.length > 0 ? workerId : undefined;
+}
+
+/**
+ * Record a wire-shape registration rejection, then send `registerError` and
+ * close the socket. Extracted from {@link parseAndValidateWorkerFrame} to
+ * keep that function's branching within the repository's complexity budget.
+ */
+function recordAndRejectRegistrationFrame(
+  context: ServerContext,
+  ws: ServerWebSocket<WebSocketData>,
+  parsed: unknown,
+  code: RegisterErrorMessage['code'],
+  message: string,
+  requestedProtocolVersion: number | undefined,
+): void {
+  const rejectedWorkerId = extractOptionalWorkerId(parsed);
+  context.registry.recordRejection({
+    code,
+    ...(rejectedWorkerId !== undefined ? { workerId: rejectedWorkerId } : {}),
+    rejectedAt: Date.now(),
+    queue: ws.data.queue ?? 'default',
+  });
+  rejectRegistration(ws, code, message, requestedProtocolVersion);
+}
+
 function parseAndValidateWorkerFrame(
+  context: ServerContext,
   ws: ServerWebSocket<WebSocketData>,
   rawMessage: string | Buffer,
 ): ParseResult {
@@ -225,7 +262,14 @@ function parseAndValidateWorkerFrame(
               received: result.error.requestedProtocolVersion,
             })
           : result.error.message;
-      rejectRegistration(ws, result.error.code, message, result.error.requestedProtocolVersion);
+      recordAndRejectRegistrationFrame(
+        context,
+        ws,
+        parsed,
+        result.error.code,
+        message,
+        result.error.requestedProtocolVersion,
+      );
       return { ok: false };
     }
 
@@ -245,7 +289,7 @@ export function handleWorkerWebSocketMessage(
 ): void {
   if (!isWorkerConnection(ws.data.pathname)) return;
 
-  const parsed = parseAndValidateWorkerFrame(ws, rawMessage);
+  const parsed = parseAndValidateWorkerFrame(context, ws, rawMessage);
   if (!parsed.ok) return;
 
   const { message } = parsed;

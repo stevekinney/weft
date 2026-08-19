@@ -312,6 +312,109 @@ describe('RemoteWorker', () => {
     await worker.disconnect();
   });
 
+  it('advertises a supplied real manifest verbatim instead of deriving a declared-shape placeholder', async () => {
+    const messages: any[] = [];
+    server = createTestServer({
+      onMessage(_ws, message) {
+        messages.push(JSON.parse(message));
+      },
+    });
+
+    const realManifest = {
+      manifestVersion: 1,
+      protocolVersion: 3,
+      sdkVersion: '9.9.9',
+      runtime: { name: 'bun', version: '1.3.14' },
+      deployment: { name: 'payments', buildId: 'build-real', artifactDigest: 'sha256:real-bytes' },
+      workflows: {
+        orders: {
+          workflowVersion: '2.0.0',
+          workflowRevision: 'sha256:revision',
+          contractHash: 'sha256:contract',
+          activities: {
+            processOrder: { contractHash: 'sha256:activity', implementationRevision: 'build-real' },
+          },
+        },
+      },
+      capabilities: {},
+    };
+
+    const worker = new RemoteWorker({
+      serverUrl: `ws://localhost:${server.port}`,
+      workerId: 'real-manifest-worker',
+      workflows: workflowsOf({ processOrder: async (input) => input }),
+      deploymentName: 'ignored-because-manifest-wins',
+      buildId: 'ignored-because-manifest-wins',
+      manifest: realManifest as any,
+    });
+
+    await worker.connect();
+
+    await waitForCondition(() => messages.some((message) => message.type === 'register'), {
+      timeoutMs: 1_000,
+      label: 'real-manifest register message',
+    });
+    const registerMessage = messages.find((message) => message.type === 'register');
+    expect(registerMessage.manifest).toEqual(realManifest);
+
+    await worker.disconnect();
+  });
+
+  it('throws at construction when a supplied manifest omits a declared workflow type', () => {
+    expect(
+      () =>
+        new RemoteWorker({
+          serverUrl: 'ws://localhost:1',
+          workflows: workflowsOf({ processOrder: async (input) => input }), // declares 'orders'
+          deploymentName: 'payments',
+          buildId: 'build-1',
+          manifest: {
+            manifestVersion: 1,
+            protocolVersion: 3,
+            sdkVersion: '1.0.0',
+            runtime: { name: 'bun', version: '1.3.14' },
+            deployment: { name: 'payments', buildId: 'build-1', artifactDigest: 'sha256:x' },
+            workflows: {}, // missing 'orders'
+            capabilities: {},
+          } as any,
+        }),
+    ).toThrow(/missing from manifest: orders/);
+  });
+
+  it('throws at construction when a supplied manifest advertises a workflow type not in workflows', () => {
+    expect(
+      () =>
+        new RemoteWorker({
+          serverUrl: 'ws://localhost:1',
+          workflows: workflowsOf({ processOrder: async (input) => input }), // declares 'orders'
+          deploymentName: 'payments',
+          buildId: 'build-1',
+          manifest: {
+            manifestVersion: 1,
+            protocolVersion: 3,
+            sdkVersion: '1.0.0',
+            runtime: { name: 'bun', version: '1.3.14' },
+            deployment: { name: 'payments', buildId: 'build-1', artifactDigest: 'sha256:x' },
+            workflows: {
+              orders: {
+                workflowVersion: '1.0.0',
+                workflowRevision: 'sha256:r',
+                contractHash: 'sha256:c',
+                activities: {},
+              },
+              shipping: {
+                workflowVersion: '1.0.0',
+                workflowRevision: 'sha256:r',
+                contractHash: 'sha256:c',
+                activities: {},
+              },
+            },
+            capabilities: {},
+          } as any,
+        }),
+    ).toThrow(/not in workflows: shipping/);
+  });
+
   it('connect() rejects when registration is rejected', async () => {
     server = createTestServer({
       autoRegisterAck: false,

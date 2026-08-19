@@ -27,6 +27,7 @@ import {
   UpdateTimeoutError,
   UpdateValidationError,
   VersionMismatchError,
+  WorkerManifestBuildError,
   WorkerProtocolIncompatibleError,
   WorkflowAlreadyExistsError,
   WorkflowBuilderError,
@@ -130,6 +131,8 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
   StartOrSignalConflictError: () => new StartOrSignalConflictError('wf-1', 'completed'),
   WorkflowTeardownPendingError: () => new WorkflowTeardownPendingError('wf-1'),
   IdempotencyKeyPurgedError: () => new IdempotencyKeyPurgedError('wf-1'),
+  WorkerManifestBuildError: () =>
+    new WorkerManifestBuildError('workflow "checkout" not registered'),
 };
 
 describe('WeftError', () => {

@@ -93,6 +93,12 @@ export const CLASSIFIED_OVERSIZED_IMPLEMENTATION_FILES = [
       'The worker entrypoint keeps registration, protocol negotiation, dispatch, completion, heartbeat, and shutdown behavior together.',
   },
   {
+    path: 'src/worker/registry.ts',
+    classification: 'justified-exception',
+    rationale:
+      'WorkerRegistry is the single in-memory state store for connected workers, in-flight tasks, and the bounded registration-rejection log (WFT-29); routing, fair-share, drain, consistency, and summary logic are already extracted into sibling modules under registry/.',
+  },
+  {
     path: 'src/server/operations/get-task-diagnostics.ts',
     classification: 'justified-exception',
     rationale:

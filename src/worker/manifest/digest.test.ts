@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
+import { CONTENT_DIGEST_ALGORITHM } from './content-digest.ts';
 import {
   computeWorkerManifestDigest,
   digestCanonicalWorkerManifest,
@@ -13,6 +14,13 @@ describe('computeWorkerManifestDigest', () => {
     const digest = await computeWorkerManifestDigest(emptyManifest());
 
     expect(digest.startsWith(`${WORKER_MANIFEST_DIGEST_ALGORITHM}:`)).toBe(true);
+  });
+
+  it('stays in sync with the generic content-digest algorithm tag', () => {
+    // Independently-declared literals (not a shared identifier) so each has
+    // its own public-facing declaration site — this test is what catches
+    // them drifting apart instead of a compile-time reference.
+    expect(WORKER_MANIFEST_DIGEST_ALGORITHM).toBe(CONTENT_DIGEST_ALGORITHM);
   });
 
   it('produces a 64-character SHA-256 hex body', async () => {

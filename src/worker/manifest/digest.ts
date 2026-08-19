@@ -15,10 +15,9 @@
  * @module worker/manifest/digest
  */
 
-import { copyBytesToArrayBuffer } from '../../core/byte-arrays.ts';
+import { sha256Hex } from './content-digest.ts';
 import { canonicalWorkerManifestJson } from './normalize.ts';
 import type { WorkerManifest } from './types.ts';
-import { utf8Encode } from './utf8.ts';
 
 /**
  * Algorithm tag prefixed to every manifest digest this version produces.
@@ -35,14 +34,6 @@ import { utf8Encode } from './utf8.ts';
  * ```
  */
 export const WORKER_MANIFEST_DIGEST_ALGORITHM = 'sha256';
-
-function bytesToHex(bytes: Uint8Array): string {
-  let hex = '';
-  for (const byte of bytes) {
-    hex += byte.toString(16).padStart(2, '0');
-  }
-  return hex;
-}
 
 /**
  * Digest canonical manifest bytes.
@@ -69,11 +60,7 @@ function bytesToHex(bytes: Uint8Array): string {
  * ```
  */
 export async function digestCanonicalWorkerManifest(canonicalJson: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    'SHA-256',
-    copyBytesToArrayBuffer(utf8Encode(canonicalJson)),
-  );
-  return `${WORKER_MANIFEST_DIGEST_ALGORITHM}:${bytesToHex(new Uint8Array(digest))}`;
+  return sha256Hex(canonicalJson);
 }
 
 /**

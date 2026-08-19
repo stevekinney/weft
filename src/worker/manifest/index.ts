@@ -46,3 +46,9 @@ export {
 } from './digest.ts';
 
 export { buildWorkerExecutionIdentity, executionIdentitySatisfies } from './execution-identity.ts';
+
+export {
+  WorkerManifestBuildError,
+  buildWorkerManifestFromRegistry,
+} from './registry-contract-builder.ts';
+export type { WorkerManifestFromRegistryOptions } from './registry-contract-builder.ts';

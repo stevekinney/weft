@@ -1620,4 +1620,63 @@ describe('WorkerRegistry', () => {
       ]);
     });
   });
+
+  describe('recordRejection / getRecentRejections', () => {
+    it('returns an empty array when nothing has been recorded', () => {
+      const registry = new WorkerRegistry();
+      expect(registry.getRecentRejections(10)).toEqual([]);
+    });
+
+    it('records and returns a rejection', () => {
+      const registry = new WorkerRegistry();
+      registry.recordRejection({
+        code: 'invalid_registration',
+        workerId: 'w-1',
+        rejectedAt: 100,
+        queue: 'default',
+      });
+
+      expect(registry.getRecentRejections(10)).toEqual([
+        { code: 'invalid_registration', workerId: 'w-1', rejectedAt: 100, queue: 'default' },
+      ]);
+    });
+
+    it('returns entries newest first', () => {
+      const registry = new WorkerRegistry();
+      registry.recordRejection({ code: 'invalid_registration', rejectedAt: 1 });
+      registry.recordRejection({ code: 'deployment_conflict', rejectedAt: 2 });
+      registry.recordRejection({ code: 'registration_rejected', rejectedAt: 3 });
+
+      expect(registry.getRecentRejections(10).map((r) => r.code)).toEqual([
+        'registration_rejected',
+        'deployment_conflict',
+        'invalid_registration',
+      ]);
+    });
+
+    it('respects the requested limit', () => {
+      const registry = new WorkerRegistry();
+      registry.recordRejection({ code: 'invalid_registration', rejectedAt: 1 });
+      registry.recordRejection({ code: 'invalid_registration', rejectedAt: 2 });
+      registry.recordRejection({ code: 'invalid_registration', rejectedAt: 3 });
+
+      expect(registry.getRecentRejections(2)).toHaveLength(2);
+    });
+
+    it('does not affect worker registration or lookup', () => {
+      const registry = new WorkerRegistry();
+      registry.recordRejection({ code: 'invalid_registration', workerId: 'w-1', rejectedAt: 1 });
+      registry.register({
+        id: 'w-1',
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 1,
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      });
+
+      expect(registry.getWorker('w-1')).toBeDefined();
+      expect(registry.getRecentRejections(10)).toHaveLength(1);
+    });
+  });
 });

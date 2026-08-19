@@ -156,6 +156,9 @@ describe('handleWorkerWebSocketMessage', () => {
       expect(message.message).toContain('workers:write');
       expect(context.registry.getWorker('w-no-scope')).toBeUndefined();
       expect(ws.closeCode).toBeDefined();
+
+      const [rejection] = context.registry.getRecentRejections(10);
+      expect(rejection).toMatchObject({ code: 'invalid_registration', workerId: 'w-no-scope' });
     });
 
     it('accepts authenticated worker registration with the worker write scope', async () => {
@@ -223,6 +226,12 @@ describe('handleWorkerWebSocketMessage', () => {
       const msg = JSON.parse(ws.sentMessages[0]!);
       expect(msg.type).toBe('registerError');
       expect(ws.closeCode).toBeDefined();
+
+      const [rejection] = context.registry.getRecentRejections(10);
+      expect(rejection).toMatchObject({
+        code: 'unsupported_protocol_version',
+        workerId: 'w-bad',
+      });
     });
 
     it('rejects a v1 worker at handshake with the canonical incompatibility message', () => {
@@ -258,6 +267,12 @@ describe('handleWorkerWebSocketMessage', () => {
       // Old-protocol worker never enters the registry.
       expect(context.registry.getWorker('w-old-protocol')).toBeUndefined();
       expect(ws.closeCode).toBeDefined();
+
+      const [rejection] = context.registry.getRecentRejections(10);
+      expect(rejection).toMatchObject({
+        code: 'unsupported_protocol_version',
+        workerId: 'w-old-protocol',
+      });
     });
 
     it('rejects registration with a manifest that fails validation', () => {
@@ -280,6 +295,12 @@ describe('handleWorkerWebSocketMessage', () => {
       expect(msg.type).toBe('registerError');
       expect(msg.code).toBe('invalid_registration');
       expect(context.registry.getWorker('w-bad-manifest')).toBeUndefined();
+
+      const [rejection] = context.registry.getRecentRejections(10);
+      expect(rejection).toMatchObject({
+        code: 'invalid_registration',
+        workerId: 'w-bad-manifest',
+      });
     });
 
     it('rejects registration when the manifest protocolVersion disagrees with the wire protocolVersion', () => {
@@ -307,6 +328,12 @@ describe('handleWorkerWebSocketMessage', () => {
       expect(msg.code).toBe('invalid_registration');
       expect(msg.message).toContain('protocolVersion 2');
       expect(context.registry.getWorker('w-version-mismatch')).toBeUndefined();
+
+      const [rejection] = context.registry.getRecentRejections(10);
+      expect(rejection).toMatchObject({
+        code: 'invalid_registration',
+        workerId: 'w-version-mismatch',
+      });
     });
 
     it('rejects a second worker whose deployment/build pair conflicts with a different artifact digest', async () => {
@@ -351,6 +378,14 @@ describe('handleWorkerWebSocketMessage', () => {
       expect(rejection.type).toBe('registerError');
       expect(rejection.code).toBe('deployment_conflict');
       expect(context.registry.getWorker('w-deploy-b')).toBeUndefined();
+
+      const [recorded] = context.registry.getRecentRejections(10);
+      expect(recorded).toMatchObject({
+        code: 'deployment_conflict',
+        workerId: 'w-deploy-b',
+        deploymentName: 'shared-deployment',
+        buildId: 'b1',
+      });
     });
 
     it('rejects registration when the configured worker admission policy declines it', () => {
@@ -378,6 +413,9 @@ describe('handleWorkerWebSocketMessage', () => {
       expect(msg.code).toBe('registration_rejected');
       expect(msg.message).toBe('fleet quota exceeded');
       expect(context.registry.getWorker('w-denied')).toBeUndefined();
+
+      const [rejection] = context.registry.getRecentRejections(10);
+      expect(rejection).toMatchObject({ code: 'registration_rejected', workerId: 'w-denied' });
     });
 
     it('accepts registration when the configured worker admission policy allows it', async () => {
@@ -429,6 +467,12 @@ describe('handleWorkerWebSocketMessage', () => {
       expect(msg.code).toBe('registration_rejected');
       expect(msg.message).toContain('admission policy exploded');
       expect(context.registry.getWorker('w-policy-throws')).toBeUndefined();
+
+      const [rejection] = context.registry.getRecentRejections(10);
+      expect(rejection).toMatchObject({
+        code: 'registration_rejected',
+        workerId: 'w-policy-throws',
+      });
     });
 
     it('does not register a worker whose socket already closed while the manifest digest was pending', async () => {
@@ -997,6 +1041,15 @@ describe('handleWorkerWebSocketMessage', () => {
       expect(ws2.closeCode).toBeDefined();
       // Original socket must remain the owner in the map.
       expect(context.workerSockets.get('w-live') as unknown).toBe(ws1);
+
+      // Only the attacker's attempt is recorded — the legitimate first
+      // registration never rejected.
+      const recentRejections = context.registry.getRecentRejections(10);
+      expect(recentRejections).toHaveLength(1);
+      expect(recentRejections[0]).toMatchObject({
+        code: 'invalid_registration',
+        workerId: 'w-live',
+      });
     });
 
     it('allows the same socket to re-register the same workerId (metadata refresh)', async () => {
