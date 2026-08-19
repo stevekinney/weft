@@ -64,6 +64,7 @@ describe('findDuplicateJsonKey', () => {
     ['a trailing backslash', '{"a\\'],
     ['a truncated unicode escape', '{"a\\u00'],
     ['an invalid unicode escape', '{"a\\uZZZZ":1}'],
+    ['a partially invalid unicode escape', '{"a\\u12ZZ":1}'],
     ['an unrecognized escape', '{"a\\qb":1}'],
   ])('reports no duplicate for %s and leaves the diagnosis to JSON.parse', (_label, text) => {
     expect(findDuplicateJsonKey(text)).toBeUndefined();

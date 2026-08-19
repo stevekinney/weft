@@ -36,9 +36,8 @@ function readString(text: string, start: number): { value: string; next: number 
       // single-character escapes and unicode escapes to compare like for like.
       if (escaped === 'u') {
         const hex = text.slice(index + 2, index + 6);
-        if (hex.length < 4) return undefined;
+        if (!/^[0-9a-fA-F]{4}$/.test(hex)) return undefined;
         const code = Number.parseInt(hex, 16);
-        if (Number.isNaN(code)) return undefined;
         value += String.fromCharCode(code);
         index += 6;
         continue;
