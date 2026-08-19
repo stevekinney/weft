@@ -243,7 +243,7 @@ const BASE_COVERAGE_ALLOWANCES = buildAllowanceLayer('BASE_COVERAGE_ALLOWANCES',
     'src/benchmarks/benchmark-subprocess.ts',
     {
       reason:
-        'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+        'Malformed child-process benchmark payloads are defensive failures; exercising them would require replacing the real benchmark subprocess protocol.',
       lines: new Set([49, 50, 59, 64]),
       requireUncoveredLines: true,
     },
@@ -252,7 +252,7 @@ const BASE_COVERAGE_ALLOWANCES = buildAllowanceLayer('BASE_COVERAGE_ALLOWANCES',
     'src/core/engine/broadcast.ts',
     {
       reason:
-        'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+        'The remaining listener-disposal branch is timing-dependent cleanup after a broadcast subscriber has already detached.',
       lines: new Set([46]),
       requireUncoveredLines: true,
     },
@@ -261,7 +261,7 @@ const BASE_COVERAGE_ALLOWANCES = buildAllowanceLayer('BASE_COVERAGE_ALLOWANCES',
     'src/core/schedule/cron-formatter.ts',
     {
       reason:
-        'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+        'Bun reports an aggregate formatter function miss even though valid cron fields and every invalid-field diagnostic are covered.',
       functions: 1,
       lines: new Set([185, 187]),
       requireUncoveredLines: true,
@@ -271,7 +271,7 @@ const BASE_COVERAGE_ALLOWANCES = buildAllowanceLayer('BASE_COVERAGE_ALLOWANCES',
     'src/core/scheduler/duration.ts',
     {
       reason:
-        'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+        'The remaining duration branches reject values outside JavaScript safe-integer bounds that the public scheduler schema already excludes.',
       lines: new Set([38, 39, 40, 91]),
       requireUncoveredLines: true,
     },
@@ -280,7 +280,7 @@ const BASE_COVERAGE_ALLOWANCES = buildAllowanceLayer('BASE_COVERAGE_ALLOWANCES',
     'src/core/inline-execution-strategy.ts',
     {
       reason:
-        'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+        'Bun reports one unnamed aggregate function miss in this class module despite complete line coverage and direct strategy tests.',
       functions: 1,
     },
   ],
@@ -291,7 +291,7 @@ const COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer('COVERAGE_ALLOWANCE_OVE
     'src/core/engine/callback-creators.ts',
     {
       reason:
-        'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+        'Bun reports an unnamed callback-closure miss after the callback factory paths are exercised through engine integration tests.',
       functions: 1,
     },
   ],
@@ -299,7 +299,7 @@ const COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer('COVERAGE_ALLOWANCE_OVE
     'src/core/engine/operations-state.ts',
     {
       reason:
-        'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+        'The remaining operation-state lines are defensive invariant failures for state combinations prevented by the operation coordinator.',
       lines: new Set([44, 45, 46, 47, 48, 49, 50, 51, 52]),
       requireUncoveredLines: true,
     },
@@ -308,7 +308,7 @@ const COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer('COVERAGE_ALLOWANCE_OVE
     'src/core/engine/queries.ts',
     {
       reason:
-        'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+        'The remaining query-registry line is a defensive missing-handler branch after registration and teardown behavior is covered.',
       lines: new Set([17]),
       requireUncoveredLines: true,
     },
@@ -317,7 +317,7 @@ const COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer('COVERAGE_ALLOWANCE_OVE
     'src/core/interceptor/index.ts',
     {
       reason:
-        'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+        'The uncovered interceptor fallback rejects a malformed chain result that correctly typed interceptors cannot produce.',
       functions: 1,
       lines: new Set([25, 26, 27]),
       requireUncoveredLines: true,
@@ -327,7 +327,7 @@ const COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer('COVERAGE_ALLOWANCE_OVE
     'src/server/authorization.ts',
     {
       reason:
-        'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+        'The residual authorization branch handles an operation catalog entry without a declared access policy, which catalog validation forbids.',
       lines: new Set([159]),
       requireUncoveredLines: true,
     },
@@ -346,7 +346,7 @@ const COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer('COVERAGE_ALLOWANCE_OVE
     'src/server/stdio-session.ts',
     {
       reason:
-        'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+        'Bun maps framing-loop exits and one aggregate adapter function as uncovered although oversize, resynchronization, partial-frame, and writer-close behavior is tested.',
       functions: 1,
       lines: new Set([354, 393]),
       requireUncoveredLines: true,
@@ -403,7 +403,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
       'src/client/http-handle.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'Bun reports one generated handle callback as missed although HTTP handle result and metadata paths are covered through transport-contract tests.',
         functions: 1,
       },
     ],
@@ -411,7 +411,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
       'src/client/http-schedule-handle.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'Bun reports one generated schedule-handle callback as missed although schedule operations are covered through transport-contract tests.',
         functions: 1,
       },
     ],
@@ -419,7 +419,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
       'src/core/context/durable-activity.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The AsyncLocalStorage-unavailable fallback runs in portability subprocesses, whose hits Bun does not merge into the parent LCOV report.',
         functions: 3,
         lines: new Set([
           124, 147, 148, 149, 150, 160, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176,
@@ -433,7 +433,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
       'src/core/context/parallel-operations.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining coordinator branches reject impossible nested-settlement states after race, all, and speculative paths are behaviorally covered.',
         lines: new Set([19, 20, 21, 31, 37, 38, 39]),
         requireUncoveredLines: true,
       },
@@ -442,7 +442,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
       'src/core/context/run-operation.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'Bun leaves the generator loop closing line cold after the final retry and catch paths settle, despite direct retry-state coverage.',
         lines: new Set([451]),
         requireUncoveredLines: true,
       },
@@ -451,7 +451,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
       'src/core/engine/review-list-entries.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining review-list branch protects against a persisted review status excluded by the decoded state schema.',
         lines: new Set([120]),
         requireUncoveredLines: true,
       },
@@ -460,7 +460,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
       'src/core/types/definition-schema-to-json.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining schema conversion branches cover unsupported schema nodes that the public definition builder cannot construct.',
         lines: new Set([172, 173, 174, 177, 178]),
         requireUncoveredLines: true,
       },
@@ -485,7 +485,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
       'src/mcp/resources.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The uncovered MCP resource branches are host-resource error fallbacks whose successful listing and reading contracts are covered through dispatch tests.',
         functions: 2,
         lines: new Set([
           39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60,
@@ -498,7 +498,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
       'src/mcp/stdio.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining stdio lines are process stream-error, close, and malformed-frame exits that cannot be deterministically attributed in the parent LCOV process.',
         functions: 3,
         lines: new Set([
           103, 104, 105, 106, 107, 126, 127, 205, 206, 207, 208, 209, 210, 211, 212, 241, 242, 279,
@@ -511,7 +511,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
       'src/server/api-catalog.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining catalog lines reject inconsistent operation metadata that the statically declared catalog does not contain.',
         lines: new Set([161, 162, 166, 167, 169, 170, 171, 172, 174, 176]),
         requireUncoveredLines: true,
       },
@@ -520,7 +520,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
       'src/server/json-rpc-dispatch.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining dispatch lines guard a catalog operation without a JSON-RPC binding, which registration validation excludes.',
         lines: new Set([188, 189]),
         requireUncoveredLines: true,
       },
@@ -529,7 +529,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
       'src/server/operations/failure-category-filter.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The residual filter helper guards an unknown failure category that boundary validation rejects before operation dispatch.',
         functions: 1,
         lines: new Set([13, 14, 15, 16, 17, 18, 19]),
         requireUncoveredLines: true,
@@ -539,7 +539,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
       'src/testing/fake-timers.test-support.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining fake-timer line is the defensive error for a timer identifier not created by this test harness.',
         lines: new Set([232]),
         requireUncoveredLines: true,
       },
@@ -597,7 +597,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/benchmarks/workflow-starts-runner.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The throughput benchmark runs in a fresh Bun subprocess, and Bun does not propagate that child execution into parent-process LCOV.',
         functions: 1,
         lines: new Set([
           25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46,
@@ -620,7 +620,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/core/context/speculative-child.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining speculative-child branch guards a settlement state that the speculation coordinator prevents.',
         lines: new Set([25]),
         requireUncoveredLines: true,
       },
@@ -629,7 +629,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/core/engine/callback-creators-core.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'Bun reports callback-wrapper function misses although the core callback bundles are exercised through engine lifecycle tests.',
         functions: 2,
       },
     ],
@@ -637,7 +637,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/core/engine/callback-creators-router-registry.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining router-registry lines reject a callback route omitted from the complete internal route table.',
         lines: new Set([26, 27, 29]),
         requireUncoveredLines: true,
       },
@@ -646,7 +646,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/core/engine/constraints.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining constraint lines guard an invalid internal option combination rejected earlier by engine option validation.',
         lines: new Set([93, 94, 95]),
         requireUncoveredLines: true,
       },
@@ -655,7 +655,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/core/engine/list-candidate-resolution.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining candidate-resolution branches are storage-index inconsistency fallbacks exercised structurally but unreachable from valid indexed writes.',
         functions: 4,
         lines: new Set([53, 54, 55, 56, 60, 61, 62, 63, 67, 68, 69, 70, 74, 75, 76, 77, 159]),
         requireUncoveredLines: true,
@@ -665,7 +665,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/core/engine/termination/finalizer-claim.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'Bun reports the lease-loss closure as missed although finalizer claim success, contention, and deposition are behaviorally tested.',
         functions: 1,
       },
     ],
@@ -673,7 +673,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/core/schedule/cron-occurrence.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The residual cron-occurrence line handles an invalid calendar rollover excluded by validated cron fields.',
         lines: new Set([217]),
         requireUncoveredLines: true,
       },
@@ -682,7 +682,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/core/search-attributes.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining search-attribute branches reject runtime value kinds that the public attribute schema and decoder exclude.',
         functions: 1,
         lines: new Set([162, 163, 202, 203, 204, 205, 206]),
         requireUncoveredLines: true,
@@ -692,7 +692,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/mcp/access.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining MCP access lines guard an operation without declared scopes, which operation-catalog validation forbids.',
         lines: new Set([28, 29, 30, 31, 32]),
         requireUncoveredLines: true,
       },
@@ -701,7 +701,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/mcp/list-filter.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The residual list-filter branches reject malformed cursor and filter combinations already excluded at the MCP input boundary.',
         lines: new Set([65, 68, 73]),
         requireUncoveredLines: true,
       },
@@ -734,7 +734,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/server/operations/get-workflow-result.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'Bun reports the terminal-result callback as missed although successful, failed, and missing workflow results are covered through operation tests.',
         functions: 1,
       },
     ],
@@ -742,7 +742,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/server/workflow-event-feed.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'Bun maps the live-drain generator loop closing lines as uncovered because every tested exit returns from inside the intentional loop.',
         lines: new Set([384, 387]),
         requireUncoveredLines: true,
       },
@@ -789,7 +789,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/testing/scheduler-contract.test-support.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'Bun reports a callback in the shared scheduler contract harness as missed although each adapter executes the contract assertions.',
         functions: 7,
       },
     ],
@@ -807,7 +807,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/testing/subprocess-engine.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'Subprocess-engine startup and failure paths run in child Bun processes whose hits are not merged into the parent LCOV report.',
         functions: 8,
         lines: new Set([
           125, 126, 127, 128, 129, 145, 146, 147, 252, 253, 254, 255, 256, 257, 258, 296, 302, 490,
@@ -1000,7 +1000,7 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/client/client-contract.test-support.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'Bun reports unnamed callbacks in this shared contract harness despite direct coverage of query, update, signal, async-activity, and event-wait paths.',
         functions: 3,
       },
     ],
@@ -1033,7 +1033,7 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/client/local-event-tail.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining local-tail lines are listener teardown after terminal settlement, covered behaviorally but not mapped by Bun to the closing callback.',
         functions: 2,
         lines: new Set([157, 158]),
         requireUncoveredLines: true,
@@ -1043,7 +1043,7 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/connection.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The residual connection line is the already-closed cleanup branch reached only by a transport close race.',
         lines: new Set([220]),
         requireUncoveredLines: true,
       },
@@ -1052,7 +1052,7 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/core/engine/anonymous-signal-sequence.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'Bun reports sequence-update closures as missed although initialization, increment, overflow, and persistence behavior is covered.',
         functions: 2,
       },
     ],
@@ -1060,7 +1060,7 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/core/signal-id.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining signal-id line is the defensive anonymous-prefix ambiguity guard for values already encoded as explicit identifiers.',
         lines: new Set([10]),
         requireUncoveredLines: true,
       },
@@ -1069,7 +1069,7 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/mcp/dispatcher.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'Segment validation rejects empty, parent, and absolute paths before resolution, making the final resource-containment guard defensive.',
         functions: 8,
         lines: new Set([112, 113, 116, 212, 213, 214, 261, 262, 266]),
         requireUncoveredLines: true,
@@ -1079,7 +1079,7 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/server/dashboard-assets.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'Segment validation rejects empty, parent, and absolute paths before resolution, making the final asset-containment guard defensive.',
         lines: new Set([188]),
         requireUncoveredLines: true,
       },
@@ -1088,7 +1088,7 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/server/operation-catalog/workflow-adapter.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining adapter branches translate impossible catalog result variants excluded by each operation definition.',
         lines: new Set([172, 173, 174, 175, 176, 180, 181, 184, 185, 186, 187, 188, 192, 193]),
         requireUncoveredLines: true,
       },
@@ -1097,7 +1097,7 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/server/operations/aggregate-workflows.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining aggregation branches handle malformed storage rows and grouping keys excluded by decoded workflow summaries.',
         lines: new Set([107, 108, 117, 118, 119]),
         requireUncoveredLines: true,
       },
@@ -1116,7 +1116,7 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/server/runtime/request-gate.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The residual request-gate lines are disconnect cleanup after an admitted request has already settled.',
         lines: new Set([118, 119]),
         requireUncoveredLines: true,
       },
@@ -1175,7 +1175,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/core/checkpoint/serialization.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining serializer branches reject malformed checkpoint tags and payload shapes that cannot be emitted by registered serializers.',
         lines: new Set([147, 179, 184, 185, 186, 187, 188, 236, 237, 238]),
         requireUncoveredLines: true,
       },
@@ -1184,7 +1184,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/core/context/child-workflow-pipe.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining pipe branches handle simultaneous child settlement and parent cancellation races covered at the coordinator boundary.',
         lines: new Set([46, 48, 49, 66, 67, 105, 119, 120, 126, 128, 129, 130, 131, 133, 134]),
         requireUncoveredLines: true,
       },
@@ -1193,7 +1193,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/core/context/version-patching.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The residual version-patching lines reject inconsistent patch records that valid checkpoint construction cannot emit.',
         lines: new Set([30, 31, 32, 51, 56, 62, 78, 79, 80]),
         requireUncoveredLines: true,
       },
@@ -1240,7 +1240,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/core/engine/attributes-tags.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining attribute-tag branches reject decoded value shapes excluded by search-attribute boundary validation.',
         functions: 1,
         lines: new Set([341, 342, 344]),
         requireUncoveredLines: true,
@@ -1250,7 +1250,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/core/engine/callback-creators-bundles.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'Bun reports one callback-bundle closure as missed although each bundle is exercised through engine lifecycle integration tests.',
         functions: 1,
       },
     ],
@@ -1258,7 +1258,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/core/engine/checkpoint-replay.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining replay line guards a checkpoint operation kind excluded by the decoded effect-log union.',
         lines: new Set([134]),
         requireUncoveredLines: true,
       },
@@ -1267,7 +1267,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/core/engine/index.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'Bun reports aggregate re-export and factory closures as missed although the engine entrypoint has complete line coverage.',
         functions: 4,
       },
     ],
@@ -1275,7 +1275,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/core/engine/lease-deposition.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'Bun reports the deposition callback as missed although successful deposition and lease-loss behavior are covered through fenced-write tests.',
         functions: 1,
       },
     ],
@@ -1283,7 +1283,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/core/engine/lifecycle/resume.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining resume line is a defensive missing-workflow-definition branch after recovery registration validation.',
         functions: 1,
         lines: new Set([91]),
         requireUncoveredLines: true,
@@ -1293,7 +1293,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/core/engine/lifecycle/start-commit.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'Bun reports one start-commit closure as missed although idempotent, conflicting, and successful commits are covered.',
         functions: 1,
       },
     ],
@@ -1301,7 +1301,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/core/engine/lifecycle/transition.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'Bun reports one transition closure as missed although terminal, cancellation, and failure transitions are covered.',
         functions: 1,
       },
     ],
@@ -1309,7 +1309,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/core/engine/listing.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining listing lines are stale-index and malformed-summary fallbacks unreachable from valid indexed workflow writes.',
         lines: new Set([84, 134, 235, 255]),
         requireUncoveredLines: true,
       },
@@ -1318,7 +1318,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/core/engine/pending-updates.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'Bun reports pending-update callbacks as missed although enqueue, replace, apply, and teardown behavior is covered.',
         functions: 2,
       },
     ],
@@ -1343,7 +1343,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/core/engine/workflow-concurrency.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining concurrency branches cover lease-loss and simultaneous-settlement interleavings whose public outcomes are tested without deterministic line attribution.',
         functions: 1,
         lines: new Set([
           57, 58, 59, 60, 61, 62, 63, 64, 65, 67, 68, 69, 70, 110, 111, 112, 131, 138, 139, 206,
@@ -1356,7 +1356,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/core/scheduler/timer-sources.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The residual timer-source line guards an unknown persisted timer kind excluded by timer decoding.',
         lines: new Set([51]),
         requireUncoveredLines: true,
       },
@@ -1365,7 +1365,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/mcp/http.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining HTTP lines are socket-close, stream-cancel, and response-write failure exits exercised through transport teardown without stable line attribution.',
         lines: new Set([115, 116, 117, 118, 119, 120, 121, 122, 204, 205, 230, 379, 423]),
         requireUncoveredLines: true,
       },
@@ -1374,7 +1374,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/mcp/protocol.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining protocol branches reject malformed JSON-RPC shapes already excluded by MCP request boundary validation.',
         functions: 4,
         lines: new Set([92, 97, 98, 99, 104, 109]),
         requireUncoveredLines: true,
@@ -1384,7 +1384,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/server/authentication/index.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The residual authentication line guards an authentication provider result outside the declared provider contract.',
         lines: new Set([158]),
         requireUncoveredLines: true,
       },
@@ -1393,7 +1393,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/server/authentication/rotating-api-key-store.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining key-store branches handle rotation races and malformed stored key metadata excluded by validated writes.',
         lines: new Set([163, 165, 166, 167]),
         requireUncoveredLines: true,
       },
@@ -1402,7 +1402,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/server/fault-to-json-rpc.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'Bun reports the default fault-mapping closure as missed although every public Weft fault code and generic fallback are asserted.',
         functions: 1,
       },
     ],
@@ -1410,7 +1410,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/server/operations/bulk-retry-failed-workflows.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The residual bulk-retry line handles a workflow disappearing between preview and fenced commit.',
         lines: new Set([81]),
         requireUncoveredLines: true,
       },
@@ -1419,7 +1419,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/server/operations/get-task-diagnostics.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining diagnostic lines are queue and worker race fallbacks for records disappearing during the bounded snapshot.',
         lines: new Set([304, 305, 306, 307, 308]),
         requireUncoveredLines: true,
       },
@@ -1428,7 +1428,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/server/operations/update-workflow.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining update lines handle a terminal transition racing the validated update commit.',
         lines: new Set([93, 94, 95, 96, 97, 98]),
         requireUncoveredLines: true,
       },
@@ -1437,7 +1437,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/server/rest-body.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The remaining body-reader branches are stream abort and reader failure exits that depend on host transport faults.',
         functions: 1,
         lines: new Set([19, 20, 21, 22, 23, 30, 39, 43]),
         requireUncoveredLines: true,
@@ -1447,7 +1447,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/server/runtime/task-result-resolution.ts',
       {
         reason:
-          'Fresh Bun 1.3.13 LCOV confirms these residual defensive or race-path misses after the WFT-74 audit.',
+          'The residual task-result line guards an internal resolution variant excluded by the worker protocol decoder.',
         functions: 1,
         lines: new Set([42]),
         requireUncoveredLines: true,
