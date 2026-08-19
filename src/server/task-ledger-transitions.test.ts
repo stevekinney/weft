@@ -347,10 +347,33 @@ describe('requeueExpiredAttempt', () => {
     expect(result.nextRecord.state).toBe('queued');
     if (result.nextRecord.state === 'queued') {
       expect(result.nextRecord.attempt).toBe(2);
-      expect(result.nextRecord.availableAt).toBe(12_000); // +2s backoff for attempt 2
+      // calculateBackoff is 1-indexed against (nextAttempt - 1): the delay
+      // before attempt 2 is calculateBackoff(1) = initialBackoff, matching
+      // reassignOrExpireTask's convention in task-reconciliation.ts.
+      expect(result.nextRecord.availableAt).toBe(11_000);
       expect(result.nextRecord.requeueCount).toBe(1);
       expect(result.nextRecord.startedAt).toBe(leased.startedAt);
       expect(result.nextRecord.lastRequeueReason).toBe('visibility-timeout');
+    }
+  });
+
+  it('grows the backoff exponentially on a second requeue', () => {
+    const leased = leasedFixture({
+      attempt: 2,
+      leaseDeadline: 20_000,
+      retryPolicy: {
+        maxAttempts: 5,
+        initialBackoff: '1s',
+        backoffMultiplier: 2,
+        maxBackoff: '30s',
+      },
+    });
+    const result = requeueExpiredAttempt(leased, requeueInput, 20_000);
+    expect(result.ok).toBe(true);
+    if (result.ok && result.nextRecord.state === 'queued') {
+      expect(result.nextRecord.attempt).toBe(3);
+      // calculateBackoff(2) = initialBackoff * multiplier = 2s.
+      expect(result.nextRecord.availableAt).toBe(22_000);
     }
   });
 

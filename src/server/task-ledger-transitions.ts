@@ -290,7 +290,11 @@ export function requeueExpiredAttempt(
     return { ok: true, nextRecord: exhaustedRecord };
   }
 
-  const availableAt = policy === undefined ? now : now + calculateBackoff(nextAttempt, policy);
+  // calculateBackoff is 1-indexed against the attempt it delays *into* minus
+  // one — matching reassignOrExpireTask's `calculateBackoff((nextAttempt) - 1,
+  // policy)` in task-reconciliation.ts and the inline retry path's
+  // `calculateBackoff(attempt - 1, retryPolicy)` in run-operation.ts.
+  const availableAt = policy === undefined ? now : now + calculateBackoff(nextAttempt - 1, policy);
   const queuedRecord: RemoteTaskQueued = {
     ...pickBase(current),
     generation: current.generation + 1,
