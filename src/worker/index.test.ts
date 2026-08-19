@@ -33,11 +33,12 @@ function createTestServer(options?: {
               ws.send(
                 JSON.stringify({
                   type: 'registerAck',
-                  protocolVersion: 2,
+                  protocolVersion: 3,
                   workerId: parsed.workerId,
-                  queue: parsed.queue ?? 'default',
-                  activities: parsed.activities,
+                  queue: 'default',
                   concurrency: parsed.concurrency ?? 10,
+                  acceptedManifestDigest: 'sha256:test-accepted-digest',
+                  serverCapabilities: [],
                 }),
               );
             }
@@ -102,6 +103,8 @@ describe('RemoteWorker', () => {
   it('constructor stores options with defaults', () => {
     const worker = new RemoteWorker({
       serverUrl: 'ws://localhost:8080',
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: workflowsOf({
         processOrder: async (input) => input,
       }),
@@ -117,6 +120,8 @@ describe('RemoteWorker', () => {
   it('connected is false before connect', () => {
     const worker = new RemoteWorker({
       serverUrl: 'ws://localhost:8080',
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: workflowsOf({
         processOrder: async (input) => input,
       }),
@@ -130,6 +135,8 @@ describe('RemoteWorker', () => {
   it('inFlight starts at 0', () => {
     const worker = new RemoteWorker({
       serverUrl: 'ws://localhost:8080',
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: workflowsOf({
         processOrder: async (input) => input,
       }),
@@ -143,6 +150,8 @@ describe('RemoteWorker', () => {
   it('[Symbol.dispose] is callable', () => {
     const worker = new RemoteWorker({
       serverUrl: 'ws://localhost:8080',
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: workflowsOf({
         processOrder: async (input) => input,
       }),
@@ -154,6 +163,8 @@ describe('RemoteWorker', () => {
   it('[Symbol.dispose] is idempotent', () => {
     const worker = new RemoteWorker({
       serverUrl: 'ws://localhost:8080',
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: workflowsOf({
         processOrder: async (input) => input,
       }),
@@ -174,6 +185,8 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workerId: 'test-worker-1',
       workflows: workflowsOf({
         processOrder: async (input) => input,
@@ -194,11 +207,53 @@ describe('RemoteWorker', () => {
       registerMessage = messages.find((m) => m.type === 'register');
     }
     expect(registerMessage).toBeDefined();
-    expect(registerMessage.protocolVersion).toBe(2);
+    expect(registerMessage.protocolVersion).toBe(3);
     expect(registerMessage.workerId).toBe('test-worker-1');
-    expect(registerMessage.activities).toEqual(['orders.processOrder']);
     expect(registerMessage.concurrency).toBe(5);
-    expect(registerMessage.queue).toBe('test-queue');
+    expect(Object.keys(registerMessage.manifest.workflows['orders'].activities)).toEqual([
+      'processOrder',
+    ]);
+
+    await worker.disconnect();
+  });
+
+  it('is immune to the caller mutating the workflows object after construction', async () => {
+    // The constructor builds #activityTable once from the workflows shape
+    // passed in. Without a snapshot, buildRegisterMessage() re-reads the
+    // SAME (mutable) options.workflows reference on every connect(), so a
+    // caller adding an activity afterward would make the advertised manifest
+    // diverge from what #activityTable can actually dispatch.
+    const messages: any[] = [];
+    server = createTestServer({
+      onMessage(_ws, message) {
+        messages.push(JSON.parse(message));
+      },
+    });
+
+    const workflows = workflowsOf({ processOrder: async (input) => input });
+    const worker = new RemoteWorker({
+      serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
+      workerId: 'test-worker-snapshot',
+      workflows,
+    });
+
+    // Mutate the caller's own object after construction — this must not
+    // affect what the worker later advertises.
+    workflows['orders']!.activities['lateAddedActivity'] = async (input: unknown) => input;
+
+    await worker.connect();
+
+    let registerMessage: any;
+    for (let attempt = 0; attempt < 40 && registerMessage === undefined; attempt++) {
+      await sleepForTesting(50);
+      registerMessage = messages.find((m) => m.type === 'register');
+    }
+    expect(registerMessage).toBeDefined();
+    expect(Object.keys(registerMessage.manifest.workflows['orders'].activities)).toEqual([
+      'processOrder',
+    ]);
 
     await worker.disconnect();
   });
@@ -221,7 +276,6 @@ describe('RemoteWorker', () => {
       deploymentName: 'payments',
       buildId: 'build-2026-05-12',
       runtimeVersion: 'bun-1.2.13',
-      gitSha: '0123456789abcdef',
       startedAt: 1_778_608_000_000,
       capabilities: {
         region: 'us-west',
@@ -239,14 +293,19 @@ describe('RemoteWorker', () => {
     expect(registerMessage).toMatchObject({
       type: 'register',
       workerId: 'identity-worker',
-      deploymentName: 'payments',
-      buildId: 'build-2026-05-12',
-      runtimeVersion: 'bun-1.2.13',
-      gitSha: '0123456789abcdef',
       startedAt: 1_778_608_000_000,
-      capabilities: {
-        region: 'us-west',
-        canary: true,
+      manifest: {
+        deployment: {
+          name: 'payments',
+          buildId: 'build-2026-05-12',
+        },
+        runtime: {
+          version: 'bun-1.2.13',
+        },
+        capabilities: {
+          region: 'us-west',
+          canary: true,
+        },
       },
     });
 
@@ -274,6 +333,8 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workerId: 'rejected-worker',
       workflows: workflowsOf({
         processOrder: async (input) => input,
@@ -297,6 +358,8 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workerId: 'close-before-ack-worker',
       workflows: workflowsOf({
         processOrder: async (input) => input,
@@ -321,6 +384,8 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workerId: 'dispose-before-ack-worker',
       workflows: workflowsOf({
         processOrder: async (input) => input,
@@ -375,6 +440,8 @@ describe('RemoteWorker', () => {
     try {
       const worker = new RemoteWorker({
         serverUrl: `ws://localhost:${server.port}`,
+        deploymentName: 'test-deployment',
+        buildId: 'test-build',
         workerId: 'ack-gated-heartbeat-worker',
         workflows: workflowsOf({
           processOrder: async (input) => input,
@@ -392,11 +459,12 @@ describe('RemoteWorker', () => {
       serverSocket.send(
         JSON.stringify({
           type: 'registerAck',
-          protocolVersion: 2,
+          protocolVersion: 3,
           workerId: 'ack-gated-heartbeat-worker',
           queue: 'default',
-          activities: ['orders.processOrder'],
           concurrency: 10,
+          acceptedManifestDigest: 'sha256:test-accepted-digest',
+          serverCapabilities: [],
         }),
       );
       await connectPromise;
@@ -415,6 +483,8 @@ describe('RemoteWorker', () => {
   it('connect() rejects when connection fails', async () => {
     const worker = new RemoteWorker({
       serverUrl: 'ws://localhost:1',
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: workflowsOf({
         processOrder: async (input) => input,
       }),
@@ -429,6 +499,8 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: workflowsOf({
         processOrder: async (input) => input,
       }),
@@ -444,6 +516,8 @@ describe('RemoteWorker', () => {
   it('disconnect() is safe to call when not connected', async () => {
     const worker = new RemoteWorker({
       serverUrl: 'ws://localhost:8080',
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: workflowsOf({
         processOrder: async (input) => input,
       }),
@@ -479,6 +553,8 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workerId: 'test-worker-2',
       workflows: workflowsOf({
         processOrder: async (input: any) => ({ processed: true, orderId: input.orderId }),
@@ -519,6 +595,8 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workerId: 'test-worker-3',
       workflows: workflowsOf({
         processOrder: async (input) => input,
@@ -559,6 +637,8 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workerId: 'test-worker-4',
       workflows: workflowsOf({
         failingActivity: async () => {
@@ -601,6 +681,8 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workerId: 'test-worker-5',
       workflows: workflowsOf({
         stringThrow: async () => {
@@ -644,6 +726,8 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: workflowsOf({
         slowActivity: async () => {
           await activityPromise;
@@ -678,6 +762,8 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: workflowsOf({
         processOrder: async (input) => input,
       }),
@@ -712,6 +798,8 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: workflowsOf({
         processOrder: async (input) => input,
       }),
@@ -732,6 +820,8 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: workflowsOf({
         processOrder: async (input) => input,
       }),
@@ -775,6 +865,8 @@ describe('RemoteWorker', () => {
     try {
       const worker = new RemoteWorker({
         serverUrl: `ws://localhost:${server.port}`,
+        deploymentName: 'test-deployment',
+        buildId: 'test-build',
         workerId: 'heartbeat-test',
         workflows: {},
       });
@@ -805,6 +897,8 @@ describe('RemoteWorker', () => {
   it('shuttingDown is false initially', () => {
     const worker = new RemoteWorker({
       serverUrl: 'ws://localhost:8080',
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: workflowsOf({
         processOrder: async (input) => input,
       }),
@@ -831,6 +925,8 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workerId: 'shutdown-test',
       workflows: workflowsOf({
         processOrder: async (input) => input,
@@ -885,6 +981,8 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workerId: 'graceful-shutdown-test',
       workflows: workflowsOf({
         slowActivity: async () => {
@@ -962,6 +1060,8 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workerId: 'ignore-post-shutdown-test',
       workflows: workflowsOf({
         processOrder: async (input) => input,
@@ -1010,6 +1110,8 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workerId: 'disconnect-timeout-test',
       workflows: workflowsOf({
         hangingActivity: async () => {
@@ -1073,6 +1175,8 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workerId: 'graceful-shutdown-timeout-test',
       workflows: workflowsOf({
         hangingActivity: async () => {
@@ -1118,6 +1222,8 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: {},
     });
 
@@ -1136,6 +1242,8 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: workflowsOf({
         processOrder: async (input) => input,
       }),
@@ -1187,6 +1295,8 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workerId: 'reconnect-after-shutdown-test',
       workflows: workflowsOf({
         processOrder: async (input) => input,
@@ -1223,6 +1333,8 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: workflowsOf({
         processOrder: async (input) => input,
       }),
@@ -1280,6 +1392,8 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workerId: 'interceptor-test',
       workflows: workflowsOf({
         greet: async (input: unknown) => `hello ${String(input)}`,
@@ -1328,6 +1442,8 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workerId: 'modify-input-test',
       workflows: workflowsOf({
         echo: async (input: unknown) => input,
@@ -1377,6 +1493,8 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workerId: 'headers-test',
       workflows: workflowsOf({
         echo: async (input: unknown) => input,
@@ -1422,6 +1540,8 @@ describe('RemoteWorker', () => {
     // No interceptors configured
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workerId: 'no-interceptor-test',
       workflows: workflowsOf({
         double: async (input: unknown) => (input as number) * 2,
@@ -1471,6 +1591,8 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workerId: 'context-check-test',
       workflows: workflowsOf({
         echo: async (input: unknown) => input,
@@ -1526,6 +1648,8 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workerId: 'cancel-test-worker',
       workflows: workflowsOf({
         cancellableActivity: async (_input: unknown, context) => {
@@ -1575,6 +1699,8 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workerId: 'cancel-noop-test',
       workflows: workflowsOf({
         processOrder: async (input) => input,
@@ -1621,6 +1747,8 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workerId: 'signal-check-worker',
       workflows: workflowsOf({
         signalInspector: async (_input: unknown, context) => {
@@ -1644,6 +1772,160 @@ describe('RemoteWorker', () => {
     expect(taskResult.status).toBe('completed');
 
     await worker.disconnect();
+  });
+});
+
+describe('RemoteWorker — connect URL resolution', () => {
+  let server: ReturnType<typeof Bun.serve> | undefined;
+
+  afterEach(() => {
+    restoreRealTimers();
+
+    if (server) {
+      server.stop(true);
+      server = undefined;
+    }
+  });
+
+  /** Server that records the raw upgrade request URL and always accepts. */
+  function createUrlCapturingServer(): {
+    server: ReturnType<typeof Bun.serve>;
+    capturedPathname: () => string | undefined;
+  } {
+    let capturedPathname: string | undefined;
+    const created = Bun.serve({
+      port: 0,
+      fetch(request, bunServer) {
+        capturedPathname = new URL(request.url).pathname;
+        if (bunServer.upgrade(request, { data: undefined })) return undefined;
+        return new Response('ok');
+      },
+      websocket: {
+        message(ws, message) {
+          const text = typeof message === 'string' ? message : new TextDecoder().decode(message);
+          try {
+            const parsed = JSON.parse(text);
+            if (parsed.type === 'register') {
+              ws.send(
+                JSON.stringify({
+                  type: 'registerAck',
+                  protocolVersion: 3,
+                  workerId: parsed.workerId,
+                  queue: 'default',
+                  concurrency: parsed.concurrency ?? 10,
+                  acceptedManifestDigest: 'sha256:test-accepted-digest',
+                  serverCapabilities: [],
+                }),
+              );
+            }
+          } catch {
+            // Test helper ignores malformed client frames.
+          }
+        },
+        open(_ws) {},
+        close(_ws) {},
+      },
+    });
+    return { server: created, capturedPathname: () => capturedPathname };
+  }
+
+  it('connects to the canonical path for a bare origin plus queue option', async () => {
+    const harness = createUrlCapturingServer();
+    server = harness.server;
+
+    using worker = new RemoteWorker({
+      serverUrl: server.url.toString(),
+      queue: 'gpu',
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
+      workflows: workflowsOf({ processOrder: async (input) => input }),
+    });
+    await worker.connect();
+
+    expect(harness.capturedPathname()).toBe('/v1/tasks/gpu/stream');
+    await worker.disconnect();
+  });
+
+  it('preserves a complete /api-prefixed worker-stream URL instead of discarding it', async () => {
+    // Regression: WORKER_STREAM_PATH_RE previously matched only the bare
+    // `/v1/tasks/:queue/stream` form. A complete, server-documented
+    // `/api`-prefixed serverUrl failed to match, fell through to the
+    // bare-origin branch, and silently lost its queue segment — connecting
+    // to `/v1/tasks/default/stream` instead of the URL the caller passed.
+    const harness = createUrlCapturingServer();
+    server = harness.server;
+    const prefixedUrl = new URL('/api/v1/tasks/gpu/stream', server.url).toString();
+
+    using worker = new RemoteWorker({
+      serverUrl: prefixedUrl,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
+      workflows: workflowsOf({ processOrder: async (input) => input }),
+    });
+    await worker.connect();
+
+    expect(harness.capturedPathname()).toBe('/api/v1/tasks/gpu/stream');
+    await worker.disconnect();
+  });
+
+  it('accepts a matching explicit queue alongside an /api-prefixed serverUrl', async () => {
+    const harness = createUrlCapturingServer();
+    server = harness.server;
+    const prefixedUrl = new URL('/api/v1/tasks/gpu/stream', server.url).toString();
+
+    using worker = new RemoteWorker({
+      serverUrl: prefixedUrl,
+      queue: 'gpu',
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
+      workflows: workflowsOf({ processOrder: async (input) => input }),
+    });
+    await worker.connect();
+
+    expect(harness.capturedPathname()).toBe('/api/v1/tasks/gpu/stream');
+    await worker.disconnect();
+  });
+
+  it('throws when an /api-prefixed serverUrl conflicts with an explicit queue option', () => {
+    expect(
+      () =>
+        new RemoteWorker({
+          serverUrl: 'ws://localhost:7233/api/v1/tasks/gpu/stream',
+          queue: 'default',
+          deploymentName: 'test-deployment',
+          buildId: 'test-build',
+          workflows: workflowsOf({ processOrder: async (input) => input }),
+        }),
+    ).toThrow(/already encodes queue "gpu"/);
+  });
+
+  it('throws at construction when an explicit queue option fails the server route grammar', () => {
+    // The server's worker-stream route only matches [\w-]+ for the queue
+    // segment. Without this check, a caller-supplied queue like "gpu.us"
+    // would connect a WebSocket the server can never classify as a worker
+    // connection, leaving connect() pending forever with no error.
+    expect(
+      () =>
+        new RemoteWorker({
+          serverUrl: 'ws://localhost:7233',
+          queue: 'gpu.us',
+          deploymentName: 'test-deployment',
+          buildId: 'test-build',
+          workflows: workflowsOf({ processOrder: async (input) => input }),
+        }),
+    ).toThrow(/not a valid queue name/);
+  });
+
+  it('throws at construction when a queue embedded in a complete serverUrl fails the server route grammar', () => {
+    expect(
+      () =>
+        new RemoteWorker({
+          serverUrl: 'ws://localhost:7233/v1/tasks/gpu%2Eus/stream',
+          deploymentName: 'test-deployment',
+          buildId: 'test-build',
+          workflows: workflowsOf({ processOrder: async (input) => input }),
+        }),
+    ).toThrow(/not a valid queue name/);
   });
 });
 
@@ -1694,11 +1976,12 @@ function createTrackingServer(options?: {
           ws.send(
             JSON.stringify({
               type: 'registerAck',
-              protocolVersion: 2,
+              protocolVersion: 3,
               workerId: parsed.workerId,
-              queue: parsed.queue ?? 'default',
-              activities: parsed.activities,
+              queue: 'default',
               concurrency: parsed.concurrency ?? 10,
+              acceptedManifestDigest: 'sha256:test-accepted-digest',
+              serverCapabilities: [],
             }),
           );
         }
@@ -1751,11 +2034,12 @@ function createReconnectServer(onRegister?: (ws: any, index: number) => void): {
           ws.send(
             JSON.stringify({
               type: 'registerAck',
-              protocolVersion: 2,
+              protocolVersion: 3,
               workerId: parsed.workerId,
               queue: 'default',
-              activities: parsed.activities,
               concurrency: 10,
+              acceptedManifestDigest: 'sha256:test-accepted-digest',
+              serverCapabilities: [],
             }),
           );
           onRegister?.(ws, idx);
@@ -1807,6 +2091,8 @@ describe('RemoteWorker — connect() re-entrancy', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: workflowsOf({ processOrder: async (input) => input }),
     });
 
@@ -1833,11 +2119,12 @@ describe('RemoteWorker — connect() re-entrancy', () => {
     ackSocket.send(
       JSON.stringify({
         type: 'registerAck',
-        protocolVersion: 2,
+        protocolVersion: 3,
         workerId: 'reentrancy-worker',
         queue: 'default',
-        activities: [],
         concurrency: 10,
+        acceptedManifestDigest: 'sha256:test-accepted-digest',
+        serverCapabilities: [],
       }),
     );
 
@@ -1859,11 +2146,12 @@ describe('RemoteWorker — connect() re-entrancy', () => {
             ws.send(
               JSON.stringify({
                 type: 'registerAck',
-                protocolVersion: 2,
+                protocolVersion: 3,
                 workerId: parsed.workerId,
                 queue: 'default',
-                activities: parsed.activities,
                 concurrency: 10,
+                acceptedManifestDigest: 'sha256:test-accepted-digest',
+                serverCapabilities: [],
               }),
             );
           }
@@ -1874,6 +2162,8 @@ describe('RemoteWorker — connect() re-entrancy', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: workflowsOf({ processOrder: async (input) => input }),
     });
 
@@ -1903,6 +2193,8 @@ describe('RemoteWorker — connect() re-entrancy', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: workflowsOf({ processOrder: async (input) => input }),
     });
 
@@ -1939,6 +2231,8 @@ describe('RemoteWorker — connect() re-entrancy', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: workflowsOf({ processOrder: async (input) => input }),
     });
 
@@ -1968,11 +2262,12 @@ describe('RemoteWorker — connect() re-entrancy', () => {
     firstSocket.send(
       JSON.stringify({
         type: 'registerAck',
-        protocolVersion: 2,
+        protocolVersion: 3,
         workerId: 'late',
         queue: 'default',
-        activities: [],
         concurrency: 10,
+        acceptedManifestDigest: 'sha256:test-accepted-digest',
+        serverCapabilities: [],
       }),
     );
     await sleepForTesting(50);
@@ -1982,11 +2277,12 @@ describe('RemoteWorker — connect() re-entrancy', () => {
     secondSocket.send(
       JSON.stringify({
         type: 'registerAck',
-        protocolVersion: 2,
+        protocolVersion: 3,
         workerId: 'current',
         queue: 'default',
-        activities: [],
         concurrency: 10,
+        acceptedManifestDigest: 'sha256:test-accepted-digest',
+        serverCapabilities: [],
       }),
     );
     await expect(second).resolves.toBeUndefined();
@@ -2034,6 +2330,8 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: workflowsOf({
         slow: async () => activityPromise,
       }),
@@ -2098,6 +2396,8 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: workflowsOf({ echo: async (input) => input }),
     });
 
@@ -2143,6 +2443,8 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: workflowsOf({
         boom: async () => {
           await blockPromise;
@@ -2206,6 +2508,8 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: workflowsOf({ slow: async () => activityPromise }),
     });
 
@@ -2293,6 +2597,8 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: workflowsOf({ slow: async () => activityPromise }),
     });
 
@@ -2351,6 +2657,8 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
     // Registration 0: deliver task, then drop so the result buffers.
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: workflowsOf({ slow: async () => activityPromise }),
     });
     await worker.connect();
@@ -2419,11 +2727,12 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
               ws.send(
                 JSON.stringify({
                   type: 'registerAck',
-                  protocolVersion: 2,
+                  protocolVersion: 3,
                   workerId: parsed.workerId,
                   queue: 'default',
-                  activities: parsed.activities,
                   concurrency: 10,
+                  acceptedManifestDigest: 'sha256:test-accepted-digest',
+                  serverCapabilities: [],
                 }),
               );
               ws.send(
@@ -2440,11 +2749,12 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
                 ws.send(
                   JSON.stringify({
                     type: 'registerAck',
-                    protocolVersion: 2,
+                    protocolVersion: 3,
                     workerId: parsed.workerId,
                     queue: 'default',
-                    activities: parsed.activities,
                     concurrency: 10,
+                    acceptedManifestDigest: 'sha256:test-accepted-digest',
+                    serverCapabilities: [],
                   }),
                 );
             }
@@ -2460,6 +2770,8 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: workflowsOf({ slow: async () => activityPromise }),
     });
     await worker.connect();
@@ -2528,6 +2840,8 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       maxBufferedResults: 0,
       workflows: workflowsOf({
         declined: async () => {
@@ -2575,6 +2889,8 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: workflowsOf({ slow: async () => activityPromise }),
     });
     await worker.connect();

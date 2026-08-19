@@ -48,23 +48,16 @@ export const REMOTE_WORKER_MESSAGE_SCHEMAS = {
   register: {
     type: 'object',
     additionalProperties: false,
-    required: ['type', 'protocolVersion', 'workerId', 'activities'],
+    required: ['type', 'protocolVersion', 'workerId', 'manifest'],
     properties: {
       type: { const: 'register' },
       protocolVersion: protocolVersionSchema,
       workerId: { type: 'string', minLength: 1 },
-      activities: {
-        type: 'array',
-        items: { type: 'string', minLength: 1 },
-      },
+      // Wire shape only: this module proves `manifest` is a JSON object.
+      // Deep manifest validation runs where the manifest is accepted.
+      manifest: { type: 'object' },
       concurrency: { type: 'number', minimum: 1, maximum: 1000 },
-      queue: { type: 'string', minLength: 1 },
-      deploymentName: { type: 'string', minLength: 1 },
-      buildId: { type: 'string', minLength: 1 },
-      runtimeVersion: { type: 'string', minLength: 1 },
-      gitSha: { type: 'string', minLength: 1 },
       startedAt: { type: 'number' },
-      capabilities: jsonObjectSchema,
     },
   },
   heartbeat: {
@@ -152,17 +145,26 @@ export const REMOTE_WORKER_MESSAGE_SCHEMAS = {
   registerAck: {
     type: 'object',
     additionalProperties: false,
-    required: ['type', 'protocolVersion', 'workerId', 'queue', 'activities', 'concurrency'],
+    required: [
+      'type',
+      'protocolVersion',
+      'workerId',
+      'queue',
+      'concurrency',
+      'acceptedManifestDigest',
+      'serverCapabilities',
+    ],
     properties: {
       type: { const: 'registerAck' },
       protocolVersion: protocolVersionSchema,
       workerId: { type: 'string', minLength: 1 },
       queue: { type: 'string', minLength: 1 },
-      activities: {
+      concurrency: { type: 'number', minimum: 1, maximum: 1000 },
+      acceptedManifestDigest: { type: 'string', minLength: 1 },
+      serverCapabilities: {
         type: 'array',
         items: { type: 'string', minLength: 1 },
       },
-      concurrency: { type: 'number', minimum: 1, maximum: 1000 },
     },
   },
   registerError: {
@@ -171,11 +173,20 @@ export const REMOTE_WORKER_MESSAGE_SCHEMAS = {
     required: ['type', 'code', 'message', 'supportedProtocolVersions'],
     properties: {
       type: { const: 'registerError' },
-      code: { enum: ['invalid_registration', 'unsupported_protocol_version'] },
+      code: {
+        enum: [
+          'invalid_registration',
+          'unsupported_protocol_version',
+          'deployment_conflict',
+          'registration_rejected',
+        ],
+      },
       message: { type: 'string' },
+      // Describes the *other* peer's supported versions, which may not
+      // include this package's own — not narrowed to protocolVersionSchema.
       supportedProtocolVersions: {
         type: 'array',
-        items: protocolVersionSchema,
+        items: { type: 'number' },
       },
       requestedProtocolVersion: { type: 'number' },
     },

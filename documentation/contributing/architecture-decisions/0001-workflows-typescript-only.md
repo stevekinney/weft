@@ -50,7 +50,7 @@ If we want polyglot workflows, we have three theoretical paths:
 
 - **`RemoteWorker` conformance.** Cross-language SDKs can run `weft conformance -- <worker-command>` to verify the worker protocol behavior against a local Weft server.
 - **Protocol drift prevention.** The RemoteWorker protocol document is checked against the exported schema catalog so message names stay aligned with the TypeScript contract.
-- **Protocol versioning.** The worker WebSocket protocol is versioned. v2 requires `register.protocolVersion: 2` and rejects missing or unsupported versions with `registerError`.
+- **Protocol versioning.** The worker WebSocket protocol is versioned. v3 requires `register.protocolVersion: 3` and rejects missing or unsupported versions with `registerError`.
 
 ## See also
 

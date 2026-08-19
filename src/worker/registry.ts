@@ -1,4 +1,14 @@
 // Server-side worker tracking and pluggable routing policies.
+import {
+  DeploymentConsistencyGuard,
+  type DeploymentConsistencyResult,
+} from './registry/deployment-consistency.ts';
+import {
+  createDrainRecord,
+  isWorkerDraining,
+  workerHealth,
+  type DrainRecord,
+} from './registry/drain.ts';
 import { FairShareCounters } from './registry/fair-share.ts';
 import {
   matchesWorkerCapabilities,
@@ -19,7 +29,6 @@ import type {
   RoutingPolicy,
   WorkerDrainMutationResult,
   WorkerDrainOptions,
-  WorkerHealth,
   WorkerInfo,
   WorkerRegistrationInfo,
   WorkerRegistryOptions,
@@ -40,11 +49,6 @@ export type {
   WorkerSummary,
 } from './registry/types.ts';
 
-type DrainRecord = {
-  reason?: string;
-  startedAt: number;
-};
-
 /**
  * Server-side registry of connected remote workers with pluggable routing
  * policies. Tracks which workers are connected, which activities they support,
@@ -55,9 +59,27 @@ type DrainRecord = {
  *
  * @example
  * ```ts
- * import { WorkerRegistry } from '@lostgradient/weft';
+ * import { WorkerRegistry, type WorkerManifest } from '@lostgradient/weft';
+ *
+ * const manifest: WorkerManifest = {
+ *   manifestVersion: 1,
+ *   protocolVersion: 3,
+ *   sdkVersion: '0.18.0',
+ *   runtime: { name: 'bun', version: '1.3.14' },
+ *   deployment: { name: 'billing', buildId: 'b3', artifactDigest: 'sha256:41d0' },
+ *   workflows: {},
+ *   capabilities: {},
+ * };
+ *
  * const registry = new WorkerRegistry({ policy: 'least-loaded' });
- * registry.register({ id: 'worker-1', queue: 'default', activities: ['sendEmail'], concurrency: 10 });
+ * registry.register({
+ *   id: 'worker-1',
+ *   queue: 'default',
+ *   activities: ['sendEmail'],
+ *   concurrency: 10,
+ *   manifest,
+ *   acceptedManifestDigest: 'sha256:deadbeef',
+ * });
  * const best = registry.findWorker('sendEmail', { queue: 'default' });
  * ```
  */
@@ -70,6 +92,8 @@ export class WorkerRegistry {
   #roundRobinCursor: Map<string, number>;
   /** Per-worker, per-key in-flight counts for fair-share routing. */
   #fairShareCounts: FairShareCounters;
+  /** One `(deploymentName, buildId)` pair never registers two artifact digests. */
+  #deploymentConsistency: DeploymentConsistencyGuard;
 
   constructor(options?: WorkerRegistryOptions) {
     this.#workers = new Map();
@@ -78,11 +102,36 @@ export class WorkerRegistry {
     this.#policy = options?.policy ?? 'least-loaded';
     this.#roundRobinCursor = new Map();
     this.#fairShareCounts = new FairShareCounters();
+    this.#deploymentConsistency = new DeploymentConsistencyGuard();
   }
 
   /** The routing policy this registry was configured with. */
   get policy(): RoutingPolicy {
     return this.#policy;
+  }
+
+  /**
+   * Read-only check of a manifest's `(deploymentName, buildId,
+   * artifactDigest)` against digests previously seen for that deployment and
+   * build. Callers with a later rejection gate must call
+   * {@link recordDeploymentConsistency} only once every such gate has
+   * passed, so a declined worker cannot poison a deployment/build slot.
+   */
+  checkDeploymentConsistency(
+    deploymentName: string,
+    buildId: string,
+    artifactDigest: string,
+  ): DeploymentConsistencyResult {
+    return this.#deploymentConsistency.check(deploymentName, buildId, artifactDigest);
+  }
+
+  /** Record `artifactDigest` for `(deploymentName, buildId)` once every rejection gate has passed. */
+  recordDeploymentConsistency(
+    deploymentName: string,
+    buildId: string,
+    artifactDigest: string,
+  ): void {
+    this.#deploymentConsistency.record(deploymentName, buildId, artifactDigest);
   }
 
   /** Register a worker. */
@@ -100,7 +149,8 @@ export class WorkerRegistry {
       ...(info.deploymentName !== undefined ? { deploymentName: info.deploymentName } : {}),
       ...(info.buildId !== undefined ? { buildId: info.buildId } : {}),
       ...(info.runtimeVersion !== undefined ? { runtimeVersion: info.runtimeVersion } : {}),
-      ...(info.gitSha !== undefined ? { gitSha: info.gitSha } : {}),
+      manifest: info.manifest,
+      acceptedManifestDigest: info.acceptedManifestDigest,
       startedAt: info.startedAt ?? now,
       capabilities: { ...info.capabilities },
       inFlight,
@@ -182,7 +232,7 @@ export class WorkerRegistry {
   ): boolean {
     if (excludeWorkerIds?.has(worker.id)) return false;
     if (!matchesWorkerCapabilities(worker, activityName, queue)) return false;
-    if (this.#isWorkerDraining(worker)) return false;
+    if (isWorkerDraining(worker, this.#deploymentDrainStates)) return false;
     return true;
   }
 
@@ -341,7 +391,7 @@ export class WorkerRegistry {
       workerId,
       affectedWorkers: 1,
       inFlight: worker.inFlight,
-      health: this.#workerHealth(worker),
+      health: workerHealth(worker, this.#deploymentDrainStates),
     };
   }
 
@@ -358,7 +408,7 @@ export class WorkerRegistry {
       workerId,
       affectedWorkers: 1,
       inFlight: worker.inFlight,
-      health: this.#workerHealth(worker),
+      health: workerHealth(worker, this.#deploymentDrainStates),
     };
   }
 
@@ -401,11 +451,10 @@ export class WorkerRegistry {
       lastHeartbeat: worker.lastHeartbeat,
       startedAt: worker.startedAt,
       capabilities: worker.capabilities,
-      health: this.#workerHealth(worker),
+      health: workerHealth(worker, this.#deploymentDrainStates),
       deploymentName: worker.deploymentName,
       buildId: worker.buildId,
       runtimeVersion: worker.runtimeVersion,
-      gitSha: worker.gitSha,
     }));
   }
 
@@ -429,7 +478,7 @@ export class WorkerRegistry {
       (worker) => worker.deploymentName === deploymentName,
     );
     const inFlight = workers.reduce((total, worker) => total + worker.inFlight, 0);
-    const healthValues = workers.map((worker) => this.#workerHealth(worker));
+    const healthValues = workers.map((worker) => workerHealth(worker, this.#deploymentDrainStates));
     return {
       target: 'deployment',
       deploymentName,
@@ -439,36 +488,9 @@ export class WorkerRegistry {
     };
   }
 
-  #isWorkerDraining(worker: WorkerInfo): boolean {
-    return this.#drainRecordForWorker(worker) !== undefined;
-  }
-
-  #workerHealth(worker: WorkerInfo): WorkerHealth {
-    if (!this.#isWorkerDraining(worker)) return 'active';
-    return worker.inFlight > 0 ? 'draining' : 'drained';
-  }
-
-  #drainRecordForWorker(worker: WorkerInfo): DrainRecord | undefined {
-    if (worker.drainStartedAt !== undefined) {
-      return {
-        startedAt: worker.drainStartedAt,
-        ...(worker.drainReason !== undefined ? { reason: worker.drainReason } : {}),
-      };
-    }
-    if (worker.deploymentName === undefined) return undefined;
-    return this.#deploymentDrainStates.get(worker.deploymentName);
-  }
-
   /** Decrement the fair-share count for a completed or expired task. */
   #releaseFairShare(task: InFlightTask): void {
     if (task.fairShareKey === undefined) return;
     this.#fairShareCounts.release(task.workerId, task.fairShareKey);
   }
-}
-
-function createDrainRecord(options?: WorkerDrainOptions): DrainRecord {
-  return {
-    startedAt: options?.updatedAt ?? Date.now(),
-    ...(options?.reason !== undefined ? { reason: options.reason } : {}),
-  };
 }

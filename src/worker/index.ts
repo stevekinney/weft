@@ -13,6 +13,7 @@ import {
 import { HeartbeatManager } from './heartbeat.ts';
 import {
   buildRegisterMessage,
+  snapshotWorkflows,
   type InternalRemoteWorkerOptions,
   type PendingRegistration,
   type RemoteWorkerOptions,
@@ -69,6 +70,77 @@ function createWorkerWebSocket(
   return new Constructor(url, { headers });
 }
 
+// The server accepts a worker-stream path with or without the external
+// `/api` prefix (authentication-bridge.ts strips `/api` before routing), so
+// this must match both forms — otherwise a caller's fully-qualified,
+// `/api`-prefixed serverUrl would fail to match, fall through to the
+// bare-origin branch below, and silently lose its queue segment and any
+// query parameters.
+const WORKER_STREAM_PATH_RE = /^(?:\/api)?\/v1\/tasks\/([^/]+)\/stream$/;
+
+// Mirrors the server's own worker-stream route grammar
+// (websocket-upgrade.ts's `WORKER_STREAM_RE`: `/^\/v1\/tasks\/([\w-]+)\/stream$/`).
+// A queue outside this grammar would still let the client construct and
+// connect a WebSocket, but the server would fail to classify the upgrade as
+// a worker connection, silently ignore every message the worker sends, and
+// leave `connect()` pending forever with no error.
+const QUEUE_NAME_RE = /^[\w-]+$/;
+
+function assertValidQueueName(queue: string): void {
+  if (!QUEUE_NAME_RE.test(queue)) {
+    throw new Error(
+      `RemoteWorker queue "${queue}" is not a valid queue name — the server's worker-stream ` +
+        `route only accepts word characters and hyphens ([\\w-]+).`,
+    );
+  }
+}
+
+/**
+ * Resolve the single WebSocket URL and effective queue this worker connects
+ * with, accepting exactly one of two forms:
+ *
+ *   - A bare server origin plus the `queue` option (or its default), which
+ *     this function combines into the canonical `/v1/tasks/{queue}/stream`
+ *     endpoint.
+ *   - A complete worker-stream `serverUrl` that already encodes a queue, with
+ *     no `queue` option — or one that matches the encoded queue exactly. The
+ *     encoded path may carry the optional `/api` prefix the server also
+ *     accepts.
+ *
+ * A `serverUrl` that encodes a queue different from an explicitly passed
+ * `queue` option throws at construction time: the two configuration sources
+ * disagree, and connecting to either silently would mean routing to a queue
+ * neither value alone asked for. Either resolved queue is also validated
+ * against the server's route grammar, so a malformed queue fails fast here
+ * rather than connecting a WebSocket the server can never classify.
+ */
+function resolveWorkerConnectUrl(
+  serverUrl: string,
+  explicitQueue: string | undefined,
+): { url: string; queue: string } {
+  const parsed = new URL(serverUrl);
+  const match = WORKER_STREAM_PATH_RE.exec(parsed.pathname);
+
+  if (match !== null) {
+    const embeddedQueue = decodeURIComponent(match[1] as string);
+    assertValidQueueName(embeddedQueue);
+    if (explicitQueue !== undefined && explicitQueue !== embeddedQueue) {
+      throw new Error(
+        `RemoteWorker serverUrl "${serverUrl}" already encodes queue "${embeddedQueue}", which ` +
+          `conflicts with the "queue" option "${explicitQueue}". Pass either a bare server ` +
+          `origin with the "queue" option, or a complete worker-stream serverUrl with no ` +
+          `"queue" option — not both.`,
+      );
+    }
+    return { url: serverUrl, queue: embeddedQueue };
+  }
+
+  const queue = explicitQueue ?? DEFAULT_QUEUE;
+  assertValidQueueName(queue);
+  const url = new URL(`/v1/tasks/${encodeURIComponent(queue)}/stream`, serverUrl).toString();
+  return { url, queue };
+}
+
 /**
  * WebSocket-based remote worker that connects to the Weft server and executes
  * activities on behalf of the engine.
@@ -97,6 +169,8 @@ function createWorkerWebSocket(
  *   },
  *   concurrency: 5,
  *   queue: 'email',
+ *   deploymentName: 'notifications',
+ *   buildId: '2026.08.19-1',
  * });
  * await worker.connect();
  * ```
@@ -109,6 +183,8 @@ export class RemoteWorker implements Disposable {
    * activity names (`${workflowType}.${activityName}`) built from `workflows`.
    */
   #activityTable: Record<string, RemoteWorkerActivityFunction>;
+  /** Resolved once at construction time by {@link resolveWorkerConnectUrl}. */
+  #connectUrl: string;
   #ws: WebSocket | null;
   #inFlight: number;
   #abortController: AbortController;
@@ -131,10 +207,16 @@ export class RemoteWorker implements Disposable {
   constructor(options: InternalRemoteWorkerOptions) {
     this.#activityTable = resolveActivityTable(options);
     this.#workerId = options.workerId ?? crypto.randomUUID();
+    const resolvedConnection = resolveWorkerConnectUrl(options.serverUrl, options.queue);
+    this.#connectUrl = resolvedConnection.url;
     this.#options = {
       ...options,
+      // Snapshot so a caller mutating their own `workflows` object after
+      // construction cannot desync a future connect()'s advertised manifest
+      // from the `#activityTable` built above from the same original shape.
+      workflows: snapshotWorkflows(options.workflows),
       concurrency: options.concurrency ?? DEFAULT_CONCURRENCY,
-      queue: options.queue ?? DEFAULT_QUEUE,
+      queue: resolvedConnection.queue,
       workerId: this.#workerId,
     };
     this.#ws = null;
@@ -182,7 +264,7 @@ export class RemoteWorker implements Disposable {
     this.#teardownActiveConnection('Superseded by a new connect() call');
 
     return new Promise<void>((resolve, reject) => {
-      const ws = createWorkerWebSocket(this.#options.serverUrl, this.#options.headers);
+      const ws = createWorkerWebSocket(this.#connectUrl, this.#options.headers);
       // Track the socket immediately (while still CONNECTING) so a re-entrant
       // connect() or a #failSocket() before `open` can close it instead of
       // leaking it. The `connected` getter and #readySocket() already gate on
@@ -194,9 +276,7 @@ export class RemoteWorker implements Disposable {
       ws.addEventListener(
         'open',
         () => {
-          this.#sendMessage(
-            buildRegisterMessage(this.#workerId, Object.keys(this.#activityTable), this.#options),
-          );
+          this.#sendMessage(buildRegisterMessage(this.#workerId, this.#options));
         },
         { signal: this.#abortController.signal },
       );

@@ -2235,16 +2235,6 @@
                 "drainingWorkers": {
                   "type": "number"
                 },
-                "gitSha": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
                 "health": {
                   "enum": ["active", "draining", "drained"],
                   "type": "string"
@@ -2280,7 +2270,6 @@
                 "deploymentName",
                 "buildId",
                 "runtimeVersion",
-                "gitSha",
                 "health",
                 "workers",
                 "activeWorkers",
@@ -2325,9 +2314,6 @@
                   "type": "number"
                 },
                 "deploymentName": {
-                  "type": "string"
-                },
-                "gitSha": {
                   "type": "string"
                 },
                 "health": {

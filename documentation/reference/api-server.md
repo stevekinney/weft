@@ -48,30 +48,32 @@ interface ServeOptions {
   workerShutdownTimeoutMs?: number;
   routingPolicy?: RoutingPolicy;
   schedulingPolicy?: SchedulingPolicy;
+  workerAdmissionPolicy?: WorkerAdmissionPolicy;
   prometheusExporter?: PrometheusExporter;
 }
 ```
 
-| Field                             | Type                            | Default          | Description                                                                               |
-| --------------------------------- | ------------------------------- | ---------------- | ----------------------------------------------------------------------------------------- |
-| `engine`                          | `Engine`                        | (required)       | The engine instance to expose over HTTP                                                   |
-| `port`                            | `number`                        | `7233`           | TCP port to listen on                                                                     |
-| `hostname`                        | `string`                        | `'0.0.0.0'`      | Hostname/IP to bind to                                                                    |
-| `development`                     | `boolean`                       | `false`          | Enable development mode with verbose error responses                                      |
-| `dashboard`                       | `DashboardRouteTarget`          | `undefined`      | External dashboard shell served at supported page routes when supplied                    |
-| `dashboardAssets`                 | `DashboardAssets`               | `undefined`      | Static dashboard files served below an explicit prefix                                    |
-| `auth`                            | `AuthConfig`                    | `undefined`      | Authentication configuration (JWT, mTLS, or custom)                                       |
-| `rateLimit`                       | `RateLimitConfig`               | `undefined`      | Optional single-process request throttling                                                |
-| `cors`                            | `CorsOptions`                   | `undefined`      | Optional browser cross-origin policy                                                      |
-| `unauthenticatedAccess`           | `'warn' \| 'allow' \| 'reject'` | `'warn'`         | Startup policy when `auth` is omitted                                                     |
-| `maxRequestBodyBytes`             | `number`                        | `1048576`        | Maximum body size for REST operation routes and JSON-RPC over HTTP                        |
-| `maxStreamConnectionsPerWorkflow` | `number`                        | `100`            | Maximum concurrent workflow stream/watch WebSocket and event SSE connections per workflow |
-| `visibilityPollIntervalMs`        | `number`                        | `5000`           | Polling interval for task visibility timeout checks                                       |
-| `workerReconnectGracePeriodMs`    | `number`                        | `2000`           | Milliseconds before a disconnected worker's in-flight tasks are requeued                  |
-| `workerShutdownTimeoutMs`         | `number`                        | `30000`          | Milliseconds `server.stop()` waits for connected workers to drain                         |
-| `routingPolicy`                   | `RoutingPolicy`                 | `'least-loaded'` | Worker routing policy                                                                     |
-| `schedulingPolicy`                | `SchedulingPolicy`              | `'priority'`     | Scheduling policy for task dispatch                                                       |
-| `prometheusExporter`              | `PrometheusExporter`            | `undefined`      | Exporter that produces the response body for `/v1/metrics`                                |
+| Field                             | Type                            | Default          | Description                                                                                    |
+| --------------------------------- | ------------------------------- | ---------------- | ---------------------------------------------------------------------------------------------- |
+| `engine`                          | `Engine`                        | (required)       | The engine instance to expose over HTTP                                                        |
+| `port`                            | `number`                        | `7233`           | TCP port to listen on                                                                          |
+| `hostname`                        | `string`                        | `'0.0.0.0'`      | Hostname/IP to bind to                                                                         |
+| `development`                     | `boolean`                       | `false`          | Enable development mode with verbose error responses                                           |
+| `dashboard`                       | `DashboardRouteTarget`          | `undefined`      | External dashboard shell served at supported page routes when supplied                         |
+| `dashboardAssets`                 | `DashboardAssets`               | `undefined`      | Static dashboard files served below an explicit prefix                                         |
+| `auth`                            | `AuthConfig`                    | `undefined`      | Authentication configuration (JWT, mTLS, or custom)                                            |
+| `rateLimit`                       | `RateLimitConfig`               | `undefined`      | Optional single-process request throttling                                                     |
+| `cors`                            | `CorsOptions`                   | `undefined`      | Optional browser cross-origin policy                                                           |
+| `unauthenticatedAccess`           | `'warn' \| 'allow' \| 'reject'` | `'warn'`         | Startup policy when `auth` is omitted                                                          |
+| `maxRequestBodyBytes`             | `number`                        | `1048576`        | Maximum body size for REST operation routes and JSON-RPC over HTTP                             |
+| `maxStreamConnectionsPerWorkflow` | `number`                        | `100`            | Maximum concurrent workflow stream/watch WebSocket and event SSE connections per workflow      |
+| `visibilityPollIntervalMs`        | `number`                        | `5000`           | Polling interval for task visibility timeout checks                                            |
+| `workerReconnectGracePeriodMs`    | `number`                        | `2000`           | Milliseconds before a disconnected worker's in-flight tasks are requeued                       |
+| `workerShutdownTimeoutMs`         | `number`                        | `30000`          | Milliseconds `server.stop()` waits for connected workers to drain                              |
+| `routingPolicy`                   | `RoutingPolicy`                 | `'least-loaded'` | Worker routing policy                                                                          |
+| `schedulingPolicy`                | `SchedulingPolicy`              | `'priority'`     | Scheduling policy for task dispatch                                                            |
+| `workerAdmissionPolicy`           | `WorkerAdmissionPolicy`         | `undefined`      | Gate on which workers may register, evaluated after manifest and deployment-consistency checks |
+| `prometheusExporter`              | `PrometheusExporter`            | `undefined`      | Exporter that produces the response body for `/v1/metrics`                                     |
 
 See [configuration.md](./configuration.md) for `AuthConfig`, `RateLimitConfig`, `CorsOptions`, `RoutingPolicy`, and `SchedulingPolicy` details. The [server guide](../guides/server.md#rate-limiting) covers rate limiting, and the [CORS section](../guides/server.md#cross-origin-resource-sharing-cors) covers browser cross-origin policy.
 
@@ -84,6 +86,8 @@ When `auth` is omitted, [`serve()`](#serve) defaults to `unauthenticatedAccess: 
 `maxRequestBodyBytes` applies to REST operation routes and JSON-RPC over HTTP; oversized bodies return `413 Payload Too Large` before the full body is buffered. `maxStreamConnectionsPerWorkflow` applies to `/v1/workflows/:id/stream`, `/v1/workflows/:id/watch`, and `/v1/workflows/:id/events/sse`; connections over the per-workflow cap are closed with WebSocket policy-violation code `1008` or rejected with `429` for workflow SSE.
 
 `server.stop()` drains connected remote workers before stopping the Bun server. It sends each worker a shutdown frame, accepts in-flight `taskResult` messages during the drain window, and waits up to `workerShutdownTimeoutMs` before teardown continues. The CLI `serve` signal handlers use the same stop path.
+
+`workerAdmissionPolicy` runs after the worker's manifest has been validated and checked for deployment consistency, and before the workerId-hijack guard and registry insertion — a rejected worker never becomes routing-eligible and never displaces an existing registration. The default (`undefined`) accepts every worker that already passed authentication. See [remote-worker-protocol.md](./remote-worker-protocol.md) for the `registerError` code (`registration_rejected`) a declined worker receives.
 
 ---
 

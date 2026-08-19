@@ -105,7 +105,7 @@ If `signal` is already aborted when called, returns a failed result immediately 
 
 ### `RemoteWorker`
 
-WebSocket-based remote worker client. Connects to the Weft server, sends a v2 registration, waits for `registerAck`, and then processes tasks dispatched by the server. Implements `Disposable`.
+WebSocket-based remote worker client. Connects to the Weft server, sends a v3 registration, waits for `registerAck`, and then processes tasks dispatched by the server. Implements `Disposable`.
 
 ```ts partial
 class RemoteWorker implements Disposable {
@@ -133,21 +133,21 @@ class RemoteWorker implements Disposable {
 
 #### `RemoteWorkerOptions`
 
-| Field                 | Type                                                                                                                                  | Default               | Description                                                                                                                                                                                                                                     |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `serverUrl`           | `string`                                                                                                                              | --                    | WebSocket URL of the Weft server                                                                                                                                                                                                                |
-| `workerId`            | `string`                                                                                                                              | `crypto.randomUUID()` | Unique worker identifier                                                                                                                                                                                                                        |
-| `workflows`           | `Record<string, { name: string; activities: Record<string, (input: unknown, context?: RemoteActivityContext) => Promise<unknown>> }>` | (required)            | Maps each workflow type to its activity implementations; the SDK advertises each as `${workflowType}.${activityName}` and validates the key matches `workflow.name`. Activities may accept an optional `RemoteActivityContext` second parameter |
-| `concurrency`         | `number`                                                                                                                              | `10`                  | Maximum concurrent tasks                                                                                                                                                                                                                        |
-| `queue`               | `string`                                                                                                                              | `'default'`           | Task queue to subscribe to                                                                                                                                                                                                                      |
-| `disconnectTimeoutMs` | `number`                                                                                                                              | `30_000`              | Time to wait for in-flight tasks before force-closing on disconnect                                                                                                                                                                             |
-| `interceptors`        | `ActivityInterceptor[]`                                                                                                               | `[]`                  | Activity interceptors applied to all tasks processed by this worker                                                                                                                                                                             |
-| `deploymentName`      | `string`                                                                                                                              | --                    | Operator-defined deployment group reported during registration                                                                                                                                                                                  |
-| `buildId`             | `string`                                                                                                                              | --                    | Build or release identifier reported during registration                                                                                                                                                                                        |
-| `runtimeVersion`      | `string`                                                                                                                              | --                    | Runtime or SDK version reported during registration                                                                                                                                                                                             |
-| `gitSha`              | `string`                                                                                                                              | --                    | Source revision reported during registration                                                                                                                                                                                                    |
-| `startedAt`           | `number`                                                                                                                              | `Date.now()`          | Worker process start time in epoch milliseconds                                                                                                                                                                                                 |
-| `capabilities`        | `Record<string, JSON value>`                                                                                                          | `{}`                  | JSON metadata such as region, hardware class, or feature flags                                                                                                                                                                                  |
+| Field                 | Type                                                                                                                                  | Default                  | Description                                                                                                                                                                                                                                     |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `serverUrl`           | `string`                                                                                                                              | --                       | WebSocket URL of the Weft server                                                                                                                                                                                                                |
+| `workerId`            | `string`                                                                                                                              | `crypto.randomUUID()`    | Unique worker identifier                                                                                                                                                                                                                        |
+| `workflows`           | `Record<string, { name: string; activities: Record<string, (input: unknown, context?: RemoteActivityContext) => Promise<unknown>> }>` | (required)               | Maps each workflow type to its activity implementations; the SDK advertises each as `${workflowType}.${activityName}` and validates the key matches `workflow.name`. Activities may accept an optional `RemoteActivityContext` second parameter |
+| `concurrency`         | `number`                                                                                                                              | `10`                     | Maximum concurrent tasks                                                                                                                                                                                                                        |
+| `queue`               | `string`                                                                                                                              | `'default'`              | Task queue to subscribe to. Conflicts with a `serverUrl` that already encodes a different queue throw at construction time                                                                                                                      |
+| `disconnectTimeoutMs` | `number`                                                                                                                              | `30_000`                 | Time to wait for in-flight tasks before force-closing on disconnect                                                                                                                                                                             |
+| `interceptors`        | `ActivityInterceptor[]`                                                                                                               | `[]`                     | Activity interceptors applied to all tasks processed by this worker                                                                                                                                                                             |
+| `deploymentName`      | `string`                                                                                                                              | (required)               | Logical service this worker instance belongs to, included in its manifest                                                                                                                                                                       |
+| `buildId`             | `string`                                                                                                                              | (required)               | Operator-visible release this worker instance is running, included in its manifest                                                                                                                                                              |
+| `artifactDigest`      | `string`                                                                                                                              | derived                  | Trusted digest of the executable artifact. When omitted, a placeholder tagged `declared-shape:<hash>` is derived from the declared workflow and activity names                                                                                  |
+| `runtimeVersion`      | `string`                                                                                                                              | `detectRuntimeVersion()` | Runtime or SDK version reported during registration                                                                                                                                                                                             |
+| `startedAt`           | `number`                                                                                                                              | `Date.now()`             | Worker process start time in epoch milliseconds                                                                                                                                                                                                 |
+| `capabilities`        | `Record<string, JSON value>`                                                                                                          | `{}`                     | JSON metadata such as region, hardware class, or feature flags                                                                                                                                                                                  |
 
 The worker sends heartbeats every 10 seconds after registration is acknowledged and handles server-initiated `shutdown` messages gracefully. `connect()` rejects if the server sends `registerError` or if the socket closes before acknowledgement.
 
@@ -158,6 +158,8 @@ import { RemoteWorker } from '@lostgradient/weft';
 
 const worker = new RemoteWorker({
   serverUrl: 'ws://localhost:7233/api/v1/tasks/default/stream',
+  deploymentName: 'notifications',
+  buildId: '2026.08.19-1',
   workflows: {
     notifications: {
       name: 'notifications',
@@ -395,7 +397,7 @@ import { WORKER_MANIFEST_VERSION, type WorkerManifest } from '@lostgradient/weft
 
 const manifest: WorkerManifest = {
   manifestVersion: WORKER_MANIFEST_VERSION,
-  protocolVersion: 2,
+  protocolVersion: 3,
   sdkVersion: '0.18.0',
   runtime: { name: 'bun', version: '1.3.14' },
   deployment: { name: 'billing', buildId: '2026.08.18-3', artifactDigest: 'sha256:41d0e2' },
@@ -454,7 +456,7 @@ const requirement: WorkerExecutionRequirement = { deploymentName: 'billing' };
 const identity: WorkerExecutionIdentity = {
   workerId: 'worker-1',
   manifestDigest: 'sha256:deadbeef',
-  protocolVersion: 2,
+  protocolVersion: 3,
   sdkVersion: '0.18.0',
   runtimeName: 'bun',
   runtimeVersion: '1.3.14',
@@ -481,7 +483,7 @@ import { computeWorkerManifestDigest, WORKER_MANIFEST_VERSION } from '@lostgradi
 
 const digest = await computeWorkerManifestDigest({
   manifestVersion: WORKER_MANIFEST_VERSION,
-  protocolVersion: 2,
+  protocolVersion: 3,
   sdkVersion: '0.18.0',
   runtime: { name: 'bun', version: '1.3.14' },
   deployment: { name: 'billing', buildId: '2026.08.18-3', artifactDigest: 'sha256:41d0e2' },

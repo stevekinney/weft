@@ -19,6 +19,9 @@ import {
   type ServeOptions,
   type TaskDispatch,
   type WeftServer,
+  type WorkerAdmissionDecision,
+  type WorkerAdmissionPolicy,
+  type WorkerAdmissionRequest,
 } from '@lostgradient/weft/server';
 import {
   createEngineEventFeedBackend,
@@ -111,6 +114,18 @@ const packageRootDiscoveryInfo: DiscoveryInfo = { description: 'Example API' };
 const packageRootReexportedExporter: PrometheusExporter = packageRootPrometheusExporter;
 const packageRootAuth: AuthConfig = { apiKeys: ['secret'] };
 
+// WorkerAdmissionRequest and WorkerAdmissionDecision are nameable from the
+// published subpath alongside WorkerAdmissionPolicy.
+const packageRootWorkerAdmissionPolicy: WorkerAdmissionPolicy = (
+  request: WorkerAdmissionRequest,
+) => {
+  const decision: WorkerAdmissionDecision =
+    request.manifest.deployment.name === 'billing'
+      ? { status: 'accepted' }
+      : { status: 'rejected', reason: 'only the billing deployment may register' };
+  return decision;
+};
+
 const fullyTypedPackageRootServeOptions: ServeOptions = {
   engine: packageRootEngine,
   auth: packageRootAuth,
@@ -121,6 +136,7 @@ const fullyTypedPackageRootServeOptions: ServeOptions = {
   schedulingPolicy: packageRootSchedulingPolicy,
   discoveryInfo: packageRootDiscoveryInfo,
   prometheusExporter: packageRootReexportedExporter,
+  workerAdmissionPolicy: packageRootWorkerAdmissionPolicy,
 };
 void fullyTypedPackageRootServeOptions;
 

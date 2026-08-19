@@ -200,6 +200,8 @@ describe('durable state, remote worker, and testing-harness parity', () => {
     remoteWorker = new RemoteWorker({
       serverUrl: `${server.url.replace(/^http/, 'ws')}/v1/tasks/default/stream`,
       workerId: 'parity-remote-worker',
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: {
         greeting: {
           name: 'greeting',

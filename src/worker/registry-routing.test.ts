@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'bun:test';
 
+import {
+  TEST_ACCEPTED_MANIFEST_DIGEST,
+  testWorkerManifest,
+} from './registry-fixtures.test-support.ts';
 import { WorkerRegistry } from './registry.ts';
 
 /**
@@ -17,6 +21,8 @@ function makeRegistryWithWorkers(
   for (let index = 0; index < count; index += 1) {
     const id = `worker-${index}`;
     registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
       id,
       queue: 'default',
       activities: [activity],
@@ -90,10 +96,38 @@ describe('WorkerRegistry routing policies', () => {
 
     it('keeps independent cursors per queue', () => {
       const registry = new WorkerRegistry({ policy: 'round-robin' });
-      registry.register({ id: 'a-0', queue: 'a', activities: ['t'], concurrency: 10 });
-      registry.register({ id: 'a-1', queue: 'a', activities: ['t'], concurrency: 10 });
-      registry.register({ id: 'b-0', queue: 'b', activities: ['t'], concurrency: 10 });
-      registry.register({ id: 'b-1', queue: 'b', activities: ['t'], concurrency: 10 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'a-0',
+        queue: 'a',
+        activities: ['t'],
+        concurrency: 10,
+      });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'a-1',
+        queue: 'a',
+        activities: ['t'],
+        concurrency: 10,
+      });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'b-0',
+        queue: 'b',
+        activities: ['t'],
+        concurrency: 10,
+      });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'b-1',
+        queue: 'b',
+        activities: ['t'],
+        concurrency: 10,
+      });
 
       expect(registry.findWorker('t', { queue: 'a' })?.id).toBe('a-0');
       expect(registry.findWorker('t', { queue: 'b' })?.id).toBe('b-0');
@@ -109,9 +143,30 @@ describe('WorkerRegistry routing policies', () => {
       // workers because the previous request for B nudged the cursor past
       // an A-only worker.
       const registry = new WorkerRegistry({ policy: 'round-robin' });
-      registry.register({ id: 'multi-0', queue: 'shared', activities: ['a', 'b'], concurrency: 5 });
-      registry.register({ id: 'a-only-1', queue: 'shared', activities: ['a'], concurrency: 5 });
-      registry.register({ id: 'a-only-2', queue: 'shared', activities: ['a'], concurrency: 5 });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'multi-0',
+        queue: 'shared',
+        activities: ['a', 'b'],
+        concurrency: 5,
+      });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'a-only-1',
+        queue: 'shared',
+        activities: ['a'],
+        concurrency: 5,
+      });
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'a-only-2',
+        queue: 'shared',
+        activities: ['a'],
+        concurrency: 5,
+      });
 
       // Activity A rotates over all three eligible workers.
       expect(registry.findWorker('a', { queue: 'shared' })?.id).toBe('multi-0');
@@ -265,6 +320,8 @@ describe('WorkerRegistry routing policies', () => {
     it('matches a qualified activity name exactly against the advertised list', () => {
       const registry = new WorkerRegistry();
       registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
         id: 'worker-welcome',
         queue: 'default',
         activities: ['welcome.formatGreeting'],
@@ -278,6 +335,8 @@ describe('WorkerRegistry routing policies', () => {
     it('does not match a bare activity name when the worker advertised a qualified name', () => {
       const registry = new WorkerRegistry();
       registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
         id: 'worker-welcome',
         queue: 'default',
         activities: ['welcome.formatGreeting'],
@@ -290,6 +349,8 @@ describe('WorkerRegistry routing policies', () => {
     it('does not match a prefix or substring of the qualified name', () => {
       const registry = new WorkerRegistry();
       registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
         id: 'worker-welcome',
         queue: 'default',
         activities: ['welcome.formatGreeting'],
@@ -307,12 +368,16 @@ describe('WorkerRegistry routing policies', () => {
       // promise of qualified names.
       const registry = new WorkerRegistry();
       registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
         id: 'worker-welcome',
         queue: 'default',
         activities: ['welcome.formatGreeting'],
         concurrency: 5,
       });
       registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
         id: 'worker-other',
         queue: 'default',
         activities: ['other.formatGreeting'],

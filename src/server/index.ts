@@ -42,6 +42,7 @@ import {
 } from './serve-internals.ts';
 import type { SchedulingPolicy } from './task-queue-types.ts';
 import { TaskQueue } from './task-queue.ts';
+import type { WorkerAdmissionPolicy } from './worker-admission-policy.ts';
 
 export {
   wireEventBroadcasting,
@@ -50,6 +51,11 @@ export {
 
 export type { DashboardAssets } from './dashboard-assets.ts';
 export type { CorsOptions } from './runtime/cors.ts';
+export type {
+  WorkerAdmissionDecision,
+  WorkerAdmissionPolicy,
+  WorkerAdmissionRequest,
+} from './worker-admission-policy.ts';
 
 export {
   AUTHORIZATION_SCOPES,
@@ -301,6 +307,14 @@ export interface ServeOptions {
    * least-loaded for that single call.
    */
   routingPolicy?: RoutingPolicy;
+  /**
+   * Gate on which workers may become routing-eligible, evaluated after the
+   * manifest is validated and checked for deployment consistency and before
+   * registry insertion. Defaults to `undefined`, which accepts every worker
+   * that already passed authentication — the behavior before this option
+   * existed.
+   */
+  workerAdmissionPolicy?: WorkerAdmissionPolicy;
   /**
    * Scheduling policy used by the {@link TaskQueue} when ordering pending tasks
    * within a queue. Defaults to `'priority'`.

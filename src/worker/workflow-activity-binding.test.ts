@@ -94,6 +94,8 @@ describe('RemoteWorker workflows option', () => {
   it('advertises qualified activity names built from the workflows map', () => {
     const worker = new RemoteWorker({
       serverUrl: 'ws://localhost:0',
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
       workflows: {
         welcome: {
           name: 'welcome',
@@ -144,7 +146,12 @@ describe('RemoteWorker workflows option', () => {
   });
 
   it('accepts an empty `workflows` map (worker advertises no activities)', () => {
-    using worker = new RemoteWorker({ serverUrl: 'ws://localhost:0', workflows: {} });
+    using worker = new RemoteWorker({
+      serverUrl: 'ws://localhost:0',
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
+      workflows: {},
+    });
     expect(worker).toBeDefined();
   });
 
@@ -153,6 +160,8 @@ describe('RemoteWorker workflows option', () => {
       () =>
         new RemoteWorker({
           serverUrl: 'ws://localhost:0',
+          deploymentName: 'test-deployment',
+          buildId: 'test-build',
           workflows: {
             'bad.name': { name: 'bad.name', activities: {} },
           },
@@ -165,6 +174,8 @@ describe('RemoteWorker workflows option', () => {
       () =>
         new RemoteWorker({
           serverUrl: 'ws://localhost:0',
+          deploymentName: 'test-deployment',
+          buildId: 'test-build',
           workflows: {
             welcome: { name: 'other', activities: {} },
           },

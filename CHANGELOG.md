@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — RemoteWorker protocol v3: canonical worker manifest replaces parallel identity fields
+
+The RemoteWorker WebSocket protocol version is now `3`. `register` no longer
+carries `activities`, `queue`, `deploymentName`, `buildId`, `runtimeVersion`,
+`gitSha`, or `capabilities` as parallel top-level fields — it carries a single
+`manifest: WorkerManifest`. The server derives routing activities from
+`manifest.workflows`, deep-validates the manifest with `parseWorkerManifest()`,
+checks `(deploymentName, buildId)` against previously seen artifact digests,
+and — when `ServeOptions.workerAdmissionPolicy` is configured — runs that
+policy before admitting the worker. `registerAck` echoes
+`acceptedManifestDigest` and `serverCapabilities` instead of echoing
+`activities` back. `registerError` gains two new codes: `deployment_conflict`
+(the manifest's `(deploymentName, buildId)` was already registered with a
+different `artifactDigest`) and `registration_rejected` (a configured
+`WorkerAdmissionPolicy` refused the worker).
+
+`gitSha` is retired everywhere: `RemoteWorkerOptions`, the registry's
+`WorkerInfo`/`WorkerSummary`/`WorkerDeploymentSummary`, and the REST/JSON-RPC
+`weft.workers.list` output. A commit is metadata, not an executable identity;
+`WorkerManifest` never had a field for it.
+
+`RemoteWorkerOptions.deploymentName` and `buildId` are now required —
+defaulting them risked a false deployment-conflict collision between two
+unrelated apps that both skipped the option. `runtimeVersion` now defaults to
+`detectRuntimeVersion()` when omitted rather than being sent blank. A new
+optional `artifactDigest` lets real build tooling supply a trusted content
+digest; when omitted, the SDK derives a placeholder tagged
+`declared-shape:<hash>` from the declared workflow and activity names, so it
+is never mistaken for a real content digest.
+
+`RemoteWorker` now accepts exactly one queue configuration source: a bare
+server origin plus the `queue` option (or its default), or a complete
+worker-stream `serverUrl` that already encodes a queue and no `queue` option.
+A `serverUrl` encoding a queue that conflicts with an explicit `queue` option
+now throws at construction time instead of silently connecting to one of the
+two.
+
+**Migration**: upgrade both server and worker SDK together — v3 is a clean
+break with no negotiation, and a v2 worker connecting to a v3 server (or vice
+versa) receives the canonical protocol-incompatibility error. Worker
+construction call sites must add `deploymentName` and `buildId`; call sites
+that supplied `gitSha` should drop it. Server hosts that inspected
+`WorkerSummary.gitSha` or `WorkerDeploymentSummary.gitSha` must remove that
+read. Hosts that want to gate worker registration should configure
+`ServeOptions.workerAdmissionPolicy`.
+
 ## [0.18.0] - 2026-08-11
 
 ### Added — principal introspection

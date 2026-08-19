@@ -786,11 +786,14 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
     ],
     [
       'src/worker/registry/summary.ts',
+      // Was lines 134-139; shifted to 129-134 when WFT-27 dropped `gitSha`
+      // from the deployment-identity tuple, removing 5 lines above this
+      // function. Same unexercised `compareDeploymentSummaries` comparator.
       {
         reason:
           'Transport disconnect and concurrency exits are behaviorally tested, but Bun does not deterministically attribute these residual paths.',
         functions: 1,
-        lines: new Set([134, 135, 136, 137, 138, 139]),
+        lines: new Set([129, 130, 131, 132, 133, 134]),
         requireUncoveredLines: true,
       },
     ],
@@ -1317,11 +1320,21 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
     ],
     [
       'src/server/runtime/websocket-worker.ts',
+      // The closed WorkerToServerMessage union makes this default branch
+      // unreachable at runtime; it exists solely as a compile-time
+      // exhaustiveness guard: `case 'heartbeat': {` / its closing `}` (272,
+      // 275), `default: {` (276), and the two dead statements inside it,
+      // `const _exhaustive` / `return _exhaustive` (279, 280). Only 279 and
+      // 280 are deterministically 0 across every run; the four case-label
+      // and brace lines around them (271, 272, 275, 276) flip between hit
+      // and unhit run to run with byte-identical source — a switch-statement
+      // coverage-attribution artifact, not a real reachability signal — so
+      // `requireUncoveredLines` is intentionally omitted here rather than
+      // chasing whichever subset happens to be 0 in a given run.
       {
         reason:
           'Transport disconnect and concurrency exits are behaviorally tested, but Bun does not deterministically attribute these residual paths.',
-        lines: new Set([430, 431, 434, 435]),
-        requireUncoveredLines: true,
+        lines: new Set([271, 272, 275, 276, 279, 280]),
       },
     ],
     [

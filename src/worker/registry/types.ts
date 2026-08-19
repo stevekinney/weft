@@ -2,6 +2,7 @@
 // Shared public types for the worker registry
 // ---------------------------------------------------------------------------
 
+import type { WorkerManifest } from '../manifest/types.ts';
 import type { RemoteWorkerCapabilities } from '../protocol.ts';
 
 /** Lifecycle health state of a connected worker. */
@@ -11,6 +12,11 @@ export type WorkerHealth = 'active' | 'draining' | 'drained';
  * Full internal state record for a connected worker, held by the registry.
  * `drainReason` and `drainStartedAt` are present only when a worker-level
  * drain marker has been set.
+ *
+ * `manifest` and `acceptedManifestDigest` are internal — not part of
+ * {@link WorkerSummary} or any REST/JSON-RPC surface. Exposing bounded
+ * worker/deployment detail from the accepted manifest is a diagnostics
+ * concern, not a registration concern.
  */
 export interface WorkerInfo {
   id: string;
@@ -25,7 +31,8 @@ export interface WorkerInfo {
   deploymentName?: string;
   buildId?: string;
   runtimeVersion?: string;
-  gitSha?: string;
+  manifest: WorkerManifest;
+  acceptedManifestDigest: string;
   drainReason?: string;
   drainStartedAt?: number;
 }
@@ -39,7 +46,8 @@ export type WorkerRegistrationInfo = {
   deploymentName?: string;
   buildId?: string;
   runtimeVersion?: string;
-  gitSha?: string;
+  manifest: WorkerManifest;
+  acceptedManifestDigest: string;
   startedAt?: number;
   capabilities?: RemoteWorkerCapabilities;
 };
@@ -68,7 +76,6 @@ export type WorkerSummary = {
   deploymentName?: string | undefined;
   buildId?: string | undefined;
   runtimeVersion?: string | undefined;
-  gitSha?: string | undefined;
 };
 
 export type WorkerDrainMutationResult =

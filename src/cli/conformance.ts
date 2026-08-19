@@ -28,9 +28,9 @@ type RunningWorker = {
 
 const CONFORMANCE_QUEUE = 'conformance';
 const CONFORMANCE_ACTIVITIES = [
-  'weft.conformance.echo',
-  'weft.conformance.sleep',
-  'weft.conformance.cancel',
+  'conformance.echo',
+  'conformance.sleep',
+  'conformance.cancel',
 ] as const;
 const CONFORMANCE_HEARTBEAT_INTERVAL_MS = 25;
 
@@ -257,7 +257,7 @@ async function runConformanceChecks(
       server,
       storage,
       'conformance-echo',
-      'weft.conformance.echo',
+      'conformance.echo',
       { ok: true },
       'completed',
       timeoutMs,
@@ -269,7 +269,7 @@ async function runConformanceChecks(
       server,
       storage,
       'conformance-heartbeat',
-      'weft.conformance.sleep',
+      'conformance.sleep',
       { milliseconds: CONFORMANCE_HEARTBEAT_INTERVAL_MS * 3 },
       'completed',
       timeoutMs,
@@ -279,7 +279,7 @@ async function runConformanceChecks(
     const cancelOperationId = 'conformance-cancel';
     const cancelDispatched = await server.dispatchTask({
       operationId: cancelOperationId,
-      activityName: 'weft.conformance.cancel',
+      activityName: 'conformance.cancel',
       input: { milliseconds: timeoutMs },
       queue: CONFORMANCE_QUEUE,
       visibilityTimeout: Math.max(500, timeoutMs),
@@ -301,7 +301,7 @@ async function runConformanceChecks(
     const reconnectDelayMs = Math.min(1_500, Math.max(250, Math.floor(timeoutMs * 0.75)));
     const reconnectDispatched = await server.dispatchTask({
       operationId: reconnectOperationId,
-      activityName: 'weft.conformance.sleep',
+      activityName: 'conformance.sleep',
       input: { milliseconds: reconnectDelayMs },
       queue: CONFORMANCE_QUEUE,
       visibilityTimeout: Math.max(500, timeoutMs),

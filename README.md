@@ -378,6 +378,8 @@ import { RemoteWorker } from '@lostgradient/weft';
 
 const worker = new RemoteWorker({
   serverUrl: 'wss://weft.internal:7233',
+  deploymentName: 'orders',
+  buildId: '2026.08.19-1',
   workflows: {
     orderFulfillment: {
       name: 'orderFulfillment',

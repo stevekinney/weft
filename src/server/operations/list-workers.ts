@@ -73,14 +73,12 @@ const workerSummarySchema = z.object({
   deploymentName: z.string().optional(),
   buildId: z.string().optional(),
   runtimeVersion: z.string().optional(),
-  gitSha: z.string().optional(),
 }) satisfies z.ZodType<WorkerSummary>;
 
 const workerDeploymentSummarySchema = z.object({
   deploymentName: z.string().nullable(),
   buildId: z.string().nullable(),
   runtimeVersion: z.string().nullable(),
-  gitSha: z.string().nullable(),
   health: workerHealthSchema,
   workers: z.number(),
   activeWorkers: z.number(),

@@ -285,7 +285,13 @@ export type {
   WorkflowTeardownStatus,
 } from './core/events';
 // Runtime — portable helpers for cross-runtime code
-export { detectRuntime, hashBytes, hashString, sleep } from './runtime/portable';
+export {
+  detectRuntime,
+  detectRuntimeVersion,
+  hashBytes,
+  hashString,
+  sleep,
+} from './runtime/portable';
 export type { RuntimeKind } from './runtime/portable';
 // Compression
 export { createBunCompressor, createCompressor } from './core/compression';
