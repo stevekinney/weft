@@ -460,7 +460,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
       'src/core/types/definition-schema-to-json.ts',
       {
         reason:
-          'The remaining schema conversion branches cover unsupported schema nodes that the public definition builder cannot construct.',
+          'The optional Valibot converter resolution failure is exercised without the dependency in a child process whose hits are not merged into parent Bun LCOV.',
         lines: new Set([172, 173, 174, 177, 178]),
         requireUncoveredLines: true,
       },
@@ -485,12 +485,8 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
       'src/mcp/resources.ts',
       {
         reason:
-          'The uncovered MCP resource branches are host-resource error fallbacks whose successful listing and reading contracts are covered through dispatch tests.',
-        functions: 2,
-        lines: new Set([
-          39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60,
-          61, 62, 63, 64, 65, 66, 67, 68, 130, 163, 188, 203, 204,
-        ]),
+          'Bun maps the workflow-resource parser closing brace as uncovered after the direct state-URI parsing assertion executes its return path.',
+        lines: new Set([188]),
         requireUncoveredLines: true,
       },
     ],
@@ -1069,10 +1065,8 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/mcp/dispatcher.ts',
       {
         reason:
-          'Segment validation rejects empty, parent, and absolute paths before resolution, making the final resource-containment guard defensive.',
-        functions: 8,
-        lines: new Set([112, 113, 116, 212, 213, 214, 261, 262, 266]),
-        requireUncoveredLines: true,
+          'Bun reports three unnamed aggregate functions despite direct response assertions executing resource-template, prompt, unsubscribe, and response-error handlers.',
+        functions: 3,
       },
     ],
     [
