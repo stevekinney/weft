@@ -39,7 +39,6 @@ import {
   cleanupWorkflowIndex,
   registerStackDisposers,
   resolveNetworkConfig,
-  restoreInflightTasks,
 } from './serve-internals.ts';
 import type { SchedulingPolicy } from './task-queue-types.ts';
 import { TaskQueue } from './task-queue.ts';
@@ -450,6 +449,16 @@ export interface WeftServer extends AsyncDisposable {
   readonly registry: WorkerRegistry;
   readonly taskQueue: TaskQueue;
   /**
+   * Resolves once startup task-ledger recovery (WFT-23) has reconstructed
+   * every non-terminal task's in-memory indexes from durable storage;
+   * rejects if the recovery scan itself failed. `dispatchTask`, long-poll
+   * claim/result handling, and worker registration all await this
+   * internally before touching the ledger, so awaiting it explicitly is
+   * optional — it exists for callers (health checks, orchestration) that
+   * want to observe readiness without dispatching a probe task.
+   */
+  readonly ready: Promise<void>;
+  /**
    * Drain connected remote workers, then stop the underlying Bun server.
    *
    * During the drain, each connected worker receives a shutdown frame and may
@@ -477,8 +486,11 @@ export interface WeftServer extends AsyncDisposable {
  *
  * `serve()` validates the supplied `auth` configuration synchronously and
  * throws `Error` before binding the port if any auth setting is invalid.
- * In-flight task records from previous server runs are restored from storage
- * on startup so no tasks are silently lost across restarts.
+ * Every non-terminal task record from previous server runs is recovered from
+ * durable storage on startup so no task is silently lost across restarts —
+ * see `WeftServer.ready`. Task dispatch, claim, completion, and worker
+ * registration all wait for that recovery to finish (or fail loudly if it
+ * doesn't) before touching the ledger.
  *
  * The returned `WeftServer.taskQueue` is exposed for inspection, not as a stable
  * mutation surface — prefer `WeftServer` methods (`dispatchTask`,
@@ -587,7 +599,9 @@ export function serve(options: ServeOptions): WeftServer {
   }
 
   registerStackDisposers(stack, context, options, broadcastingHandle, boundCleanup);
-  restoreInflightTasks(context, options);
+  // Startup task-ledger recovery (WFT-23) was already started inside
+  // `buildServerContext`, as early as possible relative to context
+  // construction — see that function's doc comment.
   // Process-level signal handling is the CLI's responsibility (`cli-main.ts`);
   // installing it here would race with the CLI and leak handlers across
   // repeated `serve()` calls in library/test contexts.
@@ -602,6 +616,7 @@ export function serve(options: ServeOptions): WeftServer {
     url: `${scheme}://${resolvedHostname}:${resolvedPort}`,
     registry: context.registry,
     taskQueue: context.taskQueue,
+    ready: context.taskLedgerRecovery.ready,
     async stop() {
       await stack[Symbol.asyncDispose]();
     },

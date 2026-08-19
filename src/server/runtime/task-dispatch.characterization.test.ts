@@ -20,7 +20,7 @@ import {
   type RemoteTaskQueued,
 } from '../task-ledger.ts';
 import { minimalServeOptions, minimalServerContext } from './server-context.test-support.ts';
-import { dispatchTaskImpl } from './task-dispatch.ts';
+import { dispatchTaskImpl, scheduleDelayedDispatch } from './task-dispatch.ts';
 import { commitTaskLedgerCompletion } from './task-ledger-completion.ts';
 
 import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
@@ -381,5 +381,61 @@ describe('dispatchTaskImpl', () => {
     expect(dispatched).toBe(true);
     const record = decodeRemoteTaskRecord(await storage.get(taskLedgerKey(operationId)));
     expect(record?.state).toBe('queued');
+  });
+});
+
+describe('scheduleDelayedDispatch', () => {
+  let context: ServerContext;
+  let options: ReturnType<typeof createMinimalOptions>;
+
+  afterEach(() => {
+    for (const timer of context.pendingTimers) {
+      clearTimeout(timer);
+    }
+  });
+
+  it('arms a tracked timer when the server is not stopping', () => {
+    context = createMinimalContext();
+    options = createMinimalOptions();
+
+    scheduleDelayedDispatch(
+      context,
+      options,
+      {
+        operationId: 'op-not-stopping',
+        activityName: 'doWork',
+        workflowType: 'testWorkflow',
+        input: null,
+      },
+      1000,
+    );
+
+    expect(context.pendingTimers.size).toBe(1);
+  });
+
+  it('does not arm a timer once context.stopping is set', () => {
+    // WFT-23: startup recovery's queued-record branch (and the ongoing
+    // reconcileOrphanedRecords safety net) both redispatch through this
+    // function. Without this guard, a recovery scan still in flight when
+    // `server.stop()`'s timer-clearing disposer runs could arm a *new*
+    // timer after `pendingTimers` has already been cleared — leaking a
+    // callback that fires `dispatchTaskImpl` against a disposed task queue.
+    context = createMinimalContext();
+    context.stopping = true;
+    options = createMinimalOptions();
+
+    scheduleDelayedDispatch(
+      context,
+      options,
+      {
+        operationId: 'op-stopping',
+        activityName: 'doWork',
+        workflowType: 'testWorkflow',
+        input: null,
+      },
+      0,
+    );
+
+    expect(context.pendingTimers.size).toBe(0);
   });
 });

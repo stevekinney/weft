@@ -306,6 +306,29 @@ export async function registerWorker(
   ws: ServerWebSocket<WebSocketData>,
   message: RegisterMessage,
 ): Promise<void> {
+  // Gate on startup task-ledger recovery (WFT-23) before anything else. A
+  // worker's taskResult/heartbeat messages are only accepted once
+  // `ws.data.workerRegistered` is set (see `handleWorkerWebSocketMessage`),
+  // so holding registration here — rather than gating those per-message —
+  // guarantees registry ownership rehydration has already run by the time
+  // any worker can send a message that depends on it. A permanently
+  // rejected gate means the recovery scan itself failed; reject the worker
+  // with an actionable error instead of leaving the socket to admit traffic
+  // against partial in-memory indexes.
+  try {
+    await context.taskLedgerRecovery.ready;
+  } catch (error) {
+    rejectAndRecordRegistration(
+      context,
+      ws,
+      'registration_rejected',
+      `Server task-ledger recovery failed — cannot admit new workers: ${error instanceof Error ? error.message : String(error)}`,
+      message.workerId,
+      message.protocolVersion,
+    );
+    return;
+  }
+
   if (!principalMayRegisterWorker(ws.data.principal)) {
     rejectAndRecordRegistration(
       context,

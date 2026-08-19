@@ -2,7 +2,13 @@ import { ActivityFailedEvent } from '../../core/events.ts';
 import type { ServeOptions, TaskDispatch } from '../index.ts';
 import { restoreExtendedDeadlineIfStillActive } from '../runtime-helpers.ts';
 import { requeueExpiredAttempt } from '../task-ledger-transitions.ts';
-import { decodeRemoteTaskRecord, taskLedgerKey, type RemoteTaskLeased } from '../task-ledger.ts';
+import {
+  decodeRemoteTaskRecord,
+  taskLedgerKey,
+  type RemoteTaskBase,
+  type RemoteTaskLeased,
+  type RemoteTaskQueued,
+} from '../task-ledger.ts';
 import type { ServerContext } from './context.ts';
 import { scheduleDelayedDispatch } from './task-dispatch.ts';
 import { commitTaskLedgerTransition } from './task-ledger-runtime.ts';
@@ -115,10 +121,21 @@ export async function reassignOrExpireTask(
   recordTaskRequeueMetric(context.metricsCollector);
 
   const delay = Math.max(0, result.record.availableAt - Date.now());
-  scheduleDelayedDispatch(context, options, createRequeuedTaskDispatch(record), delay);
+  scheduleDelayedDispatch(context, options, taskDispatchFromLedgerRecord(record), delay);
 }
 
-function createRequeuedTaskDispatch(record: RemoteTaskLeased): TaskDispatch {
+/**
+ * Reconstruct the `TaskDispatch` a fresh dispatch of this operation would
+ * have used, from the durable envelope alone. Shared by expired-lease
+ * redispatch ({@link reassignOrExpireTask}) and startup recovery's
+ * `queued`-record redispatch (`task-ledger-recovery.ts`) — both cases hand a
+ * record back to `dispatchTaskImpl` with no original caller-supplied
+ * `TaskDispatch` still in memory. Every `RemoteTaskBase` field
+ * `buildRoutingOptions`/`resolveTaskPriority` read at dispatch time
+ * (`priority`, `fairShareKey`, sticky affinity) must round-trip here too, or
+ * a requeued or recovered task silently loses its original routing intent.
+ */
+export function taskDispatchFromLedgerRecord(record: RemoteTaskBase): TaskDispatch {
   const taskDispatch: TaskDispatch = {
     operationId: record.operationId,
     activityName: record.activityName,
@@ -137,7 +154,36 @@ function createRequeuedTaskDispatch(record: RemoteTaskLeased): TaskDispatch {
   if (Object.keys(record.headers).length > 0) {
     taskDispatch.headers = record.headers;
   }
+  if (record.priority !== undefined) {
+    taskDispatch.priority = record.priority;
+  }
+  if (record.fairShareKey !== undefined) {
+    taskDispatch.fairShareKey = record.fairShareKey;
+  }
+  if (record.stickyWorkflowId !== undefined) {
+    taskDispatch.sticky = true;
+  }
   return taskDispatch;
+}
+
+/**
+ * Redispatch a `queued` ledger record whose delayed-retry `availableAt` has
+ * elapsed. Covers the case where the process-local `setTimeout` a durable
+ * retry's original `scheduleDelayedDispatch` call armed was lost — to a
+ * restart, or because the record was never dispatched from this process at
+ * all (e.g. written by a peer) — so `availableAt` is the correctness
+ * mechanism and the timer is only a latency optimization. Skipped when the
+ * operation is already tracked in-memory (dispatched or mid-redispatch) so
+ * this never races a live attempt.
+ */
+function redispatchAvailableQueuedRecord(
+  context: ServerContext,
+  options: ServeOptions,
+  decoded: RemoteTaskQueued,
+): void {
+  if (context.registry.isAssigned(decoded.operationId)) return;
+  if (context.taskQueue.isTracked(decoded.operationId)) return;
+  scheduleDelayedDispatch(context, options, taskDispatchFromLedgerRecord(decoded), 0);
 }
 
 /**
@@ -209,6 +255,16 @@ export async function scanExpiredTasks(
   }
 }
 
+/**
+ * Periodic full-ledger safety net (WFT-23), independent of the in-memory
+ * deadline heap `scanExpiredTasks` drains: catches `leased` records whose
+ * expiry was never tracked in the heap (written by a peer, or lost to a
+ * restart) and `queued` records whose durable `availableAt` has elapsed but
+ * whose `scheduleDelayedDispatch` timer never fired (same causes). Every
+ * other state (`completing`, `cancelling`, `terminal`, `deadLettered`) is
+ * left untouched — resolving those is either the worker's redelivered result
+ * (`completing`) or explicitly out of this slice's scope.
+ */
 export async function reconcileOrphanedRecords(
   context: ServerContext,
   options: ServeOptions,
@@ -222,7 +278,13 @@ export async function reconcileOrphanedRecords(
     for await (const [, value] of options.engine.storage.scan('task-ledger:')) {
       try {
         const decoded = decodeRemoteTaskRecord(value);
-        if (decoded === null || decoded.state !== 'leased') continue;
+        if (decoded === null) continue;
+        if (decoded.state === 'queued') {
+          if (decoded.availableAt <= now)
+            redispatchAvailableQueuedRecord(context, options, decoded);
+          continue;
+        }
+        if (decoded.state !== 'leased') continue;
         if (isTaskHeartbeatStaleForMetrics(decoded, now)) staleHeartbeatCount += 1;
 
         if (decoded.leaseDeadline > now) {

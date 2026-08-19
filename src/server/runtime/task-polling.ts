@@ -61,6 +61,26 @@ function authorizeWorkerPrincipal(principal: Principal | undefined): Response | 
 }
 
 /**
+ * Await startup task-ledger recovery (WFT-23) before a long-poll claim or
+ * result submission touches the ledger or the in-memory indexes recovery
+ * rebuilds. Returns a 503 with an actionable error if recovery itself
+ * failed, else `null` to let the caller proceed.
+ */
+async function awaitTaskLedgerRecovery(context: ServerContext): Promise<Response | null> {
+  try {
+    await context.taskLedgerRecovery.ready;
+    return null;
+  } catch (error) {
+    return Response.json(
+      {
+        error: `Startup task-ledger recovery failed — cannot admit new task claims: ${error instanceof Error ? error.message : String(error)}`,
+      },
+      { status: 503 },
+    );
+  }
+}
+
+/**
  * Validate and extract typed fields from a parsed task-result body.
  * Returns the validated result or a 400 Response if validation fails.
  */
@@ -256,6 +276,9 @@ export async function handleTaskPollRequest(
   const authorizationResponse = authorizeWorkerPrincipal(principal);
   if (authorizationResponse !== null) return authorizationResponse;
 
+  const recoveryResponse = await awaitTaskLedgerRecovery(context);
+  if (recoveryResponse !== null) return recoveryResponse;
+
   const queue = decodeURIComponent(pollMatch[1]);
   const activities = url.searchParams.getAll('activity');
   if (activities.length === 0) {
@@ -311,6 +334,9 @@ export async function handleTaskResultRequest(
 
   const authorizationResponse = authorizeWorkerPrincipal(principal);
   if (authorizationResponse !== null) return authorizationResponse;
+
+  const recoveryResponse = await awaitTaskLedgerRecovery(context);
+  if (recoveryResponse !== null) return recoveryResponse;
 
   const body = await parseTaskResultBody(
     request,

@@ -1,8 +1,5 @@
 import { describe, expect, it, spyOn } from 'bun:test';
 
-import { encode } from '../core/codec.ts';
-import { KEYS } from '../storage/interface.ts';
-import { MemoryStorage } from '../storage/memory.ts';
 import {
   minimalServeOptions,
   minimalServerContext,
@@ -14,7 +11,6 @@ import {
   clampWorkerReconnectGracePeriod,
   registerStackDisposers,
   resolveNetworkConfig,
-  restoreInflightTasks,
   WEBSOCKET_MAX_PAYLOAD_BYTES,
 } from './serve-internals.ts';
 
@@ -362,71 +358,48 @@ describe('registerStackDisposers', () => {
       clearTimeoutSpy.mockRestore();
     }
   });
-});
 
-describe('restoreInflightTasks', () => {
-  /** Wait until the registry has rehydrated the operation, or throw on timeout. */
-  async function waitForRestored(
-    context: ReturnType<typeof minimalServerContext>,
-    operationId: string,
-  ): Promise<void> {
-    const deadline = Date.now() + 1_000;
-    while (Date.now() < deadline) {
-      if (context.registry.getTask(operationId) !== undefined) return;
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-    throw new Error(`operation "${operationId}" was not restored within 1s`);
-  }
-
-  it('rehydrates the attemptToken so the stale-attempt guard survives a server restart', async () => {
-    // Regression: restoreInflightTasks must carry the durable record's
-    // attemptToken into the rehydrated registry entry. If it drops the token,
-    // Losing the token would silently disable the stale-attempt guard for every
-    // in-flight task across a restart, even though storage still holds the
-    // current attempt's token.
-    const storage = new MemoryStorage();
+  it('sets context.stopping from the timer-cleanup disposer', () => {
+    // WFT-23: startup recovery's scan loop and scheduleDelayedDispatch both
+    // check context.stopping before doing further work, so a still-running
+    // recovery scan cannot arm a new timer or issue a durable write after
+    // this disposer has already cleared pendingTimers. This must be set
+    // before pendingTimers is cleared, not after — see the disposer's own
+    // comment in serve-internals.ts.
     const context = minimalServerContext();
-    const options = minimalServeOptions(storage);
+    const options = {
+      ...minimalServeOptions(),
+      engine: { addEventListener() {}, removeEventListener() {} },
+    } as unknown as ReturnType<typeof minimalServeOptions>;
 
-    const operationId = 'restore-op';
-    const workerId = 'worker-a';
-    const attemptToken = 'attempt-token-2';
-    const dispatchedAt = Date.now();
-    // Seed a durable historical-shape inflight record (token-bearing) as if a
-    // dispatch persisted it before the server went down — the same shape
-    // `markInflight` (retired with the WFT-22 ledger cutover) used to
-    // normalize, lifecycle fields included. Deadline is in the future so
-    // restore keeps it.
-    await storage.put(
-      KEYS.operationInflight(operationId),
-      encode({
-        operationId,
-        workerId,
-        deadline: dispatchedAt + 30_000,
-        activityName: 'charge',
-        queue: 'default',
-        input: { amount: 1 },
-        attempt: 2,
-        visibilityTimeout: 30_000,
-        attemptToken,
-        firstQueuedAt: dispatchedAt,
-        lastQueuedAt: dispatchedAt,
-        lastDispatchedAt: dispatchedAt,
-        startedAt: dispatchedAt,
-        retryCount: 1,
-        requeueCount: 0,
-      }),
+    const deferred: Array<() => void | Promise<void>> = [];
+    const stack = {
+      defer(callback: () => void | Promise<void>) {
+        deferred.push(callback);
+      },
+    } as unknown as AsyncDisposableStack;
+
+    registerStackDisposers(
+      stack,
+      context,
+      options,
+      {
+        cleanupWorkflow() {},
+        dispose() {},
+      } as unknown as EventBroadcastingHandle,
+      () => {},
     );
 
-    restoreInflightTasks(context, options);
-    await waitForRestored(context, operationId);
+    expect(context.stopping).toBe(false);
 
-    // A stale completion from the SAME worker echoing an EARLIER attempt's token
-    // must be rejected — proving the current token survived the restart.
-    expect(context.registry.isAssignedToAttempt(operationId, workerId, 'attempt-token-1')).toBe(
-      false,
-    );
-    // The current attempt's token is accepted.
-    expect(context.registry.isAssignedToAttempt(operationId, workerId, attemptToken)).toBe(true);
+    const timerCleanupDisposer = deferred.at(-1);
+    expect(timerCleanupDisposer).toBeDefined();
+    timerCleanupDisposer!();
+
+    expect(context.stopping).toBe(true);
   });
 });
+
+// Startup task-ledger recovery (formerly `restoreInflightTasks`, scanning
+// the retired `op:inflight:` keyspace) is now `runTaskLedgerRecovery` in
+// `runtime/task-ledger-recovery.ts` — see that module's own test file.

@@ -229,7 +229,33 @@ describe('handleWorkerWebSocketMessage', () => {
   });
 
   describe('register message', () => {
-    it('rejects authenticated worker registration without the worker write scope', () => {
+    it('rejects registration when startup task-ledger recovery failed', async () => {
+      const rejection = Promise.reject(new Error('recovery scan failed'));
+      rejection.catch(() => {});
+      const context = { ...minimalServerContext(), taskLedgerRecovery: { ready: rejection } };
+      const options = minimalServeOptions();
+      const ws = createFakeWs();
+
+      handleWorkerWebSocketMessage(
+        context,
+        options,
+        ws as never,
+        registerMessageJson('w-recovery-failed', ['doWork']),
+        NOOP_CLEANUP,
+      );
+
+      await waitForRegistrationSideEffect(() => ws.sentMessages.length > 0);
+      expect(ws.sentMessages).toHaveLength(1);
+      const message = JSON.parse(ws.sentMessages[0]!);
+      expect(message.type).toBe('registerError');
+      expect(message.code).toBe('registration_rejected');
+      expect(message.message).toContain('task-ledger recovery failed');
+      expect(message.message).toContain('recovery scan failed');
+      expect(context.registry.getWorker('w-recovery-failed')).toBeUndefined();
+      expect(ws.closeCode).toBeDefined();
+    });
+
+    it('rejects authenticated worker registration without the worker write scope', async () => {
       const context = minimalServerContext();
       const options = minimalServeOptions();
       const ws = createFakeWs();
@@ -246,6 +272,7 @@ describe('handleWorkerWebSocketMessage', () => {
         NOOP_CLEANUP,
       );
 
+      await waitForRegistrationSideEffect(() => ws.sentMessages.length > 0);
       expect(ws.sentMessages).toHaveLength(1);
       const message = JSON.parse(ws.sentMessages[0]!);
       expect(message.type).toBe('registerError');
@@ -371,9 +398,11 @@ describe('handleWorkerWebSocketMessage', () => {
       });
     });
 
-    it('rejects registration with a manifest that fails validation', () => {
-      // The manifest check runs before the async digest step, so an
-      // invalid manifest rejects synchronously.
+    it('rejects registration with a manifest that fails validation', async () => {
+      // The manifest check runs before the async digest step, but
+      // `registerWorker` now awaits the task-ledger recovery gate first
+      // (WFT-23), so this still needs to poll for the rejection side effect
+      // rather than asserting synchronously.
       const context = minimalServerContext();
       const options = minimalServeOptions();
       const ws = createFakeWs();
@@ -386,6 +415,7 @@ describe('handleWorkerWebSocketMessage', () => {
         NOOP_CLEANUP,
       );
 
+      await waitForRegistrationSideEffect(() => ws.sentMessages.length > 0);
       expect(ws.sentMessages).toHaveLength(1);
       const msg = JSON.parse(ws.sentMessages[0]!);
       expect(msg.type).toBe('registerError');
@@ -399,7 +429,7 @@ describe('handleWorkerWebSocketMessage', () => {
       });
     });
 
-    it('rejects registration when the manifest protocolVersion disagrees with the wire protocolVersion', () => {
+    it('rejects registration when the manifest protocolVersion disagrees with the wire protocolVersion', async () => {
       // The wire-level register.protocolVersion and the manifest's own
       // protocolVersion field are independent claims; a worker asserting
       // v3 at the handshake but v2 inside its manifest must not be silently
@@ -418,6 +448,7 @@ describe('handleWorkerWebSocketMessage', () => {
         NOOP_CLEANUP,
       );
 
+      await waitForRegistrationSideEffect(() => ws.sentMessages.length > 0);
       expect(ws.sentMessages).toHaveLength(1);
       const msg = JSON.parse(ws.sentMessages[0]!);
       expect(msg.type).toBe('registerError');
@@ -484,7 +515,7 @@ describe('handleWorkerWebSocketMessage', () => {
       });
     });
 
-    it('rejects registration when the configured worker admission policy declines it', () => {
+    it('rejects registration when the configured worker admission policy declines it', async () => {
       const context = minimalServerContext();
       const options = {
         ...minimalServeOptions(),
@@ -503,6 +534,7 @@ describe('handleWorkerWebSocketMessage', () => {
         NOOP_CLEANUP,
       );
 
+      await waitForRegistrationSideEffect(() => ws.sentMessages.length > 0);
       expect(ws.sentMessages).toHaveLength(1);
       const msg = JSON.parse(ws.sentMessages[0]!);
       expect(msg.type).toBe('registerError');
@@ -536,7 +568,7 @@ describe('handleWorkerWebSocketMessage', () => {
       expect(context.registry.getWorker('w-allowed')).toBeDefined();
     });
 
-    it('rejects registration when the configured worker admission policy throws', () => {
+    it('rejects registration when the configured worker admission policy throws', async () => {
       // A throwing policy must not leave the client hanging with no
       // registerError and no closed socket — the fire-and-forget register
       // handler only logs an unhandled rejection, it never replies.
@@ -557,6 +589,7 @@ describe('handleWorkerWebSocketMessage', () => {
         NOOP_CLEANUP,
       );
 
+      await waitForRegistrationSideEffect(() => ws.sentMessages.length > 0);
       expect(ws.sentMessages).toHaveLength(1);
       const msg = JSON.parse(ws.sentMessages[0]!);
       expect(msg.type).toBe('registerError');
@@ -632,6 +665,7 @@ describe('handleWorkerWebSocketMessage', () => {
         NOOP_CLEANUP,
       );
 
+      await waitForRegistrationSideEffect(() => rejectedWs.sentMessages.length > 0);
       expect(rejectedWs.sentMessages).toHaveLength(1);
       expect(JSON.parse(rejectedWs.sentMessages[0]!).code).toBe('registration_rejected');
 

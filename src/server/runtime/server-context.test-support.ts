@@ -61,6 +61,8 @@ export function minimalServerContext(
     scanRunning: false,
     processingOperations: new Set(),
     reconciliationRunning: false,
+    taskLedgerRecovery: { ready: Promise.resolve() },
+    stopping: false,
   };
 }
 

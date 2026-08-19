@@ -5562,6 +5562,7 @@ describe('task assignment deduplication', () => {
     });
     expect(second).toBe(false);
 
+    // fixed delay: negative assertion (blocked re-dispatch must not send a second task message)
     await waitForRealTimersForTesting(50);
 
     const taskMessages = received.filter((m) => m.type === 'task');
@@ -5730,22 +5731,19 @@ describe('visibility timeout persistence', () => {
   it('restores in-flight tasks from storage on server restart', async () => {
     ({ engine, storage } = createEngineWithStorage());
 
-    // Pre-populate storage with an in-flight record that hasn't expired
-    const deadline = Date.now() + 60_000;
-    const inflightRecord = {
+    // Pre-populate storage with a leased ledger record that hasn't expired,
+    // as if a dispatch persisted it before the server went down.
+    const leasedRecord = makeLeasedLedgerRecord({
       operationId: 'restored-op',
-      workerId: 'old-worker',
-      deadline,
-      activityName: 'test.charge',
-      queue: 'default',
-      input: null,
-      attempt: 1,
-      visibilityTimeout: 60_000,
+      workerSessionId: 'old-worker',
+      leaseDeadline: Date.now() + 60_000,
+      visibilityTimeoutMilliseconds: 60_000,
       attemptToken: 'attempt-token-restored',
-    };
-    await storage.put(KEYS.operationInflight('restored-op'), encode(inflightRecord));
+    });
+    await storage.put(taskLedgerKey('restored-op'), encodeRemoteTaskRecord(leasedRecord));
 
-    // Start the server — it should restore the in-flight record
+    // Start the server — startup task-ledger recovery (WFT-23) should
+    // rehydrate the leased record's registry ownership.
     server = serveTestServer({ engine, port: 0 });
     await waitFor(() => server.registry.isAssigned('restored-op'), {
       label: 'restored-op to be assigned',
@@ -5758,19 +5756,15 @@ describe('visibility timeout persistence', () => {
   it('rebuilds workflow cancellation tracking for restored in-flight tasks', async () => {
     ({ engine, storage } = createEngineWithStorage());
 
-    const inflightRecord = {
+    const leasedRecord = makeLeasedLedgerRecord({
       operationId: 'restored-cancel-op',
-      workerId: 'restored-cancel-worker',
+      workerSessionId: 'restored-cancel-worker',
       workflowId: 'wf-restored-cancel',
-      deadline: Date.now() + 60_000,
-      activityName: 'test.charge',
-      queue: 'default',
-      input: null,
-      attempt: 1,
-      visibilityTimeout: 60_000,
+      leaseDeadline: Date.now() + 60_000,
+      visibilityTimeoutMilliseconds: 60_000,
       attemptToken: 'attempt-token-restored-cancel',
-    };
-    await storage.put(KEYS.operationInflight('restored-cancel-op'), encode(inflightRecord));
+    });
+    await storage.put(taskLedgerKey('restored-cancel-op'), encodeRemoteTaskRecord(leasedRecord));
 
     server = serveTestServer({ engine, port: 0 });
     await waitForRealTimersForTesting(100);
@@ -5805,10 +5799,10 @@ describe('visibility timeout persistence', () => {
     await waitForRealTimersForTesting(50);
   });
 
-  it('logs corrupt persisted inflight records during restore', async () => {
+  it('logs unrecognized persisted task ledger records during startup recovery', async () => {
     ({ engine, storage } = createEngineWithStorage());
     const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
-    await storage.put(KEYS.operationInflight('restore-corrupt-op'), encode({ invalid: true }));
+    await storage.put(taskLedgerKey('restore-corrupt-op'), encode({ invalid: true }));
 
     try {
       server = serveTestServer({ engine, port: 0 });
@@ -5817,86 +5811,96 @@ describe('visibility timeout persistence', () => {
           errorSpy.mock.calls.some((call) => {
             return (
               call[0] ===
-              '[weft] Corrupt inflight record at "op:inflight:restore-corrupt-op" during restore — skipping'
+              '[weft] Unrecognized task ledger record at "task-ledger:restore-corrupt-op" during startup recovery — skipping'
             );
           }),
-        { label: 'corrupt inflight restore error log' },
+        { label: 'unrecognized task ledger recovery error log' },
       );
 
       expect(errorSpy).toHaveBeenCalledWith(
-        '[weft] Corrupt inflight record at "op:inflight:restore-corrupt-op" during restore — skipping',
+        '[weft] Unrecognized task ledger record at "task-ledger:restore-corrupt-op" during startup recovery — skipping',
       );
     } finally {
       errorSpy.mockRestore();
     }
   });
 
-  it('retries restore scans and logs when recovery still fails', async () => {
+  it('rejects server.ready and blocks new dispatch when startup recovery scan itself fails', async () => {
+    // Per the project brief (WFT-23): "a scan failure leaves the remote
+    // worker plane unhealthy and prevents new claims rather than logging
+    // and continuing with partial indexes." Unlike the retired
+    // `restoreInflightTasks`, `runTaskLedgerRecovery` does not retry the
+    // scan and swallow the eventual failure — it rejects the recovery gate
+    // once, and every gated entry point observes that rejection.
     ({ engine, storage } = createEngineWithStorage());
-    const warningSpy = spyOn(console, 'warn').mockImplementation(() => {});
-    const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
     const originalScan = storage.scan.bind(storage);
-    let inflightScanAttempts = 0;
     const restoreScan = overrideProperty(storage, 'scan', async function* (
       prefix: string,
       options?: Parameters<MemoryStorage['scan']>[1],
     ) {
-      if (prefix === 'op:inflight:') {
-        inflightScanAttempts++;
-        throw new Error(`restore scan failed ${inflightScanAttempts}`);
+      if (prefix === 'task-ledger:') {
+        throw new Error('recovery scan failed');
       }
       yield* originalScan(prefix, options);
     } as MemoryStorage['scan']);
 
     try {
       server = serveTestServer({ engine, port: 0 });
-      await waitFor(
-        () =>
-          errorSpy.mock.calls.some((call) => {
-            return call[0] === '[weft] Failed to restore in-flight tasks from storage:';
-          }),
-        { label: 'restore scan failure error log' },
-      );
 
-      expect(warningSpy).toHaveBeenCalled();
-      expect(errorSpy).toHaveBeenCalledWith(
-        '[weft] Failed to restore in-flight tasks from storage:',
-        expect.any(Error),
-      );
+      await expect(server.ready).rejects.toThrow('recovery scan failed');
+      await expect(
+        server.dispatchTask({
+          operationId: 'blocked-by-recovery-failure',
+          activityName: 'test.charge',
+          workflowType: 'test',
+          input: null,
+        }),
+      ).rejects.toThrow('startup task-ledger recovery failed');
     } finally {
       restoreScan();
-      warningSpy.mockRestore();
-      errorSpy.mockRestore();
     }
   });
 
-  it('cleans up expired in-flight records from storage on restart', async () => {
+  it('requeues (rather than deletes) an expired leased ledger record found during startup recovery', async () => {
     ({ engine, storage } = createEngineWithStorage());
 
-    // Pre-populate storage with an expired in-flight record
-    const expiredRecord = {
+    // Pre-populate storage with a leased ledger record whose lease already
+    // expired while the server was down. Startup recovery must conditionally
+    // requeue this through the same CAS path `scanExpiredTasks`/
+    // `reconcileOrphanedRecords` use — deletion (the retired
+    // `restoreInflightTasks` behavior) would silently drop the task.
+    const expiredRecord = makeLeasedLedgerRecord({
       operationId: 'expired-op',
-      workerId: 'old-worker',
-      deadline: Date.now() - 5000, // Already expired 5s ago
-      activityName: 'test.charge',
-      queue: 'default',
-      input: null,
-      attempt: 1,
-      visibilityTimeout: 30_000,
+      workerSessionId: 'old-worker',
+      leaseDeadline: Date.now() - 5_000, // Already expired 5s ago
       attemptToken: 'attempt-token-stale-expiry',
-    };
-    await storage.put(KEYS.operationInflight('expired-op'), encode(expiredRecord));
+      retryPolicy: {
+        maxAttempts: 5,
+        initialBackoff: '1s',
+        backoffMultiplier: 2,
+        maxBackoff: '30s',
+      },
+    });
+    await storage.put(taskLedgerKey('expired-op'), encodeRemoteTaskRecord(expiredRecord));
 
     server = serveTestServer({ engine, port: 0 });
-    await waitFor(async () => (await storage.get(KEYS.operationInflight('expired-op'))) === null, {
-      label: 'expired-op inflight record cleanup',
-    });
+    await waitFor(
+      async () => {
+        const record = await readLedgerRecord(storage, 'expired-op');
+        return record !== null && record.state === 'queued';
+      },
+      { label: 'expired-op ledger record to requeue' },
+    );
 
-    // The expired record should be removed from storage
-    const raw = await storage.get(KEYS.operationInflight('expired-op'));
-    expect(raw).toBeNull();
+    // The record survives, requeued rather than deleted.
+    const record = await readLedgerRecord(storage, 'expired-op');
+    expect(record).not.toBeNull();
+    if (record === null || record.state !== 'queued') {
+      throw new Error('Expected "expired-op" to have a queued ledger record');
+    }
+    expect(record.attempt).toBe(2);
 
-    // And not tracked in the registry
+    // No longer leased to the old worker.
     expect(server.registry.isAssigned('expired-op')).toBe(false);
   });
 });

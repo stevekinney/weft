@@ -1322,6 +1322,24 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       },
     ],
     [
+      'src/server/runtime/task-ledger-recovery.ts',
+      // The closed RemoteTaskRecord state union makes this default branch
+      // unreachable at runtime; it exists solely as a compile-time
+      // exhaustiveness guard (`recoverTaskLedgerRecord`'s switch), matching
+      // the identical pattern already allowed for
+      // `websocket-worker.ts`'s WorkerToServerMessage switch. `requireUncoveredLines`
+      // is intentionally omitted for the same reason it is omitted there:
+      // `default: {` (156) is a case-label/brace line that flips between hit
+      // and unhit run to run with byte-identical source — a coverage-attribution
+      // artifact, not a real reachability signal — so only the two dead
+      // statements inside it (159, 160) are guaranteed to read 0 every run.
+      {
+        reason:
+          'Compile-time exhaustiveness guard for a closed discriminated union has no reachable runtime path to test without an unsafe cast.',
+        lines: new Set([156, 157, 158, 159, 160]),
+      },
+    ],
+    [
       'src/server/runtime/task-result-resolution.ts',
       {
         reason:
@@ -1344,19 +1362,21 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       // The closed WorkerToServerMessage union makes this default branch
       // unreachable at runtime; it exists solely as a compile-time
       // exhaustiveness guard: the `}` closing the preceding `taskResult`
-      // case (347), `case 'heartbeat': {` / its closing `}` (348, 351),
-      // `default: {` (352), and the two dead statements inside it,
-      // `const _exhaustive` / `return _exhaustive` (355, 356). Only 355 and
-      // 356 are deterministically 0 across every run; the other four
+      // case (340), `case 'heartbeat': {` / its closing `}` (341, 344),
+      // `default: {` (345), and the two dead statements inside it,
+      // `const _exhaustive` / `return _exhaustive` (348, 349). Only 348 and
+      // 349 are deterministically 0 across every run; the other four
       // case-label and brace lines around them flip between hit and unhit
       // run to run with byte-identical source — a switch-statement
       // coverage-attribution artifact, not a real reachability signal — so
       // `requireUncoveredLines` is intentionally omitted here rather than
-      // chasing whichever subset happens to be 0 in a given run.
+      // chasing whichever subset happens to be 0 in a given run. (Line
+      // numbers shifted -7 from the WFT-22 baseline when WFT-23 removed the
+      // module's now-dead `isInflightRecord` re-export.)
       {
         reason:
           'Transport disconnect and concurrency exits are behaviorally tested, but Bun does not deterministically attribute these residual paths.',
-        lines: new Set([347, 348, 351, 352, 355, 356]),
+        lines: new Set([340, 341, 344, 345, 348, 349]),
       },
     ],
     [

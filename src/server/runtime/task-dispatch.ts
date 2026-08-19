@@ -43,13 +43,20 @@ function clampVisibilityTimeout(value: number | undefined): number {
   return Math.min(Math.max(value, MIN_VISIBILITY_TIMEOUT), MAX_VISIBILITY_TIMEOUT);
 }
 
-/** Schedule a delayed dispatch, tracking the timer for cleanup on shutdown. */
+/**
+ * Schedule a delayed dispatch, tracking the timer for cleanup on shutdown.
+ *
+ * No-ops once `context.stopping` is set — `server.stop()`'s timer-clearing
+ * disposer has already run by then, so arming a new timer here would leak a
+ * callback that fires against a stopped server instead of being cleared.
+ */
 export function scheduleDelayedDispatch(
   context: ServerContext,
   options: ServeOptions,
   task: TaskDispatch,
   delay: number,
 ): void {
+  if (context.stopping) return;
   const timer = setTimeout(() => {
     context.pendingTimers.delete(timer);
     void dispatchTaskImpl(context, options, task).catch((err) =>
@@ -401,6 +408,20 @@ export async function dispatchTaskImpl(
   options: ServeOptions,
   task: TaskDispatch,
 ): Promise<boolean> {
+  // Gate on startup task-ledger recovery (WFT-23) — covers both the public
+  // `WeftServer.dispatchTask` entry point and `scheduleDelayedDispatch`'s
+  // timer callback, which also calls this function directly. A rejected
+  // gate means the recovery scan itself failed; propagate that failure
+  // loudly rather than silently returning false, which callers would read
+  // as an ordinary "no worker available" outcome.
+  try {
+    await context.taskLedgerRecovery.ready;
+  } catch (error) {
+    throw new Error(
+      `Cannot dispatch task "${task.operationId}" — startup task-ledger recovery failed: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
   if (!task.workflowType) {
     throw new Error(
       `TaskDispatch for operation "${task.operationId}" is missing required field "workflowType".`,
