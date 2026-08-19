@@ -8,11 +8,13 @@ export interface WorkerExecutionStrategyOptions {
   discardOnCancel?: boolean;
   /**
    * Require every freshly acquired worker to complete the realm-ready
-   * handshake (WFT-28) — send a valid `ready` message whose manifest digest
-   * matches {@link getExpectedWorkflowTypes} — before it receives its first
-   * `run` turn. Defaults to `false` so direct/test construction of this
-   * class is unaffected; `createExecutionStrategyBundle` hardcodes this to
-   * `true` for every engine-constructed worker-mode strategy, mirroring how
+   * handshake (WFT-28) — send a valid `ready` message whose manifest
+   * contains a matching contract for every type in
+   * {@link getExpectedWorkflowTypes} (a subset check, not exact-manifest
+   * equality) — before it receives its first `run` turn. Defaults to
+   * `false` so direct/test construction of this class is unaffected;
+   * `createExecutionStrategyBundle` hardcodes this to `true` for every
+   * engine-constructed worker-mode strategy, mirroring how
    * `requireProtocolVersion` is already hardcoded there.
    */
   requireRealmReady?: boolean;
