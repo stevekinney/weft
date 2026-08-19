@@ -226,7 +226,7 @@ const BASE_COVERAGE_ALLOWANCES = buildAllowanceLayer('BASE_COVERAGE_ALLOWANCES',
       reason:
         'Process-entry and failure-exit behavior runs in child processes whose hits are not attributed to the parent Bun LCOV report.',
       functions: 1,
-      lines: new Set([389, 390]),
+      lines: new Set([383, 384]),
       requireUncoveredLines: true,
     },
   ],
@@ -1043,7 +1043,28 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
         reason:
           'Process-entry and failure-exit behavior runs in child processes whose hits are not attributed to the parent Bun LCOV report.',
         functions: 1,
-        lines: new Set([55, 106, 128, 141, 151, 152, 168, 169, 222, 294, 332]),
+        lines: new Set([50, 101, 123, 136, 146, 147, 163, 164, 219, 292, 344]),
+        requireUncoveredLines: true,
+      },
+    ],
+    [
+      'src/core/events/activity-events.ts',
+      // TaskResultDeadLetteredEvent's constructor is public API (exported from
+      // src/index.ts, registered in event-map.ts, consulted by
+      // client-visible-events.ts) but has zero live callers: WFT-22 removed
+      // the old dead-letter-fallback write path that used to dispatch it, and
+      // the ledger-native Completing -> DeadLettered transition that will
+      // dispatch it again is WFT-24 scope. Keep the class rather than delete
+      // it — WFT-24 needs this exact shape — and allowance its constructor
+      // until that transition exists.
+      {
+        reason:
+          'TaskResultDeadLetteredEvent has zero live dispatchers between the WFT-22 dead-letter-fallback removal and the WFT-24 ledger-native DeadLettered transition that will dispatch it again.',
+        functions: 1,
+        lines: new Set([
+          174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191,
+          192, 193, 194, 195,
+        ]),
         requireUncoveredLines: true,
       },
     ],
@@ -1323,10 +1344,10 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       // The closed WorkerToServerMessage union makes this default branch
       // unreachable at runtime; it exists solely as a compile-time
       // exhaustiveness guard: the `}` closing the preceding `taskResult`
-      // case (315), `case 'heartbeat': {` / its closing `}` (316, 319),
-      // `default: {` (320), and the two dead statements inside it,
-      // `const _exhaustive` / `return _exhaustive` (323, 324). Only 323 and
-      // 324 are deterministically 0 across every run; the other four
+      // case (347), `case 'heartbeat': {` / its closing `}` (348, 351),
+      // `default: {` (352), and the two dead statements inside it,
+      // `const _exhaustive` / `return _exhaustive` (355, 356). Only 355 and
+      // 356 are deterministically 0 across every run; the other four
       // case-label and brace lines around them flip between hit and unhit
       // run to run with byte-identical source — a switch-statement
       // coverage-attribution artifact, not a real reachability signal — so
@@ -1335,7 +1356,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       {
         reason:
           'Transport disconnect and concurrency exits are behaviorally tested, but Bun does not deterministically attribute these residual paths.',
-        lines: new Set([315, 316, 319, 320, 323, 324]),
+        lines: new Set([347, 348, 351, 352, 355, 356]),
       },
     ],
     [

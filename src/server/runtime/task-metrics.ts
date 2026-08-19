@@ -5,8 +5,7 @@ import {
   calculateExecutionLatencyMs,
   calculateQueueLatencyMs,
   isHeartbeatStale,
-  type InflightRecord,
-  type ResolvedRecord,
+  type TaskTimingFields,
 } from '../task-state.ts';
 
 const DEFAULT_STALE_HEARTBEAT_METRIC_AFTER_MS = 60_000;
@@ -20,7 +19,7 @@ export function recordTaskBacklogMetric(
 
 export function recordTaskQueueLatencyMetric(
   metricsCollector: MetricsCollector | undefined,
-  record: InflightRecord | ResolvedRecord,
+  record: TaskTimingFields,
 ): void {
   const latency = calculateQueueLatencyMs(record);
   if (latency !== undefined) {
@@ -30,7 +29,7 @@ export function recordTaskQueueLatencyMetric(
 
 export function recordTaskExecutionLatencyMetric(
   metricsCollector: MetricsCollector | undefined,
-  record: InflightRecord | ResolvedRecord,
+  record: TaskTimingFields,
   completedAt: number,
 ): void {
   const latency = calculateExecutionLatencyMs(record, completedAt);
@@ -54,7 +53,7 @@ export function recordTaskRequeueMetric(
 }
 
 export function isTaskHeartbeatStaleForMetrics(
-  record: InflightRecord,
+  record: TaskTimingFields & { deadline?: number | undefined },
   currentTime: number,
   staleAfterMs: number = DEFAULT_STALE_HEARTBEAT_METRIC_AFTER_MS,
 ): boolean {

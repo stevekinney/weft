@@ -37,13 +37,23 @@ import type { WorkerExecutionIdentity } from '../worker/manifest/types.ts';
  * `rebuildWorkflowIndex` has a real, non-test code path that tolerates a
  * restored in-flight record with no `workflowId`. Making it required here
  * would silently break that existing, exercised behavior.
+ *
+ * `workflowExecutionToken` is optional for the same reason: the public
+ * `TaskDispatch.workflowExecutionToken` (`server/index.ts`) is already
+ * `string | undefined` for standalone remote-activity dispatch outside any
+ * durable workflow run, and every other declaration of this field in the
+ * codebase (`task-state.ts`, `task-queue-types.ts`, the core execution
+ * strategies) is optional too. Absence means "not workflow-bound" and must
+ * never be defaulted to an empty string — this field is documented
+ * elsewhere as an external write fence, so a shared `''` sentinel would let
+ * unrelated standalone tasks appear to hold the same fence.
  */
 export type RemoteTaskBase = Readonly<{
   recordVersion: 1;
   operationId: string;
   workflowId?: string;
   workflowType: string;
-  workflowExecutionToken: string;
+  workflowExecutionToken?: string;
   activityName: string;
   queue: string;
   input: JSONValue;
@@ -127,8 +137,19 @@ export type RemoteTaskLeased = RemoteTaskBase &
      * slice's scope.
      */
     workerSessionId: string;
-    /** Complete observed identity of the worker holding the lease — see `WorkerExecutionIdentity` in `worker/manifest/types.ts`. */
-    executionIdentity: WorkerExecutionIdentity;
+    /**
+     * Complete observed identity of the worker holding the lease — see
+     * `WorkerExecutionIdentity` in `worker/manifest/types.ts`. Optional
+     * because `buildWorkerExecutionIdentity` returns `undefined` whenever the
+     * claiming worker has no registered manifest entry for this
+     * workflowType/activityName pair — which is the *only* case for every
+     * long-poll claim (long-poll workers never call `WorkerRegistry.register`,
+     * so they never have a manifest) and can also occur for a WebSocket
+     * worker whose manifest doesn't cover the dispatched activity. Absence
+     * here means "no verifiable provenance was available at claim time," not
+     * "provenance was skipped" — nothing fabricates a placeholder identity.
+     */
+    executionIdentity?: WorkerExecutionIdentity;
     attempt: number;
     leaseDeadline: number;
     firstQueuedAt: number;
@@ -147,7 +168,7 @@ export type RemoteTaskCompleting = RemoteTaskBase &
     state: 'completing';
     attemptToken: string;
     workerSessionId: string;
-    executionIdentity: WorkerExecutionIdentity;
+    executionIdentity?: WorkerExecutionIdentity;
     attempt: number;
     leaseDeadline: number;
     firstQueuedAt: number;
@@ -179,7 +200,7 @@ export type RemoteTaskCancelling = RemoteTaskBase &
      */
     attemptToken: string;
     workerSessionId: string;
-    executionIdentity: WorkerExecutionIdentity;
+    executionIdentity?: WorkerExecutionIdentity;
     attempt: number;
     leaseDeadline: number;
     firstQueuedAt: number;

@@ -287,6 +287,25 @@ export class WorkerRegistry {
     this.taskAssigned(workerId);
   }
 
+  /**
+   * Undo exactly `assignTask`'s effects — capacity increment, fair-share
+   * count, and the in-flight entry — when the durable claim that was
+   * supposed to follow the reservation never committed. Distinct from
+   * {@link completeTask} even though the body is identical: this path means
+   * "the reservation was never realized," not "the task finished," and
+   * keeping the names apart stops a reader from mistaking an aborted claim
+   * for a normal completion at the call site.
+   */
+  releaseReservation(operationId: string): InFlightTask | undefined {
+    const task = this.#inFlightTasks.get(operationId);
+    if (task === undefined) return undefined;
+
+    this.#inFlightTasks.delete(operationId);
+    this.taskCompleted(task.workerId);
+    this.#releaseFairShare(task);
+    return task;
+  }
+
   /** Return tasks whose deadline has passed and remove them from tracking. */
   checkExpiredTasks(now: number): InFlightTask[] {
     const expired: InFlightTask[] = [];

@@ -1,14 +1,14 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
-import { decode } from '../../core/codec.ts';
 import { Engine } from '../../core/engine.ts';
 import { setActivityWorkerDispatcherForTesting } from '../../core/engine/activity-worker-dispatcher.test-support.ts';
 import { serve, type WeftServer } from '../../server/index.ts';
-import type { ResolvedRecord } from '../../server/task-state.ts';
-import { KEYS } from '../../storage/interface.ts';
+import type { RemoteTaskTerminalResolved } from '../../server/task-ledger-types.ts';
+import { decodeRemoteTaskRecord, taskLedgerKey } from '../../server/task-ledger.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { TestEngine } from '../../testing/test-engine.ts';
 import { RemoteWorker } from '../../worker/index.ts';
+import { sha256Hex } from '../../worker/manifest/content-digest.ts';
 import type {
   ActivityExecutionRequest,
   ActivityExecutionResult,
@@ -42,9 +42,27 @@ async function waitForQuery<T>(
   return latestResult;
 }
 
-async function readResolvedRecord(engine: Engine, operationId: string): Promise<ResolvedRecord> {
+/**
+ * Wait for and read a task's terminal record from the durable ledger
+ * (WFT-22). Unlike the retired `op:resolved:` record, the ledger's terminal
+ * record proves *which* attempt won via `resultDigest` — it does not persist
+ * the completed value durably. Delivering that value into a workflow's
+ * `ctx.run()` continuation is WFT-24 ("Adoption, Retention, and
+ * Diagnostics") territory: its own brief frames this exact split — "the task
+ * terminal state proves which attempt won; the workflow checkpoint proves
+ * the workflow incorporated it." See the digest-based assertion below for
+ * what WFT-22 actually guarantees for a completed result.
+ */
+async function readTerminalRecord(
+  engine: Engine,
+  operationId: string,
+): Promise<RemoteTaskTerminalResolved> {
+  const key = taskLedgerKey(operationId);
   await waitForCondition(
-    async () => (await engine.storage.get(KEYS.operationResolved(operationId))) !== null,
+    async () => {
+      const record = decodeRemoteTaskRecord(await engine.storage.get(key));
+      return record !== null && record.state === 'terminal';
+    },
     {
       timeoutMs: 5_000,
       intervalMs: 25,
@@ -52,12 +70,12 @@ async function readResolvedRecord(engine: Engine, operationId: string): Promise<
     },
   );
 
-  const value = await engine.storage.get(KEYS.operationResolved(operationId));
-  if (value === null) {
-    throw new Error(`Operation "${operationId}" did not write a resolved record`);
+  const record = decodeRemoteTaskRecord(await engine.storage.get(key));
+  if (record === null || record.state !== 'terminal' || record.disposition !== 'resolved') {
+    throw new Error(`Operation "${operationId}" did not reach a resolved terminal record`);
   }
 
-  return decode(value) as ResolvedRecord;
+  return record;
 }
 
 function installRemoteWorkerDispatcher(engine: Engine, server: WeftServer): void {
@@ -72,6 +90,7 @@ function installRemoteWorkerDispatcher(engine: Engine, server: WeftServer): void
       const dispatched = await server.dispatchTask({
         operationId: request.operationId,
         activityName: advertisedActivityName,
+        workflowType: 'greeting',
         input: request.input,
         workflowId: 'parity-remote-workflow-id',
       });
@@ -83,7 +102,7 @@ function installRemoteWorkerDispatcher(engine: Engine, server: WeftServer): void
         };
       }
 
-      const resolved = await readResolvedRecord(engine, request.operationId);
+      const resolved = await readTerminalRecord(engine, request.operationId);
       if (resolved.status === 'failed') {
         return {
           operationId: request.operationId,
@@ -92,10 +111,12 @@ function installRemoteWorkerDispatcher(engine: Engine, server: WeftServer): void
         };
       }
 
+      // No `value` field: the durable ledger never persists the completed
+      // payload (see readTerminalRecord's doc comment). A caller that needs
+      // the real value cannot get it through this bridge today.
       return {
         operationId: request.operationId,
         status: 'completed',
-        value: resolved.value,
       };
     },
     [Symbol.dispose]() {},
@@ -226,41 +247,44 @@ describe('durable state, remote worker, and testing-harness parity', () => {
       label: 'remote worker to register',
     });
 
-    const formatGreeting = activity({
-      name: 'formatGreeting',
-      execute: async (_input: { name: string }) => 'inline fallback should not run',
-    });
     const failGreeting = activity({
       name: 'failGreeting',
       execute: async () => 'inline fallback should not run',
     });
-    const remoteGreetingWorkflow = workflow({ name: 'parity-remote-greeting' }).execute(
-      async function* (context: WorkflowContext, input: { name: string }) {
-        return yield* context.run(formatGreeting, input);
-      },
-    );
     const remoteFailureWorkflow = workflow({ name: 'parity-remote-failure' }).execute(
       async function* (context: WorkflowContext) {
         return yield* context.run(failGreeting);
       },
     );
-    engine.register(remoteGreetingWorkflow);
     engine.register(remoteFailureWorkflow);
 
-    const handle = await engine.start('parity-remote-greeting', { name: 'Ada' });
-    await expect(handle.result()).resolves.toBe('Hello, Ada');
+    // Proves WFT-22's actual guarantee for a completed remote activity: a
+    // real WebSocket RemoteWorker executes the real activity, and the exact
+    // value it returns is durably provable via `resultDigest` on the
+    // terminal ledger record. This dispatches directly (bypassing
+    // `ctx.run()`/`ActivityWorkerDispatcher`) because the durable ledger does
+    // not persist the completed value itself — delivering that value into a
+    // workflow continuation is WFT-24 ("Adoption, Retention, and
+    // Diagnostics") territory; see readTerminalRecord's doc comment.
+    const directGreetingOperationId = 'parity-direct-greeting';
+    const directDispatched = await server.dispatchTask({
+      operationId: directGreetingOperationId,
+      activityName: 'greeting.formatGreeting',
+      workflowType: 'greeting',
+      input: { name: 'Ada' },
+      workflowId: 'parity-remote-workflow-id',
+    });
+    expect(directDispatched).toBe(true);
 
-    const resolvedOperations = await Array.fromAsync(engine.storage.scan('op:resolved:'));
-    const completedOperation = resolvedOperations
-      .map(([, value]) => decode(value) as ResolvedRecord)
-      .find((record) => record.activityName === 'greeting.formatGreeting');
-    expect(completedOperation).toMatchObject({
+    const directResolved = await readTerminalRecord(engine, directGreetingOperationId);
+    expect(directResolved).toMatchObject({
       status: 'completed',
-      value: 'Hello, Ada',
       activityName: 'greeting.formatGreeting',
       workflowId: 'parity-remote-workflow-id',
-      workerId: 'parity-remote-worker',
     });
+    expect(directResolved.resultDigest).toBe(
+      await sha256Hex(JSON.stringify({ status: 'completed', value: 'Hello, Ada', error: null })),
+    );
     expect(executedInputs).toEqual([{ name: 'Ada' }]);
 
     const failedHandle = await engine.start('parity-remote-failure', null);
@@ -274,16 +298,23 @@ describe('durable state, remote worker, and testing-harness parity', () => {
       },
     );
 
-    const finalResolvedOperations = await Array.fromAsync(engine.storage.scan('op:resolved:'));
-    const failedOperation = finalResolvedOperations
-      .map(([, value]) => decode(value) as ResolvedRecord)
-      .find((record) => record.activityName === 'greeting.failGreeting');
+    const failedOperation = await Array.fromAsync(engine.storage.scan('task-ledger:')).then(
+      (entries) =>
+        entries
+          .map(([, value]) => decodeRemoteTaskRecord(value))
+          .find(
+            (record): record is RemoteTaskTerminalResolved =>
+              record !== null &&
+              record.state === 'terminal' &&
+              record.disposition === 'resolved' &&
+              record.activityName === 'greeting.failGreeting',
+          ),
+    );
     expect(failedOperation).toMatchObject({
       status: 'failed',
       error: expect.stringContaining('remote greeting failed'),
       activityName: 'greeting.failGreeting',
       workflowId: 'parity-remote-workflow-id',
-      workerId: 'parity-remote-worker',
     });
     expect(server.registry.getWorker('parity-remote-worker')?.inFlight).toBe(0);
   });

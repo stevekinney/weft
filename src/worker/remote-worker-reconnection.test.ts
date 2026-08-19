@@ -16,10 +16,13 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { decode } from '../core/codec.ts';
 import { Engine } from '../core/engine.ts';
 import { serve, type ServeOptions, type WeftServer } from '../server/index.ts';
-import { KEYS } from '../storage/interface.ts';
+import {
+  decodeRemoteTaskRecord,
+  isRemoteTaskTerminalResolved,
+  taskLedgerKey,
+} from '../server/task-ledger.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { sleepForTesting, waitForCondition } from '../testing/fake-timers.test-support.ts';
 import {
@@ -32,6 +35,7 @@ import {
   type FaultInjectingWorker,
 } from '../testing/worker-fault-injection.test-support.ts';
 import { RemoteWorker } from './index.ts';
+import { sha256Hex } from './manifest/content-digest.ts';
 import type { WorkerManifest, WorkerWorkflowContract } from './manifest/index.ts';
 import { WORKER_MANIFEST_VERSION } from './manifest/index.ts';
 import type { ServerToWorkerMessage, TaskMessage } from './protocol.ts';
@@ -158,25 +162,34 @@ function isTask(message: ServerToWorkerMessage): message is TaskMessage {
   return message.type === 'task';
 }
 
+/** Reads the durable ledger's terminal-resolved record, or `null` if the operation hasn't resolved yet. */
 async function readResolvedRecord(engine: Engine, operationId: string): Promise<unknown> {
-  return engine.storage.get(KEYS.operationResolved(operationId));
+  const record = decodeRemoteTaskRecord(await engine.storage.get(taskLedgerKey(operationId)));
+  return isRemoteTaskTerminalResolved(record) ? record : null;
 }
 
-/** Wait until the inflight record is absent (null/undefined). */
+/**
+ * Wait until the ledger record for `operationId` has left the actively-held
+ * `leased`/`completing` states — either it reached `terminal` (the usual
+ * case, always checked via `readResolvedRecord` immediately before this at
+ * every call site in this file) or was requeued back to `queued` after a
+ * disconnect. Post-cutover (WFT-22) there is no separate "inflight record"
+ * to clear — the single ledger record's `state` field is the whole story.
+ */
 async function waitForInflightCleared(
   engine: Engine,
   operationId: string,
   options: { timeoutMs?: number } = {},
 ): Promise<void> {
   const deadline = Date.now() + (options.timeoutMs ?? 2_000);
-  let value: unknown;
+  let record: ReturnType<typeof decodeRemoteTaskRecord> = null;
   while (Date.now() < deadline) {
-    value = await engine.storage.get(KEYS.operationInflight(operationId));
-    if (value === undefined || value === null) return;
+    record = decodeRemoteTaskRecord(await engine.storage.get(taskLedgerKey(operationId)));
+    if (record === null || (record.state !== 'leased' && record.state !== 'completing')) return;
     await sleepForTesting(5);
   }
   throw new Error(
-    `Timed out waiting for inflight record of "${operationId}" to clear; last value type=${typeof value}, length=${(value as Uint8Array | null | undefined)?.byteLength ?? 'n/a'}`,
+    `Timed out waiting for the ledger record of "${operationId}" to leave the leased/completing state; last state=${record?.state ?? 'absent'}`,
   );
 }
 
@@ -191,6 +204,7 @@ describe('RemoteWorker durability — scanner-driven takeover', () => {
     void setup.server.dispatchTask({
       operationId,
       activityName: 'test.echo',
+      workflowType: 'test',
       input: { value: 'v' },
       // The visibilityTimeout governs BOTH worker-a's expiry (drives the
       // takeover) and worker-b's expiry (after takeover B has this long to
@@ -266,6 +280,7 @@ describe('RemoteWorker durability — idempotent duplicate completion (different
     void setup.server.dispatchTask({
       operationId,
       activityName: 'test.echo',
+      workflowType: 'test',
       input: { value: 'real' },
       visibilityTimeout: 30_000, // long — we drive takeover via hardClose
     });
@@ -299,10 +314,10 @@ describe('RemoteWorker durability — idempotent duplicate completion (different
     expect(protocolError.message).toContain(operationId);
 
     // Workflow attempt is still in flight on B at this point — no resolved record.
-    const inflightDuring2a = await setup.engine.storage.get(KEYS.operationInflight(operationId));
-    expect(inflightDuring2a !== undefined && inflightDuring2a !== null).toBe(true);
-    const resolvedDuring2a = await setup.engine.storage.get(KEYS.operationResolved(operationId));
-    expect(resolvedDuring2a === undefined || resolvedDuring2a === null).toBe(true);
+    const recordDuring2a = decodeRemoteTaskRecord(
+      await setup.engine.storage.get(taskLedgerKey(operationId)),
+    );
+    expect(recordDuring2a?.state).toBe('leased');
 
     // Worker-b completes the real attempt.
     workerB.send({
@@ -358,6 +373,7 @@ describe('RemoteWorker durability — same-worker stale attempt (attempt token)'
     void setup.server.dispatchTask({
       operationId,
       activityName: 'test.echo',
+      workflowType: 'test',
       input: { value: 'v' },
       // Short enough that attempt 1 expires and the scanner (20ms poll) re-
       // dispatches to the only worker as attempt 2, but long enough that the
@@ -428,8 +444,15 @@ describe('RemoteWorker durability — same-worker stale attempt (attempt token)'
     }
     expect(resolved !== undefined && resolved !== null).toBe(true);
     // The fresh attempt's value won; the rejected stale completion never wrote.
-    const resolvedRecord = decode(resolved as Uint8Array) as { value?: unknown };
-    expect(resolvedRecord.value).toBe('fresh-attempt-2');
+    // Terminal ledger records don't persist the value itself (see
+    // readTerminalRecord's doc comment in state-worker-harness.parity.test.ts)
+    // — prove it durably via the content digest instead.
+    const resolvedRecord = resolved as { resultDigest?: string };
+    expect(resolvedRecord.resultDigest).toBe(
+      await sha256Hex(
+        JSON.stringify({ status: 'completed', value: 'fresh-attempt-2', error: null }),
+      ),
+    );
     await waitForInflightCleared(setup.engine, operationId);
   });
 });
@@ -448,6 +471,7 @@ describe('RemoteWorker durability — transient reconnect continuity', () => {
     void setup.server.dispatchTask({
       operationId,
       activityName: 'test.echo',
+      workflowType: 'test',
       input: { value: 'v' },
       visibilityTimeout: 30_000,
     });
@@ -541,6 +565,7 @@ describe('RemoteWorker durability — backpressure decline is redelivered', () =
       // The SDK worker advertises the qualified `orders.echo` name; the raw
       // worker-B below registers the same name so the redelivery routes to it.
       activityName: 'orders.echo',
+      workflowType: 'orders',
       input: { value: 'v' },
       visibilityTimeout: 5_000,
     });
@@ -624,10 +649,12 @@ describe('RemoteWorker durability — server restart while task is in flight', (
     const indexUrl = new URL('src/index.ts', repoRoot).href;
     const serverUrl = new URL('src/server/index.ts', repoRoot).href;
     const sqliteUrl = new URL('src/storage/bun-sql.ts', repoRoot).href;
+    const taskLedgerUrl = new URL('src/server/task-ledger.ts', repoRoot).href;
     return `
 import { Engine, activity } from ${JSON.stringify(indexUrl)};
 import { serve } from ${JSON.stringify(serverUrl)};
 import { BunSQLiteStorage } from ${JSON.stringify(sqliteUrl)};
+import { decodeRemoteTaskRecord, isRemoteTaskTerminalResolved, taskLedgerKey } from ${JSON.stringify(taskLedgerUrl)};
 
 function readArgument(name, fallback) {
   const index = Bun.argv.indexOf(name);
@@ -655,9 +682,8 @@ const server = serve({
 // worker is registered, so the dispatch can immediately land on the
 // connected worker.
 async function readResolvedKey(operationId) {
-  const key = 'op:resolved:' + operationId;
-  const raw = await engine.storage.get(key);
-  return raw === undefined || raw === null ? null : { present: true };
+  const record = decodeRemoteTaskRecord(await engine.storage.get(taskLedgerKey(operationId)));
+  return isRemoteTaskTerminalResolved(record) ? { present: true } : null;
 }
 
 const testServer = Bun.serve({
@@ -670,6 +696,7 @@ const testServer = Bun.serve({
       const ok = await server.dispatchTask({
         operationId: body.operationId,
         activityName: 'test.echo',
+        workflowType: 'test',
         input: { value: body.value },
         visibilityTimeout: body.visibilityTimeout,
       });

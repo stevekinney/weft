@@ -1,11 +1,9 @@
 import type { ServerWebSocket } from 'bun';
 
-import { decode } from '../../core/codec.ts';
 import type { Engine, RegistryAgnosticEngine } from '../../core/engine.ts';
 import { WorkerDisconnectedEvent } from '../../core/events.ts';
 import { handleMcpHttpRequest } from '../../mcp/http.ts';
 import type { PrometheusExporter } from '../../observability/metrics.ts';
-import { KEYS } from '../../storage/interface.ts';
 import type { AuthConfig, AuthContext } from '../authentication.ts';
 import type { HandlerOptions } from '../handler.ts';
 import { authContextToPrincipal, handleRequest } from '../handler.ts';
@@ -19,6 +17,7 @@ import {
 } from '../json-rpc-websocket-runtime.ts';
 import type { OpenApiSecuritySchemeName } from '../openapi.ts';
 import { API_PREFIX } from '../route-model.ts';
+import { decodeRemoteTaskRecord, taskLedgerKey } from '../task-ledger.ts';
 import type { ServerContext } from './context.ts';
 import { buildPreflightResponse, decorateResponseWithCors, isPreflightRequest } from './cors.ts';
 import { gateRequest } from './request-gate.ts';
@@ -35,7 +34,7 @@ import {
   replayWatchEvents,
 } from './websocket-stream.ts';
 import { handleWebSocketUpgrade } from './websocket-upgrade.ts';
-import { handleWorkerWebSocketMessage, isInflightRecord } from './websocket-worker.ts';
+import { handleWorkerWebSocketMessage } from './websocket-worker.ts';
 
 type ServerFetchOptions = {
   // Widened to `RegistryAgnosticEngine` (see its JSDoc / #708) to match the
@@ -463,17 +462,11 @@ function runWorkerDisconnectRequeue(
   for (const task of inFlightTasks) {
     void (async () => {
       try {
-        const inflightKey = KEYS.operationInflight(task.operationId);
-        const existing = await options.engine.storage.get(inflightKey);
+        const record = decodeRemoteTaskRecord(
+          await options.engine.storage.get(taskLedgerKey(task.operationId)),
+        );
 
-        if (existing) {
-          const record = decode(existing);
-          if (!isInflightRecord(record)) {
-            console.error(
-              `[weft] Corrupt inflight record for task "${task.operationId}" — skipping reassignment`,
-            );
-            return;
-          }
+        if (record !== null && record.state === 'leased') {
           await reassignOrExpireTask(
             context,
             options,
@@ -482,11 +475,11 @@ function runWorkerDisconnectRequeue(
             'worker-disconnect',
           );
         } else {
-          // Storage write hadn't committed — clean up the key just in case.
+          // Storage write hadn't committed, or a result/timeout/cancellation
+          // already settled this attempt — nothing to reassign.
           console.warn(
-            `[weft] No inflight record found in storage for task "${task.operationId}" — skipping reassignment`,
+            `[weft] No leased ledger record found for task "${task.operationId}" — skipping reassignment`,
           );
-          await options.engine.storage.delete(inflightKey);
         }
       } catch (error) {
         console.error(

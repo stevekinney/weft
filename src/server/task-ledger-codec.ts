@@ -156,6 +156,10 @@ function isValidExecutionIdentity(value: unknown): value is WorkerExecutionIdent
   );
 }
 
+function isOptionalExecutionIdentity(value: unknown): boolean {
+  return value === undefined || isValidExecutionIdentity(value);
+}
+
 /** Validates the identity-shaped subset of {@link RemoteTaskBase}. */
 function isValidTaskIdentityFields(value: Record<string, unknown>): boolean {
   return (
@@ -163,7 +167,7 @@ function isValidTaskIdentityFields(value: Record<string, unknown>): boolean {
     isBoundedIdentifier(value['operationId']) &&
     isBoundedOptionalIdentifier(value['workflowId']) &&
     isBoundedIdentifier(value['workflowType']) &&
-    isBoundedIdentifier(value['workflowExecutionToken']) &&
+    isBoundedOptionalIdentifier(value['workflowExecutionToken']) &&
     isBoundedIdentifier(value['activityName']) &&
     isBoundedIdentifier(value['queue'])
   );
@@ -215,7 +219,7 @@ function isValidLeaseHolderShape(value: Record<string, unknown>): boolean {
     isValidAttemptFields(value) &&
     isBoundedIdentifier(value['attemptToken']) &&
     isBoundedIdentifier(value['workerSessionId']) &&
-    isValidExecutionIdentity(value['executionIdentity']) &&
+    isOptionalExecutionIdentity(value['executionIdentity']) &&
     isFiniteNumber(value['attempt']) &&
     isFiniteNumber(value['leaseDeadline']) &&
     isFiniteNumber(value['firstQueuedAt']) &&
@@ -367,8 +371,7 @@ export function encodeRemoteTaskRecord(record: RemoteTaskRecord): Uint8Array {
 
 /**
  * Decode and validate a task ledger record. Returns `null` when the bytes are
- * absent or decode to a value that fails bounds validation — matching
- * `readQueuedRecord`/`readInflightRecord` in `task-state.ts`, this does not
+ * absent or decode to a value that fails bounds validation. This does not
  * catch `decode()` throwing on bytes that are not valid MessagePack; storage
  * bytes are always ones this codebase wrote, so byte-level corruption is
  * treated as a storage integrity failure worth surfacing, not swallowing.

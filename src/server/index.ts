@@ -8,6 +8,7 @@
 import type { Engine, RegistryAgnosticEngine } from '../core/engine.ts';
 import type { RetryPolicy } from '../core/types.ts';
 import type { PrometheusExporter } from '../observability/metrics.ts';
+import { requireStorageCapability } from '../storage/interface.ts';
 import type { RoutingPolicy } from '../worker/registry.ts';
 import { WorkerRegistry } from '../worker/registry.ts';
 import type { AuthConfig, RateLimitConfig } from './authentication.ts';
@@ -356,10 +357,10 @@ export interface ServeOptions {
  * Descriptor for a task dispatched to a remote worker via
  * {@link WeftServer.dispatchTask}.
  *
- * `operationId` and `activityName` are required; all other fields refine
- * routing, retry behaviour, and priority.  Set `sticky: true` together with
- * `workflowId` to route the task to the worker that last handled tasks for
- * that workflow.
+ * `operationId`, `activityName`, and `workflowType` are required; all other
+ * fields refine routing, retry behaviour, and priority.  Set `sticky: true`
+ * together with `workflowId` to route the task to the worker that last
+ * handled tasks for that workflow.
  *
  * @example
  * ```ts
@@ -368,6 +369,7 @@ export interface ServeOptions {
  * const task: TaskDispatch = {
  *   operationId: crypto.randomUUID(),
  *   activityName: 'sendEmail',
+ *   workflowType: 'notifications',
  *   input: { to: 'user@example.com', subject: 'Hello' },
  *   queue: 'email',
  *   retryPolicy: { maxAttempts: 3, initialBackoff: '1s', backoffMultiplier: 2, maxBackoff: '30s' },
@@ -379,9 +381,17 @@ export interface TaskDispatch {
   operationId: string;
   activityName: string;
   input: unknown;
-  attempt?: number;
   /** Queue to dispatch the task to. Defaults to `'default'`. */
   queue?: string;
+  /**
+   * The dispatching workflow's registered type. Required — the durable task
+   * ledger's envelope (`RemoteTaskBase.workflowType`) is required, and
+   * `buildWorkerExecutionIdentity` needs it to look up the claiming worker's
+   * manifest entry (`manifest.workflows[workflowType].activities[activityName]`).
+   * `dispatchTaskImpl` rejects a call missing this field with an actionable
+   * error rather than defaulting it — there is no safe placeholder value.
+   */
+  workflowType: string;
   /** Workflow ID. Required for sticky routing to track worker affinity. */
   workflowId?: string | undefined;
   /** Durable token for the workflow run that launched this task, when known. */
@@ -494,6 +504,17 @@ export interface WeftServer extends AsyncDisposable {
  * ```
  */
 export function serve(options: ServeOptions): WeftServer {
+  // Every serve() call constructs a WorkerRegistry/TaskQueue that dispatches
+  // through the durable remote task ledger (WFT-22) — claim, heartbeat,
+  // completion, and requeue all commit through `storage.conditionalBatch`.
+  // Fail fast, synchronously, before binding a port, rather than at the
+  // first dispatch: "Remote activity execution fails construction or server
+  // attachment with an actionable capability error" (project brief).
+  requireStorageCapability(
+    options.engine.storage,
+    'conditionalBatch',
+    'Remote task ledger (durable dispatch, claim, heartbeat, completion, and requeue)',
+  );
   const dashboardAssets =
     options.dashboardAssets === undefined
       ? undefined

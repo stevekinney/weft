@@ -1,17 +1,11 @@
-import { decode } from '../../core/codec.ts';
 import { ActivityFailedEvent } from '../../core/events.ts';
-import { calculateBackoff } from '../../core/scheduler.ts';
-import { KEYS } from '../../storage/interface.ts';
 import type { ServeOptions, TaskDispatch } from '../index.ts';
 import { restoreExtendedDeadlineIfStillActive } from '../runtime-helpers.ts';
-import type { InflightRecord, QueuedRecord, TaskRequeueReason } from '../task-state.ts';
-import {
-  isTaskDeadLettered,
-  transitionInflightToQueued,
-  transitionInflightToResolved,
-} from '../task-state.ts';
+import { requeueExpiredAttempt } from '../task-ledger-transitions.ts';
+import { decodeRemoteTaskRecord, taskLedgerKey, type RemoteTaskLeased } from '../task-ledger.ts';
 import type { ServerContext } from './context.ts';
-import { dispatchTaskImpl, scheduleDelayedDispatch } from './task-dispatch.ts';
+import { scheduleDelayedDispatch } from './task-dispatch.ts';
+import { commitTaskLedgerTransition } from './task-ledger-runtime.ts';
 import {
   isTaskHeartbeatStaleForMetrics,
   recordTaskRequeueMetric,
@@ -19,7 +13,6 @@ import {
   recordTaskStaleHeartbeatMetric,
   recordWorkerCapacitySaturationMetric,
 } from './task-metrics.ts';
-import { isInflightRecord } from './websocket-worker.ts';
 
 interface ManualTaskReconciliationRegistration {
   scanAt?: (operationId: string, trackedDeadline: number, now: number) => Promise<void>;
@@ -70,130 +63,87 @@ export function consumeManualTaskReconciliationForTesting(
 }
 
 /**
- * Given a persisted inflight record, either permanently fail the task (if
- * retry attempts are exhausted) or transition it back to queued and
- * re-dispatch with backoff. Both the worker-disconnect handler and the
- * visibility-timeout scanner share this logic.
+ * Given a leased ledger record whose visibility deadline has passed, either
+ * permanently fail the task (retry attempts exhausted) or requeue it with
+ * backoff for redispatch. Both the worker-disconnect handler and the
+ * visibility-timeout scanner share this logic. A single attempt, no retry —
+ * a lost compare-and-swap here means a concurrent heartbeat renewed the
+ * lease or another actor already resolved this attempt, and retrying the
+ * identical transition cannot change that outcome.
  */
 export async function reassignOrExpireTask(
   context: ServerContext,
   options: ServeOptions,
   operationId: string,
-  record: InflightRecord,
-  reason: TaskRequeueReason = 'visibility-timeout',
+  record: RemoteTaskLeased,
+  reason: string = 'visibility-timeout',
 ): Promise<void> {
-  const nextAttempt = (record.attempt ?? 1) + 1;
-  const policy = record.retryPolicy;
-  const nextRetryCount = Math.max(record.retryCount ?? 0, nextAttempt - 1);
+  // Worker disconnect forfeits the lease immediately rather than waiting for
+  // the deadline to pass — see `RequeueExpiredAttemptInput.skipDeadlineCheck`.
+  const skipDeadlineCheck = reason === 'worker-disconnect';
+  const result = await commitTaskLedgerTransition(
+    options.engine.storage,
+    operationId,
+    (current, now) =>
+      requeueExpiredAttempt(
+        current,
+        { attemptToken: record.attemptToken, requeueReason: reason, skipDeadlineCheck },
+        now,
+      ),
+    1,
+  );
+  if (!result.ok) {
+    console.error(`[weft] Failed to requeue/expire task "${operationId}": ${result.reason}`);
+    return;
+  }
+  recordWorkerCapacitySaturationMetric(context.metricsCollector, context.registry);
 
-  if (hasExceededMaxAttempts(policy, nextAttempt)) {
-    await expireTaskAfterMaxAttempts(context, options, operationId, record, policy);
+  if (result.record.state === 'terminal') {
+    options.engine.dispatchEvent(
+      new ActivityFailedEvent(
+        operationId,
+        record.workflowId ?? '',
+        record.activityName,
+        new Error(result.record.error),
+        record.attempt,
+      ),
+    );
     return;
   }
 
-  const queuedRecord = createRequeuedRecord(record, nextAttempt, nextRetryCount, reason);
-  await transitionInflightToQueued(options.engine.storage, operationId, queuedRecord);
   recordTaskRetryMetric(context.metricsCollector);
   recordTaskRequeueMetric(context.metricsCollector);
-  recordWorkerCapacitySaturationMetric(context.metricsCollector, context.registry);
 
-  scheduleTaskRedispatch(context, options, createRequeuedTaskDispatch(record, nextAttempt), policy);
+  const delay = Math.max(0, result.record.availableAt - Date.now());
+  scheduleDelayedDispatch(context, options, createRequeuedTaskDispatch(record), delay);
 }
 
-function hasExceededMaxAttempts(
-  policy: InflightRecord['retryPolicy'],
-  nextAttempt: number,
-): policy is NonNullable<InflightRecord['retryPolicy']> {
-  return policy !== undefined && nextAttempt > policy.maxAttempts;
-}
-
-async function expireTaskAfterMaxAttempts(
-  context: ServerContext,
-  options: ServeOptions,
-  operationId: string,
-  record: InflightRecord,
-  policy: NonNullable<InflightRecord['retryPolicy']>,
-): Promise<void> {
-  await transitionInflightToResolved(options.engine.storage, operationId, 'failed', {
-    record,
-    resolutionReason: 'max-attempts-exceeded',
-  });
-  recordWorkerCapacitySaturationMetric(context.metricsCollector, context.registry);
-  options.engine.dispatchEvent(
-    new ActivityFailedEvent(
-      record.operationId,
-      record.workflowId ?? '',
-      record.activityName,
-      new Error(
-        `Activity "${record.activityName}" exhausted all ${policy.maxAttempts} retry attempts`,
-      ),
-      record.attempt ?? 1,
-    ),
-  );
-}
-
-function createRequeuedRecord(
-  record: InflightRecord,
-  nextAttempt: number,
-  nextRetryCount: number,
-  reason: TaskRequeueReason,
-): QueuedRecord {
-  return {
-    operationId: record.operationId,
-    activityName: record.activityName,
-    input: record.input,
-    queue: record.queue,
-    attempt: nextAttempt,
-    visibilityTimeout: record.visibilityTimeout,
-    retryPolicy: record.retryPolicy,
-    queuedAt: Date.now(),
-    workflowId: record.workflowId,
-    firstQueuedAt: record.firstQueuedAt,
-    lastDispatchedAt: record.lastDispatchedAt,
-    startedAt: record.startedAt,
-    retryCount: nextRetryCount,
-    requeueCount: (record.requeueCount ?? 0) + 1,
-    lastRequeueReason: reason,
-  };
-}
-
-function createRequeuedTaskDispatch(record: InflightRecord, nextAttempt: number): TaskDispatch {
+function createRequeuedTaskDispatch(record: RemoteTaskLeased): TaskDispatch {
   const taskDispatch: TaskDispatch = {
     operationId: record.operationId,
     activityName: record.activityName,
+    workflowType: record.workflowType,
     input: record.input,
     queue: record.queue,
-    attempt: nextAttempt,
-    visibilityTimeout: record.visibilityTimeout,
-    workflowId: record.workflowId,
+    visibilityTimeout: record.visibilityTimeoutMilliseconds,
     workflowExecutionToken: record.workflowExecutionToken,
   };
+  if (record.workflowId !== undefined) {
+    taskDispatch.workflowId = record.workflowId;
+  }
   if (record.retryPolicy !== undefined) {
     taskDispatch.retryPolicy = record.retryPolicy;
   }
-  return taskDispatch;
-}
-
-function scheduleTaskRedispatch(
-  context: ServerContext,
-  options: ServeOptions,
-  taskDispatch: TaskDispatch,
-  policy: InflightRecord['retryPolicy'],
-): void {
-  if (policy) {
-    const delay = calculateBackoff((taskDispatch.attempt ?? 1) - 1, policy);
-    scheduleDelayedDispatch(context, options, taskDispatch, delay);
-  } else {
-    void dispatchTaskImpl(context, options, taskDispatch).catch((err) =>
-      console.error(`[weft] Redispatch failed for "${taskDispatch.operationId}":`, err),
-    );
+  if (Object.keys(record.headers).length > 0) {
+    taskDispatch.headers = record.headers;
   }
+  return taskDispatch;
 }
 
 /**
  * Drain expired entries from the in-memory deadline heap and reassign
  * their tasks. Only touches storage for the specific operations whose
- * deadlines have actually passed — no full `op:inflight:*` scan.
+ * deadlines have actually passed — no full ledger scan.
  */
 export async function scanExpiredTasks(
   context: ServerContext,
@@ -217,20 +167,11 @@ export async function scanExpiredTasks(
       }
       context.processingOperations.add(operationId);
       try {
-        const inflightKey = KEYS.operationInflight(operationId);
-        const existing = await options.engine.storage.get(inflightKey);
+        const decoded = decodeRemoteTaskRecord(
+          await options.engine.storage.get(taskLedgerKey(operationId)),
+        );
 
-        if (!existing) continue; // Already resolved or requeued by another path.
-
-        const decoded = decode(existing);
-        if (!isInflightRecord(decoded)) {
-          console.error(`[weft] Corrupt inflight record for task "${operationId}" — skipping`);
-          continue;
-        }
-
-        if (await isTaskDeadLettered(options.engine.storage, operationId)) {
-          continue;
-        }
+        if (decoded === null || decoded.state !== 'leased') continue; // Already resolved or requeued by another path.
 
         // Double-check the deadline in case a heartbeat extended it after
         // the entry was added to the heap.
@@ -238,7 +179,7 @@ export async function scanExpiredTasks(
           restoreExtendedDeadlineIfStillActive(
             context.deadlineTracker,
             operationId,
-            decoded.deadline,
+            decoded.leaseDeadline,
             now,
           )
         ) {
@@ -278,14 +219,13 @@ export async function reconcileOrphanedRecords(
   try {
     const now = Date.now();
     let staleHeartbeatCount = 0;
-    for await (const [, value] of options.engine.storage.scan('op:inflight:')) {
+    for await (const [, value] of options.engine.storage.scan('task-ledger:')) {
       try {
-        const decoded = decode(value);
-        if (!isInflightRecord(decoded)) continue;
+        const decoded = decodeRemoteTaskRecord(value);
+        if (decoded === null || decoded.state !== 'leased') continue;
         if (isTaskHeartbeatStaleForMetrics(decoded, now)) staleHeartbeatCount += 1;
-        if (await isTaskDeadLettered(options.engine.storage, decoded.operationId)) continue;
 
-        if (decoded.deadline > now) {
+        if (decoded.leaseDeadline > now) {
           // Still valid — ensure it is tracked in the heap so the fast path
           // can handle it when it expires. Skip the heap rewrite if another
           // path is currently mid-process on this id — its `finally` block
@@ -294,7 +234,7 @@ export async function reconcileOrphanedRecords(
           context.deadlineTracker.remove(decoded.operationId);
           context.deadlineTracker.add({
             operationId: decoded.operationId,
-            deadline: decoded.deadline,
+            deadline: decoded.leaseDeadline,
           });
           continue;
         }
@@ -315,7 +255,7 @@ export async function reconcileOrphanedRecords(
           context.processingOperations.delete(decoded.operationId);
         }
       } catch (error) {
-        console.error('[weft] Failed to reconcile inflight record — skipping:', error);
+        console.error('[weft] Failed to reconcile leased ledger record — skipping:', error);
       }
     }
     recordTaskStaleHeartbeatMetric(context.metricsCollector, staleHeartbeatCount);

@@ -1,23 +1,25 @@
 /**
- * Task state tracking for the remote worker dispatch system.
+ * Retired pre-cutover record shapes, type guards, and lifecycle calculators
+ * for the `op:queued:`/`op:inflight:`/`op:resolved:`/`op:dead-letter:` key
+ * scheme the durable task ledger (WFT-22, `task-ledger.ts`) replaced.
  *
- * Every dispatched task exists in exactly one of three durable states:
- * - **queued**: Waiting in storage for a worker to claim it.
- * - **inflight**: Assigned to a worker with a visibility deadline.
- * - **resolved**: Completed or permanently failed.
- *
- * State transitions use `storage.batch()` to atomically delete the old
- * key and write the new key, preventing any window where a task is in
- * zero or two states simultaneously.
+ * The state-reading and state-writing functions this module once exported
+ * (`getTaskState`, `getExclusiveTaskState`, `readQueuedRecord`,
+ * `readInflightRecord`, `readDeadLetteredTaskRecord`, `isTaskDeadLettered`,
+ * `writeDeadLetteredTaskRecord`, `markInflight`) are gone — nothing writes
+ * those keys anymore. What remains is still load-bearing: the type guards
+ * and `TaskState` vocabulary back `get-task-diagnostics.ts` (not yet
+ * migrated onto the ledger — WFT-24), the lifecycle calculators back
+ * `task-metrics.ts`, and `clearDeadLetteredTaskRecord` lets that same
+ * diagnostics operation clear a legacy dead letter that still exists even
+ * though nothing creates new ones.
  *
  * @module task-state
  */
 
-import { decode, encode } from '../core/codec.ts';
 import type { RetryPolicy } from '../core/types.ts';
 import type { Storage } from '../storage/interface.ts';
 import { KEYS } from '../storage/interface.ts';
-import { buildResolvedRecord } from './task-resolved-record.ts';
 
 // ---------------------------------------------------------------------------
 // Task state type
@@ -56,6 +58,21 @@ export interface TaskLifecycleFields {
   /** Most recent reason this task moved back to queued. */
   lastRequeueReason?: TaskRequeueReason | undefined;
 }
+
+/**
+ * The subset of {@link TaskLifecycleFields} the queue-latency, execution-latency,
+ * and heartbeat-staleness calculations actually read. Deliberately narrower
+ * than `TaskLifecycleFields` so these calculations also accept the durable
+ * remote task ledger's records (`RemoteTaskLeased`, `RemoteTaskQueued` —
+ * WFT-22), which carry the same timing fields but a free-text
+ * `lastRequeueReason` rather than the fixed {@link TaskRequeueReason} enum.
+ */
+export type TaskTimingFields = Readonly<{
+  lastQueuedAt?: number | undefined;
+  lastDispatchedAt?: number | undefined;
+  startedAt?: number | undefined;
+  lastHeartbeatAt?: number | undefined;
+}>;
 
 // ---------------------------------------------------------------------------
 // Record types stored at each key
@@ -143,82 +160,6 @@ export interface DeadLetteredTaskRecord {
   lastRequeueReason?: TaskRequeueReason | undefined;
 }
 
-export interface TransitionInflightToResolvedOptions {
-  resolutionReason?: TaskResolutionReason;
-  resolvedAt?: number;
-  record?: InflightRecord;
-  value?: unknown;
-  error?: string | undefined;
-}
-
-// ---------------------------------------------------------------------------
-// State query
-// ---------------------------------------------------------------------------
-
-interface TaskStateSnapshot {
-  inflight: Uint8Array | null;
-  queued: Uint8Array | null;
-  resolved: Uint8Array | null;
-}
-
-async function readTaskStateSnapshot(
-  storage: Storage,
-  operationId: string,
-): Promise<TaskStateSnapshot> {
-  const [inflight, queued, resolved] = await Promise.all([
-    storage.get(KEYS.operationInflight(operationId)),
-    storage.get(KEYS.operationQueued(operationId)),
-    storage.get(KEYS.operationResolved(operationId)),
-  ]);
-
-  return { inflight, queued, resolved };
-}
-
-/**
- * Look up the current durable state of a task.
- *
- * Returns the state name if the task is found in any of the three
- * states, or `null` if no record exists (the task was never dispatched
- * or its resolved record has been garbage-collected).
- */
-export async function getTaskState(
-  storage: Storage,
-  operationId: string,
-): Promise<TaskState | null> {
-  const { inflight, queued, resolved } = await readTaskStateSnapshot(storage, operationId);
-
-  if (inflight !== null) return 'inflight';
-  if (queued !== null) return 'queued';
-  if (resolved !== null) return 'resolved';
-  return null;
-}
-
-/**
- * Return the task state and verify it occupies exactly one state.
- *
- * Throws if the task is found in multiple states simultaneously —
- * this indicates a bug in the state machine.
- */
-export async function getExclusiveTaskState(
-  storage: Storage,
-  operationId: string,
-): Promise<TaskState | null> {
-  const { inflight, queued, resolved } = await readTaskStateSnapshot(storage, operationId);
-
-  const states: TaskState[] = [];
-  if (inflight !== null) states.push('inflight');
-  if (queued !== null) states.push('queued');
-  if (resolved !== null) states.push('resolved');
-
-  if (states.length > 1) {
-    throw new Error(
-      `Task "${operationId}" occupies multiple states simultaneously: ${states.join(', ')}`,
-    );
-  }
-
-  return states[0] ?? null;
-}
-
 // ---------------------------------------------------------------------------
 // Record guards and lifecycle helpers
 // ---------------------------------------------------------------------------
@@ -282,60 +223,6 @@ export function isDeadLetteredTaskRecord(value: unknown): value is DeadLetteredT
   );
 }
 
-/** Decode the queued record for an operation, returning null when absent or malformed. */
-export async function readQueuedRecord(
-  storage: Storage,
-  operationId: string,
-): Promise<QueuedRecord | null> {
-  const value = await storage.get(KEYS.operationQueued(operationId));
-  if (value === null) return null;
-  const decoded = decode(value);
-  return isQueuedRecord(decoded) ? decoded : null;
-}
-
-/** Decode the inflight record for an operation, returning null when absent or malformed. */
-export async function readInflightRecord(
-  storage: Storage,
-  operationId: string,
-): Promise<InflightRecord | null> {
-  const value = await storage.get(KEYS.operationInflight(operationId));
-  if (value === null) return null;
-  const decoded = decode(value);
-  return isInflightRecord(decoded) ? decoded : null;
-}
-
-/** Decode the task-result dead-letter record for an operation. */
-export async function readDeadLetteredTaskRecord(
-  storage: Storage,
-  operationId: string,
-): Promise<DeadLetteredTaskRecord | null> {
-  const value = await storage.get(KEYS.operationDeadLetter(operationId));
-  if (value === null) return null;
-  const decoded = decode(value);
-  return isDeadLetteredTaskRecord(decoded) ? decoded : null;
-}
-
-/** True when reconciliation should not re-dispatch the operation. */
-export async function isTaskDeadLettered(storage: Storage, operationId: string): Promise<boolean> {
-  return (await readDeadLetteredTaskRecord(storage, operationId)) !== null;
-}
-
-/** Persist a task-result dead-letter guard. */
-export async function writeDeadLetteredTaskRecord(
-  storage: Storage,
-  record: DeadLetteredTaskRecord,
-): Promise<void> {
-  // Use the same atomic batch path as other task-state transitions; this guard
-  // is what prevents reconciliation from re-dispatching a reported result.
-  await storage.batch([
-    {
-      type: 'put',
-      key: KEYS.operationDeadLetter(record.operationId),
-      value: encode(record),
-    },
-  ]);
-}
-
 /** Clear a task-result dead-letter guard so reconciliation may handle the inflight record again. */
 export async function clearDeadLetteredTaskRecord(
   storage: Storage,
@@ -344,96 +231,13 @@ export async function clearDeadLetteredTaskRecord(
   await storage.delete(KEYS.operationDeadLetter(operationId));
 }
 
-function normalizeQueuedRecordLifecycle(
-  record: QueuedRecord,
-  previous?: InflightRecord | null,
-): QueuedRecord {
-  const normalized: QueuedRecord = {
-    ...record,
-    firstQueuedAt: resolveQueuedFirstQueuedAt(record, previous),
-    lastQueuedAt: record.lastQueuedAt ?? record.queuedAt,
-    retryCount: resolveRetryCount(record, previous),
-    requeueCount: record.requeueCount ?? previous?.requeueCount ?? 0,
-  };
-  applyPreviousLifecycleFields(normalized, previous);
-  return normalized;
-}
-
-function normalizeInflightRecordLifecycle(
-  record: InflightRecord,
-  previous?: QueuedRecord | null,
-  now: number = Date.now(),
-): InflightRecord {
-  const lastDispatchedAt = record.lastDispatchedAt ?? now;
-  const firstQueuedAt = resolveInflightFirstQueuedAt(record, previous, lastDispatchedAt);
-  const normalized: InflightRecord = {
-    ...record,
-    firstQueuedAt,
-    lastQueuedAt: resolveInflightLastQueuedAt(record, previous, firstQueuedAt),
-    lastDispatchedAt,
-    startedAt: record.startedAt ?? lastDispatchedAt,
-    retryCount: resolveRetryCount(record, previous),
-    requeueCount: record.requeueCount ?? previous?.requeueCount ?? 0,
-  };
-  applyPreviousLifecycleFields(normalized, previous);
-  return normalized;
-}
-
-function resolveQueuedFirstQueuedAt(
-  record: QueuedRecord,
-  previous?: InflightRecord | null,
-): number {
-  return (
-    record.firstQueuedAt ?? previous?.firstQueuedAt ?? previous?.lastQueuedAt ?? record.queuedAt
-  );
-}
-
-function resolveInflightFirstQueuedAt(
-  record: InflightRecord,
-  previous: QueuedRecord | null | undefined,
-  lastDispatchedAt: number,
-): number {
-  return (
-    record.firstQueuedAt ??
-    previous?.firstQueuedAt ??
-    previous?.lastQueuedAt ??
-    previous?.queuedAt ??
-    lastDispatchedAt
-  );
-}
-
-function resolveInflightLastQueuedAt(
-  record: InflightRecord,
-  previous: QueuedRecord | null | undefined,
-  firstQueuedAt: number,
-): number {
-  return record.lastQueuedAt ?? previous?.lastQueuedAt ?? previous?.queuedAt ?? firstQueuedAt;
-}
-
-function resolveRetryCount(
-  record: { attempt: number; retryCount?: number | undefined },
-  previous?: TaskLifecycleFields | null,
-): number {
-  return record.retryCount ?? previous?.retryCount ?? Math.max(0, record.attempt - 1);
-}
-
-function applyPreviousLifecycleFields(
-  record: TaskLifecycleFields,
-  previous?: TaskLifecycleFields | null,
-): void {
-  if (previous === undefined || previous === null) return;
-  record.lastDispatchedAt ??= previous.lastDispatchedAt;
-  record.startedAt ??= previous.startedAt;
-  record.lastRequeueReason ??= previous.lastRequeueReason;
-}
-
-export function calculateQueueLatencyMs(record: TaskLifecycleFields): number | undefined {
+export function calculateQueueLatencyMs(record: TaskTimingFields): number | undefined {
   if (record.lastQueuedAt === undefined || record.lastDispatchedAt === undefined) return undefined;
   return Math.max(0, record.lastDispatchedAt - record.lastQueuedAt);
 }
 
 export function calculateExecutionLatencyMs(
-  record: TaskLifecycleFields,
+  record: TaskTimingFields,
   completedAt: number,
 ): number | undefined {
   const startedAt = record.startedAt ?? record.lastDispatchedAt;
@@ -442,7 +246,7 @@ export function calculateExecutionLatencyMs(
 }
 
 export function calculateHeartbeatAgeMs(
-  record: TaskLifecycleFields & { deadline?: number | undefined },
+  record: TaskTimingFields & { deadline?: number | undefined },
   currentTime: number,
 ): number | undefined {
   const heartbeatReference =
@@ -452,121 +256,10 @@ export function calculateHeartbeatAgeMs(
 }
 
 export function isHeartbeatStale(
-  record: TaskLifecycleFields & { deadline?: number | undefined },
+  record: TaskTimingFields & { deadline?: number | undefined },
   currentTime: number,
   staleAfterMs: number,
 ): boolean {
   const heartbeatAgeMs = calculateHeartbeatAgeMs(record, currentTime);
   return heartbeatAgeMs !== undefined && heartbeatAgeMs >= staleAfterMs;
-}
-
-// ---------------------------------------------------------------------------
-// State transitions (atomic batch operations)
-// ---------------------------------------------------------------------------
-
-/** Write the initial queued record for a newly dispatched task. */
-export async function markQueued(storage: Storage, record: QueuedRecord): Promise<QueuedRecord> {
-  const normalizedRecord = normalizeQueuedRecordLifecycle(record);
-  await storage.put(KEYS.operationQueued(record.operationId), encode(normalizedRecord));
-  return normalizedRecord;
-}
-
-type TransitionQueuedToInflightOptions = {
-  readonly queuedRecord?: QueuedRecord | null;
-  readonly now?: number | undefined;
-};
-
-/** Atomically transition a task from queued → inflight. */
-export async function transitionQueuedToInflight(
-  storage: Storage,
-  operationId: string,
-  inflightRecord: InflightRecord,
-  options: TransitionQueuedToInflightOptions = {},
-): Promise<InflightRecord> {
-  const queuedRecord =
-    options.queuedRecord === undefined
-      ? await readQueuedRecord(storage, operationId)
-      : options.queuedRecord;
-  const normalizedInflightRecord = normalizeInflightRecordLifecycle(
-    inflightRecord,
-    queuedRecord,
-    options.now,
-  );
-
-  await storage.batch([
-    { type: 'delete', key: KEYS.operationQueued(operationId) },
-    {
-      type: 'put',
-      key: KEYS.operationInflight(operationId),
-      value: encode(normalizedInflightRecord),
-    },
-  ]);
-  return normalizedInflightRecord;
-}
-
-/** Write the initial inflight record (for tasks dispatched directly to a WS worker). */
-export async function markInflight(storage: Storage, record: InflightRecord): Promise<void> {
-  await storage.put(
-    KEYS.operationInflight(record.operationId),
-    encode(normalizeInflightRecordLifecycle(record)),
-  );
-}
-
-/** Atomically transition a task from inflight → resolved. */
-export async function transitionInflightToResolved(
-  storage: Storage,
-  operationId: string,
-  status: 'completed' | 'failed',
-  options: TransitionInflightToResolvedOptions = {},
-): Promise<void> {
-  const existingRecord = options.record ?? (await readInflightRecord(storage, operationId));
-  const resolvedAt = options.resolvedAt ?? Date.now();
-  const normalizedRecord =
-    existingRecord === null
-      ? null
-      : normalizeInflightRecordLifecycle(existingRecord, null, resolvedAt);
-  const resolutionReason =
-    options.resolutionReason ?? (status === 'completed' ? 'completed' : 'failed');
-
-  const resolvedRecord = buildResolvedRecord({
-    operationId,
-    status,
-    resolvedAt,
-    normalizedRecord,
-    resolutionReason,
-    value: options.value,
-    error: options.error,
-    queueLatencyMs:
-      normalizedRecord === null ? undefined : calculateQueueLatencyMs(normalizedRecord),
-    executionLatencyMs:
-      normalizedRecord === null
-        ? undefined
-        : calculateExecutionLatencyMs(normalizedRecord, resolvedAt),
-  });
-
-  const encodedResolvedRecord = encode(resolvedRecord);
-  await storage.batch([
-    { type: 'delete', key: KEYS.operationInflight(operationId) },
-    { type: 'put', key: KEYS.operationResolved(operationId), value: encodedResolvedRecord },
-    {
-      type: 'put',
-      key: KEYS.operationResolvedByTime(resolvedAt, operationId),
-      value: encodedResolvedRecord,
-    },
-  ]);
-}
-
-/** Atomically transition a task from inflight → queued (requeue on disconnect/timeout). */
-export async function transitionInflightToQueued(
-  storage: Storage,
-  operationId: string,
-  queuedRecord: QueuedRecord,
-): Promise<void> {
-  const inflightRecord = await readInflightRecord(storage, operationId);
-  const normalizedQueuedRecord = normalizeQueuedRecordLifecycle(queuedRecord, inflightRecord);
-
-  await storage.batch([
-    { type: 'delete', key: KEYS.operationInflight(operationId) },
-    { type: 'put', key: KEYS.operationQueued(operationId), value: encode(normalizedQueuedRecord) },
-  ]);
 }

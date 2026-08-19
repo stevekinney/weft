@@ -1,8 +1,7 @@
 import { decode } from '../core/codec.ts';
 import { Engine } from '../core/engine.ts';
 import { serve, type WeftServer } from '../server/index.ts';
-import type { ResolvedRecord } from '../server/task-state.ts';
-import { KEYS } from '../storage/interface.ts';
+import { isRemoteTaskTerminalResolved, taskLedgerKey } from '../server/task-ledger.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import {
   REMOTE_WORKER_PROTOCOL_VERSION,
@@ -36,10 +35,6 @@ const CONFORMANCE_HEARTBEAT_INTERVAL_MS = 25;
 
 function createCheck(name: string, ok: boolean, message: string): ConformanceCheck {
   return { name, ok, message };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 async function waitForCondition(
@@ -169,30 +164,31 @@ async function waitForWorkerIdle(
   throw new Error(`Timed out after ${timeoutMs}ms waiting for worker ${workerId} to become idle`);
 }
 
-function isResolvedRecord(value: unknown): value is ResolvedRecord {
-  if (!isRecord(value)) return false;
-  return (
-    typeof value['operationId'] === 'string' &&
-    (value['status'] === 'completed' || value['status'] === 'failed') &&
-    typeof value['resolvedAt'] === 'number'
-  );
-}
-
+/**
+ * Read the resolved status of a task through the durable remote task ledger
+ * (WFT-22) — the sole writer of task state; `op:resolved:` no longer exists.
+ * Only a `resolved`-disposition terminal record carries a `status`; a
+ * cancelled or retry-exhausted disposition returns `undefined` since neither
+ * represents "resolved as completed/failed" the way this harness's checks
+ * expect (the conformance "cancellation" check dispatches a normal activity
+ * that the worker itself fails in response to the cancel signal — there is
+ * no ledger-native cancellation transition wired into `cancelTask()` yet).
+ */
 async function readResolvedStatus(
   storage: MemoryStorage,
   operationId: string,
-): Promise<ResolvedRecord['status'] | undefined> {
-  const stored = await storage.get(KEYS.operationResolved(operationId));
+): Promise<'completed' | 'failed' | undefined> {
+  const stored = await storage.get(taskLedgerKey(operationId));
   if (stored === null) return undefined;
   const decoded = decode(stored);
-  if (!isResolvedRecord(decoded)) return undefined;
+  if (!isRemoteTaskTerminalResolved(decoded)) return undefined;
   return decoded.status;
 }
 
 async function waitForResolvedStatus(
   storage: MemoryStorage,
   operationId: string,
-  status: ResolvedRecord['status'],
+  status: 'completed' | 'failed',
   timeoutMs: number,
 ): Promise<void> {
   await waitForCondition(
@@ -208,12 +204,13 @@ async function dispatchAndWait(
   operationId: string,
   activityName: string,
   input: unknown,
-  expectedStatus: ResolvedRecord['status'],
+  expectedStatus: 'completed' | 'failed',
   timeoutMs: number,
 ): Promise<void> {
   const dispatched = await server.dispatchTask({
     operationId,
     activityName,
+    workflowType: 'conformance',
     input,
     queue: CONFORMANCE_QUEUE,
     visibilityTimeout: Math.max(500, timeoutMs),
@@ -280,6 +277,7 @@ async function runConformanceChecks(
     const cancelDispatched = await server.dispatchTask({
       operationId: cancelOperationId,
       activityName: 'conformance.cancel',
+      workflowType: 'conformance',
       input: { milliseconds: timeoutMs },
       queue: CONFORMANCE_QUEUE,
       visibilityTimeout: Math.max(500, timeoutMs),
@@ -302,6 +300,7 @@ async function runConformanceChecks(
     const reconnectDispatched = await server.dispatchTask({
       operationId: reconnectOperationId,
       activityName: 'conformance.sleep',
+      workflowType: 'conformance',
       input: { milliseconds: reconnectDelayMs },
       queue: CONFORMANCE_QUEUE,
       visibilityTimeout: Math.max(500, timeoutMs),
@@ -322,6 +321,19 @@ async function runConformanceChecks(
       () => server.registry.getWorker(workerId) === undefined,
       timeoutMs,
       'original worker disconnect',
+    );
+    // The disconnect-driven requeue and redispatch to the replacement worker
+    // happen asynchronously after the original worker is unregistered above
+    // — there is no synchronous guarantee the reassignment has landed yet.
+    // Wait for the replacement to actually pick up the reassigned task (or
+    // to have already disconnected itself) before checking for idle, or a
+    // not-yet-assigned replacement would read as trivially idle.
+    await waitForCondition(
+      () =>
+        (server.registry.getWorker(replacementWorkerId)?.inFlight ?? 0) > 0 ||
+        server.registry.getWorker(replacementWorkerId) === undefined,
+      timeoutMs,
+      'reassigned reconnect task delivered to replacement worker',
     );
     await waitForWorkerIdle(server, replacementWorkerId, timeoutMs);
     await waitForResolvedStatus(storage, reconnectOperationId, 'completed', timeoutMs);

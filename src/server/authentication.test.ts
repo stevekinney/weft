@@ -949,6 +949,29 @@ describe('serve() with authentication', () => {
       auth: { apiKeys: [TEST_API_KEY], defaultApiKeyScopes: ['workers:write'] },
     });
 
+    // The durable ledger authorizes a task-result submission against a real
+    // claimed record — dispatch and long-poll-claim a task first so the
+    // authorized request has a leased operation to legitimately complete,
+    // rather than the pre-ledger system's duplicate-tolerant no-op for an
+    // unknown operationId.
+    const dispatched = await server.dispatchTask({
+      operationId: 'op-1',
+      activityName: 'charge',
+      workflowType: 'testWorkflow',
+      queue: 'default',
+      input: null,
+    });
+    expect(dispatched).toBe(true);
+
+    const pollResponse = await fetch(
+      `${server.url}/v1/tasks/default?activity=charge&timeout=1000`,
+      {
+        headers: { Authorization: `Bearer ${TEST_API_KEY}` },
+      },
+    );
+    expect(pollResponse.status).toBe(200);
+    const claim = (await pollResponse.json()) as { workerId: string; attemptToken: string };
+
     const allowedResponse = await fetch(`${server.url}/v1/tasks/default/result`, {
       method: 'POST',
       headers: {
@@ -957,7 +980,8 @@ describe('serve() with authentication', () => {
       },
       body: JSON.stringify({
         operationId: 'op-1',
-        attemptToken: 'attempt-token',
+        workerId: claim.workerId,
+        attemptToken: claim.attemptToken,
         status: 'completed',
         value: 42,
       }),
