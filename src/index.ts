@@ -553,6 +553,38 @@ export type { WorkerPoolOptions } from './workers/pool';
 export { HeartbeatManager } from './worker/heartbeat';
 export { RemoteWorker } from './worker/index';
 export { LongPollWorker } from './worker/long-poll';
+export {
+  MAX_MANIFEST_ACTIVITY_COUNT,
+  MAX_MANIFEST_CAPABILITY_COUNT,
+  MAX_MANIFEST_CAPABILITY_DEPTH,
+  MAX_MANIFEST_CAPABILITY_STRING_BYTES,
+  MAX_MANIFEST_IDENTIFIER_BYTES,
+  MAX_MANIFEST_WORKFLOW_COUNT,
+  MAX_NORMALIZED_MANIFEST_BYTES,
+  WORKER_MANIFEST_DIGEST_ALGORITHM,
+  WORKER_MANIFEST_VERSION,
+  buildWorkerExecutionIdentity,
+  canonicalWorkerManifestJson,
+  computeWorkerManifestDigest,
+  digestCanonicalWorkerManifest,
+  executionIdentitySatisfies,
+  normalizeWorkerManifest,
+  parseWorkerManifest,
+  parseWorkerManifestJson,
+} from './worker/manifest/index.ts';
+export type {
+  ManifestValidationFailure,
+  WorkerActivityContract,
+  WorkerDeploymentIdentity,
+  WorkerExecutionIdentity,
+  WorkerExecutionRequirement,
+  WorkerManifest,
+  WorkerManifestParseResult,
+  WorkerManifestParseSuccess,
+  WorkerManifestRejectionReason,
+  WorkerRuntimeIdentity,
+  WorkerWorkflowContract,
+} from './worker/manifest/index.ts';
 export { WorkerRegistry } from './worker/registry';
 export {
   WorkerProtocolIncompatibleError,

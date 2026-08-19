@@ -370,6 +370,131 @@ interface InFlightTask {
 
 `checkExpiredTasks(now)` returns tasks whose visibility deadline has passed, suitable for reassignment.
 
+## Canonical worker manifest
+
+A worker manifest is how a worker answers every identity question about itself at once, with each question in its own field. The host validates that claim before the worker becomes routing-eligible, so worker readiness means _the server accepted a validated manifest_ rather than _a socket opened_.
+
+| Field             | Question answered                                | Stability                       |
+| ----------------- | ------------------------------------------------ | ------------------------------- |
+| `manifestVersion` | Can the host parse this manifest shape?          | Changes with manifest schema    |
+| `protocolVersion` | Can these peers exchange wire messages?          | Changes with wire semantics     |
+| `sdkVersion`      | Which Weft worker SDK produced this worker?      | Package release                 |
+| `runtime`         | Which runtime executes the worker?               | Runtime deployment              |
+| `deployment.name` | Which logical service owns this worker?          | Stable service identity         |
+| `buildId`         | Which operator-visible release is this?          | Immutable within a deployment   |
+| `artifactDigest`  | Which exact executable bytes are loaded?         | Content-addressed and immutable |
+| `workflowVersion` | Which replay compatibility boundary is declared? | Workflow author controlled      |
+| `contractHash`    | Which public payload contract is implemented?    | Deterministic contract identity |
+
+A Git SHA is deliberately absent: repositories may be dirty, builds may inject configuration, and one commit may produce several artifacts, so a commit is metadata rather than an executable identity.
+
+### `WorkerManifest`
+
+```ts
+import { WORKER_MANIFEST_VERSION, type WorkerManifest } from '@lostgradient/weft';
+
+const manifest: WorkerManifest = {
+  manifestVersion: WORKER_MANIFEST_VERSION,
+  protocolVersion: 2,
+  sdkVersion: '0.18.0',
+  runtime: { name: 'bun', version: '1.3.14' },
+  deployment: { name: 'billing', buildId: '2026.08.18-3', artifactDigest: 'sha256:41d0e2' },
+  workflows: {
+    checkout: {
+      workflowVersion: '2.1.0',
+      workflowRevision: 'rev-88',
+      contractHash: 'sha256:9ab3',
+      activities: { charge: { contractHash: 'sha256:2b1f', implementationRevision: 'rev-41' } },
+    },
+  },
+  capabilities: { gpu: true },
+};
+
+console.log(manifest.deployment.buildId);
+```
+
+Activity keys are canonical runtime activity names, qualified structurally by the workflow that contains them rather than only through a dotted string — so the same activity name may appear under two workflows without collision.
+
+`capabilities` is bounded descriptive data. It never grants authorization and never affects routing without an explicit host policy.
+
+### `parseWorkerManifest(value)` and `parseWorkerManifestJson(text)`
+
+Both validate an untrusted manifest and return a result rather than throwing, because a malformed manifest is an ordinary wire condition on a boundary the host does not control. A success carries the normalized manifest _and_ its canonical serialization, so a caller that stores or digests the result never re-derives canonical form.
+
+```ts
+import { parseWorkerManifest } from '@lostgradient/weft';
+
+const result = parseWorkerManifest(JSON.parse('{"manifestVersion":99}'));
+
+if (!result.ok) {
+  console.log(result.reason); // 'unsupported_manifest_version'
+}
+```
+
+Prefer `parseWorkerManifestJson()` wherever the received JSON _text_ is still available. Duplicate object keys are only visible before parsing — `JSON.parse` resolves `{"artifactDigest":"a","artifactDigest":"b"}` to one of the two silently — and a manifest that could mean two different artifacts must be rejected, not resolved.
+
+Rejection reasons are a closed union (`WorkerManifestRejectionReason`) precisely so operators can count manifest failures by reason without a high-cardinality metric label. The accompanying `message` and `path` are for diagnostics and must never be used as labels.
+
+Validation enforces explicit semantic bounds after transport-size admission: identifier byte lengths, workflow and activity counts, capability count, capability nesting depth, capability string bytes, and the total normalized manifest size. The normalized size is measured against the _canonical_ form, so a whitespace-minimized payload cannot slip under the ceiling and then expand.
+
+### `WorkerExecutionRequirement` and `WorkerExecutionIdentity`
+
+Routing input and observed execution are separate types on purpose. A requirement asks a question and may leave fields unset; an identity answers it completely.
+
+```ts
+import {
+  executionIdentitySatisfies,
+  type WorkerExecutionIdentity,
+  type WorkerExecutionRequirement,
+} from '@lostgradient/weft';
+
+// Pin the deployment; let policy choose any eligible build within it.
+const requirement: WorkerExecutionRequirement = { deploymentName: 'billing' };
+
+const identity: WorkerExecutionIdentity = {
+  workerId: 'worker-1',
+  manifestDigest: 'sha256:deadbeef',
+  protocolVersion: 2,
+  sdkVersion: '0.18.0',
+  runtimeName: 'bun',
+  runtimeVersion: '1.3.14',
+  deploymentName: 'billing',
+  buildId: '2026.08.18-3',
+  artifactDigest: 'sha256:41d0e2',
+  workflowRevision: 'rev-88',
+  activityName: 'charge',
+  activityContractHash: 'sha256:2b1f',
+};
+
+console.log(executionIdentitySatisfies(requirement, identity)); // true
+```
+
+An omitted requirement field means policy may choose any eligible value. It is _not_ an empty-string wildcard. Once a task is leased its execution identity is complete and derived from the accepted manifest plus the live session — a worker cannot self-report a different execution identity in its result, which is what makes the identity safe to persist as provenance.
+
+### `computeWorkerManifestDigest(manifest)`
+
+Manifest digests are content-addressed and algorithm-tagged (`sha256:<hex>`). Two manifests that differ only in key insertion order digest identically; any difference the host cares about changes the digest.
+
+```ts
+import { computeWorkerManifestDigest, WORKER_MANIFEST_VERSION } from '@lostgradient/weft';
+
+const digest = await computeWorkerManifestDigest({
+  manifestVersion: WORKER_MANIFEST_VERSION,
+  protocolVersion: 2,
+  sdkVersion: '0.18.0',
+  runtime: { name: 'bun', version: '1.3.14' },
+  deployment: { name: 'billing', buildId: '2026.08.18-3', artifactDigest: 'sha256:41d0e2' },
+  workflows: {},
+  capabilities: {},
+});
+
+console.log(digest.startsWith('sha256:')); // true
+```
+
+This is a content digest rather than one of the package's FNV-1a helpers, which are documented as cache-key quality: `(deploymentName, buildId)` consistency depends on two different artifacts not colliding.
+
+Use `digestCanonicalWorkerManifest()` when a canonical serialization is already in hand — `parseWorkerManifest()` returns one — to avoid serializing twice.
+
 ## Fleet and queue observability
 
 Two operator-facing endpoints expose the live worker fleet and the
