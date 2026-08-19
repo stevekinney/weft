@@ -478,15 +478,29 @@ export function createRealDependencies(): RunTestSuiteDependencies {
         }
       };
       let timedOut = false;
+      let interruptedSignal: 'SIGINT' | 'SIGTERM' | undefined;
       let forceKill: ReturnType<typeof setTimeout> | undefined;
+      const forceKillProcessGroup = (): void => {
+        signalProcessGroup('SIGKILL');
+        void stdoutReader.cancel();
+        void stderrReader.cancel();
+      };
+      const scheduleForceKill = (): void => {
+        forceKill ??= setTimeout(forceKillProcessGroup, TERMINATION_GRACE_MS);
+      };
+      const forwardSignal = (signal: 'SIGINT' | 'SIGTERM'): void => {
+        interruptedSignal ??= signal;
+        signalProcessGroup(signal);
+        scheduleForceKill();
+      };
+      const onInterrupt = (): void => forwardSignal('SIGINT');
+      const onTerminate = (): void => forwardSignal('SIGTERM');
+      process.on('SIGINT', onInterrupt);
+      process.on('SIGTERM', onTerminate);
       const timeout = setTimeout(() => {
         timedOut = true;
         signalProcessGroup('SIGTERM');
-        forceKill = setTimeout(() => {
-          signalProcessGroup('SIGKILL');
-          void stdoutReader.cancel();
-          void stderrReader.cancel();
-        }, TERMINATION_GRACE_MS);
+        scheduleForceKill();
       }, timeoutMs);
       try {
         const [exitCode, capturedStdout, capturedStderr] = await Promise.all([
@@ -503,8 +517,13 @@ export function createRealDependencies(): RunTestSuiteDependencies {
       } finally {
         clearTimeout(timeout);
         if (forceKill !== undefined) clearTimeout(forceKill);
+        process.removeListener('SIGINT', onInterrupt);
+        process.removeListener('SIGTERM', onTerminate);
         clearInterval(heartbeat);
         process.stderr.write('\n');
+        if (interruptedSignal !== undefined) {
+          process.exit(interruptedSignal === 'SIGINT' ? 130 : 143);
+        }
       }
     },
     makeRunDirectory: () => mkdtemp(join(tmpdir(), 'weft-precommit-')),

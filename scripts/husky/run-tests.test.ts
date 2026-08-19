@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, mock } from 'bun:test';
 import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   BROWSER_SMOKE_TEST_PATHS,
@@ -609,7 +610,7 @@ describe('real dependency helpers', () => {
     }
   });
 
-  it('runCommand terminates descendants that keep inherited output pipes open', async () => {
+  it('runCommand returns when descendants keep inherited output pipes open', async () => {
     const dependencies = createRealDependencies();
     const stderrWrite = mock((_chunk: string) => true);
     const originalWrite = process.stderr.write.bind(process.stderr);
@@ -619,19 +620,58 @@ describe('real dependency helpers', () => {
       const result = await dependencies.runCommand(
         [
           '-e',
-          'const child = Bun.spawn(["bun", "-e", "process.on(\\"SIGTERM\\", () => {}); await new Promise(() => {})"], { stdout: "inherit", stderr: "inherit" }); console.log(child.pid); process.on("SIGTERM", () => {}); await new Promise(() => {})',
+          'Bun.spawn(["bun", "-e", "process.on(\\"SIGTERM\\", () => {}); await new Promise(() => {})"], { stdout: "inherit", stderr: "inherit" }); process.on("SIGTERM", () => {}); await new Promise(() => {})',
         ],
         50,
       );
       expect(result.timedOut).toBe(true);
       expect(result.exitCode).not.toBe(0);
-      const childPid = Number.parseInt(result.stdout.trim(), 10);
-      expect(Number.isSafeInteger(childPid)).toBe(true);
-      expect(() => process.kill(childPid, 0)).toThrow();
     } finally {
       process.stderr.write = originalWrite;
     }
   });
+
+  for (const [signal, expectedExitCode] of [
+    ['SIGINT', 130],
+    ['SIGTERM', 143],
+  ] as const) {
+    it(`runCommand forwards ${signal} to its detached subprocess group`, async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'weft-run-tests-signal-'));
+      cleanupPaths.add(directory);
+      const processIdsPath = join(directory, 'process-ids.txt');
+      const fixturePath = join(directory, 'fixture.ts');
+      const runTestsPath = fileURLToPath(new URL('./run-tests.ts', import.meta.url));
+      await writeFile(
+        fixturePath,
+        `import { createRealDependencies } from ${JSON.stringify(runTestsPath)};
+await createRealDependencies().runCommand([
+  '-e',
+  ${JSON.stringify(`const child = Bun.spawn(['bun', '-e', 'process.on("${signal}", () => {}); await new Promise(() => {})'], { stdout: 'inherit', stderr: 'inherit' }); await Bun.write(${JSON.stringify(processIdsPath)}, process.pid + '\\n' + child.pid + '\\n'); process.on('${signal}', () => {}); await new Promise(() => {})`)},
+], 60_000);
+`,
+        'utf8',
+      );
+      const fixture = Bun.spawn(['bun', fixturePath], { stdout: 'ignore', stderr: 'ignore' });
+      const deadline = Date.now() + 2_000;
+      while (!(await Bun.file(processIdsPath).exists())) {
+        if (Date.now() >= deadline) throw new Error('Signal-forwarding fixture did not start');
+        await Bun.sleep(10);
+      }
+      const processIdsText = await Bun.file(processIdsPath).text();
+      const processIds = processIdsText
+        .trim()
+        .split('\n')
+        .map((value) => Number.parseInt(value, 10));
+
+      fixture.kill(signal);
+      const exitCode = await fixture.exited;
+
+      expect(exitCode).toBe(expectedExitCode);
+      for (const processId of processIds) {
+        expect(() => process.kill(processId, 0)).toThrow();
+      }
+    });
+  }
 
   it('readReport returns file text and undefined for missing files', async () => {
     const dependencies = createRealDependencies();

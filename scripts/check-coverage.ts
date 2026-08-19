@@ -1731,10 +1731,10 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
         functions: 8,
         lines: createMergedLineSet(
           new Set([
-            29, 30, 50, 51, 86, 87, 88, 97, 104, 105, 106, 112, 113, 114, 118, 137, 138, 139, 140,
-            141, 142, 143, 144,
+            54, 55, 91, 92, 93, 104, 115, 116, 117, 123, 124, 125, 143, 144, 145, 152, 153, 154,
+            157, 159, 160, 161, 164, 192, 193, 194, 195, 196, 197, 198, 199,
           ]),
-          createLineSet(163, 385),
+          createLineSet(218, 440),
         ),
         requireUncoveredLines: true,
       },
@@ -1742,9 +1742,12 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
     [
       'scripts/husky/run-tests.ts',
       {
-        // Direct dependency tests cover every line, including SIGKILL escalation.
-        // Bun still reports three anonymous callback functions as unhit.
-        functions: 3,
+        // Real subprocess fixtures cover signal forwarding, parent exit, and
+        // descendant SIGKILL behavior, but those paths execute in child Bun
+        // processes outside the parent LCOV report. The Windows branch and the
+        // process-group fallback are platform-specific defensive paths.
+        functions: 7,
+        lines: new Set([471, 472, 476, 483, 484, 485, 491, 492, 493, 525]),
       },
     ],
     ['src/cli/api-arguments.ts', { lines: new Set([55, 58]) }],

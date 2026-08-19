@@ -9,6 +9,7 @@ import {
   createRatchetStash,
   RATCHET_STASH_MESSAGE,
   restoreRatchetStash,
+  runGitCommand,
   withRatchetStash,
 } from './pre-commit.ts';
 import {
@@ -104,6 +105,106 @@ describe('markdown ratchet stash lifecycle', () => {
     const remaining = await stashList(repositoryRoot);
     expect(remaining).toContain('concurrent-session');
     expect(remaining).not.toContain(RATCHET_STASH_MESSAGE);
+  });
+
+  it('preserves a concurrent stash when the shared selector changes immediately before drop', async () => {
+    const repositoryRoot = await createRepository();
+    const concurrentRoot = await mkdtemp(join(tmpdir(), 'weft-precommit-concurrent-'));
+    temporaryRepositories.add(concurrentRoot);
+    await $`git -C ${repositoryRoot} worktree add --quiet -b concurrent-stash-race ${concurrentRoot}`.quiet();
+    await Bun.write(join(repositoryRoot, 'tracked.txt'), 'base\nratchet change\n');
+    const ratchetStash = await createRatchetStash(repositoryRoot);
+    expect(ratchetStash).toBeDefined();
+    if (ratchetStash === undefined) throw new Error('Expected a ratchet stash');
+    await Bun.write(join(concurrentRoot, 'concurrent.txt'), 'other work\n');
+
+    let raced = false;
+    const executeGit = async (root: string, arguments_: string[]) => {
+      if (!raced && arguments_[0] === 'stash' && arguments_[1] === 'drop') {
+        raced = true;
+        await $`git -C ${concurrentRoot} stash push -u -m concurrent-selector-race`.quiet();
+      }
+      return runGitCommand(root, arguments_);
+    };
+
+    await expect(restoreRatchetStash(repositoryRoot, ratchetStash, executeGit)).rejects.toThrow(
+      'A concurrent stash mutation changed the selected entry',
+    );
+
+    expect(await Bun.file(join(repositoryRoot, 'tracked.txt')).text()).toBe(
+      'base\nratchet change\n',
+    );
+    const remaining = await stashList(repositoryRoot);
+    expect(remaining).toContain('concurrent-selector-race');
+    expect(remaining).not.toContain(RATCHET_STASH_MESSAGE);
+    await $`git -C ${repositoryRoot} worktree remove --force ${concurrentRoot}`.quiet();
+    temporaryRepositories.delete(concurrentRoot);
+  });
+
+  it('keeps repeated-signal handlers installed until memoized cleanup settles', async () => {
+    const repositoryRoot = await createRepository();
+    const fixturePath = join(repositoryRoot, 'repeated-signal-fixture.ts');
+    const preCommitPath = fileURLToPath(new URL('./pre-commit.ts', import.meta.url));
+    await Bun.write(
+      fixturePath,
+      `import { withRatchetStash } from ${JSON.stringify(preCommitPath)};
+let finishRestore;
+const restoreGate = new Promise((resolve) => { finishRestore = resolve; });
+process.on('message', (message) => {
+  if (message === 'release') finishRestore();
+});
+await withRatchetStash('/unused', async () => {
+  process.send?.('ready');
+  await new Promise(() => {});
+}, {
+  create: async () => ({ marker: 'marker', sha: 'sha' }),
+  restore: async () => {
+    process.send?.({ type: 'restore-started', listenerCount: process.listenerCount('SIGINT') });
+    await restoreGate;
+  },
+});
+`,
+    );
+
+    let markRestoreStarted: ((listenerCount: number) => void) | undefined;
+    let markReady: (() => void) | undefined;
+    const ready = new Promise<void>((resolve) => {
+      markReady = resolve;
+    });
+    const restoreStarted = new Promise<number>((resolve) => {
+      markRestoreStarted = resolve;
+    });
+    const subprocess = Bun.spawn(['bun', fixturePath], {
+      cwd: repositoryRoot,
+      stdout: 'pipe',
+      stderr: 'pipe',
+      ipc(message) {
+        if (message === 'ready') markReady?.();
+        if (
+          typeof message === 'object' &&
+          message !== null &&
+          'type' in message &&
+          message.type === 'restore-started' &&
+          'listenerCount' in message &&
+          typeof message.listenerCount === 'number'
+        ) {
+          markRestoreStarted?.(message.listenerCount);
+        }
+      },
+    });
+
+    await ready;
+    subprocess.kill('SIGINT');
+    const listenerCount = await Promise.race([
+      restoreStarted,
+      new Promise<never>((_resolve, reject) =>
+        setTimeout(() => reject(new Error('Repeated-signal fixture did not start cleanup')), 2_000),
+      ),
+    ]);
+    expect(listenerCount).toBe(1);
+    subprocess.kill('SIGINT');
+    subprocess.send('release');
+    expect(await subprocess.exited).toBe(130);
   });
 
   for (const [signal, expectedExitCode] of [

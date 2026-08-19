@@ -33,8 +33,12 @@ class RatchetStashRestoreError extends Error {
 }
 
 type GitResult = { exitCode: number; stdout: string; stderr: string };
+type GitCommand = (repositoryRoot: string, arguments_: string[]) => Promise<GitResult>;
 
-async function runGit(repositoryRoot: string, arguments_: string[]): Promise<GitResult> {
+export async function runGitCommand(
+  repositoryRoot: string,
+  arguments_: string[],
+): Promise<GitResult> {
   const subprocess = Bun.spawn(['git', '-C', repositoryRoot, ...arguments_], {
     stdout: 'pipe',
     stderr: 'pipe',
@@ -58,11 +62,11 @@ export async function createRatchetStash(
 ): Promise<RatchetStash | undefined> {
   const marker = `${RATCHET_STASH_MESSAGE}:${crypto.randomUUID()}`;
   const pushArguments = ['stash', 'push', '--keep-index', '-u', '-m', marker];
-  const pushed = await runGit(repositoryRoot, pushArguments);
+  const pushed = await runGitCommand(repositoryRoot, pushArguments);
   if (pushed.exitCode !== 0) throw new Error(describeGitFailure(pushArguments, pushed));
 
   const listArguments = ['stash', 'list', '--format=%H %gs'];
-  const listed = await runGit(repositoryRoot, listArguments);
+  const listed = await runGitCommand(repositoryRoot, listArguments);
   if (listed.exitCode !== 0) throw new Error(describeGitFailure(listArguments, listed));
 
   for (const line of listed.stdout.split('\n')) {
@@ -79,9 +83,10 @@ export async function createRatchetStash(
 export async function restoreRatchetStash(
   repositoryRoot: string,
   stash: RatchetStash,
+  executeGit: GitCommand = runGitCommand,
 ): Promise<void> {
   const applyArguments = ['stash', 'apply', stash.sha];
-  const applied = await runGit(repositoryRoot, applyArguments);
+  const applied = await executeGit(repositoryRoot, applyArguments);
   if (applied.exitCode !== 0) {
     throw new RatchetStashRestoreError(
       `Restoring your unstaged changes from stash ${stash.sha} failed. The exact entry remains available with marker ${stash.marker}. ${describeGitFailure(applyArguments, applied)}`,
@@ -91,28 +96,69 @@ export async function restoreRatchetStash(
   // `git stash drop` rejects a raw commit SHA. Resolve the selector from the
   // captured identity immediately before dropping; the selector is never
   // chosen by stack position alone.
-  const listArguments = ['stash', 'list', '--format=%gd %H'];
-  const listed = await runGit(repositoryRoot, listArguments);
-  if (listed.exitCode !== 0) {
-    throw new RatchetStashRestoreError(describeGitFailure(listArguments, listed));
-  }
-  const selector = listed.stdout
-    .split('\n')
-    .map((line) => line.split(' '))
-    .find(([, sha]) => sha === stash.sha)?.[0];
-  if (selector === undefined) {
-    throw new RatchetStashRestoreError(
-      `Your unstaged changes were restored, but stash ${stash.sha} could not be found for removal.`,
-    );
+  const recoveredConcurrentEntries: string[] = [];
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const listArguments = ['stash', 'list', '--format=%gd%x00%H%x00%gs'];
+    const listed = await executeGit(repositoryRoot, listArguments);
+    if (listed.exitCode !== 0) {
+      throw new RatchetStashRestoreError(describeGitFailure(listArguments, listed));
+    }
+    const entries = listed.stdout
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        const [selector = '', sha = '', subject = ''] = line.split('\0');
+        return { selector, sha, subject };
+      });
+    const entry = entries.find(({ sha }) => sha === stash.sha);
+    if (entry === undefined) {
+      throw new RatchetStashRestoreError(
+        `Your unstaged changes were restored, but stash ${stash.sha} could not be found for removal.`,
+      );
+    }
+
+    const dropArguments = ['stash', 'drop', entry.selector];
+    const dropped = await executeGit(repositoryRoot, dropArguments);
+    if (dropped.exitCode !== 0) {
+      throw new RatchetStashRestoreError(
+        `Your unstaged changes were restored, but dropping stash ${stash.sha} failed. The exact entry remains available with marker ${stash.marker}. ${describeGitFailure(dropArguments, dropped)}`,
+      );
+    }
+    const droppedSha = dropped.stdout.match(/\(([0-9a-f]{40,64})\)\s*$/)?.[1];
+    if (droppedSha === stash.sha) {
+      if (recoveredConcurrentEntries.length > 0) {
+        throw new RatchetStashRestoreError(
+          `A concurrent stash mutation changed the selected entry during cleanup. Your unstaged changes were restored, the ratchet stash was removed, and the unrelated stash entries were preserved at the stack head: ${recoveredConcurrentEntries.join(', ')}. Review the shared stash order before continuing.`,
+        );
+      }
+      return;
+    }
+
+    const unrelatedEntry = entries.find(({ sha }) => sha === droppedSha);
+    let unrelatedSubject = unrelatedEntry?.subject;
+    if (unrelatedSubject === undefined) {
+      const showArguments = ['show', '-s', '--format=%s', droppedSha];
+      const shown = await executeGit(repositoryRoot, showArguments);
+      if (shown.exitCode !== 0) {
+        throw new RatchetStashRestoreError(
+          `A concurrent stash mutation changed ${entry.selector}, and recovering the dropped entry ${droppedSha} failed: ${describeGitFailure(showArguments, shown)}`,
+        );
+      }
+      unrelatedSubject = shown.stdout.trim();
+    }
+    const storeArguments = ['stash', 'store', '-m', unrelatedSubject, droppedSha];
+    const stored = await executeGit(repositoryRoot, storeArguments);
+    if (stored.exitCode !== 0) {
+      throw new RatchetStashRestoreError(
+        `A concurrent stash mutation changed ${entry.selector}. Restoring the unrelated stash ${droppedSha} failed: ${describeGitFailure(storeArguments, stored)}`,
+      );
+    }
+    recoveredConcurrentEntries.push(droppedSha);
   }
 
-  const dropArguments = ['stash', 'drop', selector];
-  const dropped = await runGit(repositoryRoot, dropArguments);
-  if (dropped.exitCode !== 0) {
-    throw new RatchetStashRestoreError(
-      `Your unstaged changes were restored, but dropping stash ${stash.sha} failed. The exact entry remains available with marker ${stash.marker}. ${describeGitFailure(dropArguments, dropped)}`,
-    );
-  }
+  throw new RatchetStashRestoreError(
+    `Concurrent stash mutations prevented safe removal of stash ${stash.sha} after five attempts. Your unstaged changes were restored and the exact entry remains available with marker ${stash.marker}.`,
+  );
 }
 
 function signalExitCode(signal: 'SIGINT' | 'SIGTERM'): number {
@@ -123,31 +169,40 @@ function signalExitCode(signal: 'SIGINT' | 'SIGTERM'): number {
 export async function withRatchetStash<T>(
   repositoryRoot: string,
   operation: () => Promise<T>,
+  dependencies: {
+    create?: typeof createRatchetStash;
+    restore?: typeof restoreRatchetStash;
+    exit?: (code: number) => void;
+  } = {},
 ): Promise<T> {
-  const stashPromise = createRatchetStash(repositoryRoot);
+  const create = dependencies.create ?? createRatchetStash;
+  const restore = dependencies.restore ?? restoreRatchetStash;
+  const exit = dependencies.exit ?? ((code: number) => process.exit(code));
+  const stashPromise = create(repositoryRoot);
   let cleanupPromise: Promise<void> | undefined;
+  let terminationPromise: Promise<void> | undefined;
   let interrupted = false;
   const cleanup = (): Promise<void> => {
     cleanupPromise ??= stashPromise.then((stash) =>
-      stash === undefined ? Promise.resolve() : restoreRatchetStash(repositoryRoot, stash),
+      stash === undefined ? Promise.resolve() : restore(repositoryRoot, stash),
     );
     return cleanupPromise;
   };
 
   const terminate = (signal: 'SIGINT' | 'SIGTERM'): void => {
     interrupted = true;
-    void cleanup().then(
-      () => process.exit(signalExitCode(signal)),
+    terminationPromise ??= cleanup().then(
+      () => exit(signalExitCode(signal)),
       (cause: unknown) => {
         error(cause instanceof Error ? cause.message : String(cause));
-        process.exit(1);
+        exit(1);
       },
     );
   };
   const onInterrupt = (): void => terminate('SIGINT');
   const onTerminate = (): void => terminate('SIGTERM');
-  process.once('SIGINT', onInterrupt);
-  process.once('SIGTERM', onTerminate);
+  process.on('SIGINT', onInterrupt);
+  process.on('SIGTERM', onTerminate);
 
   try {
     await stashPromise;
