@@ -7,6 +7,22 @@ export interface WorkerExecutionStrategyOptions {
   requireProtocolVersion?: boolean;
   discardOnCancel?: boolean;
   /**
+   * Require every freshly acquired worker to complete the realm-ready
+   * handshake (WFT-28) — send a valid `ready` message whose manifest
+   * contains a matching contract for every type in
+   * {@link getExpectedWorkflowTypes} (a subset check, not exact-manifest
+   * equality) — before it receives its first `run` turn. Defaults to
+   * `false` so direct/test construction of this class is unaffected;
+   * `createExecutionStrategyBundle` hardcodes this to `true` for every
+   * engine-constructed worker-mode strategy, mirroring how
+   * `requireProtocolVersion` is already hardcoded there.
+   */
+  requireRealmReady?: boolean;
+  /** Required when {@link requireRealmReady} is `true`. Called fresh on every handshake. */
+  getExpectedWorkflowTypes?: () => readonly string[];
+  /** Bound (ms) on the realm-ready wait. Defaults to `DEFAULT_WORKER_REALM_READY_TIMEOUT_MS`. */
+  realmReadyTimeoutMs?: number;
+  /**
    * The engine host's `EngineOptions.onLog` sink (#529). When present, the strategy
    * tells each worker (`hostHasLogSink: true` on `run`/`resume`) to forward `ctx.log`
    * records back as `log` protocol messages, which are delivered here instead of the

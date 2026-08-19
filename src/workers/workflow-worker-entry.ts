@@ -14,6 +14,8 @@ import {
   createBoundedWorkerFailureMessage,
   WORKER_PROTOCOL_VERSION,
 } from '../core/worker-protocol.ts';
+import type { WorkerRealmReadyMessage } from '../core/worker-realm-readiness.ts';
+import { buildInternalRealmManifest } from '../worker/manifest/internal-realm.ts';
 import type { WorkerLogPoster, WorkerWorkflowContext } from './workflow-runner.ts';
 import {
   cleanupWorkflowRunnerState,
@@ -45,13 +47,11 @@ const postLogMessage: WorkerLogPoster = (message, maxProtocolMessageBytes) => {
 // ---------------------------------------------------------------------------
 
 /**
- * Factory that resolves a workflow type name to its handler. Handlers receive
- * a worker-side {@link WorkerWorkflowContext} as the first argument so they
- * can read `ctx.workflowId` exactly like inline-mode handlers do.
+ * A workflow handler. Receives a worker-side {@link WorkerWorkflowContext} as
+ * the first argument so it can read `ctx.workflowId` exactly like inline-mode
+ * handlers do.
  */
-export type WorkflowHandlerFactory = (
-  type: string,
-) => ((ctx: WorkerWorkflowContext, input: unknown) => AsyncGenerator) | undefined;
+export type WorkflowHandler = (ctx: WorkerWorkflowContext, input: unknown) => AsyncGenerator;
 
 // ---------------------------------------------------------------------------
 // Worker bootstrap
@@ -61,11 +61,27 @@ export type WorkflowHandlerFactory = (
  * Initialize the worker message loop. Call this from within a Web Worker
  * to wire up the message protocol.
  *
- * @param getWorkflowHandler - Factory that resolves a workflow type name to
- *   its async generator function. Typically backed by a registration map.
+ * Sends a {@link WorkerRealmReadyMessage} first (WFT-28), built from exactly the
+ * workflow type names in `workflows` — the host validates it against its own
+ * expected manifest before this realm can receive its first `run` turn.
+ *
+ * @param workflows - Map of workflow type name to its async generator
+ *   function. This is also the realm's complete workflow-type advertisement:
+ *   the same names the ready manifest reports.
  */
-export function initializeWorkerMessageLoop(getWorkflowHandler: WorkflowHandlerFactory): void {
+export function initializeWorkerMessageLoop(
+  workflows: Readonly<Record<string, WorkflowHandler>>,
+): void {
   const runnerContext = createWorkflowRunnerContext();
+  const getWorkflowHandler = (type: string): WorkflowHandler | undefined => workflows[type];
+
+  const readyMessage: WorkerRealmReadyMessage = {
+    type: 'ready',
+    protocolVersion: WORKER_PROTOCOL_VERSION,
+    realmGeneration: crypto.randomUUID(),
+    manifest: buildInternalRealmManifest(Object.keys(workflows)),
+  };
+  workerPostMessage(readyMessage);
 
   self.addEventListener('message', async (event: MessageEvent<WorkerInboundMessage>) => {
     const message = event.data;

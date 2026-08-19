@@ -23,6 +23,7 @@ function createDependencies() {
     validateHostToWorkerMessage: () => true,
     attachWorkerListeners: mock(() => {}),
     detachWorkerListenersIfIdle: mock(() => {}),
+    ensureRealmReady: mock(async () => true),
     beginTurn: mock(() => {}),
     clearTurn: mock(() => {}),
     discardWorkerAndFailWorkflows: mock(() => {}),

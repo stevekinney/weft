@@ -409,6 +409,8 @@ export function createExecutionStrategyBundle(parameters: {
   development: boolean;
   broadcastEvents: boolean;
   getRegistration: (workflowType: string) => RegistrationEntry | undefined;
+  /** Live accessor for registered workflow type names (WFT-28); registrations are still empty here. */
+  listRegisteredWorkflowTypes: () => Iterable<string>;
   getComposedWorkflowInterceptor?: () => ComposedWorkflowInterceptor | null;
   resolveWorkflowType: (target: string | Function) => string;
   registerCancelHandler?: (workflowId: string, handler: () => Promise<void> | void) => () => void;
@@ -423,6 +425,7 @@ export function createExecutionStrategyBundle(parameters: {
     development,
     broadcastEvents,
     getRegistration,
+    listRegisteredWorkflowTypes,
     getComposedWorkflowInterceptor,
     resolveWorkflowType,
     registerCancelHandler,
@@ -445,6 +448,10 @@ export function createExecutionStrategyBundle(parameters: {
       broadcastEvents,
       requireProtocolVersion: workerExecutionConfiguration.requireProtocolVersion,
       discardOnCancel: workerExecutionConfiguration.discardOnCancel,
+      // Realm-ready handshake (WFT-28) is mandatory here for the same reason
+      // requireProtocolVersion is above: host and worker are one package build.
+      requireRealmReady: true,
+      getExpectedWorkflowTypes: () => [...listRegisteredWorkflowTypes()],
       workflowTurnTimeoutMs: workerExecutionConfiguration.workflowTurnTimeoutMs,
       maxProtocolMessageBytes: workerExecutionConfiguration.maxProtocolMessageBytes,
       // Forwarded-log abuse counter (#545): the strategy uses the engine clock so the

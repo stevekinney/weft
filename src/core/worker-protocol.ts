@@ -13,10 +13,27 @@ export {
   type WorkerReplayOperationSignature,
 } from './types/checkpoint.ts';
 
-export const WORKER_PROTOCOL_VERSION = 1;
+/**
+ * Bumped 1 -> 2 for the realm-ready handshake (WFT-28): a worker realm must
+ * now send a `ready` message before its first turn, a required pre-turn
+ * message the wire semantics didn't previously have. Host and worker are
+ * always built from the same package version — there is no independent peer
+ * to stay backward compatible with — so this is a clean-break bump, the same
+ * reasoning the RemoteWorker protocol v2 -> v3 bump used.
+ */
+export const WORKER_PROTOCOL_VERSION = 2;
 export const DEFAULT_WORKER_TURN_TIMEOUT_MS = 1_000;
 export const DEFAULT_WORKER_PROTOCOL_MESSAGE_BYTES = 1_048_576;
 export const MIN_WORKER_PROTOCOL_MESSAGE_BYTES = 4_096;
+/**
+ * Default bound (ms) on how long the host waits for a freshly acquired
+ * worker's `ready` handshake message before discarding it (WFT-28). Worker boot
+ * is module load plus evaluation with no I/O, but a cold Bun Worker spinning
+ * up a large bundled module graph can take meaningfully longer than a single
+ * workflow turn, so this is deliberately more generous than
+ * {@link DEFAULT_WORKER_TURN_TIMEOUT_MS}.
+ */
+export const DEFAULT_WORKER_REALM_READY_TIMEOUT_MS = 5_000;
 
 /**
  * Default fixed-window length (ms) for the forwarded-log flood budget (#545). Paired

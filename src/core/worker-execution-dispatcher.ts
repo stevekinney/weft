@@ -15,6 +15,14 @@ export interface WorkerExecutionDispatcherDependencies {
   ) => boolean;
   attachWorkerListeners: (worker: Worker) => void;
   detachWorkerListenersIfIdle: (worker: Worker) => void;
+  /**
+   * Resolve once `worker`'s realm-ready handshake has settled (or
+   * immediately, if realm-readiness isn't required). `false` means the
+   * handshake failed or timed out; the implementation is responsible for
+   * discarding the worker and emitting the workflow failure itself, the same
+   * contract `validateHostToWorkerMessage` already uses.
+   */
+  ensureRealmReady: (worker: Worker, workflowId: string) => Promise<boolean>;
   beginTurn: (worker: Worker, workflowId: string, turnId: number, kind: 'run' | 'resume') => void;
   clearTurn: (worker: Worker) => void;
   discardWorkerAndFailWorkflows: (
@@ -52,6 +60,23 @@ export class WorkerExecutionDispatcher {
       const worker = await this.#dependencies.pool.acquire();
       this.#dependencies.ownership.setActive(workflowId, worker);
       this.#dependencies.attachWorkerListeners(worker);
+
+      const ready = await this.#dependencies.ensureRealmReady(worker, workflowId);
+      if (!ready) return;
+
+      // The realm-ready wait can span the worker's full boot time, during
+      // which `cancelWorkflow` may have released this worker back to the
+      // pool (or the strategy may have been disposed) — re-check ownership
+      // before sending so a cancelled workflow's `run` never reaches a
+      // worker another workflow now owns. Mirrors `resumeParkedWorkflow`'s
+      // post-await re-check for the identical reason.
+      if (
+        this.#dependencies.isDisposed() ||
+        this.#dependencies.ownership.getActiveWorker(workflowId) !== worker
+      ) {
+        return;
+      }
+
       this.#sendActiveMessage(worker, workflowId, message, 'run');
     } catch (error) {
       this.#dependencies.emit({

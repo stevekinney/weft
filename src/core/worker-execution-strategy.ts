@@ -1,15 +1,11 @@
 import type { WorkerPool } from '../workers/pool.ts';
 import type { ExecutionStrategy } from './execution-strategy.ts';
-import type {
-  FailureCategory,
-  OperationOutcome,
-  WorkerInboundMessage,
-  WorkerOutboundMessage,
-} from './types.ts';
+import type { OperationOutcome, WorkerInboundMessage, WorkerOutboundMessage } from './types.ts';
 import { WorkerCheckpointResumeState } from './worker-checkpoint-resume-state.ts';
 import { WorkerExecutionDispatcher } from './worker-execution-dispatcher.ts';
 import { WorkerExecutionOwnership } from './worker-execution-ownership.ts';
 import type { WorkerExecutionStrategyOptions } from './worker-execution-strategy-options.ts';
+import { WorkerFaultHandler } from './worker-fault-handling.ts';
 import {
   buildResumeMessage,
   buildRunMessage,
@@ -26,10 +22,13 @@ import {
 } from './worker-message-helpers.ts';
 import { WorkerProtocolGuard } from './worker-protocol-guard.ts';
 import { isWorkerLogMessage } from './worker-protocol-log.ts';
-import { WORKER_PROTOCOL_VERSION } from './worker-protocol.ts';
+import {
+  DEFAULT_WORKER_REALM_READY_TIMEOUT_MS,
+  WORKER_PROTOCOL_VERSION,
+} from './worker-protocol.ts';
+import { isWorkerRealmReadyMessage, WorkerRealmReadiness } from './worker-realm-readiness.ts';
 import {
   WorkerTurnWatchdog,
-  type WorkerTurnState,
   type WorkerTurnTimeoutResolverForTesting,
 } from './worker-turn-watchdog.ts';
 
@@ -47,6 +46,8 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
   readonly #forwardedLogGate: ForwardedLogGate;
   readonly #turnWatchdog: WorkerTurnWatchdog;
   readonly #protocolGuard: WorkerProtocolGuard;
+  readonly #realmReadiness: WorkerRealmReadiness | null;
+  readonly #faultHandler: WorkerFaultHandler;
   readonly #dispatcher: WorkerExecutionDispatcher;
   #messageHandler: ((message: WorkerOutboundMessage) => void | Promise<void>) | null;
   #disposed: boolean;
@@ -59,6 +60,9 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
       requireProtocolVersion = false,
       discardOnCancel = false,
       broadcastEvents = false,
+      requireRealmReady = false,
+      getExpectedWorkflowTypes,
+      realmReadyTimeoutMs = DEFAULT_WORKER_REALM_READY_TIMEOUT_MS,
     } = options ?? {};
     this.#pool = pool;
     this.#ownership = new WorkerExecutionOwnership();
@@ -70,26 +74,46 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
     this.#discardOnCancel = discardOnCancel;
     this.#forwardedLogGate = forwardedLogGateFromStrategyOptions(options, maxProtocolMessageBytes);
     this.#turnWatchdog = new WorkerTurnWatchdog(this.#workflowTurnTimeoutMs, (turn) => {
-      this.#handleTurnTimeout(turn);
+      this.#faultHandler.handleTurnTimeout(turn);
     });
     this.#protocolGuard = new WorkerProtocolGuard(
       this.#maxProtocolMessageBytes,
       this.#requireProtocolVersion,
       this.#turnWatchdog,
     );
+    this.#realmReadiness = WorkerExecutionStrategy.#buildRealmReadiness(
+      requireRealmReady,
+      getExpectedWorkflowTypes,
+      realmReadyTimeoutMs,
+      this.#maxProtocolMessageBytes,
+    );
+    this.#faultHandler = new WorkerFaultHandler({
+      ownership: this.#ownership,
+      checkpointResumeState: this.#checkpointResumeState,
+      turnWatchdog: this.#turnWatchdog,
+      forwardedLogGate: this.#forwardedLogGate,
+      realmReadiness: this.#realmReadiness,
+      workerListeners: this.#workerListeners,
+      protocolGuard: this.#protocolGuard,
+      pool: this.#pool,
+      emit: (message) => {
+        this.#emit(message);
+      },
+    });
     this.#dispatcher = new WorkerExecutionDispatcher({
       pool: this.#pool,
       ownership: this.#ownership,
       isDisposed: () => this.#disposed,
       requireProtocolVersion: () => this.#requireProtocolVersion,
       validateHostToWorkerMessage: (workflowId, message, worker) =>
-        this.#assertHostToWorkerMessageWithinLimit(workflowId, message, worker),
+        this.#faultHandler.assertHostToWorkerMessageWithinLimit(workflowId, message, worker),
       attachWorkerListeners: (worker) => {
         this.#attachWorkerListeners(worker);
       },
       detachWorkerListenersIfIdle: (worker) => {
         this.#detachWorkerListenersIfIdle(worker);
       },
+      ensureRealmReady: (worker, workflowId) => this.#ensureRealmReady(worker, workflowId),
       beginTurn: (worker, workflowId, turnId, kind) => {
         this.#turnWatchdog.begin(worker, workflowId, turnId, kind);
       },
@@ -97,7 +121,7 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
         this.#turnWatchdog.clear(worker);
       },
       discardWorkerAndFailWorkflows: (worker, discardOptions) => {
-        this.#discardWorkerAndFailWorkflows(worker, discardOptions);
+        this.#faultHandler.discardWorkerAndFailWorkflows(worker, discardOptions);
       },
       emit: (message) => {
         this.#emit(message);
@@ -144,7 +168,7 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
     this.#ownership.resetWorkflow(parameters.workflowId);
     this.#checkpointResumeState.resetWorkflow(parameters.workflowId);
     const message = buildRunMessage(parameters, this.#inboundMessageContext());
-    if (!this.#assertHostToWorkerMessageWithinLimit(parameters.workflowId, message)) {
+    if (!this.#faultHandler.assertHostToWorkerMessageWithinLimit(parameters.workflowId, message)) {
       return;
     }
     void this.#dispatcher.acquireAndSend(parameters.workflowId, message);
@@ -183,6 +207,23 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
     }
   }
 
+  async #ensureRealmReady(worker: Worker, workflowId: string): Promise<boolean> {
+    if (!this.#realmReadiness) return true;
+    if (this.#realmReadiness.isReady(worker)) return true;
+
+    const outcome = await this.#realmReadiness.waitForReady(worker);
+    if (outcome.ok) return true;
+
+    this.#faultHandler.discardWorkerAndFailWorkflows(worker, {
+      targetWorkflowId: workflowId,
+      targetCategory: outcome.failureCategory,
+      targetError: outcome.error,
+      otherCategory: 'system',
+      otherError: `Worker discarded after realm-ready handshake failed: ${outcome.error}`,
+    });
+    return false;
+  }
+
   #inboundMessageContext(): WorkerInboundMessageContext {
     return {
       turnId: this.#nextTurnId++,
@@ -196,7 +237,7 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
     if (worker) {
       this.#ownership.markCancelled(workflowId);
       if (this.#discardOnCancel) {
-        this.#discardWorkerAndFailWorkflows(worker, {
+        this.#faultHandler.discardWorkerAndFailWorkflows(worker, {
           targetWorkflowId: workflowId,
           skipTarget: true,
           otherCategory: 'system',
@@ -223,7 +264,7 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
     this.#ownership.markCancelled(workflowId);
     this.#ownership.deleteParked(workflowId);
     if (this.#discardOnCancel) {
-      this.#discardWorkerAndFailWorkflows(parkedWorker, {
+      this.#faultHandler.discardWorkerAndFailWorkflows(parkedWorker, {
         targetWorkflowId: workflowId,
         skipTarget: true,
         otherCategory: 'system',
@@ -255,6 +296,7 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
     }
 
     this.#turnWatchdog.clearAll();
+    this.#realmReadiness?.clear();
 
     const activeWorkflowIds = this.#ownership.activeWorkflowIds();
     for (const workflowId of activeWorkflowIds) {
@@ -268,15 +310,27 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
   }
 
   async #handleWorkerMessage(worker: Worker, message: unknown): Promise<void> {
+    // Every worker realm sends `ready` at boot regardless of whether this
+    // strategy requires the handshake (WFT-28), so it must be intercepted here
+    // unconditionally — `ready` has no `workflowId` and would otherwise reach
+    // `WorkerFaultHandler.acceptWorkerMessage`'s strict gate, which requires
+    // one, and get the worker discarded before it ever executes a turn.
+    if (isWorkerRealmReadyMessage(message)) {
+      if (this.#realmReadiness) {
+        await this.#realmReadiness.noteReadyMessage(worker, message);
+      }
+      return;
+    }
+
     // Logs bypass the strict gate; ForwardedLogGate handles sustained abuse.
     if (isWorkerLogMessage(message)) {
       const owns = (id: string): boolean => this.#ownership.getTargetWorker(id) === worker;
       const abuseDiscard = this.#forwardedLogGate.handle(worker, message, owns);
-      if (abuseDiscard) this.#discardWorkerAndFailWorkflows(worker, abuseDiscard);
+      if (abuseDiscard) this.#faultHandler.discardWorkerAndFailWorkflows(worker, abuseDiscard);
       return;
     }
 
-    if (!this.#acceptWorkerMessage(worker, message)) {
+    if (!this.#faultHandler.acceptWorkerMessage(worker, message)) {
       return;
     }
 
@@ -343,15 +397,6 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
     }
   }
 
-  #handleWorkerError(worker: Worker, errorEvent: ErrorEvent): void {
-    this.#discardWorkerAndFailWorkflows(worker, {
-      targetCategory: 'system',
-      targetError: `Worker crashed: ${errorEvent.message ?? 'unknown error'}`,
-      otherCategory: 'system',
-      otherError: `Worker crashed: ${errorEvent.message ?? 'unknown error'}`,
-    });
-  }
-
   #releaseActiveWorker(workflowId: string): void {
     const worker = this.#ownership.releaseActive(workflowId);
     if (worker) {
@@ -368,10 +413,10 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
         void this.#handleWorkerMessage(worker, message).catch(() => {});
       },
       error: (errorEvent) => {
-        this.#handleWorkerError(worker, errorEvent);
+        this.#faultHandler.handleWorkerError(worker, errorEvent);
       },
       messageerror: () => {
-        this.#discardWorkerAndFailWorkflows(worker, {
+        this.#faultHandler.discardWorkerAndFailWorkflows(worker, {
           targetCategory: 'system',
           targetError: 'Worker messageerror event',
           otherCategory: 'system',
@@ -387,102 +432,6 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
     );
   }
 
-  #assertHostToWorkerMessageWithinLimit(
-    workflowId: string,
-    message: WorkerInboundMessage,
-    worker?: Worker,
-  ): boolean {
-    const failure = this.#protocolGuard.validateHostToWorkerMessage(message);
-    if (!failure) return true;
-    if (worker) {
-      this.#discardWorkerAndFailWorkflows(worker, {
-        targetWorkflowId: workflowId,
-        targetCategory: failure.failureCategory,
-        targetError: failure.error,
-        otherCategory: 'system',
-        otherError: `Worker discarded after protocol send failure for workflow: ${workflowId}`,
-      });
-      return false;
-    }
-
-    this.#emit({
-      type: 'failed',
-      workflowId,
-      error: failure.error,
-      failureCategory: failure.failureCategory,
-    });
-    return false;
-  }
-
-  #acceptWorkerMessage(worker: Worker, message: unknown): message is WorkerOutboundMessage {
-    const result = this.#protocolGuard.acceptWorkerMessage(worker, message);
-    if (result.accepted) return true;
-    this.#discardWorkerAndFailWorkflows(worker, {
-      ...(result.failure.targetWorkflowId === undefined
-        ? {}
-        : { targetWorkflowId: result.failure.targetWorkflowId }),
-      targetCategory: result.failure.failureCategory,
-      targetError: result.failure.error,
-      otherCategory: 'system',
-      otherError: result.failure.otherError,
-    });
-    return false;
-  }
-
-  #handleTurnTimeout(turn: WorkerTurnState): void {
-    this.#discardWorkerAndFailWorkflows(turn.worker, {
-      targetWorkflowId: turn.workflowId,
-      targetCategory: 'timeout',
-      targetError: `Worker workflow turn timed out after ${turn.timeoutMs}ms`,
-      otherCategory: 'timeout',
-      otherError: `Worker discarded after workflow turn timed out: ${turn.workflowId}`,
-    });
-  }
-
-  #discardWorkerAndFailWorkflows(
-    worker: Worker,
-    options: {
-      targetWorkflowId?: string;
-      targetCategory?: FailureCategory;
-      targetError?: string;
-      skipTarget?: boolean;
-      otherCategory: FailureCategory;
-      otherError: string;
-    },
-  ): void {
-    const workflowIds = this.#ownership.workflowIdsForWorker(worker);
-    if (workflowIds.length === 0) {
-      // Every discard trigger owns >= 1 workflow when it fires. Do not discard here:
-      // a fully released worker may already be re-acquired for another workflow.
-      this.#turnWatchdog.clear(worker);
-      this.#forwardedLogGate.forget(worker);
-      return;
-    }
-
-    for (const workflowId of workflowIds) {
-      const isTarget = workflowId === options.targetWorkflowId;
-      this.#ownership.forgetWorkflow(workflowId);
-      this.#checkpointResumeState.forgetWorkflowIfClosed(workflowId, true);
-      if (isTarget && options.skipTarget) {
-        continue;
-      }
-
-      this.#emit({
-        type: 'failed',
-        workflowId,
-        error: isTarget ? (options.targetError ?? options.otherError) : options.otherError,
-        failureCategory: isTarget
-          ? (options.targetCategory ?? options.otherCategory)
-          : options.otherCategory,
-      });
-    }
-
-    this.#turnWatchdog.clear(worker);
-    this.#forwardedLogGate.forget(worker);
-    this.#workerListeners.detach(worker);
-    this.#pool.discard(worker);
-  }
-
   #handleBroadcastMessage(data: Record<string, unknown>): void {
     if (data['type'] === 'signal:received' && typeof data['workflowId'] === 'string') {
       const targetWorker = this.#ownership.getTargetWorker(data['workflowId']);
@@ -496,5 +445,24 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
       // Observe the unawaited handler turn so rejections never become process noise.
       void result.catch(() => {});
     }
+  }
+
+  static #buildRealmReadiness(
+    requireRealmReady: boolean,
+    getExpectedWorkflowTypes: (() => readonly string[]) | undefined,
+    timeoutMs: number,
+    maxProtocolMessageBytes: number | undefined,
+  ): WorkerRealmReadiness | null {
+    if (!requireRealmReady) return null;
+    if (!getExpectedWorkflowTypes) {
+      throw new Error(
+        'WorkerExecutionStrategyOptions.getExpectedWorkflowTypes is required when requireRealmReady is true',
+      );
+    }
+    return new WorkerRealmReadiness({
+      getExpectedWorkflowTypes,
+      timeoutMs,
+      maxProtocolMessageBytes,
+    });
   }
 }
