@@ -20,7 +20,6 @@ import { decode, encode } from '../core/codec.ts';
 import { Engine } from '../core/engine.ts';
 import {
   ActivityFailedEvent,
-  TaskResultDeadLetteredEvent,
   WorkerConnectedEvent,
   WorkerDisconnectedEvent,
   WorkflowCancelledEvent,
@@ -47,17 +46,19 @@ import { DeadlineTracker } from './deadline-tracker.ts';
 import * as handlerModule from './handler.ts';
 import type { ServeOptions, WeftServer } from './index.ts';
 import { DASHBOARD_PAGE_ROUTES, serve, wireEventBroadcasting } from './index.ts';
-import { createOperationRegistry, executeOperation } from './operation-catalog.ts';
-import {
-  createGetTaskDiagnosticsOperation,
-  type GetTaskDiagnosticsOutput,
-} from './operations/get-task-diagnostics.ts';
-import { anonymousPrincipal, principalFromApiKey } from './principal.ts';
+import { anonymousPrincipal } from './principal.ts';
 import { API_PREFIX, DIRECT_HTTP_ROUTES } from './route-model.ts';
-import { minimalServerContext } from './runtime/server-context.test-support.ts';
-import { reconcileOrphanedRecords, scanExpiredTasks } from './runtime/task-reconciliation.ts';
 import { buildFetchHandler, buildServerContext, resolveNetworkConfig } from './serve-internals.ts';
-import type { InflightRecord, QueuedRecord, ResolvedRecord } from './task-state.ts';
+import {
+  decodeRemoteTaskRecord,
+  encodeRemoteTaskRecord,
+  isRemoteTaskTerminalResolved,
+  taskLedgerKey,
+  type RemoteTaskLeased,
+  type RemoteTaskQueued,
+  type RemoteTaskRecord,
+  type RemoteTaskTerminalResolved,
+} from './task-ledger.ts';
 
 const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (
   _ctx: WorkflowContext,
@@ -339,6 +340,79 @@ function overrideProperty<T extends object, K extends keyof T>(
   (target as Record<PropertyKey, unknown>)[property as PropertyKey] = replacement as unknown;
   return () => {
     (target as Record<PropertyKey, unknown>)[property as PropertyKey] = original as unknown;
+  };
+}
+
+/**
+ * Read the current durable remote task ledger record for `operationId`.
+ * Post-cutover (WFT-22), this is the sole current-state record for the live
+ * dispatch/claim/heartbeat/completion path — see `task-ledger.ts`.
+ */
+async function readLedgerRecord(
+  storage: WeftStorage,
+  operationId: string,
+): Promise<RemoteTaskRecord | null> {
+  return decodeRemoteTaskRecord(await storage.get(taskLedgerKey(operationId)));
+}
+
+/**
+ * Wait for and read `operationId`'s ledger record once it reaches a
+ * `resolved`-disposition terminal state. Terminal records carry only
+ * `RemoteTaskBase` fields plus `RemoteTaskTerminalCommon` (WFT-22 deliberately
+ * does not persist queue/execution latency or retry/requeue counts onto the
+ * terminal record itself — those are emitted as metrics at commit time and
+ * WFT-24 is where any durable diagnostics enrichment would live).
+ */
+async function waitForTerminalResolvedRecord(
+  storage: WeftStorage,
+  operationId: string,
+): Promise<RemoteTaskTerminalResolved> {
+  let record: RemoteTaskTerminalResolved | undefined;
+  await waitFor(
+    async () => {
+      const current = await readLedgerRecord(storage, operationId);
+      if (!isRemoteTaskTerminalResolved(current)) return false;
+      record = current;
+      return true;
+    },
+    { label: `${operationId} to resolve` },
+  );
+  if (record === undefined) {
+    throw new Error(`Expected a resolved terminal ledger record for "${operationId}"`);
+  }
+  return record;
+}
+
+/**
+ * Hand-construct a `leased` durable remote task ledger record for narrow
+ * unit-style test fixtures that don't need a full dispatch+claim round trip —
+ * mirrors `leasedFixture()` in `task-ledger-transitions.test.ts`.
+ */
+function makeLeasedLedgerRecord(overrides: Partial<RemoteTaskLeased> = {}): RemoteTaskLeased {
+  const now = Date.now();
+  return {
+    recordVersion: 1,
+    operationId: 'op-1',
+    workflowType: 'test',
+    activityName: 'test.charge',
+    queue: 'default',
+    input: null,
+    headers: {},
+    visibilityTimeoutMilliseconds: 30_000,
+    createdAt: now,
+    generation: 1,
+    state: 'leased',
+    attemptToken: 'attempt-token',
+    workerSessionId: 'worker-1',
+    attempt: 1,
+    leaseDeadline: now + 30_000,
+    firstQueuedAt: now,
+    lastQueuedAt: now,
+    startedAt: now,
+    lastHeartbeatAt: now,
+    retryCount: 0,
+    requeueCount: 0,
+    ...overrides,
   };
 }
 
@@ -2523,7 +2597,7 @@ describe('worker WebSocket protocol', () => {
     await waitForRealTimersForTesting(50);
   });
 
-  it('records task lifecycle metadata and low-cardinality metrics for WebSocket dispatches', async () => {
+  it('records terminal disposition and low-cardinality metrics for WebSocket dispatches', async () => {
     engine = createEngine();
     server = serveTestServer({ engine, port: 0 });
 
@@ -2556,45 +2630,17 @@ describe('worker WebSocket protocol', () => {
     await server.dispatchTask({
       operationId: 'diagnostic-ws-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
       workflowId: 'workflow-diagnostics',
     });
 
-    await waitFor(
-      async () => (await engine.storage.get(KEYS.operationResolved('diagnostic-ws-op'))) !== null,
-      { label: 'diagnostic-ws-op to resolve' },
-    );
-
-    const resolved = decode(
-      (await engine.storage.get(KEYS.operationResolved('diagnostic-ws-op')))!,
-    ) as {
-      workflowId?: string;
-      activityName?: string;
-      queue?: string;
-      workerId?: string;
-      firstQueuedAt?: number;
-      lastDispatchedAt?: number;
-      startedAt?: number;
-      completedAt?: number;
-      retryCount?: number;
-      requeueCount?: number;
-      resolutionReason?: string;
-      queueLatencyMs?: number;
-      executionLatencyMs?: number;
-    };
+    const resolved = await waitForTerminalResolvedRecord(engine.storage, 'diagnostic-ws-op');
     expect(resolved.workflowId).toBe('workflow-diagnostics');
     expect(resolved.activityName).toBe('test.charge');
     expect(resolved.queue).toBe('default');
-    expect(resolved.workerId).toBe('w-diagnostics');
-    expect(typeof resolved.firstQueuedAt).toBe('number');
-    expect(typeof resolved.lastDispatchedAt).toBe('number');
-    expect(typeof resolved.startedAt).toBe('number');
-    expect(typeof resolved.completedAt).toBe('number');
-    expect(resolved.retryCount).toBe(0);
-    expect(resolved.requeueCount).toBe(0);
-    expect(resolved.resolutionReason).toBe('completed');
-    expect(typeof resolved.queueLatencyMs).toBe('number');
-    expect(typeof resolved.executionLatencyMs).toBe('number');
+    expect(resolved.status).toBe('completed');
+    expect(typeof resolved.terminalAt).toBe('number');
 
     const metricsResponse = await fetch(`${server.url}/v1/metrics`);
     expect(metricsResponse.status).toBe(200);
@@ -2653,15 +2699,12 @@ describe('worker WebSocket protocol', () => {
     await server.dispatchTask({
       operationId: 'server-owned-metrics-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
       workflowId: 'workflow-server-owned-metrics',
     });
 
-    await waitFor(
-      async () =>
-        (await engine.storage.get(KEYS.operationResolved('server-owned-metrics-op'))) !== null,
-      { label: 'server-owned-metrics-op to resolve' },
-    );
+    await waitForTerminalResolvedRecord(engine.storage, 'server-owned-metrics-op');
 
     const response = await fetch(`${server.url}/v1/metrics/json`, {
       headers: { Authorization: `Bearer ${apiKey}` },
@@ -2680,27 +2723,18 @@ describe('worker WebSocket protocol', () => {
   it('refreshes stale heartbeat metrics from runtime reconciliation scans', async () => {
     engine = createEngine();
     const now = Date.now();
-    const staleInflightRecord: InflightRecord = {
+    const staleLeasedRecord = makeLeasedLedgerRecord({
       operationId: 'stale-heartbeat-metric-op',
-      workerId: 'worker-stale-heartbeat',
-      deadline: now + 60_000,
-      activityName: 'test.charge',
-      queue: 'default',
-      input: null,
-      attempt: 1,
-      visibilityTimeout: 30_000,
-      attemptToken: 'attempt-token',
+      workerSessionId: 'worker-stale-heartbeat',
+      leaseDeadline: now + 60_000,
       firstQueuedAt: now - 70_000,
       lastQueuedAt: now - 70_000,
-      lastDispatchedAt: now - 65_000,
       startedAt: now - 65_000,
       lastHeartbeatAt: now - 61_000,
-      retryCount: 0,
-      requeueCount: 0,
-    };
+    });
     await engine.storage.put(
-      KEYS.operationInflight(staleInflightRecord.operationId),
-      encode(staleInflightRecord),
+      taskLedgerKey(staleLeasedRecord.operationId),
+      encodeRemoteTaskRecord(staleLeasedRecord),
     );
 
     server = serveTestServer({
@@ -2729,13 +2763,16 @@ describe('worker WebSocket protocol', () => {
     await server.dispatchTask({
       operationId: 'heartbeat-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
       visibilityTimeout: 200,
     });
 
-    const before = decode((await engine.storage.get(KEYS.operationInflight('heartbeat-op')))!) as {
-      deadline: number;
-    };
+    const beforeRecord = await readLedgerRecord(engine.storage, 'heartbeat-op');
+    if (beforeRecord === null || beforeRecord.state !== 'leased') {
+      throw new Error('Expected "heartbeat-op" to have a leased ledger record');
+    }
+    const before = beforeRecord;
 
     // ensures wall-clock advances so the heartbeat-extended deadline is
     // measurably greater than `before` (no event to await for the gap itself)
@@ -2744,77 +2781,35 @@ describe('worker WebSocket protocol', () => {
     ws.send(JSON.stringify({ type: 'heartbeat', workerId: 'w-heartbeat-extend' }));
     await waitFor(
       async () => {
-        const current = decode(
-          (await engine.storage.get(KEYS.operationInflight('heartbeat-op')))!,
-        ) as { deadline: number };
-        return current.deadline > before.deadline;
+        const current = await readLedgerRecord(engine.storage, 'heartbeat-op');
+        return (
+          current !== null &&
+          current.state === 'leased' &&
+          current.leaseDeadline > before.leaseDeadline
+        );
       },
       { label: 'heartbeat extended the inflight deadline' },
     );
 
-    const after = decode((await engine.storage.get(KEYS.operationInflight('heartbeat-op')))!) as {
-      deadline: number;
-    };
+    const afterRecord = await readLedgerRecord(engine.storage, 'heartbeat-op');
+    if (afterRecord === null || afterRecord.state !== 'leased') {
+      throw new Error('Expected "heartbeat-op" to still have a leased ledger record');
+    }
 
-    expect(after.deadline).toBeGreaterThan(before.deadline);
+    expect(afterRecord.leaseDeadline).toBeGreaterThan(before.leaseDeadline);
 
     ws.close();
     await waitForRealTimersForTesting(50);
-  });
-
-  it('logs corrupt inflight records during heartbeat visibility extension', async () => {
-    engine = createEngine();
-    const storage = engine.storage as MemoryStorage;
-    const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
-    server = serveTestServer({ engine, port: 0 });
-
-    try {
-      const ws = await connectWorker(server);
-      await registerWorker(ws, { workerId: 'w-heartbeat-corrupt', activities: ['test.charge'] });
-
-      await server.dispatchTask({
-        operationId: 'heartbeat-corrupt-op',
-        activityName: 'test.charge',
-        input: null,
-        visibilityTimeout: 200,
-      });
-      await storage.put(KEYS.operationInflight('heartbeat-corrupt-op'), encode({ broken: true }));
-
-      ws.send(JSON.stringify({ type: 'heartbeat', workerId: 'w-heartbeat-corrupt' }));
-      await waitFor(
-        () =>
-          errorSpy.mock.calls.some(
-            (call) =>
-              call[0] ===
-              '[weft] Corrupt inflight record for task "heartbeat-corrupt-op" during heartbeat — skipping visibility extension',
-          ),
-        { label: 'corrupt inflight heartbeat warning logged' },
-      );
-
-      expect(errorSpy).toHaveBeenCalledWith(
-        '[weft] Corrupt inflight record for task "heartbeat-corrupt-op" during heartbeat — skipping visibility extension',
-      );
-
-      ws.close();
-      await waitForRealTimersForTesting(50);
-    } finally {
-      errorSpy.mockRestore();
-    }
   });
 
   it('logs heartbeat visibility persistence failures', async () => {
     engine = createEngine();
     const storage = engine.storage as MemoryStorage;
     const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
-    const originalPut = storage.put.bind(storage);
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
     server = serveTestServer({ engine, port: 0 });
 
-    const restorePut = overrideProperty(storage, 'put', (async (key: string, value: Uint8Array) => {
-      if (key === KEYS.operationInflight('heartbeat-write-fail-op')) {
-        throw new Error('heartbeat write failed');
-      }
-      await originalPut(key, value);
-    }) as MemoryStorage['put']);
+    let restoreConditionalBatch: (() => void) | undefined;
 
     try {
       const ws = await connectWorker(server);
@@ -2823,9 +2818,26 @@ describe('worker WebSocket protocol', () => {
       await server.dispatchTask({
         operationId: 'heartbeat-write-fail-op',
         activityName: 'test.charge',
+        workflowType: 'test',
         input: null,
         visibilityTimeout: 200,
       });
+
+      // Only the heartbeat's lease-renewal write should fail — installed
+      // after dispatch's own create+claim write to the same ledger key has
+      // already committed, since both go through the same `conditionalBatch`
+      // path on `taskLedgerKey('heartbeat-write-fail-op')`.
+      restoreConditionalBatch = overrideProperty(storage, 'conditionalBatch', (async (
+        conditions: Parameters<MemoryStorage['conditionalBatch']>[0],
+        operations: Parameters<MemoryStorage['conditionalBatch']>[1],
+      ) => {
+        if (
+          operations.some((operation) => operation.key === taskLedgerKey('heartbeat-write-fail-op'))
+        ) {
+          throw new Error('heartbeat write failed');
+        }
+        return originalConditionalBatch(conditions, operations);
+      }) as MemoryStorage['conditionalBatch']);
 
       ws.send(JSON.stringify({ type: 'heartbeat', workerId: 'w-heartbeat-write-fail' }));
       await waitFor(
@@ -2850,7 +2862,7 @@ describe('worker WebSocket protocol', () => {
       ws.close();
       await waitForRealTimersForTesting(50);
     } finally {
-      restorePut();
+      restoreConditionalBatch?.();
       errorSpy.mockRestore();
     }
   });
@@ -2876,6 +2888,7 @@ describe('worker WebSocket protocol', () => {
     const dispatched = await server.dispatchTask({
       operationId: 'op-1',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: { amount: 100 },
     });
 
@@ -2936,6 +2949,7 @@ describe('worker WebSocket protocol', () => {
     const dispatched = await server.dispatchTask({
       operationId: 'new-work',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
     });
 
@@ -2963,6 +2977,7 @@ describe('worker WebSocket protocol', () => {
     const dispatched = await server.dispatchTask({
       operationId: 'queued-after-drain',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
     });
 
@@ -2980,6 +2995,7 @@ describe('worker WebSocket protocol', () => {
     const dispatched = await server.dispatchTask({
       operationId: 'op-2',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
     });
 
@@ -2997,7 +3013,12 @@ describe('worker WebSocket protocol', () => {
 
     await registerWorker(ws, { workerId: 'w5', activities: ['test.compute'], concurrency: 5 });
 
-    await server.dispatchTask({ operationId: 'op-3', activityName: 'test.compute', input: null });
+    await server.dispatchTask({
+      operationId: 'op-3',
+      activityName: 'test.compute',
+      workflowType: 'test',
+      input: null,
+    });
 
     // Right after dispatch, in-flight should be 1
     expect(server.registry.getAll()[0]?.inFlight).toBe(1);
@@ -3091,8 +3112,18 @@ describe('worker WebSocket protocol', () => {
     // Dispatch two tasks — both workers start at 0 in-flight, so the first
     // goes to whichever findWorker returns first, and the second should go
     // to the other (least-loaded).
-    await server.dispatchTask({ operationId: 'op-a', activityName: 'test.charge', input: null });
-    await server.dispatchTask({ operationId: 'op-b', activityName: 'test.charge', input: null });
+    await server.dispatchTask({
+      operationId: 'op-a',
+      activityName: 'test.charge',
+      workflowType: 'test',
+      input: null,
+    });
+    await server.dispatchTask({
+      operationId: 'op-b',
+      activityName: 'test.charge',
+      workflowType: 'test',
+      input: null,
+    });
 
     await waitFor(() => received1.length === 1 && received2.length === 1, {
       label: 'each worker received one task',
@@ -3143,6 +3174,7 @@ describe('worker WebSocket protocol', () => {
       const dispatched = await server.dispatchTask({
         operationId: `alpha-${index}`,
         activityName: 'test.runAgent',
+        workflowType: 'test',
         input: null,
         fairShareKey: 'key-alpha',
       });
@@ -3174,6 +3206,7 @@ describe('worker WebSocket protocol', () => {
     const dispatchedBeta = await server.dispatchTask({
       operationId: 'beta-1',
       activityName: 'test.runAgent',
+      workflowType: 'test',
       input: null,
       fairShareKey: 'key-beta',
     });
@@ -3210,6 +3243,7 @@ describe('worker WebSocket protocol', () => {
     const first = await server.dispatchTask({
       operationId: 'cap-1',
       activityName: 'test.compute',
+      workflowType: 'test',
       input: null,
     });
     expect(first).toBe(true);
@@ -3219,6 +3253,7 @@ describe('worker WebSocket protocol', () => {
     const second = await server.dispatchTask({
       operationId: 'cap-2',
       activityName: 'test.compute',
+      workflowType: 'test',
       input: null,
     });
     expect(second).toBe(true);
@@ -3242,7 +3277,12 @@ describe('worker WebSocket protocol', () => {
     });
 
     // Dispatch first task
-    await server.dispatchTask({ operationId: 'r-1', activityName: 'test.compute', input: null });
+    await server.dispatchTask({
+      operationId: 'r-1',
+      activityName: 'test.compute',
+      workflowType: 'test',
+      input: null,
+    });
     expect(server.registry.getWorker('w-recover')?.inFlight).toBe(1);
 
     // Wait for task result to arrive and decrement inFlight
@@ -3252,7 +3292,12 @@ describe('worker WebSocket protocol', () => {
     expect(server.registry.getWorker('w-recover')?.inFlight).toBe(0);
 
     // Dispatch second task — worker should accept it since capacity recovered
-    await server.dispatchTask({ operationId: 'r-2', activityName: 'test.compute', input: null });
+    await server.dispatchTask({
+      operationId: 'r-2',
+      activityName: 'test.compute',
+      workflowType: 'test',
+      input: null,
+    });
     expect(server.registry.getWorker('w-recover')?.inFlight).toBe(1);
 
     await waitFor(() => server.registry.getWorker('w-recover')?.inFlight === 0, {
@@ -3282,8 +3327,18 @@ describe('worker WebSocket protocol', () => {
     expect(worker().concurrency - worker().inFlight).toBe(3);
 
     // Dispatch 2 tasks
-    await server.dispatchTask({ operationId: 't-1', activityName: 'test.compute', input: null });
-    await server.dispatchTask({ operationId: 't-2', activityName: 'test.compute', input: null });
+    await server.dispatchTask({
+      operationId: 't-1',
+      activityName: 'test.compute',
+      workflowType: 'test',
+      input: null,
+    });
+    await server.dispatchTask({
+      operationId: 't-2',
+      activityName: 'test.compute',
+      workflowType: 'test',
+      input: null,
+    });
     expect(worker().concurrency - worker().inFlight).toBe(1);
 
     // Complete one task
@@ -3357,6 +3412,7 @@ describe('worker WebSocket protocol', () => {
     const dispatched = await server.dispatchTask({
       operationId: 'e2e-op-1',
       activityName: 'greeting.greet',
+      workflowType: 'greeting',
       input: 'World',
     });
     expect(dispatched).toBe(true);
@@ -3445,6 +3501,7 @@ describe('worker WebSocket protocol', () => {
     await server.dispatchTask({
       operationId: 'sticky-op-1',
       activityName: 'test.compute',
+      workflowType: 'test',
       input: null,
       workflowId: 'wf-sticky-1',
     });
@@ -3460,6 +3517,7 @@ describe('worker WebSocket protocol', () => {
     await server.dispatchTask({
       operationId: 'sticky-op-2',
       activityName: 'test.compute',
+      workflowType: 'test',
       input: null,
       workflowId: 'wf-sticky-1',
       sticky: true,
@@ -3502,6 +3560,7 @@ describe('worker WebSocket protocol', () => {
     await server.dispatchTask({
       operationId: 'cap-op-1',
       activityName: 'test.compute',
+      workflowType: 'test',
       input: null,
       workflowId: 'wf-cap',
     });
@@ -3511,6 +3570,7 @@ describe('worker WebSocket protocol', () => {
     await server.dispatchTask({
       operationId: 'cap-op-2',
       activityName: 'test.compute',
+      workflowType: 'test',
       input: null,
       workflowId: 'wf-cap',
       sticky: true,
@@ -3548,6 +3608,7 @@ describe('worker WebSocket protocol', () => {
     const dispatched = await server.dispatchTask({
       operationId: 'noid-op-1',
       activityName: 'test.compute',
+      workflowType: 'test',
       input: null,
       sticky: true,
     });
@@ -3622,6 +3683,7 @@ describe('queue-aware worker stream', () => {
     await server.dispatchTask({
       operationId: 'billing-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: { amount: 100 },
       queue: 'billing',
     });
@@ -3648,6 +3710,7 @@ describe('queue-aware worker stream', () => {
     await server.dispatchTask({
       operationId: 'queued-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
       queue: 'billing',
     });
@@ -3679,6 +3742,7 @@ describe('queue-aware worker stream', () => {
     await server.dispatchTask({
       operationId: 'default-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
     });
 
@@ -3717,6 +3781,7 @@ describe('queue-aware worker stream', () => {
     await server.dispatchTask({
       operationId: 'default-only',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
     });
 
@@ -3770,6 +3835,7 @@ describe('queue-aware worker stream', () => {
     const dispatched = await server.dispatchTask({
       operationId: 'billing-e2e',
       activityName: 'billing.charge',
+      workflowType: 'billing',
       input: 42,
       queue: 'billing',
     });
@@ -4817,6 +4883,7 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
     await server.dispatchTask({
       operationId: 'op-poll-1',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: { amount: 100 },
     });
 
@@ -4830,13 +4897,14 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
     expect(task.activityName).toBe('test.charge');
   });
 
-  it('persists lifecycle metadata when a long-poll worker completes immediately after claim', async () => {
+  it('records terminal disposition and low-cardinality metrics when a long-poll worker completes immediately after claim', async () => {
     engine = createEngine();
     server = serveTestServer({ engine, port: 0 });
 
     await server.dispatchTask({
       operationId: 'long-poll-diagnostics-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: { amount: 100 },
       workflowId: 'workflow-long-poll-diagnostics',
     });
@@ -4865,27 +4933,15 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
     });
     expect(resultResponse.status).toBe(200);
 
-    await waitFor(
-      async () =>
-        (await engine.storage.get(KEYS.operationResolved('long-poll-diagnostics-op'))) !== null,
-      { label: 'long-poll-diagnostics-op to resolve' },
+    const resolved = await waitForTerminalResolvedRecord(
+      engine.storage,
+      'long-poll-diagnostics-op',
     );
-
-    const resolved = decode(
-      (await engine.storage.get(KEYS.operationResolved('long-poll-diagnostics-op')))!,
-    ) as ResolvedRecord;
     expect(resolved.workflowId).toBe('workflow-long-poll-diagnostics');
     expect(resolved.activityName).toBe('test.charge');
     expect(resolved.queue).toBe('default');
-    expect(typeof resolved.firstQueuedAt).toBe('number');
-    expect(typeof resolved.lastQueuedAt).toBe('number');
-    expect(typeof resolved.lastDispatchedAt).toBe('number');
-    expect(typeof resolved.completedAt).toBe('number');
-    expect(resolved.retryCount).toBe(0);
-    expect(resolved.requeueCount).toBe(0);
-    expect(resolved.resolutionReason).toBe('completed');
-    expect(typeof resolved.queueLatencyMs).toBe('number');
-    expect(typeof resolved.executionLatencyMs).toBe('number');
+    expect(resolved.status).toBe('completed');
+    expect(typeof resolved.terminalAt).toBe('number');
 
     const metricsResponse = await fetch(`${server.url}/v1/metrics`);
     expect(metricsResponse.status).toBe(200);
@@ -4894,51 +4950,51 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
     expect(metricsText).toContain('weft_task_execution_latency_count 1');
   });
 
-  it('refreshes lastQueuedAt when redispatching an existing queued record to long-poll', async () => {
+  it('reuses an existing queued ledger record verbatim when redispatching to long-poll', async () => {
     const storage = new MemoryStorage();
     engine = new Engine({ storage });
     engine.register(echoWorkflow);
     server = serveTestServer({ engine, port: 0 });
 
-    await storage.put(
-      KEYS.operationQueued('long-poll-requeue-timing-op'),
-      encode({
-        operationId: 'long-poll-requeue-timing-op',
-        activityName: 'test.charge',
-        input: null,
-        queue: 'default',
-        attempt: 2,
-        visibilityTimeout: 30_000,
-        queuedAt: 1_000,
-        firstQueuedAt: 500,
-        lastQueuedAt: 1_000,
-        lastDispatchedAt: 750,
-        startedAt: 800,
-        retryCount: 1,
-        requeueCount: 1,
-        lastRequeueReason: 'visibility-timeout',
-      } satisfies QueuedRecord),
-    );
+    const seeded: RemoteTaskQueued = {
+      recordVersion: 1,
+      operationId: 'long-poll-requeue-timing-op',
+      workflowType: 'test',
+      activityName: 'test.charge',
+      queue: 'default',
+      input: null,
+      headers: {},
+      visibilityTimeoutMilliseconds: 30_000,
+      createdAt: 500,
+      generation: 3,
+      state: 'queued',
+      attempt: 2,
+      availableAt: 1_000,
+      firstQueuedAt: 500,
+      lastQueuedAt: 1_000,
+      lastDispatchedAt: 750,
+      startedAt: 800,
+      retryCount: 1,
+      requeueCount: 1,
+      lastRequeueReason: 'visibility-timeout',
+    };
+    await storage.put(taskLedgerKey(seeded.operationId), encodeRemoteTaskRecord(seeded));
 
-    const beforeRedispatch = Date.now();
+    // The ledger record, not TaskQueue, is authoritative — redispatching an
+    // operationId already in `queued` reuses that record verbatim rather
+    // than bumping a CAS generation just to refresh a cosmetic timestamp.
     await server.dispatchTask({
       operationId: 'long-poll-requeue-timing-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
-      attempt: 2,
     });
 
-    const persisted = decode(
-      (await storage.get(KEYS.operationQueued('long-poll-requeue-timing-op')))!,
-    ) as QueuedRecord;
-    expect(persisted.firstQueuedAt).toBe(500);
-    expect(persisted.lastQueuedAt).toBe(persisted.queuedAt);
-    expect(persisted.lastQueuedAt).toBeGreaterThanOrEqual(beforeRedispatch);
-    expect(persisted.lastDispatchedAt).toBe(750);
-    expect(persisted.startedAt).toBe(800);
+    const persisted = await readLedgerRecord(storage, 'long-poll-requeue-timing-op');
+    expect(persisted).toEqual(seeded);
 
     const pendingTask = server.taskQueue.peekPending('default')[0];
-    expect(pendingTask?.lastQueuedAt).toBe(persisted.lastQueuedAt);
+    expect(pendingTask?.lastQueuedAt).toBe(seeded.lastQueuedAt);
   });
 
   it('blocks until a task arrives within the timeout', async () => {
@@ -4953,6 +5009,7 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
     await server.dispatchTask({
       operationId: 'op-delayed',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: { amount: 50 },
     });
 
@@ -4970,6 +5027,7 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
     await server.dispatchTask({
       operationId: 'op-ship',
       activityName: 'test.ship',
+      workflowType: 'test',
       input: null,
     });
 
@@ -4986,12 +5044,30 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
     engine = createEngine();
     server = serveTestServer({ engine, port: 0 });
 
+    // Post-cutover (WFT-22), completion is authorized against a real ledger
+    // record — an unknown operationId is now a hard rejection (see
+    // `isLongPollCompletionAuthorized`'s doc comment) rather than the old
+    // duplicate-tolerant no-op. Dispatch and claim through the real flow to
+    // get a real `attemptToken`/`workerId` pair the completion endpoint
+    // will authorize.
+    await server.dispatchTask({
+      operationId: 'op-complete-1',
+      activityName: 'test.charge',
+      workflowType: 'test',
+      input: null,
+    });
+    const pollResponse = await fetch(
+      `${server.url}/v1/tasks/default?activity=test.charge&timeout=1000`,
+    );
+    const task = (await pollResponse.json()) as { workerId: string; attemptToken: string };
+
     const response = await fetch(`${server.url}/v1/tasks/default/result`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         operationId: 'op-complete-1',
-        attemptToken: 'attempt-token-complete-1',
+        workerId: task.workerId,
+        attemptToken: task.attemptToken,
         status: 'completed',
         value: { result: 42 },
       }),
@@ -5000,46 +5076,6 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
     expect(response.status).toBe(200);
     const body = (await response.json()) as { ok: boolean };
     expect(body.ok).toBe(true);
-  });
-
-  it('logs long-poll task result persistence failures without failing the HTTP response', async () => {
-    engine = createEngine();
-    const storage = engine.storage as MemoryStorage;
-    const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
-    const originalBatch = storage.batch.bind(storage);
-    const operationId = 'op-complete-fail';
-    const restoreBatch = overrideProperty(storage, 'batch', (async (
-      operations: Parameters<MemoryStorage['batch']>[0],
-    ) => {
-      if (operations.some((operation) => operation.key === KEYS.operationResolved(operationId))) {
-        throw new Error('long-poll resolution failed');
-      }
-      await originalBatch(operations);
-    }) as MemoryStorage['batch']);
-    server = serveTestServer({ engine, port: 0 });
-
-    try {
-      const response = await fetch(`${server.url}/v1/tasks/default/result`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          operationId,
-          attemptToken: 'attempt-token-complete-fail',
-          status: 'completed',
-          value: { result: 42 },
-        }),
-      });
-
-      expect(response.status).toBe(200);
-      expect(errorSpy).toHaveBeenCalledWith(
-        `[weft] Failed to transition task "${operationId}" to resolved after retries — dead-lettered:`,
-        expect.any(Error),
-      );
-      expect(await storage.get(KEYS.operationDeadLetter(operationId))).not.toBeNull();
-    } finally {
-      restoreBatch();
-      errorSpy.mockRestore();
-    }
   });
 
   it('returns 400 for invalid completion body', async () => {
@@ -5074,6 +5110,18 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
 
     const results: Array<{ operationId: string; status: string }> = [];
 
+    // Post-cutover (WFT-22), the long-poll completion endpoint authorizes
+    // against a real ledger record (see `isLongPollCompletionAuthorized`) —
+    // hand-construct a `leased` record so completion is authorized, matching
+    // the `TaskQueue.enqueue` callback registration and the completion POST
+    // below on `workerId`/`attemptToken`.
+    const leasedRecord = makeLeasedLedgerRecord({
+      operationId: 'op-cb',
+      workerSessionId: 'worker-cb',
+      attemptToken: 'attempt-token-callback',
+    });
+    await engine.storage.put(taskLedgerKey('op-cb'), encodeRemoteTaskRecord(leasedRecord));
+
     // Enqueue with a callback
     server.taskQueue.enqueue(
       'default',
@@ -5082,16 +5130,18 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
     );
 
     // Complete via HTTP
-    await fetch(`${server.url}/v1/tasks/default/result`, {
+    const response = await fetch(`${server.url}/v1/tasks/default/result`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         operationId: 'op-cb',
+        workerId: 'worker-cb',
         attemptToken: 'attempt-token-callback',
         status: 'completed',
         value: 'done',
       }),
     });
+    expect(response.status).toBe(200);
 
     expect(results).toHaveLength(1);
     expect(results[0]?.operationId).toBe('op-cb');
@@ -5120,6 +5170,7 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
     await server.dispatchTask({
       operationId: 'e2e-lp-1',
       activityName: 'greet',
+      workflowType: 'testWorkflow',
       input: 'World',
     });
 
@@ -5171,11 +5222,13 @@ describe('task assignment deduplication', () => {
     const first = await server.dispatchTask({
       operationId: 'dup-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
     });
     const second = await server.dispatchTask({
       operationId: 'dup-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
     });
 
@@ -5199,11 +5252,13 @@ describe('task assignment deduplication', () => {
     const first = await server.dispatchTask({
       operationId: 'dup-lp',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
     });
     const second = await server.dispatchTask({
       operationId: 'dup-lp',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
     });
 
@@ -5223,6 +5278,7 @@ describe('task assignment deduplication', () => {
     const first = await server.dispatchTask({
       operationId: 'cross-dup',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
     });
     expect(first).toBe(true);
@@ -5232,6 +5288,7 @@ describe('task assignment deduplication', () => {
     const second = await server.dispatchTask({
       operationId: 'cross-dup',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
     });
     expect(second).toBe(false);
@@ -5251,6 +5308,7 @@ describe('task assignment deduplication', () => {
     await server.dispatchTask({
       operationId: 'tracked-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
     });
 
@@ -5273,6 +5331,7 @@ describe('task assignment deduplication', () => {
     await server.dispatchTask({
       operationId: 'clear-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
     });
 
@@ -5323,6 +5382,7 @@ describe('task assignment deduplication', () => {
     await server.dispatchTask({
       operationId: 'unexpected-status-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
     });
 
@@ -5362,197 +5422,27 @@ describe('task assignment deduplication', () => {
     await server.dispatchTask({
       operationId: 'cancelled-status-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
     });
 
     await waitFor(
-      async () =>
-        (await engine.storage.get(KEYS.operationResolved('cancelled-status-op'))) !== null,
+      async () => {
+        const record = await readLedgerRecord(engine.storage, 'cancelled-status-op');
+        return record !== null && record.state === 'terminal';
+      },
       { label: 'cancelled-status-op task result to resolve' },
     );
 
-    expect(await engine.storage.get(KEYS.operationInflight('cancelled-status-op'))).toBeNull();
-    expect(await engine.storage.get(KEYS.operationResolved('cancelled-status-op'))).not.toBeNull();
+    const record = await readLedgerRecord(engine.storage, 'cancelled-status-op');
+    if (record === null || record.state !== 'terminal' || record.disposition !== 'resolved') {
+      throw new Error('Expected "cancelled-status-op" to reach a resolved terminal record');
+    }
+    // resolveTaskResultStatus() maps a worker's "cancelled" taskResult status to "failed".
+    expect(record.status).toBe('failed');
 
     ws.close();
     await waitForRealTimersForTesting(50);
-  });
-
-  it('retries transient WebSocket task-result storage failures without redispatching', async () => {
-    engine = createEngine();
-    const storage = engine.storage as MemoryStorage;
-    const originalBatch = storage.batch.bind(storage);
-    server = serveTestServer({ engine, port: 0 });
-
-    const ws = await connectWorker(server);
-    const messages = collectAndCompleteTaskMessages(ws);
-
-    let resolutionBatchAttempts = 0;
-    const operationId = 'task-result-transient-fail';
-    const restoreBatch = overrideProperty(storage, 'batch', (async (
-      operations: Parameters<MemoryStorage['batch']>[0],
-    ) => {
-      if (operations.some((operation) => operation.key === KEYS.operationResolved(operationId))) {
-        resolutionBatchAttempts++;
-        if (resolutionBatchAttempts === 1) {
-          throw new Error('transient resolved batch failure');
-        }
-      }
-      await originalBatch(operations);
-    }) as MemoryStorage['batch']);
-
-    try {
-      await registerWorker(ws, {
-        workerId: 'w-task-result-transient',
-        activities: ['test.charge'],
-      });
-      await server.dispatchTask({
-        operationId,
-        activityName: 'test.charge',
-        input: null,
-        visibilityTimeout: 20,
-      });
-
-      await waitFor(
-        async () => (await engine.storage.get(KEYS.operationResolved(operationId))) !== null,
-        { label: 'transient task result to resolve after retry' },
-      );
-
-      expect(resolutionBatchAttempts).toBe(2);
-      expect(
-        messages.filter(
-          (message) => message.type === 'task' && message.operationId === operationId,
-        ),
-      ).toHaveLength(1);
-      expect(await engine.storage.get(KEYS.operationInflight(operationId))).toBeNull();
-      expect(await engine.storage.get(KEYS.operationDeadLetter(operationId))).toBeNull();
-
-      ws.close();
-      await waitForRealTimersForTesting(50);
-    } finally {
-      restoreBatch();
-    }
-  });
-
-  it('dead-letters permanent WebSocket task-result storage failures and reconciliation skips them', async () => {
-    engine = createEngine();
-    const storage = engine.storage as MemoryStorage;
-    const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
-    const originalBatch = storage.batch.bind(storage);
-    const operationId = 'task-result-dead-letter';
-    const deadLetterEvents: TaskResultDeadLetteredEvent[] = [];
-    engine.addEventListener(TaskResultDeadLetteredEvent.type, (event) => {
-      deadLetterEvents.push(event);
-    });
-    server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 1_000 });
-
-    const ws = await connectWorker(server);
-    const messages = collectAndCompleteTaskMessages(ws);
-
-    const restoreBatch = overrideProperty(storage, 'batch', (async (
-      operations: Parameters<MemoryStorage['batch']>[0],
-    ) => {
-      if (operations.some((operation) => operation.key === KEYS.operationResolved(operationId))) {
-        throw new Error('permanent resolved batch failure');
-      }
-      await originalBatch(operations);
-    }) as MemoryStorage['batch']);
-
-    try {
-      await registerWorker(ws, {
-        workerId: 'w-task-result-dead-letter',
-        activities: ['test.charge'],
-      });
-      await server.dispatchTask({
-        operationId,
-        activityName: 'test.charge',
-        input: null,
-        visibilityTimeout: 20,
-        workflowId: 'workflow-dead-letter',
-      });
-
-      await waitFor(
-        async () => (await engine.storage.get(KEYS.operationDeadLetter(operationId))) !== null,
-        { label: 'task result failure to be dead-lettered' },
-      );
-
-      expect(errorSpy).toHaveBeenCalledWith(
-        `[weft] Failed to transition task "${operationId}" to resolved after retries — dead-lettered:`,
-        expect.any(Error),
-      );
-      expect(deadLetterEvents).toHaveLength(1);
-      expect(deadLetterEvents[0]).toMatchObject({
-        operationId,
-        workflowId: 'workflow-dead-letter',
-        activityName: 'test.charge',
-        reason: 'result-resolution-storage-exhausted',
-      });
-
-      const scannerContext = minimalServerContext({ registry: server.registry });
-      scannerContext.deadlineTracker.add({ operationId, deadline: Date.now() - 1 });
-      const cleanedOperations: string[] = [];
-      await scanExpiredTasks(scannerContext, { engine, port: 0 }, (cleanedOperationId) => {
-        cleanedOperations.push(cleanedOperationId);
-      });
-      await reconcileOrphanedRecords(scannerContext, { engine, port: 0 }, (cleanedOperationId) => {
-        cleanedOperations.push(cleanedOperationId);
-      });
-      expect(
-        messages.filter(
-          (message) => message.type === 'task' && message.operationId === operationId,
-        ),
-      ).toHaveLength(1);
-      expect(cleanedOperations).toEqual([]);
-      expect(await engine.storage.get(KEYS.operationInflight(operationId))).not.toBeNull();
-      expect(await engine.storage.get(KEYS.operationResolved(operationId))).toBeNull();
-
-      const diagnosticsResponse = await handlerModule.handleRequest(
-        new Request(
-          `http://localhost/v1/tasks/diagnostics?operationId=${encodeURIComponent(operationId)}&limit=10`,
-        ),
-        engine,
-        {
-          authContext: {
-            method: 'api-key',
-            principal: principalFromApiKey({ subject: 'operator', scopes: ['system:read'] }),
-          },
-        },
-      );
-      expect(diagnosticsResponse.status).toBe(200);
-      const diagnostics = (await diagnosticsResponse.json()) as GetTaskDiagnosticsOutput;
-      expect(diagnostics.items).toContainEqual(
-        expect.objectContaining({
-          kind: 'dead-lettered',
-          state: 'dead-lettered',
-          operationId,
-          workflowId: 'workflow-dead-letter',
-          activityName: 'test.charge',
-        }),
-      );
-
-      const clearResponse = await handlerModule.handleRequest(
-        new Request(
-          `http://localhost/v1/tasks/diagnostics/dead-letter/${encodeURIComponent(operationId)}`,
-          { method: 'DELETE' },
-        ),
-        engine,
-        {
-          authContext: {
-            method: 'api-key',
-            principal: principalFromApiKey({ subject: 'operator', scopes: ['system:admin'] }),
-          },
-        },
-      );
-      expect(clearResponse.status).toBe(200);
-      expect(await clearResponse.json()).toEqual({ ok: true });
-      expect(await engine.storage.get(KEYS.operationDeadLetter(operationId))).toBeNull();
-
-      ws.close();
-      await waitForRealTimersForTesting(50);
-    } finally {
-      restoreBatch();
-      errorSpy.mockRestore();
-    }
   });
 
   it('rejects taskResult without operationId as a protocol error', async () => {
@@ -5576,6 +5466,7 @@ describe('task assignment deduplication', () => {
     await server.dispatchTask({
       operationId: 'missing-op-id-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
     });
 
@@ -5635,7 +5526,7 @@ describe('task assignment deduplication', () => {
   // before reconnecting — reconnecting too early hits the documented reconnect-
   // before-close race and the assertion flakes under CI load. See #615 review.
 
-  it('allows re-dispatch of an operationId after completion', async () => {
+  it('blocks re-dispatch of an operationId once its ledger record is terminal', async () => {
     engine = createEngine();
     server = serveTestServer({ engine, port: 0 });
 
@@ -5648,6 +5539,7 @@ describe('task assignment deduplication', () => {
     await server.dispatchTask({
       operationId: 'reuse-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
     });
     await waitFor(
@@ -5657,21 +5549,24 @@ describe('task assignment deduplication', () => {
       { label: 'first reuse-op dispatch to complete' },
     );
 
-    // After completion, dispatch the same operationId again
+    const terminalRecord = await waitForTerminalResolvedRecord(engine.storage, 'reuse-op');
+
+    // One permanent ledger record per operationId until WFT-24's retention
+    // reclaims it — mirrors the `start-idem:` spent-key semantics: a
+    // terminal operationId is not a fresh slot to reuse.
     const second = await server.dispatchTask({
       operationId: 'reuse-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
     });
-    expect(second).toBe(true);
+    expect(second).toBe(false);
 
-    await waitFor(() => received.filter((message) => message.type === 'task').length === 2, {
-      label: 'reuse-op to dispatch twice',
-    });
+    await waitForRealTimersForTesting(50);
 
-    // Worker should have received two tasks
     const taskMessages = received.filter((m) => m.type === 'task');
-    expect(taskMessages.length).toBe(2);
+    expect(taskMessages.length).toBe(1);
+    expect(await readLedgerRecord(engine.storage, 'reuse-op')).toEqual(terminalRecord);
 
     ws.close();
     await waitForRealTimersForTesting(50);
@@ -5709,20 +5604,25 @@ describe('visibility timeout persistence', () => {
     await server.dispatchTask({
       operationId: 'vt-op-1',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: { amount: 100 },
     });
-    await waitFor(async () => (await storage.get(KEYS.operationInflight('vt-op-1'))) !== null, {
-      label: 'vt-op-1 in-flight record to persist',
-    });
+    await waitFor(
+      async () => {
+        const record = await readLedgerRecord(storage, 'vt-op-1');
+        return record !== null && record.state === 'leased';
+      },
+      { label: 'vt-op-1 in-flight record to persist' },
+    );
 
-    const key = KEYS.operationInflight('vt-op-1');
-    const raw = await storage.get(key);
-    expect(raw).not.toBeNull();
-
-    const record = decode(raw!) as { operationId: string; workerId: string; deadline: number };
+    const record = await readLedgerRecord(storage, 'vt-op-1');
+    expect(record).not.toBeNull();
+    if (record === null || record.state !== 'leased') {
+      throw new Error('Expected "vt-op-1" to have a leased ledger record');
+    }
     expect(record.operationId).toBe('vt-op-1');
-    expect(record.workerId).toBe('w1');
-    expect(record.deadline).toBeGreaterThan(Date.now());
+    expect(record.workerSessionId).toBe('w1');
+    expect(record.leaseDeadline).toBeGreaterThan(Date.now());
 
     ws.close();
     await waitForRealTimersForTesting(50);
@@ -5737,13 +5637,21 @@ describe('visibility timeout persistence', () => {
 
     await registerWorker(ws, { workerId: 'w1', activities: ['test.charge'], concurrency: 5 });
 
-    await server.dispatchTask({ operationId: 'vt-op-2', activityName: 'test.charge', input: null });
+    await server.dispatchTask({
+      operationId: 'vt-op-2',
+      activityName: 'test.charge',
+      workflowType: 'test',
+      input: null,
+    });
 
-    const key = KEYS.operationInflight('vt-op-2');
+    // Post-cutover (WFT-22), completion transitions the SAME ledger key from
+    // "leased" to "terminal" rather than deleting an in-flight key and
+    // writing a separate resolved key — see `commitTaskLedgerCompletion`.
     await waitFor(
-      async () =>
-        (await storage.get(key)) === null &&
-        (await storage.get(KEYS.operationResolved('vt-op-2'))) !== null,
+      async () => {
+        const record = await readLedgerRecord(storage, 'vt-op-2');
+        return record !== null && record.state === 'terminal';
+      },
       { label: 'vt-op-2 inflight record to resolve' },
     );
 
@@ -5762,25 +5670,26 @@ describe('visibility timeout persistence', () => {
     await server.dispatchTask({
       operationId: 'vt-op-3',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
       visibilityTimeout: customTimeout,
     });
-    await waitFor(async () => (await storage.get(KEYS.operationInflight('vt-op-3'))) !== null, {
-      label: 'vt-op-3 to be inflight',
-    });
+    await waitFor(
+      async () => {
+        const record = await readLedgerRecord(storage, 'vt-op-3');
+        return record !== null && record.state === 'leased';
+      },
+      { label: 'vt-op-3 to be inflight' },
+    );
 
-    const key = KEYS.operationInflight('vt-op-3');
-    const raw = await storage.get(key);
-    expect(raw).not.toBeNull();
-
-    const record = decode(raw!) as {
-      operationId: string;
-      visibilityTimeout: number;
-      deadline: number;
-    };
-    expect(record.visibilityTimeout).toBe(customTimeout);
+    const record = await readLedgerRecord(storage, 'vt-op-3');
+    expect(record).not.toBeNull();
+    if (record === null || record.state !== 'leased') {
+      throw new Error('Expected "vt-op-3" to have a leased ledger record');
+    }
+    expect(record.visibilityTimeoutMilliseconds).toBe(customTimeout);
     // Deadline should be roughly now + 120s (within a generous margin)
-    expect(record.deadline).toBeGreaterThan(Date.now() + 100_000);
+    expect(record.leaseDeadline).toBeGreaterThan(Date.now() + 100_000);
 
     ws.close();
     await waitForRealTimersForTesting(50);
@@ -5793,17 +5702,26 @@ describe('visibility timeout persistence', () => {
     const ws = await connectWorker(server);
     await registerWorker(ws, { workerId: 'w1', activities: ['test.charge'], concurrency: 5 });
 
-    await server.dispatchTask({ operationId: 'vt-op-4', activityName: 'test.charge', input: null });
-    await waitFor(async () => (await storage.get(KEYS.operationInflight('vt-op-4'))) !== null, {
-      label: 'vt-op-4 to be inflight',
+    await server.dispatchTask({
+      operationId: 'vt-op-4',
+      activityName: 'test.charge',
+      workflowType: 'test',
+      input: null,
     });
+    await waitFor(
+      async () => {
+        const record = await readLedgerRecord(storage, 'vt-op-4');
+        return record !== null && record.state === 'leased';
+      },
+      { label: 'vt-op-4 to be inflight' },
+    );
 
-    const key = KEYS.operationInflight('vt-op-4');
-    const raw = await storage.get(key);
-    expect(raw).not.toBeNull();
-
-    const record = decode(raw!) as { visibilityTimeout: number; deadline: number };
-    expect(record.visibilityTimeout).toBe(30_000);
+    const record = await readLedgerRecord(storage, 'vt-op-4');
+    expect(record).not.toBeNull();
+    if (record === null || record.state !== 'leased') {
+      throw new Error('Expected "vt-op-4" to have a leased ledger record');
+    }
+    expect(record.visibilityTimeoutMilliseconds).toBe(30_000);
 
     ws.close();
     await waitForRealTimersForTesting(50);
@@ -6011,6 +5929,7 @@ describe('worker disconnection triggers task reassignment', () => {
     await server.dispatchTask({
       operationId: 'requeue-op-1',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: { amount: 42 },
     });
     await waitFor(() => server.registry.isAssigned('requeue-op-1'), {
@@ -6046,24 +5965,24 @@ describe('worker disconnection triggers task reassignment', () => {
     await server.dispatchTask({
       operationId: 'attempt-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
-      attempt: 2, // Already on attempt 2
     });
     await waitForRealTimersForTesting(50);
 
-    // Disconnect w1 — task should be re-dispatched with attempt 3
+    // Disconnect w1 — task should be re-dispatched with attempt 2
     ws1.close();
     await waitFor(
       () => {
         const taskMessages = received.filter((m) => m.type === 'task');
-        return taskMessages.length === 1 && taskMessages[0]?.attempt === 3;
+        return taskMessages.length === 1 && taskMessages[0]?.attempt === 2;
       },
       { label: 'attempt-op reassignment with incremented attempt' },
     );
 
     const taskMessages = received.filter((m) => m.type === 'task');
     expect(taskMessages.length).toBe(1);
-    expect(taskMessages[0]?.attempt).toBe(3);
+    expect(taskMessages[0]?.attempt).toBe(2);
 
     ws2.close();
     await waitForRealTimersForTesting(50);
@@ -6082,15 +6001,24 @@ describe('worker disconnection triggers task reassignment', () => {
     await server.dispatchTask({
       operationId: 'cleanup-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
     });
-    await waitFor(async () => (await storage.get(KEYS.operationInflight('cleanup-op'))) !== null, {
-      label: 'cleanup-op to be inflight',
-    });
+    await waitFor(
+      async () => {
+        const record = await readLedgerRecord(storage, 'cleanup-op');
+        return record !== null && record.state === 'leased';
+      },
+      { label: 'cleanup-op to be inflight' },
+    );
 
-    // Verify the original in-flight record exists
-    const keyBefore = KEYS.operationInflight('cleanup-op');
-    expect(await storage.get(keyBefore)).not.toBeNull();
+    // Verify the original leased ledger record exists, owned by w1.
+    const recordBefore = await readLedgerRecord(storage, 'cleanup-op');
+    expect(recordBefore).not.toBeNull();
+    if (recordBefore === null || recordBefore.state !== 'leased') {
+      throw new Error('Expected "cleanup-op" to have a leased ledger record');
+    }
+    expect(recordBefore.workerSessionId).toBe('w1');
 
     // Disconnect w1
     ws1.close();
@@ -6098,9 +6026,17 @@ describe('worker disconnection triggers task reassignment', () => {
       label: 'cleanup-op reassigned to w2',
     });
 
-    // The old in-flight record should be deleted (a new one is created for w2)
+    // Post-cutover (WFT-22), reassignment transitions the SAME ledger key
+    // through leased -> queued -> leased (for w2) rather than deleting an
+    // in-flight key and writing a new one — see `commitTaskLedgerTransition`.
     // The task should now be assigned in the registry (to w2)
     expect(server.registry.isAssigned('cleanup-op')).toBe(true);
+    const recordAfter = await readLedgerRecord(storage, 'cleanup-op');
+    expect(recordAfter).not.toBeNull();
+    if (recordAfter === null || recordAfter.state !== 'leased') {
+      throw new Error('Expected "cleanup-op" to have a leased ledger record after reassignment');
+    }
+    expect(recordAfter.workerSessionId).toBe('w2');
 
     ws2.close();
     await waitForRealTimersForTesting(50);
@@ -6116,6 +6052,7 @@ describe('worker disconnection triggers task reassignment', () => {
     await server.dispatchTask({
       operationId: 'fallback-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: { amount: 99 },
     });
     await waitFor(() => server.registry.isAssigned('fallback-op'), {
@@ -6134,76 +6071,14 @@ describe('worker disconnection triggers task reassignment', () => {
     expect(server.taskQueue.pendingCount('default')).toBe(1);
   });
 
-  it('records worker-disconnect requeue metadata and exposes it through diagnostics', async () => {
-    ({ engine, storage } = createReconnectTestEngineWithStorage());
-    server = serveFastReconnectTestServer(engine);
-
-    const ws = await connectWorker(server);
-    await registerWorker(ws, { workerId: 'w-disconnect-diagnostics', activities: ['test.charge'] });
-
-    await server.dispatchTask({
-      operationId: 'disconnect-diagnostics-op',
-      activityName: 'test.charge',
-      input: null,
-      workflowId: 'workflow-disconnect-diagnostics',
-    });
-    await waitFor(
-      async () => (await storage.get(KEYS.operationInflight('disconnect-diagnostics-op'))) !== null,
-      { label: 'disconnect-diagnostics-op to be inflight' },
-    );
-
-    ws.close();
-    await waitFor(
-      async () =>
-        (await storage.get(KEYS.operationQueued('disconnect-diagnostics-op'))) !== null &&
-        server.taskQueue.pendingCount('default') === 1,
-      { label: 'disconnect-diagnostics-op to be requeued' },
-    );
-
-    const queued = decode(
-      (await storage.get(KEYS.operationQueued('disconnect-diagnostics-op')))!,
-    ) as QueuedRecord;
-    expect(queued.workflowId).toBe('workflow-disconnect-diagnostics');
-    expect(queued.attempt).toBe(2);
-    expect(queued.retryCount).toBe(1);
-    expect(queued.requeueCount).toBe(1);
-    expect(queued.lastRequeueReason).toBe('worker-disconnect');
-    expect(queued.lastHeartbeatAt).toBeUndefined();
-
-    const operation = createGetTaskDiagnosticsOperation({
-      registry: server.registry,
-      taskQueue: server.taskQueue,
-      now: () => Date.now() + 1_000,
-    });
-    const result = await executeOperation(
-      'weft.tasks.diagnostics',
-      {
-        operationId: 'disconnect-diagnostics-op',
-        retryStormMinimumAttempts: 1,
-        staleQueuedAfterMs: 0,
-        limit: 10,
-      },
-      {
-        principal: principalFromApiKey({ subject: 'operator', scopes: ['system:read'] }),
-        engine,
-        transport: 'jsonRpcStdio',
-        registry: createOperationRegistry([operation]),
-      },
-    );
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error('expected task diagnostics result');
-    const diagnostics = result.value as GetTaskDiagnosticsOutput;
-    expect(diagnostics.items).toContainEqual(
-      expect.objectContaining({
-        kind: 'retry-storm',
-        operationId: 'disconnect-diagnostics-op',
-        retryCount: 1,
-        requeueCount: 1,
-        lastRequeueReason: 'worker-disconnect',
-      }),
-    );
-  });
+  // `weft.tasks.diagnostics` (get-task-diagnostics.ts) still reads the
+  // retired `op:queued:`/`op:inflight:` keys and has not been migrated onto
+  // the durable task ledger — that migration is WFT-24 ("Adoption,
+  // Retention, and Diagnostics") scope, not WFT-22. Until then the
+  // diagnostics endpoint sees nothing for post-cutover tasks; the coverage
+  // this test gave the old retry-storm reporting path is tracked for
+  // restoration in WFT-24 rather than kept green against a key scheme
+  // nothing writes anymore.
 
   it('reassigns multiple in-flight tasks when a worker disconnects', async () => {
     ({ engine, storage } = createReconnectTestEngineWithStorage());
@@ -6232,16 +6107,19 @@ describe('worker disconnection triggers task reassignment', () => {
     await server.dispatchTask({
       operationId: 'multi-op-1',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
     });
     await server.dispatchTask({
       operationId: 'multi-op-2',
       activityName: 'test.ship',
+      workflowType: 'test',
       input: null,
     });
     await server.dispatchTask({
       operationId: 'multi-op-3',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
     });
     await waitForRealTimersForTesting(100);
@@ -6271,7 +6149,7 @@ describe('worker disconnection triggers task reassignment', () => {
   it('logs corrupt inflight records when a disconnected worker task cannot be decoded', async () => {
     ({ engine, storage } = createReconnectTestEngineWithStorage());
     server = serveFastReconnectTestServer(engine);
-    const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
+    const warningSpy = spyOn(console, 'warn').mockImplementation(() => {});
 
     try {
       const ws = await connectWorker(server);
@@ -6280,27 +6158,34 @@ describe('worker disconnection triggers task reassignment', () => {
       await server.dispatchTask({
         operationId: 'disconnect-corrupt-op',
         activityName: 'test.charge',
+        workflowType: 'test',
         input: null,
       });
       await waitForRealTimersForTesting(50);
-      await storage.put(KEYS.operationInflight('disconnect-corrupt-op'), encode({ bad: true }));
+      // Post-cutover (WFT-22), corrupt a `task-ledger:` value instead of the
+      // legacy `op:inflight:` key. `decodeRemoteTaskRecord` treats a value
+      // that fails `isRemoteTaskRecord` validation the same as an absent
+      // record — `runWorkerDisconnectRequeue` no longer distinguishes
+      // "corrupt" from "missing" (see the "warns and clears missing inflight
+      // records..." test below, which shares this exact log message).
+      await storage.put(taskLedgerKey('disconnect-corrupt-op'), encode({ bad: true }));
 
       ws.close();
       await waitFor(
         () =>
-          errorSpy.mock.calls.some(
+          warningSpy.mock.calls.some(
             (call) =>
               call[0] ===
-              '[weft] Corrupt inflight record for task "disconnect-corrupt-op" — skipping reassignment',
+              '[weft] No leased ledger record found for task "disconnect-corrupt-op" — skipping reassignment',
           ),
-        { label: 'corrupt disconnect inflight record logged' },
+        { label: 'corrupt disconnect ledger record logged' },
       );
 
-      expect(errorSpy).toHaveBeenCalledWith(
-        '[weft] Corrupt inflight record for task "disconnect-corrupt-op" — skipping reassignment',
+      expect(warningSpy).toHaveBeenCalledWith(
+        '[weft] No leased ledger record found for task "disconnect-corrupt-op" — skipping reassignment',
       );
     } finally {
-      errorSpy.mockRestore();
+      warningSpy.mockRestore();
     }
   });
 
@@ -6316,10 +6201,14 @@ describe('worker disconnection triggers task reassignment', () => {
       await server.dispatchTask({
         operationId: 'disconnect-missing-op',
         activityName: 'test.charge',
+        workflowType: 'test',
         input: null,
       });
       await waitForRealTimersForTesting(50);
-      await storage.delete(KEYS.operationInflight('disconnect-missing-op'));
+      // Post-cutover (WFT-22), simulate the ledger write not having landed
+      // before disconnect by deleting the durable `task-ledger:` record
+      // rather than the legacy `op:inflight:` key nothing writes anymore.
+      await storage.delete(taskLedgerKey('disconnect-missing-op'));
 
       ws.close();
       await waitFor(
@@ -6327,15 +6216,15 @@ describe('worker disconnection triggers task reassignment', () => {
           warningSpy.mock.calls.some(
             (call) =>
               call[0] ===
-              '[weft] No inflight record found in storage for task "disconnect-missing-op" — skipping reassignment',
+              '[weft] No leased ledger record found for task "disconnect-missing-op" — skipping reassignment',
           ),
-        { label: 'missing disconnect inflight record warning logged' },
+        { label: 'missing disconnect ledger record warning logged' },
       );
 
       expect(warningSpy).toHaveBeenCalledWith(
-        '[weft] No inflight record found in storage for task "disconnect-missing-op" — skipping reassignment',
+        '[weft] No leased ledger record found for task "disconnect-missing-op" — skipping reassignment',
       );
-      expect(await storage.get(KEYS.operationInflight('disconnect-missing-op'))).toBeNull();
+      expect(await readLedgerRecord(storage, 'disconnect-missing-op')).toBeNull();
     } finally {
       warningSpy.mockRestore();
     }
@@ -6347,12 +6236,7 @@ describe('worker disconnection triggers task reassignment', () => {
     const originalGet = storage.get.bind(storage);
     server = serveFastReconnectTestServer(engine);
 
-    const restoreGet = overrideProperty(storage, 'get', (async (key: string) => {
-      if (key === KEYS.operationInflight('disconnect-get-fail-op')) {
-        throw new Error('disconnect get failed');
-      }
-      return originalGet(key);
-    }) as MemoryStorage['get']);
+    let restoreGet: (() => void) | undefined;
 
     try {
       const ws = await connectWorker(server);
@@ -6361,9 +6245,20 @@ describe('worker disconnection triggers task reassignment', () => {
       await server.dispatchTask({
         operationId: 'disconnect-get-fail-op',
         activityName: 'test.charge',
+        workflowType: 'test',
         input: null,
       });
       await waitForRealTimersForTesting(50);
+
+      // Installed after dispatch's own ledger read/write has already
+      // committed — the disconnect handler's own read of the same ledger
+      // key is what must fail here.
+      restoreGet = overrideProperty(storage, 'get', (async (key: string) => {
+        if (key === taskLedgerKey('disconnect-get-fail-op')) {
+          throw new Error('disconnect get failed');
+        }
+        return originalGet(key);
+      }) as MemoryStorage['get']);
 
       ws.close();
       await waitFor(
@@ -6381,7 +6276,7 @@ describe('worker disconnection triggers task reassignment', () => {
         expect.any(Error),
       );
     } finally {
-      restoreGet();
+      restoreGet?.();
       errorSpy.mockRestore();
     }
   });
@@ -6389,15 +6284,10 @@ describe('worker disconnection triggers task reassignment', () => {
   it('logs immediate redispatch failures when a non-retry-policy task cannot be requeued', async () => {
     ({ engine, storage } = createReconnectTestEngineWithStorage());
     const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
-    const originalPut = storage.put.bind(storage);
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
     server = serveFastReconnectTestServer(engine);
 
-    const restorePut = overrideProperty(storage, 'put', (async (key: string, value: Uint8Array) => {
-      if (key === KEYS.operationQueued('disconnect-redispatch-fail-op')) {
-        throw new Error('immediate redispatch failed');
-      }
-      await originalPut(key, value);
-    }) as MemoryStorage['put']);
+    let restoreConditionalBatch: (() => void) | undefined;
 
     try {
       const ws = await connectWorker(server);
@@ -6409,6 +6299,7 @@ describe('worker disconnection triggers task reassignment', () => {
       await server.dispatchTask({
         operationId: 'disconnect-redispatch-fail-op',
         activityName: 'test.charge',
+        workflowType: 'test',
         input: null,
       });
       // Wait until the task is actually in flight on the worker before closing
@@ -6418,26 +6309,51 @@ describe('worker disconnection triggers task reassignment', () => {
         label: 'task dispatched to worker',
       });
 
+      // Post-cutover (WFT-22), the requeue write goes through
+      // `storage.conditionalBatch` on the durable ledger key, not `storage.put`
+      // on a legacy queued key. Installed after dispatch's own claim write has
+      // already committed, so only the disconnect-triggered requeue write fails
+      // — and, since `reassignOrExpireTask` re-throws an unhandled write
+      // failure rather than catching it, it surfaces through the same
+      // catch-all in `runWorkerDisconnectRequeue` as a `.get()` failure would
+      // (see "logs disconnect reassignment failures when storage access
+      // throws" above) — same message, different failing storage method.
+      restoreConditionalBatch = overrideProperty(storage, 'conditionalBatch', (async (
+        conditions: Parameters<MemoryStorage['conditionalBatch']>[0],
+        operations: Parameters<MemoryStorage['conditionalBatch']>[1],
+      ) => {
+        if (
+          operations.some(
+            (operation) => operation.key === taskLedgerKey('disconnect-redispatch-fail-op'),
+          )
+        ) {
+          throw new Error('immediate redispatch failed');
+        }
+        return originalConditionalBatch(conditions, operations);
+      }) as MemoryStorage['conditionalBatch']);
+
       ws.close();
 
       // Wait for the requeue (after the reconnect grace period) to attempt a
-      // redispatch and fail on the throwing storage put, which logs this error.
+      // redispatch and fail on the throwing storage write, which logs this error.
       // Condition-based so it tolerates close-propagation + grace-period jitter
       // under load instead of guessing a fixed duration.
       await waitFor(
         () =>
           errorSpy.mock.calls.some(
-            (call) => call[0] === '[weft] Redispatch failed for "disconnect-redispatch-fail-op":',
+            (call) =>
+              call[0] ===
+              '[weft] Failed to reassign task "disconnect-redispatch-fail-op" from worker "w-disconnect-redispatch-fail":',
           ),
         { label: 'redispatch failure logged' },
       );
 
       expect(errorSpy).toHaveBeenCalledWith(
-        '[weft] Redispatch failed for "disconnect-redispatch-fail-op":',
+        '[weft] Failed to reassign task "disconnect-redispatch-fail-op" from worker "w-disconnect-redispatch-fail":',
         expect.any(Error),
       );
     } finally {
-      restorePut();
+      restoreConditionalBatch?.();
       errorSpy.mockRestore();
     }
   });
@@ -6499,6 +6415,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     await server.dispatchTask({
       operationId: 'expiry-op-1',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: { amount: 42 },
       visibilityTimeout: 100, // 100ms — will expire quickly
     });
@@ -6531,7 +6448,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
 
     const ws = await connectWorker(server);
     const received = collectAndCompleteTaskMessages(ws, {
-      completeWhen: (message) => message.type === 'task' && (message.attempt ?? 1) >= 3,
+      completeWhen: (message) => message.type === 'task' && (message.attempt ?? 1) >= 2,
     });
 
     await registerWorker(ws, { workerId: 'w1', activities: ['test.charge'], concurrency: 5 });
@@ -6539,8 +6456,8 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     await server.dispatchTask({
       operationId: 'attempt-expiry-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
-      attempt: 2,
       visibilityTimeout: 100,
     });
     await waitFor(
@@ -6554,9 +6471,9 @@ describe('visibility timeout expiry triggers task reassignment', () => {
       (m) => m.type === 'task' && m.operationId === 'attempt-expiry-op',
     );
     expect(taskMessages.length).toBeGreaterThanOrEqual(2);
-    // First dispatch: attempt 2; reassignment: attempt 3
-    expect(taskMessages[0]?.attempt).toBe(2);
-    expect(taskMessages[1]?.attempt).toBe(3);
+    // First dispatch: attempt 1; reassignment: attempt 2
+    expect(taskMessages[0]?.attempt).toBe(1);
+    expect(taskMessages[1]?.attempt).toBe(2);
 
     ws.close();
     await waitForRealTimersForTesting(50);
@@ -6579,6 +6496,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     await server.dispatchTask({
       operationId: 'noexpiry-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
       visibilityTimeout: 60_000,
     });
@@ -6632,27 +6550,42 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     await server.dispatchTask({
       operationId: 'cleanup-expiry-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
       visibilityTimeout: 100,
     });
 
-    // Verify original record exists
-    const inflightKey = KEYS.operationInflight('cleanup-expiry-op');
-    const rawBefore = await storage.get(inflightKey);
-    expect(rawBefore).not.toBeNull();
-    const recordBefore = decode(rawBefore!) as { attempt: number };
+    // Verify original leased ledger record exists
+    const recordBefore = await readLedgerRecord(storage, 'cleanup-expiry-op');
+    expect(recordBefore).not.toBeNull();
+    if (recordBefore === null || recordBefore.state !== 'leased') {
+      throw new Error('Expected "cleanup-expiry-op" to have a leased ledger record');
+    }
     expect(recordBefore.attempt).toBe(1);
 
-    // Wait for expiry and reassignment
-    await waitFor(async () => (await storage.get(inflightKey)) === null, {
-      timeoutMs: 2000,
-      label: 'expired task completion cleanup',
-    });
+    // Post-cutover (WFT-22), the scanner's reassignment and the worker's
+    // eventual completion transition the SAME ledger key (leased -> queued ->
+    // leased -> terminal) rather than deleting an in-flight key — see
+    // `commitTaskLedgerTransition`/`commitTaskLedgerCompletion`.
+    await waitFor(
+      async () => {
+        const record = await readLedgerRecord(storage, 'cleanup-expiry-op');
+        return record !== null && record.state === 'terminal';
+      },
+      {
+        timeoutMs: 2000,
+        label: 'expired task completion cleanup',
+      },
+    );
 
     // After the scanner re-dispatches with attempt=2, the worker completes it
-    // and the in-flight record is removed from storage.
-    const rawAfter = await storage.get(inflightKey);
-    expect(rawAfter).toBeNull();
+    // and the ledger record reaches a resolved terminal state.
+    const recordAfter = await readLedgerRecord(storage, 'cleanup-expiry-op');
+    expect(recordAfter).not.toBeNull();
+    if (recordAfter === null || recordAfter.state !== 'terminal') {
+      throw new Error('Expected "cleanup-expiry-op" to reach a terminal ledger record');
+    }
+    expect(recordAfter.attempt).toBe(2);
 
     ws.close();
     await waitForRealTimersForTesting(50);
@@ -6668,6 +6601,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     await server.dispatchTask({
       operationId: 'fallback-expiry-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
       visibilityTimeout: 100,
     });
@@ -6678,15 +6612,13 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     ws.close();
     await waitForRealTimersForTesting(300);
 
-    // The expired task should have been cleaned up from storage or requeued to long-poll
-    // (worker disconnect already handles this, but storage scan covers edge cases)
-    // Verify there are no orphaned in-flight records in storage
-    let inflightCount = 0;
-    for await (const [_key] of storage.scan('op:inflight:')) {
-      inflightCount++;
-    }
-    // Either the disconnect handler or the scanner cleaned it up
-    expect(inflightCount).toBe(0);
+    // The expired task should have been reclaimed and requeued to long-poll
+    // (worker disconnect already handles this, but visibility-timeout expiry
+    // covers edge cases where the disconnect grace period has not elapsed
+    // yet — the 100ms visibility timeout fires well before the 2000ms
+    // default reconnect grace period).
+    const record = await readLedgerRecord(storage, 'fallback-expiry-op');
+    expect(record?.state).toBe('queued');
   });
 
   it('scanner cleans up orphaned storage records with no matching registry entry', async () => {
@@ -6706,21 +6638,19 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     });
     await registerWorker(ws, { workerId: 'w1', activities: ['test.charge'], concurrency: 5 });
 
-    // Wait for startup restore to complete, then insert an orphaned expired record.
-    // This simulates a record that slipped through (e.g., created by another process).
+    // Wait for startup restore to complete, then insert an orphaned expired
+    // `leased` ledger record — this simulates a record that slipped through
+    // (e.g., created by another process) and has no matching in-memory
+    // registry entry, per WFT-22's `task-ledger:` scan in
+    // `reconcileOrphanedRecords`.
     await waitForRealTimersForTesting(100);
-    const expiredRecord = {
+    const expiredRecord = makeLeasedLedgerRecord({
       operationId: 'orphan-op',
-      workerId: 'ghost-worker',
-      deadline: Date.now() - 5000,
-      activityName: 'test.charge',
-      queue: 'default',
-      input: null,
-      attempt: 1,
-      visibilityTimeout: 30_000,
+      workerSessionId: 'ghost-worker',
       attemptToken: 'attempt-token-orphan',
-    };
-    await storage.put(KEYS.operationInflight('orphan-op'), encode(expiredRecord));
+      leaseDeadline: Date.now() - 5000,
+    });
+    await storage.put(taskLedgerKey('orphan-op'), encodeRemoteTaskRecord(expiredRecord));
 
     // Wait for the reconciliation scanner to pick up the orphaned record.
     // Orphaned records (not tracked in the deadline heap) are only discovered
@@ -6739,12 +6669,13 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     expect(taskMessages.length).toBe(1);
     expect(taskMessages[0]?.attempt).toBe(2);
 
-    // Verify the original expired inflight record was replaced — the task was
-    // re-dispatched so a new inflight record exists, but its deadline should
-    // be in the future (not the stale expired value).
-    for await (const [, value] of storage.scan('op:inflight:')) {
-      const record = decode(value) as { deadline: number };
-      expect(record.deadline).toBeGreaterThan(Date.now() - 1000);
+    // Verify the original expired ledger record was replaced — the task was
+    // re-dispatched, so its leased ledger record's deadline should be in the
+    // future (not the stale expired value).
+    for await (const [, value] of storage.scan('task-ledger:')) {
+      const record = decodeRemoteTaskRecord(value);
+      if (record === null || record.state !== 'leased') continue;
+      expect(record.leaseDeadline).toBeGreaterThan(Date.now() - 1000);
     }
 
     ws.close();
@@ -6765,48 +6696,51 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     await server.dispatchTask({
       operationId: 'heartbeat-stale-heap-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
       visibilityTimeout: 2000,
     });
 
-    const initialRecord = decode(
-      (await storage.get(KEYS.operationInflight('heartbeat-stale-heap-op')))!,
-    ) as { deadline: number };
+    const initialRecordRaw = await readLedgerRecord(storage, 'heartbeat-stale-heap-op');
+    if (initialRecordRaw === null || initialRecordRaw.state !== 'leased') {
+      throw new Error('Expected "heartbeat-stale-heap-op" to have a leased ledger record');
+    }
+    const initialRecord = initialRecordRaw;
 
     await waitForRealTimersForTesting(1000);
     ws.send(JSON.stringify({ type: 'heartbeat', workerId: 'w-heartbeat-stale-heap' }));
 
-    let extendedDeadline = initialRecord.deadline;
+    let extendedDeadline = initialRecord.leaseDeadline;
     await waitFor(
       async () => {
-        const persisted = decode(
-          (await storage.get(KEYS.operationInflight('heartbeat-stale-heap-op')))!,
-        ) as { deadline: number };
-        extendedDeadline = persisted.deadline;
-        return extendedDeadline > initialRecord.deadline;
+        const persisted = await readLedgerRecord(storage, 'heartbeat-stale-heap-op');
+        if (persisted === null || persisted.state !== 'leased') return false;
+        extendedDeadline = persisted.leaseDeadline;
+        return extendedDeadline > initialRecord.leaseDeadline;
       },
       { label: 'heartbeat extended stale heap deadline' },
     );
 
-    expect(extendedDeadline).toBeGreaterThan(initialRecord.deadline);
+    expect(extendedDeadline).toBeGreaterThan(initialRecord.leaseDeadline);
 
     const beforeScanTaskCount = received.filter((message) => message.type === 'task').length;
-    const staleDeadlineDelay = Math.max(0, initialRecord.deadline - Date.now()) + 100;
+    const staleDeadlineDelay = Math.max(0, initialRecord.leaseDeadline - Date.now()) + 100;
     expect(Date.now() + staleDeadlineDelay).toBeLessThan(extendedDeadline);
     await waitForRealTimersForTesting(staleDeadlineDelay);
-    expect(Date.now()).toBeGreaterThanOrEqual(initialRecord.deadline);
+    expect(Date.now()).toBeGreaterThanOrEqual(initialRecord.leaseDeadline);
     const afterScanTaskCount = received.filter((message) => message.type === 'task').length;
 
     expect(afterScanTaskCount).toBe(beforeScanTaskCount);
     expect(server.registry.isAssigned('heartbeat-stale-heap-op')).toBe(true);
 
-    const persisted = decode(
-      (await storage.get(KEYS.operationInflight('heartbeat-stale-heap-op')))!,
-    ) as { deadline: number };
+    const persisted = await readLedgerRecord(storage, 'heartbeat-stale-heap-op');
+    if (persisted === null || persisted.state !== 'leased') {
+      throw new Error('Expected "heartbeat-stale-heap-op" to still have a leased ledger record');
+    }
     // The deadline may advance further if another heartbeat fires during the
     // sleep above — the only invariant is that it never regresses to the
-    // stale initialRecord.deadline value that the expiry scan would pick up.
-    expect(persisted.deadline).toBeGreaterThanOrEqual(extendedDeadline);
+    // stale initialRecord.leaseDeadline value that the expiry scan would pick up.
+    expect(persisted.leaseDeadline).toBeGreaterThanOrEqual(extendedDeadline);
 
     ws.close();
     await waitForRealTimersForTesting(50);
@@ -6816,19 +6750,32 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     ({ engine, storage } = createEngineWithStorage());
 
     const operationId = 'stale-expiry-scan-op';
-    const futureDeadline = Date.now() + 5_000;
-    const inflightRecord = {
+
+    // Post-cutover (WFT-22), the live scanner reads `task-ledger:` records
+    // (not `op:inflight:`), so a real leased ledger record must exist for
+    // `restoreExtendedDeadlineIfStillActive` to find and re-check. A real
+    // dispatch (rather than hand-seeding storage before startup) naturally
+    // produces both the leased ledger record and the initial deadline-heap
+    // entry — see `selectAndReserveWorker`'s `context.deadlineTracker.add(...)`.
+    server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 25 });
+    const ws = await connectWorker(server);
+    await registerWorker(ws, { workerId: 'restored-worker', activities: ['test.charge'] });
+    await server.dispatchTask({
       operationId,
-      workerId: 'restored-worker',
-      deadline: futureDeadline,
       activityName: 'test.charge',
-      queue: 'default',
+      workflowType: 'test',
       input: null,
-      attempt: 1,
-      visibilityTimeout: 30_000,
-      attemptToken: 'attempt-token-stale-expiry',
-    };
-    await storage.put(KEYS.operationInflight(operationId), encode(inflightRecord));
+      visibilityTimeout: 5_000,
+    });
+    await waitFor(() => server.registry.isAssigned(operationId), {
+      label: `${operationId} to be assigned`,
+    });
+
+    const leasedRecord = await readLedgerRecord(storage, operationId);
+    if (leasedRecord === null || leasedRecord.state !== 'leased') {
+      throw new Error(`Expected "${operationId}" to have a leased ledger record`);
+    }
+    const futureDeadline = leasedRecord.leaseDeadline;
 
     const originalAdd = DeadlineTracker.prototype.add;
     const originalDrainExpired = DeadlineTracker.prototype.drainExpired;
@@ -6866,7 +6813,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     );
 
     try {
-      server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 25 });
+      // The real dispatch above already counts as the first `.add()` call.
       await waitFor(
         () =>
           injectedStaleEntry &&
@@ -6879,13 +6826,16 @@ describe('visibility timeout expiry triggers task reassignment', () => {
       expect(addCountForOperation).toBeGreaterThanOrEqual(2);
       expect(server.registry.isAssigned(operationId)).toBe(true);
 
-      const persisted = decode((await storage.get(KEYS.operationInflight(operationId)))!) as {
-        deadline: number;
-      };
-      expect(persisted.deadline).toBe(futureDeadline);
+      const persisted = await readLedgerRecord(storage, operationId);
+      if (persisted === null || persisted.state !== 'leased') {
+        throw new Error(`Expected "${operationId}" to still have a leased ledger record`);
+      }
+      expect(persisted.leaseDeadline).toBe(futureDeadline);
     } finally {
       restoreDrainExpired();
       restoreAdd();
+      ws.close();
+      await waitForRealTimersForTesting(50);
     }
   });
 
@@ -6901,24 +6851,35 @@ describe('visibility timeout expiry triggers task reassignment', () => {
       await server.dispatchTask({
         operationId: 'visibility-corrupt-op',
         activityName: 'test.charge',
+        workflowType: 'test',
         input: null,
         visibilityTimeout: 100,
       });
       await waitForRealTimersForTesting(50);
-      await storage.put(KEYS.operationInflight('visibility-corrupt-op'), encode({ invalid: true }));
+      // Post-cutover (WFT-22), corrupt the `task-ledger:` value with genuinely
+      // invalid MessagePack bytes (`0xc1` is msgpack's reserved "never used"
+      // marker — see `engine.test.ts`'s malformed-review fixtures for the same
+      // idiom). `decodeRemoteTaskRecord` only returns `null` for
+      // validly-decoded-but-wrong-shape values; it deliberately does not catch
+      // `decode()` itself throwing on unparseable bytes (see its doc comment),
+      // so this is what actually reaches the scanner's catch block and logs —
+      // a validly-encoded wrong-shape value would instead be silently treated
+      // as "already resolved or requeued elsewhere" with no log at all.
+      await storage.put(taskLedgerKey('visibility-corrupt-op'), new Uint8Array([0xc1]));
 
       await waitFor(
         () =>
           errorSpy.mock.calls.some(
             (call) =>
               call[0] ===
-              '[weft] Corrupt inflight record for task "visibility-corrupt-op" — skipping',
+              '[weft] Failed to process expired task "visibility-corrupt-op" — will retry:',
           ),
-        { label: 'corrupt visibility inflight record logged' },
+        { label: 'corrupt visibility ledger record logged' },
       );
 
       expect(errorSpy).toHaveBeenCalledWith(
-        '[weft] Corrupt inflight record for task "visibility-corrupt-op" — skipping',
+        '[weft] Failed to process expired task "visibility-corrupt-op" — will retry:',
+        expect.any(Error),
       );
 
       ws.close();
@@ -6938,9 +6899,9 @@ describe('visibility timeout expiry triggers task reassignment', () => {
   //
   // In-memory storage resolves faster than the event loop, so the race window
   // is vanishingly small under normal load. We wrap `MemoryStorage` with a
-  // subclass that stalls reads of the target inflight key long enough for the
-  // other scanner to also observe the still-present record before either call
-  // completes — making the race reliably reproducible in tests.
+  // subclass that stalls reads of the target ledger key long enough for the
+  // other scanner to also observe the still-present leased record before
+  // either call completes — making the race reliably reproducible in tests.
   // -------------------------------------------------------------------------
   it('dispatches ActivityFailedEvent exactly once when both scanners race on the same expired task', async () => {
     const targetOperationId = 'race-op-1';
@@ -6950,17 +6911,13 @@ describe('visibility timeout expiry triggers task reassignment', () => {
 
       override async get(key: string): Promise<Uint8Array | null> {
         const value = await super.get(key);
-        if (
-          !this.#stalledOnce &&
-          key === KEYS.operationInflight(targetOperationId) &&
-          value !== null
-        ) {
+        if (!this.#stalledOnce && key === taskLedgerKey(targetOperationId) && value !== null) {
           this.#stalledOnce = true;
           // Park long enough for the reconciliation scanner to also tick
           // (its interval is visibility × 12 = 120ms) and observe the
-          // still-present inflight record before this caller proceeds to
-          // `transitionInflightToResolved`. 200ms is well past both one
-          // reconciliation period and the fast-path retry cadence.
+          // still-present leased ledger record before this caller proceeds
+          // to commit its own requeue/expire transition. 200ms is well past
+          // both one reconciliation period and the fast-path retry cadence.
           await new Promise<void>((resolve) => setTimeout(resolve, 200));
         }
         return value;
@@ -7014,6 +6971,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
       await localServer.dispatchTask({
         operationId: targetOperationId,
         activityName: 'test.charge',
+        workflowType: 'test',
         input: null,
         workflowId,
         visibilityTimeout: 50,
@@ -7045,12 +7003,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     const originalGet = storage.get.bind(storage);
     server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 50 });
 
-    const restoreGet = overrideProperty(storage, 'get', (async (key: string) => {
-      if (key === KEYS.operationInflight('visibility-retry-op')) {
-        throw new Error('visibility get failed');
-      }
-      return originalGet(key);
-    }) as MemoryStorage['get']);
+    let restoreGet: (() => void) | undefined;
 
     try {
       const ws = await connectWorker(server);
@@ -7059,9 +7012,28 @@ describe('visibility timeout expiry triggers task reassignment', () => {
       await server.dispatchTask({
         operationId: 'visibility-retry-op',
         activityName: 'test.charge',
+        workflowType: 'test',
         input: null,
         visibilityTimeout: 100,
       });
+      await waitFor(
+        async () => {
+          const record = await readLedgerRecord(storage, 'visibility-retry-op');
+          return record !== null && record.state === 'leased';
+        },
+        { label: 'visibility-retry-op to be inflight' },
+      );
+
+      // Installed after dispatch's own ledger read/write has already
+      // committed, on the same `taskLedgerKey` the fast expiry scanner reads
+      // once the visibility timeout above elapses.
+      restoreGet = overrideProperty(storage, 'get', (async (key: string) => {
+        if (key === taskLedgerKey('visibility-retry-op')) {
+          throw new Error('visibility get failed');
+        }
+        return originalGet(key);
+      }) as MemoryStorage['get']);
+
       await waitFor(
         () =>
           errorSpy.mock.calls.some(
@@ -7080,7 +7052,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
       ws.close();
       await waitForRealTimersForTesting(50);
     } finally {
-      restoreGet();
+      restoreGet?.();
       errorSpy.mockRestore();
     }
   });
@@ -7148,20 +7120,14 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     await registerWorker(ws, { workerId: 'w-reconcile-track', activities: ['test.charge'] });
 
     await waitForRealTimersForTesting(50);
-    await storage.put(
-      KEYS.operationInflight('orphan-track-op'),
-      encode({
-        operationId: 'orphan-track-op',
-        workerId: 'ghost-worker',
-        deadline: Date.now() + 500,
-        activityName: 'test.charge',
-        queue: 'default',
-        input: null,
-        attempt: 1,
-        visibilityTimeout: 500,
-        attemptToken: 'attempt-token-orphan-track',
-      }),
-    );
+    const orphanTrackRecord = makeLeasedLedgerRecord({
+      operationId: 'orphan-track-op',
+      workerSessionId: 'ghost-worker',
+      attemptToken: 'attempt-token-orphan-track',
+      leaseDeadline: Date.now() + 500,
+      visibilityTimeoutMilliseconds: 500,
+    });
+    await storage.put(taskLedgerKey('orphan-track-op'), encodeRemoteTaskRecord(orphanTrackRecord));
 
     // fixed delay: negative assertion (orphan must NOT be reassigned yet)
     await waitForRealTimersForTesting(300);
@@ -7195,18 +7161,23 @@ describe('visibility timeout expiry triggers task reassignment', () => {
 
     try {
       await waitForRealTimersForTesting(50);
-      await storage.put(KEYS.operationInflight('reconcile-bad-op'), new Uint8Array([1, 2, 3]));
+      // Genuinely invalid MessagePack bytes (`0xc1` is msgpack's reserved
+      // "never used" marker) so `decode()` itself throws inside
+      // `decodeRemoteTaskRecord`, reaching `reconcileOrphanedRecords`'s
+      // per-record catch — see the visibility-scanner corrupt-record test
+      // above for the same idiom and rationale.
+      await storage.put(taskLedgerKey('reconcile-bad-op'), new Uint8Array([0xc1]));
 
       await waitFor(
         () =>
           errorSpy.mock.calls.some(
-            (call) => call[0] === '[weft] Failed to reconcile inflight record — skipping:',
+            (call) => call[0] === '[weft] Failed to reconcile leased ledger record — skipping:',
           ),
-        { label: 'inflight reconciliation failure log' },
+        { label: 'ledger reconciliation failure log' },
       );
 
       expect(errorSpy).toHaveBeenCalledWith(
-        '[weft] Failed to reconcile inflight record — skipping:',
+        '[weft] Failed to reconcile leased ledger record — skipping:',
         expect.any(Error),
       );
     } finally {
@@ -7223,7 +7194,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
       prefix: string,
       options?: Parameters<MemoryStorage['scan']>[1],
     ) {
-      if (prefix === 'op:inflight:') {
+      if (prefix === 'task-ledger:') {
         inflightScanCalls++;
         if (inflightScanCalls >= 2) {
           throw new Error('reconciliation scan failed');
@@ -7339,6 +7310,7 @@ describe('concurrent scanner deduplication', () => {
     await server.dispatchTask({
       operationId: 'dedup-scan-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
       visibilityTimeout: 60, // expires in 60ms, well before the 600ms reconciliation
     });
@@ -7380,18 +7352,13 @@ describe('concurrent scanner deduplication', () => {
     // the orphan so it is not accidentally restored as a valid in-flight task.
     await waitForRealTimersForTesting(100);
 
-    const orphanRecord = {
+    const orphanRecord = makeLeasedLedgerRecord({
       operationId: 'dedup-orphan-op',
-      workerId: 'ghost-worker',
-      deadline: Date.now() - 5_000, // already expired
-      activityName: 'test.charge',
-      queue: 'default',
-      input: null,
-      attempt: 1,
-      visibilityTimeout: 30_000,
+      workerSessionId: 'ghost-worker',
       attemptToken: 'attempt-token-dedup-orphan',
-    };
-    await storage.put(KEYS.operationInflight('dedup-orphan-op'), encode(orphanRecord));
+      leaseDeadline: Date.now() - 5_000, // already expired
+    });
+    await storage.put(taskLedgerKey('dedup-orphan-op'), encodeRemoteTaskRecord(orphanRecord));
 
     // Wait for two full reconciliation cycles (2 * 600ms = 1200ms) plus slack.
     // Without the deduplication guard a second concurrent reconciliation cycle
@@ -7425,17 +7392,24 @@ describe('concurrent scanner deduplication', () => {
     let shouldInjectExpiredEntry = false;
     let blockedOperationBatch = false;
 
+    // Post-cutover (WFT-22), the requeue write reconciliation performs goes
+    // through `storage.conditionalBatch` on the durable ledger key, not
+    // `storage.batch` on legacy inflight/queued keys — so this test's
+    // storage wrapper must stall the ledger's `conditionalBatch` write
+    // instead of a plain `batch` write.
     const delayedStorage: WeftStorage = {
       capabilities: innerStorage.capabilities.bind(innerStorage),
       get: innerStorage.get.bind(innerStorage),
       put: innerStorage.put.bind(innerStorage),
       delete: innerStorage.delete.bind(innerStorage),
       scan: innerStorage.scan.bind(innerStorage),
-      batch: async (operations) => {
+      batch: innerStorage.batch.bind(innerStorage),
+      conditionalBatch: async (
+        conditions: Parameters<MemoryStorage['conditionalBatch']>[0],
+        operations: Parameters<MemoryStorage['conditionalBatch']>[1],
+      ) => {
         const touchesTrackedOperation = operations.some(
-          (operation) =>
-            operation.key === KEYS.operationInflight(operationId) ||
-            operation.key === KEYS.operationQueued(operationId),
+          (operation) => operation.key === taskLedgerKey(operationId),
         );
 
         if (!blockedOperationBatch && touchesTrackedOperation) {
@@ -7445,7 +7419,7 @@ describe('concurrent scanner deduplication', () => {
           await blockedBatch;
         }
 
-        await innerStorage.batch(operations);
+        return innerStorage.conditionalBatch(conditions, operations);
       },
       [Symbol.dispose]() {
         innerStorage[Symbol.dispose]();
@@ -7493,20 +7467,13 @@ describe('concurrent scanner deduplication', () => {
       server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 25 });
       await waitForRealTimersForTesting(100);
 
-      await innerStorage.put(
-        KEYS.operationInflight(operationId),
-        encode({
-          operationId,
-          workerId: 'ghost-worker',
-          deadline: Date.now() - 5_000,
-          activityName: 'test.charge',
-          queue: 'default',
-          input: null,
-          attempt: 1,
-          visibilityTimeout: 30_000,
-          attemptToken: 'attempt-token-dedup-readd',
-        }),
-      );
+      const orphanRecord = makeLeasedLedgerRecord({
+        operationId,
+        workerSessionId: 'ghost-worker',
+        attemptToken: 'attempt-token-dedup-readd',
+        leaseDeadline: Date.now() - 5_000,
+      });
+      await innerStorage.put(taskLedgerKey(operationId), encodeRemoteTaskRecord(orphanRecord));
 
       await reconciliationBlocked;
 
@@ -7519,13 +7486,18 @@ describe('concurrent scanner deduplication', () => {
 
       releaseBlockedBatch();
       await waitFor(
-        async () => (await innerStorage.get(KEYS.operationQueued(operationId))) !== null,
+        async () => {
+          const record = decodeRemoteTaskRecord(await innerStorage.get(taskLedgerKey(operationId)));
+          return record !== null && record.state === 'queued';
+        },
         {
           label: 'dedup readd operation queued',
         },
       );
 
-      expect(await innerStorage.get(KEYS.operationQueued(operationId))).not.toBeNull();
+      const record = decodeRemoteTaskRecord(await innerStorage.get(taskLedgerKey(operationId)));
+      expect(record).not.toBeNull();
+      expect(record?.state).toBe('queued');
     } finally {
       releaseBlockedBatch();
       restoreDrainExpired();
@@ -7563,14 +7535,16 @@ describe('retry policy respected on reassignment', () => {
     const received = collectTaskMessages(ws);
     await registerWorker(ws, { workerId: 'w1', activities: ['test.charge'], concurrency: 5 });
 
-    // Dispatch a task already at maxAttempts with a short visibility timeout
+    // maxAttempts: 1 — the only attempt this task ever gets already
+    // exhausts the policy, so the first visibility-timeout expiry must
+    // terminalize it rather than requeue a second attempt.
     await server.dispatchTask({
       operationId: 'max-attempt-expiry-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: { amount: 42 },
-      attempt: 2,
       visibilityTimeout: 100,
-      retryPolicy: testRetryPolicy, // maxAttempts = 2, already at attempt 2
+      retryPolicy: { ...testRetryPolicy, maxAttempts: 1 },
     });
     await waitFor(
       () =>
@@ -7578,40 +7552,37 @@ describe('retry policy respected on reassignment', () => {
           (message) =>
             message.type === 'task' &&
             message.operationId === 'max-attempt-expiry-op' &&
-            message.attempt === 2,
+            message.attempt === 1,
         ),
       { label: 'initial max-attempt-expiry-op dispatch' },
     );
 
-    // Wait for the terminal resolution rather than the intermediate removal
-    // of the in-flight record, which also occurs before retryable requeue.
     const operationId = 'max-attempt-expiry-op';
-    const inflightKey = KEYS.operationInflight(operationId);
-    const queuedKey = KEYS.operationQueued(operationId);
-    const resolvedKey = KEYS.operationResolved(operationId);
-    await waitFor(async () => (await storage.get(resolvedKey)) !== null, {
-      timeoutMs: 1000,
-      label: 'max-attempt-expiry-op terminal resolution',
-    });
+    let terminal: RemoteTaskRecord | null = null;
+    await waitFor(
+      async () => {
+        const record = await readLedgerRecord(storage, operationId);
+        if (record === null || record.state !== 'terminal') return false;
+        terminal = record;
+        return true;
+      },
+      { timeoutMs: 1000, label: 'max-attempt-expiry-op terminal resolution' },
+    );
 
-    const resolved = decode((await storage.get(resolvedKey))!) as ResolvedRecord;
-    expect(resolved).toMatchObject({
+    expect(terminal).toMatchObject({
       operationId,
-      status: 'failed',
-      resolutionReason: 'max-attempts-exceeded',
+      disposition: 'retryExhausted',
       activityName: 'test.charge',
       queue: 'default',
-      attempt: 2,
+      attempt: 1,
     });
-    expect(await storage.get(inflightKey)).toBeNull();
-    expect(await storage.get(queuedKey)).toBeNull();
 
     // The task should NOT be re-dispatched — only the initial dispatch should exist
     const taskMessages = received.filter(
       (m) => m.type === 'task' && m.operationId === 'max-attempt-expiry-op',
     );
     expect(taskMessages.length).toBe(1);
-    expect(taskMessages[0]?.attempt).toBe(2);
+    expect(taskMessages[0]?.attempt).toBe(1);
 
     ws.close();
     await waitForRealTimersForTesting(50);
@@ -7627,13 +7598,15 @@ describe('retry policy respected on reassignment', () => {
       secondaryMessages: received,
     } = await connectRegisteredWorkerPair(server);
 
-    // Dispatch a task already at maxAttempts
+    // maxAttempts: 1 — the only attempt this task ever gets already
+    // exhausts the policy, so the disconnect-driven reassignment must
+    // terminalize it rather than reassign to w2.
     await server.dispatchTask({
       operationId: 'max-attempt-disconnect-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: { amount: 42 },
-      attempt: 2,
-      retryPolicy: testRetryPolicy, // maxAttempts = 2, already at attempt 2
+      retryPolicy: { ...testRetryPolicy, maxAttempts: 1 },
     });
     await waitFor(() => server.registry.isAssignedToWorker('max-attempt-disconnect-op', 'w1'), {
       label: 'max-attempt task assigned to w1 before disconnect',
@@ -7644,25 +7617,24 @@ describe('retry policy respected on reassignment', () => {
     ws1.close();
 
     const operationId = 'max-attempt-disconnect-op';
-    const inflightKey = KEYS.operationInflight(operationId);
-    const queuedKey = KEYS.operationQueued(operationId);
-    const resolvedKey = KEYS.operationResolved(operationId);
-    await waitFor(async () => (await storage.get(resolvedKey)) !== null, {
-      label: 'max-attempt-disconnect-op terminal resolution',
-    });
+    let terminal: RemoteTaskRecord | null = null;
+    await waitFor(
+      async () => {
+        const record = await readLedgerRecord(storage, operationId);
+        if (record === null || record.state !== 'terminal') return false;
+        terminal = record;
+        return true;
+      },
+      { label: 'max-attempt-disconnect-op terminal resolution' },
+    );
 
-    const resolved = decode((await storage.get(resolvedKey))!) as ResolvedRecord;
-    expect(resolved).toMatchObject({
+    expect(terminal).toMatchObject({
       operationId,
-      status: 'failed',
-      resolutionReason: 'max-attempts-exceeded',
+      disposition: 'retryExhausted',
       activityName: 'test.charge',
       queue: 'default',
-      workerId: 'w1',
-      attempt: 2,
+      attempt: 1,
     });
-    expect(await storage.get(inflightKey)).toBeNull();
-    expect(await storage.get(queuedKey)).toBeNull();
 
     const taskMessages = received.filter(
       (m) => m.type === 'task' && m.operationId === 'max-attempt-disconnect-op',
@@ -7687,6 +7659,7 @@ describe('retry policy respected on reassignment', () => {
     await server.dispatchTask({
       operationId: 'within-limit-expiry-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
       visibilityTimeout: 100,
       retryPolicy: { ...testRetryPolicy, maxAttempts: 3 },
@@ -7752,6 +7725,7 @@ describe('retry policy respected on reassignment', () => {
     await server.dispatchTask({
       operationId: 'backoff-expiry-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
       visibilityTimeout: 80,
       retryPolicy: { ...testRetryPolicy, maxAttempts: 3, initialBackoff: 100 },
@@ -7801,6 +7775,7 @@ describe('retry policy respected on reassignment', () => {
     await server.dispatchTask({
       operationId: 'backoff-disconnect-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
       retryPolicy: { ...testRetryPolicy, maxAttempts: 3, initialBackoff: 150 },
     });
@@ -7826,29 +7801,50 @@ describe('retry policy respected on reassignment', () => {
   it('logs delayed redispatch failures when backoff requeue dispatch throws', async () => {
     ({ engine, storage } = createReconnectTestEngineWithStorage());
     const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
-    const originalPut = storage.put.bind(storage);
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
     server = serveFastReconnectTestServer(engine);
 
-    const restorePut = overrideProperty(storage, 'put', (async (key: string, value: Uint8Array) => {
-      if (key === KEYS.operationQueued('delayed-redispatch-fail-op')) {
-        throw new Error('delayed redispatch failed');
+    const operationId = 'delayed-redispatch-fail-op';
+    // Post-cutover (WFT-22), the delayed redispatch's own storage write is
+    // what must fail — and only that write. With a retry policy and a
+    // positive backoff, disconnect's own immediate `leased -> queued`
+    // requeue write succeeds normally; only after the backoff delay does
+    // `scheduleDelayedDispatch` re-invoke `dispatchTaskImpl`, which (with a
+    // second worker available) performs a real `queued -> leased` claim
+    // write on the same ledger key. Counting matching writes distinguishes
+    // that third write (1: initial dispatch's create+claim, 2: disconnect's
+    // requeue, 3: the delayed redispatch's claim) from the earlier ones that
+    // must succeed for the scenario to reach the delayed path at all.
+    let writeCount = 0;
+    const restoreConditionalBatch = overrideProperty(storage, 'conditionalBatch', (async (
+      conditions: Parameters<MemoryStorage['conditionalBatch']>[0],
+      operations: Parameters<MemoryStorage['conditionalBatch']>[1],
+    ) => {
+      if (operations.some((operation) => operation.key === taskLedgerKey(operationId))) {
+        writeCount++;
+        if (writeCount >= 3) {
+          throw new Error('delayed redispatch failed');
+        }
       }
-      await originalPut(key, value);
-    }) as MemoryStorage['put']);
+      return originalConditionalBatch(conditions, operations);
+    }) as MemoryStorage['conditionalBatch']);
 
     try {
-      const ws = await connectWorker(server);
-      await registerWorker(ws, { workerId: 'w-delayed-redispatch', activities: ['test.charge'] });
+      const { primaryWorker: ws1, secondaryWorker: ws2 } =
+        await connectRegisteredWorkerPair(server);
 
       await server.dispatchTask({
-        operationId: 'delayed-redispatch-fail-op',
+        operationId,
         activityName: 'test.charge',
+        workflowType: 'test',
         input: null,
         retryPolicy: { ...testRetryPolicy, maxAttempts: 3, initialBackoff: 50, maxBackoff: 50 },
       });
-      await waitForRealTimersForTesting(50);
+      await waitFor(() => server.registry.isAssignedToWorker(operationId, 'w1'), {
+        label: `${operationId} assigned to w1 before disconnect`,
+      });
 
-      ws.close();
+      ws1.close();
 
       // Poll for the delayed-redispatch error log rather than waiting a fixed
       // 250ms and asserting immediately: under parallel load the backoff requeue
@@ -7859,18 +7855,20 @@ describe('retry policy respected on reassignment', () => {
       await waitFor(
         () =>
           errorSpy.mock.calls.some(
-            (call) =>
-              call[0] === '[weft] Delayed redispatch failed for "delayed-redispatch-fail-op":',
+            (call) => call[0] === `[weft] Delayed redispatch failed for "${operationId}":`,
           ),
         { label: 'delayed redispatch error log' },
       );
 
       expect(errorSpy).toHaveBeenCalledWith(
-        '[weft] Delayed redispatch failed for "delayed-redispatch-fail-op":',
+        `[weft] Delayed redispatch failed for "${operationId}":`,
         expect.any(Error),
       );
+
+      ws2.close();
+      await waitForRealTimersForTesting(50);
     } finally {
-      restorePut();
+      restoreConditionalBatch();
       errorSpy.mockRestore();
     }
   });
@@ -7885,19 +7883,23 @@ describe('retry policy respected on reassignment', () => {
     await server.dispatchTask({
       operationId: 'policy-stored-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
       retryPolicy: testRetryPolicy,
     });
     await waitFor(
-      async () => (await storage.get(KEYS.operationInflight('policy-stored-op'))) !== null,
-      { label: 'retry policy inflight record stored' },
+      async () => {
+        const record = await readLedgerRecord(storage, 'policy-stored-op');
+        return record !== null && record.state === 'leased';
+      },
+      { label: 'retry policy ledger record stored' },
     );
 
-    const inflightKey = KEYS.operationInflight('policy-stored-op');
-    const raw = await storage.get(inflightKey);
-    expect(raw).not.toBeNull();
-
-    const record = decode(raw!) as { retryPolicy: RetryPolicy };
+    const record = await readLedgerRecord(storage, 'policy-stored-op');
+    expect(record).not.toBeNull();
+    if (record === null || record.state !== 'leased') {
+      throw new Error('Expected "policy-stored-op" to have a leased ledger record');
+    }
     expect(record.retryPolicy).toEqual(testRetryPolicy);
 
     ws.close();
@@ -7918,6 +7920,7 @@ describe('retry policy respected on reassignment', () => {
     await server.dispatchTask({
       operationId: 'no-policy-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
       visibilityTimeout: 100,
     });
@@ -8064,9 +8067,13 @@ describe('worker shutdown and cancel propagation', () => {
 
       receivedShutdown = true;
       sendCompletedTaskResult(ws, operationId, taskAttemptToken, 'drained-before-stop');
-      void waitFor(async () => (await storage.get(KEYS.operationResolved(operationId))) !== null, {
-        label: 'task result persisted during server stop drain',
-      })
+      void waitFor(
+        async () => {
+          const record = await readLedgerRecord(storage, operationId);
+          return record !== null && record.state === 'terminal';
+        },
+        { label: 'task result persisted during server stop drain' },
+      )
         .catch(() => {})
         .finally(() => ws.close());
     });
@@ -8075,24 +8082,31 @@ describe('worker shutdown and cancel propagation', () => {
     await server.dispatchTask({
       operationId,
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
       visibilityTimeout: 30_000,
     });
-    await waitFor(async () => (await storage.get(KEYS.operationInflight(operationId))) !== null, {
-      label: 'inflight task persisted before server stop',
-    });
+    await waitFor(
+      async () => {
+        const record = await readLedgerRecord(storage, operationId);
+        return record !== null && record.state === 'leased';
+      },
+      { label: 'inflight task persisted before server stop' },
+    );
 
     await server.stop();
 
     expect(receivedShutdown).toBe(true);
-    const resolved = decode(
-      (await storage.get(KEYS.operationResolved(operationId)))!,
-    ) as ResolvedRecord | null;
-    expect(resolved).toMatchObject({
-      operationId,
-      status: 'completed',
-      value: 'drained-before-stop',
-    });
+    const resolved = await readLedgerRecord(storage, operationId);
+    if (resolved === null || resolved.state !== 'terminal' || resolved.disposition !== 'resolved') {
+      throw new Error(`Expected "${operationId}" to reach a resolved terminal ledger record`);
+    }
+    // The durable ledger never persists the completed payload itself (WFT-24
+    // "adoption" territory — see `readTerminalRecord`'s doc comment in
+    // `state-worker-harness.parity.test.ts`), so only `status` is observable
+    // here, not the `value` the worker sent.
+    expect(resolved.operationId).toBe(operationId);
+    expect(resolved.status).toBe('completed');
   });
 
   it('falls back to the long-poll queue when a registry worker has no live socket', async () => {
@@ -8111,6 +8125,7 @@ describe('worker shutdown and cancel propagation', () => {
     const dispatched = await server.dispatchTask({
       operationId: 'ghost-worker-op',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: null,
     });
 
@@ -8138,6 +8153,7 @@ describe('worker shutdown and cancel propagation', () => {
     await server.dispatchTask({
       operationId: 'cancel-op-1',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: { amount: 100 },
     });
     await waitFor(() => server.registry.isAssigned('cancel-op-1'), {
@@ -8188,6 +8204,7 @@ describe('worker shutdown and cancel propagation', () => {
     await server.dispatchTask({
       operationId: 'wf-cancel-op-1',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: { amount: 100 },
       workflowId: 'workflow-to-cancel',
     });
@@ -8258,6 +8275,7 @@ describe('header propagation in task dispatch', () => {
     await server.dispatchTask({
       operationId: 'header-op-1',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: { amount: 100 },
       headers: { 'x-trace-id': 'trace-123', 'x-auth': 'bearer-token' },
     });
@@ -8297,6 +8315,7 @@ describe('header propagation in task dispatch', () => {
     await server.dispatchTask({
       operationId: 'no-header-op-1',
       activityName: 'test.charge',
+      workflowType: 'test',
       input: { amount: 50 },
     });
 
@@ -8321,6 +8340,7 @@ describe('header propagation in task dispatch', () => {
     await server.dispatchTask({
       operationId: 'lp-header-op-1',
       activityName: 'unregistered-activity',
+      workflowType: 'testWorkflow',
       input: { data: 'test' },
       headers: { 'x-request-id': 'req-456' },
     });
@@ -8375,6 +8395,7 @@ describe('header propagation in task dispatch', () => {
     const dispatched = await server.dispatchTask({
       operationId: 'header-e2e-op-1',
       activityName: 'notifications.echo',
+      workflowType: 'notifications',
       input: 'payload',
       headers: { 'x-trace-id': 'trace-e2e-789', 'x-custom': 'value-42' },
     });
@@ -8431,6 +8452,7 @@ describe('header propagation in task dispatch', () => {
     await server.dispatchTask({
       operationId: 'header-e2e-no-op',
       activityName: 'notifications.echo',
+      workflowType: 'notifications',
       input: 'payload',
     });
 

@@ -3,22 +3,34 @@
  *
  * These tests assert the HTTP response shapes the function returns for every
  * valid and invalid input combination so the refactor cannot silently change
- * those contract shapes.
+ * those contract shapes. Migrated off the retired `op:queued:`/`op:inflight:`/
+ * `op:resolved:`/`op:dead-letter:` keys onto the durable `task-ledger:` record
+ * (WFT-22) — fixtures now write real ledger records instead of the deleted
+ * `markInflight`. Two shapes deliberately changed across the cutover, not a
+ * migration artifact: a completion for an operation with no ledger record now
+ * returns 403 instead of a tolerant 200 no-op, and a terminal-commit
+ * persistence failure now returns 403 instead of a tolerant 200 (see
+ * `isLongPollCompletionAuthorized`'s and `task-ledger-completion.ts`'s doc
+ * comments). Both are pinned below rather than silently dropped.
  */
 
 import { describe, expect, it, spyOn } from 'bun:test';
 
-import { decode } from '../../core/codec.ts';
-import { KEYS, type BatchOperation } from '../../storage/interface.ts';
+import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { principalFromApiKey } from '../principal.ts';
-import { markInflight, type InflightRecord, type ResolvedRecord } from '../task-state.ts';
-import { minimalServeOptions, minimalServerContext } from './server-context.test-support.ts';
-import { handleTaskPollRequest, handleTaskResultRequest } from './task-polling.ts';
 import {
-  taskResultPayloadSizeError,
-  transitionTaskResultToResolvedWithRetry,
-} from './task-result-resolution.ts';
+  decodeRemoteTaskRecord,
+  encodeRemoteTaskRecord,
+  isRemoteTaskTerminalResolved,
+  taskLedgerKey,
+  type RemoteTaskLeased,
+  type RemoteTaskTerminalResolved,
+} from '../task-ledger.ts';
+import { minimalServeOptions, minimalServerContext } from './server-context.test-support.ts';
+import { dispatchTaskImpl } from './task-dispatch.ts';
+import { handleTaskPollRequest, handleTaskResultRequest } from './task-polling.ts';
+import { taskResultPayloadSizeError } from './task-result-resolution.ts';
 
 /** handleTaskResultRequest never consults the worker registry, so use a null one. */
 function createMinimalContext() {
@@ -47,66 +59,113 @@ function setPayloadSizeLimit(context: unknown, maxBytes: number): void {
   (context as { payloadSizeMaxBytes: number | null }).payloadSizeMaxBytes = maxBytes;
 }
 
-function makeInflightRecord(operationId: string): InflightRecord {
+/**
+ * Build a `leased` ledger record directly (WFT-22), matching the
+ * `leasedFixture()` pattern in `task-ledger.test.ts` / `task-ledger-transitions.test.ts`.
+ * These `handleTaskResultRequest` tests are narrow completion-path unit
+ * tests — they don't care how the record got into `leased` state, only that
+ * `commitTaskLedgerCompletion` sees a real one, so a hand-built record is
+ * preferred here over driving a full dispatch/claim flow.
+ */
+function leasedFixture(overrides: Partial<RemoteTaskLeased> = {}): RemoteTaskLeased {
+  const now = Date.now();
   return {
-    operationId,
-    workerId: 'longpoll-worker',
-    deadline: Date.now() + 30_000,
+    recordVersion: 1,
+    operationId: 'op-1',
+    workflowType: 'testWorkflow',
     activityName: 'charge',
     queue: 'default',
     input: null,
-    attempt: 1,
-    visibilityTimeout: 30_000,
+    headers: {},
+    visibilityTimeoutMilliseconds: 30_000,
+    createdAt: now,
+    generation: 1,
+    state: 'leased',
     attemptToken: 'attempt-token',
+    workerSessionId: 'longpoll-worker',
+    attempt: 1,
+    leaseDeadline: now + 30_000,
+    firstQueuedAt: now,
+    lastQueuedAt: now,
+    startedAt: now,
+    lastHeartbeatAt: now,
+    retryCount: 0,
+    requeueCount: 0,
+    ...overrides,
   };
 }
 
-class FailingTaskResultResolutionStorage extends MemoryStorage {
-  override async batch(operations: BatchOperation[]): Promise<void> {
-    if (operations.some((operation) => operation.key.startsWith('op:resolved:'))) {
-      throw new Error('resolved write failed');
-    }
-    await super.batch(operations);
-  }
-
-  override async put(key: string, value: Uint8Array): Promise<void> {
-    if (key.startsWith('op:dead-letter:')) {
-      throw new Error('dead-letter write failed');
-    }
-    await super.put(key, value);
-  }
+async function writeLeasedRecord(
+  storage: MemoryStorage,
+  overrides: Partial<RemoteTaskLeased> = {},
+): Promise<RemoteTaskLeased> {
+  const record = leasedFixture(overrides);
+  await storage.put(taskLedgerKey(record.operationId), encodeRemoteTaskRecord(record));
+  return record;
 }
 
-class FailingResolvedAndDeadLetterStorage extends MemoryStorage {
-  override async batch(operations: BatchOperation[]): Promise<void> {
-    if (
-      operations.some(
-        (operation) =>
-          operation.key.startsWith('op:resolved:') || operation.key.startsWith('op:dead-letter:'),
-      )
-    ) {
-      throw new Error('resolved or dead-letter write failed');
-    }
-    await super.batch(operations);
-  }
-}
-
-async function readResolvedRecord(
+/**
+ * Read a task's resolved terminal ledger record (WFT-22). Unlike the
+ * retired `op:resolved:` record, this narrows with `isRemoteTaskTerminalResolved`
+ * rather than an `as` cast, and it never asserts a `value` field — the
+ * ledger's terminal record doesn't persist the completed payload (see
+ * `state-worker-harness.parity.test.ts`'s `readTerminalRecord` doc comment;
+ * delivering the value into a workflow continuation is WFT-24 territory).
+ */
+async function readResolvedTerminalRecord(
   storage: MemoryStorage,
   operationId: string,
-): Promise<ResolvedRecord> {
-  const bytes = await storage.get(KEYS.operationResolved(operationId));
-  expect(bytes).not.toBeNull();
-  return decode(bytes!) as ResolvedRecord;
+): Promise<RemoteTaskTerminalResolved> {
+  const record = decodeRemoteTaskRecord(await storage.get(taskLedgerKey(operationId)));
+  if (!isRemoteTaskTerminalResolved(record)) {
+    throw new Error(
+      `Expected operation "${operationId}" to have a resolved terminal ledger record`,
+    );
+  }
+  return record;
+}
+
+/**
+ * Storage that loses the compare-and-swap on the terminal-commit write for a
+ * specific operation, modeling a persistence failure at the
+ * `Completing -> Terminal` step (`task-ledger-completion.ts`'s module doc
+ * comment: "the ledger simply stays in whatever state it last durably
+ * reached"). Returning `false` (not throwing) is deliberate — `commitTaskLedgerTransition`
+ * only treats a lost CAS as retryable-then-failed; a thrown storage error
+ * would instead propagate uncaught past the `if (!committed.ok)` branch this
+ * suite is exercising.
+ */
+class FailingTerminalCommitStorage extends MemoryStorage {
+  readonly #failingOperationId: string;
+
+  constructor(failingOperationId: string) {
+    super();
+    this.#failingOperationId = failingOperationId;
+  }
+
+  override async conditionalBatch(
+    conditions: ConditionalBatchCondition[],
+    operations: BatchOperation[],
+  ): Promise<boolean> {
+    const targetsFailingTerminalCommit = operations.some((operation) => {
+      if (operation.type !== 'put' || !operation.key.startsWith('task-ledger:')) return false;
+      const record = decodeRemoteTaskRecord(operation.value);
+      return (
+        record !== null &&
+        record.operationId === this.#failingOperationId &&
+        record.state === 'terminal'
+      );
+    });
+    if (targetsFailingTerminalCommit) return false;
+    return super.conditionalBatch(conditions, operations);
+  }
 }
 
 describe('handleTaskResultRequest', () => {
   it('returns the payload-size diagnostic for an oversized completion value', () => {
     const error = taskResultPayloadSizeError(
       {
-        operationId: 'oversized-direct',
         status: 'completed',
-        resolutionReason: 'completed',
         value: { blob: 'x'.repeat(200) },
       },
       64,
@@ -198,9 +257,12 @@ describe('handleTaskResultRequest', () => {
 
   it('returns 200 ok for a valid completed result', async () => {
     const context = createMinimalContext();
-    const options = createMinimalOptions();
+    const storage = new MemoryStorage();
+    const options = createMinimalOptions(storage);
+    await writeLeasedRecord(storage, { operationId: 'op-1' });
     const request = makePostRequest({
       operationId: 'op-1',
+      workerId: 'longpoll-worker',
       attemptToken: 'attempt-token',
       status: 'completed',
       value: 42,
@@ -213,9 +275,12 @@ describe('handleTaskResultRequest', () => {
 
   it('returns 200 ok for a valid failed result', async () => {
     const context = createMinimalContext();
-    const options = createMinimalOptions();
+    const storage = new MemoryStorage();
+    const options = createMinimalOptions(storage);
+    await writeLeasedRecord(storage, { operationId: 'op-2' });
     const request = makePostRequest({
       operationId: 'op-2',
+      workerId: 'longpoll-worker',
       attemptToken: 'attempt-token',
       status: 'failed',
       error: 'Something went wrong',
@@ -231,7 +296,7 @@ describe('handleTaskResultRequest', () => {
     const context = createMinimalContext();
     setPayloadSizeLimit(context, 64);
     const options = createMinimalOptions(storage);
-    await markInflight(storage, makeInflightRecord('op-oversize-http'));
+    await writeLeasedRecord(storage, { operationId: 'op-oversize-http' });
 
     const request = makePostRequest({
       operationId: 'op-oversize-http',
@@ -253,12 +318,13 @@ describe('handleTaskResultRequest', () => {
     const body = await response?.json();
     expect(body).toMatchObject({ code: 'PayloadSizeExceededError' });
     expect(body.error).toContain('activity result exceeds');
-    expect(await storage.get(KEYS.operationInflight('op-oversize-http'))).toBeNull();
 
-    const resolved = await readResolvedRecord(storage, 'op-oversize-http');
+    // No `value` field is asserted here — the ledger's terminal record never
+    // persists the completed payload (see readResolvedTerminalRecord's doc
+    // comment); there is no equivalent of the retired `ResolvedRecord.value`.
+    const resolved = await readResolvedTerminalRecord(storage, 'op-oversize-http');
     expect(resolved.status).toBe('failed');
     expect(resolved.error).toContain('activity result exceeds');
-    expect(resolved.value).toBeUndefined();
   });
 
   it('rejects oversized failure errors and resolves the long-poll task as failed', async () => {
@@ -266,7 +332,7 @@ describe('handleTaskResultRequest', () => {
     const context = createMinimalContext();
     setPayloadSizeLimit(context, 64);
     const options = createMinimalOptions(storage);
-    await markInflight(storage, makeInflightRecord('op-oversize-http-failure'));
+    await writeLeasedRecord(storage, { operationId: 'op-oversize-http-failure' });
 
     const request = makePostRequest({
       operationId: 'op-oversize-http-failure',
@@ -288,7 +354,7 @@ describe('handleTaskResultRequest', () => {
     const body = await response?.json();
     expect(body.error).toContain('activity result exceeds');
 
-    const resolved = await readResolvedRecord(storage, 'op-oversize-http-failure');
+    const resolved = await readResolvedTerminalRecord(storage, 'op-oversize-http-failure');
     expect(resolved.status).toBe('failed');
     expect(resolved.error).toContain('activity result exceeds');
     expect(resolved.error).not.toContain('x'.repeat(100));
@@ -299,7 +365,7 @@ describe('handleTaskResultRequest', () => {
     const context = createMinimalContext();
     setPayloadSizeLimit(context, 10);
     const options = createMinimalOptions(storage);
-    await markInflight(storage, makeInflightRecord('op-failure-size-boundary'));
+    await writeLeasedRecord(storage, { operationId: 'op-failure-size-boundary' });
 
     const response = await handleTaskResultRequest(
       context,
@@ -316,16 +382,21 @@ describe('handleTaskResultRequest', () => {
     );
 
     expect(response?.status).toBe(200);
-    const resolved = await readResolvedRecord(storage, 'op-failure-size-boundary');
+    const resolved = await readResolvedTerminalRecord(storage, 'op-failure-size-boundary');
     expect(resolved.status).toBe('failed');
     expect(resolved.error).toBe('12345678');
   });
 
-  it('logs and still returns 200 when resolved-result persistence fails', async () => {
-    const storage = new FailingResolvedAndDeadLetterStorage();
+  // Renamed from "logs and still returns 200 when resolved-result persistence
+  // fails": the ledger cutover changed this response shape deliberately, not
+  // as a migration artifact. `handleTaskResultRequest` now returns 403 (not a
+  // tolerant 200) whenever `commitTaskLedgerCompletion` itself fails — see
+  // the doc comment on `applyTaskResult`'s caller in task-polling.ts.
+  it('logs and returns 403 when the terminal ledger commit cannot be persisted', async () => {
+    const storage = new FailingTerminalCommitStorage('op-resolved-write-fails');
     const context = createMinimalContext();
     const options = createMinimalOptions(storage);
-    await markInflight(storage, makeInflightRecord('op-resolved-write-fails'));
+    await writeLeasedRecord(storage, { operationId: 'op-resolved-write-fails' });
     using consoleErrorSpy = spyOn(console, 'error').mockImplementation(() => {});
 
     const response = await handleTaskResultRequest(
@@ -342,19 +413,26 @@ describe('handleTaskResultRequest', () => {
       WORKER_PRINCIPAL,
     );
 
-    expect(response?.status).toBe(200);
+    expect(response?.status).toBe(403);
     expect(consoleErrorSpy).toHaveBeenCalledWith(
-      '[weft] Failed to transition task "op-resolved-write-fails" to resolved — inflight record may leak:',
-      expect.any(Error),
+      '[weft] Failed to commit task result for "op-resolved-write-fails" through the durable ledger:',
+      'lost the compare-and-swap race on operation "op-resolved-write-fails" after 3 attempt(s)',
     );
+
+    // The record is left durably in `completing`, per task-ledger-completion.ts's
+    // module doc comment — the terminal write never landed, but nothing is lost.
+    const stuck = decodeRemoteTaskRecord(
+      await storage.get(taskLedgerKey('op-resolved-write-fails')),
+    );
+    expect(stuck?.state).toBe('completing');
   });
 
   it('logs when persisting an oversized-result rejection fails', async () => {
-    const storage = new FailingResolvedAndDeadLetterStorage();
+    const storage = new FailingTerminalCommitStorage('op-oversize-rejection-write-fails');
     const context = createMinimalContext();
     setPayloadSizeLimit(context, 64);
     const options = createMinimalOptions(storage);
-    await markInflight(storage, makeInflightRecord('op-oversize-rejection-write-fails'));
+    await writeLeasedRecord(storage, { operationId: 'op-oversize-rejection-write-fails' });
     using consoleErrorSpy = spyOn(console, 'error').mockImplementation(() => {});
 
     const response = await handleTaskResultRequest(
@@ -374,50 +452,33 @@ describe('handleTaskResultRequest', () => {
     expect(response?.status).toBe(413);
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       '[weft] Failed to persist oversized task result rejection for task "op-oversize-rejection-write-fails":',
-      expect.any(Error),
+      'lost the compare-and-swap race on operation "op-oversize-rejection-write-fails" after 3 attempt(s)',
     );
-  });
-
-  it('persists the dead-letter guard when primitive dead-letter put fails after result-resolution retries', async () => {
-    const storage = new FailingTaskResultResolutionStorage();
-    const context = createMinimalContext();
-    const options = createMinimalOptions(storage);
-    await markInflight(storage, makeInflightRecord('op-dead-letter-write-fails'));
-
-    await expect(
-      transitionTaskResultToResolvedWithRetry(context, options, {
-        operationId: 'op-dead-letter-write-fails',
-        status: 'completed',
-        resolutionReason: 'completed',
-        value: 'done',
-      }),
-    ).resolves.toBeUndefined();
-
-    expect(await storage.get(KEYS.operationInflight('op-dead-letter-write-fails'))).not.toBeNull();
-    expect(
-      await storage.get(KEYS.operationDeadLetter('op-dead-letter-write-fails')),
-    ).not.toBeNull();
   });
 
   it('removes the deadline tracker entry on success', async () => {
     const context = createMinimalContext();
-    const options = createMinimalOptions();
+    const storage = new MemoryStorage();
+    const options = createMinimalOptions(storage);
+    await writeLeasedRecord(storage, { operationId: 'op-tracked' });
 
     context.deadlineTracker.add({ operationId: 'op-tracked', deadline: Date.now() + 30_000 });
     expect(context.deadlineTracker.size).toBe(1);
 
     const request = makePostRequest({
       operationId: 'op-tracked',
+      workerId: 'longpoll-worker',
       attemptToken: 'attempt-token',
       status: 'completed',
     });
-    await handleTaskResultRequest(
+    const response = await handleTaskResultRequest(
       context,
       options,
       request,
       makeUrl('/v1/tasks/op-tracked/result'),
     );
 
+    expect(response?.status).toBe(200);
     expect(context.deadlineTracker.size).toBe(0);
   });
 });
@@ -467,11 +528,14 @@ describe('handleTaskPollRequest', () => {
   it('returns the generated long-poll workerId with a claimed task', async () => {
     const context = minimalServerContext();
     const options = minimalServeOptions();
-    context.taskQueue.enqueue('default', {
-      operationId: 'op-claim',
-      activityName: 'charge',
-      input: { amount: 42 },
-    });
+    expect(
+      await dispatchTaskImpl(context, options, {
+        operationId: 'op-claim',
+        activityName: 'charge',
+        workflowType: 'testWorkflow',
+        input: { amount: 42 },
+      }),
+    ).toBe(true);
     const request = new Request('http://localhost/v1/tasks/default?activity=charge&timeout=0', {
       method: 'GET',
     });
@@ -484,14 +548,52 @@ describe('handleTaskPollRequest', () => {
     expect(body.workerId).toMatch(/^longpoll-/);
   });
 
+  it('settles with 204 when the durable claim loses the race against a stale in-memory match', async () => {
+    const storage = new MemoryStorage();
+    const context = minimalServerContext();
+    const options = minimalServeOptions(storage);
+    expect(
+      await dispatchTaskImpl(context, options, {
+        operationId: 'op-stale-match',
+        activityName: 'charge',
+        workflowType: 'testWorkflow',
+        input: { amount: 42 },
+      }),
+    ).toBe(true);
+
+    // Simulate another actor already claiming/purging this operationId
+    // between the in-memory TaskQueue match and the durable claim attempt —
+    // the ledger record is gone by the time markTaskClaimedByLongPollWorker
+    // runs, so the claim's precondition (`current !== null && state ===
+    // 'queued'`) fails and the poll must not hand out a task the ledger no
+    // longer agrees the worker holds.
+    const existing = decodeRemoteTaskRecord(await storage.get(taskLedgerKey('op-stale-match')));
+    if (existing === null || existing.state !== 'queued') {
+      throw new Error('Expected op-stale-match to have a queued ledger record');
+    }
+    await storage.delete(taskLedgerKey('op-stale-match'));
+
+    const request = new Request('http://localhost/v1/tasks/default?activity=charge&timeout=0', {
+      method: 'GET',
+    });
+    const url = new URL(request.url);
+
+    const response = await handleTaskPollRequest(context, options, request, url, WORKER_PRINCIPAL);
+
+    expect(response?.status).toBe(204);
+  });
+
   it('rejects task results that do not match the long-poll in-flight workerId', async () => {
     const context = minimalServerContext();
     const options = minimalServeOptions();
-    context.taskQueue.enqueue('default', {
-      operationId: 'op-owned',
-      activityName: 'charge',
-      input: { amount: 42 },
-    });
+    expect(
+      await dispatchTaskImpl(context, options, {
+        operationId: 'op-owned',
+        activityName: 'charge',
+        workflowType: 'testWorkflow',
+        input: { amount: 42 },
+      }),
+    ).toBe(true);
 
     const pollRequest = new Request('http://localhost/v1/tasks/default?activity=charge&timeout=0', {
       method: 'GET',
@@ -540,11 +642,14 @@ describe('handleTaskPollRequest', () => {
   it('rejects an in-flight result that omits the workerId', async () => {
     const context = minimalServerContext();
     const options = minimalServeOptions();
-    context.taskQueue.enqueue('default', {
-      operationId: 'op-missing-worker',
-      activityName: 'charge',
-      input: { amount: 42 },
-    });
+    expect(
+      await dispatchTaskImpl(context, options, {
+        operationId: 'op-missing-worker',
+        activityName: 'charge',
+        workflowType: 'testWorkflow',
+        input: { amount: 42 },
+      }),
+    ).toBe(true);
 
     const pollRequest = new Request('http://localhost/v1/tasks/default?activity=charge&timeout=0', {
       method: 'GET',
@@ -578,11 +683,14 @@ describe('handleTaskPollRequest', () => {
   it('rejects an in-flight result whose attempt token does not match the claim', async () => {
     const context = minimalServerContext();
     const options = minimalServeOptions();
-    context.taskQueue.enqueue('default', {
-      operationId: 'op-stale-token',
-      activityName: 'charge',
-      input: { amount: 42 },
-    });
+    expect(
+      await dispatchTaskImpl(context, options, {
+        operationId: 'op-stale-token',
+        activityName: 'charge',
+        workflowType: 'testWorkflow',
+        input: { amount: 42 },
+      }),
+    ).toBe(true);
 
     const pollRequest = new Request('http://localhost/v1/tasks/default?activity=charge&timeout=0', {
       method: 'GET',
@@ -639,11 +747,14 @@ describe('handleTaskPollRequest', () => {
     // as an absent echo and bypassing the attempt guard on a token-bearing record.
     const context = minimalServerContext();
     const options = minimalServeOptions();
-    context.taskQueue.enqueue('default', {
-      operationId: 'op-malformed-token',
-      activityName: 'charge',
-      input: { amount: 1 },
-    });
+    expect(
+      await dispatchTaskImpl(context, options, {
+        operationId: 'op-malformed-token',
+        activityName: 'charge',
+        workflowType: 'testWorkflow',
+        input: { amount: 1 },
+      }),
+    ).toBe(true);
 
     const pollRequest = new Request('http://localhost/v1/tasks/default?activity=charge&timeout=0', {
       method: 'GET',
@@ -681,11 +792,14 @@ describe('handleTaskPollRequest', () => {
   it('rejects a matching-workerId completion when the worker omits the echoed token', async () => {
     const context = minimalServerContext();
     const options = minimalServeOptions();
-    context.taskQueue.enqueue('default', {
-      operationId: 'op-omit-echo',
-      activityName: 'charge',
-      input: { amount: 42 },
-    });
+    expect(
+      await dispatchTaskImpl(context, options, {
+        operationId: 'op-omit-echo',
+        activityName: 'charge',
+        workflowType: 'testWorkflow',
+        input: { amount: 42 },
+      }),
+    ).toBe(true);
 
     const pollRequest = new Request('http://localhost/v1/tasks/default?activity=charge&timeout=0', {
       method: 'GET',
@@ -717,13 +831,20 @@ describe('handleTaskPollRequest', () => {
     expect(rejected?.status).toBe(400);
   });
 
-  it('accepts a result with no in-flight record without an ownership check', async () => {
+  // Renamed from "accepts a result with no in-flight record without an
+  // ownership check": the ledger cutover changed this response shape
+  // deliberately. The old `op:inflight:` system tolerated a completion for
+  // an unknown/already-resolved operationId as a silent no-op returning
+  // success; the durable ledger's single authoritative key removes the
+  // ambiguity that made "absent" a plausible stand-in for "already resolved
+  // elsewhere" — see `isLongPollCompletionAuthorized`'s doc comment in
+  // task-polling.ts, which cites the project brief's failure matrix: "Result
+  // arrives for unknown operation -> Rejected."
+  it('rejects a task result for an operation with no ledger record — unknown operations reject, not no-op', async () => {
     const context = minimalServerContext();
     const options = minimalServeOptions();
 
-    // No task was ever claimed, so there is no in-flight record to own. The
-    // completion lands as a no-op on already-settled/unknown work; the ownership
-    // guard is intentionally skipped because there is no owner to match against.
+    // No task was ever claimed, so there is no ledger record to own.
     const response = await handleTaskResultRequest(
       context,
       options,
@@ -737,6 +858,6 @@ describe('handleTaskPollRequest', () => {
       makeUrl('/v1/tasks/default/result'),
       WORKER_PRINCIPAL,
     );
-    expect(response?.status).toBe(200);
+    expect(response?.status).toBe(403);
   });
 });

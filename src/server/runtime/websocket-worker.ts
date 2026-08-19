@@ -1,7 +1,5 @@
 import type { ServerWebSocket } from 'bun';
 
-import { decode, encode } from '../../core/codec.ts';
-import { KEYS } from '../../storage/interface.ts';
 import {
   REMOTE_WORKER_PROTOCOL_VERSION,
   parseWorkerToServerMessage,
@@ -13,14 +11,16 @@ import {
 import { workerProtocolIncompatibleMessage } from '../../worker/worker-protocol-incompatible-error.ts';
 import type { ServeOptions } from '../index.ts';
 import type { WebSocketData } from '../json-rpc-websocket-runtime.ts';
-import { isInflightRecord, readInflightRecord } from '../task-state.ts';
+import { renewAttemptLease } from '../task-ledger-transitions.ts';
 import type { ServerContext } from './context.ts';
 import { withRetry } from './retry.ts';
-import { recordWorkerCapacitySaturationMetric } from './task-metrics.ts';
+import { commitTaskLedgerCompletion } from './task-ledger-completion.ts';
+import { commitTaskLedgerTransition } from './task-ledger-runtime.ts';
 import {
-  taskResultPayloadSizeError,
-  transitionTaskResultToResolvedWithRetry,
-} from './task-result-resolution.ts';
+  recordTaskExecutionLatencyMetric,
+  recordWorkerCapacitySaturationMetric,
+} from './task-metrics.ts';
+import { taskResultPayloadSizeError } from './task-result-resolution.ts';
 import { WORKER_STREAM_RE } from './websocket-upgrade.ts';
 import {
   rejectProtocolMessage,
@@ -33,6 +33,11 @@ function isWorkerConnection(pathname: string): boolean {
   return WORKER_STREAM_RE.test(pathname);
 }
 
+/**
+ * Re-exported for `serve-internals.ts`'s startup restore, which still reads
+ * pre-cutover `InflightRecord`s even though nothing in this module writes
+ * that shape anymore.
+ */
 export { isInflightRecord } from '../task-state.ts';
 
 export { withRetry } from './retry.ts';
@@ -79,9 +84,7 @@ function onTaskResultMessage(
   const resolvedStatus = resolveTaskResultStatus(message);
   const payloadError = taskResultPayloadSizeError(
     {
-      operationId,
       status: resolvedStatus,
-      resolutionReason: resolvedStatus,
       ...(message.status === 'completed' ? { value: message.value } : { error: message.error }),
     },
     context.payloadSizeMaxBytes,
@@ -93,31 +96,51 @@ function onTaskResultMessage(
   recordWorkerCapacitySaturationMetric(context.metricsCollector, context.registry);
 
   void (async () => {
-    const inflightRecord = await readInflightRecord(options.engine.storage, operationId);
     if (payloadError !== null) {
       sendWorkerProtocolMessage(ws, {
         type: 'protocolError',
         code: 'invalid_message',
         message: payloadError.message,
       });
-      await transitionTaskResultToResolvedWithRetry(context, options, {
+      const rejected = await commitTaskLedgerCompletion(options.engine.storage, {
         operationId,
+        attemptToken: message.attemptToken,
         status: 'failed',
-        resolutionReason: 'failed',
-        inflightRecord,
         error: payloadError.message,
-        skipPayloadSizeCheck: true,
       });
+      if (rejected.ok) {
+        recordTaskExecutionLatencyMetric(
+          context.metricsCollector,
+          { startedAt: rejected.completing.startedAt },
+          Date.now(),
+        );
+      } else {
+        console.error(
+          `[weft] Failed to persist oversized task result rejection for task "${operationId}":`,
+          rejected.reason,
+        );
+      }
       return;
     }
 
-    await transitionTaskResultToResolvedWithRetry(context, options, {
+    const committed = await commitTaskLedgerCompletion(options.engine.storage, {
       operationId,
+      attemptToken: message.attemptToken,
       status: resolvedStatus,
-      resolutionReason: resolvedStatus,
-      inflightRecord,
       ...(message.status === 'completed' ? { value: message.value } : { error: message.error }),
     });
+    if (committed.ok) {
+      recordTaskExecutionLatencyMetric(
+        context.metricsCollector,
+        { startedAt: committed.completing.startedAt },
+        Date.now(),
+      );
+    } else {
+      console.error(
+        `[weft] Failed to commit task result for "${operationId}" through the durable ledger:`,
+        committed.reason,
+      );
+    }
   })().catch((error) => {
     console.error(
       `[weft] Failed to transition task "${operationId}" to resolved — inflight record may leak:`,
@@ -151,6 +174,7 @@ function onHeartbeatMessage(
 
       const opId = task.operationId;
       const heartbeatWorkerId = ws.data.workerId;
+      const attemptToken = task.attemptToken;
       void withRetry(async () => {
         // Guard: if the task completed or was reassigned during the async gap,
         // skip the write to avoid resurrecting or corrupting another worker's record.
@@ -160,19 +184,27 @@ function onHeartbeatMessage(
           .find((trackedTask) => trackedTask.operationId === opId);
         if (!currentTask) return;
 
-        const inflightKey = KEYS.operationInflight(opId);
-        const existing = await options.engine.storage.get(inflightKey);
-        if (existing) {
-          const decoded = decode(existing);
-          if (!isInflightRecord(decoded)) {
-            console.error(
-              `[weft] Corrupt inflight record for task "${opId}" during heartbeat — skipping visibility extension`,
-            );
-            return;
-          }
-          const updated = { ...decoded, deadline: newDeadline, lastHeartbeatAt: Date.now() };
-          await options.engine.storage.put(inflightKey, encode(updated));
-        }
+        // A single attempt, matching the brief's failure matrix: "Stale
+        // heartbeat conditional write loses; terminal state remains sole
+        // state." A lost CAS here means a result, timeout, or cancellation
+        // already committed a newer generation — the heartbeat write simply
+        // loses, silently, rather than fighting to retry a transition that
+        // no longer applies.
+        await commitTaskLedgerTransition(
+          options.engine.storage,
+          opId,
+          (current, now) =>
+            renewAttemptLease(
+              current,
+              {
+                attemptToken,
+                workerSessionId: heartbeatWorkerId ?? '',
+                leaseDurationMilliseconds: task.visibilityTimeout,
+              },
+              now,
+            ),
+          1,
+        );
       }, `extend visibility for task "${opId}"`).catch((error) => {
         console.error(`[weft] Failed to extend visibility for task "${opId}":`, error);
       });

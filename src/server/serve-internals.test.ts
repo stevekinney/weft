@@ -1,5 +1,7 @@
 import { describe, expect, it, spyOn } from 'bun:test';
 
+import { encode } from '../core/codec.ts';
+import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import {
   minimalServeOptions,
@@ -15,7 +17,6 @@ import {
   restoreInflightTasks,
   WEBSOCKET_MAX_PAYLOAD_BYTES,
 } from './serve-internals.ts';
-import { transitionQueuedToInflight } from './task-state.ts';
 
 import type { EventBroadcastingHandle } from './index.ts';
 
@@ -390,19 +391,32 @@ describe('restoreInflightTasks', () => {
     const operationId = 'restore-op';
     const workerId = 'worker-a';
     const attemptToken = 'attempt-token-2';
-    // Seed a durable inflight record (token-bearing) as if a dispatch persisted
-    // it before the server went down. Deadline is in the future so restore keeps it.
-    await transitionQueuedToInflight(storage, operationId, {
-      operationId,
-      workerId,
-      deadline: Date.now() + 30_000,
-      activityName: 'charge',
-      queue: 'default',
-      input: { amount: 1 },
-      attempt: 2,
-      visibilityTimeout: 30_000,
-      attemptToken,
-    });
+    const dispatchedAt = Date.now();
+    // Seed a durable historical-shape inflight record (token-bearing) as if a
+    // dispatch persisted it before the server went down — the same shape
+    // `markInflight` (retired with the WFT-22 ledger cutover) used to
+    // normalize, lifecycle fields included. Deadline is in the future so
+    // restore keeps it.
+    await storage.put(
+      KEYS.operationInflight(operationId),
+      encode({
+        operationId,
+        workerId,
+        deadline: dispatchedAt + 30_000,
+        activityName: 'charge',
+        queue: 'default',
+        input: { amount: 1 },
+        attempt: 2,
+        visibilityTimeout: 30_000,
+        attemptToken,
+        firstQueuedAt: dispatchedAt,
+        lastQueuedAt: dispatchedAt,
+        lastDispatchedAt: dispatchedAt,
+        startedAt: dispatchedAt,
+        retryCount: 1,
+        requeueCount: 0,
+      }),
+    );
 
     restoreInflightTasks(context, options);
     await waitForRestored(context, operationId);

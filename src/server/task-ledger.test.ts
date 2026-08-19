@@ -368,6 +368,15 @@ describe('isRemoteTaskLeased', () => {
   it('rejects a record from a different state', () => {
     expect(isRemoteTaskLeased(queuedFixture())).toBe(false);
   });
+
+  it('accepts an absent workflowExecutionToken — standalone dispatch outside a durable workflow run', () => {
+    const { workflowExecutionToken: _token, ...withoutToken } = leasedFixture();
+    expect(isRemoteTaskLeased(withoutToken)).toBe(true);
+  });
+
+  it('rejects an empty-string workflowExecutionToken — absence must never be defaulted to ""', () => {
+    expect(isRemoteTaskLeased({ ...leasedFixture(), workflowExecutionToken: '' })).toBe(false);
+  });
 });
 
 describe('isRemoteTaskCompleting', () => {
@@ -474,5 +483,11 @@ describe('encodeRemoteTaskRecord / decodeRemoteTaskRecord', () => {
 
   it('returns null for well-formed-but-invalid decoded content', () => {
     expect(decodeRemoteTaskRecord(encode({ state: 'queued' }))).toBeNull();
+  });
+
+  it('round-trips a leased record with workflowExecutionToken absent', () => {
+    const { workflowExecutionToken: _token, ...withoutToken } = leasedFixture();
+    const decoded = decodeRemoteTaskRecord(encodeRemoteTaskRecord(withoutToken));
+    expect(decoded).toEqual(withoutToken);
   });
 });

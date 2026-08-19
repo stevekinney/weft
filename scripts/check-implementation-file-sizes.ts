@@ -123,12 +123,6 @@ export const CLASSIFIED_OVERSIZED_IMPLEMENTATION_FILES = [
       'Workflow-builder types form one fluent type-state contract where splitting would obscure the compile-time state transitions.',
   },
   {
-    path: 'src/server/task-state.ts',
-    classification: 'justified-exception',
-    rationale:
-      'Task-state storage owns queued, inflight, resolved, dead-letter, and worker-index records under one persistence contract.',
-  },
-  {
     path: 'src/client/http-client.ts',
     classification: 'justified-exception',
     rationale:

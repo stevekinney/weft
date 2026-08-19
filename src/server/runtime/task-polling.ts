@@ -1,15 +1,18 @@
 import type { ServeOptions } from '../index.ts';
 import { isAuthenticated, type Principal } from '../principal.ts';
 import { readRestJsonBody, type RestBodyReadOptions } from '../rest-body.ts';
+import { claimQueued } from '../task-ledger-transitions.ts';
+import { decodeRemoteTaskRecord, taskLedgerKey, type RemoteTaskRecord } from '../task-ledger.ts';
 import type { PendingTask } from '../task-queue-types.ts';
-import type { InflightRecord } from '../task-state.ts';
-import { readInflightRecord, transitionQueuedToInflight } from '../task-state.ts';
 import type { ServerContext } from './context.ts';
-import { recordTaskBacklogMetric, recordTaskQueueLatencyMetric } from './task-metrics.ts';
+import { commitTaskLedgerCompletion } from './task-ledger-completion.ts';
+import { commitTaskLedgerTransition } from './task-ledger-runtime.ts';
 import {
-  taskResultPayloadSizeError,
-  transitionTaskResultToResolvedWithRetry,
-} from './task-result-resolution.ts';
+  recordTaskBacklogMetric,
+  recordTaskExecutionLatencyMetric,
+  recordTaskQueueLatencyMetric,
+} from './task-metrics.ts';
+import { taskResultPayloadSizeError } from './task-result-resolution.ts';
 
 const TASK_POLL_RE = /^\/v1\/tasks\/([\w-]+)$/;
 const TASK_RESULT_RE = /^\/v1\/tasks\/([\w-]+)\/result$/;
@@ -91,59 +94,58 @@ function validateTaskResultBody(body: Record<string, unknown>): ValidatedTaskRes
 }
 
 /**
- * Apply a validated task result: notify the task queue, remove the deadline,
- * and transition the storage record to resolved.
+ * Whether a long-poll completion may apply, read from the durable ledger
+ * record rather than the old `op:inflight:` record. Unlike the pre-ledger
+ * system, an absent or non-owning record is a hard rejection, not a
+ * duplicate-tolerant no-op — the ledger's single authoritative key removes
+ * the ambiguity that made "absent" a plausible stand-in for "already
+ * resolved elsewhere" (see the project brief's failure matrix: "Result
+ * arrives for unknown operation → Rejected").
+ */
+function isLongPollCompletionAuthorized(
+  record: RemoteTaskRecord | null,
+  validated: ValidatedTaskResult,
+): boolean {
+  if (record === null) return false;
+  if (record.state !== 'leased' && record.state !== 'completing') return false;
+  if (validated.workerId === undefined || record.workerSessionId !== validated.workerId) {
+    return false;
+  }
+  return validated.attemptToken === record.attemptToken;
+}
+
+/**
+ * Apply a validated task result: commit it through the durable ledger, then
+ * update the in-memory bookkeeping the durable write does not own —
+ * resolving any parked local completion waiters and clearing the deadline
+ * tracker entry.
  */
 async function applyTaskResult(
   context: ServerContext,
   options: ServeOptions,
   result: ValidatedTaskResult,
-  inflightRecord: InflightRecord | null,
-): Promise<void> {
+): Promise<{ ok: true } | { ok: false; reason: string }> {
   const { operationId, status, value, error } = result;
 
-  const resolvedStatus = status === 'failed' ? 'failed' : ('completed' as const);
-  try {
-    context.taskQueue.complete({ operationId, status, value, error });
-    context.deadlineTracker.remove(operationId);
-
-    await transitionTaskResultToResolvedWithRetry(context, options, {
-      operationId,
-      status: resolvedStatus,
-      resolutionReason: resolvedStatus,
-      inflightRecord,
-      ...(status === 'completed' ? { value } : { error }),
-    });
-  } catch (storageError) {
-    console.error(
-      `[weft] Failed to transition task "${operationId}" to resolved — inflight record may leak:`,
-      storageError,
-    );
-  }
-}
-
-async function applyPayloadRejectedTaskResult(
-  context: ServerContext,
-  options: ServeOptions,
-  result: ValidatedTaskResult,
-  inflightRecord: InflightRecord | null,
-  error: Error,
-): Promise<void> {
-  context.taskQueue.complete({
-    operationId: result.operationId,
-    status: 'failed',
-    error: error.message,
+  const committed = await commitTaskLedgerCompletion(options.engine.storage, {
+    operationId,
+    attemptToken: result.attemptToken,
+    status,
+    ...(status === 'completed' ? { value } : {}),
+    ...(status === 'failed' && error !== undefined ? { error } : {}),
   });
-  context.deadlineTracker.remove(result.operationId);
+  if (!committed.ok) return committed;
 
-  await transitionTaskResultToResolvedWithRetry(context, options, {
-    operationId: result.operationId,
-    status: 'failed',
-    resolutionReason: 'failed',
-    inflightRecord,
-    error: error.message,
-    skipPayloadSizeCheck: true,
-  });
+  recordTaskExecutionLatencyMetric(
+    context.metricsCollector,
+    { startedAt: committed.completing.startedAt },
+    Date.now(),
+  );
+  context.taskQueue.complete({ operationId, status, value, error });
+  context.deadlineTracker.remove(operationId);
+  recordTaskBacklogMetric(context.metricsCollector, context.taskQueue);
+
+  return { ok: true };
 }
 
 function payloadSizeExceededResponse(error: {
@@ -165,79 +167,70 @@ function payloadSizeExceededResponse(error: {
   );
 }
 
-/**
- * A freshly created long-poll inflight record always carries an `attemptToken`.
- * The intersection makes that invariant a compile-time fact so the claim can read
- * the token directly without an unreachable empty-string fallback.
- */
-type TokenedInflightRecord = InflightRecord & { attemptToken: string };
-
-export function createLongPollInflightRecord(
-  queue: string,
-  task: PendingTask,
-): TokenedInflightRecord {
-  const now = Date.now();
-  const visibilityTimeout = task.visibilityTimeout ?? DEFAULT_VISIBILITY_TIMEOUT;
-  const deadline = now + visibilityTimeout;
-
-  return {
-    operationId: task.operationId,
-    workerId: `longpoll-${crypto.randomUUID().slice(0, 8)}`,
-    deadline,
-    activityName: task.activityName,
-    queue,
-    input: task.input,
-    attempt: task.attempt ?? 1,
-    visibilityTimeout,
-    retryPolicy: task.retryPolicy,
-    workflowId: task.workflowId,
-    workflowExecutionToken: task.workflowExecutionToken,
-    // Fresh per-claim token. The long-poll completion handler validates the
-    // echoed token against the durable record, rejecting a stale earlier claim
-    // whose visibility timed out and was reclaimed. Re-claim writes a new record
-    // (delete-then-create) so the token rotates by construction.
-    attemptToken: crypto.randomUUID(),
-    firstQueuedAt: task.firstQueuedAt ?? task.enqueuedAt ?? now,
-    lastQueuedAt: task.lastQueuedAt ?? task.enqueuedAt ?? now,
-    lastDispatchedAt: now,
-    startedAt: now,
-    retryCount: task.retryCount ?? Math.max(0, (task.attempt ?? 1) - 1),
-    requeueCount: task.requeueCount ?? 0,
-    lastRequeueReason: task.lastRequeueReason,
-  };
-}
-
 /** The worker-facing identity of a long-poll claim: the synthetic worker id and its per-claim token. */
 export interface LongPollClaim {
   workerId: string;
   attemptToken: string;
 }
 
+/**
+ * Conditionally claim the durable `queued` ledger record for a task the
+ * in-memory `TaskQueue` matched to a long-poll waiter. Returns `null` when
+ * the claim loses — the ledger disagrees with the in-memory match hint,
+ * meaning another actor already claimed or cancelled this operationId — in
+ * which case the caller treats the poll as if nothing matched, per "index
+ * disagreement never authorizes a state transition".
+ *
+ * Long-poll workers never call `WorkerRegistry.register()`, so there is no
+ * manifest to build a `WorkerExecutionIdentity` from; the claim always omits
+ * `executionIdentity` (see `RemoteTaskLeased.executionIdentity`'s doc
+ * comment) rather than fabricate one.
+ */
 export async function markTaskClaimedByLongPollWorker(
   context: ServerContext,
   options: ServeOptions,
-  queue: string,
   task: PendingTask,
-): Promise<LongPollClaim> {
-  const inflightRecord = createLongPollInflightRecord(queue, task);
-  context.deadlineTracker.add({
-    operationId: task.operationId,
-    deadline: inflightRecord.deadline,
-  });
-  const normalizedInflightRecord = await transitionQueuedToInflight(
+): Promise<LongPollClaim | null> {
+  const workerSessionId = `longpoll-${crypto.randomUUID().slice(0, 8)}`;
+  const attemptToken = crypto.randomUUID();
+  const visibilityTimeout = task.visibilityTimeout ?? DEFAULT_VISIBILITY_TIMEOUT;
+
+  const result = await commitTaskLedgerTransition(
     options.engine.storage,
     task.operationId,
-    inflightRecord,
+    (current, now) => {
+      if (current === null || current.state !== 'queued') {
+        return {
+          ok: false as const,
+          reason: `operation "${task.operationId}" is not claimable from its current ledger state`,
+        };
+      }
+      return claimQueued(
+        current,
+        {
+          expectedGeneration: current.generation,
+          attemptToken,
+          workerSessionId,
+          leaseDurationMilliseconds: visibilityTimeout,
+        },
+        now,
+      );
+    },
+    1,
   );
-  recordTaskQueueLatencyMetric(context.metricsCollector, normalizedInflightRecord);
+  if (!result.ok) return null;
+
+  context.deadlineTracker.add({
+    operationId: task.operationId,
+    deadline: result.record.leaseDeadline,
+  });
+  recordTaskQueueLatencyMetric(context.metricsCollector, {
+    lastQueuedAt: result.record.lastQueuedAt,
+    lastDispatchedAt: Date.now(),
+  });
   recordTaskBacklogMetric(context.metricsCollector, context.taskQueue);
-  return {
-    workerId: normalizedInflightRecord.workerId,
-    // The token is read from the freshly created record (typed to always carry
-    // one), not from the normalized round-trip, so the claim never hands the
-    // worker an empty or missing token to echo.
-    attemptToken: inflightRecord.attemptToken,
-  };
+
+  return { workerId: workerSessionId, attemptToken };
 }
 
 export async function handleTaskPollRequest(
@@ -280,7 +273,13 @@ export async function handleTaskPollRequest(
 
   const task = await context.taskQueue.poll(queue, activities, timeout, request.signal);
   if (task !== null) {
-    const claim = await markTaskClaimedByLongPollWorker(context, options, queue, task);
+    const claim = await markTaskClaimedByLongPollWorker(context, options, task);
+    if (claim === null) {
+      // The in-memory match was stale by the time the durable claim ran —
+      // treat this poll as if nothing matched rather than handing out a
+      // task the ledger disagrees the worker actually holds.
+      return new Response(null, { status: 204 });
+    }
     return Response.json({
       ...task,
       workerId: claim.workerId,
@@ -329,20 +328,16 @@ export async function handleTaskResultRequest(
     return validated;
   }
 
-  // A null record means the task already resolved/expired/was reclaimed, so there
-  // is no owner to match against; the completion lands as a no-op on already-
-  // settled work. Otherwise the submitter must clear both the workerId and the
-  // attempt-token guards before the result is applied.
-  const inflightRecord = await readInflightRecord(options.engine.storage, validated.operationId);
-  if (inflightRecord !== null && !isLongPollCompletionAuthorized(inflightRecord, validated)) {
+  const record = decodeRemoteTaskRecord(
+    await options.engine.storage.get(taskLedgerKey(validated.operationId)),
+  );
+  if (!isLongPollCompletionAuthorized(record, validated)) {
     return Response.json({ error: 'Forbidden' }, { status: 403 });
   }
 
   const payloadError = taskResultPayloadSizeError(
     {
-      operationId: validated.operationId,
       status: validated.status,
-      resolutionReason: validated.status,
       ...(validated.status === 'completed'
         ? { value: validated.value }
         : { error: validated.error }),
@@ -350,44 +345,41 @@ export async function handleTaskResultRequest(
     context.payloadSizeMaxBytes,
   );
   if (payloadError !== null) {
-    try {
-      await applyPayloadRejectedTaskResult(
-        context,
-        options,
-        validated,
-        inflightRecord,
-        payloadError,
+    const rejected = await commitTaskLedgerCompletion(options.engine.storage, {
+      operationId: validated.operationId,
+      attemptToken: validated.attemptToken,
+      status: 'failed',
+      error: payloadError.message,
+    });
+    if (rejected.ok) {
+      recordTaskExecutionLatencyMetric(
+        context.metricsCollector,
+        { startedAt: rejected.completing.startedAt },
+        Date.now(),
       );
-    } catch (error) {
+      context.taskQueue.complete({
+        operationId: validated.operationId,
+        status: 'failed',
+        error: payloadError.message,
+      });
+      context.deadlineTracker.remove(validated.operationId);
+      recordTaskBacklogMetric(context.metricsCollector, context.taskQueue);
+    } else {
       console.error(
         `[weft] Failed to persist oversized task result rejection for task "${validated.operationId}":`,
-        error,
+        rejected.reason,
       );
     }
     return payloadSizeExceededResponse(payloadError);
   }
 
-  await applyTaskResult(context, options, validated, inflightRecord);
-  return Response.json({ ok: true });
-}
-
-/**
- * Whether a long-poll completion may apply to an in-flight task. Two layered
- * checks, both no-ops on rejection (the caller never reaches `applyTaskResult`):
- *
- * - **workerId**: the submitter must echo the exact synthetic workerId handed out
- *   on claim — a missing workerId is rejected, not treated as a wildcard.
- * - **attemptToken**: the per-claim token distinguishes a re-claimed earlier
- *   attempt (same operationId, possibly reusable workerId) from the current one.
- *   The submitter must echo the same non-empty token. A missing or different
- *   token is rejected.
- */
-function isLongPollCompletionAuthorized(
-  inflightRecord: InflightRecord,
-  validated: ValidatedTaskResult,
-): boolean {
-  if (validated.workerId === undefined || inflightRecord.workerId !== validated.workerId) {
-    return false;
+  const applied = await applyTaskResult(context, options, validated);
+  if (!applied.ok) {
+    console.error(
+      `[weft] Failed to commit task result for "${validated.operationId}" through the durable ledger:`,
+      applied.reason,
+    );
+    return Response.json({ error: 'Forbidden' }, { status: 403 });
   }
-  return validated.attemptToken === inflightRecord.attemptToken;
+  return Response.json({ ok: true });
 }

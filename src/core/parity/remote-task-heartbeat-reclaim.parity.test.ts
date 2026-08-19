@@ -2,12 +2,24 @@ import { describe, expect, it } from 'bun:test';
 
 import { serve, type ServeOptions, type WeftServer } from '../../server/index.ts';
 import { useManualTaskReconciliationForTesting } from '../../server/runtime/task-reconciliation.ts';
-import { KEYS } from '../../storage/interface.ts';
+import type { RemoteTaskLeased } from '../../server/task-ledger-types.ts';
+import { decodeRemoteTaskRecord, taskLedgerKey } from '../../server/task-ledger.ts';
+import type { Storage } from '../../storage/interface.ts';
 import { REMOTE_WORKER_PROTOCOL_VERSION } from '../../worker/protocol.ts';
 import { manifestForActivities } from '../../worker/registry-fixtures.test-support.ts';
-import { decode } from '../codec.ts';
 import { Engine } from '../engine.ts';
 import { waitForParityCondition } from './real-timer-wait.test-support.ts';
+
+/** Reads the ledger record for `operationId`, asserting it is currently leased. */
+async function readLeasedRecord(storage: Storage, operationId: string): Promise<RemoteTaskLeased> {
+  const record = decodeRemoteTaskRecord(await storage.get(taskLedgerKey(operationId)));
+  if (record === null || record.state !== 'leased') {
+    throw new Error(
+      `Expected a leased ledger record for "${operationId}", got: ${record?.state ?? 'absent'}`,
+    );
+  }
+  return record;
+}
 
 /**
  * This case is intentionally separated from the rest of the failure-handling
@@ -78,6 +90,7 @@ describe('Temporal failure-handling parity (remote-task heartbeat reclaim)', () 
       await server.dispatchTask({
         operationId: 'parity-heartbeating-task',
         activityName: 'test.parityRemoteActivity',
+        workflowType: 'test',
         input: null,
         visibilityTimeout: 120,
       });
@@ -85,11 +98,9 @@ describe('Temporal failure-handling parity (remote-task heartbeat reclaim)', () 
       await waitForParityCondition(() => taskAttempts.length === 1, {
         label: 'first remote task dispatch',
       });
-      const beforeHeartbeat = decode(
-        (await engine.storage.get(KEYS.operationInflight('parity-heartbeating-task')))!,
-      ) as { deadline: number };
+      const beforeHeartbeat = await readLeasedRecord(engine.storage, 'parity-heartbeating-task');
 
-      const dispatchTime = beforeHeartbeat.deadline - 120;
+      const dispatchTime = beforeHeartbeat.leaseDeadline - 120;
       await waitForParityCondition(() => Date.now() >= dispatchTime + 10, {
         label: 'clock advanced before heartbeat',
       });
@@ -99,38 +110,41 @@ describe('Temporal failure-handling parity (remote-task heartbeat reclaim)', () 
       socket.send(JSON.stringify({ type: 'heartbeat', workerId: 'parity-heartbeat-worker' }));
       await waitForParityCondition(
         async () => {
-          const current = decode(
-            (await engine.storage.get(KEYS.operationInflight('parity-heartbeating-task')))!,
-          ) as { deadline: number };
-          return current.deadline > beforeHeartbeat.deadline;
+          const current = await readLeasedRecord(engine.storage, 'parity-heartbeating-task');
+          return current.leaseDeadline > beforeHeartbeat.leaseDeadline;
         },
         { label: 'heartbeat deadline extension' },
       );
-      const afterHeartbeat = decode(
-        (await engine.storage.get(KEYS.operationInflight('parity-heartbeating-task')))!,
-      ) as { deadline: number };
+      const afterHeartbeat = await readLeasedRecord(engine.storage, 'parity-heartbeating-task');
 
       await manualReconciliation.scanAt(
         'parity-heartbeating-task',
-        beforeHeartbeat.deadline,
-        beforeHeartbeat.deadline + 1,
+        beforeHeartbeat.leaseDeadline,
+        beforeHeartbeat.leaseDeadline + 1,
       );
 
-      expect(afterHeartbeat.deadline).toBeGreaterThan(beforeHeartbeat.deadline + 1);
+      expect(afterHeartbeat.leaseDeadline).toBeGreaterThan(beforeHeartbeat.leaseDeadline + 1);
       expect(taskAttempts).toEqual([1]);
       expect(server.registry.isAssigned('parity-heartbeating-task')).toBe(true);
 
+      // requeueExpiredAttempt's deadline precondition is checked against the
+      // real wall clock inside commitTaskLedgerTransition (Date.now()), not
+      // the simulated `now` passed to scanAt — that simulated value only
+      // decides which deadline-tracker heap entries scanExpiredTasks drains.
+      // Wait for real time to actually reach the lease deadline before the
+      // scan that expects reassignment to succeed.
+      await waitForParityCondition(() => Date.now() >= afterHeartbeat.leaseDeadline, {
+        label: 'real clock to reach the post-heartbeat lease deadline',
+      });
       await manualReconciliation.scanAt(
         'parity-heartbeating-task',
-        afterHeartbeat.deadline,
-        afterHeartbeat.deadline + 1,
+        afterHeartbeat.leaseDeadline,
+        afterHeartbeat.leaseDeadline + 1,
       );
       await waitForParityCondition(() => taskAttempts.includes(2), {
         label: 'reclaimed attempt delivery',
       });
-      const reassigned = decode(
-        (await engine.storage.get(KEYS.operationInflight('parity-heartbeating-task')))!,
-      ) as { attempt?: number };
+      const reassigned = await readLeasedRecord(engine.storage, 'parity-heartbeating-task');
       expect(reassigned.attempt).toBe(2);
       expect(taskAttempts).toEqual([1, 2]);
       expect(server.registry.isAssigned('parity-heartbeating-task')).toBe(true);

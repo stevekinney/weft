@@ -429,6 +429,28 @@ describe('requeueExpiredAttempt', () => {
     expect(result.ok).toBe(false);
   });
 
+  it('requeues a live, unexpired lease when skipDeadlineCheck is set (worker disconnect)', () => {
+    const leased = leasedFixture({ leaseDeadline: 99_000 });
+    const result = requeueExpiredAttempt(
+      leased,
+      { ...requeueInput, requeueReason: 'worker-disconnect', skipDeadlineCheck: true },
+      10_000,
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok && result.nextRecord.state === 'queued') {
+      expect(result.nextRecord.lastRequeueReason).toBe('worker-disconnect');
+    }
+  });
+
+  it('still enforces the attempt-token match when skipDeadlineCheck is set', () => {
+    const result = requeueExpiredAttempt(
+      leasedFixture({ leaseDeadline: 99_000 }),
+      { ...requeueInput, attemptToken: 'stale', skipDeadlineCheck: true },
+      10_000,
+    );
+    expect(result.ok).toBe(false);
+  });
+
   it('rejects a stale attempt token', () => {
     const result = requeueExpiredAttempt(
       leasedFixture({ leaseDeadline: 10_000 }),

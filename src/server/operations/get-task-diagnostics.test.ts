@@ -20,7 +20,6 @@ import {
   type InflightRecord,
   type QueuedRecord,
   type ResolvedRecord,
-  writeDeadLetteredTaskRecord,
 } from '../task-state.ts';
 import {
   createGetTaskDiagnosticsOperation,
@@ -291,7 +290,10 @@ describe('weft.tasks.diagnostics', () => {
     };
 
     await storage.put(KEYS.operationInflight(inflightRecord.operationId), encode(inflightRecord));
-    await writeDeadLetteredTaskRecord(storage, deadLetterRecord);
+    await storage.put(
+      KEYS.operationDeadLetter(deadLetterRecord.operationId),
+      encode(deadLetterRecord),
+    );
 
     const result = await runDiagnostics({
       engine,

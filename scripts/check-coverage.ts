@@ -1043,7 +1043,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
         reason:
           'Process-entry and failure-exit behavior runs in child processes whose hits are not attributed to the parent Bun LCOV report.',
         functions: 1,
-        lines: new Set([55, 106, 128, 141, 151, 152, 168, 169, 222, 294, 332]),
+        lines: new Set([55, 168, 169, 222]),
         requireUncoveredLines: true,
       },
     ],
@@ -1323,10 +1323,10 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       // The closed WorkerToServerMessage union makes this default branch
       // unreachable at runtime; it exists solely as a compile-time
       // exhaustiveness guard: the `}` closing the preceding `taskResult`
-      // case (315), `case 'heartbeat': {` / its closing `}` (316, 319),
-      // `default: {` (320), and the two dead statements inside it,
-      // `const _exhaustive` / `return _exhaustive` (323, 324). Only 323 and
-      // 324 are deterministically 0 across every run; the other four
+      // case (341), `case 'heartbeat': {` / its closing `}` (342, 345),
+      // `default: {` (346), and the two dead statements inside it,
+      // `const _exhaustive` / `return _exhaustive` (349, 350). Only 349 and
+      // 350 are deterministically 0 across every run; the other four
       // case-label and brace lines around them flip between hit and unhit
       // run to run with byte-identical source — a switch-statement
       // coverage-attribution artifact, not a real reachability signal — so
@@ -1335,7 +1335,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       {
         reason:
           'Transport disconnect and concurrency exits are behaviorally tested, but Bun does not deterministically attribute these residual paths.',
-        lines: new Set([315, 316, 319, 320, 323, 324]),
+        lines: new Set([341, 342, 345, 346, 349, 350]),
       },
     ],
     [

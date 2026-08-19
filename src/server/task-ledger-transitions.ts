@@ -104,7 +104,8 @@ export type ClaimQueuedInput = Readonly<{
   expectedGeneration: number;
   attemptToken: string;
   workerSessionId: string;
-  executionIdentity: WorkerExecutionIdentity;
+  /** Omitted when the claiming worker has no registered manifest entry for this workflowType/activityName — see `RemoteTaskLeased.executionIdentity`'s doc comment. */
+  executionIdentity?: WorkerExecutionIdentity;
   leaseDurationMilliseconds: number;
 }>;
 
@@ -129,7 +130,9 @@ export function claimQueued(
     state: 'leased',
     attemptToken: input.attemptToken,
     workerSessionId: input.workerSessionId,
-    executionIdentity: input.executionIdentity,
+    ...(input.executionIdentity !== undefined
+      ? { executionIdentity: input.executionIdentity }
+      : {}),
     attempt: current.attempt,
     leaseDeadline: now + input.leaseDurationMilliseconds,
     firstQueuedAt: current.firstQueuedAt,
@@ -254,6 +257,16 @@ export function commitTerminalResult(
 export type RequeueExpiredAttemptInput = Readonly<{
   attemptToken: string;
   requeueReason: string;
+  /**
+   * Skip the lease-deadline precondition. Worker disconnect forfeits the
+   * lease immediately rather than waiting for it to expire — the brief's
+   * "Disconnect races heartbeat -> One attempt-token transition wins" licenses
+   * a requeue here as long as the attempt token still matches, independent of
+   * whether the deadline has actually passed. Visibility-timeout-origin
+   * requeues never set this, since expiry genuinely requires the deadline
+   * precondition.
+   */
+  skipDeadlineCheck?: boolean;
 }>;
 
 export function requeueExpiredAttempt(
@@ -267,7 +280,7 @@ export function requeueExpiredAttempt(
   if (current.attemptToken !== input.attemptToken) {
     return { ok: false, reason: 'attempt token mismatch' };
   }
-  if (current.leaseDeadline > now) {
+  if (input.skipDeadlineCheck !== true && current.leaseDeadline > now) {
     return { ok: false, reason: 'lease has not expired' };
   }
 

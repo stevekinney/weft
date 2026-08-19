@@ -4,18 +4,31 @@
  * These tests assert outbound WebSocket messages and registry public-reader
  * state for every message variant (register, taskResult, heartbeat), plus
  * malformed/unknown-type paths. They do NOT assert private call order.
+ *
+ * `taskResult message` fixtures write real `task-ledger:` records (WFT-22)
+ * instead of the retired `markInflight`/`op:inflight:` state — the ledger is
+ * the sole authority `commitTaskLedgerCompletion` reads/writes today, and
+ * response shapes here were never asserted (this suite checks WebSocket
+ * frames and registry state, not HTTP responses), so no behavior changed —
+ * only the fixture that seeds the durable ledger.
  */
 
 import { describe, expect, it, spyOn } from 'bun:test';
 
-import { decode } from '../../core/codec.ts';
-import { KEYS } from '../../storage/interface.ts';
+import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { sleepForTesting, waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { REMOTE_WORKER_PROTOCOL_VERSION } from '../../worker/protocol.ts';
 import { manifestForActivities } from '../../worker/registry-fixtures.test-support.ts';
 import { principalFromApiKey } from '../principal.ts';
-import { markInflight, type InflightRecord, type ResolvedRecord } from '../task-state.ts';
+import {
+  decodeRemoteTaskRecord,
+  encodeRemoteTaskRecord,
+  isRemoteTaskTerminalResolved,
+  taskLedgerKey,
+  type RemoteTaskLeased,
+  type RemoteTaskTerminalResolved,
+} from '../task-ledger.ts';
 import { minimalServeOptions, minimalServerContext } from './server-context.test-support.ts';
 import { handleWorkerWebSocketMessage } from './websocket-worker.ts';
 
@@ -92,27 +105,110 @@ function setPayloadSizeLimit(context: unknown, maxBytes: number): void {
   (context as { payloadSizeMaxBytes: number | null }).payloadSizeMaxBytes = maxBytes;
 }
 
-async function readResolvedRecord(
-  storage: MemoryStorage,
-  operationId: string,
-): Promise<ResolvedRecord> {
-  const bytes = await storage.get(KEYS.operationResolved(operationId));
-  expect(bytes).not.toBeNull();
-  return decode(bytes!) as ResolvedRecord;
-}
-
-function makeInflightRecord(operationId: string, workerId: string): InflightRecord {
+/**
+ * Build a `leased` ledger record directly (WFT-22), matching the
+ * `leasedFixture()` pattern in `task-ledger.test.ts` / `task-ledger-transitions.test.ts`.
+ * These `taskResult` tests are narrow completion-path unit tests — they
+ * manually seed `context.registry.assignTask()` rather than driving a real
+ * WebSocket dispatch, so a hand-built ledger record (not care how it got
+ * into `leased` state) is the matching setup for the durable side.
+ */
+function leasedLedgerFixture(overrides: Partial<RemoteTaskLeased> = {}): RemoteTaskLeased {
+  const now = Date.now();
   return {
-    operationId,
-    workerId,
-    deadline: Date.now() + 30_000,
+    recordVersion: 1,
+    operationId: 'op-1',
+    workflowType: 'test',
     activityName: 'doWork',
     queue: 'default',
     input: null,
-    attempt: 1,
-    visibilityTimeout: 30_000,
+    headers: {},
+    visibilityTimeoutMilliseconds: 30_000,
+    createdAt: now,
+    generation: 1,
+    state: 'leased',
     attemptToken: 'attempt-token',
+    workerSessionId: 'worker-1',
+    attempt: 1,
+    leaseDeadline: now + 30_000,
+    firstQueuedAt: now,
+    lastQueuedAt: now,
+    startedAt: now,
+    lastHeartbeatAt: now,
+    retryCount: 0,
+    requeueCount: 0,
+    ...overrides,
   };
+}
+
+async function writeLeasedLedgerRecord(
+  storage: MemoryStorage,
+  overrides: Partial<RemoteTaskLeased> = {},
+): Promise<RemoteTaskLeased> {
+  const record = leasedLedgerFixture(overrides);
+  await storage.put(taskLedgerKey(record.operationId), encodeRemoteTaskRecord(record));
+  return record;
+}
+
+/**
+ * Wait for and read a task's resolved terminal ledger record (WFT-22). No
+ * `value` field is asserted anywhere below — the ledger's terminal record
+ * never persists the completed payload (see
+ * `state-worker-harness.parity.test.ts`'s `readTerminalRecord` doc comment;
+ * delivering the value into a workflow continuation is WFT-24 territory).
+ */
+async function waitForResolvedTerminalRecord(
+  storage: MemoryStorage,
+  operationId: string,
+  label: string,
+): Promise<RemoteTaskTerminalResolved> {
+  await waitForCondition(
+    async () => {
+      const record = decodeRemoteTaskRecord(await storage.get(taskLedgerKey(operationId)));
+      return record !== null && record.state === 'terminal';
+    },
+    { timeoutMs: 1000, intervalMs: 10, label },
+  );
+  const record = decodeRemoteTaskRecord(await storage.get(taskLedgerKey(operationId)));
+  if (!isRemoteTaskTerminalResolved(record)) {
+    throw new Error(
+      `Expected operation "${operationId}" to have a resolved terminal ledger record`,
+    );
+  }
+  return record;
+}
+
+/**
+ * Storage that loses the CAS for a `terminal` write targeting one specific
+ * operationId — mirrors `task-polling.characterization.test.ts`'s
+ * `FailingTerminalCommitStorage` — so `commitTaskLedgerCompletion` exhausts
+ * its retries and returns `ok: false`, exercising `onTaskResultMessage`'s
+ * failure-logging branches instead of only the happy path.
+ */
+class FailingTerminalCommitStorage extends MemoryStorage {
+  readonly #failingOperationId: string;
+
+  constructor(failingOperationId: string) {
+    super();
+    this.#failingOperationId = failingOperationId;
+  }
+
+  override async conditionalBatch(
+    conditions: ConditionalBatchCondition[],
+    operations: BatchOperation[],
+  ): Promise<boolean> {
+    const targetsFailingTerminalCommit = operations.some((operation) => {
+      if (operation.type !== 'put' || !operation.key.startsWith('task-ledger:')) return false;
+      const record = decodeRemoteTaskRecord(operation.value);
+      return (
+        record !== null &&
+        record.operationId === this.#failingOperationId &&
+        record.state === 'terminal'
+      );
+    });
+    if (targetsFailingTerminalCommit) return false;
+    return super.conditionalBatch(conditions, operations);
+  }
 }
 
 describe('handleWorkerWebSocketMessage', () => {
@@ -687,7 +783,8 @@ describe('handleWorkerWebSocketMessage', () => {
   describe('taskResult message', () => {
     it('completes task in registry and removes deadline tracker entry', async () => {
       const context = minimalServerContext();
-      const options = minimalServeOptions();
+      const storage = new MemoryStorage();
+      const options = minimalServeOptions(storage);
       const ws = createFakeWs();
 
       // Register worker first
@@ -705,6 +802,10 @@ describe('handleWorkerWebSocketMessage', () => {
       // Manually assign a task to the registry and add deadline
       context.registry.assignTask('w-result', 'op-finish', 30_000, undefined, 'attempt-token');
       context.deadlineTracker.add({ operationId: 'op-finish', deadline: Date.now() + 30_000 });
+      await writeLeasedLedgerRecord(storage, {
+        operationId: 'op-finish',
+        workerSessionId: 'w-result',
+      });
 
       expect(context.registry.isAssigned('op-finish')).toBe(true);
       expect(context.deadlineTracker.size).toBe(1);
@@ -729,7 +830,8 @@ describe('handleWorkerWebSocketMessage', () => {
 
     it('calls cleanupWorkflowIndex with the operationId', async () => {
       const context = minimalServerContext();
-      const options = minimalServeOptions();
+      const storage = new MemoryStorage();
+      const options = minimalServeOptions(storage);
       const ws = createFakeWs();
 
       const cleaned: string[] = [];
@@ -746,6 +848,11 @@ describe('handleWorkerWebSocketMessage', () => {
       );
 
       context.registry.assignTask('w-cleanup', 'op-cleanup', 30_000, undefined, 'attempt-token');
+      await writeLeasedLedgerRecord(storage, {
+        operationId: 'op-cleanup',
+        workerSessionId: 'w-cleanup',
+        activityName: 'cleanWork',
+      });
 
       handleWorkerWebSocketMessage(
         context,
@@ -786,7 +893,10 @@ describe('handleWorkerWebSocketMessage', () => {
 
       context.registry.assignTask('w-oversize', 'op-oversize', 30_000, undefined, 'attempt-token');
       context.deadlineTracker.add({ operationId: 'op-oversize', deadline: Date.now() + 30_000 });
-      await markInflight(storage, makeInflightRecord('op-oversize', 'w-oversize'));
+      await writeLeasedLedgerRecord(storage, {
+        operationId: 'op-oversize',
+        workerSessionId: 'w-oversize',
+      });
 
       handleWorkerWebSocketMessage(
         context,
@@ -802,9 +912,10 @@ describe('handleWorkerWebSocketMessage', () => {
         NOOP_CLEANUP,
       );
 
-      await waitForCondition(
-        async () => (await storage.get(KEYS.operationResolved('op-oversize'))) !== null,
-        { timeoutMs: 1000, intervalMs: 10, label: 'oversized WebSocket task to resolve failed' },
+      const resolved = await waitForResolvedTerminalRecord(
+        storage,
+        'op-oversize',
+        'oversized WebSocket task to resolve failed',
       );
 
       const protocolError = ws.sentMessages
@@ -817,12 +928,9 @@ describe('handleWorkerWebSocketMessage', () => {
       expect(String(protocolError.message)).toContain('activity result exceeds');
       expect(context.registry.isAssigned('op-oversize')).toBe(false);
       expect(context.deadlineTracker.size).toBe(0);
-      expect(await storage.get(KEYS.operationInflight('op-oversize'))).toBeNull();
 
-      const resolved = await readResolvedRecord(storage, 'op-oversize');
       expect(resolved.status).toBe('failed');
       expect(resolved.error).toContain('activity result exceeds');
-      expect(resolved.value).toBeUndefined();
     });
 
     it('rejects oversized cancelled errors and resolves the task as failed', async () => {
@@ -850,7 +958,10 @@ describe('handleWorkerWebSocketMessage', () => {
         undefined,
         'attempt-token',
       );
-      await markInflight(storage, makeInflightRecord('op-cancel-oversize', 'w-cancel-oversize'));
+      await writeLeasedLedgerRecord(storage, {
+        operationId: 'op-cancel-oversize',
+        workerSessionId: 'w-cancel-oversize',
+      });
 
       handleWorkerWebSocketMessage(
         context,
@@ -867,13 +978,10 @@ describe('handleWorkerWebSocketMessage', () => {
         NOOP_CLEANUP,
       );
 
-      await waitForCondition(
-        async () => (await storage.get(KEYS.operationResolved('op-cancel-oversize'))) !== null,
-        {
-          timeoutMs: 1000,
-          intervalMs: 10,
-          label: 'oversized WebSocket cancellation to resolve failed',
-        },
+      const resolved = await waitForResolvedTerminalRecord(
+        storage,
+        'op-cancel-oversize',
+        'oversized WebSocket cancellation to resolve failed',
       );
 
       const protocolError = ws.sentMessages
@@ -881,7 +989,6 @@ describe('handleWorkerWebSocketMessage', () => {
         .find((message: { type?: string }) => message.type === 'protocolError');
       expect(String(protocolError.message)).toContain('activity result exceeds');
 
-      const resolved = await readResolvedRecord(storage, 'op-cancel-oversize');
       expect(resolved.status).toBe('failed');
       expect(resolved.error).toContain('activity result exceeds');
       expect(resolved.error).not.toContain('x'.repeat(100));
@@ -941,6 +1048,121 @@ describe('handleWorkerWebSocketMessage', () => {
       expect(errorSpy).toHaveBeenCalledWith(
         '[weft] Failed to transition task "op-storage-failure" to resolved — inflight record may leak:',
         expect.any(Error),
+      );
+    });
+
+    it('logs when the durable completion commit loses its CAS without throwing', async () => {
+      const storage = new FailingTerminalCommitStorage('op-commit-loses-cas');
+      const context = minimalServerContext();
+      const options = minimalServeOptions(storage);
+      const ws = createFakeWs();
+
+      handleWorkerWebSocketMessage(
+        context,
+        options,
+        ws as never,
+        registerMessageJson('w-commit-loses-cas', ['doWork'], { concurrency: 5 }),
+        NOOP_CLEANUP,
+      );
+      await waitForRegistrationSideEffect(
+        () => context.registry.getWorker('w-commit-loses-cas') !== undefined,
+      );
+
+      context.registry.assignTask(
+        'w-commit-loses-cas',
+        'op-commit-loses-cas',
+        30_000,
+        undefined,
+        'attempt-token',
+      );
+      await writeLeasedLedgerRecord(storage, {
+        operationId: 'op-commit-loses-cas',
+        workerSessionId: 'w-commit-loses-cas',
+      });
+
+      using errorSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      handleWorkerWebSocketMessage(
+        context,
+        options,
+        ws as never,
+        JSON.stringify({
+          type: 'taskResult',
+          operationId: 'op-commit-loses-cas',
+          attemptToken: 'attempt-token',
+          status: 'completed',
+          value: 'done',
+        }),
+        NOOP_CLEANUP,
+      );
+
+      await waitForCondition(async () => errorSpy.mock.calls.length > 0, {
+        timeoutMs: 1000,
+        intervalMs: 10,
+        label: 'lost-CAS completion commit to be logged',
+      });
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[weft] Failed to commit task result for "op-commit-loses-cas" through the durable ledger:',
+        expect.any(String),
+      );
+    });
+
+    it('logs when the durable oversized-rejection commit loses its CAS without throwing', async () => {
+      const storage = new FailingTerminalCommitStorage('op-rejection-loses-cas');
+      const context = minimalServerContext();
+      setPayloadSizeLimit(context, 64);
+      const options = minimalServeOptions(storage);
+      const ws = createFakeWs();
+
+      handleWorkerWebSocketMessage(
+        context,
+        options,
+        ws as never,
+        registerMessageJson('w-rejection-loses-cas', ['doWork'], { concurrency: 5 }),
+        NOOP_CLEANUP,
+      );
+      await waitForRegistrationSideEffect(
+        () => context.registry.getWorker('w-rejection-loses-cas') !== undefined,
+      );
+
+      context.registry.assignTask(
+        'w-rejection-loses-cas',
+        'op-rejection-loses-cas',
+        30_000,
+        undefined,
+        'attempt-token',
+      );
+      await writeLeasedLedgerRecord(storage, {
+        operationId: 'op-rejection-loses-cas',
+        workerSessionId: 'w-rejection-loses-cas',
+      });
+
+      using errorSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      handleWorkerWebSocketMessage(
+        context,
+        options,
+        ws as never,
+        JSON.stringify({
+          type: 'taskResult',
+          operationId: 'op-rejection-loses-cas',
+          attemptToken: 'attempt-token',
+          status: 'completed',
+          value: { blob: 'x'.repeat(200) },
+        }),
+        NOOP_CLEANUP,
+      );
+
+      await waitForCondition(async () => errorSpy.mock.calls.length > 0, {
+        timeoutMs: 1000,
+        intervalMs: 10,
+        label: 'lost-CAS oversized-rejection commit to be logged',
+      });
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[weft] Failed to persist oversized task result rejection for task "op-rejection-loses-cas":',
+        expect.any(String),
       );
     });
   });

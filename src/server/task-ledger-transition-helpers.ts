@@ -29,7 +29,9 @@ export function pickBase(record: RemoteTaskBase): RemoteTaskBase {
     operationId: record.operationId,
     ...(record.workflowId !== undefined ? { workflowId: record.workflowId } : {}),
     workflowType: record.workflowType,
-    workflowExecutionToken: record.workflowExecutionToken,
+    ...(record.workflowExecutionToken !== undefined
+      ? { workflowExecutionToken: record.workflowExecutionToken }
+      : {}),
     activityName: record.activityName,
     queue: record.queue,
     input: record.input,
@@ -63,7 +65,7 @@ export function pickAttemptFields(record: RemoteTaskAttemptFields): RemoteTaskAt
 export type LeaseHolderFields = Readonly<{
   attemptToken: string;
   workerSessionId: string;
-  executionIdentity: WorkerExecutionIdentity;
+  executionIdentity?: WorkerExecutionIdentity;
   attempt: number;
   leaseDeadline: number;
   firstQueuedAt: number;
@@ -76,7 +78,9 @@ export function pickLeaseHolderFields(record: LeaseHolderFields): LeaseHolderFie
   return {
     attemptToken: record.attemptToken,
     workerSessionId: record.workerSessionId,
-    executionIdentity: record.executionIdentity,
+    ...(record.executionIdentity !== undefined
+      ? { executionIdentity: record.executionIdentity }
+      : {}),
     attempt: record.attempt,
     leaseDeadline: record.leaseDeadline,
     firstQueuedAt: record.firstQueuedAt,
