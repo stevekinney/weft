@@ -6,7 +6,6 @@ import {
   type WorkerExecutionIdentity,
   type WorkerExecutionRequirement,
   type WorkerManifest,
-  type WorkerManifestParseResult,
   type WorkerManifestRejectionReason,
 } from '@lostgradient/weft';
 
@@ -28,11 +27,16 @@ const manifest: WorkerManifest = {
 };
 
 // Validation narrows without a cast at the call site.
-const result: WorkerManifestParseResult = parseWorkerManifest(manifest);
-const accepted: WorkerManifest | undefined = result.ok ? result.manifest : undefined;
-const reason: WorkerManifestRejectionReason | undefined = result.ok ? undefined : result.reason;
+const result = parseWorkerManifest(manifest);
+if (result.ok) {
+  const accepted: WorkerManifest = result.manifest;
+  void accepted;
+} else {
+  const reason: WorkerManifestRejectionReason = result.reason;
+  void reason;
+}
 
-const identity: WorkerExecutionIdentity | undefined = buildWorkerExecutionIdentity({
+const identity = buildWorkerExecutionIdentity({
   manifest,
   manifestDigest: 'sha256:deadbeef',
   workerId: 'worker-1',
@@ -41,11 +45,10 @@ const identity: WorkerExecutionIdentity | undefined = buildWorkerExecutionIdenti
 });
 
 const requirement: WorkerExecutionRequirement = { buildId: 'b3' };
-const eligible: boolean = identity === undefined ? false : executionIdentitySatisfies(requirement, identity);
+if (identity !== undefined) {
+  const eligible: boolean = executionIdentitySatisfies(requirement, identity);
+  void eligible;
+}
 
 // @ts-expect-error the requirement argument comes before the identity argument.
 executionIdentitySatisfies(identity as WorkerExecutionIdentity, requirement);
-
-void accepted;
-void reason;
-void eligible;
