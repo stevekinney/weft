@@ -104,6 +104,24 @@ describe('operation coverage regressions', () => {
     );
   });
 
+  it('rejects malformed failure-category filter shapes', () => {
+    expect(
+      parseRequiredBulkListFilter({
+        filter: { status: 'failed', failureCategory: ['application', 'timeout'] },
+      }),
+    ).toMatchObject({ failureCategory: ['application', 'timeout'] });
+    expect(() =>
+      parseRequiredBulkListFilter({
+        filter: { status: 'failed', failureCategory: 1 },
+      }),
+    ).toThrow('Field "filter.failureCategory" must be a string or an array of strings');
+    expect(() =>
+      parseRequiredBulkListFilter({
+        filter: { status: 'failed', failureCategory: ['application', 1] },
+      }),
+    ).toThrow('Field "filter.failureCategory" must be a string or an array of strings');
+  });
+
   it('maps complete bulk filters and rejects malformed control inputs', () => {
     expect(
       listFilterFromBulkInput({

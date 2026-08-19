@@ -522,16 +522,6 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
       },
     ],
     [
-      'src/server/operations/failure-category-filter.ts',
-      {
-        reason:
-          'The residual filter helper guards an unknown failure category that boundary validation rejects before operation dispatch.',
-        functions: 1,
-        lines: new Set([13, 14, 15, 16, 17, 18, 19]),
-        requireUncoveredLines: true,
-      },
-    ],
-    [
       'src/testing/fake-timers.test-support.ts',
       {
         reason:
@@ -681,24 +671,6 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
           'The remaining search-attribute branches reject runtime value kinds that the public attribute schema and decoder exclude.',
         functions: 1,
         lines: new Set([162, 163, 202, 203, 204, 205, 206]),
-        requireUncoveredLines: true,
-      },
-    ],
-    [
-      'src/mcp/access.ts',
-      {
-        reason:
-          'The remaining MCP access lines guard an operation without declared scopes, which operation-catalog validation forbids.',
-        lines: new Set([28, 29, 30, 31, 32]),
-        requireUncoveredLines: true,
-      },
-    ],
-    [
-      'src/mcp/list-filter.ts',
-      {
-        reason:
-          'The residual list-filter branches reject malformed cursor and filter combinations already excluded at the MCP input boundary.',
-        lines: new Set([65, 68, 73]),
         requireUncoveredLines: true,
       },
     ],
@@ -1053,15 +1025,6 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       },
     ],
     [
-      'src/core/signal-id.ts',
-      {
-        reason:
-          'The remaining signal-id line is the defensive anonymous-prefix ambiguity guard for values already encoded as explicit identifiers.',
-        lines: new Set([10]),
-        requireUncoveredLines: true,
-      },
-    ],
-    [
       'src/mcp/dispatcher.ts',
       {
         reason:
@@ -1084,15 +1047,6 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
         reason:
           'The remaining adapter branches translate impossible catalog result variants excluded by each operation definition.',
         lines: new Set([172, 173, 174, 175, 176, 180, 181, 184, 185, 186, 187, 188, 192, 193]),
-        requireUncoveredLines: true,
-      },
-    ],
-    [
-      'src/server/operations/aggregate-workflows.ts',
-      {
-        reason:
-          'The remaining aggregation branches handle malformed storage rows and grouping keys excluded by decoded workflow summaries.',
-        lines: new Set([107, 108, 117, 118, 119]),
         requireUncoveredLines: true,
       },
     ],

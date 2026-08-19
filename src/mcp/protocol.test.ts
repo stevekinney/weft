@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 
 import type { Engine } from '../core/engine.ts';
+import { principalFromApiKey } from '../server/principal.ts';
+import { assertScope } from './access.ts';
 import { dispatchMcpMessage, type McpDispatchContext } from './dispatcher.ts';
 import { internalError, invalidParams, methodNotFound, resourceNotFound } from './protocol.ts';
 import { isWorkflowSearchResourceUri, listMcpResourceTemplates } from './resources.ts';
@@ -77,6 +79,28 @@ describe('MCP resource contracts', () => {
     expect(isWorkflowSearchResourceUri('not a URL')).toBeFalse();
     expect(isWorkflowSearchResourceUri('weft://workflows/%E0%A4%A/state')).toBeFalse();
     expect(isWorkflowSearchResourceUri('weft://workflows/workflow-1/state')).toBeFalse();
+  });
+
+  test('rejects anonymous and insufficiently scoped resource access', () => {
+    expect(() =>
+      assertScope(
+        { engine: {} as Engine, principal: { method: 'unauthenticated' }, authRequired: true },
+        'workflows:read',
+        'Reading workflow resources',
+      ),
+    ).toThrow('Reading workflow resources requires authentication');
+
+    expect(() =>
+      assertScope(
+        {
+          engine: {} as Engine,
+          principal: principalFromApiKey({ subject: 'operator', scopes: ['events:read'] }),
+          authRequired: true,
+        },
+        'workflows:read',
+        'Reading workflow resources',
+      ),
+    ).toThrow('Reading workflow resources requires workflows:read');
   });
 });
 

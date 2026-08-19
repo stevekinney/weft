@@ -432,6 +432,21 @@ describe('engine signals', () => {
     });
   });
 
+  it('rejects empty signalIds before persistence', async () => {
+    const storage = new MemoryStorage();
+    const internals = createSignalInternals(storage);
+    const callbacks = createSignalCallbacks();
+
+    await expect(
+      signal(internals as never, 'workflow-empty-signal-id', 'release', 'first', callbacks, {
+        signalId: '',
+      }),
+    ).rejects.toThrow('signalId must be non-empty');
+    expect(await consumeSignal(internals as never, 'workflow-empty-signal-id', 'release')).toEqual({
+      found: false,
+    });
+  });
+
   it('rejects oversize default signalIds before buffering multiple deliveries', async () => {
     const storage = new MemoryStorage();
     const internals = createSignalInternals(storage);

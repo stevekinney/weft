@@ -10,6 +10,21 @@ describe('MCP list filter parsing', () => {
     });
   });
 
+  it('rejects invalid scalar, shape, and array-member status values', () => {
+    expect(parseMcpListFilter({ status: 'unknown' })).toEqual({
+      ok: false,
+      message: 'Invalid workflow status: unknown',
+    });
+    expect(parseMcpListFilter({ status: 1 })).toEqual({
+      ok: false,
+      message: 'List filter status must be a workflow status or array',
+    });
+    expect(parseMcpListFilter({ status: ['running', 1] })).toEqual({
+      ok: false,
+      message: 'List filter status array contains an invalid workflow status',
+    });
+  });
+
   it('accepts valid string arrays for tags', () => {
     expect(parseMcpListFilter({ tags: ['alpha', 'beta'] })).toEqual({
       ok: true,
