@@ -66,8 +66,15 @@ Do **not** point two engines at the same durable store. Multi-process recovery i
 engines booting against one store can both resume the same workflow and both execute its next step,
 producing duplicate side effects (the next activity firing twice). Safe multi-process recovery — a
 fenced ownership claim acquired before a resumed workflow executes — is a future `MultiEngine`
-capability that is **not yet implemented**. Until it lands, treat single-engine-per-store as a hard
-operational constraint.
+capability that is **not yet implemented**. Its protocol is specified as an accepted contract in
+[ADR 0002—Fenced Per-Workflow Ownership](../contributing/architecture-decisions/0002-multiengine-per-workflow-ownership.md);
+that document describes what the runtime must do, not what it does today. Until it lands, treat
+single-engine-per-store as a hard operational constraint.
+
+`ownership: 'lease'` does not lift this constraint. It is the global single-writer mode: exactly one
+engine holds the store-wide lease, so it gives you a clean rolling-deploy handoff and epoch-fenced
+writes, but it serializes the whole store behind one writer rather than letting distinct workflows
+progress on distinct engines.
 
 For the operator's checklist on enforcing this—infrastructure-level single-instance configuration,
 boot assertions, backup/restore, and an optional second-instance detector—see
