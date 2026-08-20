@@ -158,7 +158,7 @@ function isWebExtensionNamespace(value: unknown): value is WebExtensionNamespace
   return value['storage'] === undefined || isRecord(value['storage']);
 }
 
-function resolveNamespace(namespace: unknown = undefined): WebExtensionNamespace {
+function resolveNamespace(namespace?: unknown): WebExtensionNamespace {
   if (namespace !== undefined) {
     if (!isWebExtensionNamespace(namespace)) {
       throw new Error('WebExtensionStorage injected namespace must be an object.');
@@ -274,7 +274,7 @@ export class WebExtensionStorage implements Storage {
   readonly #persistence: WebExtensionStoragePersistence;
   readonly #changeListener: WebExtensionStorageChangeListener;
 
-  constructor(options: WebExtensionStorageOptions = {}, namespace: unknown = undefined) {
+  constructor(options: WebExtensionStorageOptions = {}, namespace?: unknown) {
     this.#area = options.area ?? 'local';
     this.#persistence = webExtensionAreaPersistence(this.#area);
     this.#namespace = resolveNamespace(namespace);
