@@ -181,6 +181,61 @@ evidence. After confirmed deposition detaches the manager, the response keeps
 identity. Holder IDs remain confined to this scoped JSON diagnostic and are never
 emitted as metric labels.
 
+### `GET /api/v1/tasks/:operationId`
+
+Returns one task's full durable ledger state — the wire-reachable counterpart to
+the same-process-only `WeftServer.getTaskResult()`. The REST endpoint is backed
+by the `weft.tasks.get` operation and requires `system:read`.
+
+```http
+GET /api/v1/tasks/op-123
+```
+
+The response is a discriminated union on `state`, distinguishing `queued`,
+`leased`, `completing`, `cancelling`, `terminal`, and `deadLettered` — a finer
+vocabulary than `GET /api/v1/tasks/diagnostics`, which collapses `leased`,
+`completing`, and `cancelling` into one `inflight` value for alerting purposes.
+Every variant carries the dispatch envelope (`operationId`, `workflowId?`,
+`workflowType`, `activityName`, `queue`, `priority?`, `headerKeys`, `createdAt`,
+`attempt`) plus state-specific fields — for example a `terminal` record adds
+`disposition`, `resultDigest`, `terminalAt`, `adopted`, and `adoptedAt?`; a
+`deadLettered` record adds `pendingStatus`, `resultDigest`,
+`persistenceFailureReason`, and `deadLetteredAt`.
+
+```json
+{
+  "operationId": "op-123",
+  "workflowId": "wf-456",
+  "workflowType": "checkout",
+  "activityName": "chargeCard",
+  "queue": "payments",
+  "headerKeys": ["x-trace-id"],
+  "createdAt": 1720000000000,
+  "attempt": 2,
+  "state": "terminal",
+  "disposition": "resolved",
+  "resultDigest": "sha256:...",
+  "terminalAt": 1720000005000,
+  "adopted": false
+}
+```
+
+Faults `NotFound` if no ledger record exists for the `operationId` — either it
+was never dispatched, or an adopted terminal record was already reaped by
+`ServeOptions.taskRetentionWindowMs`.
+
+Three fields are deliberately never returned: `attemptToken`, `workerSessionId`,
+and `executionIdentity` are worker ownership/session internals with no business
+being public — the same exclusion `TaskResultView` documents for its own
+same-process shape. `headers` are summarized as key names only (`headerKeys`);
+the task's `input` value and a dead-lettered record's pending result value are
+never included — this is a "digest not value" read surface, matching how a
+resolved task's own result value is never re-delivered. This operation is
+read-only: there is no HTTP path to `adoptTaskResult` (adoption stays
+same-process-only, since it is an explicit caller assertion that a workflow
+incorporated a result — a browser-based caller cannot honestly make that
+assertion on the workflow's behalf).
+
 ### `GET /api/v1/tasks/diagnostics`
 
 Returns bounded task diagnostics for queued, in-flight, and task-result dead-letter activity records. The REST endpoint is backed by the `weft.tasks.diagnostics` operation and requires `system:read`.

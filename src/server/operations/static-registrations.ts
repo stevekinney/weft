@@ -56,6 +56,7 @@ import { getReviewOperation, getReviewRestBinding } from './get-review.ts';
 import { getScheduleOperation, getScheduleRestBinding } from './get-schedule.ts';
 import { getStreamChunksOperation, getStreamChunksRestBinding } from './get-stream-chunks.ts';
 import { getSystemLeaseOperation, getSystemLeaseRestBinding } from './get-system-lease.ts';
+import { getTaskDetailOperation, getTaskDetailRestBinding } from './get-task-detail.ts';
 import {
   clearTaskDeadLetterOperation,
   clearTaskDeadLetterRestBinding,
@@ -189,8 +190,13 @@ export const STATIC_REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = [
   streamWorkflowSseRestBinding,
   workflowEventsSseRestBinding,
   fleetEventsSseRestBinding,
+  // getTaskDetailRestBinding (GET /v1/tasks/:operationId) must be registered
+  // AFTER every more specific literal /v1/tasks/... path — matchRestBinding
+  // is first-match-wins in array order, and :operationId matches any single
+  // segment, including "diagnostics".
   getTaskDiagnosticsRestBinding,
   clearTaskDeadLetterRestBinding,
+  getTaskDetailRestBinding,
   // Operation-catalog-backed routes
   listSchedulesRestBinding,
   getScheduleRestBinding,
@@ -264,6 +270,7 @@ export const STATIC_OPERATIONS: ReadonlyArray<RegistrableOperation> = [
   workflowEventsSubscriptionOperation,
   fleetEventsSubscriptionOperation,
   clearTaskDeadLetterOperation,
+  getTaskDetailOperation,
   // Operation-catalog-backed routes
   listSchedulesOperation,
   listAlertsOperation,

@@ -1860,6 +1860,574 @@
       }
     },
     {
+      "name": "weft.tasks.get",
+      "kind": "unary",
+      "summary": "Get one task's full durable ledger state",
+      "tags": ["Observability"],
+      "destructive": false,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["system:read"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "operationId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["operationId"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "activityName": {
+                "type": "string"
+              },
+              "attempt": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "availableAt": {
+                "type": "number"
+              },
+              "createdAt": {
+                "type": "number"
+              },
+              "firstQueuedAt": {
+                "type": "number"
+              },
+              "headerKeys": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "lastDispatchedAt": {
+                "type": "number"
+              },
+              "lastQueuedAt": {
+                "type": "number"
+              },
+              "lastRequeueReason": {
+                "type": "string"
+              },
+              "operationId": {
+                "type": "string"
+              },
+              "priority": {
+                "type": "number"
+              },
+              "queue": {
+                "type": "string"
+              },
+              "requeueCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "retryCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "startedAt": {
+                "type": "number"
+              },
+              "state": {
+                "const": "queued",
+                "type": "string"
+              },
+              "workflowId": {
+                "type": "string"
+              },
+              "workflowType": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "operationId",
+              "workflowType",
+              "activityName",
+              "queue",
+              "headerKeys",
+              "createdAt",
+              "attempt",
+              "state",
+              "availableAt",
+              "firstQueuedAt",
+              "lastQueuedAt"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "activityName": {
+                "type": "string"
+              },
+              "attempt": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "createdAt": {
+                "type": "number"
+              },
+              "firstQueuedAt": {
+                "type": "number"
+              },
+              "headerKeys": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "lastHeartbeatAt": {
+                "type": "number"
+              },
+              "lastQueuedAt": {
+                "type": "number"
+              },
+              "lastRequeueReason": {
+                "type": "string"
+              },
+              "leaseDeadline": {
+                "type": "number"
+              },
+              "operationId": {
+                "type": "string"
+              },
+              "priority": {
+                "type": "number"
+              },
+              "queue": {
+                "type": "string"
+              },
+              "requeueCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "retryCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "startedAt": {
+                "type": "number"
+              },
+              "state": {
+                "const": "leased",
+                "type": "string"
+              },
+              "workflowId": {
+                "type": "string"
+              },
+              "workflowType": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "operationId",
+              "workflowType",
+              "activityName",
+              "queue",
+              "headerKeys",
+              "createdAt",
+              "attempt",
+              "state",
+              "leaseDeadline",
+              "firstQueuedAt",
+              "lastQueuedAt",
+              "startedAt",
+              "lastHeartbeatAt"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "activityName": {
+                "type": "string"
+              },
+              "attempt": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "createdAt": {
+                "type": "number"
+              },
+              "firstQueuedAt": {
+                "type": "number"
+              },
+              "headerKeys": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "lastHeartbeatAt": {
+                "type": "number"
+              },
+              "lastQueuedAt": {
+                "type": "number"
+              },
+              "lastRequeueReason": {
+                "type": "string"
+              },
+              "leaseDeadline": {
+                "type": "number"
+              },
+              "operationId": {
+                "type": "string"
+              },
+              "pendingStatus": {
+                "enum": ["completed", "failed"],
+                "type": "string"
+              },
+              "priority": {
+                "type": "number"
+              },
+              "queue": {
+                "type": "string"
+              },
+              "requeueCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "resultDigest": {
+                "type": "string"
+              },
+              "retryCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "startedAt": {
+                "type": "number"
+              },
+              "state": {
+                "const": "completing",
+                "type": "string"
+              },
+              "workflowId": {
+                "type": "string"
+              },
+              "workflowType": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "operationId",
+              "workflowType",
+              "activityName",
+              "queue",
+              "headerKeys",
+              "createdAt",
+              "attempt",
+              "state",
+              "leaseDeadline",
+              "firstQueuedAt",
+              "lastQueuedAt",
+              "startedAt",
+              "lastHeartbeatAt",
+              "pendingStatus",
+              "resultDigest"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "activityName": {
+                "type": "string"
+              },
+              "attempt": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "cancellationReason": {
+                "type": "string"
+              },
+              "cancellationRequestedAt": {
+                "type": "number"
+              },
+              "createdAt": {
+                "type": "number"
+              },
+              "firstQueuedAt": {
+                "type": "number"
+              },
+              "headerKeys": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "lastHeartbeatAt": {
+                "type": "number"
+              },
+              "lastQueuedAt": {
+                "type": "number"
+              },
+              "lastRequeueReason": {
+                "type": "string"
+              },
+              "leaseDeadline": {
+                "type": "number"
+              },
+              "operationId": {
+                "type": "string"
+              },
+              "priority": {
+                "type": "number"
+              },
+              "queue": {
+                "type": "string"
+              },
+              "requeueCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "retryCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "startedAt": {
+                "type": "number"
+              },
+              "state": {
+                "const": "cancelling",
+                "type": "string"
+              },
+              "workflowId": {
+                "type": "string"
+              },
+              "workflowType": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "operationId",
+              "workflowType",
+              "activityName",
+              "queue",
+              "headerKeys",
+              "createdAt",
+              "attempt",
+              "state",
+              "leaseDeadline",
+              "firstQueuedAt",
+              "lastQueuedAt",
+              "startedAt",
+              "lastHeartbeatAt",
+              "cancellationReason",
+              "cancellationRequestedAt"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "activityName": {
+                "type": "string"
+              },
+              "adopted": {
+                "type": "boolean"
+              },
+              "adoptedAt": {
+                "type": "number"
+              },
+              "attempt": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "cancellationReason": {
+                "type": "string"
+              },
+              "createdAt": {
+                "type": "number"
+              },
+              "disposition": {
+                "enum": ["resolved", "cancelled", "retryExhausted"],
+                "type": "string"
+              },
+              "error": {
+                "type": "string"
+              },
+              "headerKeys": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "lastRequeueReason": {
+                "type": "string"
+              },
+              "operationId": {
+                "type": "string"
+              },
+              "priority": {
+                "type": "number"
+              },
+              "queue": {
+                "type": "string"
+              },
+              "requeueCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "resultDigest": {
+                "type": "string"
+              },
+              "resultStatus": {
+                "enum": ["completed", "failed"],
+                "type": "string"
+              },
+              "retryCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "state": {
+                "const": "terminal",
+                "type": "string"
+              },
+              "terminalAt": {
+                "type": "number"
+              },
+              "workflowId": {
+                "type": "string"
+              },
+              "workflowType": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "operationId",
+              "workflowType",
+              "activityName",
+              "queue",
+              "headerKeys",
+              "createdAt",
+              "attempt",
+              "state",
+              "disposition",
+              "resultDigest",
+              "terminalAt",
+              "adopted"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "activityName": {
+                "type": "string"
+              },
+              "attempt": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "createdAt": {
+                "type": "number"
+              },
+              "deadLetteredAt": {
+                "type": "number"
+              },
+              "error": {
+                "type": "string"
+              },
+              "headerKeys": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "lastRequeueReason": {
+                "type": "string"
+              },
+              "operationId": {
+                "type": "string"
+              },
+              "pendingStatus": {
+                "enum": ["completed", "failed"],
+                "type": "string"
+              },
+              "persistenceFailureReason": {
+                "type": "string"
+              },
+              "priority": {
+                "type": "number"
+              },
+              "queue": {
+                "type": "string"
+              },
+              "requeueCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "resultDigest": {
+                "type": "string"
+              },
+              "retryCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "state": {
+                "const": "deadLettered",
+                "type": "string"
+              },
+              "workflowId": {
+                "type": "string"
+              },
+              "workflowType": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "operationId",
+              "workflowType",
+              "activityName",
+              "queue",
+              "headerKeys",
+              "createdAt",
+              "attempt",
+              "state",
+              "pendingStatus",
+              "resultDigest",
+              "deadLetteredAt",
+              "persistenceFailureReason"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    },
+    {
       "name": "weft.updates.result.get",
       "kind": "unary",
       "summary": "Get the result of an update request",
