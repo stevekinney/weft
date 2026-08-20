@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-08-20
+
 ### Changed — RemoteWorker protocol v3: canonical worker manifest replaces parallel identity fields
 
 The RemoteWorker WebSocket protocol version is now `3`. `register` no longer
@@ -52,6 +54,67 @@ that supplied `gitSha` should drop it. Server hosts that inspected
 `WorkerSummary.gitSha` or `WorkerDeploymentSummary.gitSha` must remove that
 read. Hosts that want to gate worker registration should configure
 `ServeOptions.workerAdmissionPolicy`.
+
+### Changed — durable remote task ledger replaces the op:queued:/op:inflight:/op:resolved:/op:dead-letter: keyspace
+
+A single authoritative `task-ledger:<operationId>` record, proven through
+`storage.conditionalBatch` at every transition (`Queued -> Leased ->
+Completing -> Terminal`, plus a new `Completing -> DeadLettered`
+escalation), replaces the four separate `op:queued:`/`op:inflight:`/
+`op:resolved:`/`op:dead-letter:` keyspaces. `get-task-diagnostics.ts` is
+fully migrated onto a single `task-ledger:` scan.
+
+**Added**: `WeftServer.getTaskResult(operationId)` and
+`WeftServer.adoptTaskResult(operationId, resultDigest)` give a same-process
+caller an explicit way to read a terminal task's `TaskResultView` and assert
+adoption. Adoption and cleanup are separate durable facts — a terminal
+record an adopter never calls this for is retained forever, by design.
+`ServeOptions.taskRetentionWindowMs` opts _adopted_ terminal records into
+time-based reaping via the existing `reconcileOrphanedRecords` scan; it
+defaults to `undefined` (keep forever), so upgrading never starts silently
+deleting data. A `Completing -> DeadLettered` escalation dispatches a new
+`TaskResultDeadLetteredEvent` when a terminal-commit write exhausts its CAS
+retry budget, instead of leaving the record stuck in `completing`.
+`WeftServer.ready` exposes a settled-promise readiness gate that the
+startup task-ledger recovery scan (`runTaskLedgerRecovery`, replacing the
+old unawaited `restoreInflightTasks`) resolves once every non-terminal
+record has been examined and its recovery action initiated — lease
+ownership rehydrated, a queued record's redispatch scheduled, or an
+expired lease requeued/exhausted. `ready` marks scan completion, not that
+every scheduled redispatch has actually run by the time it resolves.
+
+**Breaking**:
+
+- `TaskDispatch.workflowType` is now required.
+- `TaskDispatch.attempt` is removed. It previously had real effect — fresh
+  dispatch persisted it into the queued/in-flight record, sent it in the
+  worker task frame, and used it to seed the initial retry count — so a
+  caller that seeded a non-default `attempt` will see different behavior.
+  Attempt tracking is now entirely ledger-owned.
+- A task-result completion for an unknown or unauthorized `operationId` is
+  now a hard rejection: REST returns `403`, and WebSocket sends a
+  `protocolError` frame back to the worker instead of applying it silently.
+- A terminal ledger record permanently blocks re-dispatch of the same
+  `operationId` until retention reclaims it, mirroring the `start-idem:`
+  spent-key contract.
+- `KEYS.operationDeadLetter`/`operationDeadLetterPrefix` are removed from
+  the published `@lostgradient/weft/storage` `interface` surface.
+- Diagnostics retry-storm detection no longer applies to terminal records —
+  a terminal ledger record carries no attempt-history fields to detect a
+  storm from. This is a disclosed behavior change, not an oversight.
+- Pre-upgrade `op:inflight:` records are no longer read at startup. A
+  server restarting onto this version from a pre-cutover deployment will
+  not resume in-flight work recorded in the old keyspace; drain the queue
+  before upgrading if that matters. An expired leased record recovery
+  finds is requeued if its retry policy allows another attempt, or
+  transitioned straight to a terminal `retryExhausted` record if not —
+  it is never silently deleted, but it is not unconditionally requeued.
+
+**Migration**: upgrade server and any code reading `KEYS.operationDeadLetter`
+together. Dispatch call sites must supply `workflowType` and drop `attempt`.
+Hosts that want bounded terminal-record retention should configure
+`ServeOptions.taskRetentionWindowMs`; hosts that want to observe a caller's
+own dead-letter escalations should listen for `TaskResultDeadLetteredEvent`.
 
 ## [0.18.0] - 2026-08-11
 
