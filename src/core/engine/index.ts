@@ -321,9 +321,18 @@ export {
 } from './errors.ts';
 export { HANDLE_RESULT_PROMISE, WorkflowHandle } from './handles.ts';
 export {
+  WeftWorkflowClaimLostWarning,
+  WeftWorkflowWakeDiscardedWarning,
+  WORKFLOW_CLAIM_LOST_WARNING_NAME,
+  WORKFLOW_WAKE_DISCARDED_WARNING_NAME,
+} from './lease-deposition.ts';
+export type { WorkflowWakeKind } from './lease-deposition.ts';
+export {
   EngineLeaseAcquisitionTimeoutError,
   EngineLeaseCorruptedError,
   EngineLeaseNotHeldError,
+  OwnershipModeMismatchError,
+  WorkflowClaimUnavailableError,
 } from './lease-errors.ts';
 export type { EngineLeaseHealth, LeaseLostReason } from './lease-health.ts';
 export type { RecoverAllOptions, RecoveredWorkflowInfo } from './lifecycle.ts';

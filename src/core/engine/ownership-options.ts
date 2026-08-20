@@ -4,6 +4,15 @@
  * file under the `max-lines` ceiling; mirrors the second-instance resolver's
  * "only validate when the feature is enabled" discipline.
  *
+ * `ownership` is a three-member discriminated union — `'none'`, `'lease'`
+ * (a single store-wide lease), and `'workflow-lease'` (per-workflow fencing,
+ * ADR 0002 at
+ * `documentation/contributing/architecture-decisions/0002-multiengine-per-workflow-ownership.md`).
+ * This module only widens and validates the option surface: it resolves the
+ * `workflowClaimTtl`/`workflowClaimRenewInterval` tuning fields and rejects
+ * incoherent configuration, but no engine behavior yet claims to fence
+ * per-workflow execution — that lands in a later stage of the ADR rollout.
+ *
  * @module core/engine/ownership-options
  */
 
@@ -16,6 +25,25 @@ export const DEFAULT_LEASE_TTL_MS = 30_000;
 export const DEFAULT_LEASE_RENEW_INTERVAL_MS = 5_000;
 /** Default boot-time lease acquisition wait window for `ownership: 'lease'`. */
 export const DEFAULT_LEASE_WAIT_TIMEOUT_MS = 60_000;
+
+/** Default per-workflow claim time-to-live for `ownership: 'workflow-lease'`. */
+export const DEFAULT_WORKFLOW_CLAIM_TTL_MS = 30_000;
+/** Default per-workflow claim renewal interval for `ownership: 'workflow-lease'`. */
+export const DEFAULT_WORKFLOW_CLAIM_RENEW_INTERVAL_MS = 5_000;
+
+/**
+ * ADR 0002's fixed safety margin between a workflow claim's TTL and its renewal
+ * interval: `workflowClaimTtl` must be at least this many times
+ * `workflowClaimRenewInterval`, on top of the plain "renewal fires before the
+ * claim can lapse" relationship `assertLeaseTimingCoherent` already enforces for
+ * the global lease. The ADR proposes `3` as the default and leaves the exact
+ * value an open question (see the ADR's "Open questions" section); it is
+ * defined here, not imported, because no `workflow-claim-transitions.ts` module
+ * exists in this codebase yet. Once claim acquire/renew/takeover logic lands, it
+ * should very likely become the canonical export of this constant, with this
+ * copy re-exported (or removed) so the two never drift.
+ */
+export const WORKFLOW_CLAIM_TTL_SAFETY_MULTIPLIER = 3;
 
 export function resolveBackgroundTaskMode(
   options: EngineConstructorOptions | undefined,
@@ -39,30 +67,56 @@ function assertManualBackgroundTaskCompatibility(
   if (options?.ownership === 'lease') {
     throw new Error('ownership cannot be "lease" when backgroundTasks is "manual"');
   }
+  // `'workflow-lease'` is deliberately NOT rejected here (ADR 0002): unlike the
+  // global lease, per-workflow claim renewal is driven by `runMaintenance()` on
+  // every awaited host tick, the same way manual mode already drives
+  // scheduler/cleanup/retention/alerts, so it does not need a process-local
+  // interval.
 }
 
 /**
- * Resolve the ownership posture and lease tuning into their `ResolvedOptions`
- * fields. Defaults to `'none'`. The lease durations are documented as "ignored
- * when ownership is not 'lease'", so they are only normalized (and thus only
- * able to throw on an invalid value) when lease ownership is actually enabled —
- * an invalid duration must not make an off-by-default config fatal at boot.
+ * Resolve the ownership posture and its per-mode tuning into their
+ * `ResolvedOptions` fields. Defaults to `'none'`. The lease and workflow-claim
+ * durations are documented as "ignored" outside their own mode, so they are
+ * only normalized (and thus only able to throw on an invalid value) when that
+ * mode is actually selected — an invalid duration must not make an off-by-
+ * default config fatal at boot.
  */
 export function resolveOwnershipFields(
   options: EngineConstructorOptions | undefined,
 ): Pick<
   ResolvedOptions,
-  'ownershipMode' | 'leaseTtlMs' | 'leaseRenewIntervalMs' | 'leaseWaitTimeoutMs'
+  | 'ownershipMode'
+  | 'leaseTtlMs'
+  | 'leaseRenewIntervalMs'
+  | 'leaseWaitTimeoutMs'
+  | 'workflowClaimTtlMs'
+  | 'workflowClaimRenewIntervalMs'
 > {
   const ownershipMode = assertKnownOwnershipMode(options?.ownership ?? 'none');
-  if (ownershipMode !== 'lease') {
-    return {
-      ownershipMode,
-      leaseTtlMs: DEFAULT_LEASE_TTL_MS,
-      leaseRenewIntervalMs: DEFAULT_LEASE_RENEW_INTERVAL_MS,
-      leaseWaitTimeoutMs: DEFAULT_LEASE_WAIT_TIMEOUT_MS,
-    };
+  const leaseDefaults = {
+    leaseTtlMs: DEFAULT_LEASE_TTL_MS,
+    leaseRenewIntervalMs: DEFAULT_LEASE_RENEW_INTERVAL_MS,
+    leaseWaitTimeoutMs: DEFAULT_LEASE_WAIT_TIMEOUT_MS,
+  };
+  const workflowClaimDefaults = {
+    workflowClaimTtlMs: DEFAULT_WORKFLOW_CLAIM_TTL_MS,
+    workflowClaimRenewIntervalMs: DEFAULT_WORKFLOW_CLAIM_RENEW_INTERVAL_MS,
+  };
+
+  if (ownershipMode === 'lease') {
+    return { ownershipMode, ...resolveLeaseTiming(options), ...workflowClaimDefaults };
   }
+  if (ownershipMode === 'workflow-lease') {
+    assertWorkflowLeaseCompatibleWithSecondInstanceDetection(options);
+    return { ownershipMode, ...leaseDefaults, ...resolveWorkflowClaimTiming(options) };
+  }
+  return { ownershipMode, ...leaseDefaults, ...workflowClaimDefaults };
+}
+
+function resolveLeaseTiming(
+  options: EngineConstructorOptions | undefined,
+): Pick<ResolvedOptions, 'leaseTtlMs' | 'leaseRenewIntervalMs' | 'leaseWaitTimeoutMs'> {
   const leaseTtlMs =
     normalizeRetentionDuration(options?.leaseTtl, 'options.leaseTtl') ?? DEFAULT_LEASE_TTL_MS;
   const leaseRenewIntervalMs =
@@ -72,7 +126,22 @@ export function resolveOwnershipFields(
     normalizeRetentionDuration(options?.leaseWaitTimeout, 'options.leaseWaitTimeout') ??
     DEFAULT_LEASE_WAIT_TIMEOUT_MS;
   assertLeaseTimingCoherent(leaseTtlMs, leaseRenewIntervalMs, leaseWaitTimeoutMs);
-  return { ownershipMode, leaseTtlMs, leaseRenewIntervalMs, leaseWaitTimeoutMs };
+  return { leaseTtlMs, leaseRenewIntervalMs, leaseWaitTimeoutMs };
+}
+
+function resolveWorkflowClaimTiming(
+  options: EngineConstructorOptions | undefined,
+): Pick<ResolvedOptions, 'workflowClaimTtlMs' | 'workflowClaimRenewIntervalMs'> {
+  const workflowClaimTtlMs =
+    normalizeRetentionDuration(options?.workflowClaimTtl, 'options.workflowClaimTtl') ??
+    DEFAULT_WORKFLOW_CLAIM_TTL_MS;
+  const workflowClaimRenewIntervalMs =
+    normalizeRetentionDuration(
+      options?.workflowClaimRenewInterval,
+      'options.workflowClaimRenewInterval',
+    ) ?? DEFAULT_WORKFLOW_CLAIM_RENEW_INTERVAL_MS;
+  assertWorkflowClaimTimingCoherent(workflowClaimTtlMs, workflowClaimRenewIntervalMs);
+  return { workflowClaimTtlMs, workflowClaimRenewIntervalMs };
 }
 
 /**
@@ -82,11 +151,35 @@ export function resolveOwnershipFields(
  * runtime validation other string-union options get in construction. Returns the
  * value narrowed to the accepted union.
  */
-function assertKnownOwnershipMode(mode: string): 'none' | 'lease' {
-  if (mode !== 'none' && mode !== 'lease') {
-    throw new Error(`Unknown ownership posture "${String(mode)}". Expected 'none' or 'lease'.`);
+function assertKnownOwnershipMode(mode: string): 'none' | 'lease' | 'workflow-lease' {
+  if (mode !== 'none' && mode !== 'lease' && mode !== 'workflow-lease') {
+    throw new Error(
+      `Unknown ownership posture "${mode}". Expected 'none', 'lease', or 'workflow-lease'.`,
+    );
   }
   return mode;
+}
+
+/**
+ * `ownership: 'workflow-lease'` is rejected together with
+ * `detectSecondInstance: true` (ADR 0002): second-instance detection is a
+ * best-effort, single-global-owner liveness check, and `'workflow-lease'`
+ * exists specifically so multiple engines can own the same store at once —
+ * the two postures contradict each other. NOTE: the ADR describes this as
+ * mirroring `ownership: 'lease'`, but `'lease'` + `detectSecondInstance: true`
+ * is not actually rejected anywhere in the current codebase; that appears to
+ * be a pre-existing gap the ADR misdescribes as already closed, not something
+ * this stage is scoped to fix.
+ */
+function assertWorkflowLeaseCompatibleWithSecondInstanceDetection(
+  options: EngineConstructorOptions | undefined,
+): void {
+  if (options?.detectSecondInstance === true) {
+    throw new Error(
+      "ownership: 'workflow-lease' cannot be combined with detectSecondInstance: true " +
+        '— second-instance detection assumes a single global owner.',
+    );
+  }
 }
 
 /**
@@ -112,6 +205,44 @@ function assertLeaseTimingCoherent(
     throw new Error(
       `ownership: 'lease' requires leaseRenewInterval (${leaseRenewIntervalMs}ms) to be strictly less than ` +
         `leaseTtl (${leaseTtlMs}ms), so a renewal fires before the lease can lapse.`,
+    );
+  }
+}
+
+/**
+ * Workflow-lease analogue of {@link assertLeaseTimingCoherent}. Enforces the
+ * same "renewal fires before the claim can lapse" relationship, plus the ADR's
+ * additional safety-margin relationship: `workflowClaimTtl` must be at least
+ * {@link WORKFLOW_CLAIM_TTL_SAFETY_MULTIPLIER} times `workflowClaimRenewInterval`.
+ * A renewal interval close to the TTL leaves no room for a slow renewal (a
+ * scheduling delay, a storage round-trip) before the claim is eligible for
+ * takeover; the multiplier turns "comfortably longer" into a mechanically
+ * checkable floor.
+ */
+function assertWorkflowClaimTimingCoherent(
+  workflowClaimTtlMs: number,
+  workflowClaimRenewIntervalMs: number,
+): void {
+  if (workflowClaimTtlMs <= 0 || workflowClaimRenewIntervalMs <= 0) {
+    throw new Error(
+      `ownership: 'workflow-lease' requires positive workflowClaimTtl and workflowClaimRenewInterval ` +
+        `(got workflowClaimTtl=${workflowClaimTtlMs}ms, workflowClaimRenewInterval=${workflowClaimRenewIntervalMs}ms).`,
+    );
+  }
+  if (workflowClaimRenewIntervalMs >= workflowClaimTtlMs) {
+    throw new Error(
+      `ownership: 'workflow-lease' requires workflowClaimRenewInterval (${workflowClaimRenewIntervalMs}ms) ` +
+        `to be strictly less than workflowClaimTtl (${workflowClaimTtlMs}ms), so a renewal fires before ` +
+        `the claim can lapse.`,
+    );
+  }
+  const requiredTtlMs = WORKFLOW_CLAIM_TTL_SAFETY_MULTIPLIER * workflowClaimRenewIntervalMs;
+  if (workflowClaimTtlMs < requiredTtlMs) {
+    throw new Error(
+      `ownership: 'workflow-lease' requires workflowClaimTtl (${workflowClaimTtlMs}ms) to be at least ` +
+        `WORKFLOW_CLAIM_TTL_SAFETY_MULTIPLIER (${WORKFLOW_CLAIM_TTL_SAFETY_MULTIPLIER}) times ` +
+        `workflowClaimRenewInterval (${workflowClaimRenewIntervalMs}ms), i.e. at least ${requiredTtlMs}ms, ` +
+        `so a stalled renewal has margin before the claim can be taken over.`,
     );
   }
 }

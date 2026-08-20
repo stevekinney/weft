@@ -37,8 +37,16 @@ import {
   commitFencedEngineWrite,
   commitFencedEngineWriteAllowingPreconditionFailure,
 } from './fenced-write.ts';
-import { Engine, ENGINE_LEASE_LOST_WARNING_NAME, EngineLeaseNotHeldError } from './index.ts';
+import { ENGINE_LEASE_LOST_WARNING_NAME, Engine, EngineLeaseNotHeldError } from './index.ts';
 import { getInternals } from './internals.ts';
+import {
+  WORKFLOW_CLAIM_LOST_WARNING_NAME,
+  WORKFLOW_WAKE_DISCARDED_WARNING_NAME,
+  WeftWorkflowClaimLostWarning,
+  WeftWorkflowWakeDiscardedWarning,
+  emitWorkflowClaimLostWarning,
+  emitWorkflowWakeDiscardedWarning,
+} from './lease-deposition.ts';
 
 const waiterWorkflow = workflow({ name: 'deposition-waiter' }).execute(async function* (
   ctx: WorkflowContext,
@@ -936,5 +944,119 @@ describe('#470 Step 2: fenced-write fan-out — behavior-level coverage', () => 
       await engine[Symbol.asyncDispose]();
       storage[Symbol.dispose]?.();
     }
+  });
+});
+
+/**
+ * ADR 0002 (MultiEngine per-workflow ownership): the two new per-workflow
+ * warning types and their injectable emission seam. Unlike the deposition
+ * tests above, these are pure-value unit tests — no engine or storage is
+ * involved yet, since claim renewal and `wakeOwnershipCheck` (the real call
+ * sites for these emitters) land in a later stage. What is covered here is
+ * that the emitted object carries the right structured fields, that the
+ * default emission path really is `process.emitWarning(warning)`, and that
+ * the injected seam lets a caller assert on the emitted instance
+ * deterministically instead of scraping `process`'s global `warning` event.
+ */
+describe('ADR 0002 workflow-lease warnings', () => {
+  describe('WeftWorkflowClaimLostWarning', () => {
+    it('carries workflowId and a stable warning name', () => {
+      const warning = new WeftWorkflowClaimLostWarning('wf-1');
+      expect(warning).toBeInstanceOf(Error);
+      expect(warning.workflowId).toBe('wf-1');
+      expect(warning.name).toBe(WORKFLOW_CLAIM_LOST_WARNING_NAME);
+      expect(warning.message).toContain('wf-1');
+    });
+  });
+
+  describe('WeftWorkflowWakeDiscardedWarning', () => {
+    it('carries workflowId, wakeKind, and a stable warning name', () => {
+      const warning = new WeftWorkflowWakeDiscardedWarning('wf-2', 'signal');
+      expect(warning).toBeInstanceOf(Error);
+      expect(warning.workflowId).toBe('wf-2');
+      expect(warning.wakeKind).toBe('signal');
+      expect(warning.name).toBe(WORKFLOW_WAKE_DISCARDED_WARNING_NAME);
+      expect(warning.message).toContain('wf-2');
+      expect(warning.message).toContain('signal');
+    });
+
+    it.each([
+      'sleep',
+      'wait-condition',
+      'signal',
+      'async-activity',
+      'child-completion',
+      'inline-macrotask-drive',
+    ] as const)('accepts wakeKind %s', (wakeKind) => {
+      const warning = new WeftWorkflowWakeDiscardedWarning('wf-3', wakeKind);
+      expect(warning.wakeKind).toBe(wakeKind);
+    });
+  });
+
+  describe('emitWorkflowClaimLostWarning', () => {
+    it('invokes the injected seam with a WeftWorkflowClaimLostWarning instance', () => {
+      const emitted: Error[] = [];
+      emitWorkflowClaimLostWarning('wf-1', (warning) => {
+        emitted.push(warning);
+      });
+      expect(emitted).toHaveLength(1);
+      expect(emitted[0]).toBeInstanceOf(WeftWorkflowClaimLostWarning);
+      expect((emitted[0] as WeftWorkflowClaimLostWarning).workflowId).toBe('wf-1');
+    });
+
+    it('defaults to process.emitWarning(warning) when no seam is injected', () => {
+      const captured: unknown[] = [];
+      const originalEmitWarning = process.emitWarning;
+      // process.emitWarning is a Bun/Node global with several overloads; the
+      // default seam calls it with a single Error argument, which is the
+      // overload this stub captures.
+      process.emitWarning = (warning: unknown) => {
+        captured.push(warning);
+      };
+      try {
+        emitWorkflowClaimLostWarning('wf-default');
+      } finally {
+        process.emitWarning = originalEmitWarning;
+      }
+      expect(captured).toHaveLength(1);
+      expect(captured[0]).toBeInstanceOf(WeftWorkflowClaimLostWarning);
+      expect((captured[0] as WeftWorkflowClaimLostWarning).workflowId).toBe('wf-default');
+      expect((captured[0] as WeftWorkflowClaimLostWarning).name).toBe(
+        WORKFLOW_CLAIM_LOST_WARNING_NAME,
+      );
+    });
+  });
+
+  describe('emitWorkflowWakeDiscardedWarning', () => {
+    it('invokes the injected seam with a WeftWorkflowWakeDiscardedWarning instance', () => {
+      const emitted: Error[] = [];
+      emitWorkflowWakeDiscardedWarning('wf-2', 'child-completion', (warning) => {
+        emitted.push(warning);
+      });
+      expect(emitted).toHaveLength(1);
+      expect(emitted[0]).toBeInstanceOf(WeftWorkflowWakeDiscardedWarning);
+      const warning = emitted[0] as WeftWorkflowWakeDiscardedWarning;
+      expect(warning.workflowId).toBe('wf-2');
+      expect(warning.wakeKind).toBe('child-completion');
+    });
+
+    it('defaults to process.emitWarning(warning) when no seam is injected', () => {
+      const captured: unknown[] = [];
+      const originalEmitWarning = process.emitWarning;
+      process.emitWarning = (warning: unknown) => {
+        captured.push(warning);
+      };
+      try {
+        emitWorkflowWakeDiscardedWarning('wf-default', 'async-activity');
+      } finally {
+        process.emitWarning = originalEmitWarning;
+      }
+      expect(captured).toHaveLength(1);
+      expect(captured[0]).toBeInstanceOf(WeftWorkflowWakeDiscardedWarning);
+      const warning = captured[0] as WeftWorkflowWakeDiscardedWarning;
+      expect(warning.workflowId).toBe('wf-default');
+      expect(warning.wakeKind).toBe('async-activity');
+      expect(warning.name).toBe(WORKFLOW_WAKE_DISCARDED_WARNING_NAME);
+    });
   });
 });

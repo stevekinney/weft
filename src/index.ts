@@ -69,6 +69,20 @@ export {
   WorkflowTeardownPendingError,
   WorkflowTypeNotRegisteredForRecoveryError,
 } from './core/engine';
+// ADR 0002 (MultiEngine per-workflow ownership) error and warning types, routed
+// through the `./core/engine` barrel like every sibling lease error. Reaching
+// into `lease-deposition.ts` directly from the package root would violate that
+// module's documented allowlist (`src/core/engine/**` only).
+// EngineDeposedError stays unexported: it is internal-only per its own
+// documentation and the ADR's error table (never surfaced to user code).
+export {
+  OwnershipModeMismatchError,
+  WORKFLOW_CLAIM_LOST_WARNING_NAME,
+  WORKFLOW_WAKE_DISCARDED_WARNING_NAME,
+  WeftWorkflowClaimLostWarning,
+  WeftWorkflowWakeDiscardedWarning,
+  WorkflowClaimUnavailableError,
+} from './core/engine';
 export type {
   EngineCreateOptions,
   EngineLeaseHealth,
@@ -76,6 +90,7 @@ export type {
   LeaseLostReason,
   RecoverAllOptions,
   RecoveredWorkflowInfo,
+  WorkflowWakeKind,
 } from './core/engine';
 export {
   DEFAULT_CHECKPOINT_SIZE_WARNING_THRESHOLD,
