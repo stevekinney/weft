@@ -36,7 +36,23 @@ import {
 } from '../task-ledger.ts';
 import { commitTaskLedgerTransition } from './task-ledger-runtime.ts';
 
-/** Public, storage-agnostic view of a single task-ledger record. */
+/**
+ * Public, storage-agnostic view of a single task-ledger record.
+ *
+ * @example
+ * ```ts
+ * import { serve, type TaskResultView } from '@lostgradient/weft/server';
+ * import { Engine, MemoryStorage } from '@lostgradient/weft';
+ *
+ * await using engine = new Engine({ storage: new MemoryStorage() });
+ * await using server = serve({ engine, port: 0 });
+ *
+ * const view: TaskResultView | null = await server.getTaskResult('op-1');
+ * if (view?.status === 'terminal' && !view.adopted) {
+ *   await server.adoptTaskResult('op-1', view.resultDigest);
+ * }
+ * ```
+ */
 export type TaskResultView =
   | Readonly<{ status: 'pending'; state: 'queued' | 'leased' | 'completing' | 'cancelling' }>
   | Readonly<{

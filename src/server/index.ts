@@ -101,6 +101,7 @@ export type { PrometheusExporter } from '../observability/metrics.ts';
 export { WorkerRegistry } from '../worker/registry.ts';
 export type { RoutingPolicy } from '../worker/registry.ts';
 export type { DiscoveryInfo } from './discovery-info.ts';
+export type { TaskResultView } from './runtime/task-result-view.ts';
 export type { SchedulingPolicy } from './task-queue-types.ts';
 export { TaskQueue } from './task-queue.ts';
 

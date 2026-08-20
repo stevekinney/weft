@@ -18,6 +18,7 @@ import {
   type SchedulingPolicy,
   type ServeOptions,
   type TaskDispatch,
+  type TaskResultView,
   type WeftServer,
   type WorkerAdmissionDecision,
   type WorkerAdmissionPolicy,
@@ -143,6 +144,7 @@ void fullyTypedPackageRootServeOptions;
 const packageRootTaskDispatch: TaskDispatch = {
   operationId: 'op-1',
   activityName: 'sendEmail',
+  workflowType: 'exampleWorkflow',
   input: {},
   retryPolicy: {
     maxAttempts: 3,
@@ -158,6 +160,14 @@ const packageRootRegistry: WorkerRegistry = packageRootServer.registry;
 const packageRootTaskQueue: TaskQueue = packageRootServer.taskQueue;
 void packageRootRegistry;
 void packageRootTaskQueue;
+
+// TaskResultView is nameable from the published subpath — it is the return
+// type of WeftServer.getTaskResult, WFT-24's adoption/retention read surface.
+async function verifyPackageRootTaskResultViewNameable(): Promise<void> {
+  const result: TaskResultView | null = await packageRootServer.getTaskResult('op-1');
+  void result;
+}
+void verifyPackageRootTaskResultViewNameable;
 
 // WorkerRegistry is re-exported as a VALUE from the published subpath, so it is
 // constructable — not merely nameable as a type.
