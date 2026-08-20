@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
+import { encode } from '../../core/codec.ts';
 import { Engine } from '../../core/engine.ts';
 import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
@@ -294,6 +295,18 @@ describe('weft.tasks.get', () => {
     expect(result.fault.code).toBe('NotFound');
   });
 
+  it('faults EngineFailure, not NotFound, when the ledger key exists but does not decode', async () => {
+    const storage = new MemoryStorage();
+    const engine = createEngine(storage);
+    await storage.put(taskLedgerKey('corrupt-op'), encode({ invalid: true }));
+
+    const result = await runGetTaskDetail(engine, 'corrupt-op');
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected EngineFailure fault');
+    expect(result.fault.code).toBe('EngineFailure');
+  });
+
   it('reports a queued task with envelope fields, header keys only, and no header values', async () => {
     const storage = new MemoryStorage();
     const engine = createEngine(storage);
@@ -311,6 +324,7 @@ describe('weft.tasks.get', () => {
       queue: 'billing',
       priority: 7,
       headerKeys: ['x-trace-id', 'authorization'],
+      visibilityTimeoutMilliseconds: 30_000,
       createdAt: 1_000,
       attempt: 1,
       state: 'queued',
@@ -321,6 +335,59 @@ describe('weft.tasks.get', () => {
       lastQueuedAt: 1_000,
     });
     expect(JSON.stringify(result.value)).not.toContain('Bearer secret');
+  });
+
+  it('reports the retained retry and routing envelope when configured', async () => {
+    const storage = new MemoryStorage();
+    const engine = createEngine(storage);
+    await putLedgerRecord(
+      storage,
+      queuedFixture({
+        retryPolicy: {
+          maxAttempts: 5,
+          initialBackoff: '1s',
+          backoffMultiplier: 2,
+          maxBackoff: '30s',
+        },
+        scheduleToCloseDeadline: 999_999,
+        executionRequirement: { deploymentName: 'billing-service', buildId: 'build-42' },
+        fairShareKey: 'tenant-1',
+        stickyWorkflowId: 'wf-1',
+      }),
+    );
+
+    const result = await runGetTaskDetail(engine, 'op-queued');
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected success');
+    expect(result.value).toMatchObject({
+      retryPolicy: {
+        maxAttempts: 5,
+        initialBackoff: '1s',
+        backoffMultiplier: 2,
+        maxBackoff: '30s',
+      },
+      scheduleToCloseDeadline: 999_999,
+      executionRequirement: { deploymentName: 'billing-service', buildId: 'build-42' },
+      fairShareKey: 'tenant-1',
+      stickyWorkflowId: 'wf-1',
+    });
+  });
+
+  it('omits the retry and routing envelope fields entirely when not configured', async () => {
+    const storage = new MemoryStorage();
+    const engine = createEngine(storage);
+    await putLedgerRecord(storage, leasedFixture());
+
+    const result = await runGetTaskDetail(engine, 'op-leased');
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected success');
+    expect(result.value).not.toHaveProperty('retryPolicy');
+    expect(result.value).not.toHaveProperty('scheduleToCloseDeadline');
+    expect(result.value).not.toHaveProperty('executionRequirement');
+    expect(result.value).not.toHaveProperty('fairShareKey');
+    expect(result.value).not.toHaveProperty('stickyWorkflowId');
   });
 
   it('reports a leased task without attemptToken, workerSessionId, or executionIdentity', async () => {
@@ -456,13 +523,13 @@ describe('weft.tasks.get', () => {
     expect(result.fault.code).toBe('Forbidden');
   });
 
-  it('resolves GET /v1/tasks/:operationId through the real REST router', async () => {
+  it('resolves GET /v1/tasks/detail/:operationId through the real REST router', async () => {
     const storage = new MemoryStorage();
     const engine = createEngine(storage);
     await putLedgerRecord(storage, queuedFixture());
 
     const response = await handleRequest(
-      new Request('http://localhost/v1/tasks/op-queued', { method: 'GET' }),
+      new Request('http://localhost/v1/tasks/detail/op-queued', { method: 'GET' }),
       engine,
       {
         operationRegistry: createOperationRegistry([getTaskDetailOperation]),
@@ -482,7 +549,7 @@ describe('weft.tasks.get', () => {
     const engine = createEngine(storage);
 
     const response = await handleRequest(
-      new Request('http://localhost/v1/tasks/never-dispatched', { method: 'GET' }),
+      new Request('http://localhost/v1/tasks/detail/never-dispatched', { method: 'GET' }),
       engine,
       {
         operationRegistry: createOperationRegistry([getTaskDetailOperation]),
@@ -494,12 +561,33 @@ describe('weft.tasks.get', () => {
     expect(response.status).toBe(404);
   });
 
-  it('does not shadow GET /v1/tasks/diagnostics — the parameterized :operationId route must lose to the more specific literal path', async () => {
-    // Regression test: matchRestBinding is first-match-wins in array order,
-    // and GET /v1/tasks/:operationId matches any single segment, including
-    // "diagnostics". Uses the real, fully-registered static bindings/live
-    // operation registry — not a hand-picked subset — so a future reordering
-    // of static-registrations.ts would fail this test too.
+  it('a task whose operationId equals an existing literal /v1/tasks/... sibling ("diagnostics") is reachable through the detail namespace', async () => {
+    // Regression guard for the exact case a bare GET /v1/tasks/:operationId
+    // would have broken: an operationId equal to a sibling literal path
+    // segment. /detail/ structurally cannot collide (different segment
+    // count from every other /v1/tasks/... binding), so this must resolve
+    // to the task, not to weft.tasks.diagnostics.
+    const storage = new MemoryStorage();
+    const engine = createEngine(storage);
+    await putLedgerRecord(storage, queuedFixture({ operationId: 'diagnostics' }));
+
+    const response = await handleRequest(
+      new Request('http://localhost/v1/tasks/detail/diagnostics', { method: 'GET' }),
+      engine,
+      {
+        operationRegistry: createLiveOperationRegistry(),
+        restBindings: REST_BINDINGS,
+        ...systemReadAuthContext(),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as GetTaskDetailOutput;
+    expect(body.operationId).toBe('diagnostics');
+    expect(body.state).toBe('queued');
+  });
+
+  it('GET /v1/tasks/diagnostics still resolves to weft.tasks.diagnostics through the full static registry', async () => {
     const storage = new MemoryStorage();
     const engine = createEngine(storage);
 

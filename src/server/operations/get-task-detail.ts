@@ -56,6 +56,28 @@ const getTaskDetailInput = z.object({
   operationId: z.string().min(1),
 });
 
+const durationSchema = z.union([z.number(), z.string()]);
+
+const retryPolicySchema = z
+  .object({
+    maxAttempts: z.number(),
+    initialBackoff: durationSchema,
+    backoffMultiplier: z.number(),
+    maxBackoff: durationSchema,
+    nonRetryableErrors: z.array(z.string()).optional(),
+  })
+  .strict();
+
+const executionRequirementSchema = z
+  .object({
+    deploymentName: z.string().optional(),
+    buildId: z.string().optional(),
+    artifactDigest: z.string().optional(),
+    workflowRevision: z.string().optional(),
+    activityContractHash: z.string().optional(),
+  })
+  .strict();
+
 const taskDetailBaseFields = {
   operationId: z.string(),
   workflowId: z.string().optional(),
@@ -64,6 +86,12 @@ const taskDetailBaseFields = {
   queue: z.string(),
   priority: z.number().optional(),
   headerKeys: z.array(z.string()),
+  visibilityTimeoutMilliseconds: z.number(),
+  retryPolicy: retryPolicySchema.optional(),
+  scheduleToCloseDeadline: z.number().optional(),
+  executionRequirement: executionRequirementSchema.optional(),
+  fairShareKey: z.string().optional(),
+  stickyWorkflowId: z.string().optional(),
   createdAt: z.number(),
   attempt: z.number().int().nonnegative(),
   retryCount: z.number().int().nonnegative().optional(),
@@ -163,6 +191,16 @@ function baseEnvelopeFields(record: RemoteTaskRecord) {
     queue: record.queue,
     ...(record.priority !== undefined ? { priority: record.priority } : {}),
     headerKeys: Object.keys(record.headers),
+    visibilityTimeoutMilliseconds: record.visibilityTimeoutMilliseconds,
+    ...(record.retryPolicy !== undefined ? { retryPolicy: record.retryPolicy } : {}),
+    ...(record.scheduleToCloseDeadline !== undefined
+      ? { scheduleToCloseDeadline: record.scheduleToCloseDeadline }
+      : {}),
+    ...(record.executionRequirement !== undefined
+      ? { executionRequirement: record.executionRequirement }
+      : {}),
+    ...(record.fairShareKey !== undefined ? { fairShareKey: record.fairShareKey } : {}),
+    ...(record.stickyWorkflowId !== undefined ? { stickyWorkflowId: record.stickyWorkflowId } : {}),
     createdAt: record.createdAt,
     attempt: record.attempt,
   };
@@ -323,14 +361,26 @@ export const getTaskDetailOperation = defineOperation<GetTaskDetailInput, GetTas
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<GetTaskDetailOutput> => {
     const typedEngine = engine as Engine;
-    const decoded = decodeRemoteTaskRecord(
-      await typedEngine.storage.get(taskLedgerKey(input.operationId)),
-    );
-    if (decoded === null) {
+    const raw = await typedEngine.storage.get(taskLedgerKey(input.operationId));
+    if (raw === null) {
       raiseFault(getTaskDetailOperation, {
         code: 'NotFound',
         message: `No task found for operation "${input.operationId}"`,
         data: { resource: 'task', identifier: input.operationId },
+      });
+    }
+    const decoded = decodeRemoteTaskRecord(raw);
+    if (decoded === null) {
+      // The key exists but its bytes do not decode into a valid
+      // RemoteTaskRecord — a data-integrity concern (corruption, or a
+      // future record-version skew this build cannot read), not a missing
+      // resource. Reporting NotFound here would tell an operator the task
+      // was never dispatched or was cleanly reaped, hiding the exact record
+      // that needs investigation.
+      raiseFault(getTaskDetailOperation, {
+        code: 'EngineFailure',
+        message: `Task ledger record for operation "${input.operationId}" could not be decoded`,
+        data: {},
       });
     }
     return projectTaskDetail(decoded);
@@ -339,7 +389,14 @@ export const getTaskDetailOperation = defineOperation<GetTaskDetailInput, GetTas
 
 export const getTaskDetailRestBinding: UnknownRestBinding = {
   method: 'GET',
-  path: '/v1/tasks/:operationId',
+  // Deliberately not `/v1/tasks/:operationId`: a caller-controlled
+  // operationId is only required to be a nonempty bounded string, so it can
+  // legally equal an existing (or future) literal sibling segment under
+  // `/v1/tasks/` — "diagnostics" today. A bare :operationId route would make
+  // that task permanently unreachable over REST (the literal route always
+  // wins; see static-registrations.ts's registration-order comment). The
+  // `/detail/` segment reserves a namespace this operation owns outright.
+  path: '/v1/tasks/detail/:operationId',
   pathParamNames: ['operationId'],
   operationName: 'weft.tasks.get',
   inputSources: {

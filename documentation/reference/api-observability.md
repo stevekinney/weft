@@ -181,14 +181,19 @@ evidence. After confirmed deposition detaches the manager, the response keeps
 identity. Holder IDs remain confined to this scoped JSON diagnostic and are never
 emitted as metric labels.
 
-### `GET /api/v1/tasks/:operationId`
+### `GET /api/v1/tasks/detail/:operationId`
 
 Returns one task's full durable ledger state — the wire-reachable counterpart to
 the same-process-only `WeftServer.getTaskResult()`. The REST endpoint is backed
-by the `weft.tasks.get` operation and requires `system:read`.
+by the `weft.tasks.get` operation and requires `system:read`. The path lives
+under `/detail/` rather than a bare `/api/v1/tasks/:operationId`: a
+caller-supplied `operationId` is only required to be a nonempty bounded
+string, so it can legally equal an existing sibling literal path — currently
+`diagnostics` — and a bare parameterized route would make that task
+permanently unreachable over REST.
 
 ```http
-GET /api/v1/tasks/op-123
+GET /api/v1/tasks/detail/op-123
 ```
 
 The response is a discriminated union on `state`, distinguishing `queued`,
@@ -196,7 +201,9 @@ The response is a discriminated union on `state`, distinguishing `queued`,
 vocabulary than `GET /api/v1/tasks/diagnostics`, which collapses `leased`,
 `completing`, and `cancelling` into one `inflight` value for alerting purposes.
 Every variant carries the dispatch envelope (`operationId`, `workflowId?`,
-`workflowType`, `activityName`, `queue`, `priority?`, `headerKeys`, `createdAt`,
+`workflowType`, `activityName`, `queue`, `priority?`, `headerKeys`,
+`visibilityTimeoutMilliseconds`, `retryPolicy?`, `scheduleToCloseDeadline?`,
+`executionRequirement?`, `fairShareKey?`, `stickyWorkflowId?`, `createdAt`,
 `attempt`) plus state-specific fields — for example a `terminal` record adds
 `disposition`, `resultDigest`, `terminalAt`, `adopted`, and `adoptedAt?`; a
 `deadLettered` record adds `pendingStatus`, `resultDigest`,
@@ -210,6 +217,13 @@ Every variant carries the dispatch envelope (`operationId`, `workflowId?`,
   "activityName": "chargeCard",
   "queue": "payments",
   "headerKeys": ["x-trace-id"],
+  "visibilityTimeoutMilliseconds": 30000,
+  "retryPolicy": {
+    "maxAttempts": 3,
+    "initialBackoff": "1s",
+    "backoffMultiplier": 2,
+    "maxBackoff": "30s"
+  },
   "createdAt": 1720000000000,
   "attempt": 2,
   "state": "terminal",
@@ -222,7 +236,10 @@ Every variant carries the dispatch envelope (`operationId`, `workflowId?`,
 
 Faults `NotFound` if no ledger record exists for the `operationId` — either it
 was never dispatched, or an adopted terminal record was already reaped by
-`ServeOptions.taskRetentionWindowMs`.
+`ServeOptions.taskRetentionWindowMs`. Faults `EngineFailure` (distinct from
+`NotFound`) if the stored record exists but its bytes fail to decode into a
+valid ledger record — a data-integrity concern that operators should
+investigate, not a legitimately absent task.
 
 Three fields are deliberately never returned: `attemptToken`, `workerSessionId`,
 and `executionIdentity` are worker ownership/session internals with no business

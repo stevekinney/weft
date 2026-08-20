@@ -190,10 +190,11 @@ export const STATIC_REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = [
   streamWorkflowSseRestBinding,
   workflowEventsSseRestBinding,
   fleetEventsSseRestBinding,
-  // getTaskDetailRestBinding (GET /v1/tasks/:operationId) must be registered
-  // AFTER every more specific literal /v1/tasks/... path — matchRestBinding
-  // is first-match-wins in array order, and :operationId matches any single
-  // segment, including "diagnostics".
+  // getTaskDetailRestBinding lives under the /v1/tasks/detail/ namespace
+  // specifically so its :operationId segment can never collide with a
+  // sibling literal path (see the binding's own comment). Still registered
+  // after the other /v1/tasks/... bindings on general principle — matchRestBinding
+  // is first-match-wins in array order.
   getTaskDiagnosticsRestBinding,
   clearTaskDeadLetterRestBinding,
   getTaskDetailRestBinding,
