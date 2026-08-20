@@ -18,6 +18,7 @@
 
 import type { EngineConstructorOptions, ResolvedOptions } from './engine-internal-types.ts';
 import { normalizeRetentionDuration } from './validation.ts';
+import { WORKFLOW_CLAIM_TTL_SAFETY_MULTIPLIER } from './workflow-claim-transitions.ts';
 
 /** Default lease time-to-live for `ownership: 'lease'`. */
 export const DEFAULT_LEASE_TTL_MS = 30_000;
@@ -31,19 +32,7 @@ export const DEFAULT_WORKFLOW_CLAIM_TTL_MS = 30_000;
 /** Default per-workflow claim renewal interval for `ownership: 'workflow-lease'`. */
 export const DEFAULT_WORKFLOW_CLAIM_RENEW_INTERVAL_MS = 5_000;
 
-/**
- * ADR 0002's fixed safety margin between a workflow claim's TTL and its renewal
- * interval: `workflowClaimTtl` must be at least this many times
- * `workflowClaimRenewInterval`, on top of the plain "renewal fires before the
- * claim can lapse" relationship `assertLeaseTimingCoherent` already enforces for
- * the global lease. The ADR proposes `3` as the default and leaves the exact
- * value an open question (see the ADR's "Open questions" section); it is
- * defined here, not imported, because no `workflow-claim-transitions.ts` module
- * exists in this codebase yet. Once claim acquire/renew/takeover logic lands, it
- * should very likely become the canonical export of this constant, with this
- * copy re-exported (or removed) so the two never drift.
- */
-export const WORKFLOW_CLAIM_TTL_SAFETY_MULTIPLIER = 3;
+export { WORKFLOW_CLAIM_TTL_SAFETY_MULTIPLIER };
 
 export function resolveBackgroundTaskMode(
   options: EngineConstructorOptions | undefined,
