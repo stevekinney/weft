@@ -31,11 +31,8 @@ import {
 } from './runtime/shutdown.ts';
 import { stopBunServerForShutdown } from './runtime/stop-server.ts';
 import { cancelTask, dispatchTaskImpl } from './runtime/task-dispatch.ts';
-import {
-  adoptTaskResultImpl,
-  getTaskResultViewImpl,
-  type TaskResultView,
-} from './runtime/task-result-view.ts';
+import type { TaskResultView } from './runtime/task-result-view.ts';
+import { adoptTaskResultImpl, getTaskResultViewImpl } from './runtime/task-result-view.ts';
 import { publishTokenMessage, publishWatchMessage } from './runtime/websocket-stream.ts';
 import {
   buildBunServeConfig,
