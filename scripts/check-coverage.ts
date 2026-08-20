@@ -824,18 +824,38 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
     ],
     [
       'scripts/husky/pre-commit.ts',
+      // reportTestOutcome was hoisted out of main() to module scope, landing
+      // immediately before it (229-268), to fix an
+      // unicorn/consistent-function-scoping finding surfaced by the
+      // oxlint-tsgolint version bump; the lint:fix step also gained ~20 lines
+      // scoping it to staged files only (PR #904). reportTestOutcome is only
+      // ever called from inside main(), which pre-commit.test.ts never
+      // invokes, so it is exactly as uncoverable as main() itself — the range
+      // now runs 229-474 (was 229-451) to cover both as one contiguous span,
+      // matching main()'s new end boundary. Lines before 227 (the pre-main()
+      // stash-lifecycle helpers) are untouched.
+      // `requireUncoveredLines` is intentionally omitted now: `return false;`
+      // / the closing `}` of reportTestOutcome (267, 268) and main()'s final
+      // `process.exit(0)` (473) read as hit on this run despite neither
+      // function being invoked by pre-commit.test.ts — a boundary coverage-
+      // attribution artifact matching the same class already documented for
+      // `task-ledger-recovery.ts`'s case-label/brace lines elsewhere in this
+      // file, not a real reachability signal. `functions` bumped 8 -> 9: the
+      // lint:fix scoping change's staged-file filter/existence-check closures
+      // add one more never-invoked function (Bun's LCOV omits per-function
+      // FN:/FNDA: detail for this file — confirmed via the raw aggregate,
+      // FNF:23/FNH:14, i.e. 9 uncovered).
       {
         reason:
           'Stash and interruption behavior runs in real Git child processes, whose signal-handler and executable-hook hits are not merged into parent Bun LCOV.',
-        functions: 8,
+        functions: 9,
         lines: createMergedLineSet(
           new Set([
             54, 55, 84, 85, 86, 99, 100, 101, 112, 123, 124, 125, 131, 132, 133, 151, 152, 153, 160,
             161, 162, 165, 167, 168, 169, 172, 200, 201, 202, 203, 204, 205, 206, 207,
           ]),
-          createLineSet(229, 451),
+          createLineSet(229, 474),
         ),
-        requireUncoveredLines: true,
       },
     ],
     [
@@ -1044,27 +1064,6 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
           'Process-entry and failure-exit behavior runs in child processes whose hits are not attributed to the parent Bun LCOV report.',
         functions: 1,
         lines: new Set([50, 101, 123, 136, 146, 147, 163, 164, 219, 292, 344]),
-        requireUncoveredLines: true,
-      },
-    ],
-    [
-      'src/core/events/activity-events.ts',
-      // TaskResultDeadLetteredEvent's constructor is public API (exported from
-      // src/index.ts, registered in event-map.ts, consulted by
-      // client-visible-events.ts) but has zero live callers: WFT-22 removed
-      // the old dead-letter-fallback write path that used to dispatch it, and
-      // the ledger-native Completing -> DeadLettered transition that will
-      // dispatch it again is WFT-24 scope. Keep the class rather than delete
-      // it — WFT-24 needs this exact shape — and allowance its constructor
-      // until that transition exists.
-      {
-        reason:
-          'TaskResultDeadLetteredEvent has zero live dispatchers between the WFT-22 dead-letter-fallback removal and the WFT-24 ledger-native DeadLettered transition that will dispatch it again.',
-        functions: 1,
-        lines: new Set([
-          174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191,
-          192, 193, 194, 195,
-        ]),
         requireUncoveredLines: true,
       },
     ],
@@ -1312,6 +1311,24 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       },
     ],
     [
+      'src/server/operations/get-task-diagnostics.ts',
+      // The closed RemoteTaskRecord state union makes this default branch
+      // unreachable at runtime; it exists solely as a compile-time
+      // exhaustiveness guard (`addRecordDiagnostics`'s switch), matching the
+      // identical pattern already allowed for `task-ledger-recovery.ts`.
+      // `requireUncoveredLines` is intentionally omitted for the same reason
+      // it is omitted there: `default: {` (306) and its closing `}` (311)
+      // are case-label/brace lines that flip between hit and unhit run to
+      // run with byte-identical source — a coverage-attribution artifact,
+      // not a real reachability signal — so only the two dead statements
+      // inside it (309, 310) are guaranteed to read 0 every run.
+      {
+        reason:
+          'Compile-time exhaustiveness guard for a closed discriminated union has no reachable runtime path to test without an unsafe cast.',
+        lines: new Set([306, 309, 310, 311]),
+      },
+    ],
+    [
       'src/server/rest-body.ts',
       {
         reason:
@@ -1350,6 +1367,29 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       },
     ],
     [
+      'src/server/runtime/task-result-view.ts',
+      // The closed RemoteTaskRecord state union makes this default branch
+      // unreachable at runtime; it exists solely as a compile-time
+      // exhaustiveness guard (`getTaskResultViewImpl`'s switch), matching the
+      // identical pattern already allowed for `task-ledger-recovery.ts`.
+      // `requireUncoveredLines` is intentionally omitted for the same reason
+      // it is omitted there: `default: {` (122) is a case-label/brace line
+      // that flips between hit and unhit run to run with byte-identical
+      // source — a coverage-attribution artifact, not a real reachability
+      // signal — so only the two dead statements inside it (125, 126) are
+      // guaranteed to read 0 every run. (Line numbers shifted -2 when
+      // getTaskResultViewImpl/adoptTaskResultImpl were changed to take
+      // `storage: Storage` directly instead of `options: ServeOptions`,
+      // breaking a circular import with `../index.ts` implicated in a
+      // deterministic CI-only oxlint-tsgolint false positive on
+      // TaskResultView — PR #904.)
+      {
+        reason:
+          'Compile-time exhaustiveness guard for a closed discriminated union has no reachable runtime path to test without an unsafe cast.',
+        lines: new Set([122, 125, 126]),
+      },
+    ],
+    [
       'src/server/runtime/websocket-stream.ts',
       {
         reason:
@@ -1362,21 +1402,21 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       // The closed WorkerToServerMessage union makes this default branch
       // unreachable at runtime; it exists solely as a compile-time
       // exhaustiveness guard: the `}` closing the preceding `taskResult`
-      // case (340), `case 'heartbeat': {` / its closing `}` (341, 344),
-      // `default: {` (345), and the two dead statements inside it,
-      // `const _exhaustive` / `return _exhaustive` (348, 349). Only 348 and
-      // 349 are deterministically 0 across every run; the other four
+      // case (349), `case 'heartbeat': {` / its closing `}` (350, 353),
+      // `default: {` (354), and the two dead statements inside it,
+      // `const _exhaustive` / `return _exhaustive` (357, 358). Only 357 and
+      // 358 are deterministically 0 across every run; the other four
       // case-label and brace lines around them flip between hit and unhit
       // run to run with byte-identical source — a switch-statement
       // coverage-attribution artifact, not a real reachability signal — so
       // `requireUncoveredLines` is intentionally omitted here rather than
       // chasing whichever subset happens to be 0 in a given run. (Line
-      // numbers shifted -7 from the WFT-22 baseline when WFT-23 removed the
-      // module's now-dead `isInflightRecord` re-export.)
+      // numbers shifted +9 from the WFT-23 baseline when WFT-24's dead-letter
+      // dispatch import and call sites were added above this switch.)
       {
         reason:
           'Transport disconnect and concurrency exits are behaviorally tested, but Bun does not deterministically attribute these residual paths.',
-        lines: new Set([340, 341, 344, 345, 348, 349]),
+        lines: new Set([349, 350, 353, 354, 357, 358]),
       },
     ],
     [

@@ -6,15 +6,20 @@ import { Engine } from '../engine.ts';
 import { PayloadSizeExceededError } from '../payload-size.ts';
 import { activity, workflow, type WorkflowContext } from '../types.ts';
 
+/** True when `haystack` contains `needle` starting at `start` as a contiguous byte subsequence. */
+function matchesAt(haystack: Uint8Array, needle: Uint8Array, start: number): boolean {
+  for (let offset = 0; offset < needle.length; offset++) {
+    if (haystack[start + offset] !== needle[offset]) return false;
+  }
+  return true;
+}
+
 /** True when `haystack` contains `needle` as a contiguous byte subsequence. */
 function bytesContain(haystack: Uint8Array, needle: Uint8Array): boolean {
   if (needle.length === 0) return true;
   if (needle.length > haystack.length) return false;
-  outer: for (let start = 0; start <= haystack.length - needle.length; start++) {
-    for (let offset = 0; offset < needle.length; offset++) {
-      if (haystack[start + offset] !== needle[offset]) continue outer;
-    }
-    return true;
+  for (let start = 0; start <= haystack.length - needle.length; start++) {
+    if (matchesAt(haystack, needle, start)) return true;
   }
   return false;
 }

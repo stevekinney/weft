@@ -226,6 +226,47 @@ export async function withRatchetStash<T>(
   }
 }
 
+function reportTestOutcome(outcome: Awaited<ReturnType<typeof runTestSuite>>): boolean {
+  const { ok: testsOk, lines } = renderTestOutcome(outcome);
+  if (testsOk) {
+    success('test passed');
+    return true;
+  }
+
+  error('test failed');
+  for (const line of lines) error(line);
+
+  // Diagnostic surface, most-useful-first. The parsed summary above is
+  // best-effort; the JUnit excerpts and captured stderr are authoritative.
+  if (outcome.kind !== 'passed') {
+    // `reportContent` is the full-run JUnit the runner already read — no
+    // second disk read (which could race cleanup and silently yield nothing).
+    for (const excerpt of extractJunitFailureExcerpts(outcome.reportContent ?? '')) {
+      info(`\n${excerpt.file} > ${excerpt.name} [${excerpt.kind}]`);
+      console.error(excerpt.detail);
+    }
+    const stderrTail = tailBound(outcome.output.stderr);
+    if (stderrTail.trim().length > 0) {
+      info('\nCaptured test output (stderr tail):');
+      console.error(stderrTail);
+    }
+    if (outcome.isolationOutput) {
+      const isolationTail = tailBound(outcome.isolationOutput.stderr);
+      if (isolationTail.trim().length > 0) {
+        info('\nIsolation re-run output (stderr tail):');
+        console.error(isolationTail);
+      }
+    }
+    // The retained reports help diagnose a *real* failure's stack traces; for
+    // a context-sensitive pass-in-isolation result the summary is the action.
+    if (outcome.kind === 'failed' && outcome.retainedDirectory) {
+      warning(`\nFull reports retained at: ${outcome.retainedDirectory}`);
+    }
+  }
+
+  return false;
+}
+
 export async function main(): Promise<void> {
   if (isContinuousIntegration()) {
     info('Skipping hook in CI');
@@ -259,14 +300,35 @@ export async function main(): Promise<void> {
     }
   }
 
-  // 2) lint:fix
-  info('Running lint:fix…');
-  try {
-    await $`bun run lint:fix`;
-    success('lint:fix passed');
-  } catch {
-    error('lint:fix failed');
-    ok = false;
+  // 2) lint:fix — scoped to staged lintable files only. `oxlint --fix`
+  // mutates the working tree in place and nothing here re-stages its
+  // output (the later `lint-staged` step does that, scoped the same way),
+  // so running it unscoped against the whole project — as a bare
+  // `bun run lint:fix` once did — silently rewrites every file oxlint has
+  // an autofix for on every commit, whether or not it's part of what's
+  // being committed. That blast radius is fine when few rules are
+  // autofixable; it stopped being fine, and remains a real risk to guard
+  // against, the moment upstream oxlint versions enable more of them.
+  const stagedLintableFiles = staged.filter(
+    (file) =>
+      (file.startsWith('src/') || file.startsWith('scripts/')) &&
+      /\.(js|ts|tsx|jsx|mjs|cjs)$/.test(file),
+  );
+  const stagedLintableFilesOrMissing = await Promise.all(
+    stagedLintableFiles.map(async (file) => ((await Bun.file(file).exists()) ? file : null)),
+  );
+  const existingStagedLintableFiles = stagedLintableFilesOrMissing.filter((file) => file !== null);
+  if (existingStagedLintableFiles.length > 0) {
+    info('Running lint:fix…');
+    try {
+      await $`oxlint --fix --type-aware --tsconfig ./tsconfig.json ${existingStagedLintableFiles}`;
+      success('lint:fix passed');
+    } catch {
+      error('lint:fix failed');
+      ok = false;
+    }
+  } else {
+    info('Skipping lint:fix (no staged lintable files)');
   }
 
   // 3) definition vocabulary check
@@ -298,47 +360,6 @@ export async function main(): Promise<void> {
   } catch {
     error('typecheck failed');
     ok = false;
-  }
-
-  function reportTestOutcome(outcome: Awaited<ReturnType<typeof runTestSuite>>): boolean {
-    const { ok: testsOk, lines } = renderTestOutcome(outcome);
-    if (testsOk) {
-      success('test passed');
-      return true;
-    }
-
-    error('test failed');
-    for (const line of lines) error(line);
-
-    // Diagnostic surface, most-useful-first. The parsed summary above is
-    // best-effort; the JUnit excerpts and captured stderr are authoritative.
-    if (outcome.kind !== 'passed') {
-      // `reportContent` is the full-run JUnit the runner already read — no
-      // second disk read (which could race cleanup and silently yield nothing).
-      for (const excerpt of extractJunitFailureExcerpts(outcome.reportContent ?? '')) {
-        info(`\n${excerpt.file} > ${excerpt.name} [${excerpt.kind}]`);
-        console.error(excerpt.detail);
-      }
-      const stderrTail = tailBound(outcome.output.stderr);
-      if (stderrTail.trim().length > 0) {
-        info('\nCaptured test output (stderr tail):');
-        console.error(stderrTail);
-      }
-      if (outcome.isolationOutput) {
-        const isolationTail = tailBound(outcome.isolationOutput.stderr);
-        if (isolationTail.trim().length > 0) {
-          info('\nIsolation re-run output (stderr tail):');
-          console.error(isolationTail);
-        }
-      }
-      // The retained reports help diagnose a *real* failure's stack traces; for
-      // a context-sensitive pass-in-isolation result the summary is the action.
-      if (outcome.kind === 'failed' && outcome.retainedDirectory) {
-        warning(`\nFull reports retained at: ${outcome.retainedDirectory}`);
-      }
-    }
-
-    return false;
   }
 
   // 6) test

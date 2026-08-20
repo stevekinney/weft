@@ -439,7 +439,7 @@ export type ClientOperationTypes = {
           | 'retry-storm'
           | 'all-workers-at-capacity'
           | 'dead-lettered';
-        readonly lastRequeueReason?: 'visibility-timeout' | 'worker-disconnect';
+        readonly lastRequeueReason?: string;
         readonly operationId?: string;
         readonly queue?: string;
         readonly queueLatencyMs?: number;
@@ -466,7 +466,7 @@ export type ClientOperationTypes = {
   'weft.tasks.diagnostics.deadletters.clear': {
     readonly input: { readonly operationId: string };
     readonly output: { readonly ok: boolean };
-    readonly faults: never;
+    readonly faults: 'NotFound';
   };
   'weft.updates.result.get': {
     readonly input: { readonly updateId: string };

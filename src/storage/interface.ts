@@ -550,8 +550,6 @@ export const KEYS = {
   operationInflight: (id: string) => `op:inflight:${id}`,
   operationQueued: (id: string) => `op:queued:${id}`,
   operationResolved: (id: string) => `op:resolved:${id}`,
-  operationDeadLetterPrefix: () => 'op:dead-letter:',
-  operationDeadLetter: (id: string) => `op:dead-letter:${id}`,
   bulkOperationAuditPrefix: () => 'audit:bulk:',
   bulkOperationAudit: (timestamp: number, requestId: string, confirmationToken: string) =>
     `audit:bulk:${formatSortableTimestamp(timestamp)}:${encodeStorageKeyComponent(requestId)}:${encodeStorageKeyComponent(confirmationToken)}`,

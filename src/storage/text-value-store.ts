@@ -170,7 +170,7 @@ const textEncoder = new TextEncoder();
 //
 // `ignoreBOM: true` preserves a leading U+FEFF as data rather than silently
 // stripping it. Without this flag, the default `ignoreBOM: false` makes
-// `decode()` discard a leading BOM, so a string that starts with `﻿`
+// `decode()` discard a leading BOM, so a string that starts with `\u{feff}`
 // loses that character on a set→get round-trip. Combined with `fatal: true`,
 // the wrapper either round-trips bytes verbatim or raises `TypeError`.
 const textDecoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });

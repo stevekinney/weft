@@ -17,6 +17,7 @@ import {
   type SchedulingPolicy,
   type ServeOptions,
   type TaskDispatch,
+  type TaskResultView,
   type WeftServer,
   type WorkerAdmissionDecision,
   type WorkerAdmissionPolicy,
@@ -119,6 +120,7 @@ void fullyTypedServeOptions;
 const taskDispatch: TaskDispatch = {
   operationId: 'op-1',
   activityName: 'sendEmail',
+  workflowType: 'exampleWorkflow',
   input: {},
   retryPolicy: {
     maxAttempts: 3,
@@ -135,6 +137,14 @@ const registry: WorkerRegistry = server.registry;
 const taskQueue: TaskQueue = server.taskQueue;
 void registry;
 void taskQueue;
+
+// TaskResultView is nameable from the same entry — it is the return type of
+// WeftServer.getTaskResult, WFT-24's adoption/retention read surface.
+async function verifyTaskResultViewNameable(): Promise<void> {
+  const result: TaskResultView | null = await server.getTaskResult('op-1');
+  void result;
+}
+void verifyTaskResultViewNameable;
 
 // WorkerRegistry is re-exported as a VALUE (matching the root export), so it is
 // constructable from `/server` — not merely nameable as a type.

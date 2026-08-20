@@ -22,6 +22,11 @@ import { encodeScheduleRunMetadata } from '../core/engine/schedule-run-metadata.
 import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types.ts';
 import { serve, type WeftServer } from '../server/index.ts';
+import {
+  encodeRemoteTaskRecord,
+  taskLedgerKey,
+  type RemoteTaskDeadLettered,
+} from '../server/task-ledger.ts';
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { HttpClient } from './http-client.ts';
@@ -43,6 +48,31 @@ const UNCURATED_CATALOG_OPERATIONS = [
 ] as const;
 
 const REST_ONLY_OPERATION = 'weft.tasks.diagnostics.deadletters.clear' as const;
+
+/** Seed a minimal `deadLettered` ledger record so `REST_ONLY_OPERATION` has something to clear (WFT-24: the operation reads the durable ledger, not the retired `KEYS.operationDeadLetter` marker key). */
+function deadLetteredLedgerFixture(operationId: string): RemoteTaskDeadLettered {
+  return {
+    recordVersion: 1,
+    operationId,
+    workflowType: 'test',
+    activityName: 'charge',
+    queue: 'default',
+    input: null,
+    headers: {},
+    visibilityTimeoutMilliseconds: 30_000,
+    createdAt: 0,
+    generation: 3,
+    state: 'deadLettered',
+    attemptToken: 'attempt-token',
+    attempt: 1,
+    pendingStatus: 'completed',
+    pendingResultDigest: 'digest-1',
+    retryCount: 0,
+    requeueCount: 0,
+    deadLetteredAt: 0,
+    persistenceFailureReason: 'lost the compare-and-swap race',
+  };
+}
 
 describe('LocalClient catalog operations', () => {
   it('exposes a typed accessor covering every client-callable operation', () => {
@@ -107,11 +137,14 @@ describe('LocalClient catalog operations', () => {
     const client = new LocalClient(engine);
     const operationId = 'local-dead-letter';
     try {
-      await engine.storage.put(KEYS.operationDeadLetter(operationId), new Uint8Array([1]));
+      await engine.storage.put(
+        taskLedgerKey(operationId),
+        encodeRemoteTaskRecord(deadLetteredLedgerFixture(operationId)),
+      );
       await expect(client.call(REST_ONLY_OPERATION, { operationId })).resolves.toEqual({
         ok: true,
       });
-      expect(await engine.storage.get(KEYS.operationDeadLetter(operationId))).toBeNull();
+      expect(await engine.storage.get(taskLedgerKey(operationId))).toBeNull();
     } finally {
       engine[Symbol.dispose]();
     }
@@ -308,12 +341,15 @@ describe('HttpClient catalog operations', () => {
 
   it('routes an ordinary REST-only operation through generated binding metadata', async () => {
     const operationId = 'http/dead letter';
-    await engine.storage.put(KEYS.operationDeadLetter(operationId), new Uint8Array([1]));
+    await engine.storage.put(
+      taskLedgerKey(operationId),
+      encodeRemoteTaskRecord(deadLetteredLedgerFixture(operationId)),
+    );
 
     await expect(client.operations[REST_ONLY_OPERATION]({ operationId })).resolves.toEqual({
       ok: true,
     });
-    expect(await engine.storage.get(KEYS.operationDeadLetter(operationId))).toBeNull();
+    expect(await engine.storage.get(taskLedgerKey(operationId))).toBeNull();
   });
 
   it('preserves HttpClientError shaping for REST-only operation authorization failures', async () => {

@@ -1,10 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 
-import { encode } from '../../core/codec.ts';
 import { Engine } from '../../core/engine.ts';
 import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
-import { KEYS, type ScanOptions } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import {
   TEST_ACCEPTED_MANIFEST_DIGEST,
@@ -14,14 +12,17 @@ import { WorkerRegistry } from '../../worker/registry.ts';
 import type { AuthorizationScope } from '../authorization-scope.ts';
 import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
 import { principalFromApiKey, principalFromJwtClaims } from '../principal.ts';
+import {
+  encodeRemoteTaskRecord,
+  taskLedgerKey,
+  type RemoteTaskDeadLettered,
+  type RemoteTaskLeased,
+  type RemoteTaskQueued,
+  type RemoteTaskTerminalResolved,
+} from '../task-ledger.ts';
 import { TaskQueue } from '../task-queue.ts';
 import {
-  type DeadLetteredTaskRecord,
-  type InflightRecord,
-  type QueuedRecord,
-  type ResolvedRecord,
-} from '../task-state.ts';
-import {
+  clearTaskDeadLetterOperation,
   createGetTaskDiagnosticsOperation,
   type GetTaskDiagnosticsOutput,
 } from './get-task-diagnostics.ts';
@@ -39,22 +40,116 @@ function createEngine(storage: MemoryStorage): Engine {
   return engine;
 }
 
-class ScanCountingStorage extends MemoryStorage {
-  readonly scannedEntriesByPrefix = new Map<string, number>();
+function queuedFixture(overrides: Partial<RemoteTaskQueued> = {}): RemoteTaskQueued {
+  return {
+    recordVersion: 1,
+    operationId: 'op-queued',
+    workflowType: 'test',
+    activityName: 'charge',
+    queue: 'default',
+    input: null,
+    headers: {},
+    visibilityTimeoutMilliseconds: 30_000,
+    createdAt: 0,
+    generation: 0,
+    state: 'queued',
+    attempt: 1,
+    availableAt: 0,
+    firstQueuedAt: 0,
+    lastQueuedAt: 0,
+    retryCount: 0,
+    requeueCount: 0,
+    ...overrides,
+  };
+}
 
-  override async *scan(
-    prefix: string,
-    options: ScanOptions = {},
-  ): AsyncIterable<[string, Uint8Array]> {
-    for await (const entry of super.scan(prefix, options)) {
-      this.scannedEntriesByPrefix.set(prefix, (this.scannedEntriesByPrefix.get(prefix) ?? 0) + 1);
-      yield entry;
-    }
-  }
+function leasedFixture(overrides: Partial<RemoteTaskLeased> = {}): RemoteTaskLeased {
+  return {
+    recordVersion: 1,
+    operationId: 'op-leased',
+    workflowType: 'test',
+    activityName: 'charge',
+    queue: 'default',
+    input: null,
+    headers: {},
+    visibilityTimeoutMilliseconds: 30_000,
+    createdAt: 0,
+    generation: 1,
+    state: 'leased',
+    attemptToken: 'attempt-token',
+    workerSessionId: 'worker-1',
+    attempt: 1,
+    leaseDeadline: 60_000,
+    firstQueuedAt: 0,
+    lastQueuedAt: 0,
+    startedAt: 0,
+    lastHeartbeatAt: 0,
+    retryCount: 0,
+    requeueCount: 0,
+    ...overrides,
+  };
+}
 
-  scannedEntryCount(prefix: string): number {
-    return this.scannedEntriesByPrefix.get(prefix) ?? 0;
-  }
+function terminalFixture(
+  overrides: Partial<RemoteTaskTerminalResolved> = {},
+): RemoteTaskTerminalResolved {
+  return {
+    recordVersion: 1,
+    operationId: 'op-terminal',
+    workflowType: 'test',
+    activityName: 'charge',
+    queue: 'default',
+    input: null,
+    headers: {},
+    visibilityTimeoutMilliseconds: 30_000,
+    createdAt: 0,
+    generation: 2,
+    state: 'terminal',
+    disposition: 'resolved',
+    attempt: 1,
+    attemptToken: 'attempt-token',
+    status: 'completed',
+    resultDigest: 'digest',
+    terminalAt: 9_000,
+    adopted: false,
+    retentionGeneration: 0,
+    ...overrides,
+  };
+}
+
+function deadLetteredFixture(
+  overrides: Partial<RemoteTaskDeadLettered> = {},
+): RemoteTaskDeadLettered {
+  return {
+    recordVersion: 1,
+    operationId: 'op-dead-lettered',
+    workflowType: 'test',
+    activityName: 'charge',
+    queue: 'default',
+    input: null,
+    headers: {},
+    visibilityTimeoutMilliseconds: 30_000,
+    createdAt: 0,
+    generation: 3,
+    state: 'deadLettered',
+    attemptToken: 'attempt-token',
+    attempt: 2,
+    pendingStatus: 'completed',
+    pendingResultDigest: 'digest',
+    retryCount: 0,
+    requeueCount: 0,
+    deadLetteredAt: 9_000,
+    persistenceFailureReason:
+      'lost the compare-and-swap race on operation "op-dead-lettered" after 3 attempt(s)',
+    ...overrides,
+  };
+}
+
+async function putLedgerRecord(
+  storage: MemoryStorage,
+  record: RemoteTaskQueued | RemoteTaskLeased | RemoteTaskTerminalResolved | RemoteTaskDeadLettered,
+): Promise<void> {
+  await storage.put(taskLedgerKey(record.operationId), encodeRemoteTaskRecord(record));
 }
 
 async function runDiagnostics({
@@ -85,107 +180,55 @@ async function runDiagnostics({
   });
 }
 
-async function putResolvedRecord(storage: MemoryStorage, record: ResolvedRecord): Promise<void> {
-  const encodedRecord = encode(record);
-  await storage.put(KEYS.operationResolved(record.operationId), encodedRecord);
-  await storage.put(
-    KEYS.operationResolvedByTime(record.resolvedAt, record.operationId),
-    encodedRecord,
-  );
-}
-
 describe('weft.tasks.diagnostics', () => {
-  it('loads a resolved task directly by operation id', async () => {
-    const storage = new ScanCountingStorage();
-    const engine = createEngine(storage);
-    const registry = new WorkerRegistry();
-    const taskQueue = new TaskQueue();
-
-    await putResolvedRecord(storage, {
-      operationId: 'resolved-by-id',
-      workflowId: 'workflow-history',
-      activityName: 'charge',
-      queue: 'default',
-      status: 'failed',
-      resolvedAt: 9_000,
-      retryCount: 3,
-      requeueCount: 3,
-      resolutionReason: 'max-attempts-exceeded',
-    });
-
-    const result = await runDiagnostics({
-      engine,
-      registry,
-      taskQueue,
-      input: { operationId: 'resolved-by-id', retryStormMinimumAttempts: 3 },
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error('expected diagnostics result');
-    const diagnostics = result.value as GetTaskDiagnosticsOutput;
-    expect(diagnostics.items.map((item) => item.operationId)).toEqual(['resolved-by-id']);
-    expect(storage.scannedEntryCount(KEYS.operationResolvedByTimePrefix())).toBe(0);
-  });
-
   it('identifies stuck queued tasks, stale inflight tasks, retry storms, and capacity saturation', async () => {
     const storage = new MemoryStorage();
     const engine = createEngine(storage);
     const registry = new WorkerRegistry();
     const taskQueue = new TaskQueue();
 
-    const stuckQueued: QueuedRecord = {
-      operationId: 'queued-stuck',
-      workflowId: 'workflow-a',
-      activityName: 'charge',
-      input: null,
-      queue: 'payments',
-      attempt: 1,
-      visibilityTimeout: 30_000,
-      queuedAt: 1_000,
-      firstQueuedAt: 1_000,
-      lastQueuedAt: 1_000,
-      retryCount: 0,
-      requeueCount: 0,
-    };
-    const staleInflight: InflightRecord = {
-      operationId: 'inflight-stale',
-      workflowId: 'workflow-a',
-      activityName: 'charge',
-      input: null,
-      queue: 'payments',
-      workerId: 'worker-stale',
-      deadline: 20_000,
-      attempt: 2,
-      visibilityTimeout: 30_000,
-      attemptToken: 'attempt-token',
-      firstQueuedAt: 1_000,
-      lastQueuedAt: 1_000,
-      lastDispatchedAt: 2_000,
-      startedAt: 2_100,
-      lastHeartbeatAt: 3_000,
-      retryCount: 1,
-      requeueCount: 1,
-    };
-    const retryStorm: ResolvedRecord = {
-      operationId: 'retry-storm',
-      workflowId: 'workflow-a',
-      activityName: 'ship',
-      queue: 'payments',
-      status: 'failed',
-      resolvedAt: 9_000,
-      firstQueuedAt: 1_000,
-      lastQueuedAt: 8_000,
-      lastDispatchedAt: 8_500,
-      startedAt: 8_600,
-      completedAt: 9_000,
-      retryCount: 5,
-      requeueCount: 5,
-      resolutionReason: 'max-attempts-exceeded',
-    };
-
-    await storage.put(KEYS.operationQueued(stuckQueued.operationId), encode(stuckQueued));
-    await storage.put(KEYS.operationInflight(staleInflight.operationId), encode(staleInflight));
-    await putResolvedRecord(storage, retryStorm);
+    await putLedgerRecord(
+      storage,
+      queuedFixture({
+        operationId: 'queued-stuck',
+        workflowId: 'workflow-a',
+        queue: 'payments',
+        availableAt: 1_000,
+        firstQueuedAt: 1_000,
+        lastQueuedAt: 1_000,
+      }),
+    );
+    await putLedgerRecord(
+      storage,
+      leasedFixture({
+        operationId: 'inflight-stale',
+        workflowId: 'workflow-a',
+        queue: 'payments',
+        workerSessionId: 'worker-stale',
+        firstQueuedAt: 1_000,
+        lastQueuedAt: 1_000,
+        startedAt: 2_100,
+        lastHeartbeatAt: 3_000,
+      }),
+    );
+    await putLedgerRecord(
+      storage,
+      leasedFixture({
+        operationId: 'retry-storm',
+        workflowId: 'workflow-a',
+        activityName: 'ship',
+        queue: 'payments',
+        workerSessionId: 'worker-fresh',
+        firstQueuedAt: 1_000,
+        lastQueuedAt: 1_000,
+        startedAt: 9_900,
+        // Fresh heartbeat — must not also trigger stale-inflight, isolating
+        // the retry-storm assertion below.
+        lastHeartbeatAt: 9_999,
+        retryCount: 5,
+        requeueCount: 5,
+      }),
+    );
 
     registry.register({
       manifest: testWorkerManifest(),
@@ -226,73 +269,49 @@ describe('weft.tasks.diagnostics', () => {
       allWorkersAtCapacity: 1,
       deadLettered: 0,
     });
-    expect(diagnostics.items.map((item) => item.kind)).toEqual([
-      'stuck-queued',
-      'stale-inflight',
-      'retry-storm',
-      'all-workers-at-capacity',
-    ]);
-    expect(diagnostics.items[0]).toMatchObject({
+    expect(new Set(diagnostics.items.map((item) => item.kind))).toEqual(
+      new Set(['all-workers-at-capacity', 'retry-storm', 'stale-inflight', 'stuck-queued']),
+    );
+    const stuckQueuedItem = diagnostics.items.find((item) => item.kind === 'stuck-queued');
+    expect(stuckQueuedItem).toMatchObject({
       operationId: 'queued-stuck',
       workflowId: 'workflow-a',
       queue: 'payments',
       queueLatencyMs: 9_000,
     });
-    expect(diagnostics.items[1]).toMatchObject({
+    const staleInflightItem = diagnostics.items.find((item) => item.kind === 'stale-inflight');
+    expect(staleInflightItem).toMatchObject({
       operationId: 'inflight-stale',
       workerId: 'worker-stale',
       heartbeatAgeMs: 7_000,
     });
+    const retryStormItem = diagnostics.items.find((item) => item.kind === 'retry-storm');
+    expect(retryStormItem).toMatchObject({
+      operationId: 'retry-storm',
+      state: 'inflight',
+      retryCount: 5,
+      requeueCount: 5,
+    });
   });
 
-  it('lists task-result dead letters without also reporting the guarded inflight task', async () => {
+  it('lists task-result dead letters (the ledger has no separate guarded inflight record to conflict with)', async () => {
     const storage = new MemoryStorage();
     const engine = createEngine(storage);
     const registry = new WorkerRegistry();
     const taskQueue = new TaskQueue();
 
-    const inflightRecord: InflightRecord = {
-      operationId: 'dead-lettered-operation',
-      workflowId: 'workflow-dead-letter',
-      activityName: 'charge',
-      input: null,
-      queue: 'payments',
-      workerId: 'worker-dead-letter',
-      deadline: 2_000,
-      attempt: 2,
-      visibilityTimeout: 30_000,
-      attemptToken: 'attempt-token',
-      firstQueuedAt: 1_000,
-      lastQueuedAt: 1_500,
-      lastDispatchedAt: 2_000,
-      startedAt: 2_100,
-      lastHeartbeatAt: 3_000,
-      retryCount: 1,
-      requeueCount: 1,
-      lastRequeueReason: 'visibility-timeout',
-    };
-    const deadLetterRecord: DeadLetteredTaskRecord = {
-      operationId: inflightRecord.operationId,
-      workflowId: inflightRecord.workflowId,
-      activityName: inflightRecord.activityName,
-      queue: inflightRecord.queue,
-      workerId: inflightRecord.workerId,
-      attempt: inflightRecord.attempt,
-      visibilityTimeout: inflightRecord.visibilityTimeout,
-      retryCount: inflightRecord.retryCount,
-      requeueCount: inflightRecord.requeueCount,
-      lastRequeueReason: inflightRecord.lastRequeueReason,
-      reason: 'result-resolution-storage-exhausted',
-      deadLetteredAt: 9_000,
-      errorMessage: 'result-resolution-storage-exhausted',
-      retryAttempts: 2,
-      status: 'completed',
-    };
-
-    await storage.put(KEYS.operationInflight(inflightRecord.operationId), encode(inflightRecord));
-    await storage.put(
-      KEYS.operationDeadLetter(deadLetterRecord.operationId),
-      encode(deadLetterRecord),
+    await putLedgerRecord(
+      storage,
+      deadLetteredFixture({
+        operationId: 'dead-lettered-operation',
+        workflowId: 'workflow-dead-letter',
+        queue: 'payments',
+        retryCount: 1,
+        requeueCount: 1,
+        lastRequeueReason: 'visibility-timeout',
+        deadLetteredAt: 9_000,
+        persistenceFailureReason: 'storage exhausted after 3 attempts',
+      }),
     );
 
     const result = await runDiagnostics({
@@ -300,7 +319,7 @@ describe('weft.tasks.diagnostics', () => {
       registry,
       taskQueue,
       input: {
-        operationId: inflightRecord.operationId,
+        operationId: 'dead-lettered-operation',
         staleHeartbeatAfterMs: 0,
         limit: 10,
       },
@@ -316,16 +335,70 @@ describe('weft.tasks.diagnostics', () => {
     expect(diagnostics.items[0]).toMatchObject({
       kind: 'dead-lettered',
       state: 'dead-lettered',
-      operationId: inflightRecord.operationId,
-      workflowId: inflightRecord.workflowId,
-      activityName: inflightRecord.activityName,
-      queue: inflightRecord.queue,
-      workerId: inflightRecord.workerId,
+      operationId: 'dead-lettered-operation',
+      workflowId: 'workflow-dead-letter',
+      queue: 'payments',
       deadLetteredAt: 9_000,
       deadLetterReason: 'result-resolution-storage-exhausted',
-      storageError: 'result-resolution-storage-exhausted',
-      retryAttempts: 2,
+      storageError: 'storage exhausted after 3 attempts',
     });
+  });
+
+  it('reports no diagnostics for a terminal record — no attempt-count history survives resolution', async () => {
+    const storage = new MemoryStorage();
+    const engine = createEngine(storage);
+    const registry = new WorkerRegistry();
+    const taskQueue = new TaskQueue();
+
+    await putLedgerRecord(storage, terminalFixture({ operationId: 'resolved-op' }));
+
+    const result = await runDiagnostics({
+      engine,
+      registry,
+      taskQueue,
+      input: { operationId: 'resolved-op' },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected diagnostics result');
+    const diagnostics = result.value as GetTaskDiagnosticsOutput;
+    expect(diagnostics.items).toHaveLength(0);
+    expect(diagnostics.summary).toEqual({
+      stuckQueued: 0,
+      staleInflight: 0,
+      retryStorms: 0,
+      allWorkersAtCapacity: 0,
+      deadLettered: 0,
+    });
+  });
+
+  it('skips a queued record whose availableAt is still in the future — scheduled, not stuck', async () => {
+    const storage = new MemoryStorage();
+    const engine = createEngine(storage);
+    const registry = new WorkerRegistry();
+    const taskQueue = new TaskQueue();
+
+    await putLedgerRecord(
+      storage,
+      queuedFixture({
+        operationId: 'delayed-retry',
+        availableAt: 60_000,
+        firstQueuedAt: 1_000,
+        lastQueuedAt: 1_000,
+      }),
+    );
+
+    const result = await runDiagnostics({
+      engine,
+      registry,
+      taskQueue,
+      input: { operationId: 'delayed-retry', staleQueuedAfterMs: 0 },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected diagnostics result');
+    const diagnostics = result.value as GetTaskDiagnosticsOutput;
+    expect(diagnostics.items).toHaveLength(0);
   });
 
   it('bounds diagnostic result items while retaining summary counts', async () => {
@@ -335,20 +408,15 @@ describe('weft.tasks.diagnostics', () => {
     const taskQueue = new TaskQueue();
 
     for (let index = 0; index < 3; index += 1) {
-      const record: QueuedRecord = {
-        operationId: `queued-${index}`,
-        activityName: 'charge',
-        input: null,
-        queue: 'default',
-        attempt: 1,
-        visibilityTimeout: 30_000,
-        queuedAt: 1_000 + index,
-        firstQueuedAt: 1_000 + index,
-        lastQueuedAt: 1_000 + index,
-        retryCount: 0,
-        requeueCount: 0,
-      };
-      await storage.put(KEYS.operationQueued(record.operationId), encode(record));
+      await putLedgerRecord(
+        storage,
+        queuedFixture({
+          operationId: `queued-${String(index)}`,
+          availableAt: 1_000 + index,
+          firstQueuedAt: 1_000 + index,
+          lastQueuedAt: 1_000 + index,
+        }),
+      );
     }
 
     const result = await runDiagnostics({
@@ -364,150 +432,6 @@ describe('weft.tasks.diagnostics', () => {
     expect(diagnostics.summary.stuckQueued).toBe(3);
     expect(diagnostics.items).toHaveLength(2);
     expect(diagnostics.limit).toBe(2);
-  });
-
-  it('bounds resolved history scans independently from the result item limit', async () => {
-    const storage = new ScanCountingStorage();
-    const engine = createEngine(storage);
-    const registry = new WorkerRegistry();
-    const taskQueue = new TaskQueue();
-
-    for (let index = 0; index < 1_005; index += 1) {
-      const record: ResolvedRecord = {
-        operationId: `resolved-retry-${String(index).padStart(4, '0')}`,
-        workflowId: 'workflow-history',
-        activityName: 'charge',
-        queue: 'default',
-        status: 'failed',
-        resolvedAt: 9_000 + index,
-        retryCount: 3,
-        requeueCount: 3,
-        resolutionReason: 'max-attempts-exceeded',
-      };
-      await putResolvedRecord(storage, record);
-    }
-
-    const result = await runDiagnostics({
-      engine,
-      registry,
-      taskQueue,
-      input: {
-        retryStormMinimumAttempts: 3,
-        limit: 2,
-      },
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error('expected diagnostics result');
-    const diagnostics = result.value as GetTaskDiagnosticsOutput;
-    expect(storage.scannedEntryCount(KEYS.operationResolvedByTimePrefix())).toBe(1_000);
-    expect(diagnostics.summary.retryStorms).toBe(1_000);
-    expect(diagnostics.items).toHaveLength(2);
-  });
-
-  it('orders resolved history by resolvedAt rather than operation id', async () => {
-    const storage = new ScanCountingStorage();
-    const engine = createEngine(storage);
-    const registry = new WorkerRegistry();
-    const taskQueue = new TaskQueue();
-
-    await putResolvedRecord(storage, {
-      operationId: 'z-old-retry',
-      workflowId: 'workflow-history',
-      activityName: 'charge',
-      queue: 'default',
-      status: 'failed',
-      resolvedAt: 1_000,
-      retryCount: 3,
-      requeueCount: 3,
-      resolutionReason: 'max-attempts-exceeded',
-    });
-    await putResolvedRecord(storage, {
-      operationId: 'a-new-retry',
-      workflowId: 'workflow-history',
-      activityName: 'charge',
-      queue: 'default',
-      status: 'failed',
-      resolvedAt: 9_000,
-      retryCount: 3,
-      requeueCount: 3,
-      resolutionReason: 'max-attempts-exceeded',
-    });
-
-    const result = await runDiagnostics({
-      engine,
-      registry,
-      taskQueue,
-      input: {
-        retryStormMinimumAttempts: 3,
-        limit: 1,
-      },
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error('expected diagnostics result');
-    const diagnostics = result.value as GetTaskDiagnosticsOutput;
-    expect(diagnostics.summary.retryStorms).toBe(2);
-    expect(diagnostics.items).toHaveLength(1);
-    expect(diagnostics.items[0]?.operationId).toBe('a-new-retry');
-  });
-
-  it('counts filtered resolved retry storms beyond the returned item limit', async () => {
-    const storage = new ScanCountingStorage();
-    const engine = createEngine(storage);
-    const registry = new WorkerRegistry();
-    const taskQueue = new TaskQueue();
-
-    for (let index = 0; index < 3; index += 1) {
-      const record: ResolvedRecord = {
-        operationId: `z-unrelated-${index}`,
-        workflowId: 'other-workflow',
-        activityName: 'charge',
-        queue: 'default',
-        status: 'failed',
-        resolvedAt: 9_000 + index,
-        retryCount: 3,
-        requeueCount: 3,
-        resolutionReason: 'max-attempts-exceeded',
-      };
-      await putResolvedRecord(storage, record);
-    }
-
-    for (let index = 0; index < 2; index += 1) {
-      const record: ResolvedRecord = {
-        operationId: `a-matching-${index}`,
-        workflowId: 'target-workflow',
-        activityName: 'charge',
-        queue: 'default',
-        status: 'failed',
-        resolvedAt: 8_000 + index,
-        retryCount: 3,
-        requeueCount: 3,
-        resolutionReason: 'max-attempts-exceeded',
-      };
-      await putResolvedRecord(storage, record);
-    }
-
-    const result = await runDiagnostics({
-      engine,
-      registry,
-      taskQueue,
-      input: {
-        workflowId: 'target-workflow',
-        retryStormMinimumAttempts: 3,
-        limit: 2,
-      },
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error('expected diagnostics result');
-    const diagnostics = result.value as GetTaskDiagnosticsOutput;
-    expect(storage.scannedEntryCount(KEYS.operationResolvedByTimePrefix())).toBe(5);
-    expect(diagnostics.summary.retryStorms).toBe(2);
-    expect(diagnostics.items.map((item) => item.operationId)).toEqual([
-      'a-matching-1',
-      'a-matching-0',
-    ]);
   });
 
   it('requires system read scope', async () => {
@@ -529,6 +453,75 @@ describe('weft.tasks.diagnostics', () => {
         registry: operationRegistry,
       },
     );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected authorization failure');
+    expect(result.fault.code).toBe('Forbidden');
+  });
+});
+
+describe('weft.tasks.diagnostics.deadletters.clear', () => {
+  function runClear(
+    engine: Engine,
+    operationId: string,
+    scopes: ReadonlyArray<AuthorizationScope>,
+  ) {
+    const operationRegistry = createOperationRegistry([clearTaskDeadLetterOperation]);
+    return executeOperation(
+      'weft.tasks.diagnostics.deadletters.clear',
+      { operationId },
+      {
+        principal: principalFromApiKey({ subject: 'operator', scopes }),
+        engine,
+        transport: 'http-rest',
+        registry: operationRegistry,
+      },
+    );
+  }
+
+  it('deletes a dead-lettered ledger record, freeing the operationId', async () => {
+    const storage = new MemoryStorage();
+    const engine = createEngine(storage);
+    await putLedgerRecord(storage, deadLetteredFixture({ operationId: 'op-to-clear' }));
+
+    const result = await runClear(engine, 'op-to-clear', ['system:admin']);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected clear to succeed');
+    expect(result.value).toEqual({ ok: true });
+    expect(await storage.get(taskLedgerKey('op-to-clear'))).toBeNull();
+  });
+
+  it('faults NotFound when no dead-lettered record exists for the operationId', async () => {
+    const storage = new MemoryStorage();
+    const engine = createEngine(storage);
+
+    const result = await runClear(engine, 'never-dispatched', ['system:admin']);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected NotFound fault');
+    expect(result.fault.code).toBe('NotFound');
+  });
+
+  it('faults NotFound rather than clearing a record that is not currently dead-lettered', async () => {
+    const storage = new MemoryStorage();
+    const engine = createEngine(storage);
+    await putLedgerRecord(storage, queuedFixture({ operationId: 'still-queued' }));
+
+    const result = await runClear(engine, 'still-queued', ['system:admin']);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected NotFound fault');
+    expect(result.fault.code).toBe('NotFound');
+    expect(await storage.get(taskLedgerKey('still-queued'))).not.toBeNull();
+  });
+
+  it('requires system admin scope', async () => {
+    const storage = new MemoryStorage();
+    const engine = createEngine(storage);
+    await putLedgerRecord(storage, deadLetteredFixture({ operationId: 'op-scoped' }));
+
+    const result = await runClear(engine, 'op-scoped', ['system:read']);
 
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('expected authorization failure');

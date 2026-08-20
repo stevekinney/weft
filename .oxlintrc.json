@@ -1,22 +1,12 @@
 {
   "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
-  "plugins": ["typescript", "promise", "unicorn", "import"],
+  "plugins": ["eslint", "typescript", "promise", "unicorn", "import"],
   "categories": {
     "correctness": "error",
     "suspicious": "warn"
   },
   "rules": {
-    "no-restricted-syntax": [
-      "error",
-      {
-        "selector": "WithStatement",
-        "message": "With statements are not allowed."
-      },
-      {
-        "selector": "LabeledStatement",
-        "message": "Labeled statements are not allowed."
-      }
-    ],
+    "no-labels": "error",
     "no-console": "off",
     "no-unused-vars": [
       "warn",
@@ -63,7 +53,8 @@
     ".bun/**",
     "node_modules/**",
     ".claude/worktrees/**",
-    "*.lock"
+    "*.lock",
+    "tests/**/*.test-d.ts"
   ],
   "overrides": [
     {

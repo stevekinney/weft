@@ -1,41 +1,26 @@
 /**
- * Retired pre-cutover record shapes, type guards, and lifecycle calculators
- * for the `op:queued:`/`op:inflight:`/`op:resolved:`/`op:dead-letter:` key
- * scheme the durable task ledger (WFT-22, `task-ledger.ts`) replaced.
+ * Lifecycle vocabulary and timing calculators shared by the durable task
+ * ledger and its diagnostics/metrics consumers.
  *
- * The state-reading and state-writing functions this module once exported
- * (`getTaskState`, `getExclusiveTaskState`, `readQueuedRecord`,
- * `readInflightRecord`, `readDeadLetteredTaskRecord`, `isTaskDeadLettered`,
- * `writeDeadLetteredTaskRecord`, `markInflight`) are gone — nothing writes
- * those keys anymore. What remains is still load-bearing: the type guards
- * and `TaskState` vocabulary back `get-task-diagnostics.ts` (not yet
- * migrated onto the ledger — WFT-24), the lifecycle calculators back
- * `task-metrics.ts`, and `clearDeadLetteredTaskRecord` lets that same
- * diagnostics operation clear a legacy dead letter that still exists even
- * though nothing creates new ones.
+ * The `op:queued:`/`op:inflight:`/`op:resolved:`/`op:dead-letter:` record
+ * shapes and type guards this module once exported alongside these
+ * calculators are gone: WFT-22 replaced the key scheme with the durable
+ * task ledger (`task-ledger.ts`), and WFT-24 migrated `get-task-diagnostics.ts`
+ * (the last production reader of those legacy shapes) onto the ledger.
+ * What remains is still load-bearing: `TaskLifecycleFields` and
+ * `TaskRequeueReason` back the ledger's own record types, and the
+ * queue-latency, execution-latency, and heartbeat-staleness calculators
+ * back `task-metrics.ts` and the ledger diagnostics.
  *
  * @module task-state
  */
 
-import type { RetryPolicy } from '../core/types.ts';
-import type { Storage } from '../storage/interface.ts';
-import { KEYS } from '../storage/interface.ts';
-
 // ---------------------------------------------------------------------------
-// Task state type
+// Lifecycle vocabulary
 // ---------------------------------------------------------------------------
-
-/** The three exclusive states a dispatched task can occupy. */
-export type TaskState = 'queued' | 'inflight' | 'resolved';
 
 /** Why a task was requeued before another dispatch attempt. */
 export type TaskRequeueReason = 'visibility-timeout' | 'worker-disconnect';
-
-/** Final reason captured when a task reaches the resolved state. */
-export type TaskResolutionReason = 'completed' | 'failed' | 'cancelled' | 'max-attempts-exceeded';
-
-/** Why a task-result transition was moved to the operator dead-letter guard. */
-export type TaskDeadLetterReason = 'result-resolution-storage-exhausted';
 
 /** Lifecycle evidence persisted with task records for diagnostics. */
 export interface TaskLifecycleFields {
@@ -75,161 +60,8 @@ export type TaskTimingFields = Readonly<{
 }>;
 
 // ---------------------------------------------------------------------------
-// Record types stored at each key
+// Timing calculators
 // ---------------------------------------------------------------------------
-
-/** Persisted record for a task in the queued state. */
-export interface QueuedRecord extends TaskLifecycleFields {
-  operationId: string;
-  activityName: string;
-  input: unknown;
-  queue: string;
-  attempt: number;
-  visibilityTimeout: number;
-  retryPolicy?: RetryPolicy | undefined;
-  queuedAt: number;
-  /** Workflow that dispatched this activity. Present when the dispatch included a workflowId. */
-  workflowId?: string | undefined;
-  /** Durable token for the workflow run that dispatched this activity, when known. */
-  workflowExecutionToken?: string | undefined;
-}
-
-/** Persisted record for a task in the inflight state. */
-export interface InflightRecord extends TaskLifecycleFields {
-  operationId: string;
-  workerId: string;
-  deadline: number;
-  activityName: string;
-  queue: string;
-  input: unknown;
-  attempt: number;
-  visibilityTimeout: number;
-  retryPolicy?: RetryPolicy | undefined;
-  /** Workflow that dispatched this activity. Present when the dispatch included a workflowId. */
-  workflowId?: string | undefined;
-  /** Durable token for the workflow run that dispatched this activity, when known. */
-  workflowExecutionToken?: string | undefined;
-  /** Unique, unguessable token identifying this dispatch attempt. */
-  attemptToken: string;
-}
-
-/** Persisted record for a task in the resolved state. */
-export interface ResolvedRecord {
-  operationId: string;
-  status: 'completed' | 'failed';
-  resolvedAt: number;
-  value?: unknown;
-  error?: string | undefined;
-  activityName?: string | undefined;
-  queue?: string | undefined;
-  workerId?: string | undefined;
-  attempt?: number | undefined;
-  visibilityTimeout?: number | undefined;
-  /** Workflow that dispatched this activity. Present when the dispatch included a workflowId. */
-  workflowId?: string | undefined;
-  firstQueuedAt?: number | undefined;
-  lastQueuedAt?: number | undefined;
-  lastDispatchedAt?: number | undefined;
-  startedAt?: number | undefined;
-  completedAt?: number | undefined;
-  lastHeartbeatAt?: number | undefined;
-  retryCount?: number | undefined;
-  requeueCount?: number | undefined;
-  lastRequeueReason?: TaskRequeueReason | undefined;
-  resolutionReason?: TaskResolutionReason | undefined;
-  queueLatencyMs?: number | undefined;
-  executionLatencyMs?: number | undefined;
-}
-
-/** Durable operator guard for a task result whose resolved write exhausted retries. */
-export interface DeadLetteredTaskRecord {
-  operationId: string;
-  reason: TaskDeadLetterReason;
-  deadLetteredAt: number;
-  errorMessage: string;
-  retryAttempts: number;
-  status: 'completed' | 'failed';
-  activityName?: string | undefined;
-  queue?: string | undefined;
-  workerId?: string | undefined;
-  attempt?: number | undefined;
-  visibilityTimeout?: number | undefined;
-  workflowId?: string | undefined;
-  retryCount?: number | undefined;
-  requeueCount?: number | undefined;
-  lastRequeueReason?: TaskRequeueReason | undefined;
-}
-
-// ---------------------------------------------------------------------------
-// Record guards and lifecycle helpers
-// ---------------------------------------------------------------------------
-
-/** Type guard for decoded storage records in the queued state. */
-export function isQueuedRecord(value: unknown): value is QueuedRecord {
-  if (value === null || typeof value !== 'object') return false;
-  const record = value as Record<string, unknown>;
-  return (
-    typeof record['operationId'] === 'string' &&
-    typeof record['activityName'] === 'string' &&
-    typeof record['queue'] === 'string' &&
-    typeof record['attempt'] === 'number' &&
-    typeof record['visibilityTimeout'] === 'number' &&
-    typeof record['queuedAt'] === 'number'
-  );
-}
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0;
-}
-
-/** Type guard for decoded storage records in the inflight state. */
-export function isInflightRecord(value: unknown): value is InflightRecord {
-  if (value === null || typeof value !== 'object') return false;
-  const record = value as Record<string, unknown>;
-  return (
-    typeof record['operationId'] === 'string' &&
-    typeof record['activityName'] === 'string' &&
-    typeof record['queue'] === 'string' &&
-    typeof record['attempt'] === 'number' &&
-    typeof record['visibilityTimeout'] === 'number' &&
-    typeof record['workerId'] === 'string' &&
-    typeof record['deadline'] === 'number' &&
-    isNonEmptyString(record['attemptToken'])
-  );
-}
-
-/** Type guard for decoded storage records in the resolved state. */
-export function isResolvedRecord(value: unknown): value is ResolvedRecord {
-  if (value === null || typeof value !== 'object') return false;
-  const record = value as Record<string, unknown>;
-  return (
-    typeof record['operationId'] === 'string' &&
-    (record['status'] === 'completed' || record['status'] === 'failed') &&
-    typeof record['resolvedAt'] === 'number'
-  );
-}
-
-/** Type guard for decoded task-result dead-letter records. */
-export function isDeadLetteredTaskRecord(value: unknown): value is DeadLetteredTaskRecord {
-  if (value === null || typeof value !== 'object') return false;
-  const record = value as Record<string, unknown>;
-  return (
-    typeof record['operationId'] === 'string' &&
-    record['reason'] === 'result-resolution-storage-exhausted' &&
-    typeof record['deadLetteredAt'] === 'number' &&
-    typeof record['errorMessage'] === 'string' &&
-    typeof record['retryAttempts'] === 'number' &&
-    (record['status'] === 'completed' || record['status'] === 'failed')
-  );
-}
-
-/** Clear a task-result dead-letter guard so reconciliation may handle the inflight record again. */
-export async function clearDeadLetteredTaskRecord(
-  storage: Storage,
-  operationId: string,
-): Promise<void> {
-  await storage.delete(KEYS.operationDeadLetter(operationId));
-}
 
 export function calculateQueueLatencyMs(record: TaskTimingFields): number | undefined {
   if (record.lastQueuedAt === undefined || record.lastDispatchedAt === undefined) return undefined;

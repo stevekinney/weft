@@ -14,7 +14,10 @@ import type { WebSocketData } from '../json-rpc-websocket-runtime.ts';
 import { renewAttemptLease } from '../task-ledger-transitions.ts';
 import type { ServerContext } from './context.ts';
 import { withRetry } from './retry.ts';
-import { commitTaskLedgerCompletion } from './task-ledger-completion.ts';
+import {
+  commitTaskLedgerCompletion,
+  dispatchTaskDeadLetteredEvent,
+} from './task-ledger-completion.ts';
 import { commitTaskLedgerTransition } from './task-ledger-runtime.ts';
 import {
   recordTaskExecutionLatencyMetric,
@@ -112,6 +115,9 @@ function onTaskResultMessage(
           `[weft] Failed to persist oversized task result rejection for task "${operationId}":`,
           rejected.reason,
         );
+        if (rejected.deadLettered !== undefined) {
+          dispatchTaskDeadLetteredEvent(options, operationId, rejected.deadLettered, workerId);
+        }
       }
       return;
     }
@@ -133,6 +139,9 @@ function onTaskResultMessage(
         `[weft] Failed to commit task result for "${operationId}" through the durable ledger:`,
         committed.reason,
       );
+      if (committed.deadLettered !== undefined) {
+        dispatchTaskDeadLetteredEvent(options, operationId, committed.deadLettered, workerId);
+      }
     }
   })().catch((error) => {
     console.error(

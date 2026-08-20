@@ -9,9 +9,11 @@
  */
 
 import { MetricsCollector } from '../../observability/metrics.ts';
+import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { WorkerRegistry } from '../../worker/registry.ts';
 import { DeadlineTracker } from '../deadline-tracker.ts';
+import { decodeRemoteTaskRecord } from '../task-ledger.ts';
 import { TaskQueue } from '../task-queue.ts';
 
 import type { ServeOptions } from '../index.ts';
@@ -77,4 +79,40 @@ export function minimalServeOptions(storage: MemoryStorage = new MemoryStorage()
   // so a full Engine is unnecessary. The cast covers the deliberately partial
   // `engine`.
   return { engine: { storage, dispatchEvent: () => true }, port: 0 } as unknown as ServeOptions;
+}
+
+/**
+ * Storage that loses the compare-and-swap on the terminal-commit write for a
+ * specific operation, modeling a persistence failure at the
+ * `Completing -> Terminal` step (`task-ledger-completion.ts`'s module doc
+ * comment: "the ledger simply stays in whatever state it last durably
+ * reached"). Returning `false` (not throwing) is deliberate — `commitTaskLedgerTransition`
+ * only treats a lost CAS as retryable-then-failed; a thrown storage error
+ * would instead propagate uncaught past the `if (!committed.ok)` branch
+ * these suites are exercising.
+ */
+export class FailingTerminalCommitStorage extends MemoryStorage {
+  readonly #failingOperationId: string;
+
+  constructor(failingOperationId: string) {
+    super();
+    this.#failingOperationId = failingOperationId;
+  }
+
+  override async conditionalBatch(
+    conditions: ConditionalBatchCondition[],
+    operations: BatchOperation[],
+  ): Promise<boolean> {
+    const targetsFailingTerminalCommit = operations.some((operation) => {
+      if (operation.type !== 'put' || !operation.key.startsWith('task-ledger:')) return false;
+      const record = decodeRemoteTaskRecord(operation.value);
+      return (
+        record !== null &&
+        record.operationId === this.#failingOperationId &&
+        record.state === 'terminal'
+      );
+    });
+    if (targetsFailingTerminalCommit) return false;
+    return super.conditionalBatch(conditions, operations);
+  }
 }

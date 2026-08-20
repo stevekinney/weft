@@ -81,7 +81,7 @@ export function createCompositionChildWorkflowOptions(
   internals: ContextInternals,
   token: string,
   index: number,
-  options: AwaitChildWorkflowOptions | undefined = undefined,
+  options?: AwaitChildWorkflowOptions,
 ): AwaitChildWorkflowOptions {
   assertCompositionAwaitsChildWorkflow(options);
 

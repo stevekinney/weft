@@ -16,7 +16,7 @@
 
 import { describe, expect, it, spyOn } from 'bun:test';
 
-import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
+import type { TaskResultDeadLetteredEvent } from '../../core/events.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { principalFromApiKey } from '../principal.ts';
 import {
@@ -27,7 +27,11 @@ import {
   type RemoteTaskLeased,
   type RemoteTaskTerminalResolved,
 } from '../task-ledger.ts';
-import { minimalServeOptions, minimalServerContext } from './server-context.test-support.ts';
+import {
+  FailingTerminalCommitStorage,
+  minimalServeOptions,
+  minimalServerContext,
+} from './server-context.test-support.ts';
 import { dispatchTaskImpl } from './task-dispatch.ts';
 import { handleTaskPollRequest, handleTaskResultRequest } from './task-polling.ts';
 import { taskResultPayloadSizeError } from './task-result-resolution.ts';
@@ -123,42 +127,6 @@ async function readResolvedTerminalRecord(
     );
   }
   return record;
-}
-
-/**
- * Storage that loses the compare-and-swap on the terminal-commit write for a
- * specific operation, modeling a persistence failure at the
- * `Completing -> Terminal` step (`task-ledger-completion.ts`'s module doc
- * comment: "the ledger simply stays in whatever state it last durably
- * reached"). Returning `false` (not throwing) is deliberate — `commitTaskLedgerTransition`
- * only treats a lost CAS as retryable-then-failed; a thrown storage error
- * would instead propagate uncaught past the `if (!committed.ok)` branch this
- * suite is exercising.
- */
-class FailingTerminalCommitStorage extends MemoryStorage {
-  readonly #failingOperationId: string;
-
-  constructor(failingOperationId: string) {
-    super();
-    this.#failingOperationId = failingOperationId;
-  }
-
-  override async conditionalBatch(
-    conditions: ConditionalBatchCondition[],
-    operations: BatchOperation[],
-  ): Promise<boolean> {
-    const targetsFailingTerminalCommit = operations.some((operation) => {
-      if (operation.type !== 'put' || !operation.key.startsWith('task-ledger:')) return false;
-      const record = decodeRemoteTaskRecord(operation.value);
-      return (
-        record !== null &&
-        record.operationId === this.#failingOperationId &&
-        record.state === 'terminal'
-      );
-    });
-    if (targetsFailingTerminalCommit) return false;
-    return super.conditionalBatch(conditions, operations);
-  }
 }
 
 describe('handleTaskResultRequest', () => {
@@ -407,12 +375,13 @@ describe('handleTaskResultRequest', () => {
   // as a migration artifact. `handleTaskResultRequest` now returns 403 (not a
   // tolerant 200) whenever `commitTaskLedgerCompletion` itself fails — see
   // the doc comment on `applyTaskResult`'s caller in task-polling.ts.
-  it('logs and returns 403 when the terminal ledger commit cannot be persisted', async () => {
+  it('logs, dead-letters, and returns 403 when the terminal ledger commit cannot be persisted', async () => {
     const storage = new FailingTerminalCommitStorage('op-resolved-write-fails');
     const context = createMinimalContext();
     const options = createMinimalOptions(storage);
     await writeLeasedRecord(storage, { operationId: 'op-resolved-write-fails' });
     using consoleErrorSpy = spyOn(console, 'error').mockImplementation(() => {});
+    const dispatchEventSpy = spyOn(options.engine, 'dispatchEvent');
 
     const response = await handleTaskResultRequest(
       context,
@@ -434,12 +403,22 @@ describe('handleTaskResultRequest', () => {
       'lost the compare-and-swap race on operation "op-resolved-write-fails" after 3 attempt(s)',
     );
 
-    // The record is left durably in `completing`, per task-ledger-completion.ts's
-    // module doc comment — the terminal write never landed, but nothing is lost.
-    const stuck = decodeRemoteTaskRecord(
+    // WFT-24: the sustained terminal-commit failure escalates to a
+    // best-effort Completing --> DeadLettered write (FailingTerminalCommitStorage
+    // only blocks writes whose next state is `terminal`, so the dead-letter
+    // write — next state `deadLettered` — succeeds) instead of leaving the
+    // record silently stuck in `completing` forever.
+    const deadLettered = decodeRemoteTaskRecord(
       await storage.get(taskLedgerKey('op-resolved-write-fails')),
     );
-    expect(stuck?.state).toBe('completing');
+    expect(deadLettered?.state).toBe('deadLettered');
+    expect(dispatchEventSpy).toHaveBeenCalledTimes(1);
+    const dispatchedEvent = dispatchEventSpy.mock.calls[0]?.[0] as TaskResultDeadLetteredEvent;
+    expect(dispatchedEvent.type).toBe('task:dead-lettered');
+    expect(dispatchedEvent.operationId).toBe('op-resolved-write-fails');
+    expect(dispatchedEvent.errorMessage).toBe(
+      'lost the compare-and-swap race on operation "op-resolved-write-fails" after 3 attempt(s)',
+    );
   });
 
   it('logs when persisting an oversized-result rejection fails', async () => {

@@ -192,6 +192,7 @@ interface ServeOptions {
   maxStreamConnectionsPerWorkflow?: number;
   visibilityPollIntervalMs?: number;
   workerReconnectGracePeriodMs?: number;
+  taskRetentionWindowMs?: number;
   workerShutdownTimeoutMs?: number;
   routingPolicy?: RoutingPolicy;
   schedulingPolicy?: SchedulingPolicy;
@@ -215,6 +216,7 @@ interface ServeOptions {
 | `maxStreamConnectionsPerWorkflow` | `number`                        | `100`            | Maximum workflow stream/watch WebSocket and event SSE connections per workflow                           |
 | `visibilityPollIntervalMs`        | `number`                        | `5000`           | Polling interval for task visibility timeout checks                                                      |
 | `workerReconnectGracePeriodMs`    | `number`                        | `2000`           | Reconnect grace before worker-disconnect task requeue                                                    |
+| `taskRetentionWindowMs`           | `number`                        | `undefined`      | Reap adopted terminal task-ledger records once this old; unset means never                               |
 | `workerShutdownTimeoutMs`         | `number`                        | `30000`          | Shutdown drain window for connected remote workers                                                       |
 | `routingPolicy`                   | `RoutingPolicy`                 | `'least-loaded'` | Worker routing policy                                                                                    |
 | `schedulingPolicy`                | `SchedulingPolicy`              | `'priority'`     | Scheduling policy for task dispatch                                                                      |
@@ -227,6 +229,8 @@ When `auth` is omitted, [`serve()`](./api-server.md#serve) defaults to `unauthen
 `maxRequestBodyBytes` rejects oversized REST operation and JSON-RPC HTTP request bodies with `413 Payload Too Large`. `maxStreamConnectionsPerWorkflow` limits concurrent `/v1/workflows/:id/stream`, `/v1/workflows/:id/watch`, and `/v1/workflows/:id/events/sse` connections for one workflow; excess WebSockets close with WebSocket code `1008`, and excess workflow SSE requests return `429`.
 
 `workerReconnectGracePeriodMs` is clamped to `0..5000`. A same-`workerId` reconnect inside the window cancels the pending worker-disconnect requeue and keeps the worker's in-flight task assignments. The default is `2000` ms because Weft's common single-node and local-first deployments need a short buffer for transient socket churn without delaying genuine dead-worker detection for a full cloud drain window. Use `100` only for low-latency test or embedded scenarios, set `0` to requeue synchronously from the close handler, and set `5000` for cloud or load-balancer deployments where replacement workers commonly need several seconds to reconnect.
+
+`taskRetentionWindowMs` is opt-in — leaving it `undefined` keeps every terminal task-ledger record forever. Set it to reap _adopted_ terminal records once they age past the window; unadopted records are never reaped regardless of age. See [`getTaskResult`/`adoptTaskResult`](../guides/server.md#gettaskresult-and-adopttaskresult) for how adoption works.
 
 Raw storage administration routes also have fixed operation guardrails: `/v1/storage` scans accept `limit` values up to `MAX_SCAN_LIMIT` (`10_000`), and `/v1/storage/-/batch` plus `/v1/storage/-/conditional-batch` accept at most `MAX_BATCH_OPERATIONS` (`10_000`) operations or conditions per request. The same batch cap is enforced by storage adapters before local or remote adapter work so internal callers cannot accidentally create pathological batch fan-out.
 

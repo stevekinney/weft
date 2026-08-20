@@ -80,6 +80,7 @@ _Operational events:_
 - `WorkerDisconnectedEvent` (`'worker:disconnected'`) -- carries `workerId` and `inFlightTaskCount`
 - `CheckpointSizeWarningEvent` (`'checkpoint:size-warning'`) -- carries `workflowId`, `sizeBytes`, and `step`
 - `DevelopmentWarningEvent` (`'development:warning'`) -- carries `workflowId`, `message`, and `fieldPaths`
+- `TaskResultDeadLetteredEvent` (`'task:dead-lettered'`) -- carries `operationId`, `workflowId`, `activityName`, `queue`, `workerId`, `reason`, and `errorMessage`. Dispatched when a remote worker's task result cannot be durably persisted after storage retries are exhausted; see [task diagnostics](../reference/api-observability.md#get-apiv1tasksdiagnostics).
 
 ## Review events
 

@@ -5906,6 +5906,107 @@ describe('visibility timeout persistence', () => {
 });
 
 // ---------------------------------------------------------------------------
+// WeftServer.getTaskResult / adoptTaskResult (WFT-24)
+// ---------------------------------------------------------------------------
+
+describe('WeftServer.getTaskResult / adoptTaskResult', () => {
+  let engine: Engine;
+  let server: WeftServer;
+
+  afterEach(async () => {
+    await server?.stop();
+    engine?.[Symbol.dispose]();
+  });
+
+  function createEngineWithStorage(): { engine: Engine; storage: MemoryStorage } {
+    const s = new MemoryStorage();
+    const e = new Engine({ storage: s });
+    e.register(echoWorkflow);
+    return { engine: e, storage: s };
+  }
+
+  it('returns null for an operationId that was never dispatched', async () => {
+    ({ engine } = createEngineWithStorage());
+    server = serveTestServer({ engine, port: 0 });
+
+    expect(await server.getTaskResult('never-dispatched')).toBeNull();
+  });
+
+  it('reports pending, then terminal with resultDigest, then adopted after adoptTaskResult', async () => {
+    ({ engine } = createEngineWithStorage());
+    server = serveTestServer({ engine, port: 0 });
+
+    const ws = await connectWorker(server);
+    collectAndCompleteTaskMessages(ws, { resultValue: 42 });
+    await registerWorker(ws, { workerId: 'w1', activities: ['test.charge'], concurrency: 5 });
+
+    await server.dispatchTask({
+      operationId: 'result-view-op',
+      activityName: 'test.charge',
+      workflowType: 'test',
+      input: null,
+    });
+
+    const pending = await server.getTaskResult('result-view-op');
+    expect(pending).toEqual({ status: 'pending', state: 'leased' });
+
+    await waitFor(
+      async () => {
+        const view = await server.getTaskResult('result-view-op');
+        return view?.status === 'terminal';
+      },
+      { label: 'result-view-op to reach terminal' },
+    );
+
+    const terminal = await server.getTaskResult('result-view-op');
+    expect(terminal).toMatchObject({ status: 'terminal', disposition: 'resolved', adopted: false });
+    if (terminal?.status !== 'terminal') throw new Error('expected a terminal view');
+
+    const adopted = await server.adoptTaskResult('result-view-op', terminal.resultDigest);
+    expect(adopted).toBe(true);
+
+    const afterAdoption = await server.getTaskResult('result-view-op');
+    expect(afterAdoption).toMatchObject({ status: 'terminal', adopted: true });
+
+    ws.close();
+    await waitForRealTimersForTesting(50);
+  });
+
+  it('rejects adoption with a mismatched resultDigest, leaving the record unadopted', async () => {
+    ({ engine } = createEngineWithStorage());
+    server = serveTestServer({ engine, port: 0 });
+
+    const ws = await connectWorker(server);
+    collectAndCompleteTaskMessages(ws, { resultValue: 'ok' });
+    await registerWorker(ws, { workerId: 'w1', activities: ['test.charge'], concurrency: 5 });
+
+    await server.dispatchTask({
+      operationId: 'result-view-mismatch-op',
+      activityName: 'test.charge',
+      workflowType: 'test',
+      input: null,
+    });
+
+    await waitFor(
+      async () => {
+        const view = await server.getTaskResult('result-view-mismatch-op');
+        return view?.status === 'terminal';
+      },
+      { label: 'result-view-mismatch-op to reach terminal' },
+    );
+
+    const adopted = await server.adoptTaskResult('result-view-mismatch-op', 'wrong-digest');
+    expect(adopted).toBe(false);
+
+    const view = await server.getTaskResult('result-view-mismatch-op');
+    expect(view).toMatchObject({ adopted: false });
+
+    ws.close();
+    await waitForRealTimersForTesting(50);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Worker disconnection triggers task reassignment
 // ---------------------------------------------------------------------------
 
