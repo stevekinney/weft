@@ -18,31 +18,36 @@
  * `nextRecord` this module returns only for what to write, never for what to
  * compare against.
  *
- * Only ten rows are covered — `Completing --> DeadLettered` (dead-letter
- * creation on exhausted result-persistence retries) appears in the state
- * diagram but not in the transition-contract table, and dead-letter content
- * is explicitly WFT-24 ("Adoption, retention, and diagnostics") scope.
- *
- * This module holds rows 1-6 (create through requeue). Rows 7-10
- * (cancellation and terminal adoption) live in
- * `task-ledger-transitions-cancellation.ts` and are re-exported below — the
- * split exists only to keep both files under this repository's file-size
- * ceiling.
+ * Twelve rows are covered. This module holds rows 1-6 (create through
+ * requeue) plus two WFT-24 additions at the end: `Completing --> DeadLettered`
+ * (dead-letter creation on exhausted result-persistence retries) and "Clear
+ * dead letter" (an operator discarding a dead-lettered diagnostic). Both
+ * appear in the state diagram but not the original ten-row
+ * transition-contract table — WFT-25 deliberately left them out as WFT-24
+ * ("Adoption, retention, and diagnostics") scope; see `commitDeadLetter`'s
+ * own doc comment for why they belong beside `commitTerminalResult` rather
+ * than in the cancellation file. Rows 7-10 (cancellation and terminal
+ * adoption) live in `task-ledger-transitions-cancellation.ts` and are
+ * re-exported below — the split exists only to keep both files under this
+ * repository's file-size ceiling.
  *
  * @module server/task-ledger-transitions
  */
 
+import type { JSONValue } from '../core/json.ts';
 import { calculateBackoff } from '../core/scheduler.ts';
 import type { WorkerExecutionIdentity } from '../worker/manifest/types.ts';
 import {
   pickAttemptFields,
   pickBase,
   pickLeaseHolderFields,
+  type TaskLedgerPreconditionResult,
   type TaskLedgerTransitionResult,
 } from './task-ledger-transition-helpers.ts';
 import type {
   RemoteTaskBase,
   RemoteTaskCompleting,
+  RemoteTaskDeadLettered,
   RemoteTaskLeased,
   RemoteTaskQueued,
   RemoteTaskRecord,
@@ -323,4 +328,94 @@ export function requeueExpiredAttempt(
     lastRequeueReason: input.requeueReason,
   };
   return { ok: true, nextRecord: queuedRecord };
+}
+
+// ---------------------------------------------------------------------------
+// 11. Commit dead letter — precondition: state completing, attempt token and
+//     pending result digest match. (WFT-24.)
+// ---------------------------------------------------------------------------
+
+/**
+ * Terminal-adjacent, not terminal: a `deadLettered` record is not a
+ * `RemoteTaskTerminal` disposition. `commitTaskLedgerCompletion`
+ * (`server/runtime/task-ledger-completion.ts`) reaches this only after
+ * `beginCompletion` already landed the record durably in `completing` (or
+ * found it already there) and the *second* write — `commitTerminalResult` —
+ * exhausted its own CAS retry budget. That is a genuine, sustained storage
+ * write failure on this operation specifically, not a benign lost race
+ * against a legitimate concurrent writer: `commitTerminalResult`'s own
+ * precondition (state `completing`, matching attempt token and result
+ * digest) already guards against clobbering a result some other writer
+ * legitimately resolved out from under this one, so a caller reaching this
+ * transition has already confirmed, moments earlier, that nothing else
+ * should have been able to land instead.
+ *
+ * Preconditions mirror `commitTerminalResult`'s exactly (state, attempt
+ * token, result digest) rather than trusting the caller's exhausted-retry
+ * report at face value — a fresh read here could observe that some other
+ * writer *did* land a terminal result in the interim (e.g. the worker's own
+ * retried submission, resumed through `commitTaskLedgerCompletion`'s
+ * `resuming` branch, racing ahead of the exhausted attempt), in which case
+ * this correctly rejects rather than dead-lettering an already-resolved
+ * task.
+ */
+export type CommitDeadLetterInput = Readonly<{
+  attemptToken: string;
+  resultDigest: string;
+  value?: JSONValue;
+  error?: string;
+  persistenceFailureReason: string;
+}>;
+
+export function commitDeadLetter(
+  current: RemoteTaskRecord | null,
+  input: CommitDeadLetterInput,
+  now: number,
+): TaskLedgerTransitionResult<RemoteTaskDeadLettered> {
+  if (current === null || current.state !== 'completing') {
+    return { ok: false, reason: 'expected task state "completing"' };
+  }
+  if (
+    current.attemptToken !== input.attemptToken ||
+    current.pendingResultDigest !== input.resultDigest
+  ) {
+    return { ok: false, reason: 'attempt token or result digest mismatch' };
+  }
+  const nextRecord: RemoteTaskDeadLettered = {
+    ...pickBase(current),
+    ...pickAttemptFields(current),
+    generation: current.generation + 1,
+    state: 'deadLettered',
+    attemptToken: current.attemptToken,
+    attempt: current.attempt,
+    pendingStatus: current.pendingStatus,
+    pendingResultDigest: current.pendingResultDigest,
+    ...(input.value !== undefined ? { value: input.value } : {}),
+    ...(input.error !== undefined ? { error: input.error } : {}),
+    deadLetteredAt: now,
+    persistenceFailureReason: input.persistenceFailureReason,
+  };
+  return { ok: true, nextRecord };
+}
+
+// ---------------------------------------------------------------------------
+// 12. Clear dead letter — precondition: state deadLettered. (WFT-24.)
+// ---------------------------------------------------------------------------
+
+/**
+ * Precondition for `weft.tasks.diagnostics.deadletters.clear`
+ * (`server/operations/get-task-diagnostics.ts`): an operator has seen the
+ * dead-lettered diagnostic and is discarding it, freeing the operationId
+ * for reuse (a later `createQueued` for the same operationId is otherwise
+ * rejected — its own precondition requires the current key be absent).
+ * Precondition-only, like `canDeleteRetainedTerminalTask` — the caller
+ * issues the delete.
+ */
+export function canClearDeadLetteredTask(
+  current: RemoteTaskRecord | null,
+): TaskLedgerPreconditionResult {
+  if (current === null || current.state !== 'deadLettered') {
+    return { ok: false, reason: 'expected task state "deadLettered"' };
+  }
+  return { ok: true };
 }

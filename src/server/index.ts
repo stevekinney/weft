@@ -31,6 +31,11 @@ import {
 } from './runtime/shutdown.ts';
 import { stopBunServerForShutdown } from './runtime/stop-server.ts';
 import { cancelTask, dispatchTaskImpl } from './runtime/task-dispatch.ts';
+import {
+  adoptTaskResultImpl,
+  getTaskResultViewImpl,
+  type TaskResultView,
+} from './runtime/task-result-view.ts';
 import { publishTokenMessage, publishWatchMessage } from './runtime/websocket-stream.ts';
 import {
   buildBunServeConfig,
@@ -274,7 +279,7 @@ export interface ServeOptions {
    * workflow SSE requests return `429`.
    */
   maxStreamConnectionsPerWorkflow?: number;
-  /** How often (in ms) the server scans `op:inflight:*` for expired visibility deadlines. Defaults to 5 000. */
+  /** How often (in ms) the server scans the task ledger for expired visibility deadlines. Defaults to 5 000. */
   visibilityPollIntervalMs?: number;
   /**
    * Grace period (in ms) between a worker WebSocket close and the requeue of
@@ -288,6 +293,19 @@ export interface ServeOptions {
    * `[0, 5_000]`.
    */
   workerReconnectGracePeriodMs?: number;
+  /**
+   * How long (in ms) an adopted terminal task-ledger record is retained
+   * before the periodic reconciliation scan reaps it. Defaults to `undefined`
+   * — retention is opt-in, and unset means terminal records are kept forever
+   * regardless of adoption, matching the durable ledger's default posture of
+   * never discarding a task's authoritative record without an explicit
+   * policy. Only adopted records are ever eligible; a terminal record whose
+   * result no caller has adopted via {@link WeftServer.adoptTaskResult} is
+   * retained indefinitely no matter how old it is. Unlike workflow history's
+   * count-based `history.retentionWindow`, this is time-based — a terminal
+   * task record has no natural sequence axis to bound by count.
+   */
+  taskRetentionWindowMs?: number;
   /**
    * Maximum time (in ms) `server.stop()` waits for connected remote workers to
    * drain in-flight task results after receiving a shutdown frame before the
@@ -469,6 +487,22 @@ export interface WeftServer extends AsyncDisposable {
   stop(): Promise<void>;
   /** Dispatch a task to the best available worker. Returns true if dispatched. */
   dispatchTask(task: TaskDispatch): Promise<boolean>;
+  /**
+   * Read the current public view of a dispatched task's ledger record.
+   * Returns `null` if no record exists — never dispatched, or a retained
+   * terminal record was already reaped. See {@link TaskResultView}.
+   */
+  getTaskResult(operationId: string): Promise<TaskResultView | null>;
+  /**
+   * Mark a terminal task's result as adopted — the durable assertion that
+   * whatever consumed the result (a workflow's own checkpoint, or other
+   * application logic) has durably incorporated it. `resultDigest` must
+   * match the terminal record's `resultDigest` from {@link getTaskResult}.
+   * Returns `true` once adopted; `false` if the record is not currently
+   * terminal or the digest does not match. Only adopted terminal records
+   * become eligible for {@link ServeOptions.taskRetentionWindowMs} reaping.
+   */
+  adoptTaskResult(operationId: string, resultDigest: string): Promise<boolean>;
   /** Send a shutdown message to a specific worker and wait for it to disconnect. Returns true if the worker was found. */
   shutdownWorker(workerId: string, options?: { timeoutMs?: number }): Promise<boolean>;
   /** Send a shutdown message to all connected workers and wait for them to disconnect. */
@@ -621,6 +655,9 @@ export function serve(options: ServeOptions): WeftServer {
       await stack[Symbol.asyncDispose]();
     },
     dispatchTask: (task) => dispatchTaskImpl(context, options, task),
+    getTaskResult: (operationId) => getTaskResultViewImpl(options, operationId),
+    adoptTaskResult: (operationId, resultDigest) =>
+      adoptTaskResultImpl(options, operationId, resultDigest),
     shutdownWorker: (workerId, shutdownOptions) =>
       shutdownWorkerImpl(context, workerId, shutdownOptions),
     shutdownAllWorkers: (shutdownOptions) => shutdownAllWorkersImpl(context, shutdownOptions),

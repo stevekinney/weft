@@ -946,6 +946,7 @@ interface WeftEventMap {
   'activity:started': ActivityStartedEvent;
   'activity:completed': ActivityCompletedEvent;
   'activity:failed': ActivityFailedEvent;
+  'task:dead-lettered': TaskResultDeadLetteredEvent;
   'signal:received': SignalReceivedEvent;
   'signal:delivered': SignalDeliveredEvent;
   'attributes:changed': AttributesChangedEvent;

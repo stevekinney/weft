@@ -9,11 +9,19 @@
  * does not apply — for example the task is already terminal — and retrying
  * the same rejected transition would just reject again.
  *
+ * `commitTaskLedgerDelete` (WFT-24) is the delete counterpart, used by
+ * terminal-task retention: a conditional delete gated on a precondition
+ * function rather than a transition function, since deletion has no next
+ * record to write.
+ *
  * @module server/runtime/task-ledger-runtime
  */
 
 import { storageConditionalBatch, type Storage } from '../../storage/interface.ts';
-import type { TaskLedgerTransitionResult } from '../task-ledger-transitions.ts';
+import type {
+  TaskLedgerPreconditionResult,
+  TaskLedgerTransitionResult,
+} from '../task-ledger-transitions.ts';
 import {
   decodeRemoteTaskRecord,
   encodeRemoteTaskRecord,
@@ -23,6 +31,10 @@ import {
 
 export type TaskLedgerCommitResult<T extends RemoteTaskRecord> =
   | Readonly<{ ok: true; record: T }>
+  | Readonly<{ ok: false; reason: string }>;
+
+export type TaskLedgerDeleteResult =
+  | Readonly<{ ok: true }>
   | Readonly<{ ok: false; reason: string }>;
 
 /**
@@ -67,5 +79,48 @@ export async function commitTaskLedgerTransition<T extends RemoteTaskRecord>(
   return {
     ok: false,
     reason: `lost the compare-and-swap race on operation "${operationId}" after ${String(maxAttempts)} attempt(s)`,
+  };
+}
+
+/**
+ * Read the current ledger record, check a delete-only precondition (WFT-24
+ * retention: {@link canDeleteRetainedTerminalTask}), and conditionally delete
+ * with `expectedValue` set to the exact bytes just read — the delete
+ * counterpart to {@link commitTaskLedgerTransition}, needed because
+ * `canDeleteRetainedTerminalTask` has no next record to write, only a
+ * precondition to satisfy before issuing a delete.
+ *
+ * Retries only a lost CAS, same as `commitTaskLedgerTransition` — a
+ * concurrent writer that changed the record between read and delete (for
+ * example a later adoption call bumping `retentionGeneration`) means the
+ * fresh record deserves a fresh precondition check, not a delete of state
+ * the caller never actually observed.
+ */
+export async function commitTaskLedgerDelete(
+  storage: Storage,
+  operationId: string,
+  preconditionFn: (current: RemoteTaskRecord | null) => TaskLedgerPreconditionResult,
+  maxAttempts = 1,
+): Promise<TaskLedgerDeleteResult> {
+  const key = taskLedgerKey(operationId);
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const rawExisting = await storage.get(key);
+    const current = decodeRemoteTaskRecord(rawExisting);
+    const result = preconditionFn(current);
+    if (!result.ok) return result;
+
+    const committed = await storageConditionalBatch(
+      storage,
+      [{ key, expectedValue: rawExisting }],
+      [{ type: 'delete', key }],
+    );
+    if (committed) return { ok: true };
+    // Lost the CAS — another writer changed the record. Retry against fresh state.
+  }
+
+  return {
+    ok: false,
+    reason: `lost the compare-and-swap race deleting operation "${operationId}" after ${String(maxAttempts)} attempt(s)`,
   };
 }

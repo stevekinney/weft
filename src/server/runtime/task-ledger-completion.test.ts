@@ -15,6 +15,7 @@ import {
   taskLedgerKey,
   type RemoteTaskCompleting,
 } from '../task-ledger.ts';
+import { FailingTerminalCommitStorage } from './server-context.test-support.ts';
 import { commitTaskLedgerCompletion } from './task-ledger-completion.ts';
 
 function completingFixture(overrides: Partial<RemoteTaskCompleting> = {}): RemoteTaskCompleting {
@@ -92,5 +93,32 @@ describe('commitTaskLedgerCompletion', () => {
     });
 
     expect(result.ok).toBe(false);
+  });
+
+  it('dead-letters a resumed crash-window completion whose terminal commit keeps losing the CAS', async () => {
+    const storage = new FailingTerminalCommitStorage('op-1');
+    const resultDigest = await sha256Hex(
+      JSON.stringify({ status: 'completed', value: { ok: true }, error: null }),
+    );
+    const completing = completingFixture({ pendingResultDigest: resultDigest });
+    await storage.put(taskLedgerKey(completing.operationId), encodeRemoteTaskRecord(completing));
+
+    const result = await commitTaskLedgerCompletion(storage, {
+      operationId: completing.operationId,
+      attemptToken: completing.attemptToken,
+      status: 'completed',
+      value: { ok: true },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected commitTaskLedgerCompletion to fail');
+    expect(result.deadLettered?.state).toBe('deadLettered');
+    expect(result.deadLettered?.operationId).toBe(completing.operationId);
+    expect(result.deadLettered?.persistenceFailureReason).toBe(result.reason);
+
+    const persisted = decodeRemoteTaskRecord(
+      await storage.get(taskLedgerKey(completing.operationId)),
+    );
+    expect(persisted?.state).toBe('deadLettered');
   });
 });

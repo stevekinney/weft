@@ -1,37 +1,60 @@
 /**
  * `weft.tasks.diagnostics` operation + REST binding.
  *
- * Scans durable task records and live worker state to identify queue pressure,
- * stale in-flight work, retry storms, and worker capacity saturation. Results
- * are intentionally bounded and low-cardinality so operators can use them in a
- * dashboard without turning workflow or worker identifiers into metrics labels.
+ * Scans the durable task ledger (WFT-24 — previously the retired
+ * `op:queued:`/`op:inflight:`/`op:resolved:`/`op:dead-letter:` keys, which
+ * nothing has written since the WFT-22 ledger cutover) and live worker state
+ * to identify queue pressure, stale in-flight work, retry storms, dead
+ * letters, and worker capacity saturation. Results are intentionally bounded
+ * and low-cardinality so operators can use them in a dashboard without
+ * turning workflow or worker identifiers into metrics labels.
+ *
+ * The output schema's field names and `kind`/`state` vocabulary are
+ * unchanged from the pre-ledger version — only the internal scan and
+ * classification logic changed — so existing dashboards built against this
+ * endpoint's shape keep working. `leased`, `completing`, and `cancelling`
+ * ledger states are all reported as diagnostic `state: 'inflight'`: they
+ * share the same lease-holder/heartbeat shape and the same operator
+ * question ("is a worker still making progress on this attempt?"), so
+ * exposing the ledger's more granular internal states here would add
+ * distinctions operators cannot act on differently.
+ *
+ * Retry-storm detection (`kind: 'retry-storm'`) no longer covers `terminal`
+ * records: `RemoteTaskTerminal` carries no `retryCount`/`requeueCount` (WFT-25
+ * deliberately dropped attempt-count history once a task resolves), so
+ * there is nothing left to detect a storm from once an attempt reaches a
+ * disposition. The `resolved` value in the `state` enum is kept in the
+ * output schema for backward compatibility but nothing produces it anymore.
+ * `dead-lettered` diagnostics are unaffected — that is a distinct, separate
+ * `kind`.
+ *
+ * Unlike the pre-ledger scan, the full ledger scan this operation performs
+ * is one combined keyspace across every state (queued through terminal),
+ * not separate per-state prefixes — there is no time-bounded history index
+ * to limit how many terminal records get walked past on the way to
+ * classifying the ones that still matter. Operators who dispatch high
+ * volumes of tasks and want this scan to stay cheap should set
+ * {@link ServeOptions.taskRetentionWindowMs} so adopted terminal records
+ * are reaped rather than accumulating indefinitely.
  *
  * @module server/operations/get-task-diagnostics
  */
 
 import { z } from 'zod';
 
-import { decode } from '../../core/codec.ts';
 import type { Engine } from '../../core/engine.ts';
-import { KEYS } from '../../storage/interface.ts';
 import type { WorkerRegistry } from '../../worker/registry.ts';
+import { raiseFault } from '../operation-catalog/raise-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { commitTaskLedgerDelete } from '../runtime/task-ledger-runtime.ts';
+import { canClearDeadLetteredTask } from '../task-ledger-transitions.ts';
+import { decodeRemoteTaskRecord, type RemoteTaskRecord } from '../task-ledger.ts';
 import type { TaskQueue } from '../task-queue.ts';
 import {
   calculateExecutionLatencyMs,
   calculateHeartbeatAgeMs,
   calculateQueueLatencyMs,
-  clearDeadLetteredTaskRecord,
-  isDeadLetteredTaskRecord,
-  isInflightRecord,
-  isQueuedRecord,
-  isResolvedRecord,
-  type DeadLetteredTaskRecord,
-  type InflightRecord,
-  type QueuedRecord,
-  type ResolvedRecord,
-  type TaskState,
 } from '../task-state.ts';
 
 const DEFAULT_STALE_QUEUED_AFTER_MS = 60_000;
@@ -39,7 +62,6 @@ const DEFAULT_STALE_HEARTBEAT_AFTER_MS = 60_000;
 const DEFAULT_RETRY_STORM_MINIMUM_ATTEMPTS = 3;
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
-const RESOLVED_HISTORY_SCAN_LIMIT = 1_000;
 
 const taskDiagnosticKindSchema = z.enum([
   'stuck-queued',
@@ -63,7 +85,7 @@ const taskDiagnosticItemSchema = z
     queueLatencyMs: z.number().nonnegative().optional(),
     executionLatencyMs: z.number().nonnegative().optional(),
     heartbeatAgeMs: z.number().nonnegative().optional(),
-    lastRequeueReason: z.enum(['visibility-timeout', 'worker-disconnect']).optional(),
+    lastRequeueReason: z.string().optional(),
     resolutionReason: z.string().optional(),
     deadLetteredAt: z.number().nonnegative().optional(),
     deadLetterReason: z.literal('result-resolution-storage-exhausted').optional(),
@@ -127,14 +149,6 @@ interface GetTaskDiagnosticsOptions {
   now?: (() => number) | undefined;
 }
 
-type TaskRecord = QueuedRecord | InflightRecord | ResolvedRecord;
-
-type FilterableTaskRecord = {
-  operationId: string;
-  workflowId?: string | undefined;
-  queue?: string | undefined;
-};
-
 const restOnlyTaskDiagnosticsTransports = {
   http: true,
   jsonRpcHttp: false,
@@ -189,12 +203,25 @@ export const clearTaskDeadLetterOperation = defineOperation<
     kind: 'scoped',
     scopes: { kind: 'anyOf', scopes: ['system:admin'] },
   },
-  producibleFaults: [],
+  producibleFaults: ['NotFound'],
   discoverable: true,
   transports: restOnlyTaskDiagnosticsTransports,
   unknownKeyPolicy: { http: 'reject', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<ClearTaskDeadLetterOutput> => {
-    await clearDeadLetteredTaskRecord((engine as Engine).storage, input.operationId);
+    const typedEngine = engine as Engine;
+    const deleted = await commitTaskLedgerDelete(
+      typedEngine.storage,
+      input.operationId,
+      canClearDeadLetteredTask,
+      1,
+    );
+    if (!deleted.ok) {
+      raiseFault(clearTaskDeadLetterOperation, {
+        code: 'NotFound',
+        message: `No dead-lettered task found for operation "${input.operationId}"`,
+        data: { resource: 'task', identifier: input.operationId },
+      });
+    }
     return { ok: true };
   },
 });
@@ -221,7 +248,6 @@ async function collectTaskDiagnostics({
     deadLettered: 0,
   };
   const relevantQueues = new Set<string>();
-  const deadLetteredOperationIds = new Set<string>();
 
   const addItem = (item: TaskDiagnosticItem): void => {
     incrementSummary(summary, item.kind);
@@ -230,30 +256,12 @@ async function collectTaskDiagnostics({
     }
   };
 
-  for await (const record of scanDeadLetterRecords(engine)) {
-    if (!matchesTaskRecordFilter(record, input)) continue;
-    deadLetteredOperationIds.add(record.operationId);
-    if (record.queue !== undefined) relevantQueues.add(record.queue);
-    addDeadLetterDiagnostics(record, addItem);
-  }
-
-  for await (const record of scanQueuedRecords(engine)) {
-    if (!matchesTaskRecordFilter(record, input)) continue;
-    relevantQueues.add(record.queue);
-    addQueuedDiagnostics(record, input, currentTime, addItem);
-  }
-
-  for await (const record of scanInflightRecords(engine)) {
-    if (!matchesTaskRecordFilter(record, input)) continue;
-    if (deadLetteredOperationIds.has(record.operationId)) continue;
-    relevantQueues.add(record.queue);
-    addInflightDiagnostics(record, input, currentTime, addItem);
-  }
-
-  for await (const record of scanResolvedRecords(engine, input)) {
-    if (!matchesTaskRecordFilter(record, input)) continue;
-    if (record.queue !== undefined) relevantQueues.add(record.queue);
-    addRetryStormDiagnostic(record, 'resolved', input, addItem);
+  for await (const [, value] of engine.storage.scan('task-ledger:')) {
+    const decoded = decodeRemoteTaskRecord(value);
+    if (decoded === null) continue;
+    if (!matchesTaskRecordFilter(decoded, input)) continue;
+    relevantQueues.add(decoded.queue);
+    addRecordDiagnostics(decoded, input, currentTime, addItem);
   }
 
   addCapacityDiagnostics({
@@ -267,122 +275,98 @@ async function collectTaskDiagnostics({
   return { items, summary, limit: input.limit };
 }
 
-async function* scanDeadLetterRecords(engine: Engine): AsyncIterable<DeadLetteredTaskRecord> {
-  for await (const [, value] of engine.storage.scan(KEYS.operationDeadLetterPrefix())) {
-    const decoded = decode(value);
-    if (isDeadLetteredTaskRecord(decoded)) {
-      yield decoded;
-    }
-  }
-}
-
-async function* scanQueuedRecords(engine: Engine): AsyncIterable<QueuedRecord> {
-  for await (const [, value] of engine.storage.scan('op:queued:')) {
-    const decoded = decode(value);
-    if (isQueuedRecord(decoded)) {
-      yield decoded;
-    }
-  }
-}
-
-async function* scanInflightRecords(engine: Engine): AsyncIterable<InflightRecord> {
-  for await (const [, value] of engine.storage.scan('op:inflight:')) {
-    const decoded = decode(value);
-    if (isInflightRecord(decoded)) {
-      yield decoded;
-    }
-  }
-}
-
-async function* scanResolvedRecords(
-  engine: Engine,
+function addRecordDiagnostics(
+  decoded: RemoteTaskRecord,
   input: GetTaskDiagnosticsInput,
-): AsyncIterable<ResolvedRecord> {
-  if (input.operationId !== undefined) {
-    const value = await engine.storage.get(KEYS.operationResolved(input.operationId));
-    if (value === null) return;
-    const decoded = decode(value);
-    if (isResolvedRecord(decoded)) {
-      yield decoded;
-    }
-    return;
-  }
-
-  // Resolved task records are historical and can grow without bound. Scan a
-  // fixed recent-history window ordered by resolvedAt rather than operationId.
-  for await (const [, value] of engine.storage.scan(KEYS.operationResolvedByTimePrefix(), {
-    limit: RESOLVED_HISTORY_SCAN_LIMIT,
-    reverse: true,
-  })) {
-    const decoded = decode(value);
-    if (isResolvedRecord(decoded)) {
-      yield decoded;
+  currentTime: number,
+  addItem: (item: TaskDiagnosticItem) => void,
+): void {
+  switch (decoded.state) {
+    case 'queued':
+      if (decoded.availableAt <= currentTime) {
+        addQueuedDiagnostics(decoded, input, currentTime, addItem);
+      }
+      addRetryStormDiagnostic(decoded, 'queued', input, addItem);
+      return;
+    case 'leased':
+    case 'completing':
+    case 'cancelling':
+      addInflightDiagnostics(decoded, input, currentTime, addItem);
+      addRetryStormDiagnostic(decoded, 'inflight', input, addItem);
+      return;
+    case 'terminal':
+      // No RemoteTaskAttemptFields (retryCount/requeueCount) on terminal
+      // records — WFT-25 deliberately did not carry attempt-count history
+      // past resolution, so retry-storm detection cannot apply here.
+      // Nothing else about a finished attempt is diagnostically stuck.
+      return;
+    case 'deadLettered':
+      addDeadLetterDiagnostics(decoded, addItem);
+      return;
+    default: {
+      // Exhaustiveness guard: adding a new RemoteTaskRecord state without a
+      // case above must fail this typecheck.
+      const exhaustive: never = decoded;
+      void exhaustive;
     }
   }
 }
 
 function addQueuedDiagnostics(
-  record: QueuedRecord,
+  record: RemoteTaskRecord & { state: 'queued' },
   input: GetTaskDiagnosticsInput,
   currentTime: number,
   addItem: (item: TaskDiagnosticItem) => void,
 ): void {
-  const queuedAt = record.lastQueuedAt ?? record.queuedAt;
-  const queueLatencyMs = Math.max(0, currentTime - queuedAt);
-  if (queueLatencyMs >= input.staleQueuedAfterMs) {
-    addItem({
-      kind: 'stuck-queued',
-      state: 'queued',
-      operationId: record.operationId,
-      workflowId: record.workflowId,
-      activityName: record.activityName,
-      queue: record.queue,
-      retryCount: record.retryCount ?? Math.max(0, (record.attempt ?? 1) - 1),
-      requeueCount: record.requeueCount ?? 0,
-      queueLatencyMs,
-      lastRequeueReason: record.lastRequeueReason,
-      evidence: [
-        `Task has waited ${queueLatencyMs}ms in queue "${record.queue}" without a worker claim`,
-      ],
-    });
-  }
-
-  addRetryStormDiagnostic(record, 'queued', input, addItem);
+  const queueLatencyMs = Math.max(0, currentTime - record.lastQueuedAt);
+  if (queueLatencyMs < input.staleQueuedAfterMs) return;
+  addItem({
+    kind: 'stuck-queued',
+    state: 'queued',
+    operationId: record.operationId,
+    workflowId: record.workflowId,
+    activityName: record.activityName,
+    queue: record.queue,
+    retryCount: record.retryCount,
+    requeueCount: record.requeueCount,
+    queueLatencyMs,
+    lastRequeueReason: record.lastRequeueReason,
+    evidence: [
+      `Task has waited ${queueLatencyMs}ms in queue "${record.queue}" without a worker claim`,
+    ],
+  });
 }
 
 function addInflightDiagnostics(
-  record: InflightRecord,
+  record: RemoteTaskRecord & { state: 'leased' | 'completing' | 'cancelling' },
   input: GetTaskDiagnosticsInput,
   currentTime: number,
   addItem: (item: TaskDiagnosticItem) => void,
 ): void {
   const heartbeatAgeMs = calculateHeartbeatAgeMs(record, currentTime) ?? 0;
-  if (heartbeatAgeMs >= input.staleHeartbeatAfterMs) {
-    addItem({
-      kind: 'stale-inflight',
-      state: 'inflight',
-      operationId: record.operationId,
-      workflowId: record.workflowId,
-      activityName: record.activityName,
-      queue: record.queue,
-      workerId: record.workerId,
-      retryCount: record.retryCount ?? Math.max(0, (record.attempt ?? 1) - 1),
-      requeueCount: record.requeueCount ?? 0,
-      queueLatencyMs: calculateQueueLatencyMs(record),
-      executionLatencyMs: calculateExecutionLatencyMs(record, currentTime),
-      heartbeatAgeMs,
-      lastRequeueReason: record.lastRequeueReason,
-      evidence: [
-        `Worker "${record.workerId}" has not sent a heartbeat for ${heartbeatAgeMs}ms on queue "${record.queue}"`,
-      ],
-    });
-  }
-
-  addRetryStormDiagnostic(record, 'inflight', input, addItem);
+  if (heartbeatAgeMs < input.staleHeartbeatAfterMs) return;
+  addItem({
+    kind: 'stale-inflight',
+    state: 'inflight',
+    operationId: record.operationId,
+    workflowId: record.workflowId,
+    activityName: record.activityName,
+    queue: record.queue,
+    workerId: record.workerSessionId,
+    retryCount: record.retryCount,
+    requeueCount: record.requeueCount,
+    queueLatencyMs: calculateQueueLatencyMs(record),
+    executionLatencyMs: calculateExecutionLatencyMs(record, currentTime),
+    heartbeatAgeMs,
+    lastRequeueReason: record.lastRequeueReason,
+    evidence: [
+      `Worker "${record.workerSessionId}" has not sent a heartbeat for ${heartbeatAgeMs}ms on queue "${record.queue}"`,
+    ],
+  });
 }
 
 function addDeadLetterDiagnostics(
-  record: DeadLetteredTaskRecord,
+  record: RemoteTaskRecord & { state: 'deadLettered' },
   addItem: (item: TaskDiagnosticItem) => void,
 ): void {
   addItem({
@@ -392,29 +376,31 @@ function addDeadLetterDiagnostics(
     workflowId: record.workflowId,
     activityName: record.activityName,
     queue: record.queue,
-    workerId: record.workerId,
-    retryCount: record.retryCount ?? Math.max(0, (record.attempt ?? 1) - 1),
-    requeueCount: record.requeueCount ?? 0,
+    retryCount: record.retryCount,
+    requeueCount: record.requeueCount,
     lastRequeueReason: record.lastRequeueReason,
     deadLetteredAt: record.deadLetteredAt,
-    deadLetterReason: record.reason,
-    storageError: record.errorMessage,
-    retryAttempts: record.retryAttempts,
+    deadLetterReason: 'result-resolution-storage-exhausted',
+    storageError: record.persistenceFailureReason,
     evidence: [
-      `Task result transition exhausted ${record.retryAttempts} storage attempts; reconciliation will not re-dispatch operation "${record.operationId}" until the dead-letter entry is cleared`,
+      `Task result could not be durably persisted (${record.persistenceFailureReason}); reconciliation will not re-dispatch operation "${record.operationId}" until the dead-letter entry is cleared`,
     ],
   });
 }
 
+/**
+ * Retry-storm detection only applies to `queued`, `leased`, `completing`,
+ * and `cancelling` records — the only states carrying `RemoteTaskAttemptFields`
+ * (`retryCount`/`requeueCount`). `terminal` records do not: WFT-25
+ * deliberately did not carry attempt-count history past resolution.
+ */
 function addRetryStormDiagnostic(
-  record: TaskRecord,
-  state: TaskState,
+  record: RemoteTaskRecord & { state: 'queued' | 'leased' | 'completing' | 'cancelling' },
+  state: 'queued' | 'inflight',
   input: GetTaskDiagnosticsInput,
   addItem: (item: TaskDiagnosticItem) => void,
 ): void {
-  const retryCount =
-    record.retryCount ?? Math.max(0, ((record as { attempt?: number }).attempt ?? 1) - 1);
-  const requeueCount = record.requeueCount ?? 0;
+  const { retryCount, requeueCount } = record;
   if (
     retryCount < input.retryStormMinimumAttempts &&
     requeueCount < input.retryStormMinimumAttempts
@@ -427,16 +413,13 @@ function addRetryStormDiagnostic(
     state,
     operationId: record.operationId,
     workflowId: record.workflowId,
-    activityName: 'activityName' in record ? record.activityName : undefined,
+    activityName: record.activityName,
     queue: record.queue,
-    workerId: 'workerId' in record ? record.workerId : undefined,
+    workerId: 'workerSessionId' in record ? record.workerSessionId : undefined,
     retryCount,
     requeueCount,
     queueLatencyMs: calculateQueueLatencyMs(record),
-    executionLatencyMs:
-      'resolvedAt' in record ? calculateExecutionLatencyMs(record, record.resolvedAt) : undefined,
     lastRequeueReason: record.lastRequeueReason,
-    resolutionReason: 'resolutionReason' in record ? record.resolutionReason : undefined,
     evidence: [
       `Task has ${retryCount} retries and ${requeueCount} requeues, meeting retry storm threshold ${input.retryStormMinimumAttempts}`,
     ],
@@ -516,7 +499,7 @@ function buildCapacityDiagnostic(
 }
 
 function matchesTaskRecordFilter(
-  record: FilterableTaskRecord,
+  record: RemoteTaskRecord,
   input: GetTaskDiagnosticsInput,
 ): boolean {
   if (input.operationId !== undefined && record.operationId !== input.operationId) return false;

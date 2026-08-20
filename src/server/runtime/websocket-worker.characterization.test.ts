@@ -15,7 +15,7 @@
 
 import { describe, expect, it, spyOn } from 'bun:test';
 
-import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
+import type { TaskResultDeadLetteredEvent } from '../../core/events.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { sleepForTesting, waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { REMOTE_WORKER_PROTOCOL_VERSION } from '../../worker/protocol.ts';
@@ -29,7 +29,11 @@ import {
   type RemoteTaskLeased,
   type RemoteTaskTerminalResolved,
 } from '../task-ledger.ts';
-import { minimalServeOptions, minimalServerContext } from './server-context.test-support.ts';
+import {
+  FailingTerminalCommitStorage,
+  minimalServeOptions,
+  minimalServerContext,
+} from './server-context.test-support.ts';
 import { handleWorkerWebSocketMessage } from './websocket-worker.ts';
 
 import type { WebSocketData } from '../json-rpc-websocket-runtime.ts';
@@ -176,39 +180,6 @@ async function waitForResolvedTerminalRecord(
     );
   }
   return record;
-}
-
-/**
- * Storage that loses the CAS for a `terminal` write targeting one specific
- * operationId — mirrors `task-polling.characterization.test.ts`'s
- * `FailingTerminalCommitStorage` — so `commitTaskLedgerCompletion` exhausts
- * its retries and returns `ok: false`, exercising `onTaskResultMessage`'s
- * failure-logging branches instead of only the happy path.
- */
-class FailingTerminalCommitStorage extends MemoryStorage {
-  readonly #failingOperationId: string;
-
-  constructor(failingOperationId: string) {
-    super();
-    this.#failingOperationId = failingOperationId;
-  }
-
-  override async conditionalBatch(
-    conditions: ConditionalBatchCondition[],
-    operations: BatchOperation[],
-  ): Promise<boolean> {
-    const targetsFailingTerminalCommit = operations.some((operation) => {
-      if (operation.type !== 'put' || !operation.key.startsWith('task-ledger:')) return false;
-      const record = decodeRemoteTaskRecord(operation.value);
-      return (
-        record !== null &&
-        record.operationId === this.#failingOperationId &&
-        record.state === 'terminal'
-      );
-    });
-    if (targetsFailingTerminalCommit) return false;
-    return super.conditionalBatch(conditions, operations);
-  }
 }
 
 describe('handleWorkerWebSocketMessage', () => {
@@ -1085,10 +1056,11 @@ describe('handleWorkerWebSocketMessage', () => {
       );
     });
 
-    it('logs when the durable completion commit loses its CAS without throwing', async () => {
+    it('logs, dead-letters, and dispatches TaskResultDeadLetteredEvent when the durable completion commit loses its CAS', async () => {
       const storage = new FailingTerminalCommitStorage('op-commit-loses-cas');
       const context = minimalServerContext();
       const options = minimalServeOptions(storage);
+      const dispatchEventSpy = spyOn(options.engine, 'dispatchEvent');
       const ws = createFakeWs();
 
       handleWorkerWebSocketMessage(
@@ -1140,13 +1112,30 @@ describe('handleWorkerWebSocketMessage', () => {
         '[weft] Failed to commit task result for "op-commit-loses-cas" through the durable ledger:',
         expect.any(String),
       );
+
+      // WFT-24: FailingTerminalCommitStorage only blocks writes whose next
+      // state is `terminal`, so the best-effort Completing --> DeadLettered
+      // escalation (next state `deadLettered`) succeeds.
+      const deadLettered = decodeRemoteTaskRecord(
+        await storage.get(taskLedgerKey('op-commit-loses-cas')),
+      );
+      expect(deadLettered?.state).toBe('deadLettered');
+      // dispatchEventSpy also observes registration's own event(s), so filter
+      // to the dead-letter event specifically rather than asserting a raw count.
+      const deadLetterEvents = dispatchEventSpy.mock.calls
+        .map((call) => call[0])
+        .filter((event) => event.type === 'task:dead-lettered');
+      expect(deadLetterEvents).toHaveLength(1);
+      const dispatchedEvent = deadLetterEvents[0] as TaskResultDeadLetteredEvent;
+      expect(dispatchedEvent.operationId).toBe('op-commit-loses-cas');
     });
 
-    it('logs when the durable oversized-rejection commit loses its CAS without throwing', async () => {
+    it('logs, dead-letters, and dispatches TaskResultDeadLetteredEvent when the durable oversized-rejection commit loses its CAS', async () => {
       const storage = new FailingTerminalCommitStorage('op-rejection-loses-cas');
       const context = minimalServerContext();
       setPayloadSizeLimit(context, 64);
       const options = minimalServeOptions(storage);
+      const dispatchEventSpy = spyOn(options.engine, 'dispatchEvent');
       const ws = createFakeWs();
 
       handleWorkerWebSocketMessage(
@@ -1198,6 +1187,19 @@ describe('handleWorkerWebSocketMessage', () => {
         '[weft] Failed to persist oversized task result rejection for task "op-rejection-loses-cas":',
         expect.any(String),
       );
+
+      const deadLettered = decodeRemoteTaskRecord(
+        await storage.get(taskLedgerKey('op-rejection-loses-cas')),
+      );
+      expect(deadLettered?.state).toBe('deadLettered');
+      // dispatchEventSpy also observes registration's own event(s), so filter
+      // to the dead-letter event specifically rather than asserting a raw count.
+      const deadLetterEvents = dispatchEventSpy.mock.calls
+        .map((call) => call[0])
+        .filter((event) => event.type === 'task:dead-lettered');
+      expect(deadLetterEvents).toHaveLength(1);
+      const dispatchedEvent = deadLetterEvents[0] as TaskResultDeadLetteredEvent;
+      expect(dispatchedEvent.operationId).toBe('op-rejection-loses-cas');
     });
   });
 

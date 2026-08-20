@@ -1,17 +1,21 @@
 import { ActivityFailedEvent } from '../../core/events.ts';
 import type { ServeOptions, TaskDispatch } from '../index.ts';
 import { restoreExtendedDeadlineIfStillActive } from '../runtime-helpers.ts';
-import { requeueExpiredAttempt } from '../task-ledger-transitions.ts';
+import {
+  canDeleteRetainedTerminalTask,
+  requeueExpiredAttempt,
+} from '../task-ledger-transitions.ts';
 import {
   decodeRemoteTaskRecord,
   taskLedgerKey,
   type RemoteTaskBase,
   type RemoteTaskLeased,
   type RemoteTaskQueued,
+  type RemoteTaskTerminal,
 } from '../task-ledger.ts';
 import type { ServerContext } from './context.ts';
 import { scheduleDelayedDispatch } from './task-dispatch.ts';
-import { commitTaskLedgerTransition } from './task-ledger-runtime.ts';
+import { commitTaskLedgerDelete, commitTaskLedgerTransition } from './task-ledger-runtime.ts';
 import {
   isTaskHeartbeatStaleForMetrics,
   recordTaskRequeueMetric,
@@ -187,6 +191,44 @@ function redispatchAvailableQueuedRecord(
 }
 
 /**
+ * Reap an adopted terminal record once it has aged past
+ * {@link ServeOptions.taskRetentionWindowMs} (WFT-24). No-ops when the
+ * option is unset — retention is opt-in, `undefined` means "keep terminal
+ * records forever," matching the acceptance criterion's letter ("terminal
+ * results remain until workflow adoption or explicit retained-dead-letter
+ * disposition") rather than a default that starts silently deleting data on
+ * upgrade. Unadopted terminal records are never reaped here regardless of
+ * age — `canDeleteRetainedTerminalTask`'s own precondition already rejects
+ * them, but the age check short-circuits first to avoid a wasted read on
+ * every young record.
+ */
+async function reapRetainedTerminalRecord(
+  options: ServeOptions,
+  decoded: RemoteTaskTerminal,
+  now: number,
+): Promise<void> {
+  if (options.taskRetentionWindowMs === undefined) return;
+  if (!decoded.adopted) return;
+  const retainedSince = decoded.adoptedAt ?? decoded.terminalAt;
+  if (now - retainedSince < options.taskRetentionWindowMs) return;
+
+  const deleted = await commitTaskLedgerDelete(
+    options.engine.storage,
+    decoded.operationId,
+    (current) =>
+      canDeleteRetainedTerminalTask(current, {
+        expectedRetentionGeneration: decoded.retentionGeneration,
+      }),
+    1,
+  );
+  if (!deleted.ok) {
+    console.error(
+      `[weft] Failed to reap retained terminal task "${decoded.operationId}": ${deleted.reason}`,
+    );
+  }
+}
+
+/**
  * Drain expired entries from the in-memory deadline heap and reassign
  * their tasks. Only touches storage for the specific operations whose
  * deadlines have actually passed — no full ledger scan.
@@ -259,11 +301,13 @@ export async function scanExpiredTasks(
  * Periodic full-ledger safety net (WFT-23), independent of the in-memory
  * deadline heap `scanExpiredTasks` drains: catches `leased` records whose
  * expiry was never tracked in the heap (written by a peer, or lost to a
- * restart) and `queued` records whose durable `availableAt` has elapsed but
- * whose `scheduleDelayedDispatch` timer never fired (same causes). Every
- * other state (`completing`, `cancelling`, `terminal`, `deadLettered`) is
- * left untouched — resolving those is either the worker's redelivered result
- * (`completing`) or explicitly out of this slice's scope.
+ * restart), `queued` records whose durable `availableAt` has elapsed but
+ * whose `scheduleDelayedDispatch` timer never fired (same causes), and
+ * (WFT-24) adopted `terminal` records old enough to reap under
+ * {@link ServeOptions.taskRetentionWindowMs}. `completing`, `cancelling`,
+ * and `deadLettered` are left untouched — resolving those is either the
+ * worker's redelivered result (`completing`) or explicitly out of this
+ * slice's scope.
  */
 export async function reconcileOrphanedRecords(
   context: ServerContext,
@@ -276,12 +320,22 @@ export async function reconcileOrphanedRecords(
     const now = Date.now();
     let staleHeartbeatCount = 0;
     for await (const [, value] of options.engine.storage.scan('task-ledger:')) {
+      // `server.stop()` may run while this scan is still in flight — see
+      // the identical guard and comment in `task-ledger-recovery.ts`'s
+      // startup scan, which this mirrors for the same reason: stop
+      // processing further records once shutdown has begun, so this loop
+      // cannot issue a durable write or delete against a torn-down server.
+      if (context.stopping) return;
       try {
         const decoded = decodeRemoteTaskRecord(value);
         if (decoded === null) continue;
         if (decoded.state === 'queued') {
           if (decoded.availableAt <= now)
             redispatchAvailableQueuedRecord(context, options, decoded);
+          continue;
+        }
+        if (decoded.state === 'terminal') {
+          await reapRetainedTerminalRecord(options, decoded, now);
           continue;
         }
         if (decoded.state !== 'leased') continue;

@@ -1708,7 +1708,6 @@
                   "type": "string"
                 },
                 "lastRequeueReason": {
-                  "enum": ["visibility-timeout", "worker-disconnect"],
                   "type": "string"
                 },
                 "operationId": {
@@ -1822,7 +1821,7 @@
         "jsonRpcWebSocket": false,
         "jsonRpcStdio": false
       },
-      "producibleFaults": [],
+      "producibleFaults": ["NotFound"],
       "inputSchema": {
         "additionalProperties": false,
         "properties": {

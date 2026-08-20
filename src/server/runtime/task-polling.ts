@@ -5,7 +5,10 @@ import { claimQueued } from '../task-ledger-transitions.ts';
 import { decodeRemoteTaskRecord, taskLedgerKey, type RemoteTaskRecord } from '../task-ledger.ts';
 import type { PendingTask } from '../task-queue-types.ts';
 import type { ServerContext } from './context.ts';
-import { commitTaskLedgerCompletion } from './task-ledger-completion.ts';
+import {
+  commitTaskLedgerCompletion,
+  dispatchTaskDeadLetteredEvent,
+} from './task-ledger-completion.ts';
 import { commitTaskLedgerTransition } from './task-ledger-runtime.ts';
 import {
   recordTaskBacklogMetric,
@@ -154,7 +157,19 @@ async function applyTaskResult(
     ...(status === 'completed' ? { value } : {}),
     ...(status === 'failed' && error !== undefined ? { error } : {}),
   });
-  if (!committed.ok) return committed;
+  if (!committed.ok) {
+    if (committed.deadLettered !== undefined) {
+      // Dead-lettered is terminal-ish: no further heartbeat/visibility
+      // extension will arrive for this operation, so stop tracking its
+      // deadline. taskQueue.complete() is deliberately not called — that
+      // signals a normal delivered result to whatever is waiting, and a
+      // dead letter is the opposite: the result could not be durably
+      // applied.
+      context.deadlineTracker.remove(operationId);
+      dispatchTaskDeadLetteredEvent(options, operationId, committed.deadLettered, result.workerId);
+    }
+    return { ok: false, reason: committed.reason };
+  }
 
   recordTaskExecutionLatencyMetric(
     context.metricsCollector,
@@ -395,6 +410,14 @@ export async function handleTaskResultRequest(
         `[weft] Failed to persist oversized task result rejection for task "${validated.operationId}":`,
         rejected.reason,
       );
+      if (rejected.deadLettered !== undefined) {
+        dispatchTaskDeadLetteredEvent(
+          options,
+          validated.operationId,
+          rejected.deadLettered,
+          validated.workerId,
+        );
+      }
     }
     return payloadSizeExceededResponse(payloadError);
   }

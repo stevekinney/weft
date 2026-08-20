@@ -8,6 +8,8 @@
 
 import { describe, expect, it, spyOn } from 'bun:test';
 
+import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
+import { MemoryStorage } from '../../storage/memory.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { manifestForActivities } from '../../worker/registry-fixtures.test-support.ts';
 import {
@@ -16,6 +18,7 @@ import {
   taskLedgerKey,
   type RemoteTaskLeased,
   type RemoteTaskQueued,
+  type RemoteTaskTerminalResolved,
 } from '../task-ledger.ts';
 import { minimalServeOptions, minimalServerContext } from './server-context.test-support.ts';
 import {
@@ -25,6 +28,16 @@ import {
 } from './task-reconciliation.ts';
 
 const NOOP_CLEANUP = (): void => {};
+
+/** Storage that loses every compare-and-swap, modeling a sustained persistence failure. */
+class LosesCasStorage extends MemoryStorage {
+  override async conditionalBatch(
+    _conditions: ConditionalBatchCondition[],
+    _operations: BatchOperation[],
+  ): Promise<boolean> {
+    return false;
+  }
+}
 
 function queuedFixture(overrides: Partial<RemoteTaskQueued> = {}): RemoteTaskQueued {
   const now = Date.now();
@@ -74,6 +87,34 @@ function leasedFixture(overrides: Partial<RemoteTaskLeased> = {}): RemoteTaskLea
     lastHeartbeatAt: now,
     retryCount: 0,
     requeueCount: 0,
+    ...overrides,
+  };
+}
+
+function terminalFixture(
+  overrides: Partial<RemoteTaskTerminalResolved> = {},
+): RemoteTaskTerminalResolved {
+  const now = Date.now();
+  return {
+    recordVersion: 1,
+    operationId: 'op-terminal',
+    workflowType: 'test',
+    activityName: 'test.charge',
+    queue: 'default',
+    input: null,
+    headers: {},
+    visibilityTimeoutMilliseconds: 30_000,
+    createdAt: now,
+    generation: 3,
+    state: 'terminal',
+    disposition: 'resolved',
+    attempt: 1,
+    attemptToken: 'attempt-token',
+    status: 'completed',
+    resultDigest: 'digest-1',
+    terminalAt: now,
+    adopted: false,
+    retentionGeneration: 0,
     ...overrides,
   };
 }
@@ -219,5 +260,146 @@ describe('reconcileOrphanedRecords — queued redispatch', () => {
     // No redispatch scheduled — scheduleDelayedDispatch always registers a
     // pendingTimers entry, so an empty set proves the early return fired.
     expect(context.pendingTimers.size).toBe(0);
+  });
+});
+
+describe('reconcileOrphanedRecords — terminal retention (WFT-24)', () => {
+  it('reaps an adopted terminal record once it is older than taskRetentionWindowMs', async () => {
+    const context = minimalServerContext();
+    const options = {
+      ...minimalServeOptions(),
+      taskRetentionWindowMs: 1_000,
+    };
+    const stored = terminalFixture({
+      operationId: 'op-old-adopted',
+      adopted: true,
+      adoptedAt: Date.now() - 5_000,
+    });
+    await options.engine.storage.put(
+      taskLedgerKey(stored.operationId),
+      encodeRemoteTaskRecord(stored),
+    );
+
+    await reconcileOrphanedRecords(context, options, NOOP_CLEANUP);
+
+    expect(await options.engine.storage.get(taskLedgerKey(stored.operationId))).toBeNull();
+  });
+
+  it('leaves an unadopted terminal record alone regardless of age', async () => {
+    const context = minimalServerContext();
+    const options = {
+      ...minimalServeOptions(),
+      taskRetentionWindowMs: 1_000,
+    };
+    const stored = terminalFixture({
+      operationId: 'op-old-unadopted',
+      adopted: false,
+      terminalAt: Date.now() - 5_000,
+    });
+    await options.engine.storage.put(
+      taskLedgerKey(stored.operationId),
+      encodeRemoteTaskRecord(stored),
+    );
+
+    await reconcileOrphanedRecords(context, options, NOOP_CLEANUP);
+
+    expect(
+      decodeRemoteTaskRecord(await options.engine.storage.get(taskLedgerKey(stored.operationId))),
+    ).not.toBeNull();
+  });
+
+  it('leaves an adopted terminal record alone when it has not aged past the retention window', async () => {
+    const context = minimalServerContext();
+    const options = {
+      ...minimalServeOptions(),
+      taskRetentionWindowMs: 60_000,
+    };
+    const stored = terminalFixture({
+      operationId: 'op-fresh-adopted',
+      adopted: true,
+      adoptedAt: Date.now(),
+    });
+    await options.engine.storage.put(
+      taskLedgerKey(stored.operationId),
+      encodeRemoteTaskRecord(stored),
+    );
+
+    await reconcileOrphanedRecords(context, options, NOOP_CLEANUP);
+
+    expect(
+      decodeRemoteTaskRecord(await options.engine.storage.get(taskLedgerKey(stored.operationId))),
+    ).not.toBeNull();
+  });
+
+  it('never reaps when taskRetentionWindowMs is unset — retention is opt-in', async () => {
+    const context = minimalServerContext();
+    const options = minimalServeOptions();
+    const stored = terminalFixture({
+      operationId: 'op-no-retention-configured',
+      adopted: true,
+      adoptedAt: Date.now() - 365 * 24 * 60 * 60 * 1000,
+    });
+    await options.engine.storage.put(
+      taskLedgerKey(stored.operationId),
+      encodeRemoteTaskRecord(stored),
+    );
+
+    await reconcileOrphanedRecords(context, options, NOOP_CLEANUP);
+
+    expect(
+      decodeRemoteTaskRecord(await options.engine.storage.get(taskLedgerKey(stored.operationId))),
+    ).not.toBeNull();
+  });
+
+  it('stops scanning once context.stopping is set, issuing no further deletes', async () => {
+    const context = minimalServerContext();
+    context.stopping = true;
+    const options = {
+      ...minimalServeOptions(),
+      taskRetentionWindowMs: 1_000,
+    };
+    const stored = terminalFixture({
+      operationId: 'op-during-shutdown',
+      adopted: true,
+      adoptedAt: Date.now() - 5_000,
+    });
+    await options.engine.storage.put(
+      taskLedgerKey(stored.operationId),
+      encodeRemoteTaskRecord(stored),
+    );
+
+    await reconcileOrphanedRecords(context, options, NOOP_CLEANUP);
+
+    expect(
+      decodeRemoteTaskRecord(await options.engine.storage.get(taskLedgerKey(stored.operationId))),
+    ).not.toBeNull();
+  });
+
+  it('logs and leaves the record in place when the retention delete loses the CAS', async () => {
+    const context = minimalServerContext();
+    const options = {
+      ...minimalServeOptions(new LosesCasStorage()),
+      taskRetentionWindowMs: 1_000,
+    };
+    const stored = terminalFixture({
+      operationId: 'op-reap-cas-loss',
+      adopted: true,
+      adoptedAt: Date.now() - 5_000,
+    });
+    await options.engine.storage.put(
+      taskLedgerKey(stored.operationId),
+      encodeRemoteTaskRecord(stored),
+    );
+
+    using errorSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+    await reconcileOrphanedRecords(context, options, NOOP_CLEANUP);
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to reap retained terminal task "op-reap-cas-loss"'),
+    );
+    expect(
+      decodeRemoteTaskRecord(await options.engine.storage.get(taskLedgerKey(stored.operationId))),
+    ).not.toBeNull();
   });
 });

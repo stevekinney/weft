@@ -1048,27 +1048,6 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       },
     ],
     [
-      'src/core/events/activity-events.ts',
-      // TaskResultDeadLetteredEvent's constructor is public API (exported from
-      // src/index.ts, registered in event-map.ts, consulted by
-      // client-visible-events.ts) but has zero live callers: WFT-22 removed
-      // the old dead-letter-fallback write path that used to dispatch it, and
-      // the ledger-native Completing -> DeadLettered transition that will
-      // dispatch it again is WFT-24 scope. Keep the class rather than delete
-      // it — WFT-24 needs this exact shape — and allowance its constructor
-      // until that transition exists.
-      {
-        reason:
-          'TaskResultDeadLetteredEvent has zero live dispatchers between the WFT-22 dead-letter-fallback removal and the WFT-24 ledger-native DeadLettered transition that will dispatch it again.',
-        functions: 1,
-        lines: new Set([
-          174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191,
-          192, 193, 194, 195,
-        ]),
-        requireUncoveredLines: true,
-      },
-    ],
-    [
       'src/cli/parse-schedule-arguments.ts',
       {
         reason:
@@ -1312,6 +1291,24 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       },
     ],
     [
+      'src/server/operations/get-task-diagnostics.ts',
+      // The closed RemoteTaskRecord state union makes this default branch
+      // unreachable at runtime; it exists solely as a compile-time
+      // exhaustiveness guard (`addRecordDiagnostics`'s switch), matching the
+      // identical pattern already allowed for `task-ledger-recovery.ts`.
+      // `requireUncoveredLines` is intentionally omitted for the same reason
+      // it is omitted there: `default: {` (306) and its closing `}` (311)
+      // are case-label/brace lines that flip between hit and unhit run to
+      // run with byte-identical source — a coverage-attribution artifact,
+      // not a real reachability signal — so only the two dead statements
+      // inside it (309, 310) are guaranteed to read 0 every run.
+      {
+        reason:
+          'Compile-time exhaustiveness guard for a closed discriminated union has no reachable runtime path to test without an unsafe cast.',
+        lines: new Set([306, 309, 310, 311]),
+      },
+    ],
+    [
       'src/server/rest-body.ts',
       {
         reason:
@@ -1350,6 +1347,24 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       },
     ],
     [
+      'src/server/runtime/task-result-view.ts',
+      // The closed RemoteTaskRecord state union makes this default branch
+      // unreachable at runtime; it exists solely as a compile-time
+      // exhaustiveness guard (`getTaskResultViewImpl`'s switch), matching the
+      // identical pattern already allowed for `task-ledger-recovery.ts`.
+      // `requireUncoveredLines` is intentionally omitted for the same reason
+      // it is omitted there: `default: {` (108) is a case-label/brace line
+      // that flips between hit and unhit run to run with byte-identical
+      // source — a coverage-attribution artifact, not a real reachability
+      // signal — so only the two dead statements inside it (111, 112) are
+      // guaranteed to read 0 every run.
+      {
+        reason:
+          'Compile-time exhaustiveness guard for a closed discriminated union has no reachable runtime path to test without an unsafe cast.',
+        lines: new Set([108, 111, 112]),
+      },
+    ],
+    [
       'src/server/runtime/websocket-stream.ts',
       {
         reason:
@@ -1362,21 +1377,21 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       // The closed WorkerToServerMessage union makes this default branch
       // unreachable at runtime; it exists solely as a compile-time
       // exhaustiveness guard: the `}` closing the preceding `taskResult`
-      // case (340), `case 'heartbeat': {` / its closing `}` (341, 344),
-      // `default: {` (345), and the two dead statements inside it,
-      // `const _exhaustive` / `return _exhaustive` (348, 349). Only 348 and
-      // 349 are deterministically 0 across every run; the other four
+      // case (349), `case 'heartbeat': {` / its closing `}` (350, 353),
+      // `default: {` (354), and the two dead statements inside it,
+      // `const _exhaustive` / `return _exhaustive` (357, 358). Only 357 and
+      // 358 are deterministically 0 across every run; the other four
       // case-label and brace lines around them flip between hit and unhit
       // run to run with byte-identical source — a switch-statement
       // coverage-attribution artifact, not a real reachability signal — so
       // `requireUncoveredLines` is intentionally omitted here rather than
       // chasing whichever subset happens to be 0 in a given run. (Line
-      // numbers shifted -7 from the WFT-22 baseline when WFT-23 removed the
-      // module's now-dead `isInflightRecord` re-export.)
+      // numbers shifted +9 from the WFT-23 baseline when WFT-24's dead-letter
+      // dispatch import and call sites were added above this switch.)
       {
         reason:
           'Transport disconnect and concurrency exits are behaviorally tested, but Bun does not deterministically attribute these residual paths.',
-        lines: new Set([340, 341, 344, 345, 348, 349]),
+        lines: new Set([349, 350, 353, 354, 357, 358]),
       },
     ],
     [

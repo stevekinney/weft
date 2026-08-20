@@ -3,9 +3,11 @@ import { describe, expect, it } from 'bun:test';
 import type { WorkerExecutionIdentity } from '../worker/manifest/types.ts';
 import {
   beginCompletion,
+  canClearDeadLetteredTask,
   canDeleteRetainedTerminalTask,
   claimQueued,
   commitCancellation,
+  commitDeadLetter,
   commitTerminalResult,
   createQueued,
   markWorkflowResultAdopted,
@@ -16,6 +18,7 @@ import {
 import type {
   RemoteTaskCancelling,
   RemoteTaskCompleting,
+  RemoteTaskDeadLettered,
   RemoteTaskLeased,
   RemoteTaskQueued,
   RemoteTaskTerminal,
@@ -131,6 +134,25 @@ function terminalFixture(overrides: Partial<RemoteTaskTerminal> = {}): RemoteTas
     retentionGeneration: 0,
     ...overrides,
   } as RemoteTaskTerminal;
+}
+
+function deadLetteredFixture(
+  overrides: Partial<RemoteTaskDeadLettered> = {},
+): RemoteTaskDeadLettered {
+  return {
+    ...baseFields(),
+    generation: 3,
+    state: 'deadLettered',
+    attemptToken: 'attempt-1',
+    attempt: 1,
+    pendingStatus: 'completed',
+    pendingResultDigest: 'digest-1',
+    retryCount: 0,
+    requeueCount: 0,
+    deadLetteredAt: 4_000,
+    persistenceFailureReason: 'lost the compare-and-swap race',
+    ...overrides,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -628,6 +650,90 @@ describe('canDeleteRetainedTerminalTask', () => {
       expectedRetentionGeneration: 0,
     });
     expect(result.ok).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 11. Commit dead letter (WFT-24)
+// ---------------------------------------------------------------------------
+
+describe('commitDeadLetter', () => {
+  const deadLetterInput = {
+    attemptToken: 'attempt-1',
+    resultDigest: 'digest-1',
+    persistenceFailureReason:
+      'lost the compare-and-swap race on operation "op-1" after 3 attempt(s)',
+  };
+
+  it('dead-letters a completing record on matching attempt and digest', () => {
+    const result = commitDeadLetter(completingFixture(), deadLetterInput, 5_000);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.nextRecord.state).toBe('deadLettered');
+    expect(result.nextRecord.pendingStatus).toBe('completed');
+    expect(result.nextRecord.pendingResultDigest).toBe('digest-1');
+    expect(result.nextRecord.deadLetteredAt).toBe(5_000);
+    expect(result.nextRecord.persistenceFailureReason).toBe(
+      deadLetterInput.persistenceFailureReason,
+    );
+  });
+
+  it('carries value and error through when provided', () => {
+    const result = commitDeadLetter(
+      completingFixture(),
+      { ...deadLetterInput, value: { total: 42 }, error: 'boom' },
+      5_000,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.nextRecord.value).toEqual({ total: 42 });
+    expect(result.nextRecord.error).toBe('boom');
+  });
+
+  it('rejects a stale attempt token', () => {
+    const result = commitDeadLetter(
+      completingFixture(),
+      { ...deadLetterInput, attemptToken: 'stale' },
+      5_000,
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it('rejects a result digest mismatch — a concurrent legitimate resolution must not be clobbered', () => {
+    const result = commitDeadLetter(
+      completingFixture(),
+      { ...deadLetterInput, resultDigest: 'wrong-digest' },
+      5_000,
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it('rejects when the task is not completing', () => {
+    expect(commitDeadLetter(leasedFixture(), deadLetterInput, 5_000).ok).toBe(false);
+  });
+
+  it('rejects when the task was already resolved terminal in the interim', () => {
+    expect(commitDeadLetter(terminalFixture(), deadLetterInput, 5_000).ok).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 12. Clear dead letter (WFT-24)
+// ---------------------------------------------------------------------------
+
+describe('canClearDeadLetteredTask', () => {
+  it('allows clearing a dead-lettered record', () => {
+    expect(canClearDeadLetteredTask(deadLetteredFixture())).toEqual({ ok: true });
+  });
+
+  it('rejects a record that is not dead-lettered', () => {
+    expect(canClearDeadLetteredTask(terminalFixture()).ok).toBe(false);
+    expect(canClearDeadLetteredTask(leasedFixture()).ok).toBe(false);
+    expect(canClearDeadLetteredTask(queuedFixture()).ok).toBe(false);
+  });
+
+  it('rejects when no record exists', () => {
+    expect(canClearDeadLetteredTask(null).ok).toBe(false);
   });
 });
 

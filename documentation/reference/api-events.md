@@ -141,6 +141,23 @@ class ActivityFailedEvent extends Event {
 }
 ```
 
+### `TaskResultDeadLetteredEvent`
+
+Emitted on the `Engine` when a remote worker's task result cannot be durably persisted from `Completing` to `Terminal` after storage retries are exhausted. The durable ledger's `deadLettered` state blocks the operationId from a fresh dispatch until an operator clears it — see [`GET /api/v1/tasks/diagnostics`](./api-observability.md#get-apiv1tasksdiagnostics) and its clear action.
+
+```ts partial
+class TaskResultDeadLetteredEvent extends Event {
+  static readonly type = 'task:dead-lettered';
+  readonly operationId: string;
+  readonly workflowId: string | undefined;
+  readonly activityName: string | undefined;
+  readonly queue: string | undefined;
+  readonly workerId: string | undefined;
+  readonly reason: 'result-resolution-storage-exhausted';
+  readonly errorMessage: string;
+}
+```
+
 ### `SignalReceivedEvent`
 
 Emitted when a signal is delivered to the engine for a workflow.
@@ -333,6 +350,7 @@ interface WeftEventMap extends WeftReviewEventMap {
   'activity:started': ActivityStartedEvent;
   'activity:completed': ActivityCompletedEvent;
   'activity:failed': ActivityFailedEvent;
+  'task:dead-lettered': TaskResultDeadLetteredEvent;
   'signal:received': SignalReceivedEvent;
   'signal:delivered': SignalDeliveredEvent;
   'attributes:changed': AttributesChangedEvent;

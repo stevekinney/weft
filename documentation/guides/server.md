@@ -36,6 +36,7 @@ interface ServeOptions {
   unauthenticatedAccess?: 'warn' | 'allow' | 'reject'; // startup policy when auth is omitted
   visibilityPollIntervalMs?: number; // task visibility scanner interval; default: 5000
   workerReconnectGracePeriodMs?: number; // reconnect grace before requeue; default: 2000
+  taskRetentionWindowMs?: number; // reap adopted terminal task records after this age; default: undefined (never)
   routingPolicy?: RoutingPolicy; // task dispatch policy for remote workers; default: 'least-loaded'
   schedulingPolicy?: SchedulingPolicy; // workflow scheduling policy
   prometheusExporter?: PrometheusExporter; // Prometheus metrics exporter
@@ -64,6 +65,8 @@ The console package is an optional peer of Weft; it is not installed by
 When [`auth`](../reference/configuration.md#serveoptions) is omitted, [`serve()`](../reference/api-server.md#serve) starts in an open local-development mode and logs a loud startup warning because every non-public operation is reachable by anyone who can connect to the server. Production wrappers should pass `unauthenticatedAccess: 'reject'` or set [`WEFT_SERVER_AUTHENTICATION_REQUIRED=1`](../reference/configuration.md#environment-variables); either setting makes `serve()` fail before binding unless `auth` is configured. Use `unauthenticatedAccess: 'allow'` only when an intentionally open local process boundary should start without a warning.
 
 `workerReconnectGracePeriodMs` is clamped to `0..5000`. The default `2000` ms gives a worker that drops and reconnects with the same `workerId` a short window to keep its in-flight task assignments while still detecting genuinely dead local workers quickly. Use `100` only for low-latency test or embedded scenarios, set `0` when close handling should requeue immediately, and set `5000` for cloud or load-balancer deployments where replacement workers commonly need several seconds to reconnect.
+
+`taskRetentionWindowMs` controls when a terminal task's ledger record becomes eligible for deletion. It is opt-in: the default `undefined` means terminal records are kept forever. Only _adopted_ records (see [`getTaskResult` and `adoptTaskResult`](#gettaskresult-and-adopttaskresult) below) are ever reaped, regardless of age — a terminal record no caller has adopted is retained indefinitely by design.
 
 ## Authentication
 
@@ -201,6 +204,8 @@ interface WeftServer extends AsyncDisposable {
   readonly ready: Promise<void>;
   stop(): Promise<void>;
   dispatchTask(task: TaskDispatch): Promise<boolean>;
+  getTaskResult(operationId: string): Promise<TaskResultView | null>;
+  adoptTaskResult(operationId: string, resultDigest: string): Promise<boolean>;
   shutdownWorker(workerId: string, options?: { timeoutMs?: number }): Promise<boolean>;
   shutdownAllWorkers(options?: { timeoutMs?: number }): Promise<void>;
   cancelTask(operationId: string): boolean;
@@ -208,6 +213,34 @@ interface WeftServer extends AsyncDisposable {
 ```
 
 `ready` resolves once startup task-ledger recovery has reconstructed every non-terminal task's in-memory registry, deadline-tracker, and task-queue state from durable storage after a restart; it rejects if the recovery scan itself failed. `dispatchTask`, long-poll claim/result handling, and worker registration all await this internally before touching the ledger, so a scan failure blocks new task claims and worker registrations with an actionable error rather than silently continuing with partial indexes. Awaiting `ready` explicitly is optional — it exists for callers (health checks, orchestration) that want to observe readiness without dispatching a probe task.
+
+### `getTaskResult` and `adoptTaskResult`
+
+`getTaskResult(operationId)` reads the current public view of a dispatched task. It returns `null` if no record exists — the task was never dispatched, or a retained terminal record has already been reaped. A non-terminal task reports `{ status: 'pending', state }`; a terminal task reports its `disposition`, `resultDigest`, and adoption state; a dead-lettered task reports why its result could not be durably persisted. The resolved terminal `resultStatus`/`error` describe the worker's own outcome — the actual result _value_ is never included, since the durable ledger only ever stores a content digest of it, not the payload itself.
+
+```typescript partial
+type TaskResultView =
+  | { status: 'pending'; state: 'queued' | 'leased' | 'completing' | 'cancelling' }
+  | {
+      status: 'terminal';
+      disposition: 'resolved' | 'cancelled' | 'retryExhausted';
+      resultDigest: string;
+      terminalAt: number;
+      adopted: boolean;
+      adoptedAt?: number;
+      resultStatus?: 'completed' | 'failed'; // only present for disposition: 'resolved'
+      error?: string;
+    }
+  | {
+      status: 'deadLettered';
+      persistenceFailureReason: string;
+      pendingStatus: 'completed' | 'failed';
+      deadLetteredAt: number;
+      error?: string;
+    };
+```
+
+`adoptTaskResult(operationId, resultDigest)` marks a terminal task's result as adopted — the durable assertion that whatever consumed the result (application logic, or a workflow's own checkpoint once a future project closes that loop) has incorporated it. `resultDigest` must match the digest from `getTaskResult`; a mismatch (or a record that is not currently terminal) returns `false` without changing anything. Adoption is required before `taskRetentionWindowMs` will ever reap a terminal record — until a caller adopts a result, it is retained forever, by design. Adoption is also idempotent: adopting an already-adopted record with the same digest succeeds again and refreshes `adoptedAt`.
 
 ```typescript partial
 {
