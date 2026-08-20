@@ -464,10 +464,10 @@ const signalStorageKey = (
  * zero-padded to 16 digits for lexicographic ordering.
  *
  * This registry grows as storage features are added, which is why this file
- * carries a `max-lines: 600` override (above the repo default ceiling) in
- * `.oxlintrc.json` — 600 matches the documented split threshold in
- * `.claude/rules/conventions.md`. When `KEYS` next approaches that line, extract
- * it into its own module rather than raising the ceiling again.
+ * carries a `max-lines` override in `.oxlintrc.json` above the repository
+ * default of 500. Extracting `KEYS` into its own module — and dropping the
+ * override — is tracked in WFT-90. Prefer adding new key families as a separate
+ * module spread into `KEYS` (see `ownership-keys.ts`) over growing this file.
  *
  * @example
  * ```ts
