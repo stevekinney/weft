@@ -53,7 +53,8 @@
     ".bun/**",
     "node_modules/**",
     ".claude/worktrees/**",
-    "*.lock"
+    "*.lock",
+    "tests/**/*.test-d.ts"
   ],
   "overrides": [
     {
