@@ -653,9 +653,9 @@ export function serve(options: ServeOptions): WeftServer {
       await stack[Symbol.asyncDispose]();
     },
     dispatchTask: (task) => dispatchTaskImpl(context, options, task),
-    getTaskResult: (operationId) => getTaskResultViewImpl(options, operationId),
+    getTaskResult: (operationId) => getTaskResultViewImpl(options.engine.storage, operationId),
     adoptTaskResult: (operationId, resultDigest) =>
-      adoptTaskResultImpl(options, operationId, resultDigest),
+      adoptTaskResultImpl(options.engine.storage, operationId, resultDigest),
     shutdownWorker: (workerId, shutdownOptions) =>
       shutdownWorkerImpl(context, workerId, shutdownOptions),
     shutdownAllWorkers: (shutdownOptions) => shutdownAllWorkersImpl(context, shutdownOptions),

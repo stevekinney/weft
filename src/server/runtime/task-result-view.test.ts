@@ -145,7 +145,7 @@ function deadLetteredFixture(
 describe('getTaskResultViewImpl', () => {
   it('returns null when no record exists', async () => {
     const options = minimalServeOptions();
-    expect(await getTaskResultViewImpl(options, 'never-dispatched')).toBeNull();
+    expect(await getTaskResultViewImpl(options.engine.storage, 'never-dispatched')).toBeNull();
   });
 
   it.each([
@@ -157,7 +157,7 @@ describe('getTaskResultViewImpl', () => {
     const options = minimalServeOptions();
     await options.engine.storage.put(taskLedgerKey('op-1'), encodeRemoteTaskRecord(record));
 
-    const view = await getTaskResultViewImpl(options, 'op-1');
+    const view = await getTaskResultViewImpl(options.engine.storage, 'op-1');
 
     expect(view).toEqual({ status: 'pending', state });
   });
@@ -167,7 +167,7 @@ describe('getTaskResultViewImpl', () => {
     const record = resolvedFixture({ adopted: true, adoptedAt: 5_000 });
     await options.engine.storage.put(taskLedgerKey('op-1'), encodeRemoteTaskRecord(record));
 
-    const view = await getTaskResultViewImpl(options, 'op-1');
+    const view = await getTaskResultViewImpl(options.engine.storage, 'op-1');
 
     expect(view).toEqual({
       status: 'terminal',
@@ -186,7 +186,7 @@ describe('getTaskResultViewImpl', () => {
     const record = resolvedFixture({ status: 'failed', error: 'boom' });
     await options.engine.storage.put(taskLedgerKey('op-1'), encodeRemoteTaskRecord(record));
 
-    const view = await getTaskResultViewImpl(options, 'op-1');
+    const view = await getTaskResultViewImpl(options.engine.storage, 'op-1');
 
     expect(view).toMatchObject({ resultStatus: 'failed', error: 'boom' });
   });
@@ -196,7 +196,7 @@ describe('getTaskResultViewImpl', () => {
     const record = cancelledFixture();
     await options.engine.storage.put(taskLedgerKey('op-1'), encodeRemoteTaskRecord(record));
 
-    const view = await getTaskResultViewImpl(options, 'op-1');
+    const view = await getTaskResultViewImpl(options.engine.storage, 'op-1');
 
     expect(view).toEqual({
       status: 'terminal',
@@ -212,7 +212,7 @@ describe('getTaskResultViewImpl', () => {
     const record = deadLetteredFixture({ error: 'boom' });
     await options.engine.storage.put(taskLedgerKey('op-1'), encodeRemoteTaskRecord(record));
 
-    const view = await getTaskResultViewImpl(options, 'op-1');
+    const view = await getTaskResultViewImpl(options.engine.storage, 'op-1');
 
     expect(view).toEqual({
       status: 'deadLettered',
@@ -230,10 +230,10 @@ describe('adoptTaskResultImpl', () => {
     const record = resolvedFixture();
     await options.engine.storage.put(taskLedgerKey('op-1'), encodeRemoteTaskRecord(record));
 
-    const adopted = await adoptTaskResultImpl(options, 'op-1', 'digest-1');
+    const adopted = await adoptTaskResultImpl(options.engine.storage, 'op-1', 'digest-1');
 
     expect(adopted).toBe(true);
-    const view = await getTaskResultViewImpl(options, 'op-1');
+    const view = await getTaskResultViewImpl(options.engine.storage, 'op-1');
     expect(view).toMatchObject({ adopted: true });
   });
 
@@ -242,7 +242,7 @@ describe('adoptTaskResultImpl', () => {
     const record = resolvedFixture({ adopted: true, adoptedAt: 1_000 });
     await options.engine.storage.put(taskLedgerKey('op-1'), encodeRemoteTaskRecord(record));
 
-    const adopted = await adoptTaskResultImpl(options, 'op-1', 'digest-1');
+    const adopted = await adoptTaskResultImpl(options.engine.storage, 'op-1', 'digest-1');
 
     expect(adopted).toBe(true);
   });
@@ -252,10 +252,10 @@ describe('adoptTaskResultImpl', () => {
     const record = resolvedFixture();
     await options.engine.storage.put(taskLedgerKey('op-1'), encodeRemoteTaskRecord(record));
 
-    const adopted = await adoptTaskResultImpl(options, 'op-1', 'wrong-digest');
+    const adopted = await adoptTaskResultImpl(options.engine.storage, 'op-1', 'wrong-digest');
 
     expect(adopted).toBe(false);
-    const view = await getTaskResultViewImpl(options, 'op-1');
+    const view = await getTaskResultViewImpl(options.engine.storage, 'op-1');
     expect(view).toMatchObject({ adopted: false });
   });
 
@@ -264,11 +264,13 @@ describe('adoptTaskResultImpl', () => {
     const record = leasedFixture();
     await options.engine.storage.put(taskLedgerKey('op-1'), encodeRemoteTaskRecord(record));
 
-    expect(await adoptTaskResultImpl(options, 'op-1', 'digest-1')).toBe(false);
+    expect(await adoptTaskResultImpl(options.engine.storage, 'op-1', 'digest-1')).toBe(false);
   });
 
   it('rejects adopting a nonexistent record', async () => {
     const options = minimalServeOptions();
-    expect(await adoptTaskResultImpl(options, 'never-dispatched', 'digest-1')).toBe(false);
+    expect(await adoptTaskResultImpl(options.engine.storage, 'never-dispatched', 'digest-1')).toBe(
+      false,
+    );
   });
 });

@@ -1353,17 +1353,20 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       // exhaustiveness guard (`getTaskResultViewImpl`'s switch), matching the
       // identical pattern already allowed for `task-ledger-recovery.ts`.
       // `requireUncoveredLines` is intentionally omitted for the same reason
-      // it is omitted there: `default: {` (124) is a case-label/brace line
+      // it is omitted there: `default: {` (122) is a case-label/brace line
       // that flips between hit and unhit run to run with byte-identical
       // source — a coverage-attribution artifact, not a real reachability
-      // signal — so only the two dead statements inside it (127, 128) are
-      // guaranteed to read 0 every run. (Line numbers shifted +16 when the
-      // TaskResultView doc comment gained an @example block for the public
-      // JSDoc audit.)
+      // signal — so only the two dead statements inside it (125, 126) are
+      // guaranteed to read 0 every run. (Line numbers shifted -2 when
+      // getTaskResultViewImpl/adoptTaskResultImpl were changed to take
+      // `storage: Storage` directly instead of `options: ServeOptions`,
+      // breaking a circular import with `../index.ts` implicated in a
+      // deterministic CI-only oxlint-tsgolint false positive on
+      // TaskResultView — PR #904.)
       {
         reason:
           'Compile-time exhaustiveness guard for a closed discriminated union has no reachable runtime path to test without an unsafe cast.',
-        lines: new Set([124, 127, 128]),
+        lines: new Set([122, 125, 126]),
       },
     ],
     [

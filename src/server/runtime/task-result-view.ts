@@ -26,7 +26,7 @@
  * @module server/runtime/task-result-view
  */
 
-import type { ServeOptions } from '../index.ts';
+import type { Storage } from '../../storage/interface.ts';
 import { markWorkflowResultAdopted } from '../task-ledger-transitions.ts';
 import {
   decodeRemoteTaskRecord,
@@ -103,12 +103,10 @@ function deadLetteredTaskResultView(decoded: RemoteTaskDeadLettered): TaskResult
  * retained terminal record has already been reaped.
  */
 export async function getTaskResultViewImpl(
-  options: ServeOptions,
+  storage: Storage,
   operationId: string,
 ): Promise<TaskResultView | null> {
-  const decoded = decodeRemoteTaskRecord(
-    await options.engine.storage.get(taskLedgerKey(operationId)),
-  );
+  const decoded = decodeRemoteTaskRecord(await storage.get(taskLedgerKey(operationId)));
   if (decoded === null) return null;
 
   switch (decoded.state) {
@@ -141,12 +139,12 @@ export async function getTaskResultViewImpl(
  * `adoptedAt`.
  */
 export async function adoptTaskResultImpl(
-  options: ServeOptions,
+  storage: Storage,
   operationId: string,
   resultDigest: string,
 ): Promise<boolean> {
   const result = await commitTaskLedgerTransition(
-    options.engine.storage,
+    storage,
     operationId,
     (current, now) =>
       markWorkflowResultAdopted(current, { expectedResultDigest: resultDigest }, now),
