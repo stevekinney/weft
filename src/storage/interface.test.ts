@@ -222,6 +222,9 @@ describe('WEFT_RESERVED_KEY_PREFIXES', () => {
       KEYS.workflowVisibilityMetaCursor(),
       KEYS.leaseEpoch(),
       KEYS.leaseHolder(),
+      KEYS.workflowOwnerEpoch('workflow-id'),
+      KEYS.workflowOwnerHolder('workflow-id'),
+      KEYS.ownershipModeMarker(),
     ];
 
     for (const key of representativeKeys) {
@@ -450,7 +453,7 @@ describe('normalizeDeleteRangeOptions', () => {
 
   it('throws when a bound is not a string', () => {
     for (const bound of ['gt', 'gte', 'lt', 'lte'] as const) {
-      expect(() => normalizeDeleteRangeOptions({ [bound]: 3 } as never)).toThrow(
+      expect(() => normalizeDeleteRangeOptions({ [bound]: 3 })).toThrow(
         'deleteRange bounds must be strings',
       );
     }

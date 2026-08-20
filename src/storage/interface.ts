@@ -7,6 +7,8 @@ import {
   storageHasCore,
   storageKeysCore,
 } from './derived-operations.ts';
+import { encodeStorageKeyComponent } from './key-encoding.ts';
+import { OWNERSHIP_CLAIM_KEYS } from './ownership-keys.ts';
 
 export { assertDurableStorageForRecovery, requireStorageCapability } from './capabilities.ts';
 export type { GatedStorageCapabilityKey, StorageCapabilities } from './capabilities.ts';
@@ -428,60 +430,11 @@ export async function storageConditionalBatch(
   return storage.conditionalBatch(conditions, operations);
 }
 
-/**
- * Encode an untrusted string so it is safe to embed in a colon-delimited storage key.
- *
- * @example
- * ```ts
- * import { encodeStorageKeyComponent } from '@lostgradient/weft/storage/interface';
- *
- * const safe = encodeStorageKeyComponent('user:123/profile');
- * console.log(safe); // 'user%3A123%2Fprofile'
- * ```
- */
-export function encodeStorageKeyComponent(value: string): string {
-  return encodeURIComponent(value);
-}
-
-/**
- * Decode a storage-key component produced by {@link encodeStorageKeyComponent}.
- * Throws when `value` is malformed percent-encoded text. Callers handling
- * untrusted input should prefer {@link tryDecodeStorageKeyComponent}.
- *
- * @throws {URIError} When `value` contains malformed percent-encoded data.
- *
- * @example
- * ```ts
- * import { encodeStorageKeyComponent, decodeStorageKeyComponent } from '@lostgradient/weft/storage/interface';
- *
- * const encoded = encodeStorageKeyComponent('user:123');
- * const decoded = decodeStorageKeyComponent(encoded);
- * console.log(decoded); // 'user:123'
- * ```
- */
-export function decodeStorageKeyComponent(value: string): string {
-  return decodeURIComponent(value);
-}
-
-/**
- * Decode a storage-key component produced by {@link encodeStorageKeyComponent}.
- * Returns `null` when the component is malformed instead of throwing.
- *
- * @example
- * ```ts
- * import { tryDecodeStorageKeyComponent } from '@lostgradient/weft/storage/interface';
- *
- * console.log(tryDecodeStorageKeyComponent('user%3A123')); // 'user:123'
- * console.log(tryDecodeStorageKeyComponent('%GG'));        // null
- * ```
- */
-export function tryDecodeStorageKeyComponent(value: string): string | null {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return null;
-  }
-}
+export {
+  decodeStorageKeyComponent,
+  encodeStorageKeyComponent,
+  tryDecodeStorageKeyComponent,
+} from './key-encoding.ts';
 
 const formatSortableTimestamp = (timestamp: number): string => String(timestamp).padStart(16, '0');
 
@@ -673,6 +626,7 @@ export const KEYS = {
    * {@link KEYS.leaseEpoch}.
    */
   leaseHolder: () => 'lease:holder',
+  ...OWNERSHIP_CLAIM_KEYS,
   budget: (namespace: string, period: string, date: string) =>
     `budget:${namespace}:${period}:${date}`,
   review: (workflowId: string, reviewId: string) =>
