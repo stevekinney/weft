@@ -8,7 +8,17 @@ const maximumUnpackedBytes = 12 * 1024 * 1024;
 // fixture, or stray build output) rather than a hard size ceiling — the packed
 // and unpacked byte budgets above are the primary bloat backstop. Bump this
 // when the published `dist/` surface legitimately grows.
-const maximumEntryCount = 1391;
+//
+// 0.19.0 packs 1411 entries, up from 0.18.0's 1335. Every one of the 78 added
+// entries is a `.d.ts`/`.js` pair for shipped feature code — the canonical
+// worker manifest (`dist/worker/manifest/*`), the durable task ledger
+// (`dist/server/task-ledger-*`), worker registry admission and deployment
+// consistency (`dist/worker/registry/*`), and the two new worker-diagnostics
+// operations — with `dist/server/task-resolved-record.*` retired in exchange.
+// No test, fixture, or stray build output entered the tarball, and both byte
+// budgets stayed far clear (1.12 MB packed of 5, 4.6 MB unpacked of 12). The
+// ceiling keeps the same ~56-entry headroom it was originally given.
+const maximumEntryCount = 1467;
 
 type PackFile = {
   path: string;

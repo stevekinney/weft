@@ -119,6 +119,7 @@ void fullyTypedServeOptions;
 const taskDispatch: TaskDispatch = {
   operationId: 'op-1',
   activityName: 'sendEmail',
+  workflowType: 'notifications',
   input: {},
   retryPolicy: {
     maxAttempts: 3,

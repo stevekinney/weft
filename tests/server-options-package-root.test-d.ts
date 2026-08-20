@@ -143,6 +143,7 @@ void fullyTypedPackageRootServeOptions;
 const packageRootTaskDispatch: TaskDispatch = {
   operationId: 'op-1',
   activityName: 'sendEmail',
+  workflowType: 'notifications',
   input: {},
   retryPolicy: {
     maxAttempts: 3,

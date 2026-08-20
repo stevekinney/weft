@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-08-20
+
 ### Changed — RemoteWorker protocol v3: canonical worker manifest replaces parallel identity fields
 
 The RemoteWorker WebSocket protocol version is now `3`. `register` no longer
@@ -52,6 +54,76 @@ that supplied `gitSha` should drop it. Server hosts that inspected
 `WorkerSummary.gitSha` or `WorkerDeploymentSummary.gitSha` must remove that
 read. Hosts that want to gate worker registration should configure
 `ServeOptions.workerAdmissionPolicy`.
+
+### Changed — durable task ledger for queue dispatch, worker claims, and startup recovery
+
+Task dispatch, worker claims, and result submission are now backed by a
+durable `task-ledger:` record per `operationId`, and startup recovery reads
+that same keyspace before the server admits task-plane traffic.
+
+`TaskDispatch.workflowType` is now required — `buildWorkerExecutionIdentity`
+needs it to look up the claiming worker's manifest entry
+(`manifest.workflows[workflowType].activities[activityName]`), and there is
+no safe default to supply. `TaskDispatch.attempt` has been removed; it was
+already silently ignored by dispatch and redispatch, so keeping it as a
+documented no-op field would have been worse than dropping it.
+`WorkerRegistry` gains a new public `releaseReservation(operationId)` method
+that undoes a prior `assignTask` reservation when the durable claim behind
+it never committed.
+
+Redispatching an `operationId` that is already `queued` reuses the existing
+ledger record instead of creating a new one, and once an `operationId`
+reaches a terminal state, `dispatchTask` permanently refuses to redispatch
+it — mirroring the existing `start-idem:` spent-key contract, where a
+terminal record is not a slot to reuse. Submitting a task result for an
+`operationId` whose ledger commit fails — an unknown `operationId` or a
+mismatched `attemptToken` — is now a hard rejection: `403 Forbidden` over
+REST, a logged error over WebSocket, rather than the previous system's
+tolerant no-op.
+
+`serve()` now calls `requireStorageCapability` synchronously during
+construction, before binding a port, so an `engine.storage` backend that
+doesn't implement `conditionalBatch` fails immediately instead of surfacing
+the gap at the first `dispatchTask` call.
+
+Startup recovery no longer scans the retired `op:inflight:` keyspace as an
+unawaited background promise that only logged an eventual failure. It now
+scans the durable `task-ledger:` keyspace synchronously, reconstructing
+every non-terminal record's in-memory state: `queued` records redispatch
+respecting `availableAt`, `leased` records rehydrate ownership (or requeue
+through the same conditional-CAS path the periodic reconciliation scanner
+already uses, or exhaust, if the lease already lapsed), and
+`completing`/`cancelling` records rehydrate ownership only.
+
+`WeftServer` gains a new public `ready: Promise<void>` field that resolves
+once this recovery scan completes and rejects — permanently — if the scan
+itself failed. `dispatchTask`, the long-poll task-claim and task-result
+endpoints, and WebSocket worker registration all await this gate
+internally, so awaiting `ready` yourself is optional; it exists for health
+checks or orchestration that want to observe readiness without dispatching
+a probe task. A failed recovery scan now surfaces as a thrown `Error` from
+`dispatchTask`, a `503` from the task-claim and task-result endpoints, and a
+`registerError` with the existing code `registration_rejected` from worker
+registration — a new trigger for that code alongside a rejecting
+`WorkerAdmissionPolicy` — rather than being silently masked by partial
+in-memory indexes.
+
+**Migration**: add `workflowType` to every `TaskDispatch` call site — there
+is no safe default the SDK can supply. Drop any `attempt` field you were
+passing; it was never read. Confirm your storage adapter implements
+`conditionalBatch`, since `serve()` now throws at startup rather than at
+first dispatch if it doesn't. Update any code that relied on redispatching a
+completed `operationId` to reset its record, or on unauthenticated or
+unrecognized task-result submissions being silently ignored — both now
+surface as explicit rejections that call sites must handle. A server
+restarting onto this version from a pre-durable-ledger deployment will not
+resume in-flight work recorded under the old `op:inflight:` keyspace — those
+records remain inert in storage until a later release migrates diagnostics
+off them. Callers that treat "no worker available" and "server not ready" as
+equivalent outcomes from `dispatchTask`, the task-claim/result endpoints, or
+worker registration should now distinguish the thrown error, `503`, or
+`registration_rejected` case produced by a failed recovery scan from
+ordinary backpressure.
 
 ## [0.18.0] - 2026-08-11
 
