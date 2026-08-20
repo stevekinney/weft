@@ -42,4 +42,28 @@ if (VERSION !== pkg.version) {
   process.exit(1);
 }
 
-console.log(`Release version verified: ${tag} (package.json and VERSION agree)`);
+// README.md is the npm package landing page, so its current-release marker is
+// a third version surface consumers read. It drifted to a stale release once
+// because nothing pinned it here alongside package.json and VERSION.
+const readmePath = path.join(process.cwd(), 'README.md');
+const readmeCurrentReleasePattern =
+  /^A Bun-native durable execution engine\. Current release: `(.+)`\.$/m;
+const readmeMatch = fs.readFileSync(readmePath, 'utf8').match(readmeCurrentReleasePattern);
+
+if (!readmeMatch) {
+  console.error(
+    'README.md is missing its "Current release: `x.y.z`." marker, so the release ' +
+      'version could not be verified against it. Restore that line before releasing.',
+  );
+  process.exit(1);
+}
+
+if (readmeMatch[1] !== pkg.version) {
+  console.error(
+    `Version mismatch: README.md current release=${readmeMatch[1]} package.json=${pkg.version}. ` +
+      'Update README.md to match package.json before releasing.',
+  );
+  process.exit(1);
+}
+
+console.log(`Release version verified: ${tag} (package.json, VERSION, and README agree)`);

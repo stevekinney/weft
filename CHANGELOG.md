@@ -64,9 +64,12 @@ that same keyspace before the server admits task-plane traffic.
 `TaskDispatch.workflowType` is now required — `buildWorkerExecutionIdentity`
 needs it to look up the claiming worker's manifest entry
 (`manifest.workflows[workflowType].activities[activityName]`), and there is
-no safe default to supply. `TaskDispatch.attempt` has been removed; it was
-already silently ignored by dispatch and redispatch, so keeping it as a
-documented no-op field would have been worse than dropping it.
+no safe default to supply. `TaskDispatch.attempt` has been removed, and it
+was not a no-op: dispatch persisted `attempt ?? 1` into the in-flight record
+and sent it to WebSocket workers, and redispatch derived retry backoff from
+it as `retryCount: attempt - 1`. The durable ledger now owns attempt
+numbering and backoff for every task, so a caller-seeded starting attempt no
+longer has a place to live.
 `WorkerRegistry` gains a new public `releaseReservation(operationId)` method
 that undoes a prior `assignTask` reservation when the durable claim behind
 it never committed.
@@ -75,11 +78,14 @@ Redispatching an `operationId` that is already `queued` reuses the existing
 ledger record instead of creating a new one, and once an `operationId`
 reaches a terminal state, `dispatchTask` permanently refuses to redispatch
 it — mirroring the existing `start-idem:` spent-key contract, where a
-terminal record is not a slot to reuse. Submitting a task result for an
-`operationId` whose ledger commit fails — an unknown `operationId` or a
-mismatched `attemptToken` — is now a hard rejection: `403 Forbidden` over
-REST, a logged error over WebSocket, rather than the previous system's
-tolerant no-op.
+terminal record is not a slot to reuse. Submitting a task result for a task
+the worker does not own, or with a stale `attemptToken`, is now a hard
+rejection rather than the previous system's tolerant no-op: `403 Forbidden`
+over REST, and over WebSocket a `protocolError` frame with code
+`invalid_message` naming the rejected `operationId`, returned by the
+ownership and attempt-token guards before any ledger commit is attempted. A
+durable commit that fails _after_ those guards pass is logged rather than
+signalled back over the socket.
 
 `serve()` now calls `requireStorageCapability` synchronously during
 construction, before binding a port, so an `engine.storage` backend that
@@ -110,12 +116,15 @@ in-memory indexes.
 
 **Migration**: add `workflowType` to every `TaskDispatch` call site — there
 is no safe default the SDK can supply. Drop any `attempt` field you were
-passing; it was never read. Confirm your storage adapter implements
-`conditionalBatch`, since `serve()` now throws at startup rather than at
-first dispatch if it doesn't. Update any code that relied on redispatching a
-completed `operationId` to reset its record, or on unauthenticated or
-unrecognized task-result submissions being silently ignored — both now
-surface as explicit rejections that call sites must handle. A server
+passing, and expect the ledger to start that task at attempt 1: a
+caller-seeded attempt number no longer shifts the first retry's backoff, so
+call sites that pre-seeded one to resume an external retry count should move
+that state into their own retry policy. Confirm your storage adapter
+implements `conditionalBatch`, since `serve()` now throws at startup rather
+than at first dispatch if it doesn't. Update any code that relied on
+redispatching a completed `operationId` to reset its record, or on
+unowned or stale-token task-result submissions being silently ignored —
+both now surface as explicit rejections that call sites must handle. A server
 restarting onto this version from a pre-durable-ledger deployment will not
 resume in-flight work recorded under the old `op:inflight:` keyspace — those
 records remain inert in storage until a later release migrates diagnostics
