@@ -78,16 +78,22 @@ retry budget, instead of leaving the record stuck in `completing`.
 `WeftServer.ready` exposes a settled-promise readiness gate that the
 startup task-ledger recovery scan (`runTaskLedgerRecovery`, replacing the
 old unawaited `restoreInflightTasks`) resolves once every non-terminal
-record has been rehydrated, redispatched, or requeued.
+record has been examined and its recovery action initiated — lease
+ownership rehydrated, a queued record's redispatch scheduled, or an
+expired lease requeued/exhausted. `ready` marks scan completion, not that
+every scheduled redispatch has actually run by the time it resolves.
 
 **Breaking**:
 
 - `TaskDispatch.workflowType` is now required.
-- `TaskDispatch.attempt` is removed — it was already silently ignored by
-  both fresh dispatch and requeue-redispatch.
+- `TaskDispatch.attempt` is removed. It previously had real effect — fresh
+  dispatch persisted it into the queued/in-flight record, sent it in the
+  worker task frame, and used it to seed the initial retry count — so a
+  caller that seeded a non-default `attempt` will see different behavior.
+  Attempt tracking is now entirely ledger-owned.
 - A task-result completion for an unknown or unauthorized `operationId` is
-  now a hard rejection (403 REST / logged error WebSocket), not the old
-  system's tolerant no-op.
+  now a hard rejection: REST returns `403`, and WebSocket sends a
+  `protocolError` frame back to the worker instead of applying it silently.
 - A terminal ledger record permanently blocks re-dispatch of the same
   `operationId` until retention reclaims it, mirroring the `start-idem:`
   spent-key contract.
@@ -99,8 +105,10 @@ record has been rehydrated, redispatched, or requeued.
 - Pre-upgrade `op:inflight:` records are no longer read at startup. A
   server restarting onto this version from a pre-cutover deployment will
   not resume in-flight work recorded in the old keyspace; drain the queue
-  before upgrading if that matters. Expired leased records that recovery
-  finds are now requeued instead of deleted.
+  before upgrading if that matters. An expired leased record recovery
+  finds is requeued if its retry policy allows another attempt, or
+  transitioned straight to a terminal `retryExhausted` record if not —
+  it is never silently deleted, but it is not unconditionally requeued.
 
 **Migration**: upgrade server and any code reading `KEYS.operationDeadLetter`
 together. Dispatch call sites must supply `workflowType` and drop `attempt`.
