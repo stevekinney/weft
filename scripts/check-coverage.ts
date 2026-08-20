@@ -1317,17 +1317,18 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       // (projectTaskDetail's switch) unreachable at runtime — a compile-time
       // exhaustiveness guard only. `requireUncoveredLines` is omitted
       // because, matching the sibling entry's documented experience, which
-      // of `default: {` (339), the dead `const`/`return` pair (342, 343),
-      // and the closing brace (344) reads 0 flips between runs/environments
+      // of `default: {` (337), the dead `const`/`return` pair (340, 341),
+      // and the closing brace (342) reads 0 flips between runs/environments
       // with byte-identical source — a coverage-attribution artifact, not a
       // real reachability signal. All four are included so the allowance
       // covers every combination CI has actually produced. Re-derive from
       // fresh coverage/lcov.info (not by inspection) if this file's line
-      // count ever shifts again.
+      // count ever shifts again — it has drifted repeatedly from lint-staged
+      // formatting collapsing multi-line conditional spreads onto one line.
       {
         reason:
           'Compile-time exhaustiveness guard for a closed discriminated union has no reachable runtime path to test without an unsafe cast.',
-        lines: new Set([339, 342, 343, 344]),
+        lines: new Set([337, 340, 341, 342]),
       },
     ],
     [
