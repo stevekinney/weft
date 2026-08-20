@@ -1315,15 +1315,17 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       // Same pattern as the get-task-diagnostics.ts entry immediately below:
       // the closed RemoteTaskRecord state union makes this default branch
       // (projectTaskDetail's switch) unreachable at runtime — a compile-time
-      // exhaustiveness guard only. `requireUncoveredLines` is omitted for the
-      // same reason: `default: {` (301) and the dead `const`/`return` pair
-      // (304, 305) inside it are the lines that read 0 every run; the
-      // closing brace is a boundary-attribution artifact that flips between
-      // hit/unhit run to run with byte-identical source.
+      // exhaustiveness guard only. `requireUncoveredLines` is omitted
+      // because, matching the sibling entry's documented experience, which
+      // of `default: {` (299), the dead `const`/`return` pair (302, 303),
+      // and the closing brace (304) reads 0 flips between runs/environments
+      // with byte-identical source — a coverage-attribution artifact, not a
+      // real reachability signal. All four are included so the allowance
+      // covers every combination CI has actually produced.
       {
         reason:
           'Compile-time exhaustiveness guard for a closed discriminated union has no reachable runtime path to test without an unsafe cast.',
-        lines: new Set([301, 304, 305]),
+        lines: new Set([299, 302, 303, 304]),
       },
     ],
     [
