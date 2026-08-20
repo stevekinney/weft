@@ -17,8 +17,9 @@ purposes, this operation distinguishes all six ledger states and carries the
 full dispatch envelope (attempt identity, queue, priority, header key names,
 retry policy, visibility timeout, schedule-to-close deadline, execution
 requirement, fair-share key, sticky routing, retry availability) plus
-state-specific evidence (terminal disposition, `resultDigest`, adoption
-markers, dead-letter reason). The REST path lives under `/v1/tasks/detail/`
+state-specific evidence (terminal disposition, `resultDigest` for resolved
+dispositions, adoption markers, dead-letter reason). The REST path lives
+under `/v1/tasks/detail/`
 rather than a bare `/v1/tasks/:operationId`, so a task whose caller-supplied
 `operationId` happens to equal an existing sibling literal path (currently
 `diagnostics`) is still reachable. Faults `NotFound` for a missing or

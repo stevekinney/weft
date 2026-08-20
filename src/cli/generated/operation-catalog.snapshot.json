@@ -2698,7 +2698,6 @@
               "attempt",
               "state",
               "disposition",
-              "resultDigest",
               "terminalAt",
               "adopted"
             ],

@@ -21,7 +21,12 @@
  * payload inspector. The task `input` value and a dead-lettered record's
  * pending result `value` are omitted for the same "digest not value"
  * reason `TaskResultView` omits a resolved result's value — the ledger
- * proves which attempt won, it does not re-deliver payloads.
+ * proves which attempt won, it does not re-deliver payloads. `resultDigest`
+ * is only projected for `disposition: 'resolved'`: the `cancelled`
+ * (mid-attempt) and `retryExhausted` lineages store a synthetic
+ * `${disposition}:${operationId}:${attemptToken}` placeholder there instead
+ * of a real content hash (`task-ledger-transitions(-cancellation).ts`),
+ * which would otherwise leak the excluded `attemptToken` verbatim.
  *
  * **Read-only by design.** This issue deliberately does not add an HTTP
  * path to `adoptTaskResultImpl`. WFT-24 describes adoption as "an explicit
@@ -148,7 +153,8 @@ const taskDetailTerminalSchema = z
     ...taskDetailBaseFields,
     state: z.literal('terminal'),
     disposition: z.enum(['resolved', 'cancelled', 'retryExhausted']),
-    resultDigest: z.string(),
+    // Only present for disposition: 'resolved' — see terminalDispositionFields.
+    resultDigest: z.string().optional(),
     terminalAt: z.number(),
     adopted: z.boolean(),
     adoptedAt: z.number().optional(),
@@ -277,8 +283,16 @@ function projectCancelling(record: RemoteTaskCancelling): GetTaskDetailOutput {
 
 function terminalDispositionFields(record: RemoteTaskTerminal) {
   if (record.disposition === 'resolved') {
+    // Only the 'resolved' lineage's resultDigest is a genuine content hash
+    // of an actual result value, safe to publish (TaskResultView's own
+    // documented "digest not value" contract). The 'cancelled' (when
+    // cancelled mid-attempt) and 'retryExhausted' lineages instead store a
+    // synthetic placeholder — task-ledger-transitions(-cancellation).ts
+    // build it as `${disposition}:${operationId}:${attemptToken}` — which
+    // would leak the excluded attemptToken verbatim if returned here.
     return {
       disposition: 'resolved' as const,
+      resultDigest: record.resultDigest,
       resultStatus: record.status,
       ...(record.error !== undefined ? { error: record.error } : {}),
     };
@@ -299,7 +313,6 @@ function projectTerminal(record: RemoteTaskTerminal): GetTaskDetailOutput {
   return {
     ...baseEnvelopeFields(record),
     state: 'terminal',
-    resultDigest: record.resultDigest,
     terminalAt: record.terminalAt,
     adopted: record.adopted,
     ...(record.adoptedAt !== undefined ? { adoptedAt: record.adoptedAt } : {}),

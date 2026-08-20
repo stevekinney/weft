@@ -205,9 +205,12 @@ Every variant carries the dispatch envelope (`operationId`, `workflowId?`,
 `visibilityTimeoutMilliseconds`, `retryPolicy?`, `scheduleToCloseDeadline?`,
 `executionRequirement?`, `fairShareKey?`, `stickyWorkflowId?`, `createdAt`,
 `attempt`) plus state-specific fields — for example a `terminal` record adds
-`disposition`, `resultDigest`, `terminalAt`, `adopted`, and `adoptedAt?`; a
-`deadLettered` record adds `pendingStatus`, `resultDigest`,
-`persistenceFailureReason`, and `deadLetteredAt`.
+`disposition`, `terminalAt`, `adopted`, and `adoptedAt?`; a `deadLettered`
+record adds `pendingStatus`, `resultDigest`, `persistenceFailureReason`, and
+`deadLetteredAt`. `resultDigest` is present on a `terminal` record only when
+`disposition` is `resolved` — the `cancelled` and `retryExhausted` lineages
+store an internal placeholder there instead of a real content hash, so it is
+omitted rather than returned.
 
 ```json
 {

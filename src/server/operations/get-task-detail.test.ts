@@ -455,10 +455,18 @@ describe('weft.tasks.get', () => {
     expect(result.value).not.toHaveProperty('cancellationReason');
   });
 
-  it('reports a cancelled terminal task with cancellationReason, not resultStatus', async () => {
+  it('reports a cancelled terminal task with cancellationReason, not resultStatus, and never leaks the synthetic resultDigest that embeds attemptToken', async () => {
     const storage = new MemoryStorage();
     const engine = createEngine(storage);
-    await putLedgerRecord(storage, terminalCancelledFixture());
+    // task-ledger-transitions-cancellation.ts builds a leased-origin
+    // cancellation's resultDigest as `cancelled:${operationId}:${attemptToken}`
+    // — this fixture mirrors that exact shape to prove the token doesn't leak.
+    await putLedgerRecord(
+      storage,
+      terminalCancelledFixture({
+        resultDigest: 'cancelled:op-terminal-cancelled:super-secret-attempt-token',
+      }),
+    );
 
     const result = await runGetTaskDetail(engine, 'op-terminal-cancelled');
 
@@ -468,12 +476,21 @@ describe('weft.tasks.get', () => {
     expect(result.value.disposition).toBe('cancelled');
     expect(result.value.cancellationReason).toBe('operator requested');
     expect(result.value).not.toHaveProperty('resultStatus');
+    expect(result.value).not.toHaveProperty('resultDigest');
+    expect(JSON.stringify(result.value)).not.toContain('super-secret-attempt-token');
   });
 
-  it('reports a retry-exhausted terminal task with its error, and no retryCount/requeueCount', async () => {
+  it('reports a retry-exhausted terminal task with its error, no retryCount/requeueCount, and never leaks the synthetic resultDigest that embeds attemptToken', async () => {
     const storage = new MemoryStorage();
     const engine = createEngine(storage);
-    await putLedgerRecord(storage, terminalRetryExhaustedFixture());
+    // task-ledger-transitions.ts builds a retry-exhausted resultDigest as
+    // `retry-exhausted:${operationId}:${attemptToken}` — same proof as above.
+    await putLedgerRecord(
+      storage,
+      terminalRetryExhaustedFixture({
+        resultDigest: 'retry-exhausted:op-terminal-exhausted:super-secret-attempt-token',
+      }),
+    );
 
     const result = await runGetTaskDetail(engine, 'op-terminal-exhausted');
 
@@ -484,6 +501,8 @@ describe('weft.tasks.get', () => {
     expect(result.value.error).toBe('boom');
     expect(result.value).not.toHaveProperty('retryCount');
     expect(result.value).not.toHaveProperty('requeueCount');
+    expect(result.value).not.toHaveProperty('resultDigest');
+    expect(JSON.stringify(result.value)).not.toContain('super-secret-attempt-token');
   });
 
   it('reports a dead-lettered task with pendingStatus, resultDigest, and reason, never the raw pending value', async () => {
