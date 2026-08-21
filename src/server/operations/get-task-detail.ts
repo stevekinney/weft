@@ -38,7 +38,7 @@
  * @module server/operations/get-task-detail
  */
 
-import { z } from 'zod';
+import type { z } from 'zod';
 
 import type { Engine } from '../../core/engine.ts';
 import { raiseFault } from '../operation-catalog/raise-fault.ts';
@@ -56,189 +56,91 @@ import {
   type RemoteTaskRecord,
   type RemoteTaskTerminal,
 } from '../task-ledger.ts';
+import {
+  executionRequirementSchema,
+  getTaskDetailInput,
+  getTaskDetailOutputSchema,
+  retryPolicySchema,
+  type GetTaskDetailInput,
+  type GetTaskDetailOutput,
+} from './get-task-detail-schema.ts';
 
-const getTaskDetailInput = z.object({
-  operationId: z.string().min(1),
-});
+export {
+  executionRequirementSchema,
+  getTaskDetailOutputSchema,
+  retryPolicySchema,
+  type GetTaskDetailInput,
+  type GetTaskDetailOutput,
+} from './get-task-detail-schema.ts';
 
-const durationSchema = z.union([z.number(), z.string()]);
+// The ledger only validates that a stored retryPolicy/executionRequirement
+// has the right known fields with the right types (isValidRetryPolicy /
+// isValidExecutionRequirement) — it never rejects *additive* properties, and
+// task-dispatch.ts stores a fresh dispatch's caller-supplied object
+// unchanged. Passing that object through this operation's own `.strict()`
+// output schema verbatim would fail output validation (EngineFailure) for
+// an otherwise completely valid, already-running task the moment its caller
+// (a newer producer, or a plain JS object with excess properties — dispatch
+// is a same-process API, not Zod-validated) attaches anything extra.
+// Projecting only the declared fields keeps the read contract honest without
+// making an unrelated task unreadable.
+function projectRetryPolicy(
+  retryPolicy: NonNullable<RemoteTaskRecord['retryPolicy']>,
+): z.infer<typeof retryPolicySchema> {
+  return {
+    maxAttempts: retryPolicy.maxAttempts,
+    initialBackoff: retryPolicy.initialBackoff,
+    backoffMultiplier: retryPolicy.backoffMultiplier,
+    maxBackoff: retryPolicy.maxBackoff,
+    ...(retryPolicy.nonRetryableErrors !== undefined
+      ? { nonRetryableErrors: retryPolicy.nonRetryableErrors }
+      : {}),
+  };
+}
 
-const retryPolicySchema = z
-  .object({
-    maxAttempts: z.number(),
-    initialBackoff: durationSchema,
-    backoffMultiplier: z.number(),
-    maxBackoff: durationSchema,
-    nonRetryableErrors: z.array(z.string()).optional(),
-  })
-  .strict();
-
-const executionRequirementSchema = z
-  .object({
-    deploymentName: z.string().optional(),
-    buildId: z.string().optional(),
-    artifactDigest: z.string().optional(),
-    workflowRevision: z.string().optional(),
-    activityContractHash: z.string().optional(),
-  })
-  .strict();
-
-const taskDetailBaseFields = {
-  operationId: z.string(),
-  workflowId: z.string().optional(),
-  workflowType: z.string(),
-  activityName: z.string(),
-  queue: z.string(),
-  priority: z.number().optional(),
-  headerKeys: z.array(z.string()),
-  visibilityTimeoutMilliseconds: z.number(),
-  retryPolicy: retryPolicySchema.optional(),
-  scheduleToCloseDeadline: z.number().optional(),
-  executionRequirement: executionRequirementSchema.optional(),
-  fairShareKey: z.string().optional(),
-  stickyWorkflowId: z.string().optional(),
-  createdAt: z.number(),
-  attempt: z.number().int().nonnegative(),
-  retryCount: z.number().int().nonnegative().optional(),
-  requeueCount: z.number().int().nonnegative().optional(),
-  lastRequeueReason: z.string().optional(),
-};
-
-const leaseHolderSchemaFields = {
-  leaseDeadline: z.number(),
-  firstQueuedAt: z.number(),
-  lastQueuedAt: z.number(),
-  startedAt: z.number(),
-  lastHeartbeatAt: z.number(),
-};
-
-const taskDetailQueuedSchema = z
-  .object({
-    ...taskDetailBaseFields,
-    state: z.literal('queued'),
-    availableAt: z.number(),
-    firstQueuedAt: z.number(),
-    lastQueuedAt: z.number(),
-    lastDispatchedAt: z.number().optional(),
-    startedAt: z.number().optional(),
-  })
-  .strict();
-
-const taskDetailLeasedSchema = z
-  .object({ ...taskDetailBaseFields, state: z.literal('leased'), ...leaseHolderSchemaFields })
-  .strict();
-
-const taskDetailCompletingSchema = z
-  .object({
-    ...taskDetailBaseFields,
-    state: z.literal('completing'),
-    ...leaseHolderSchemaFields,
-    pendingStatus: z.enum(['completed', 'failed']),
-    resultDigest: z.string(),
-  })
-  .strict();
-
-const taskDetailCancellingSchema = z
-  .object({
-    ...taskDetailBaseFields,
-    state: z.literal('cancelling'),
-    ...leaseHolderSchemaFields,
-    cancellationReason: z.string(),
-    cancellationRequestedAt: z.number(),
-  })
-  .strict();
-
-// The RemoteTaskTerminal union guarantees resultStatus for 'resolved',
-// cancellationReason for 'cancelled', and error for 'retryExhausted' — never
-// independently optional the way task-ledger-types.ts models them. A single
-// flat object schema with all three optional would accept impossible
-// responses (e.g. `{ disposition: 'cancelled' }` with no reason) and
-// couldn't be narrowed precisely by a schema consumer. Modeled as a nested
-// discriminatedUnion on `disposition`, itself one branch of the outer
-// discriminatedUnion on `state` below — Zod v4 requires every branch of a
-// discriminatedUnion to be $ZodTypeDiscriminable, which a plain z.union()
-// does not satisfy.
-const terminalCommonFields = {
-  ...taskDetailBaseFields,
-  state: z.literal('terminal'),
-  terminalAt: z.number(),
-  adopted: z.boolean(),
-  adoptedAt: z.number().optional(),
-};
-
-const taskDetailTerminalResolvedSchema = z
-  .object({
-    ...terminalCommonFields,
-    disposition: z.literal('resolved'),
-    resultDigest: z.string(),
-    resultStatus: z.enum(['completed', 'failed']),
-    error: z.string().optional(),
-  })
-  .strict();
-
-const taskDetailTerminalCancelledSchema = z
-  .object({
-    ...terminalCommonFields,
-    disposition: z.literal('cancelled'),
-    cancellationReason: z.string(),
-  })
-  .strict();
-
-const taskDetailTerminalRetryExhaustedSchema = z
-  .object({
-    ...terminalCommonFields,
-    disposition: z.literal('retryExhausted'),
-    error: z.string(),
-  })
-  .strict();
-
-const taskDetailTerminalSchema = z.discriminatedUnion('disposition', [
-  taskDetailTerminalResolvedSchema,
-  taskDetailTerminalCancelledSchema,
-  taskDetailTerminalRetryExhaustedSchema,
-]);
-
-const taskDetailDeadLetteredSchema = z
-  .object({
-    ...taskDetailBaseFields,
-    state: z.literal('deadLettered'),
-    pendingStatus: z.enum(['completed', 'failed']),
-    resultDigest: z.string(),
-    deadLetteredAt: z.number(),
-    persistenceFailureReason: z.string(),
-    error: z.string().optional(),
-  })
-  .strict();
-
-/** Exported for direct schema-level tests; the operation itself uses this via `outputSchema`. */
-export const getTaskDetailOutputSchema = z.discriminatedUnion('state', [
-  taskDetailQueuedSchema,
-  taskDetailLeasedSchema,
-  taskDetailCompletingSchema,
-  taskDetailCancellingSchema,
-  taskDetailTerminalSchema,
-  taskDetailDeadLetteredSchema,
-]);
-
-export type GetTaskDetailInput = z.infer<typeof getTaskDetailInput>;
-export type GetTaskDetailOutput = z.infer<typeof getTaskDetailOutputSchema>;
+function projectExecutionRequirement(
+  executionRequirement: NonNullable<RemoteTaskRecord['executionRequirement']>,
+): z.infer<typeof executionRequirementSchema> {
+  return {
+    ...(executionRequirement.deploymentName !== undefined
+      ? { deploymentName: executionRequirement.deploymentName }
+      : {}),
+    ...(executionRequirement.buildId !== undefined
+      ? { buildId: executionRequirement.buildId }
+      : {}),
+    ...(executionRequirement.artifactDigest !== undefined
+      ? { artifactDigest: executionRequirement.artifactDigest }
+      : {}),
+    ...(executionRequirement.workflowRevision !== undefined
+      ? { workflowRevision: executionRequirement.workflowRevision }
+      : {}),
+    ...(executionRequirement.activityContractHash !== undefined
+      ? { activityContractHash: executionRequirement.activityContractHash }
+      : {}),
+  };
+}
 
 function baseEnvelopeFields(record: RemoteTaskRecord) {
   return {
     operationId: record.operationId,
     ...(record.workflowId !== undefined ? { workflowId: record.workflowId } : {}),
+    ...(record.workflowExecutionToken !== undefined
+      ? { workflowExecutionToken: record.workflowExecutionToken }
+      : {}),
     workflowType: record.workflowType,
     activityName: record.activityName,
     queue: record.queue,
     ...(record.priority !== undefined ? { priority: record.priority } : {}),
     headerKeys: Object.keys(record.headers),
     visibilityTimeoutMilliseconds: record.visibilityTimeoutMilliseconds,
-    ...(record.retryPolicy !== undefined ? { retryPolicy: record.retryPolicy } : {}),
+    ...(record.retryPolicy !== undefined
+      ? { retryPolicy: projectRetryPolicy(record.retryPolicy) }
+      : {}),
     ...(record.scheduleToCloseDeadline !== undefined
       ? { scheduleToCloseDeadline: record.scheduleToCloseDeadline }
       : {}),
     ...(record.executionRequirement !== undefined
-      ? { executionRequirement: record.executionRequirement }
+      ? { executionRequirement: projectExecutionRequirement(record.executionRequirement) }
       : {}),
     ...(record.fairShareKey !== undefined ? { fairShareKey: record.fairShareKey } : {}),
     ...(record.stickyWorkflowId !== undefined ? { stickyWorkflowId: record.stickyWorkflowId } : {}),
@@ -418,13 +320,14 @@ export const getTaskDetailOperation = defineOperation<GetTaskDetailInput, GetTas
       });
     }
     const decoded = decodeRemoteTaskRecord(raw);
-    if (decoded === null) {
-      // The key exists but its bytes do not decode into a valid
-      // RemoteTaskRecord — a data-integrity concern (corruption, or a
-      // future record-version skew this build cannot read), not a missing
-      // resource. Reporting NotFound here would tell an operator the task
-      // was never dispatched or was cleanly reaped, hiding the exact record
-      // that needs investigation.
+    if (decoded === null || decoded.operationId !== input.operationId) {
+      // Either the key's bytes don't decode into a valid RemoteTaskRecord,
+      // or (an import, manual storage repair, or corruption) they decode to
+      // a *different* operationId's record living under this key. Both are
+      // data-integrity concerns, not a missing resource — reporting
+      // NotFound would tell an operator the task was never dispatched or
+      // was cleanly reaped, or worse, silently hand back a different task's
+      // data for this lookup, masking the storage problem entirely.
       raiseFault(getTaskDetailOperation, {
         code: 'EngineFailure',
         message: `Task ledger record for operation "${input.operationId}" could not be decoded`,

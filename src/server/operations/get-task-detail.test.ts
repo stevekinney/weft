@@ -308,6 +308,91 @@ describe('weft.tasks.get', () => {
     expect(result.fault.code).toBe('EngineFailure');
   });
 
+  it('faults EngineFailure when the decoded record has a different operationId than requested', async () => {
+    // Simulates a storage-integrity problem: operation B's record living
+    // under operation A's key (manual repair gone wrong, import, or
+    // corruption). Must not silently hand back B's data for an A lookup.
+    const storage = new MemoryStorage();
+    const engine = createEngine(storage);
+    await storage.put(
+      taskLedgerKey('op-a'),
+      encodeRemoteTaskRecord(queuedFixture({ operationId: 'op-b' })),
+    );
+
+    const result = await runGetTaskDetail(engine, 'op-a');
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected EngineFailure fault');
+    expect(result.fault.code).toBe('EngineFailure');
+  });
+
+  it('rejects an operationId larger than the ledger byte limit with InvalidParams, not a storage lookup', async () => {
+    const storage = new MemoryStorage();
+    const engine = createEngine(storage);
+    const oversized = 'x'.repeat(600);
+
+    const result = await runGetTaskDetail(engine, oversized);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected InvalidParams fault');
+    expect(result.fault.code).toBe('InvalidParams');
+  });
+
+  it('projects only the declared retryPolicy and executionRequirement fields, tolerating additive properties the ledger itself does not reject', async () => {
+    // isValidRetryPolicy/isValidExecutionRequirement only check known
+    // fields; a same-process dispatch caller can attach extra properties
+    // that the ledger happily stores. Returning that object through a
+    // .strict() schema verbatim would EngineFailure an otherwise valid,
+    // running task.
+    const storage = new MemoryStorage();
+    const engine = createEngine(storage);
+    await putLedgerRecord(
+      storage,
+      queuedFixture({
+        retryPolicy: {
+          maxAttempts: 3,
+          initialBackoff: '1s',
+          backoffMultiplier: 2,
+          maxBackoff: '30s',
+          // @ts-expect-error deliberately additive field the ledger's own validator ignores
+          unexpectedFutureField: 'should be stripped',
+        },
+        executionRequirement: {
+          deploymentName: 'billing-service',
+          // @ts-expect-error deliberately additive field the ledger's own validator ignores
+          unexpectedFutureField: 'should also be stripped',
+        },
+      }),
+    );
+
+    const result = await runGetTaskDetail(engine, 'op-queued');
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected success, not EngineFailure from strict validation');
+    expect(result.value).toMatchObject({
+      retryPolicy: {
+        maxAttempts: 3,
+        initialBackoff: '1s',
+        backoffMultiplier: 2,
+        maxBackoff: '30s',
+      },
+      executionRequirement: { deploymentName: 'billing-service' },
+    });
+    expect(JSON.stringify(result.value)).not.toContain('unexpectedFutureField');
+  });
+
+  it('reports workflowExecutionToken when the task is workflow-bound', async () => {
+    const storage = new MemoryStorage();
+    const engine = createEngine(storage);
+    await putLedgerRecord(storage, queuedFixture({ workflowExecutionToken: 'exec-token-abc' }));
+
+    const result = await runGetTaskDetail(engine, 'op-queued');
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected success');
+    expect(result.value).toMatchObject({ workflowExecutionToken: 'exec-token-abc' });
+  });
+
   it('reports a queued task with envelope fields, header keys only, and no header values', async () => {
     const storage = new MemoryStorage();
     const engine = createEngine(storage);

@@ -2022,6 +2022,9 @@
               "visibilityTimeoutMilliseconds": {
                 "type": "number"
               },
+              "workflowExecutionToken": {
+                "type": "string"
+              },
               "workflowId": {
                 "type": "string"
               },
@@ -2177,6 +2180,9 @@
               },
               "visibilityTimeoutMilliseconds": {
                 "type": "number"
+              },
+              "workflowExecutionToken": {
+                "type": "string"
               },
               "workflowId": {
                 "type": "string"
@@ -2343,6 +2349,9 @@
               "visibilityTimeoutMilliseconds": {
                 "type": "number"
               },
+              "workflowExecutionToken": {
+                "type": "string"
+              },
               "workflowId": {
                 "type": "string"
               },
@@ -2508,6 +2517,9 @@
               },
               "visibilityTimeoutMilliseconds": {
                 "type": "number"
+              },
+              "workflowExecutionToken": {
+                "type": "string"
               },
               "workflowId": {
                 "type": "string"
@@ -2684,6 +2696,9 @@
                   "visibilityTimeoutMilliseconds": {
                     "type": "number"
                   },
+                  "workflowExecutionToken": {
+                    "type": "string"
+                  },
                   "workflowId": {
                     "type": "string"
                   },
@@ -2848,6 +2863,9 @@
                   "visibilityTimeoutMilliseconds": {
                     "type": "number"
                   },
+                  "workflowExecutionToken": {
+                    "type": "string"
+                  },
                   "workflowId": {
                     "type": "string"
                   },
@@ -3011,6 +3029,9 @@
                   "visibilityTimeoutMilliseconds": {
                     "type": "number"
                   },
+                  "workflowExecutionToken": {
+                    "type": "string"
+                  },
                   "workflowId": {
                     "type": "string"
                   },
@@ -3170,6 +3191,9 @@
               },
               "visibilityTimeoutMilliseconds": {
                 "type": "number"
+              },
+              "workflowExecutionToken": {
+                "type": "string"
               },
               "workflowId": {
                 "type": "string"
