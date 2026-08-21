@@ -2041,6 +2041,8 @@
               "visibilityTimeoutMilliseconds",
               "createdAt",
               "attempt",
+              "retryCount",
+              "requeueCount",
               "state",
               "availableAt",
               "firstQueuedAt",
@@ -2200,6 +2202,8 @@
               "visibilityTimeoutMilliseconds",
               "createdAt",
               "attempt",
+              "retryCount",
+              "requeueCount",
               "state",
               "leaseDeadline",
               "firstQueuedAt",
@@ -2368,6 +2372,8 @@
               "visibilityTimeoutMilliseconds",
               "createdAt",
               "attempt",
+              "retryCount",
+              "requeueCount",
               "state",
               "leaseDeadline",
               "firstQueuedAt",
@@ -2537,6 +2543,8 @@
               "visibilityTimeoutMilliseconds",
               "createdAt",
               "attempt",
+              "retryCount",
+              "requeueCount",
               "state",
               "leaseDeadline",
               "firstQueuedAt",
@@ -2607,9 +2615,6 @@
                     },
                     "type": "array"
                   },
-                  "lastRequeueReason": {
-                    "type": "string"
-                  },
                   "operationId": {
                     "type": "string"
                   },
@@ -2619,22 +2624,12 @@
                   "queue": {
                     "type": "string"
                   },
-                  "requeueCount": {
-                    "maximum": 9007199254740991,
-                    "minimum": 0,
-                    "type": "integer"
-                  },
                   "resultDigest": {
                     "type": "string"
                   },
                   "resultStatus": {
                     "enum": ["completed", "failed"],
                     "type": "string"
-                  },
-                  "retryCount": {
-                    "maximum": 9007199254740991,
-                    "minimum": 0,
-                    "type": "integer"
                   },
                   "retryPolicy": {
                     "additionalProperties": false,
@@ -2781,9 +2776,6 @@
                     },
                     "type": "array"
                   },
-                  "lastRequeueReason": {
-                    "type": "string"
-                  },
                   "operationId": {
                     "type": "string"
                   },
@@ -2792,16 +2784,6 @@
                   },
                   "queue": {
                     "type": "string"
-                  },
-                  "requeueCount": {
-                    "maximum": 9007199254740991,
-                    "minimum": 0,
-                    "type": "integer"
-                  },
-                  "retryCount": {
-                    "maximum": 9007199254740991,
-                    "minimum": 0,
-                    "type": "integer"
                   },
                   "retryPolicy": {
                     "additionalProperties": false,
@@ -2947,9 +2929,6 @@
                     },
                     "type": "array"
                   },
-                  "lastRequeueReason": {
-                    "type": "string"
-                  },
                   "operationId": {
                     "type": "string"
                   },
@@ -2958,16 +2937,6 @@
                   },
                   "queue": {
                     "type": "string"
-                  },
-                  "requeueCount": {
-                    "maximum": 9007199254740991,
-                    "minimum": 0,
-                    "type": "integer"
-                  },
-                  "retryCount": {
-                    "maximum": 9007199254740991,
-                    "minimum": 0,
-                    "type": "integer"
                   },
                   "retryPolicy": {
                     "additionalProperties": false,
@@ -3211,6 +3180,8 @@
               "visibilityTimeoutMilliseconds",
               "createdAt",
               "attempt",
+              "retryCount",
+              "requeueCount",
               "state",
               "pendingStatus",
               "resultDigest",

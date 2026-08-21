@@ -201,21 +201,26 @@ The response is a discriminated union on `state`, distinguishing `queued`,
 vocabulary than `GET /api/v1/tasks/diagnostics`, which collapses `leased`,
 `completing`, and `cancelling` into one `inflight` value for alerting purposes.
 Every variant carries the dispatch envelope (`operationId`, `workflowId?`,
-`workflowType`, `activityName`, `queue`, `priority?`, `headerKeys`,
-`visibilityTimeoutMilliseconds`, `retryPolicy?`, `scheduleToCloseDeadline?`,
-`executionRequirement?`, `fairShareKey?`, `stickyWorkflowId?`, `createdAt`,
-`attempt`) plus state-specific fields — for example a `terminal` record adds
-`disposition`, `terminalAt`, `adopted`, and `adoptedAt?`; a `deadLettered`
-record adds `pendingStatus`, `resultDigest`, `persistenceFailureReason`, and
-`deadLetteredAt`. `resultDigest` is present on a `terminal` record only when
-`disposition` is `resolved` — the `cancelled` and `retryExhausted` lineages
-store an internal placeholder there instead of a real content hash, so it is
-omitted rather than returned.
+`workflowExecutionToken?`, `workflowType`, `activityName`, `queue`,
+`priority?`, `headerKeys`, `visibilityTimeoutMilliseconds`, `retryPolicy?`,
+`scheduleToCloseDeadline?`, `executionRequirement?`, `fairShareKey?`,
+`stickyWorkflowId?`, `createdAt`, `attempt`) plus state-specific fields — for
+example a `terminal` record adds `disposition`, `terminalAt`, `adopted`, and
+`adoptedAt?`; a `deadLettered` record adds `pendingStatus`, `resultDigest`,
+`persistenceFailureReason`, and `deadLetteredAt`. `resultDigest` is present
+on a `terminal` record only when `disposition` is `resolved` — the
+`cancelled` and `retryExhausted` lineages store an internal placeholder
+there instead of a real content hash, so it is omitted rather than returned.
+`workflowExecutionToken` is not a secret — an external write fence, like
+activity and finalizer attempt tokens — present when the task is
+workflow-bound; it distinguishes the exact run that owns a retained task
+when `start-new` reuses a workflow ID.
 
 ```json
 {
   "operationId": "op-123",
   "workflowId": "wf-456",
+  "workflowExecutionToken": "exec-abc123",
   "workflowType": "checkout",
   "activityName": "chargeCard",
   "queue": "payments",

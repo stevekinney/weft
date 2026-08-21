@@ -68,8 +68,18 @@ const taskDetailBaseFields = {
   stickyWorkflowId: z.string().optional(),
   createdAt: z.number(),
   attempt: z.number().int().nonnegative(),
-  retryCount: z.number().int().nonnegative().optional(),
-  requeueCount: z.number().int().nonnegative().optional(),
+};
+
+// RemoteTaskAttemptFields is applied to every RemoteTaskRecord state EXCEPT
+// terminal — task-ledger-types.ts deliberately drops attempt-count history
+// once a task resolves. Putting these fields in taskDetailBaseFields (shared
+// by all six state variants, terminal included) would make the schema
+// accept their omission everywhere, when the ledger actually guarantees
+// retryCount/requeueCount on the five nonterminal variants. Kept separate so
+// only those five spread it in.
+const attemptSchemaFields = {
+  retryCount: z.number().int().nonnegative(),
+  requeueCount: z.number().int().nonnegative(),
   lastRequeueReason: z.string().optional(),
 };
 
@@ -84,6 +94,7 @@ const leaseHolderSchemaFields = {
 const taskDetailQueuedSchema = z
   .object({
     ...taskDetailBaseFields,
+    ...attemptSchemaFields,
     state: z.literal('queued'),
     availableAt: z.number(),
     firstQueuedAt: z.number(),
@@ -94,12 +105,18 @@ const taskDetailQueuedSchema = z
   .strict();
 
 const taskDetailLeasedSchema = z
-  .object({ ...taskDetailBaseFields, state: z.literal('leased'), ...leaseHolderSchemaFields })
+  .object({
+    ...taskDetailBaseFields,
+    ...attemptSchemaFields,
+    state: z.literal('leased'),
+    ...leaseHolderSchemaFields,
+  })
   .strict();
 
 const taskDetailCompletingSchema = z
   .object({
     ...taskDetailBaseFields,
+    ...attemptSchemaFields,
     state: z.literal('completing'),
     ...leaseHolderSchemaFields,
     pendingStatus: z.enum(['completed', 'failed']),
@@ -110,6 +127,7 @@ const taskDetailCompletingSchema = z
 const taskDetailCancellingSchema = z
   .object({
     ...taskDetailBaseFields,
+    ...attemptSchemaFields,
     state: z.literal('cancelling'),
     ...leaseHolderSchemaFields,
     cancellationReason: z.string(),
@@ -170,6 +188,7 @@ const taskDetailTerminalSchema = z.discriminatedUnion('disposition', [
 const taskDetailDeadLetteredSchema = z
   .object({
     ...taskDetailBaseFields,
+    ...attemptSchemaFields,
     state: z.literal('deadLettered'),
     pendingStatus: z.enum(['completed', 'failed']),
     resultDigest: z.string(),
