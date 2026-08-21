@@ -54,6 +54,11 @@ import { BULK_OPERATION_BATCH_SIZE } from './listing.ts';
 import { createTerminalCleanupTimerId } from './state-utilities.ts';
 import { loadWorkflowState, runSerializedWorkflowStateWrite } from './storage-io.ts';
 import { decodeWorkflowState, isTerminalWorkflowStatus } from './validation.ts';
+import {
+  commitWithWorkflowClaimFold,
+  prepareWorkflowClaimFold,
+  throwWorkflowClaimUnavailable,
+} from './workflow-claim-fold.ts';
 import { buildWorkflowConcurrencyStartOperations } from './workflow-concurrency.ts';
 import { buildWorkflowVisibilityIndexTransition } from './workflow-indexes.ts';
 
@@ -403,21 +408,37 @@ async function reactivateFailedWorkflowFromCheckpointSerialized(
   );
 }
 
+/**
+ * ADR 0002: claim-acquiring — folds `acquire()` into this reactivation batch.
+ * A lost claim throws; the follow-up `engine.resume()` skips re-acquiring.
+ */
 async function commitFailedWorkflowReactivation(
   internals: EngineInternals,
   workflowId: string,
   operations: BatchOperation[],
   conditions: ConditionalBatchCondition[],
 ): Promise<boolean> {
-  if (conditions.length > 0) {
-    requireStorageCapability(internals.storage, 'conditionalBatch', 'retry failed workflow');
+  const claimFold = await prepareWorkflowClaimFold(internals, workflowId);
+  if (claimFold === undefined) {
+    if (conditions.length > 0) {
+      requireStorageCapability(internals.storage, 'conditionalBatch', 'retry failed workflow');
+    }
+    return commitFencedEngineWriteAllowingPreconditionFailure(
+      internals,
+      workflowId,
+      operations,
+      conditions,
+    );
   }
-  return commitFencedEngineWriteAllowingPreconditionFailure(
+  const result = await commitWithWorkflowClaimFold(
     internals,
-    workflowId,
+    claimFold,
     operations,
     conditions,
+    'retry failed workflow claim acquisition',
   );
+  if (result.status === 'committed') return true;
+  return result.claimConflict ? throwWorkflowClaimUnavailable(internals, workflowId) : false;
 }
 
 function buildReactivatedWorkflowState(

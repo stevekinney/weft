@@ -13,6 +13,7 @@ import { WorkflowTypeNotRegisteredForRecoveryError } from '../errors.ts';
 import { commitFencedEngineWrite } from '../fenced-write.ts';
 import { getWorkflowExecutionStartedAt, type WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
+import { WorkflowClaimUnavailableError } from '../lease-errors.ts';
 import { normalizeForkStep, selectPersistedWorkflowStartHeaders } from '../state-utilities.ts';
 import { loadWorkflowState } from '../storage-io.ts';
 import { getComposedWorkflowInterceptor } from '../strategy-helpers.ts';
@@ -128,6 +129,16 @@ async function preflightRecoverAll(
  * - `VersionMismatchError`, unless `options.versionMismatchPolicy` is
  *   `'throw'`, which selects fail-fast recovery and leaves later entries in
  *   storage-scan order unresumed.
+ * - `WorkflowClaimUnavailableError` (ADR 0002): another engine already holds
+ *   a live, unexpired claim for this workflow under `ownership:
+ *   'workflow-lease'`. `recoverAll()` is background scanning — the ADR
+ *   requires it to skip a lost claim and continue recovering every OTHER
+ *   workflow this engine can legitimately own, never abort the sweep or
+ *   surface the error to the caller. This is the one caller-side difference
+ *   from `engine.resume(id)`, which reaches the SAME `resume()` below
+ *   un-isolated and lets the error propagate, per the ADR's explicit
+ *   "explicit, single-workflow public API... throws" vs "background
+ *   scanning... never thrown" asymmetry.
  *
  * Returns `null` when the failure was isolated (nothing to push onto the
  * caller's handle list); rethrows anything else, including an opted-in
@@ -148,6 +159,9 @@ async function recoverEntryOrIsolateFailure(
     }
     if (error instanceof VersionMismatchError && options?.versionMismatchPolicy !== 'throw') {
       await callbacks.failWorkflowForVersionMismatch(workflowId, error);
+      return null;
+    }
+    if (error instanceof WorkflowClaimUnavailableError) {
       return null;
     }
     throw error;

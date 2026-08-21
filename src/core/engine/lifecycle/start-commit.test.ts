@@ -4,6 +4,7 @@ import type { ConditionalBatchCondition } from '../../../storage/interface.ts';
 import { MemoryStorage } from '../../../storage/memory.ts';
 import { AtomicStateConflictError } from '../../atomic-state.ts';
 import type { Checkpoint, WorkflowState } from '../../types.ts';
+import { WorkflowClaimRegistry } from '../workflow-claim-registry.ts';
 import { buildAndCommitStartBatch } from './start-commit.ts';
 
 function createWorkflowState(overrides: Partial<WorkflowState> = {}): WorkflowState {
@@ -116,7 +117,7 @@ describe('start-commit lifecycle helpers', () => {
             operations: [],
             stateKey: 'workflow-concurrency',
           }),
-        } as never,
+        },
         undefined,
       ),
     ).rejects.toBeInstanceOf(AtomicStateConflictError);
@@ -143,12 +144,52 @@ describe('start-commit lifecycle helpers', () => {
             operations: [],
             stateKey: 'workflow-concurrency',
           }),
-        } as never,
+        },
         () => ({
           conditions: [condition],
           operations: [],
         }),
       ),
     ).rejects.toThrow('start idempotency compare-and-swap lost to a concurrent caller');
+  });
+
+  it('ADR 0002: folds acquire() into an idempotent start batch under ownership: "workflow-lease"', async () => {
+    const storage = new MemoryStorage();
+    const registry = new WorkflowClaimRegistry({
+      storage,
+      engineId: 'test-engine',
+      getNow: () => Date.now(),
+      claimTtlMs: 30_000,
+      claimRenewIntervalMs: 5_000,
+    });
+    const context = {
+      ...createBaseContext(storage),
+      internals: {
+        deposed: false,
+        leaseManager: null,
+        options: { ownershipMode: 'workflow-lease' },
+        storage,
+        workflowClaimRegistry: registry,
+      } as never,
+    };
+    const idempotentCondition: ConditionalBatchCondition = {
+      key: 'start-idempotent-precondition',
+      expectedValue: null,
+    };
+
+    // A non-empty idempotency precondition alongside the claim fold exercises
+    // `persistStartBatch`'s claimFold branch merging CALLER conditions (not
+    // just the fold's own), distinct from an ordinary claimed start with no
+    // preconditions.
+    await expect(
+      buildAndCommitStartBatch(context as never, () => ({
+        conditions: [idempotentCondition],
+        operations: [{ type: 'put', key: 'start-idempotent-mapping', value: new Uint8Array([1]) }],
+      })),
+    ).resolves.toBeUndefined();
+
+    await expect(storage.get(`wf:${context.workflowId}`)).resolves.not.toBeNull();
+    await expect(storage.get('start-idempotent-mapping')).resolves.toEqual(new Uint8Array([1]));
+    expect(registry.currentEpoch(context.workflowId)).toBe(1);
   });
 });

@@ -14,6 +14,7 @@ import {
   handleSleepTimerWithAcknowledgement,
   resolveSleepTimer,
 } from './sleep-timer-acknowledgements.ts';
+import { commitWithWorkflowClaimFold, prepareWorkflowClaimFold } from './workflow-claim-fold.ts';
 import { buildWorkflowVisibilityIndexTransition } from './workflow-indexes.ts';
 
 type RegistrationEntry =
@@ -249,10 +250,33 @@ export async function startDelayedWorkflow(
         );
       }
 
+      // ADR 0002 row `startDelayedWorkflow` (delayed-start timer fire):
+      // claim-acquiring — this is where a delayed-start workflow gets its FIRST
+      // owner, since its create batch is intentionally external (no claim held
+      // yet; see `lifecycle/start-commit.ts`). Fold `acquire()` into this SAME
+      // pending→running batch when `workflow-lease` applies; a lost claim race
+      // here is background-scanner territory (this fire is dispatched by the
+      // scheduler tick, not an explicit single-workflow caller), so it is
+      // reported by returning `null` — never thrown — letting the caller skip
+      // this workflow and the scheduler continue its sweep undisturbed.
+      const claimFold = await prepareWorkflowClaimFold(internals, entry.workflowId);
+      if (claimFold) {
+        const result = await commitWithWorkflowClaimFold(
+          internals,
+          claimFold,
+          operations,
+          [],
+          'delayed-start workflow claim acquisition',
+        );
+        return result.status === 'committed' ? nextRunningState : null;
+      }
+
       // Fence the delayed-start pending→running transition on the lease epoch: a
       // deposed timer must not flip a workflow the successor already owns. (Epoch-only
       // is sufficient under lease ownership's single-writer invariant; the existing
-      // in-process serialization above handles same-engine ordering.)
+      // in-process serialization above handles same-engine ordering.) Also the
+      // `ownership: 'none'` path, and the `'workflow-lease'` path while no
+      // `WorkflowClaimRegistry` is constructed yet (a parallel construction stage).
       await commitFencedEngineWrite(
         internals,
         entry.workflowId,

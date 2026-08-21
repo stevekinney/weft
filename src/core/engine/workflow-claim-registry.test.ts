@@ -548,6 +548,42 @@ describe('WorkflowClaimRegistry.currentEpoch / currentEpochBytes', () => {
   });
 });
 
+describe('WorkflowClaimRegistry.listHeldWorkflowIds', () => {
+  it('returns an empty array when no claims are held', () => {
+    const storage = new MemoryStorage();
+    const clock = makeClock();
+    const registry = new WorkflowClaimRegistry(registryOptions({ storage, getNow: clock.now }));
+
+    expect(registry.listHeldWorkflowIds()).toEqual([]);
+  });
+
+  it('lists every currently tracked workflow id', async () => {
+    const storage = new MemoryStorage();
+    const clock = makeClock();
+    const registry = new WorkflowClaimRegistry(registryOptions({ storage, getNow: clock.now }));
+    await registry.acquire('wf-1');
+    await registry.acquire('wf-2');
+
+    expect(registry.listHeldWorkflowIds().toSorted()).toEqual(['wf-1', 'wf-2']);
+  });
+
+  it('drops a released id and returns a snapshot mutation cannot corrupt', async () => {
+    const storage = new MemoryStorage();
+    const clock = makeClock();
+    const registry = new WorkflowClaimRegistry(registryOptions({ storage, getNow: clock.now }));
+    await registry.acquire('wf-1');
+    await registry.acquire('wf-2');
+    await registry.release('wf-1');
+
+    const snapshot = registry.listHeldWorkflowIds();
+    expect(snapshot).toEqual(['wf-2']);
+
+    await registry.acquire('wf-3');
+    expect(snapshot).toEqual(['wf-2']);
+    expect(registry.listHeldWorkflowIds().toSorted()).toEqual(['wf-2', 'wf-3']);
+  });
+});
+
 describe('WorkflowClaimRegistry.releaseAll', () => {
   it('releases every tracked claim', async () => {
     const storage = new MemoryStorage();

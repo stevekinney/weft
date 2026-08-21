@@ -990,7 +990,7 @@ describe('engine lifecycle coverage helpers', () => {
           return 'done';
         },
         version: '1',
-      } as never,
+      },
       createLifecycleCallbacks({
         createWorkflowHandleWithResultPromise: () => handle,
         dispatchEvent,
@@ -1085,7 +1085,7 @@ describe('engine lifecycle coverage helpers', () => {
             return 'done';
           },
           version: '1',
-        } as never,
+        },
         createLifecycleCallbacks() as never,
       ),
     ).toThrow('Inline workflow launch requested without an inline strategy.');
@@ -1128,6 +1128,7 @@ describe('engine lifecycle coverage helpers', () => {
         {
           registrations: new Map(),
           storage,
+          options: { ownershipMode: 'none' },
         } as never,
         workflowId,
         true,
@@ -1149,6 +1150,7 @@ describe('engine lifecycle coverage helpers', () => {
         {
           registrations: new Map(),
           storage,
+          options: { ownershipMode: 'none' },
         } as never,
         workflowId,
         true,

@@ -13,15 +13,20 @@
  * fields the registry happens to know, mirroring `lease-manager.ts`'s
  * "never round-trip encode(decode(raw))" discipline.
  *
- * **Scope.** This is the unit alone: acquire, renew, release, takeover, and
- * release-all. It is NOT wired into `Engine`/`EngineInternals` — a later
- * stage folds `acquire` into enabling writes (start, delayed-start fire,
- * recovery), drives `renew` and the reclaim scan from a lifecycle task, and
- * turns a lost `acquire`/`takeover` into `WorkflowClaimUnavailableError` for
- * explicit single-workflow callers. Per the ADR, background scanning never
- * throws that error — it skips the workflow and continues — so every method
- * here returns a discriminated result instead of throwing on a lost CAS,
- * leaving that decision to the caller. Also out of scope for this stage: the
+ * **Scope.** The unit itself: acquire, renew, release, takeover, and
+ * release-all — plus, additively, {@link WorkflowClaimRegistry.prepareAcquireFragment}
+ * and {@link WorkflowClaimRegistry.recordFoldedAcquire}, the two-step seam a
+ * caller uses to fold `acquire` into ITS OWN atomic enabling write (a create
+ * batch, a delayed-start pending→running transition, a failed-workflow
+ * reactivation) instead of committing the fragment through this registry's
+ * own `acquire()`. Driving `renew` and the reclaim scan from a lifecycle
+ * task, and turning a lost `acquire`/`takeover` into
+ * `WorkflowClaimUnavailableError` for explicit single-workflow callers, are
+ * still each call site's own responsibility — this registry never throws
+ * that error itself. Per the ADR, background scanning never throws it either
+ * — it skips the workflow and continues — so every method here returns a
+ * discriminated result instead of throwing on a lost CAS, leaving that
+ * decision to the caller. Still out of scope for this module: the
  * per-workflow-id anti-thrash takeover cooldown, `weft_workflow_claim_*`
  * metrics, `wakeOwnershipCheck`, and external terminal-transition rotation
  * (cancel/timeout/suspend/purge — any engine may commit those, and they do
@@ -58,6 +63,7 @@ import {
   buildWorkflowClaimRenewTransition,
   buildWorkflowClaimTakeoverTransition,
   isWorkflowClaimExpired,
+  type WorkflowClaimTransitionFragment,
 } from './workflow-claim-transitions.ts';
 
 /** Options for {@link WorkflowClaimRegistry}. */
@@ -104,6 +110,18 @@ export type WorkflowClaimReleaseResult =
   | { status: 'released'; workflowId: string }
   | { status: 'lost-race'; workflowId: string }
   | { status: 'not-held'; workflowId: string };
+
+/**
+ * A prepared, not-yet-committed `acquire` — the output of
+ * {@link WorkflowClaimRegistry.prepareAcquireFragment}, meant to be merged
+ * into a caller's own atomic enabling write and then handed back to
+ * {@link WorkflowClaimRegistry.recordFoldedAcquire} once that write commits.
+ */
+export type WorkflowClaimAcquirePreparation = {
+  fragment: WorkflowClaimTransitionFragment;
+  epoch: number;
+  claimedAt: number;
+};
 
 /** Result of {@link WorkflowClaimRegistry.takeover}. */
 export type WorkflowClaimTakeoverResult =
@@ -170,6 +188,17 @@ export class WorkflowClaimRegistry {
   }
 
   /**
+   * Every workflow id this engine currently tracks a live claim for — active
+   * or parked. A defensive-copy snapshot, mirroring `releaseAll`'s own
+   * `[...this.#claims.keys()]` read: callers (the claim-renewal task, an
+   * active-claims metrics gauge) must not observe mutations to this registry's
+   * internal map while iterating a snapshot they already took.
+   */
+  listHeldWorkflowIds(): readonly string[] {
+    return [...this.#claims.keys()];
+  }
+
+  /**
    * Defensive copy of the epoch bytes this engine last wrote for
    * `workflowId`, for fencing durable writes — `null` if untracked. A copy so
    * a caller mutating the returned buffer cannot corrupt this registry's
@@ -227,6 +256,57 @@ export class WorkflowClaimRegistry {
     );
     this.#claims.set(workflowId, { epoch, claimedAt: now, epochBytes, holderBytes });
     return { status: 'acquired', workflowId, epoch };
+  }
+
+  /**
+   * Read fresh `wf-owner-epoch:<workflowId>` bytes and build the pure
+   * `acquire` fragment WITHOUT committing it or updating this registry's
+   * tracking — for a caller that folds the fragment into ITS OWN atomic
+   * enabling write instead of letting {@link acquire} commit it alone. The
+   * caller merges `fragment.conditions`/`fragment.operations` into its own
+   * operation list, commits ONE atomic `storageConditionalBatch`, and —
+   * ONLY on success — calls {@link recordFoldedAcquire} with this SAME
+   * preparation. Safe to call again on every retry attempt: this always
+   * re-reads fresh bytes, so a stale epoch from an earlier attempt never
+   * dooms a later one.
+   */
+  async prepareAcquireFragment(workflowId: string): Promise<WorkflowClaimAcquirePreparation> {
+    const observedEpochBytes = await this.#claimStorage.get(KEYS.workflowOwnerEpoch(workflowId));
+    const now = this.#getNow();
+    const fragment = buildWorkflowClaimAcquireTransition({
+      workflowId,
+      engineId: this.#engineId,
+      now,
+      claimTtlMs: this.#claimTtlMs,
+      observedEpochBytes,
+    });
+    return { fragment, epoch: mintNextEpoch(observedEpochBytes), claimedAt: now };
+  }
+
+  /**
+   * Install the tracking entry for a claim acquired via a FOLDED enabling
+   * write (see {@link prepareAcquireFragment}) — call ONLY after the
+   * caller's own atomic commit that included `preparation.fragment`'s
+   * conditions and operations has actually succeeded. Extracts the exact
+   * bytes the fragment wrote using the same "never round-trip
+   * encode(decode(raw))" discipline every other grant path in this class
+   * uses.
+   */
+  recordFoldedAcquire(workflowId: string, preparation: WorkflowClaimAcquirePreparation): void {
+    const epochBytes = extractPutOperationValue(
+      preparation.fragment.operations,
+      KEYS.workflowOwnerEpoch(workflowId),
+    );
+    const holderBytes = extractPutOperationValue(
+      preparation.fragment.operations,
+      KEYS.workflowOwnerHolder(workflowId),
+    );
+    this.#claims.set(workflowId, {
+      epoch: preparation.epoch,
+      claimedAt: preparation.claimedAt,
+      epochBytes,
+      holderBytes,
+    });
   }
 
   /**

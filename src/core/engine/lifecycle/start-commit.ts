@@ -7,6 +7,12 @@ import {
   commitFencedEngineWriteAllowingPreconditionFailure,
 } from '../fenced-write.ts';
 import type { EngineInternals } from '../internals.ts';
+import {
+  commitWithWorkflowClaimFold,
+  prepareWorkflowClaimFold,
+  throwWorkflowClaimUnavailable,
+  type WorkflowClaimFold,
+} from '../workflow-claim-fold.ts';
 import type { WorkflowConcurrencyStartOperations } from '../workflow-concurrency.ts';
 import { type LifecycleCallbacks, type RegistrationEntry } from './shared.ts';
 import { buildStartBatchOperations } from './start-batch.ts';
@@ -44,51 +50,83 @@ type TaggedStartCondition = {
   condition: ConditionalBatchCondition;
 };
 
+/** Outcome of {@link persistStartBatch}, disambiguating WHICH kind of race was lost. */
+type PersistStartBatchOutcome = 'committed' | 'precondition-lost' | 'claim-lost';
+
 /**
- * Commit the start batch. With no preconditions this is a plain `storage.batch()`
- * (the hot path). With preconditions — used by idempotent start and
- * `startOrSignal` — it commits through `storageConditionalBatch` so the workflow
- * record, idempotency mapping, and any create-batch signal land in ONE atomic
- * compare-and-swap. Returns `true` when the batch committed and `false` when a
- * precondition failed (a concurrent same-key caller already wrote the mapping),
- * so the caller can resolve to the existing run instead of leaking an orphan
- * record. Requires the `conditionalBatch` capability and throws if it is absent
- * rather than silently degrading to a non-atomic write.
+ * Commit the start batch. With no preconditions and no claim fold, this is a
+ * plain `storage.batch()` (the hot path). With preconditions — used by
+ * idempotent start and `startOrSignal` — it commits through
+ * `storageConditionalBatch` so the workflow record, idempotency mapping, and
+ * any create-batch signal land in ONE atomic compare-and-swap. Under
+ * `ownership: 'workflow-lease'`, an ordinary (non-delayed) start additionally
+ * folds `acquire()` into this SAME batch via `claimFold` (ADR 0002 § Entry
+ * point classification): `workflowId` has no tracked claim before this write,
+ * so it can never be fenced through `commitFencedEngineWrite` (which requires
+ * an already-tracked epoch) — the fold's own conditions ARE the fence for this
+ * first write instead. Returns `'precondition-lost'` when a base precondition
+ * (idempotency mapping, workflow-concurrency admission) failed — the caller
+ * resolves to the existing run or retries admission — and `'claim-lost'` when
+ * the fold's own conditions were the ones that failed, which the caller
+ * raises as `WorkflowClaimUnavailableError` rather than mistaking for either
+ * of those. Requires the `conditionalBatch` capability whenever a batch of
+ * conditions is committed, and throws if it is absent rather than silently
+ * degrading to a non-atomic write.
  */
 async function persistStartBatch(
   internals: EngineInternals,
   workflowId: string,
   startOperations: BatchOperation[],
   conditions: TaggedStartCondition[],
-): Promise<boolean> {
+  claimFold: WorkflowClaimFold | undefined,
+  isDelayedStart: boolean,
+): Promise<PersistStartBatchOutcome> {
+  if (claimFold) {
+    const result = await commitWithWorkflowClaimFold(
+      internals,
+      claimFold,
+      startOperations,
+      conditions.map((entry) => entry.condition),
+      'workflow claim acquisition',
+    );
+    if (result.status === 'committed') return 'committed';
+    return result.claimConflict ? 'claim-lost' : 'precondition-lost';
+  }
+
   // The start record is engine-generated workflow state — fence it on the lease
   // epoch (issue #470 Step 2) so a deposed engine cannot plant a phantom run in the
   // successor's store. Both branches go through the fenced helpers, which append the
   // epoch condition under `ownership: 'lease'` and are byte-for-byte no-ops under
-  // `ownership: 'none'`. Workflow-scoped under `ownership: 'workflow-lease'`: ADR
-  // 0002 folds `acquire()` into this enabling write (a later stage); until that
-  // lands, `workflowId` has no tracked claim yet and every start fails closed —
-  // correct for an unwired mode, not a regression (see the stage-89 patch summary).
+  // `ownership: 'none'`. Under `ownership: 'workflow-lease'`, `fenceWorkflowId` is
+  // `null` for a delayed start (its create batch is intentionally external — no
+  // claim fold above — until its pending→running timer fire acquires the claim; see
+  // `operations-time.ts`), so this write carries no per-workflow claim fence at all;
+  // an ORDINARY start reaching this branch only happens while no
+  // `WorkflowClaimRegistry` is constructed yet (Gate 1/Gate 2 wiring is a parallel
+  // stage), in which case it still fails closed — correct for an unwired registry,
+  // not a regression.
+  const fenceWorkflowId = isDelayedStart ? null : workflowId;
   if (conditions.length === 0) {
     await commitFencedEngineWrite(
       internals,
-      workflowId,
+      fenceWorkflowId,
       startOperations,
       [],
       () => new Error('Workflow start lost its CAS race.'),
     );
-    return true;
+    return 'committed';
   }
   requireStorageCapability(internals.storage, 'conditionalBatch', 'start preconditions');
   // Preserve the idempotent-start contract: a base-precondition failure returns
-  // `false` (caller resolves to the existing run), while a lost epoch fence is a
-  // hard deposition halt rather than a spurious "run already exists".
-  return commitFencedEngineWriteAllowingPreconditionFailure(
+  // `'precondition-lost'` (caller resolves to the existing run), while a lost epoch
+  // fence is a hard deposition halt rather than a spurious "run already exists".
+  const committed = await commitFencedEngineWriteAllowingPreconditionFailure(
     internals,
-    workflowId,
+    fenceWorkflowId,
     startOperations,
     conditions.map((entry) => entry.condition),
   );
+  return committed ? 'committed' : 'precondition-lost';
 }
 
 async function hasStartPreconditionConflict(
@@ -204,13 +242,33 @@ export async function buildAndCommitStartBatch(
       ...tagStartPreconditions(idempotent?.conditions),
       ...tagWorkflowConcurrencyConditions(workflowConcurrency?.conditions ?? []),
     ];
+    // ADR 0002 row `startWorkflow`/`buildAndCommitStartBatch`: claim-acquiring for
+    // an ordinary start, but the delayed `startAt`/`startAfter` create batch is
+    // intentionally external — its `pending` row has no owner yet, and the
+    // corresponding acquire happens later, at the delayed-start timer fire (see
+    // `operations-time.ts`). Re-prepared fresh every attempt of this loop, since a
+    // stale epoch read would doom a later retry's CAS.
+    const isDelayedStart = context.delayedStartTimer !== undefined;
+    const claimFold = isDelayedStart
+      ? undefined
+      : await prepareWorkflowClaimFold(internals, workflowId);
 
-    const committed = await persistStartBatch(internals, workflowId, startOperations, conditions);
-    if (committed) {
+    const outcome = await persistStartBatch(
+      internals,
+      workflowId,
+      startOperations,
+      conditions,
+      claimFold,
+      isDelayedStart,
+    );
+    if (outcome === 'committed') {
       return;
     }
     if (await hasStartPreconditionConflict(internals, conditions)) {
       throw new StartIdempotencyRaceLostError();
+    }
+    if (outcome === 'claim-lost') {
+      return throwWorkflowClaimUnavailable(internals, workflowId);
     }
     if (workflowConcurrency === undefined) {
       throw new StartIdempotencyRaceLostError();
