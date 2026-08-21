@@ -1,6 +1,8 @@
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { join } from 'node:path';
+
+import { resolveRealNodeExecutable } from './lib/resolve-real-node.ts';
 
 const repositoryPath = join(import.meta.dir, '..');
 const packageName = '@lostgradient/weft';
@@ -33,12 +35,17 @@ function createSubprocessEnvironment(
   return environment;
 }
 
-function runCommand(label: string, command: string[], cwd: string): void {
+function runCommand(
+  label: string,
+  command: string[],
+  cwd: string,
+  env: Record<string, string> = createSubprocessEnvironment(),
+): void {
   const result = Bun.spawnSync(command, {
     cwd,
     stdout: 'pipe',
     stderr: 'pipe',
-    env: createSubprocessEnvironment(),
+    env,
   });
 
   if (result.exitCode === 0) {
@@ -58,23 +65,6 @@ function runCommand(label: string, command: string[], cwd: string): void {
       .filter(Boolean)
       .join('\n'),
   );
-}
-
-function resolveRealNodeExecutable(): string {
-  const bunExecutable = realpathSync(process.execPath);
-  for (const directory of (process.env['PATH'] ?? '').split(delimiter)) {
-    if (directory.includes('bun-node-')) continue;
-    const candidate = join(directory, 'node');
-    try {
-      const realCandidate = realpathSync(candidate);
-      if (realCandidate !== bunExecutable && !realCandidate.includes('/.bun/')) {
-        return candidate;
-      }
-    } catch {
-      // Keep looking.
-    }
-  }
-  throw new Error('validate-package-consumers requires a real node executable on PATH');
 }
 
 function packPackage(packDirectory: string): string {
@@ -375,7 +365,11 @@ async function runCliServeSharesRootSingletonsWithDynamicWorkflowModuleSmoke(
 }
 
 async function runNodeConsumerSmoke(consumerDirectory: string): Promise<void> {
-  const nodeExecutable = resolveRealNodeExecutable();
+  const resolvedNode = resolveRealNodeExecutable(createSubprocessEnvironment(), consumerDirectory);
+  if (resolvedNode === null) {
+    throw new Error('validate-package-consumers requires a real node executable on PATH');
+  }
+  const { executable: nodeExecutable, env: nodeEnv } = resolvedNode;
   const script = [
     `import { Engine, MemoryStorage, WorkflowStartedEvent as RootWorkflowStartedEvent, WorkflowResumedEvent as RootWorkflowResumedEvent, WorkflowCompletedEvent as RootWorkflowCompletedEvent, WorkflowFailedEvent as RootWorkflowFailedEvent, WorkflowCancelledEvent as RootWorkflowCancelledEvent, WorkflowTimedOutEvent as RootWorkflowTimedOutEvent, WorkflowSuspendedEvent as RootWorkflowSuspendedEvent, WorkflowTeardownEvent as RootWorkflowTeardownEvent } from '${packageName}';`,
     `import { HttpClient, isFaultCode, WorkflowStartedEvent, WorkflowResumedEvent, WorkflowCompletedEvent, WorkflowFailedEvent, WorkflowCancelledEvent, WorkflowTimedOutEvent, WorkflowSuspendedEvent, WorkflowTeardownEvent } from '${packageName}/client';`,
@@ -395,6 +389,7 @@ async function runNodeConsumerSmoke(consumerDirectory: string): Promise<void> {
     'Node.js consumer imports portable public package surface',
     [nodeExecutable, '--input-type=module', '--eval', script],
     consumerDirectory,
+    nodeEnv,
   );
 }
 

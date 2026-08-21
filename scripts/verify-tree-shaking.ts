@@ -9,17 +9,11 @@
  * Run after `bun run build`: bun run verify:exports
  */
 
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  symlinkSync,
-} from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { join } from 'node:path';
+
+import { resolveRealNodeExecutable } from './lib/resolve-real-node.ts';
 
 const repositoryPath = join(import.meta.dir, '..');
 const distPath = join(repositoryPath, 'dist');
@@ -84,12 +78,13 @@ function runSmokeScript(
   runtimeName: string,
   description: string,
   script: string,
+  env: typeof process.env = process.env,
 ): void {
   const result = Bun.spawnSync([...command, script], {
     cwd: repositoryPath,
     stdout: 'pipe',
     stderr: 'pipe',
-    env: process.env,
+    env,
   });
 
   if (result.exitCode === 0) {
@@ -114,6 +109,7 @@ function runSQLiteImportSmokeTest(
   command: readonly string[],
   expectedConstructorName: string,
   runtimeName: string,
+  env: typeof process.env = process.env,
 ): void {
   const script = [
     "import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';",
@@ -126,24 +122,8 @@ function runSQLiteImportSmokeTest(
     runtimeName,
     `@lostgradient/weft/storage/sqlite resolves to ${expectedConstructorName}`,
     script,
+    env,
   );
-}
-
-function resolveRealNodeExecutable(): string | null {
-  const bunExecutable = realpathSync(process.execPath);
-  for (const directory of (process.env.PATH ?? '').split(delimiter)) {
-    if (directory.includes('bun-node-')) continue;
-
-    const candidate = join(directory, 'node');
-    if (!existsSync(candidate)) continue;
-
-    const realCandidate = realpathSync(candidate);
-    if (realCandidate === bunExecutable || realCandidate.includes('/.bun/')) continue;
-
-    return candidate;
-  }
-
-  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -562,34 +542,42 @@ runSmokeScript(
 );
 runSQLiteImportSmokeTest([process.execPath, '--eval'], 'BunSQLiteStorage', 'Bun');
 
-const nodeExecutable = resolveRealNodeExecutable();
-if (nodeExecutable === null) {
+const definedProcessEnv: Record<string, string> = Object.fromEntries(
+  Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+);
+const resolvedNode = resolveRealNodeExecutable(definedProcessEnv, repositoryPath);
+if (resolvedNode === null) {
   fail(
     '@lostgradient/weft/storage/sqlite Node.js import smoke test requires a real node executable on PATH',
   );
 } else {
+  const { executable: nodeExecutable, env: sanitizedNodeEnv } = resolvedNode;
   runSmokeScript(
     [nodeExecutable, '--input-type=module', '--eval'],
     'Node.js',
     '@lostgradient/weft/storage full barrel imports',
     storageBarrelScript,
+    sanitizedNodeEnv,
   );
   runSmokeScript(
     [nodeExecutable, '--input-type=module', '--eval'],
     'Node.js',
     'new storage adapter subpaths import',
     storageAdapterSubpathsScript,
+    sanitizedNodeEnv,
   );
   runSmokeScript(
     [nodeExecutable, '--input-type=module', '--eval'],
     'Node.js',
     '@lostgradient/weft/storage/sqlite/node explicit override imports',
     nodeSqliteOverrideScript,
+    sanitizedNodeEnv,
   );
   runSQLiteImportSmokeTest(
     [nodeExecutable, '--input-type=module', '--eval'],
     'NodeSQLiteStorage',
     'Node.js',
+    sanitizedNodeEnv,
   );
 }
 
