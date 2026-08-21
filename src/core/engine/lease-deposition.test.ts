@@ -216,6 +216,7 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     await expect(
       commitFencedEngineWrite(
         internals,
+        null,
         [{ type: 'put', key: 'k', value: new Uint8Array([1]) }],
         [],
         () => new Error('unused'),
@@ -245,6 +246,7 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     await expect(
       commitFencedEngineWrite(
         internals,
+        null,
         [{ type: 'put', key: KEYS.checkpoint('x'), value: new Uint8Array([1]) }],
         // Require-absent on a key we pre-populate, forcing a base-condition failure
         // with the epoch condition still satisfied.
@@ -289,7 +291,7 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     const ops: BatchOperation[] = [{ type: 'put', key: 'k', value: new Uint8Array([7]) }];
     // No base conditions + ownership: 'none' => plain batch with EXACTLY the ops
     // passed (no epoch condition appended, no conditionalBatch path taken).
-    await commitFencedEngineWrite(internals, ops, [], () => new Error('unused'));
+    await commitFencedEngineWrite(internals, null, ops, [], () => new Error('unused'));
 
     expect(conditionalUsed).toBe(false);
     // Identity check via boolean to avoid the `toBe(null)` overload narrowing the
@@ -329,6 +331,7 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     const baseConditions: ConditionalBatchCondition[] = [{ key: 'guard', expectedValue: null }];
     await commitFencedEngineWrite(
       internals,
+      null,
       [{ type: 'put', key: 'guarded', value: new Uint8Array([1]) }],
       baseConditions,
       () => new Error('unused'),
@@ -537,6 +540,7 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     await expect(
       commitFencedEngineWrite(
         internals,
+        null,
         [{ type: 'put', key: 'k', value: new Uint8Array([1]) }],
         [],
         () => new Error('unused'),
@@ -592,6 +596,7 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     await expect(
       commitFencedEngineWrite(
         internals,
+        null,
         [{ type: 'put', key: 'k', value: new Uint8Array([1]) }],
         [],
         () => new Error('should not surface — re-read threw, so we halt as deposed'),
@@ -623,6 +628,7 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     await storage.put('exists', new Uint8Array([1]));
     const conflicted = await commitFencedEngineWriteAllowingPreconditionFailure(
       internals,
+      null,
       [{ type: 'put', key: 'k', value: new Uint8Array([2]) }],
       [{ key: 'exists', expectedValue: null }], // require-absent on a present key → fail
     );
@@ -634,6 +640,7 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     await expect(
       commitFencedEngineWriteAllowingPreconditionFailure(
         internals,
+        null,
         [{ type: 'put', key: 'k2', value: new Uint8Array([3]) }],
         [],
       ),
@@ -745,6 +752,7 @@ describe('#470 Step 2: fenced-write fan-out — behavior-level coverage', () => 
       await expect(
         commitFencedEngineWrite(
           internals,
+          null,
           [{ type: 'put', key: KEYS.checkpoint('x'), value: new Uint8Array([1]) }],
           [],
           () => new Error('unused'),

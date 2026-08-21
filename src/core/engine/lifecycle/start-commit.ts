@@ -57,6 +57,7 @@ type TaggedStartCondition = {
  */
 async function persistStartBatch(
   internals: EngineInternals,
+  workflowId: string,
   startOperations: BatchOperation[],
   conditions: TaggedStartCondition[],
 ): Promise<boolean> {
@@ -64,10 +65,14 @@ async function persistStartBatch(
   // epoch (issue #470 Step 2) so a deposed engine cannot plant a phantom run in the
   // successor's store. Both branches go through the fenced helpers, which append the
   // epoch condition under `ownership: 'lease'` and are byte-for-byte no-ops under
-  // `ownership: 'none'`.
+  // `ownership: 'none'`. Workflow-scoped under `ownership: 'workflow-lease'`: ADR
+  // 0002 folds `acquire()` into this enabling write (a later stage); until that
+  // lands, `workflowId` has no tracked claim yet and every start fails closed —
+  // correct for an unwired mode, not a regression (see the stage-89 patch summary).
   if (conditions.length === 0) {
     await commitFencedEngineWrite(
       internals,
+      workflowId,
       startOperations,
       [],
       () => new Error('Workflow start lost its CAS race.'),
@@ -80,6 +85,7 @@ async function persistStartBatch(
   // hard deposition halt rather than a spurious "run already exists".
   return commitFencedEngineWriteAllowingPreconditionFailure(
     internals,
+    workflowId,
     startOperations,
     conditions.map((entry) => entry.condition),
   );
@@ -199,7 +205,7 @@ export async function buildAndCommitStartBatch(
       ...tagWorkflowConcurrencyConditions(workflowConcurrency?.conditions ?? []),
     ];
 
-    const committed = await persistStartBatch(internals, startOperations, conditions);
+    const committed = await persistStartBatch(internals, workflowId, startOperations, conditions);
     if (committed) {
       return;
     }

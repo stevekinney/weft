@@ -164,8 +164,21 @@ export async function commitFencedWorkflowStateOperations(
 ): Promise<void> {
   const commit = buildWorkflowStateCommit(internals, state.id, operations, options);
 
+  // Workflow-scoped: this helper commits an engine-generator-owned workflow
+  // STATUS transition. Its callers span both self-driven advances (complete,
+  // fail — this engine holding the claim is correct) and external terminal
+  // transitions (cancel, timeout, suspend — ADR 0002 classifies these
+  // "intentionally external", any engine may commit them, and their epoch
+  // handling is a rotate-the-epoch write a later stage must implement, not a
+  // condition against THIS engine's own claim). Fencing on `state.id`
+  // uniformly is deliberately conservative for now: under `'lease'`/`'none'`
+  // it is unchanged, and under `'workflow-lease'` every workflow-scoped write
+  // already fails closed until that later stage wires claim acquisition and
+  // rotation, so no external-transition regression is introduced by not yet
+  // splitting this call site — see the stage-89 patch summary.
   await commitFencedEngineWrite(
     internals,
+    state.id,
     commit.operations,
     commit.conditions,
     () =>
@@ -264,8 +277,12 @@ export async function writeScheduleState(
 
   operations.push(...(options?.additionalOperations ?? []));
 
+  // Engine-scoped: `state.id` here is a SCHEDULE id, not a workflow id, and
+  // this writes the schedule record itself (create/pause/resume/cancel/update),
+  // not any one workflow's execution. No `wf-owner-epoch` fence applies.
   await commitFencedEngineWrite(
     internals,
+    null,
     operations,
     [],
     () => new Error(`Schedule state commit for schedule "${state.id}" lost its precondition.`),

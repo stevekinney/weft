@@ -436,6 +436,7 @@ async function deleteTransientScheduleRunMetadata(
 ): Promise<void> {
   await commitFencedEngineWrite(
     internals,
+    workflowId,
     [{ type: 'delete', key: KEYS.scheduleRun(workflowId) }],
     [],
     () => new Error(`Schedule-run cleanup for workflow "${workflowId}" lost its precondition.`),

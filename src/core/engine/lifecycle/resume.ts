@@ -320,6 +320,7 @@ async function reactivateSuspendedWorkflowState(
   // workflow the successor already owns.
   await commitFencedEngineWrite(
     internals,
+    state.id,
     [
       { type: 'put', key: KEYS.workflow(state.id), value: encode(state) },
       ...buildWorkflowVisibilityIndexTransition(state.id, previousState, state).batchOps,

@@ -192,6 +192,7 @@ async function consumePendingAsyncActivity(
   try {
     await commitFencedEngineWrite(
       internals,
+      pending.workflowId,
       buildAsyncActivityAcknowledgementOperations(pending, outcome),
       [],
       () => new Error(`Async activity acknowledgement for token "${token}" lost its precondition.`),

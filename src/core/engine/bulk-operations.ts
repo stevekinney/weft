@@ -381,7 +381,12 @@ async function reactivateFailedWorkflowFromCheckpointSerialized(
       ...(concurrencyStartOperations?.operations ?? []),
     ];
     const conditions = concurrencyStartOperations?.conditions ?? [];
-    const committed = await commitFailedWorkflowReactivation(internals, operations, conditions);
+    const committed = await commitFailedWorkflowReactivation(
+      internals,
+      workflowId,
+      operations,
+      conditions,
+    );
 
     if (committed) {
       return {
@@ -400,13 +405,19 @@ async function reactivateFailedWorkflowFromCheckpointSerialized(
 
 async function commitFailedWorkflowReactivation(
   internals: EngineInternals,
+  workflowId: string,
   operations: BatchOperation[],
   conditions: ConditionalBatchCondition[],
 ): Promise<boolean> {
   if (conditions.length > 0) {
     requireStorageCapability(internals.storage, 'conditionalBatch', 'retry failed workflow');
   }
-  return commitFencedEngineWriteAllowingPreconditionFailure(internals, operations, conditions);
+  return commitFencedEngineWriteAllowingPreconditionFailure(
+    internals,
+    workflowId,
+    operations,
+    conditions,
+  );
 }
 
 function buildReactivatedWorkflowState(

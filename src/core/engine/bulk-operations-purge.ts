@@ -211,12 +211,10 @@ export async function purgeWorkflow(
   cleanupWaiters: CleanupWaiters,
 ): Promise<void> {
   const deleteOperations = await collectWorkflowPurgeDeleteOperations(internals, state);
-  await commitFencedEngineWrite(
-    internals,
-    deleteOperations,
-    [],
-    () => new Error(`Purge commit for workflow "${state.id}" lost its precondition.`),
-  );
+  // Engine-scoped (ADR 0002 "intentionally external"); rotation is a later stage.
+  await commitFencedEngineWrite(internals, null, deleteOperations, [], () => {
+    return new Error(`Purge commit for workflow "${state.id}" lost its precondition.`);
+  });
   clearPurgedWorkflowInMemoryState(internals, state.id, cleanupWaiters);
 }
 

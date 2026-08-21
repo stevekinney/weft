@@ -682,9 +682,13 @@ export class Engine<
       // engine cannot drop a timer while its callback's fenced reschedule/clear
       // was rejected. Empty base conditions: the only guard is the epoch fence,
       // so under single-engine ownership this commits like the unfenced default.
+      // Engine-scoped: one tick's cleanup batch can span fired timers from
+      // MANY distinct workflows (deadline, delayed-start, schedule, terminal
+      // cleanup, teardown), so there is no single workflowId to fence against.
       commitTimerCleanup: (operations) =>
         commitFencedEngineWrite(
           getInternals(this),
+          null,
           operations,
           [],
           () => new Error('Timer cleanup lost its fenced CAS race'),
@@ -752,6 +756,11 @@ export class Engine<
     getInternals(this).secondInstanceDetectionInterval = null;
     getInternals(this).secondInstanceDetector = null;
     getInternals(this).leaseManager = null;
+    // Not yet wired: constructing and populating this per `ownership:
+    // 'workflow-lease'` (Gate 1/Gate 2, claim acquisition folded into start/
+    // resume/delayed-start-fire) is a later stage. `commitFencedEngineWrite`
+    // already reads it for every workflow-scoped write.
+    getInternals(this).workflowClaimRegistry = null;
     getInternals(this).inFlightLeaseAcquire = null;
     getInternals(this).deposed = false;
     getInternals(this).tearDownAfterDeposition = (): void => {

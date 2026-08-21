@@ -316,6 +316,7 @@ export async function fork(
     // engine cannot create a phantom forked run in the successor's store.
     await commitFencedEngineWrite(
       internals,
+      workflowId,
       buildForkBatchOperations(
         internals,
         workflowId,

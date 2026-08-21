@@ -53,6 +53,7 @@ import type { WorkflowFeedListener } from './index.ts';
 import type { LeaseManager } from './lease-manager.ts';
 import type { ScheduleHandleEngine } from './schedule-handle.ts';
 import type { SecondInstanceDetector } from './second-instance-detector.ts';
+import type { WorkflowClaimRegistry } from './workflow-claim-registry.ts';
 
 export type SleepTimerAcknowledgementWaiter = {
   fireAt: number;
@@ -264,6 +265,19 @@ export interface EngineInternals {
    * Step 1; epoch fencing of durable writes (Step 2) is what makes it enforceable.
    */
   leaseManager: LeaseManager | null;
+  /**
+   * The active per-workflow claim registry for `ownership: 'workflow-lease'`;
+   * `null` under `'none'`/`'lease'` and, for now, ALSO under `'workflow-lease'`
+   * itself — wiring construction (Gate 1/Gate 2, actually instantiating the
+   * registry, and folding `acquire()` into start/resume/delayed-start-fire) is a
+   * later stage. Its presence here lets {@link commitFencedEngineWrite} read
+   * {@link WorkflowClaimRegistry.currentEpochBytes} for a workflow-scoped write
+   * without that later stage having to touch the fencing path again. Until it is
+   * populated, every workflow-scoped write under `'workflow-lease'` fails closed
+   * with {@link EngineDeposedError} — correct, not a bug: this engine holds no
+   * claim for any workflow yet.
+   */
+  workflowClaimRegistry: WorkflowClaimRegistry | null;
   /**
    * The in-flight lease acquisition, or `null` when none is running. Set while
    * `#acquireLeaseIfConfigured` awaits `acquire()` (which can park for the whole

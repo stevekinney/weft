@@ -255,6 +255,7 @@ export async function startDelayedWorkflow(
       // in-process serialization above handles same-engine ordering.)
       await commitFencedEngineWrite(
         internals,
+        entry.workflowId,
         operations,
         [],
         () =>

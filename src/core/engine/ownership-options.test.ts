@@ -4,6 +4,8 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { workflow } from '../types.ts';
 import type { EngineConstructorOptions } from './engine-internal-types.ts';
 import { Engine } from './index.ts';
+import { getInternals } from './internals.ts';
+import { EngineDeposedError } from './lease-errors.ts';
 import {
   DEFAULT_LEASE_RENEW_INTERVAL_MS,
   DEFAULT_LEASE_TTL_MS,
@@ -14,6 +16,7 @@ import {
   resolveOwnershipFields,
   WORKFLOW_CLAIM_TTL_SAFETY_MULTIPLIER,
 } from './ownership-options.ts';
+import { WorkflowClaimRegistry } from './workflow-claim-registry.ts';
 
 /**
  * Direct unit coverage of `ownership-options.ts` for the three-member
@@ -190,12 +193,16 @@ describe('resolveBackgroundTaskMode', () => {
 });
 
 describe("ownership: 'workflow-lease' engine construction", () => {
-  // This stage only widens and validates the option surface — no engine
-  // behavior yet claims to fence per-workflow execution. Pin that: a
-  // 'workflow-lease' engine must construct, recover, start, and complete a
-  // workflow exactly as a 'none' engine would, with no throwing "not yet
-  // wired" placeholder anywhere on that path.
-  it('constructs, starts, and completes a workflow with no fencing behavior yet wired', async () => {
+  // This stage widens and validates the option surface (this file) AND, as of
+  // stage 89, threads the per-workflow fence through every engine-owned
+  // durable write (`fenced-write.ts`). Construction and Gate 1/Gate 2 wiring —
+  // actually instantiating and populating `EngineInternals.workflowClaimRegistry`
+  // — is still a later stage, so it stays `null` on every engine this file
+  // constructs. That makes every workflow-scoped write fail closed (correct,
+  // not a bug: this engine holds no claim for any workflow yet) UNLESS a test
+  // manually installs a registry and pre-acquires the claim, standing in for
+  // what that later stage's acquire-folding will do automatically.
+  it('fails closed starting a workflow when no claim registry is wired yet', async () => {
     const greet = workflow({ name: 'ownership-options-workflow-lease-smoke' }).execute(
       async function* (_ctx, input: { name: string }) {
         return `hello ${input.name}`;
@@ -208,9 +215,40 @@ describe("ownership: 'workflow-lease' engine construction", () => {
       workflows: { 'ownership-options-workflow-lease-smoke': greet },
     });
 
-    const handle = await engine.start('ownership-options-workflow-lease-smoke', {
-      name: 'world',
+    await expect(
+      engine.start('ownership-options-workflow-lease-smoke', { name: 'world' }),
+    ).rejects.toThrow(EngineDeposedError);
+  });
+
+  it('starts and completes a workflow once its claim is pre-acquired via the registry', async () => {
+    const greet = workflow({ name: 'ownership-options-workflow-lease-smoke-claimed' }).execute(
+      async function* (_ctx, input: { name: string }) {
+        return `hello ${input.name}`;
+      },
+    );
+
+    await using engine = await Engine.create({
+      storage: new MemoryStorage(),
+      ownership: 'workflow-lease',
+      workflows: { 'ownership-options-workflow-lease-smoke-claimed': greet },
     });
+    const internals = getInternals(engine);
+    const registry = new WorkflowClaimRegistry({
+      storage: internals.storage,
+      engineId: 'test-engine',
+      getNow: () => internals.options.getNow(),
+      claimTtlMs: DEFAULT_WORKFLOW_CLAIM_TTL_MS,
+      claimRenewIntervalMs: DEFAULT_WORKFLOW_CLAIM_RENEW_INTERVAL_MS,
+    });
+    internals.workflowClaimRegistry = registry;
+    const acquired = await registry.acquire('claimed-workflow');
+    expect(acquired.status).toBe('acquired');
+
+    const handle = await engine.start(
+      'ownership-options-workflow-lease-smoke-claimed',
+      { name: 'world' },
+      { id: 'claimed-workflow' },
+    );
     expect(await handle.result()).toBe('hello world');
   });
 

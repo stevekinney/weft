@@ -337,6 +337,7 @@ async function persistCoordinatedUpdateResponse<
     // cannot overwrite the successor's response (issue #470 Step 2).
     await commitFencedEngineWrite(
       internals,
+      workflowId,
       responseOperations,
       [],
       () =>
