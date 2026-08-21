@@ -25,6 +25,7 @@ import {
 } from '../task-ledger.ts';
 import {
   getTaskDetailOperation,
+  getTaskDetailOutputSchema,
   getTaskDetailRestBinding,
   type GetTaskDetailOutput,
 } from './get-task-detail.ts';
@@ -447,7 +448,7 @@ describe('weft.tasks.get', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error('expected success');
     if (result.value.state !== 'terminal') throw new Error('expected terminal state');
-    expect(result.value.disposition).toBe('resolved');
+    if (result.value.disposition !== 'resolved') throw new Error('expected resolved disposition');
     expect(result.value.resultDigest).toBe('digest-abc');
     expect(result.value.adopted).toBe(true);
     expect(result.value.adoptedAt).toBe(4_500);
@@ -473,7 +474,7 @@ describe('weft.tasks.get', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error('expected success');
     if (result.value.state !== 'terminal') throw new Error('expected terminal state');
-    expect(result.value.disposition).toBe('cancelled');
+    if (result.value.disposition !== 'cancelled') throw new Error('expected cancelled disposition');
     expect(result.value.cancellationReason).toBe('operator requested');
     expect(result.value).not.toHaveProperty('resultStatus');
     expect(result.value).not.toHaveProperty('resultDigest');
@@ -497,7 +498,8 @@ describe('weft.tasks.get', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error('expected success');
     if (result.value.state !== 'terminal') throw new Error('expected terminal state');
-    expect(result.value.disposition).toBe('retryExhausted');
+    if (result.value.disposition !== 'retryExhausted')
+      throw new Error('expected retryExhausted disposition');
     expect(result.value.error).toBe('boom');
     expect(result.value).not.toHaveProperty('retryCount');
     expect(result.value).not.toHaveProperty('requeueCount');
@@ -624,5 +626,57 @@ describe('weft.tasks.get', () => {
     const body = (await response.json()) as { items: unknown; summary: unknown };
     expect(body).toHaveProperty('items');
     expect(body).toHaveProperty('summary');
+  });
+});
+
+describe('getTaskDetailOutputSchema', () => {
+  const terminalBase = {
+    operationId: 'op-1',
+    workflowType: 'test',
+    activityName: 'charge',
+    queue: 'default',
+    headerKeys: [],
+    visibilityTimeoutMilliseconds: 30_000,
+    createdAt: 1_000,
+    attempt: 1,
+    state: 'terminal' as const,
+    terminalAt: 4_000,
+    adopted: false,
+  };
+
+  it('accepts a resolved terminal record with resultDigest and resultStatus', () => {
+    const result = getTaskDetailOutputSchema.safeParse({
+      ...terminalBase,
+      disposition: 'resolved',
+      resultDigest: 'digest-abc',
+      resultStatus: 'completed',
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects a cancelled terminal record with no cancellationReason — the durable union requires one', () => {
+    const result = getTaskDetailOutputSchema.safeParse({
+      ...terminalBase,
+      disposition: 'cancelled',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a retryExhausted terminal record with no error — the durable union requires one', () => {
+    const result = getTaskDetailOutputSchema.safeParse({
+      ...terminalBase,
+      disposition: 'retryExhausted',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a cancelled terminal record carrying resultStatus or resultDigest — those belong only to resolved', () => {
+    const result = getTaskDetailOutputSchema.safeParse({
+      ...terminalBase,
+      disposition: 'cancelled',
+      cancellationReason: 'operator requested',
+      resultStatus: 'completed',
+    });
+    expect(result.success).toBe(false);
   });
 });

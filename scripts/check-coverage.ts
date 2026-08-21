@@ -1317,8 +1317,8 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       // (projectTaskDetail's switch) unreachable at runtime — a compile-time
       // exhaustiveness guard only. `requireUncoveredLines` is omitted
       // because, matching the sibling entry's documented experience, which
-      // of `default: {` (350), the dead `const`/`return` pair (353, 354),
-      // and the closing brace (355) reads 0 flips between runs/environments
+      // of `default: {` (385), the dead `const`/`return` pair (388, 389),
+      // and the closing brace (390) reads 0 flips between runs/environments
       // with byte-identical source — a coverage-attribution artifact, not a
       // real reachability signal. All four are included so the allowance
       // covers every combination CI has actually produced. Re-derive from
@@ -1328,7 +1328,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       {
         reason:
           'Compile-time exhaustiveness guard for a closed discriminated union has no reachable runtime path to test without an unsafe cast.',
-        lines: new Set([350, 353, 354, 355]),
+        lines: new Set([385, 388, 389, 390]),
       },
     ],
     [

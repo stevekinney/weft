@@ -2537,171 +2537,505 @@
             "type": "object"
           },
           {
-            "additionalProperties": false,
-            "properties": {
-              "activityName": {
-                "type": "string"
-              },
-              "adopted": {
-                "type": "boolean"
-              },
-              "adoptedAt": {
-                "type": "number"
-              },
-              "attempt": {
-                "maximum": 9007199254740991,
-                "minimum": 0,
-                "type": "integer"
-              },
-              "cancellationReason": {
-                "type": "string"
-              },
-              "createdAt": {
-                "type": "number"
-              },
-              "disposition": {
-                "enum": ["resolved", "cancelled", "retryExhausted"],
-                "type": "string"
-              },
-              "error": {
-                "type": "string"
-              },
-              "executionRequirement": {
+            "oneOf": [
+              {
                 "additionalProperties": false,
                 "properties": {
-                  "activityContractHash": {
+                  "activityName": {
                     "type": "string"
                   },
-                  "artifactDigest": {
-                    "type": "string"
+                  "adopted": {
+                    "type": "boolean"
                   },
-                  "buildId": {
-                    "type": "string"
-                  },
-                  "deploymentName": {
-                    "type": "string"
-                  },
-                  "workflowRevision": {
-                    "type": "string"
-                  }
-                },
-                "type": "object"
-              },
-              "fairShareKey": {
-                "type": "string"
-              },
-              "headerKeys": {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              "lastRequeueReason": {
-                "type": "string"
-              },
-              "operationId": {
-                "type": "string"
-              },
-              "priority": {
-                "type": "number"
-              },
-              "queue": {
-                "type": "string"
-              },
-              "requeueCount": {
-                "maximum": 9007199254740991,
-                "minimum": 0,
-                "type": "integer"
-              },
-              "resultDigest": {
-                "type": "string"
-              },
-              "resultStatus": {
-                "enum": ["completed", "failed"],
-                "type": "string"
-              },
-              "retryCount": {
-                "maximum": 9007199254740991,
-                "minimum": 0,
-                "type": "integer"
-              },
-              "retryPolicy": {
-                "additionalProperties": false,
-                "properties": {
-                  "backoffMultiplier": {
+                  "adoptedAt": {
                     "type": "number"
                   },
-                  "initialBackoff": {
-                    "anyOf": [
-                      {
-                        "type": "number"
-                      },
-                      {
-                        "type": "string"
-                      }
-                    ]
+                  "attempt": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
                   },
-                  "maxAttempts": {
+                  "createdAt": {
                     "type": "number"
                   },
-                  "maxBackoff": {
-                    "anyOf": [
-                      {
-                        "type": "number"
+                  "disposition": {
+                    "const": "resolved",
+                    "type": "string"
+                  },
+                  "error": {
+                    "type": "string"
+                  },
+                  "executionRequirement": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "activityContractHash": {
+                        "type": "string"
                       },
-                      {
+                      "artifactDigest": {
+                        "type": "string"
+                      },
+                      "buildId": {
+                        "type": "string"
+                      },
+                      "deploymentName": {
+                        "type": "string"
+                      },
+                      "workflowRevision": {
                         "type": "string"
                       }
-                    ]
+                    },
+                    "type": "object"
                   },
-                  "nonRetryableErrors": {
+                  "fairShareKey": {
+                    "type": "string"
+                  },
+                  "headerKeys": {
                     "items": {
                       "type": "string"
                     },
                     "type": "array"
+                  },
+                  "lastRequeueReason": {
+                    "type": "string"
+                  },
+                  "operationId": {
+                    "type": "string"
+                  },
+                  "priority": {
+                    "type": "number"
+                  },
+                  "queue": {
+                    "type": "string"
+                  },
+                  "requeueCount": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "resultDigest": {
+                    "type": "string"
+                  },
+                  "resultStatus": {
+                    "enum": ["completed", "failed"],
+                    "type": "string"
+                  },
+                  "retryCount": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "retryPolicy": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "backoffMultiplier": {
+                        "type": "number"
+                      },
+                      "initialBackoff": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      "maxAttempts": {
+                        "type": "number"
+                      },
+                      "maxBackoff": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      "nonRetryableErrors": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "maxAttempts",
+                      "initialBackoff",
+                      "backoffMultiplier",
+                      "maxBackoff"
+                    ],
+                    "type": "object"
+                  },
+                  "scheduleToCloseDeadline": {
+                    "type": "number"
+                  },
+                  "state": {
+                    "const": "terminal",
+                    "type": "string"
+                  },
+                  "stickyWorkflowId": {
+                    "type": "string"
+                  },
+                  "terminalAt": {
+                    "type": "number"
+                  },
+                  "visibilityTimeoutMilliseconds": {
+                    "type": "number"
+                  },
+                  "workflowId": {
+                    "type": "string"
+                  },
+                  "workflowType": {
+                    "type": "string"
                   }
                 },
-                "required": ["maxAttempts", "initialBackoff", "backoffMultiplier", "maxBackoff"],
+                "required": [
+                  "operationId",
+                  "workflowType",
+                  "activityName",
+                  "queue",
+                  "headerKeys",
+                  "visibilityTimeoutMilliseconds",
+                  "createdAt",
+                  "attempt",
+                  "state",
+                  "terminalAt",
+                  "adopted",
+                  "disposition",
+                  "resultDigest",
+                  "resultStatus"
+                ],
                 "type": "object"
               },
-              "scheduleToCloseDeadline": {
-                "type": "number"
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "activityName": {
+                    "type": "string"
+                  },
+                  "adopted": {
+                    "type": "boolean"
+                  },
+                  "adoptedAt": {
+                    "type": "number"
+                  },
+                  "attempt": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "cancellationReason": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "number"
+                  },
+                  "disposition": {
+                    "const": "cancelled",
+                    "type": "string"
+                  },
+                  "executionRequirement": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "activityContractHash": {
+                        "type": "string"
+                      },
+                      "artifactDigest": {
+                        "type": "string"
+                      },
+                      "buildId": {
+                        "type": "string"
+                      },
+                      "deploymentName": {
+                        "type": "string"
+                      },
+                      "workflowRevision": {
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "fairShareKey": {
+                    "type": "string"
+                  },
+                  "headerKeys": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "lastRequeueReason": {
+                    "type": "string"
+                  },
+                  "operationId": {
+                    "type": "string"
+                  },
+                  "priority": {
+                    "type": "number"
+                  },
+                  "queue": {
+                    "type": "string"
+                  },
+                  "requeueCount": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "retryCount": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "retryPolicy": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "backoffMultiplier": {
+                        "type": "number"
+                      },
+                      "initialBackoff": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      "maxAttempts": {
+                        "type": "number"
+                      },
+                      "maxBackoff": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      "nonRetryableErrors": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "maxAttempts",
+                      "initialBackoff",
+                      "backoffMultiplier",
+                      "maxBackoff"
+                    ],
+                    "type": "object"
+                  },
+                  "scheduleToCloseDeadline": {
+                    "type": "number"
+                  },
+                  "state": {
+                    "const": "terminal",
+                    "type": "string"
+                  },
+                  "stickyWorkflowId": {
+                    "type": "string"
+                  },
+                  "terminalAt": {
+                    "type": "number"
+                  },
+                  "visibilityTimeoutMilliseconds": {
+                    "type": "number"
+                  },
+                  "workflowId": {
+                    "type": "string"
+                  },
+                  "workflowType": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "workflowType",
+                  "activityName",
+                  "queue",
+                  "headerKeys",
+                  "visibilityTimeoutMilliseconds",
+                  "createdAt",
+                  "attempt",
+                  "state",
+                  "terminalAt",
+                  "adopted",
+                  "disposition",
+                  "cancellationReason"
+                ],
+                "type": "object"
               },
-              "state": {
-                "const": "terminal",
-                "type": "string"
-              },
-              "stickyWorkflowId": {
-                "type": "string"
-              },
-              "terminalAt": {
-                "type": "number"
-              },
-              "visibilityTimeoutMilliseconds": {
-                "type": "number"
-              },
-              "workflowId": {
-                "type": "string"
-              },
-              "workflowType": {
-                "type": "string"
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "activityName": {
+                    "type": "string"
+                  },
+                  "adopted": {
+                    "type": "boolean"
+                  },
+                  "adoptedAt": {
+                    "type": "number"
+                  },
+                  "attempt": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "createdAt": {
+                    "type": "number"
+                  },
+                  "disposition": {
+                    "const": "retryExhausted",
+                    "type": "string"
+                  },
+                  "error": {
+                    "type": "string"
+                  },
+                  "executionRequirement": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "activityContractHash": {
+                        "type": "string"
+                      },
+                      "artifactDigest": {
+                        "type": "string"
+                      },
+                      "buildId": {
+                        "type": "string"
+                      },
+                      "deploymentName": {
+                        "type": "string"
+                      },
+                      "workflowRevision": {
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "fairShareKey": {
+                    "type": "string"
+                  },
+                  "headerKeys": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "lastRequeueReason": {
+                    "type": "string"
+                  },
+                  "operationId": {
+                    "type": "string"
+                  },
+                  "priority": {
+                    "type": "number"
+                  },
+                  "queue": {
+                    "type": "string"
+                  },
+                  "requeueCount": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "retryCount": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "retryPolicy": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "backoffMultiplier": {
+                        "type": "number"
+                      },
+                      "initialBackoff": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      "maxAttempts": {
+                        "type": "number"
+                      },
+                      "maxBackoff": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      "nonRetryableErrors": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "maxAttempts",
+                      "initialBackoff",
+                      "backoffMultiplier",
+                      "maxBackoff"
+                    ],
+                    "type": "object"
+                  },
+                  "scheduleToCloseDeadline": {
+                    "type": "number"
+                  },
+                  "state": {
+                    "const": "terminal",
+                    "type": "string"
+                  },
+                  "stickyWorkflowId": {
+                    "type": "string"
+                  },
+                  "terminalAt": {
+                    "type": "number"
+                  },
+                  "visibilityTimeoutMilliseconds": {
+                    "type": "number"
+                  },
+                  "workflowId": {
+                    "type": "string"
+                  },
+                  "workflowType": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "workflowType",
+                  "activityName",
+                  "queue",
+                  "headerKeys",
+                  "visibilityTimeoutMilliseconds",
+                  "createdAt",
+                  "attempt",
+                  "state",
+                  "terminalAt",
+                  "adopted",
+                  "disposition",
+                  "error"
+                ],
+                "type": "object"
               }
-            },
-            "required": [
-              "operationId",
-              "workflowType",
-              "activityName",
-              "queue",
-              "headerKeys",
-              "visibilityTimeoutMilliseconds",
-              "createdAt",
-              "attempt",
-              "state",
-              "disposition",
-              "terminalAt",
-              "adopted"
-            ],
-            "type": "object"
+            ]
           },
           {
             "additionalProperties": false,

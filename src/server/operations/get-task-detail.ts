@@ -148,21 +148,55 @@ const taskDetailCancellingSchema = z
   })
   .strict();
 
-const taskDetailTerminalSchema = z
+// The RemoteTaskTerminal union guarantees resultStatus for 'resolved',
+// cancellationReason for 'cancelled', and error for 'retryExhausted' — never
+// independently optional the way task-ledger-types.ts models them. A single
+// flat object schema with all three optional would accept impossible
+// responses (e.g. `{ disposition: 'cancelled' }` with no reason) and
+// couldn't be narrowed precisely by a schema consumer. Modeled as a nested
+// discriminatedUnion on `disposition`, itself one branch of the outer
+// discriminatedUnion on `state` below — Zod v4 requires every branch of a
+// discriminatedUnion to be $ZodTypeDiscriminable, which a plain z.union()
+// does not satisfy.
+const terminalCommonFields = {
+  ...taskDetailBaseFields,
+  state: z.literal('terminal'),
+  terminalAt: z.number(),
+  adopted: z.boolean(),
+  adoptedAt: z.number().optional(),
+};
+
+const taskDetailTerminalResolvedSchema = z
   .object({
-    ...taskDetailBaseFields,
-    state: z.literal('terminal'),
-    disposition: z.enum(['resolved', 'cancelled', 'retryExhausted']),
-    // Only present for disposition: 'resolved' — see terminalDispositionFields.
-    resultDigest: z.string().optional(),
-    terminalAt: z.number(),
-    adopted: z.boolean(),
-    adoptedAt: z.number().optional(),
-    resultStatus: z.enum(['completed', 'failed']).optional(),
-    cancellationReason: z.string().optional(),
+    ...terminalCommonFields,
+    disposition: z.literal('resolved'),
+    resultDigest: z.string(),
+    resultStatus: z.enum(['completed', 'failed']),
     error: z.string().optional(),
   })
   .strict();
+
+const taskDetailTerminalCancelledSchema = z
+  .object({
+    ...terminalCommonFields,
+    disposition: z.literal('cancelled'),
+    cancellationReason: z.string(),
+  })
+  .strict();
+
+const taskDetailTerminalRetryExhaustedSchema = z
+  .object({
+    ...terminalCommonFields,
+    disposition: z.literal('retryExhausted'),
+    error: z.string(),
+  })
+  .strict();
+
+const taskDetailTerminalSchema = z.discriminatedUnion('disposition', [
+  taskDetailTerminalResolvedSchema,
+  taskDetailTerminalCancelledSchema,
+  taskDetailTerminalRetryExhaustedSchema,
+]);
 
 const taskDetailDeadLetteredSchema = z
   .object({
@@ -176,7 +210,8 @@ const taskDetailDeadLetteredSchema = z
   })
   .strict();
 
-const getTaskDetailOutput = z.discriminatedUnion('state', [
+/** Exported for direct schema-level tests; the operation itself uses this via `outputSchema`. */
+export const getTaskDetailOutputSchema = z.discriminatedUnion('state', [
   taskDetailQueuedSchema,
   taskDetailLeasedSchema,
   taskDetailCompletingSchema,
@@ -186,7 +221,7 @@ const getTaskDetailOutput = z.discriminatedUnion('state', [
 ]);
 
 export type GetTaskDetailInput = z.infer<typeof getTaskDetailInput>;
-export type GetTaskDetailOutput = z.infer<typeof getTaskDetailOutput>;
+export type GetTaskDetailOutput = z.infer<typeof getTaskDetailOutputSchema>;
 
 function baseEnvelopeFields(record: RemoteTaskRecord) {
   return {
@@ -363,7 +398,7 @@ export const getTaskDetailOperation = defineOperation<GetTaskDetailInput, GetTas
   destructive: false,
   tags: ['Observability'],
   inputSchema: getTaskDetailInput,
-  outputSchema: getTaskDetailOutput,
+  outputSchema: getTaskDetailOutputSchema,
   access: {
     kind: 'scoped',
     scopes: { kind: 'anyOf', scopes: ['system:read'] },
