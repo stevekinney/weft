@@ -32,6 +32,7 @@ export const CATALOG_OPERATION_NAMES = [
   'weft.system.registry',
   'weft.task.queues.list',
   'weft.tasks.diagnostics',
+  'weft.tasks.get',
   'weft.updates.result.get',
   'weft.worker.deployments.drain',
   'weft.worker.deployments.resume',
@@ -101,6 +102,7 @@ export const CLIENT_OPERATION_NAMES = [
   'weft.task.queues.list',
   'weft.tasks.diagnostics',
   'weft.tasks.diagnostics.deadletters.clear',
+  'weft.tasks.get',
   'weft.updates.result.get',
   'weft.worker.deployments.drain',
   'weft.worker.deployments.resume',
@@ -466,6 +468,11 @@ export type ClientOperationTypes = {
   'weft.tasks.diagnostics.deadletters.clear': {
     readonly input: { readonly operationId: string };
     readonly output: { readonly ok: boolean };
+    readonly faults: 'NotFound';
+  };
+  'weft.tasks.get': {
+    readonly input: { readonly operationId: string };
+    readonly output: unknown;
     readonly faults: 'NotFound';
   };
   'weft.updates.result.get': {

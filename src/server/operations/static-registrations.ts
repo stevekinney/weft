@@ -56,6 +56,7 @@ import { getReviewOperation, getReviewRestBinding } from './get-review.ts';
 import { getScheduleOperation, getScheduleRestBinding } from './get-schedule.ts';
 import { getStreamChunksOperation, getStreamChunksRestBinding } from './get-stream-chunks.ts';
 import { getSystemLeaseOperation, getSystemLeaseRestBinding } from './get-system-lease.ts';
+import { getTaskDetailOperation, getTaskDetailRestBinding } from './get-task-detail.ts';
 import {
   clearTaskDeadLetterOperation,
   clearTaskDeadLetterRestBinding,
@@ -189,8 +190,14 @@ export const STATIC_REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = [
   streamWorkflowSseRestBinding,
   workflowEventsSseRestBinding,
   fleetEventsSseRestBinding,
+  // getTaskDetailRestBinding lives under the /v1/tasks/detail/ namespace
+  // specifically so its :operationId segment can never collide with a
+  // sibling literal path (see the binding's own comment). Still registered
+  // after the other /v1/tasks/... bindings on general principle — matchRestBinding
+  // is first-match-wins in array order.
   getTaskDiagnosticsRestBinding,
   clearTaskDeadLetterRestBinding,
+  getTaskDetailRestBinding,
   // Operation-catalog-backed routes
   listSchedulesRestBinding,
   getScheduleRestBinding,
@@ -264,6 +271,7 @@ export const STATIC_OPERATIONS: ReadonlyArray<RegistrableOperation> = [
   workflowEventsSubscriptionOperation,
   fleetEventsSubscriptionOperation,
   clearTaskDeadLetterOperation,
+  getTaskDetailOperation,
   // Operation-catalog-backed routes
   listSchedulesOperation,
   listAlertsOperation,

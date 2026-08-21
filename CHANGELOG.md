@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — `weft.tasks.get` / `GET /v1/tasks/detail/:operationId`
+
+A new read-only operation returns one task's full durable ledger state over
+REST and JSON-RPC — the wire-reachable counterpart to the same-process-only
+`WeftServer.getTaskResult()`. Unlike `weft.tasks.diagnostics`, which collapses
+`leased`/`completing`/`cancelling` into one `inflight` value for alerting
+purposes, this operation distinguishes all six ledger states and carries the
+full dispatch envelope (attempt identity, queue, priority, header key names,
+retry policy, visibility timeout, schedule-to-close deadline, execution
+requirement, fair-share key, sticky routing, retry availability) plus
+state-specific evidence (terminal disposition, `resultDigest` for resolved
+dispositions, adoption markers, dead-letter reason). The REST path lives
+under `/v1/tasks/detail/`
+rather than a bare `/v1/tasks/:operationId`, so a task whose caller-supplied
+`operationId` happens to equal an existing sibling literal path (currently
+`diagnostics`) is still reachable. Faults `NotFound` for a missing or
+already-reaped `operationId`, and `EngineFailure` (distinct from `NotFound`)
+if the stored record exists but fails to decode — a data-integrity signal,
+not a normal absence. Purely additive — no existing operation's behavior
+changes. Adoption stays same-process-only; there is no HTTP path to
+`adoptTaskResult`.
+
 ## [0.19.0] - 2026-08-20
 
 ### Changed — RemoteWorker protocol v3: canonical worker manifest replaces parallel identity fields
