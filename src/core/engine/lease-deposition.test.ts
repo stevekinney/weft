@@ -782,7 +782,7 @@ describe('#470 Step 2: fenced-write fan-out — behavior-level coverage', () => 
     // therefore loses one atomic compare-and-swap covering both — proving the
     // side-effect path is genuinely fenced (not committed unconditionally).
     const { stageAtomicWorkflowCommitSideEffects } = await import('./checkpoint-side-effects.ts');
-    const { commitFencedWorkflowStateOperations } = await import('./storage-io.ts');
+    const { commitSelfWorkflowStateOperations } = await import('./storage-io.ts');
     const base = new BunSQLiteStorage(':memory:');
     const failedConditions: string[] = [];
     const storage: Storage = {
@@ -818,7 +818,7 @@ describe('#470 Step 2: fenced-write fan-out — behavior-level coverage', () => 
     await stealLease(storage, 2, 'successor');
     const now = internals.options.getNow();
     await expect(
-      commitFencedWorkflowStateOperations(
+      commitSelfWorkflowStateOperations(
         internals,
         {
           id: 'sfx-run',
@@ -851,7 +851,7 @@ describe('#470 Step 2: fenced-write fan-out — behavior-level coverage', () => 
     // successor). This is an ordinary lost race — it throws the precondition error
     // and the engine is NOT deposed.
     const { stageAtomicWorkflowCommitSideEffects } = await import('./checkpoint-side-effects.ts');
-    const { commitFencedWorkflowStateOperations } = await import('./storage-io.ts');
+    const { commitSelfWorkflowStateOperations } = await import('./storage-io.ts');
     const storage = new BunSQLiteStorage(':memory:');
     const engine = await Engine.create({
       storage,
@@ -873,7 +873,7 @@ describe('#470 Step 2: fenced-write fan-out — behavior-level coverage', () => 
 
     const now = internals.options.getNow();
     await expect(
-      commitFencedWorkflowStateOperations(
+      commitSelfWorkflowStateOperations(
         internals,
         {
           id: 'race-run',

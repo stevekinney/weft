@@ -23,7 +23,8 @@ import {
 import { resolveWorkflowTypeTarget, type RegistrationCallbacks } from './registration.ts';
 import { cleanupReviews } from './reviews.ts';
 import {
-  commitFencedWorkflowStateOperations,
+  commitExternalTerminalWorkflowStateOperations,
+  commitSelfWorkflowStateOperations,
   loadWorkflowState,
   runSerializedWorkflowStateWrite,
 } from './storage-io.ts';
@@ -214,13 +215,25 @@ export function createTerminationCallbacksWith<
     loadWorkflowState: (workflowId) => loadWorkflowState(getInternals(engine), workflowId),
     runSerializedWorkflowStateWrite: (workflowId, writeOperation) =>
       runSerializedWorkflowStateWrite(getInternals(engine), workflowId, writeOperation),
-    // Lifecycle advances (suspend, completion) commit through the FENCED workflow-
-    // state path so a deposed engine's terminal/suspend write loses its CAS instead
-    // of corrupting the successor. Operator mutations (setAttributes, tag edits)
-    // batch directly in attributes-tags.ts / listing.ts and are intentionally never
-    // fenced — they legitimately run from any caller — so they are NOT routed here.
-    commitWorkflowStateOperations: (state, operations, options) =>
-      commitFencedWorkflowStateOperations(getInternals(engine), state, operations, options),
+    // Lifecycle advances commit through the FENCED workflow-state path so a
+    // deposed engine's write loses its CAS instead of corrupting the
+    // successor — but WHICH fence depends on the transition category (ADR
+    // 0002). Completion is a SELF-transition: this engine finishes its own
+    // workflow, fenced on its own claim. Suspend is an EXTERNAL terminal
+    // transition: `engine.suspend` may be called against a workflow this
+    // engine does not own, so it rotates the claim epoch instead. Operator
+    // mutations (setAttributes, tag edits) batch directly in
+    // attributes-tags.ts / listing.ts and are intentionally never fenced —
+    // they legitimately run from any caller — so they are NOT routed here.
+    commitSelfWorkflowStateOperations: (state, operations, options) =>
+      commitSelfWorkflowStateOperations(getInternals(engine), state, operations, options),
+    commitExternalTerminalWorkflowStateOperations: (state, operations, options) =>
+      commitExternalTerminalWorkflowStateOperations(
+        getInternals(engine),
+        state,
+        operations,
+        options,
+      ),
     cleanupReviews: (workflowId) => cleanupReviews(getInternals(engine), workflowId),
   };
 }

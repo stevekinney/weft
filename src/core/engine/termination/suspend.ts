@@ -135,7 +135,11 @@ export async function suspendWorkflow(
     const updatedAt = internals.options.getNow();
     const updatedState = { ...state, status: 'suspended' as const, updatedAt };
 
-    await callbacks.commitWorkflowStateOperations(state, [
+    // Suspend is an EXTERNAL terminal-ish transition (ADR 0002): `engine.suspend`
+    // is a public API any caller may invoke against an engine that is not the
+    // running owner, so this rotates the claim epoch under `ownership:
+    // 'workflow-lease'` rather than fencing on this engine's own claim.
+    await callbacks.commitExternalTerminalWorkflowStateOperations(state, [
       { type: 'put', key: KEYS.workflow(workflowId), value: encode(updatedState) },
       ...buildWorkflowVisibilityIndexTransition(workflowId, state, updatedState).batchOps,
       // Delete the absolute execution-deadline timer in the same batch as the

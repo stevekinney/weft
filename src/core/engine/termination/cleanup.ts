@@ -8,6 +8,7 @@ import type { EngineInternals } from '../internals.ts';
 import { settleSleepTimerAcknowledgements } from '../sleep-timer-acknowledgements.ts';
 import { parseTerminalCleanupTimerId, workflowFeedListenerKey } from '../state-utilities.ts';
 import { releaseWorkflowConcurrencySlot } from '../workflow-concurrency.ts';
+import type { WorkflowStateCommitCallback } from './state-commit-callbacks.ts';
 
 export type TerminationCallbacks = {
   dispatchEvent: (event: Event) => void;
@@ -21,11 +22,10 @@ export type TerminationCallbacks = {
     workflowId: string,
     writeOperation: () => Promise<Result>,
   ) => Promise<Result>;
-  commitWorkflowStateOperations: (
-    state: WorkflowState,
-    operations: BatchOperation[],
-    options?: { includePendingAtomicSideEffects?: boolean },
-  ) => Promise<void>;
+  /** SELF-transition (complete): fences on this engine's own claim. See ADR 0002. */
+  commitSelfWorkflowStateOperations: WorkflowStateCommitCallback;
+  /** EXTERNAL terminal transition (suspend): rotates the claim epoch. See ADR 0002. */
+  commitExternalTerminalWorkflowStateOperations: WorkflowStateCommitCallback;
   cleanupReviews: (workflowId: string) => Promise<void>;
 };
 
@@ -71,15 +71,15 @@ function selectTrackedWaiterMaps(
   // scope would require capturing `internals`, which is created per Engine.
   const dispatch = {
     signal: () => ({
-      waiters: internals.signalWaiters as Map<string, unknown>,
+      waiters: internals.signalWaiters,
       byWorkflow: internals.signalWaitersByWorkflow,
     }),
     update: () => ({
-      waiters: internals.updateWaiters as Map<string, unknown>,
+      waiters: internals.updateWaiters,
       byWorkflow: internals.updateWaitersByWorkflow,
     }),
     review: () => ({
-      waiters: internals.reviewWaiters as Map<string, unknown>,
+      waiters: internals.reviewWaiters,
       byWorkflow: internals.reviewWaitersByWorkflow,
     }),
   } satisfies Record<TrackedWaiterKind, () => TrackedWaiterMaps>;

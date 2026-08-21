@@ -12,6 +12,7 @@ import {
 } from './bulk-operations-purge.ts';
 import { encodeEpoch } from './lease-codec.ts';
 import { createTerminalCleanupTimerId } from './state-utilities.ts';
+import { decodeEpoch, encodeWorkflowClaimHolder } from './workflow-claim-codec.ts';
 
 function createWorkflowState(
   workflowId: string,
@@ -32,7 +33,11 @@ function createWorkflowState(
   };
 }
 
-function createInternals(storage: MemoryStorage, now = 10_000) {
+function createInternals(
+  storage: MemoryStorage,
+  now = 10_000,
+  ownershipMode: 'none' | 'lease' | 'workflow-lease' = 'none',
+) {
   return {
     checkpoints: new Map(),
     deposed: false,
@@ -40,9 +45,11 @@ function createInternals(storage: MemoryStorage, now = 10_000) {
     handleCache: new Map(),
     heartbeatDetails: new Map(),
     lastHeartbeatDetailsByStep: new Map(),
+    leaseManager: null,
+    workflowClaimRegistry: null,
     options: {
       getNow: () => now,
-      ownershipMode: 'none',
+      ownershipMode,
       retention: undefined,
     },
     pendingAsyncActivities: new Map(),
@@ -203,5 +210,39 @@ describe('bulk purge helpers', () => {
     await expect(purgeWorkflow(internals as never, state, () => {})).rejects.toThrow(
       `Purge commit for workflow "${state.id}" lost its precondition.`,
     );
+  });
+
+  it('purgeWorkflow under "workflow-lease" rotates wf-owner-epoch and deletes wf-owner-holder (ADR 0002, "intentionally external")', async () => {
+    const storage = new MemoryStorage();
+    const internals = createInternals(storage, 10_000, 'workflow-lease');
+    const state = createWorkflowState('purge-rotation', 3_000);
+    await storage.put(KEYS.workflow(state.id), encode(state));
+    await storage.put(KEYS.workflowOwnerEpoch(state.id), encodeEpoch(4));
+    await storage.put(
+      KEYS.workflowOwnerHolder(state.id),
+      encodeWorkflowClaimHolder({
+        engineId: 'stale-owner',
+        epoch: 4,
+        expiresAt: 999_999,
+        claimedAt: 1_000,
+      }),
+    );
+
+    await purgeWorkflow(internals, state, () => {});
+
+    const rotatedEpoch = decodeEpoch((await storage.get(KEYS.workflowOwnerEpoch(state.id)))!);
+    expect(rotatedEpoch).toBe(5);
+    expect(await storage.get(KEYS.workflowOwnerHolder(state.id))).toBeNull();
+  });
+
+  it('purgeWorkflow under "none" leaves wf-owner-epoch untouched (byte-for-byte unchanged)', async () => {
+    const storage = new MemoryStorage();
+    const internals = createInternals(storage);
+    const state = createWorkflowState('purge-no-rotation', 3_000);
+    await storage.put(KEYS.workflow(state.id), encode(state));
+
+    await purgeWorkflow(internals, state, () => {});
+
+    expect(await storage.get(KEYS.workflowOwnerEpoch(state.id))).toBeNull();
   });
 });

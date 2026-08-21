@@ -21,7 +21,9 @@ import type { EngineInternals } from './internals.ts';
  * the next checkpoint still flushes the staged op in the terminal batch, so the
  * finalizer always sees the resource id. The staged op inherits the lease-epoch
  * fence (#470) for free, since checkpoint and terminal commits route through
- * `commitFencedWorkflowStateOperations`.
+ * `commitSelfWorkflowStateOperations` (completion) or
+ * `commitExternalTerminalWorkflowStateOperations` (cancel/timeout/suspend —
+ * ADR 0002), both in `storage-io.ts`.
  *
  * Oversized payloads are rejected before staging (the same hostile-input guard
  * activity results use). A call made once the workflow is already terminalizing
