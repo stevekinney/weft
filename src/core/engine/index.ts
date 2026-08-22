@@ -216,6 +216,7 @@ import {
   type TimeOperationCallbacks,
 } from './operations-time.ts';
 import { bootstrapWorkflowLeaseOwnership } from './ownership-bootstrap.ts';
+import { bootstrapOwnershipGates } from './ownership-mode-marker.ts';
 import { assertCompatiblePersistedDataVersion } from './persisted-data-version.ts';
 import { query as queryWorkflow } from './queries.ts';
 import {
@@ -976,8 +977,24 @@ export class Engine<
    */
   async #bootstrapOwnershipIfConfigured(): Promise<void> {
     const internals = getInternals(this);
-    if (internals.options.ownershipMode !== 'workflow-lease') return;
+    const ownershipMode = internals.options.ownershipMode;
+    if (ownershipMode === 'none') return;
     if (internals.disposed) throw new EngineDisposedError();
+    if (ownershipMode === 'lease') {
+      // A global-lease engine runs the same two gates and stamps the same
+      // store-wide marker. Without this, the marker would only ever be written
+      // by `workflow-lease` engines, so Gate 2's cross-MODE exclusivity — the
+      // whole reason the marker exists — would not hold against a `'lease'`
+      // engine sharing the store, which is exactly the mixed-mode hazard the
+      // ADR names. It runs before lease acquisition, so a capability or mode
+      // mismatch fails construction before any lease is taken.
+      await bootstrapOwnershipGates({
+        storage: internals.storage,
+        ownershipMode,
+        getNow: internals.options.getNow,
+      });
+      return;
+    }
     if (internals.inFlightOwnershipBootstrap !== null) {
       await internals.inFlightOwnershipBootstrap;
       return;

@@ -159,6 +159,46 @@ function createParkedMarkerBootstrapStorage(base: Storage): {
   };
 }
 
+describe('ownership-mode marker cross-mode exclusivity', () => {
+  it("a 'lease' engine stamps the marker, so a later 'workflow-lease' engine on the same store is rejected", async () => {
+    using storage = new MemoryStorage();
+    await stampCurrentSchemaVersion(storage);
+
+    await using leaseEngine = await Engine.create({ storage, ownership: 'lease' });
+    expect(await storage.get(KEYS.ownershipModeMarker())).not.toBeNull();
+
+    // The whole point of the marker: the two fencing modes cannot share a
+    // store. If only workflow-lease engines stamped it, a lease engine could
+    // coexist undetected, which is the mixed-mode hazard the ADR exists to close.
+    await expect(Engine.create({ storage, ownership: 'workflow-lease' })).rejects.toThrow(
+      OwnershipModeMismatchError,
+    );
+    void leaseEngine;
+  });
+
+  it("a 'workflow-lease' engine stamps the marker, so a later 'lease' engine on the same store is rejected", async () => {
+    using storage = new MemoryStorage();
+    await stampCurrentSchemaVersion(storage);
+
+    await using claimEngine = await Engine.create({ storage, ownership: 'workflow-lease' });
+    expect(await storage.get(KEYS.ownershipModeMarker())).not.toBeNull();
+
+    await expect(Engine.create({ storage, ownership: 'lease' })).rejects.toThrow(
+      OwnershipModeMismatchError,
+    );
+    void claimEngine;
+  });
+
+  it("an 'ownership: none' engine never touches the marker", async () => {
+    using storage = new MemoryStorage();
+    await stampCurrentSchemaVersion(storage);
+
+    await using engine = await Engine.create({ storage });
+    expect(await storage.get(KEYS.ownershipModeMarker())).toBeNull();
+    void engine;
+  });
+});
+
 describe("Engine.create({ ownership: 'workflow-lease' })", () => {
   it('stamps the ownership-mode marker and constructs a live claim registry/renewal task before recovery', async () => {
     using storage = new MemoryStorage();
