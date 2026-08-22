@@ -10,11 +10,13 @@ import {
   type WorkflowClaimHolderRecord,
 } from './workflow-claim-codec.ts';
 import {
-  extractPutOperationValue,
   WorkflowClaimRegistry,
   type WorkflowClaimRegistryOptions,
 } from './workflow-claim-registry.ts';
-import { WORKFLOW_CLAIM_TAKEOVER_GRACE_MULTIPLIER } from './workflow-claim-transitions.ts';
+import {
+  extractPutOperationValue,
+  WORKFLOW_CLAIM_TAKEOVER_GRACE_MULTIPLIER,
+} from './workflow-claim-transitions.ts';
 import { createWorkflowClaimTestStorage } from './workflow-claim.test-support.ts';
 
 const TTL_MS = 30_000;
@@ -519,6 +521,120 @@ describe('WorkflowClaimRegistry.takeover', () => {
     const result = await registry.takeover('wf-1');
 
     expect(result).toEqual({ status: 'lost-race', workflowId: 'wf-1', heldBy: 'engine-c' });
+  });
+});
+
+describe('WorkflowClaimRegistry.takeover · anti-thrash cooldown', () => {
+  it('suppresses an immediate takeover after a deposition, without any storage read', async () => {
+    const storage = new MemoryStorage();
+    const clock = makeClock();
+    const gated = createWorkflowClaimTestStorage(storage);
+    let getCalls = 0;
+    const countingStorage: Storage = {
+      ...gated.storage,
+      get: (key) => {
+        getCalls += 1;
+        return gated.storage.get(key);
+      },
+    };
+    const registry = new WorkflowClaimRegistry(
+      registryOptions({ storage: countingStorage, getNow: clock.now }),
+    );
+    await registry.acquire('wf-1');
+
+    // Force the renewal CAS false so the cooldown starts; storage is left
+    // untouched, so the durable holder from `acquire` above is still live.
+    gated.queueForceFalse();
+    expect(await registry.renew('wf-1')).toEqual({ status: 'lost', workflowId: 'wf-1' });
+
+    const before = getCalls;
+    const result = await registry.takeover('wf-1');
+
+    expect(result).toEqual({ status: 'backoff-skipped', workflowId: 'wf-1' });
+    expect(getCalls).toBe(before);
+  });
+
+  it('allows a takeover to succeed once the cooldown window has passed', async () => {
+    const storage = new MemoryStorage();
+    const clock = makeClock();
+    const gated = createWorkflowClaimTestStorage(storage);
+    const registry = new WorkflowClaimRegistry(
+      registryOptions({ storage: gated.storage, getNow: clock.now }),
+    );
+    await registry.acquire('wf-1');
+    const epochBefore = registry.currentEpoch('wf-1');
+
+    gated.queueForceFalse();
+    await registry.renew('wf-1');
+
+    const immediate = await registry.takeover('wf-1');
+    expect(immediate).toEqual({ status: 'backoff-skipped', workflowId: 'wf-1' });
+
+    // Advance past BOTH the cooldown window (RENEW_MS) and the still-live
+    // holder's own grace-adjusted expiry, so success proves the cooldown
+    // cleared the way, not just that the holder finally expired.
+    clock.advance(TTL_MS + WORKFLOW_CLAIM_TAKEOVER_GRACE_MULTIPLIER * RENEW_MS + 1);
+
+    const later = await registry.takeover('wf-1');
+    expect(later).toEqual({
+      status: 'acquired',
+      workflowId: 'wf-1',
+      epoch: (epochBefore ?? 0) + 1,
+    });
+  });
+
+  it('a successful acquire clears an active cooldown for that id', async () => {
+    const storage = new MemoryStorage();
+    const clock = makeClock();
+    const gated = createWorkflowClaimTestStorage(storage);
+    const registry = new WorkflowClaimRegistry(
+      registryOptions({ storage: gated.storage, getNow: clock.now }),
+    );
+    await registry.acquire('wf-1');
+
+    gated.queueForceFalse();
+    await registry.renew('wf-1');
+
+    // Simulate the holder clearing out-of-band (e.g. a graceful release
+    // elsewhere) so `acquire` can commit against an absent holder key.
+    await storage.delete(KEYS.workflowOwnerHolder('wf-1'));
+    const acquireResult = await registry.acquire('wf-1');
+    expect(acquireResult.status).toBe('acquired');
+
+    // If the cooldown were still active, `takeover` would short-circuit to
+    // `'backoff-skipped'` before any storage read; `'not-expired'` proves it
+    // was cleared and the fresh (live) holder was actually read.
+    const takeoverResult = await registry.takeover('wf-1');
+    expect(takeoverResult.status).toBe('not-expired');
+  });
+
+  it('a successful takeover clears the cooldown, so a later deposition restarts at the base window', async () => {
+    const storage = new MemoryStorage();
+    const clock = makeClock();
+    const gated = createWorkflowClaimTestStorage(storage);
+    const registry = new WorkflowClaimRegistry(
+      registryOptions({ storage: gated.storage, getNow: clock.now }),
+    );
+    await registry.acquire('wf-1');
+
+    gated.queueForceFalse();
+    await registry.renew('wf-1'); // first deposition
+
+    clock.advance(TTL_MS + WORKFLOW_CLAIM_TAKEOVER_GRACE_MULTIPLIER * RENEW_MS + 1);
+    const firstTakeover = await registry.takeover('wf-1');
+    expect(firstTakeover.status).toBe('acquired'); // clears the cooldown
+
+    gated.queueForceFalse();
+    await registry.renew('wf-1'); // second deposition, right after the clear
+
+    // Had the clear not fired, this deposition would double the window from
+    // RENEW_MS to 2 * RENEW_MS instead of restarting at RENEW_MS. Advancing
+    // by exactly RENEW_MS distinguishes a genuinely restarted base-duration
+    // window (already inactive, so the read reaches the real judgment) from
+    // a continued/doubled one (still active, still 'backoff-skipped').
+    clock.advance(RENEW_MS);
+    const result = await registry.takeover('wf-1');
+    expect(result.status).toBe('not-expired');
   });
 });
 

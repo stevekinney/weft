@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 
 import { createDeferred, flushMicrotasks } from '../../testing/fake-timers.test-support.ts';
+import type { OwnerSideSignalPollTarget } from './owner-side-signal-poll.ts';
 import {
   createWorkflowClaimRenewalTask,
+  type WorkflowClaimReclaimAttemptResult,
+  type WorkflowClaimReclaimTarget,
   type WorkflowClaimRenewalIntervalScheduler,
   type WorkflowClaimRenewalPassResult,
   type WorkflowClaimRenewalTarget,
@@ -292,6 +295,259 @@ describe('createWorkflowClaimRenewalTask · runOnce', () => {
     const task = createWorkflowClaimRenewalTask({ target, getNow: clock.now, intervalMs: 1_000 });
 
     await expect(task.runOnce()).rejects.toBe(boom);
+  });
+});
+
+/** A fake `WorkflowClaimReclaimTarget` with fully controllable per-candidate outcomes. */
+function createFakeReclaimTarget(initialIds: readonly string[] = []): WorkflowClaimReclaimTarget & {
+  calls: string[];
+  results: Map<string, WorkflowClaimReclaimAttemptResult>;
+  failNext(workflowId: string, error: unknown): void;
+  failNextList(error: unknown): void;
+} {
+  const ids = [...initialIds];
+  const calls: string[] = [];
+  const results = new Map<string, WorkflowClaimReclaimAttemptResult>();
+  const failures = new Map<string, unknown>();
+  let listFailure: { error: unknown } | null = null;
+
+  return {
+    calls,
+    results,
+    async listReclaimCandidateWorkflowIds() {
+      if (listFailure !== null) {
+        const { error } = listFailure;
+        listFailure = null;
+        throw error;
+      }
+      return [...ids];
+    },
+    async attemptWorkflowClaimTakeover(workflowId) {
+      calls.push(workflowId);
+      if (failures.has(workflowId)) {
+        const error = failures.get(workflowId);
+        failures.delete(workflowId);
+        throw error;
+      }
+      return results.get(workflowId) ?? { status: 'not-eligible' };
+    },
+    failNext(workflowId, error) {
+      failures.set(workflowId, error);
+    },
+    failNextList(error) {
+      listFailure = { error };
+    },
+  };
+}
+
+/** A fake `OwnerSideSignalPollTarget` with fully controllable buffered/wake state. */
+function createFakeSignalPollTarget(
+  waits: readonly { workflowId: string; signalName: string }[] = [],
+): OwnerSideSignalPollTarget & {
+  wokenIds: string[];
+  bufferedFor: Set<string>;
+  failHasBufferedNext(error: unknown): void;
+} {
+  const bufferedFor = new Set<string>();
+  const wokenIds: string[] = [];
+  let hasBufferedFailure: { error: unknown } | null = null;
+
+  return {
+    wokenIds,
+    bufferedFor,
+    listParkedSignalWaits: () => [...waits],
+    async hasBufferedSignal(workflowId) {
+      if (hasBufferedFailure !== null) {
+        const { error } = hasBufferedFailure;
+        hasBufferedFailure = null;
+        throw error;
+      }
+      return bufferedFor.has(workflowId);
+    },
+    async wakeWorkflow(workflowId) {
+      wokenIds.push(workflowId);
+    },
+    failHasBufferedNext(error) {
+      hasBufferedFailure = { error };
+    },
+  };
+}
+
+describe('createWorkflowClaimRenewalTask · runOnce · reclaim pass', () => {
+  it('leaves result.reclaim undefined when no reclaimTarget is configured', async () => {
+    const clock = makeClock();
+    const target = createFakeTarget([]);
+    const task = createWorkflowClaimRenewalTask({ target, getNow: clock.now, intervalMs: 1_000 });
+
+    const result = await task.runOnce();
+
+    expect(result.reclaim).toBeUndefined();
+  });
+
+  it('attempts every candidate and reports a mix of outcomes', async () => {
+    const clock = makeClock();
+    const target = createFakeTarget([]);
+    const reclaimTarget = createFakeReclaimTarget(['wf-a', 'wf-b', 'wf-c', 'wf-d']);
+    reclaimTarget.results.set('wf-a', { status: 'reclaimed' });
+    reclaimTarget.results.set('wf-b', { status: 'not-eligible' });
+    reclaimTarget.results.set('wf-c', { status: 'backoff-skipped' });
+    reclaimTarget.results.set('wf-d', { status: 'lost-race' });
+    const task = createWorkflowClaimRenewalTask({
+      target,
+      reclaimTarget,
+      getNow: clock.now,
+      intervalMs: 1_000,
+    });
+
+    const result = await task.runOnce();
+
+    expect(result.reclaim).toEqual({
+      status: 'completed',
+      outcomes: [
+        { workflowId: 'wf-a', status: 'reclaimed' },
+        { workflowId: 'wf-b', status: 'not-eligible' },
+        { workflowId: 'wf-c', status: 'backoff-skipped' },
+        { workflowId: 'wf-d', status: 'lost-race' },
+      ],
+      reclaimedCount: 1,
+    });
+    expect(reclaimTarget.calls).toEqual(['wf-a', 'wf-b', 'wf-c', 'wf-d']);
+  });
+
+  it('continues past a per-candidate throw, recording an error outcome', async () => {
+    const clock = makeClock();
+    const target = createFakeTarget([]);
+    const reclaimTarget = createFakeReclaimTarget(['wf-a', 'wf-b']);
+    const boom = new Error('takeover blew up');
+    reclaimTarget.failNext('wf-a', boom);
+    reclaimTarget.results.set('wf-b', { status: 'reclaimed' });
+    const task = createWorkflowClaimRenewalTask({
+      target,
+      reclaimTarget,
+      getNow: clock.now,
+      intervalMs: 1_000,
+    });
+
+    const result = await task.runOnce();
+
+    expect(result.reclaim).toEqual({
+      status: 'completed',
+      outcomes: [
+        { workflowId: 'wf-a', status: 'error', error: boom },
+        { workflowId: 'wf-b', status: 'reclaimed' },
+      ],
+      reclaimedCount: 1,
+    });
+  });
+
+  it('reports discovery-failed, without rejecting the pass, when listing candidates throws', async () => {
+    const clock = makeClock();
+    const target = createFakeTarget(['workflow-a']);
+    const reclaimTarget = createFakeReclaimTarget([]);
+    const boom = new Error('storage scan failed');
+    reclaimTarget.failNextList(boom);
+    const task = createWorkflowClaimRenewalTask({
+      target,
+      reclaimTarget,
+      getNow: clock.now,
+      intervalMs: 1_000,
+    });
+
+    const result = await task.runOnce();
+
+    // Renewal (an independent sub-step) still committed and is unaffected.
+    expect(result.renewedCount).toBe(1);
+    expect(result.reclaim).toEqual({ status: 'discovery-failed', error: boom });
+  });
+});
+
+describe('createWorkflowClaimRenewalTask · runOnce · owner-side signal poll', () => {
+  it('leaves result.signalPoll undefined when no signalPollTarget is configured', async () => {
+    const clock = makeClock();
+    const target = createFakeTarget([]);
+    const task = createWorkflowClaimRenewalTask({ target, getNow: clock.now, intervalMs: 1_000 });
+
+    const result = await task.runOnce();
+
+    expect(result.signalPoll).toBeUndefined();
+  });
+
+  it('wakes a parked workflow whose awaited signal has been buffered by another engine', async () => {
+    const clock = makeClock();
+    const target = createFakeTarget([]);
+    const signalPollTarget = createFakeSignalPollTarget([
+      { workflowId: 'wf-parked', signalName: 'approval' },
+    ]);
+    signalPollTarget.bufferedFor.add('wf-parked'); // "another engine" durably buffered this signal
+    const task = createWorkflowClaimRenewalTask({
+      target,
+      signalPollTarget,
+      getNow: clock.now,
+      intervalMs: 1_000,
+    });
+
+    const result = await task.runOnce();
+
+    expect(result.signalPoll).toEqual({
+      status: 'completed',
+      result: {
+        startedAt: expect.any(Number),
+        finishedAt: expect.any(Number),
+        outcomes: [{ workflowId: 'wf-parked', signalName: 'approval', status: 'woken' }],
+        wokenCount: 1,
+      },
+    });
+    expect(signalPollTarget.wokenIds).toEqual(['wf-parked']);
+  });
+
+  it('reports failed, without rejecting the pass, when the poll itself throws', async () => {
+    const clock = makeClock();
+    const target = createFakeTarget(['workflow-a']);
+    const signalPollTarget = createFakeSignalPollTarget([
+      { workflowId: 'wf-parked', signalName: 'approval' },
+    ]);
+    const boom = new Error('signal buffer probe failed');
+    signalPollTarget.failHasBufferedNext(boom);
+    const task = createWorkflowClaimRenewalTask({
+      target,
+      signalPollTarget,
+      getNow: clock.now,
+      intervalMs: 1_000,
+    });
+
+    const result = await task.runOnce();
+
+    // Renewal (an independent sub-step) still committed and is unaffected.
+    expect(result.renewedCount).toBe(1);
+    expect(result.signalPoll).toEqual({ status: 'failed', error: boom });
+  });
+});
+
+describe('createWorkflowClaimRenewalTask · runOnce · all three sub-steps in one pass', () => {
+  it('runs renewal, reclaim, and owner-side signal polling together from one awaited call', async () => {
+    const clock = makeClock();
+    const target = createFakeTarget(['workflow-a']);
+    const reclaimTarget = createFakeReclaimTarget(['wf-stranded']);
+    reclaimTarget.results.set('wf-stranded', { status: 'reclaimed' });
+    const signalPollTarget = createFakeSignalPollTarget([
+      { workflowId: 'wf-parked', signalName: 'approval' },
+    ]);
+    signalPollTarget.bufferedFor.add('wf-parked');
+    const task = createWorkflowClaimRenewalTask({
+      target,
+      reclaimTarget,
+      signalPollTarget,
+      getNow: clock.now,
+      intervalMs: 1_000,
+    });
+
+    // A single awaited call is exactly what `backgroundTasks: 'manual'`
+    // hosts drive from `Engine#runMaintenance()` — this is that same call.
+    const result = await task.runOnce();
+
+    expect(result.renewedCount).toBe(1);
+    expect(result.reclaim).toMatchObject({ status: 'completed', reclaimedCount: 1 });
+    expect(result.signalPoll).toMatchObject({ status: 'completed', result: { wokenCount: 1 } });
   });
 });
 

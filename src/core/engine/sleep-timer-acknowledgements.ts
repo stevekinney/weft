@@ -5,17 +5,36 @@ import type {
   EngineInternals,
   SleepTimerAcknowledgementWaiter,
 } from './internals.ts';
+import { confirmWakeOwnership } from './wake-ownership-guard.ts';
 
 export type SleepTimerAcknowledgement = {
   cancel: () => void;
   promise: Promise<void>;
 };
 
+/**
+ * Durable sleep timers fire globally — under `ownership: 'workflow-lease'`
+ * every engine sharing the store observes the same expired timer, not only
+ * the workflow's owner (see ADR 0002's entry-point classification: the
+ * scheduler dispatch shell is claim-acquiring only for claim-ACQUIRING
+ * branches; this one is claim-REQUIRING and checks for itself). Running
+ * `confirmWakeOwnership` FIRST — before `shouldIgnoreUnclaimedSleepTimer`
+ * even loads workflow state — matters: on a non-owning engine that state
+ * legitimately reads `'running'` (the true owner is actively driving it),
+ * which would otherwise hit `shouldIgnoreUnclaimedSleepTimer`'s "fired
+ * before ready" throw meant for a same-engine registration race, not a
+ * cross-engine ownership miss. A discard here is a silent no-op: the true
+ * owner's own copy of this same durable timer fire handles the real wake.
+ */
 export async function handleSleepTimerWithAcknowledgement(
   internals: EngineInternals,
   entry: TimerEntry,
   loadWorkflowState: (workflowId: string) => Promise<WorkflowState | null>,
 ): Promise<void> {
+  if ((await confirmWakeOwnership(internals, entry.workflowId, 'sleep')) === 'discard') {
+    return;
+  }
+
   const operationId = entry.id.replace('sleep:', '');
   if (await shouldIgnoreUnclaimedSleepTimer(internals, entry, operationId, loadWorkflowState))
     return;

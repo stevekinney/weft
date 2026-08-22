@@ -12,13 +12,22 @@ import type { Storage, StorageCapabilities } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { OwnershipModeMismatchError } from './lease-errors.ts';
+import type { OwnerSideSignalPollTarget } from './owner-side-signal-poll.ts';
 import {
   bootstrapWorkflowLeaseOwnership,
+  createWorkflowClaimReclaimTarget,
   createWorkflowClaimRenewalTarget,
+  WORKFLOW_CLAIM_TAKEOVER_MAX_ATTEMPTS,
 } from './ownership-bootstrap.ts';
-import { encodeOwnershipModeMarker } from './workflow-claim-codec.ts';
+import {
+  encodeEpoch,
+  encodeOwnershipModeMarker,
+  encodeWorkflowClaimHolder,
+} from './workflow-claim-codec.ts';
+import { WorkflowClaimMetricsCollector } from './workflow-claim-metrics.ts';
 import type { WorkflowClaimRenewResult } from './workflow-claim-registry.ts';
 import { WorkflowClaimRegistry } from './workflow-claim-registry.ts';
+import { createWorkflowClaimTestStorage } from './workflow-claim.test-support.ts';
 
 const TTL_MS = 30_000;
 const RENEW_MS = 5_000;
@@ -119,6 +128,35 @@ describe('bootstrapWorkflowLeaseOwnership', () => {
     expect(marker).not.toBeNull();
   });
 
+  it('threads a provided signalPollTarget straight into the renewal task', async () => {
+    using storage = new MemoryStorage();
+    const clock = makeClock();
+    const signalPollTarget: OwnerSideSignalPollTarget = {
+      listParkedSignalWaits: () => [],
+      hasBufferedSignal: async () => false,
+      wakeWorkflow: async () => {},
+    };
+
+    const result = await bootstrapWorkflowLeaseOwnership({
+      storage,
+      getNow: clock.now,
+      claimTtlMs: TTL_MS,
+      claimRenewIntervalMs: RENEW_MS,
+      signalPollTarget,
+    });
+    const pass = await result.renewalTask.runOnce();
+
+    expect(pass.signalPoll).toEqual({
+      status: 'completed',
+      result: {
+        startedAt: expect.any(Number),
+        finishedAt: expect.any(Number),
+        outcomes: [],
+        wokenCount: 0,
+      },
+    });
+  });
+
   it('propagates a Gate 1 failure (no conditionalBatch) and constructs nothing', async () => {
     const base = new MemoryStorage();
     const noCasStorage: Storage = {
@@ -205,5 +243,238 @@ describe('bootstrapWorkflowLeaseOwnership', () => {
     // Engine A's own bookkeeping drops wf-1 once its renewal is confirmed
     // lost, so only wf-2 remains in its held-id count.
     expect(snapshot.activeClaims).toBe(1);
+  });
+});
+
+async function putHolder(storage: Storage, workflowId: string, engineId: string): Promise<void> {
+  await storage.put(
+    KEYS.workflowOwnerHolder(workflowId),
+    encodeWorkflowClaimHolder({ engineId, epoch: 1, expiresAt: 1_000, claimedAt: 500 }),
+  );
+  await storage.put(KEYS.workflowOwnerEpoch(workflowId), encodeEpoch(1));
+}
+
+describe('createWorkflowClaimReclaimTarget', () => {
+  it('excludes ids this engine already holds from the candidate list', async () => {
+    const storage = new MemoryStorage();
+    await putHolder(storage, 'wf-foreign', 'engine-b');
+    const registry = new WorkflowClaimRegistry({
+      storage,
+      engineId: 'engine-a',
+      getNow: () => 0,
+      claimTtlMs: TTL_MS,
+      claimRenewIntervalMs: RENEW_MS,
+    });
+    await registry.acquire('wf-mine');
+    const reclaimTarget = createWorkflowClaimReclaimTarget(
+      registry,
+      storage,
+      new WorkflowClaimMetricsCollector(),
+    );
+
+    const candidates = await reclaimTarget.listReclaimCandidateWorkflowIds();
+
+    expect(candidates).toEqual(['wf-foreign']);
+  });
+
+  it('maps a successful takeover to "reclaimed" without recording backoff_skipped', async () => {
+    const clock = makeClock();
+    const storage = new MemoryStorage();
+    await putHolder(storage, 'wf-1', 'engine-b');
+    clock.advance(TTL_MS * 10); // far past any grace-adjusted expiry
+    const registry = new WorkflowClaimRegistry({
+      storage,
+      engineId: 'engine-a',
+      getNow: clock.now,
+      claimTtlMs: TTL_MS,
+      claimRenewIntervalMs: RENEW_MS,
+    });
+    const metrics = new WorkflowClaimMetricsCollector();
+    const reclaimTarget = createWorkflowClaimReclaimTarget(registry, storage, metrics);
+
+    const result = await reclaimTarget.attemptWorkflowClaimTakeover('wf-1');
+
+    expect(result).toEqual({ status: 'reclaimed' });
+    expect(registry.currentEpoch('wf-1')).not.toBeNull();
+    expect(metrics.snapshot().attempts.backoff_skipped).toBe(0);
+  });
+
+  it('maps a live (not-expired) holder to "not-eligible" without retrying', async () => {
+    const clock = makeClock();
+    const storage = new MemoryStorage();
+    await storage.put(
+      KEYS.workflowOwnerHolder('wf-1'),
+      encodeWorkflowClaimHolder({
+        engineId: 'engine-b',
+        epoch: 1,
+        expiresAt: clock.now() + TTL_MS,
+        claimedAt: clock.now(),
+      }),
+    );
+    await storage.put(KEYS.workflowOwnerEpoch('wf-1'), encodeEpoch(1));
+    const registry = new WorkflowClaimRegistry({
+      storage,
+      engineId: 'engine-a',
+      getNow: clock.now,
+      claimTtlMs: TTL_MS,
+      claimRenewIntervalMs: RENEW_MS,
+    });
+    const reclaimTarget = createWorkflowClaimReclaimTarget(
+      registry,
+      storage,
+      new WorkflowClaimMetricsCollector(),
+    );
+
+    const result = await reclaimTarget.attemptWorkflowClaimTakeover('wf-1');
+
+    expect(result).toEqual({ status: 'not-eligible' });
+  });
+
+  it('maps an absent claim to "not-eligible"', async () => {
+    const storage = new MemoryStorage();
+    const registry = new WorkflowClaimRegistry({
+      storage,
+      engineId: 'engine-a',
+      getNow: () => 0,
+      claimTtlMs: TTL_MS,
+      claimRenewIntervalMs: RENEW_MS,
+    });
+    const reclaimTarget = createWorkflowClaimReclaimTarget(
+      registry,
+      storage,
+      new WorkflowClaimMetricsCollector(),
+    );
+
+    const result = await reclaimTarget.attemptWorkflowClaimTakeover('wf-never-claimed');
+
+    expect(result).toEqual({ status: 'not-eligible' });
+  });
+
+  it(`retries a lost-race CAS up to ${WORKFLOW_CLAIM_TAKEOVER_MAX_ATTEMPTS} attempts and then gives up`, async () => {
+    const clock = makeClock();
+    const storage = new MemoryStorage();
+    await putHolder(storage, 'wf-1', 'engine-b');
+    clock.advance(TTL_MS * 10);
+    const gated = createWorkflowClaimTestStorage(storage);
+    for (let attempt = 0; attempt < WORKFLOW_CLAIM_TAKEOVER_MAX_ATTEMPTS; attempt += 1) {
+      gated.queueForceFalse();
+    }
+    const registry = new WorkflowClaimRegistry({
+      storage: gated.storage,
+      engineId: 'engine-a',
+      getNow: clock.now,
+      claimTtlMs: TTL_MS,
+      claimRenewIntervalMs: RENEW_MS,
+    });
+    const reclaimTarget = createWorkflowClaimReclaimTarget(
+      registry,
+      gated.storage,
+      new WorkflowClaimMetricsCollector(),
+    );
+
+    const result = await reclaimTarget.attemptWorkflowClaimTakeover('wf-1');
+
+    expect(result).toEqual({ status: 'lost-race' });
+    expect(registry.currentEpoch('wf-1')).toBeNull();
+  });
+
+  it(`succeeds on the ${WORKFLOW_CLAIM_TAKEOVER_MAX_ATTEMPTS}th attempt, proving the bound is inclusive`, async () => {
+    const clock = makeClock();
+    const storage = new MemoryStorage();
+    await putHolder(storage, 'wf-1', 'engine-b');
+    clock.advance(TTL_MS * 10);
+    const gated = createWorkflowClaimTestStorage(storage);
+    for (let attempt = 0; attempt < WORKFLOW_CLAIM_TAKEOVER_MAX_ATTEMPTS - 1; attempt += 1) {
+      gated.queueForceFalse();
+    }
+    const registry = new WorkflowClaimRegistry({
+      storage: gated.storage,
+      engineId: 'engine-a',
+      getNow: clock.now,
+      claimTtlMs: TTL_MS,
+      claimRenewIntervalMs: RENEW_MS,
+    });
+    const reclaimTarget = createWorkflowClaimReclaimTarget(
+      registry,
+      gated.storage,
+      new WorkflowClaimMetricsCollector(),
+    );
+
+    const result = await reclaimTarget.attemptWorkflowClaimTakeover('wf-1');
+
+    expect(result).toEqual({ status: 'reclaimed' });
+  });
+
+  it('a backoff-skipped result short-circuits the retry loop and records the metric', async () => {
+    const clock = makeClock();
+    const storage = new MemoryStorage();
+    const gated = createWorkflowClaimTestStorage(storage);
+    const registry = new WorkflowClaimRegistry({
+      storage: gated.storage,
+      engineId: 'engine-a',
+      getNow: clock.now,
+      claimTtlMs: TTL_MS,
+      claimRenewIntervalMs: RENEW_MS,
+    });
+    await registry.acquire('wf-1');
+    gated.queueForceFalse();
+    expect(await registry.renew('wf-1')).toEqual({ status: 'lost', workflowId: 'wf-1' }); // starts the cooldown
+    const metrics = new WorkflowClaimMetricsCollector();
+    const reclaimTarget = createWorkflowClaimReclaimTarget(registry, gated.storage, metrics);
+
+    const result = await reclaimTarget.attemptWorkflowClaimTakeover('wf-1');
+
+    expect(result).toEqual({ status: 'backoff-skipped' });
+    expect(metrics.snapshot().attempts.backoff_skipped).toBe(1);
+  });
+});
+
+describe('bootstrapWorkflowLeaseOwnership · reclaim scan (end-to-end)', () => {
+  it('reclaims an expired stranded claim and skips a still-live one, via renewalTask.runOnce()', async () => {
+    using storage = new MemoryStorage();
+    const clock = makeClock();
+
+    const crashed = await bootstrapWorkflowLeaseOwnership({
+      storage,
+      getNow: clock.now,
+      claimTtlMs: TTL_MS,
+      claimRenewIntervalMs: RENEW_MS,
+    });
+    await crashed.registry.acquire('wf-stranded');
+    // A second, still-healthy claim on the same crashed engine's storage,
+    // freshly re-stamped as live right before the successor's pass runs.
+    await putHolder(storage, 'wf-live', 'engine-still-healthy');
+
+    // The crashed engine never renews again; a successor bootstraps fresh
+    // against the same store and, after enough time passes, its reclaim scan
+    // should take over the stranded claim while leaving the live one alone.
+    clock.advance(TTL_MS * 10);
+    await storage.put(
+      KEYS.workflowOwnerHolder('wf-live'),
+      encodeWorkflowClaimHolder({
+        engineId: 'engine-still-healthy',
+        epoch: 1,
+        expiresAt: clock.now() + TTL_MS,
+        claimedAt: clock.now(),
+      }),
+    );
+    const successor = await bootstrapWorkflowLeaseOwnership({
+      storage,
+      getNow: clock.now,
+      claimTtlMs: TTL_MS,
+      claimRenewIntervalMs: RENEW_MS,
+    });
+
+    const pass = await successor.renewalTask.runOnce();
+
+    expect(pass.reclaim).toMatchObject({
+      status: 'completed',
+      outcomes: expect.arrayContaining([
+        { workflowId: 'wf-stranded', status: 'reclaimed' },
+        { workflowId: 'wf-live', status: 'not-eligible' },
+      ]),
+    });
+    expect(successor.registry.currentEpoch('wf-stranded')).not.toBeNull();
+    expect(successor.registry.currentEpoch('wf-live')).toBeNull();
   });
 });

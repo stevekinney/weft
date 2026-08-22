@@ -29,6 +29,7 @@ function createInternals(storage = new MemoryStorage()) {
     options: { ownershipMode: 'none' as const },
     storage,
     updateCoordinator,
+    workflowClaimRegistry: null,
   } as unknown as EngineInternals;
 
   return {
@@ -285,7 +286,7 @@ describe('pending update helpers', () => {
       put: realStorage.put.bind(realStorage),
       scan: realStorage.scan.bind(realStorage),
       [Symbol.dispose]: () => realStorage[Symbol.dispose](),
-    } as never;
+    };
     harness.internals.inlineStrategy = {
       getContext: () => ({
         updateHandlers: new Map([['approve', () => 'ok']]),

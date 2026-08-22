@@ -324,3 +324,23 @@ export function isWorkflowClaimExpired(input: WorkflowClaimExpiryInput): boolean
     input.expiresAt + WORKFLOW_CLAIM_TAKEOVER_GRACE_MULTIPLIER * input.renewIntervalMs;
   return graceAdjustedDeadline < input.now;
 }
+
+/**
+ * Pull the exact bytes a just-built transition fragment wrote for `key`,
+ * rather than re-encoding a value from the fields the caller happens to
+ * know. This is what lets {@link WorkflowClaimRegistry} cache "the bytes it
+ * actually wrote" without silently drifting if `workflow-claim-transitions.ts`'s
+ * internal object-literal field order ever changed. Exported so the
+ * not-found branch — unreachable through the registry itself, since every
+ * fragment it extracts from is one it just built — has direct unit coverage.
+ */
+export function extractPutOperationValue(operations: BatchOperation[], key: string): Uint8Array {
+  const operation = operations.find(
+    (candidate): candidate is Extract<BatchOperation, { type: 'put' }> =>
+      candidate.type === 'put' && candidate.key === key,
+  );
+  if (operation === undefined) {
+    throw new Error(`workflow-claim-registry: expected a "put" operation for key "${key}"`);
+  }
+  return operation.value;
+}
