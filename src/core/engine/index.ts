@@ -178,6 +178,7 @@ import { getFinalizerStatus as getFinalizerStatusFromInternals } from './finaliz
 import {
   createWorkflowHandleWithResultPromise as createWorkflowHandleWithResultPromiseFromInternals,
   getWorkflowResultPromise as getWorkflowResultPromiseFromInternals,
+  pollPendingCrossEngineResultWaiters,
 } from './handle-result.ts';
 import { HANDLE_RESULT_PROMISE, WorkflowHandle } from './handles.ts';
 import { hasQueuedInlineWorkflowStart } from './inline-launch-queue.ts';
@@ -1529,6 +1530,11 @@ export class Engine<
     // scheduler.tick() resumes under a freshly confirmed claim rather than one
     // that is about to lapse.
     await internals.workflowClaimRenewalTask?.runOnce();
+    // No timer runs in this mode, so the cross-engine result poll that
+    // `getWorkflowResultPromise` would otherwise schedule is driven here.
+    // Without it a manual-mode engine awaiting a child claimed by another
+    // engine would never observe that child terminate.
+    await pollPendingCrossEngineResultWaiters(internals);
     await internals.scheduler.tick(now);
     try {
       await internals.updateCoordinator.cleanupExpiredResponses();

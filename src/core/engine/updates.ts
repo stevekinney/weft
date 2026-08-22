@@ -5,6 +5,7 @@ import type { CoordinatedUpdateResult } from '../types.ts';
 import { UpdateValidationError, type UpdateRequest, type UpdateResponse } from '../updates.ts';
 import { notifyConditionWaiters } from './condition-waiters.ts';
 import type { EngineInternals } from './internals.ts';
+import { isWorkflowClaimedByAnotherEngine } from './queries.ts';
 import { trackWaiterKey, untrackWaiterKey } from './signals.ts';
 import { waitForUpdateResponse } from './waiting-update-response.ts';
 
@@ -69,6 +70,10 @@ export async function update(
   if (inlineResult.handled) {
     return inlineResult.value;
   }
+  // `inlineResult.reason` distinguishes "not owned locally" from "no handler
+  // registered", but both fall through the same way: unlike `query()`, the
+  // coordinated path below is already durable/cross-engine correct, so
+  // branching on `reason` here would add risk without fixing anything.
 
   const waitingResult = await tryWaitingUpdateHandler(
     internals,
@@ -87,15 +92,32 @@ export async function update(
 
 type UpdateAttemptResult = { handled: true; value: unknown } | { handled: false };
 
-async function tryInlineUpdateHandler(
+/**
+ * `handled: false` used to conflate two reasons: no live local context at all
+ * (`'not-owned-locally'`, possible under `ownership: 'workflow-lease'` when
+ * another engine holds the claim) versus a live context with no handler
+ * registered for `name` (`'no-handler'`). See the `update()` call site for
+ * why neither is routed differently — the reason is exposed so a caller that
+ * DOES care (tests, future routing) can tell them apart.
+ */
+export type InlineUpdateAttemptResult =
+  | { handled: true; value: unknown }
+  | { handled: false; reason: 'not-owned-locally' | 'no-handler' };
+
+export async function tryInlineUpdateHandler(
   internals: EngineInternals,
   workflowId: string,
   name: string,
   payload: unknown,
   callbacks: UpdateCallbacks,
-): Promise<UpdateAttemptResult> {
+): Promise<InlineUpdateAttemptResult> {
   const handler = internals.inlineStrategy?.getContext(workflowId)?.updateHandlers.get(name);
-  if (!handler) return { handled: false };
+  if (!handler) {
+    const reason = (await isWorkflowClaimedByAnotherEngine(internals, workflowId))
+      ? 'not-owned-locally'
+      : 'no-handler';
+    return { handled: false, reason };
+  }
 
   const updateId = crypto.randomUUID();
   callbacks.dispatchEvent(new UpdateReceivedEvent(updateId, workflowId, name, payload));
@@ -453,7 +475,7 @@ export function extractStandardSchemaIssues(
   result: unknown,
 ): Array<{ message: string; path?: string }> | null {
   if (result === null || typeof result !== 'object' || !('issues' in result)) return null;
-  const { issues } = result as { issues: unknown };
+  const { issues } = result;
   if (!Array.isArray(issues)) return null;
   return issues.flatMap((issue: unknown) => {
     if (issue === null || typeof issue !== 'object') return [];

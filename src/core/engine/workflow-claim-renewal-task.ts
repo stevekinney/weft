@@ -31,20 +31,31 @@
  * task's only failure handling is: catch, record the outcome, move on to the
  * next workflow.
  *
- * **Extension seam (not built here).** ADR 0002 puts two more responsibilities
- * on this same recurring cadence — a reclaim scan that attempts `takeover` for
- * workflows whose holders have passed the grace-adjusted `expire` judgment
- * (ADR § Reclaiming stranded claims), and owner-side polling of the durable
+ * **The same cadence also drives two more ADR 0002 responsibilities**, each
+ * OPTIONAL and each following the identical decoupling discipline: a reclaim
+ * scan that attempts `takeover` for workflows whose holders have passed the
+ * grace-adjusted `expire` judgment (ADR § Reclaiming stranded claims), driven
+ * through the {@link WorkflowClaimReclaimTarget} structural seam — expected to
+ * be satisfied by `listWorkflowClaimReclaimCandidates`
+ * (`workflow-claim-reclaim-scan.ts`) plus `WorkflowClaimRegistry.takeover`,
+ * adapted by `ownership-bootstrap.ts` — and owner-side polling of the durable
  * signal buffer for parked `waitForSignal` workflows (ADR § signal delivery,
- * around "owner-side polling"). Neither is implemented here — both need
- * machinery (the registry's takeover path, the signal buffer) this module does
- * not own. {@link WorkflowClaimRenewalPassResult} is deliberately an
- * additive-friendly record (a single outcomes array plus scalar summaries) so
- * a later stage can extend the pass with more steps without reshaping this
- * driver's control flow.
+ * "owner-side polling"), driven by calling `owner-side-signal-poll.ts`'s
+ * {@link runOwnerSideSignalPoll} directly against an injected
+ * {@link OwnerSideSignalPollTarget} — that module's own concrete adapter needs
+ * `EngineInternals`/`inline-parking.ts`, which this module still does not
+ * import. Both are `undefined` in {@link WorkflowClaimRenewalPassResult} when
+ * their target option is omitted, which is how a caller with only the
+ * renewal target (or a test) opts out of running them at all.
  *
  * @module core/engine/workflow-claim-renewal-task
  */
+
+import {
+  runOwnerSideSignalPoll,
+  type OwnerSideSignalPollResult,
+  type OwnerSideSignalPollTarget,
+} from './owner-side-signal-poll.ts';
 
 /**
  * The minimal structural shape this task needs from a per-workflow claim
@@ -79,15 +90,72 @@ export type WorkflowClaimRenewalOutcome =
   | { workflowId: string; status: 'failed'; error: unknown };
 
 /**
- * The result of one full renewal pass ({@link WorkflowClaimRenewalTask.runOnce}).
- * Kept as a flat, additive-friendly record — a later stage folding the reclaim
- * scan or signal polling into the same pass can add sibling fields without
- * reshaping this type or its consumers.
+ * The minimal structural shape the reclaim-scan portion of a pass needs.
+ * Defined locally for the same decoupling reason as
+ * {@link WorkflowClaimRenewalTarget} — expected to be satisfied by an adapter
+ * over `listWorkflowClaimReclaimCandidates` (`workflow-claim-reclaim-scan.ts`)
+ * and `WorkflowClaimRegistry.takeover`, built by `ownership-bootstrap.ts`.
+ */
+export type WorkflowClaimReclaimTarget = {
+  /**
+   * Every workflow id with a currently-persisted holder record this engine
+   * does not itself already hold. Read fresh at the start of every pass.
+   */
+  listReclaimCandidateWorkflowIds(): Promise<readonly string[]>;
+  /**
+   * Attempt to reclaim one candidate. Retrying a lost-race CAS (bounded, per
+   * the ADR, at 5 attempts within this call) and gating on the per-workflow-id
+   * anti-thrash cooldown are the implementation's responsibility — this task
+   * calls it exactly once per candidate, catches whatever it throws, and
+   * continues to the next one.
+   */
+  attemptWorkflowClaimTakeover(workflowId: string): Promise<WorkflowClaimReclaimAttemptResult>;
+};
+
+/** One candidate's non-throwing outcome from {@link WorkflowClaimReclaimTarget.attemptWorkflowClaimTakeover}. */
+export type WorkflowClaimReclaimAttemptResult =
+  | { status: 'reclaimed' }
+  | { status: 'not-eligible' }
+  | { status: 'backoff-skipped' }
+  | { status: 'lost-race' };
+
+/** One workflow's outcome within a single reclaim-scan pass. */
+export type WorkflowClaimReclaimOutcome =
+  | ({ workflowId: string } & WorkflowClaimReclaimAttemptResult)
+  | { workflowId: string; status: 'error'; error: unknown };
+
+/**
+ * The reclaim-scan portion of one pass. `'discovery-failed'` covers
+ * `listReclaimCandidateWorkflowIds()` itself throwing — without a candidate
+ * list there is no per-workflow loop to run, but that must not fail the rest
+ * of the pass (renewals already committed by then, and a
+ * `backgroundTasks: 'manual'` host awaiting `runMaintenance()` must not see a
+ * rejected promise for a problem isolated to this one sub-step).
+ */
+export type WorkflowClaimReclaimPassResult =
+  | { status: 'completed'; outcomes: WorkflowClaimReclaimOutcome[]; reclaimedCount: number }
+  | { status: 'discovery-failed'; error: unknown };
+
+/**
+ * The owner-side signal-poll portion of one pass. `'failed'` covers
+ * {@link runOwnerSideSignalPoll} itself rejecting (e.g. its target's
+ * `hasBufferedSignal` throwing) — same non-fatal-to-the-pass treatment as
+ * {@link WorkflowClaimReclaimPassResult}'s `'discovery-failed'`.
+ */
+export type WorkflowClaimSignalPollOutcome =
+  | { status: 'completed'; result: OwnerSideSignalPollResult }
+  | { status: 'failed'; error: unknown };
+
+/**
+ * The result of one full pass ({@link WorkflowClaimRenewalTask.runOnce}).
+ * `reclaim`/`signalPoll` are `undefined` exactly when the matching target
+ * option was omitted — that omission is how a caller (or a test exercising
+ * renewal alone) opts out of running that sub-step at all.
  */
 export type WorkflowClaimRenewalPassResult = {
   /** `getNow()` read at the start of the pass, before any renewal call. */
   startedAt: number;
-  /** `getNow()` read after every renewal call has settled. */
+  /** `getNow()` read after renewal, reclaim, and signal-poll have all settled. */
   finishedAt: number;
   /** One entry per workflow id the pass attempted, in iteration order. */
   outcomes: WorkflowClaimRenewalOutcome[];
@@ -95,6 +163,10 @@ export type WorkflowClaimRenewalPassResult = {
   renewedCount: number;
   /** `outcomes.filter(o => o.status === 'failed').length`, precomputed for observability consumers. */
   failedCount: number;
+  /** Present only when this task was constructed with a `reclaimTarget`. */
+  reclaim?: WorkflowClaimReclaimPassResult;
+  /** Present only when this task was constructed with a `signalPollTarget`. */
+  signalPoll?: WorkflowClaimSignalPollOutcome;
 };
 
 /**
@@ -130,6 +202,17 @@ export type WorkflowClaimRenewalTaskOptions = {
    * otherwise-idle process alive — mirroring `lease-manager.ts`'s `startRenewal`.
    */
   scheduler?: WorkflowClaimRenewalIntervalScheduler;
+  /**
+   * Optional reclaim-scan target. Omitted (the default) runs renewal alone —
+   * `result.reclaim` stays `undefined`. See {@link WorkflowClaimReclaimTarget}.
+   */
+  reclaimTarget?: WorkflowClaimReclaimTarget;
+  /**
+   * Optional owner-side signal-poll target. Omitted (the default) leaves
+   * `result.signalPoll` `undefined`. See `owner-side-signal-poll.ts`'s
+   * `OwnerSideSignalPollTarget`.
+   */
+  signalPollTarget?: OwnerSideSignalPollTarget;
   /**
    * Called after every completed pass, interval-driven or explicit. This is
    * the reporting seam a later observability stage hangs a metrics counter
@@ -211,10 +294,41 @@ function defaultScheduler(): WorkflowClaimRenewalIntervalScheduler {
  * pass itself — the caller drives it, either via `start()` for interval mode
  * or by awaiting `runOnce()` directly under `backgroundTasks: 'manual'`.
  */
+/**
+ * Run one reclaim-scan sub-pass: list candidates, attempt each once, and
+ * catch both a per-candidate throw and the listing call itself throwing. See
+ * {@link WorkflowClaimReclaimPassResult}'s doc for why discovery failure is a
+ * result, not a rejection.
+ */
+async function runReclaimPass(
+  target: WorkflowClaimReclaimTarget,
+): Promise<WorkflowClaimReclaimPassResult> {
+  let candidates: readonly string[];
+  try {
+    candidates = await target.listReclaimCandidateWorkflowIds();
+  } catch (error) {
+    return { status: 'discovery-failed', error };
+  }
+  const outcomes: WorkflowClaimReclaimOutcome[] = [];
+  for (const workflowId of candidates) {
+    try {
+      const attempt = await target.attemptWorkflowClaimTakeover(workflowId);
+      outcomes.push({ workflowId, ...attempt });
+    } catch (error) {
+      outcomes.push({ workflowId, status: 'error', error });
+    }
+  }
+  return {
+    status: 'completed',
+    outcomes,
+    reclaimedCount: outcomes.filter((outcome) => outcome.status === 'reclaimed').length,
+  };
+}
+
 export function createWorkflowClaimRenewalTask(
   options: WorkflowClaimRenewalTaskOptions,
 ): WorkflowClaimRenewalTask {
-  const { target, getNow, intervalMs, onPassComplete } = options;
+  const { target, getNow, intervalMs, reclaimTarget, signalPollTarget, onPassComplete } = options;
   const scheduler: WorkflowClaimRenewalIntervalScheduler = options.scheduler ?? defaultScheduler();
 
   let intervalHandle: unknown = null;
@@ -232,6 +346,21 @@ export function createWorkflowClaimRenewalTask(
         outcomes.push({ workflowId, status: 'failed', error });
       }
     }
+
+    const reclaim = reclaimTarget === undefined ? undefined : await runReclaimPass(reclaimTarget);
+
+    let signalPoll: WorkflowClaimSignalPollOutcome | undefined;
+    if (signalPollTarget !== undefined) {
+      try {
+        signalPoll = {
+          status: 'completed',
+          result: await runOwnerSideSignalPoll({ target: signalPollTarget, getNow }),
+        };
+      } catch (error) {
+        signalPoll = { status: 'failed', error };
+      }
+    }
+
     const finishedAt = getNow();
     const result: WorkflowClaimRenewalPassResult = {
       startedAt,
@@ -239,6 +368,8 @@ export function createWorkflowClaimRenewalTask(
       outcomes,
       renewedCount: outcomes.filter((outcome) => outcome.status === 'renewed').length,
       failedCount: outcomes.filter((outcome) => outcome.status === 'failed').length,
+      ...(reclaim === undefined ? {} : { reclaim }),
+      ...(signalPoll === undefined ? {} : { signalPoll }),
     };
     // A throwing observability sink must not turn a successful renewal pass into
     // a rejection: the durable work is already committed at this point, and in

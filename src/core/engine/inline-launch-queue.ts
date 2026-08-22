@@ -3,6 +3,7 @@ import type { QueuedInlineWorkflowExecutionStart } from './engine-internal-types
 import type { EngineInternals } from './internals.ts';
 import { startWorkflowExecution } from './lifecycle.ts';
 import { loadWorkflowState } from './storage-io.ts';
+import { confirmWakeOwnership } from './wake-ownership-guard.ts';
 
 export type InlineLaunchQueueCallbacks = {
   processPendingUpdatesAfterInlineAdvance: (workflowId: string) => Promise<void>;
@@ -200,6 +201,23 @@ async function startQueuedInlineWorkflowExecution(
   try {
     const state = await loadWorkflowState(internals, start.workflowId);
     if (!state || state.status !== 'running') {
+      return;
+    }
+
+    // ADR 0002's `inline-macrotask-drive` wake kind: this launch was queued at
+    // an earlier tick, and the gap before this deferred macrotask actually
+    // runs is unbounded under load — long enough that this engine's claim for
+    // `start.workflowId` (acquired at enqueue time via a folded enabling
+    // write) may since have been taken over. Unlike a timer-driven wake, no
+    // in-memory-only sanity check can bound that latency against any
+    // configured TTL, so this is a REAL `wakeOwnershipCheck`, not a cheaper
+    // local guard. A discard is a silent no-op here: this engine no longer
+    // owns the workflow, so its own copy of the queued start must not drive
+    // the generator's first turn — the takeover winner starts it instead.
+    if (
+      (await confirmWakeOwnership(internals, start.workflowId, 'inline-macrotask-drive')) ===
+      'discard'
+    ) {
       return;
     }
 

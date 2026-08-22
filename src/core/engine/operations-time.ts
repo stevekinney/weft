@@ -6,6 +6,7 @@ import type { ContextOperationRequest } from '../context.ts';
 import { buildTimerBatchOperations, normalizeStorageTimestamp } from '../scheduler.ts';
 import type { Checkpoint, Duration, StartOptions, TimerEntry, WorkflowState } from '../types.ts';
 import type { WorkflowVersionTuple } from '../workflow-version-tuple.ts';
+import { notifyConditionWaiters } from './condition-waiters.ts';
 import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
 import { reprovideRecoveredServices } from './lifecycle/recovered-services.ts';
@@ -459,8 +460,10 @@ export async function handleTimerFired(
  * here.
  */
 function resolveConditionTimer(internals: EngineInternals, entry: TimerEntry): void {
-  const resolver = internals.conditionWaiters.get(entry.workflowId);
-  if (resolver) resolver();
+  // Delegates to condition-waiters.ts's notifyConditionWaiters, which runs the
+  // `wakeOwnershipCheck` guard (ADR 0002's `wait-condition` kind) before
+  // resolving the parked waiter — see that function's doc comment.
+  notifyConditionWaiters(internals, entry.workflowId);
 }
 
 async function handleReviewTimer(

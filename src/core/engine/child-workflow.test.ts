@@ -1,10 +1,15 @@
 import { describe, expect, it, mock } from 'bun:test';
 
+import { KEYS } from '../../storage/interface.ts';
+import { MemoryStorage } from '../../storage/memory.ts';
+import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import type { ChildWorkflowInterception } from '../interceptor/interception-contexts.ts';
-import type { WorkflowState } from '../types.ts';
+import { workflow, type WorkflowContext, type WorkflowState } from '../types.ts';
 import type { ChildWorkflowOptions } from '../types/workflow-function.ts';
 import { executeChildWorkflow } from './child-workflow.ts';
 import { WorkflowAlreadyExistsError } from './errors.ts';
+import { Engine } from './index.ts';
+import { getInternals } from './internals.ts';
 
 // The public defense: `onTerminalConflict` must stay absent from `ChildWorkflowOptions`.
 // If a future edit adds it, this fails to compile and forces a deliberate decision rather
@@ -246,5 +251,79 @@ describe('engine child workflow helpers', () => {
     expect(internals.pendingNestingDepth).toBeUndefined();
     expect(internals.pendingParentHeaders).toBeUndefined();
     expect(internals.pendingExecutionStateOwnerId).toBeUndefined();
+  });
+});
+
+describe('WFT-79: cross-engine parent/child completion (ownership: "workflow-lease")', () => {
+  it('a parent recovered on one engine still observes its child completing on a DIFFERENT engine', async () => {
+    const storage = new MemoryStorage();
+    const childWorkflow = workflow({ name: 'wft-79-child' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      yield* ctx.waitForSignal('go');
+      return 'child-done';
+    });
+    const parentWorkflow = workflow({ name: 'wft-79-parent' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      return yield* ctx.startChild('wft-79-child', null, { id: 'wft-79-child-1' });
+    });
+    const workflows = { 'wft-79-parent': parentWorkflow, 'wft-79-child': childWorkflow };
+
+    // Seed BOTH the parent (mid, uncheckpointed child-await turn) and the
+    // child (durably parked on a signal) via a plain `ownership: 'none'`
+    // engine — simulating a crashed prior owner that held no claim on
+    // either. `ctx.startChild()`'s await is never checkpointed mid-flight
+    // (there is no completed effect-log entry for an in-flight operation),
+    // so the parent's LAST durable checkpoint predates the child even
+    // existing — replay on any later owner reruns `ctx.startChild()` from
+    // scratch.
+    await using seedEngine = await Engine.create({ storage, workflows, recover: false });
+    await seedEngine.start('wft-79-parent', null, { id: 'wft-79-parent-1' });
+    await waitForCondition(
+      async () => (await storage.get(KEYS.checkpoint('wft-79-child-1'))) !== null,
+      { label: 'child checkpoint' },
+    );
+
+    const ownershipOptions = {
+      ownership: 'workflow-lease' as const,
+      workflowClaimTtl: 200,
+      workflowClaimRenewInterval: 20,
+      recover: false,
+    };
+
+    // Engine B claims and resumes the CHILD only — it never touches the parent.
+    await using engineB = await Engine.create({ storage, workflows, ...ownershipOptions });
+    await engineB.resume('wft-79-child-1');
+
+    // Engine A claims and resumes the PARENT. Replay re-runs `ctx.startChild()`
+    // from scratch: `dispatchChildWorkflowStart` hits the pre-existing child
+    // id, `resolveTerminalConflictForRestart` throws `WorkflowAlreadyExistsError`
+    // (child-start never permits `onTerminalConflict: 'start-new'`) BEFORE any
+    // claim CAS is attempted, and `dispatchChildWorkflowStart`'s catch
+    // re-attaches via `getHandle()` instead of restarting the child — proving
+    // this replay path never surfaces `WorkflowClaimUnavailableError` even
+    // though engine B already durably holds the child's claim.
+    await using engineA = await Engine.create({ storage, workflows, ...ownershipOptions });
+    const parentHandle = await engineA.resume('wft-79-parent-1');
+
+    // Wait for A's replay to actually reach the child-await — i.e. for A to
+    // register its OWN local waiter for the child — before completing the
+    // child, so this test exercises the cross-engine POLL fallback
+    // (`handle-result.ts`) rather than a lucky race against an
+    // already-terminal read.
+    const internalsA = getInternals(engineA);
+    await waitForCondition(() => internalsA.resultResolvers.has('wft-79-child-1'), {
+      label: "engine A's replay registering a local waiter for the child",
+    });
+
+    // Complete the child on its OWNING engine (B) only — A's `resultResolvers`
+    // map is never touched by B's termination commit.
+    await engineB.getHandle('wft-79-child-1').signal('go');
+    await expect(engineB.getHandle('wft-79-child-1').result()).resolves.toBe('child-done');
+
+    // The parent — owned by A, which never claimed the child — must still
+    // observe completion instead of hanging forever.
+    await expect(parentHandle.result()).resolves.toBe('child-done');
   });
 });

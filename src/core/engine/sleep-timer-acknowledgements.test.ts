@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'bun:test';
 
+import { MemoryStorage } from '../../storage/memory.ts';
+import { Engine } from './index.ts';
 import type { EngineInternals } from './internals.ts';
+import { getInternals } from './internals.ts';
 import {
   acknowledgeSupersededSleepTimers,
   createSleepTimerAcknowledgement,
+  handleSleepTimerWithAcknowledgement,
   recordDurableInlineOperation,
   rejectAllSleepTimerAcknowledgements,
   rejectSleepTimerAcknowledgements,
@@ -111,5 +115,37 @@ describe('sleep timer durable acknowledgements', () => {
     await expect(second.promise).rejects.toBe(disposalError);
     await expect(third.promise).rejects.toBe(disposalError);
     expect(internals.sleepTimerAcknowledgementWaiters.size).toBe(0);
+  });
+});
+
+describe('handleSleepTimerWithAcknowledgement: ADR 0002 "sleep" wake kind ownership check', () => {
+  it('discards a fired timer for a workflow this engine holds no tracked claim for, without loading state', async () => {
+    await using engine = await Engine.create({
+      storage: new MemoryStorage(),
+      ownership: 'workflow-lease',
+      workflows: {},
+    });
+    const internals = getInternals(engine);
+    // The workflow-lease bootstrap installs a registry, but this engine never
+    // acquired a claim for this particular workflow id.
+    expect(internals.workflowClaimRegistry).not.toBeNull();
+
+    let stateLoaded = false;
+    const loadWorkflowState = async (): Promise<null> => {
+      stateLoaded = true;
+      return null;
+    };
+
+    await handleSleepTimerWithAcknowledgement(
+      internals,
+      { id: 'sleep:wf-unowned:0', workflowId: 'wf-unowned', fireAt: 0, kind: 'sleep' },
+      loadWorkflowState,
+    );
+
+    // The ownership check runs BEFORE shouldIgnoreUnclaimedSleepTimer ever
+    // loads workflow state — see this function's doc comment for why that
+    // ordering matters (it would otherwise risk the "fired before ready"
+    // spurious throw for a workflow this engine never owned).
+    expect(stateLoaded).toBe(false);
   });
 });
