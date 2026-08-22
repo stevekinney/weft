@@ -53,6 +53,9 @@ import type { WorkflowFeedListener } from './index.ts';
 import type { LeaseManager } from './lease-manager.ts';
 import type { ScheduleHandleEngine } from './schedule-handle.ts';
 import type { SecondInstanceDetector } from './second-instance-detector.ts';
+import type { WorkflowClaimMetricsRecorder } from './workflow-claim-metrics.ts';
+import type { WorkflowClaimRegistry } from './workflow-claim-registry.ts';
+import type { WorkflowClaimRenewalTask } from './workflow-claim-renewal-task.ts';
 
 export type SleepTimerAcknowledgementWaiter = {
   fireAt: number;
@@ -265,6 +268,43 @@ export interface EngineInternals {
    */
   leaseManager: LeaseManager | null;
   /**
+   * The active per-workflow claim registry for `ownership: 'workflow-lease'`;
+   * `null` under `'none'`/`'lease'` and, for now, ALSO under `'workflow-lease'`
+   * itself — wiring construction (Gate 1/Gate 2, actually instantiating the
+   * registry, and folding `acquire()` into start/resume/delayed-start-fire) is a
+   * later stage. Its presence here lets {@link commitFencedEngineWrite} read
+   * {@link WorkflowClaimRegistry.currentEpochBytes} for a workflow-scoped write
+   * without that later stage having to touch the fencing path again. Until it is
+   * populated, every workflow-scoped write under `'workflow-lease'` fails closed
+   * with {@link EngineDeposedError} — correct, not a bug: this engine holds no
+   * claim for any workflow yet.
+   */
+  workflowClaimRegistry: WorkflowClaimRegistry | null;
+  /**
+   * The active per-workflow claim-renewal task for `ownership: 'workflow-lease'`;
+   * `null` under `'none'`/`'lease'` and until `#bootstrapOwnershipIfConfigured`
+   * completes. Renews every claim this engine holds (active or parked) on its
+   * own cadence — independent of the durable-timer scheduler, so `startScheduler:
+   * false` still renews claims — or via `runMaintenance()` under
+   * `backgroundTasks: 'manual'`, which never starts its interval. Stopped
+   * (interval cleared, never awaited — stopping is synchronous) and detached at
+   * every `disposeEngine` call site; releasing the claims it was renewing is the
+   * separate, best-effort `workflowClaimRegistry.releaseAll()` step each
+   * disposal path drives on its own schedule.
+   */
+  workflowClaimRenewalTask: WorkflowClaimRenewalTask | null;
+  /**
+   * Bounded-cardinality observability recorder for the `ownership:
+   * 'workflow-lease'` claim protocol (ADR 0002 § Observability); `null` under
+   * `'none'`/`'lease'` and until `#bootstrapOwnershipIfConfigured` completes.
+   * One instance per engine process, shared by this engine's claim-renewal task
+   * (which feeds it renewal-failure counts and the active-claim gauge after
+   * every pass) and, in a later stage, its claim-acquiring entry points (start,
+   * resume, delayed-start fire), which would record `acquired`/`takeover`/
+   * `lost_race`/`deposed`/`backoff_skipped` attempts into the same instance.
+   */
+  workflowClaimMetrics: WorkflowClaimMetricsRecorder | null;
+  /**
    * The in-flight lease acquisition, or `null` when none is running. Set while
    * `#acquireLeaseIfConfigured` awaits `acquire()` (which can park for the whole
    * `leaseWaitTimeout` waiting for a handoff) and cleared when it settles. Disposal
@@ -273,6 +313,15 @@ export interface EngineInternals {
    * than leaking until TTL on an already-disposed engine.
    */
   inFlightLeaseAcquire: Promise<void> | null;
+  /**
+   * The in-flight `ownership: 'workflow-lease'` bootstrap (Gate 1, Gate 2, and
+   * claim-registry/renewal-task construction), or `null` when none is running.
+   * Mirrors {@link inFlightLeaseAcquire}'s idempotency shape: concurrent
+   * `Engine.create` + `recoverAll` (and repeated `recoverAll`/`runMaintenance`)
+   * callers await this same promise rather than racing the gates twice. Always
+   * `null` under `ownership: 'none'`/`'lease'`, which never run this bootstrap.
+   */
+  inFlightOwnershipBootstrap: Promise<void> | null;
   /**
    * Set to `true` the instant this engine is detected as deposed under
    * `ownership: 'lease'` — either a fenced durable write's CAS failed against a

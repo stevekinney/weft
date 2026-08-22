@@ -145,12 +145,18 @@ describe('activity reconciliation helpers', () => {
     await storage.put(reference.key, encode(expectedRecord));
 
     await expect(
-      commitActivityReconciliationTransitionWithFencedWrite(internals, reference, expectedRecord, {
-        ...expectedRecord,
-        status: 'completed',
-        result: 'done',
-        updatedAt: 2,
-      }),
+      commitActivityReconciliationTransitionWithFencedWrite(
+        internals,
+        'workflow-id',
+        reference,
+        expectedRecord,
+        {
+          ...expectedRecord,
+          status: 'completed',
+          result: 'done',
+          updatedAt: 2,
+        },
+      ),
     ).rejects.toThrow('Activity reconciliation completion lost compare-and-set ownership.');
   });
 

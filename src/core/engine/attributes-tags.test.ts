@@ -8,7 +8,9 @@ import {
   bulkMutateWorkflowTags,
   cleanupAttributeIndex,
   mutateWorkflowTags,
+  updateWorkflowState,
 } from './attributes-tags.ts';
+import { decodeEpoch, encodeEpoch } from './workflow-claim-codec.ts';
 
 function createWorkflowState(
   workflowId: string,
@@ -27,10 +29,15 @@ function createWorkflowState(
   };
 }
 
-function createInternals(storage: MemoryStorage, now = 2_000) {
+function createInternals(
+  storage: MemoryStorage,
+  now = 2_000,
+  overrides: Record<string, unknown> = {},
+) {
   return {
     deposed: false,
     leaseManager: null,
+    workflowClaimRegistry: null,
     options: {
       getNow: () => now,
       ownershipMode: 'none',
@@ -39,6 +46,7 @@ function createInternals(storage: MemoryStorage, now = 2_000) {
     storage,
     workflowStateWriteChains: new Map(),
     scheduleStateOperationChains: new Map(),
+    ...overrides,
   } as never;
 }
 
@@ -144,5 +152,53 @@ describe('attribute and tag helpers', () => {
         'bulk-explode',
       ]),
     ).rejects.toThrow('unexpected read failure');
+  });
+
+  it('routes "category" to the matching ADR 0002 commit shape: "external-terminal" rotates wf-owner-epoch under workflow-lease, "self" fences on this engine\'s own (absent) claim and fails closed', async () => {
+    const storage = new MemoryStorage();
+    const workflowId = 'update-workflow-state-category';
+    await storage.put(KEYS.workflow(workflowId), encode(createWorkflowState(workflowId)));
+
+    // No `workflowClaimRegistry` installed — mirrors today's un-wired state.
+    // An EXTERNAL terminal transition never consults it, so it succeeds and
+    // rotates the epoch; a SELF transition fences on this engine's own claim
+    // and — holding none — fails closed immediately.
+    const internals = createInternals(storage, 2_000, {
+      options: { getNow: () => 2_000, ownershipMode: 'workflow-lease' },
+      workflowClaimRegistry: null,
+      pendingAtomicWorkflowCommitSideEffects: new Map(),
+    });
+
+    await expect(
+      updateWorkflowState(internals, workflowId, { status: 'cancelled' }, 'external-terminal'),
+    ).resolves.not.toBeNull();
+    expect(decodeEpoch((await storage.get(KEYS.workflowOwnerEpoch(workflowId)))!)).toBe(1);
+
+    await storage.put(
+      KEYS.workflow(workflowId),
+      encode(createWorkflowState(workflowId, { status: 'running' })),
+    );
+    await expect(
+      updateWorkflowState(internals, workflowId, { status: 'failed' }, 'self'),
+    ).rejects.toMatchObject({ code: 'EngineDeposedError' });
+  });
+
+  it('mutateWorkflowTags never rotates wf-owner-epoch — non-terminal external mutations do not end the run (ADR 0002)', async () => {
+    const storage = new MemoryStorage();
+    const workflowId = 'mutate-tags-no-rotation';
+    await storage.put(
+      KEYS.workflow(workflowId),
+      encode(createWorkflowState(workflowId, { tags: ['solo'] })),
+    );
+    const seededEpochBytes = encodeEpoch(7);
+    await storage.put(KEYS.workflowOwnerEpoch(workflowId), seededEpochBytes);
+
+    const internals = createInternals(storage, 2_000, {
+      options: { getNow: () => 2_000, ownershipMode: 'workflow-lease' },
+    });
+
+    await expect(mutateWorkflowTags(internals, workflowId, ['solo'], 'remove')).resolves.toBe(true);
+
+    expect(await storage.get(KEYS.workflowOwnerEpoch(workflowId))).toEqual(seededEpochBytes);
   });
 });

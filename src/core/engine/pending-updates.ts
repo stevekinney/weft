@@ -237,6 +237,7 @@ async function rejectPendingUpdate(
   // successor's. Fence it on the lease epoch.
   await commitFencedEngineWrite(
     internals,
+    workflowId,
     responseOperations,
     [],
     () => new Error(`Update rejection for workflow "${workflowId}" lost its CAS race.`),
@@ -274,6 +275,7 @@ async function deliverPendingUpdate(
   // lease epoch so a deposed engine cannot overwrite the successor's response.
   await commitFencedEngineWrite(
     internals,
+    workflowId,
     responseOperations,
     [],
     () => new Error(`Update response for workflow "${workflowId}" lost its CAS race.`),

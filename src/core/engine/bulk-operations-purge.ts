@@ -23,6 +23,7 @@ import type { EngineInternals } from './internals.ts';
 import { streamWorkflowStates } from './listing.ts';
 import { decodeScheduleRunMetadata } from './schedule-run-metadata.ts';
 import { createTerminalCleanupTimerId } from './state-utilities.ts';
+import { buildExternalTerminalRotationFragment } from './storage-io.ts';
 import {
   decodeWorkflowState,
   isTerminalWorkflowStatus,
@@ -211,12 +212,12 @@ export async function purgeWorkflow(
   cleanupWaiters: CleanupWaiters,
 ): Promise<void> {
   const deleteOperations = await collectWorkflowPurgeDeleteOperations(internals, state);
-  await commitFencedEngineWrite(
-    internals,
-    deleteOperations,
-    [],
-    () => new Error(`Purge commit for workflow "${state.id}" lost its precondition.`),
-  );
+  // Rotates wf-owner-epoch under `workflow-lease` (ADR 0002); no-op elsewhere.
+  const rotation = await buildExternalTerminalRotationFragment(internals, state.id);
+  const operations = [...deleteOperations, ...rotation.operations];
+  await commitFencedEngineWrite(internals, null, operations, rotation.conditions, () => {
+    return new Error(`Purge commit for workflow "${state.id}" lost its precondition.`);
+  });
   clearPurgedWorkflowInMemoryState(internals, state.id, cleanupWaiters);
 }
 

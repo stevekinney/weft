@@ -10,7 +10,10 @@ import { assertPayloadWithinLimit } from '../payload-size.ts';
 import type { ActivityVerificationContext, ActivityVerificationResult } from '../types.ts';
 import { WeftError } from '../weft-error.ts';
 import { stageAtomicWorkflowCommitSideEffects } from './checkpoint-side-effects.ts';
-import { commitFencedEngineWrite } from './fenced-write.ts';
+import {
+  commitFencedEngineWrite,
+  commitFencedEngineWriteAllowingPreconditionFailure,
+} from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
 
 type ActivityOperation = Extract<ContextOperationRequest, { type: 'activity' }>;
@@ -160,18 +163,25 @@ export function validateActivityResultForReconciliation(
 }
 
 export async function claimActivityReconciliationStart(
-  storage: Storage,
+  internals: EngineInternals,
+  workflowId: string,
   reference: ActivityReconciliationReference,
   record: ActivityReconciliationRecord,
 ): Promise<boolean> {
+  const storage = internals.storage;
   if (!storage.capabilities().conditionalBatch) {
     throw new ActivityReconciliationCapabilityError();
   }
   requireStorageCapability(storage, 'conditionalBatch', 'activity result reconciliation');
-  return storageConditionalBatch(
-    storage,
-    [{ key: reference.key, expectedValue: null }],
+  // ADR 0002 names this a hard prerequisite: it is a workflow-scoped write, so it
+  // carries the same `wf-owner-epoch:<id>` precondition as every other one. `false`
+  // still means "another attempt already claimed this record"; a lost epoch
+  // precondition surfaces as deposition rather than that benign case.
+  return commitFencedEngineWriteAllowingPreconditionFailure(
+    internals,
+    workflowId,
     [{ type: 'put', key: reference.key, value: encode(record) }],
+    [{ key: reference.key, expectedValue: null }],
   );
 }
 
@@ -221,6 +231,7 @@ export async function resolveStartedActivityReconciliationRecord(
     };
     await commitActivityReconciliationTransitionWithFencedWrite(
       internals,
+      workflowId,
       reference,
       record,
       nextRecord,
@@ -248,6 +259,7 @@ export async function resolveStartedActivityReconciliationRecord(
   );
   await commitActivityReconciliationTransitionWithFencedWrite(
     internals,
+    workflowId,
     reference,
     record,
     completedRecord,
@@ -294,6 +306,7 @@ export function stageActivityReconciliationTransitionWithAtomicWorkflowCommit(
 
 export async function commitActivityReconciliationTransitionWithFencedWrite(
   internals: EngineInternals,
+  workflowId: string,
   reference: ActivityReconciliationReference,
   expectedRecord: ActivityReconciliationRecord,
   nextRecord: ActivityReconciliationRecord,
@@ -305,6 +318,7 @@ export async function commitActivityReconciliationTransitionWithFencedWrite(
   );
   await commitFencedEngineWrite(
     internals,
+    workflowId,
     sideEffects.operations,
     sideEffects.conditions,
     () =>
@@ -426,7 +440,8 @@ async function claimStartedRecord(
     internals.options.getNow(),
   );
   const claimed = await claimActivityReconciliationStart(
-    internals.storage,
+    internals,
+    workflowId,
     reference,
     startedRecord,
   );

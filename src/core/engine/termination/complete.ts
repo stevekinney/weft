@@ -138,6 +138,11 @@ export async function terminateWorkflow(
         ...(reason !== undefined ? { terminationReason: reason } : {}),
         ...(terminalCleanupToken !== undefined ? { terminalCleanupToken } : {}),
       },
+      // Cancel/timeout are EXTERNAL terminal transitions (ADR 0002): any engine
+      // may commit them against a workflow it does not own, so this rotates the
+      // claim epoch under `ownership: 'workflow-lease'` rather than fencing on
+      // this engine's own claim.
+      'external-terminal',
       {
         // Total over non-terminal states (see FORCIBLY_TERMINABLE_STATUSES):
         // cancelling a suspended workflow terminates it and rejects its pending
@@ -400,7 +405,9 @@ export async function completeWorkflow(
         );
       }
 
-      await callbacks.commitWorkflowStateOperations(state, completionOperations, {
+      // completeWorkflow is a SELF-transition (ADR 0002): this engine is
+      // finishing its own workflow.
+      await callbacks.commitSelfWorkflowStateOperations(state, completionOperations, {
         includePendingAtomicSideEffects: true,
       });
       return { duration };
@@ -441,28 +448,37 @@ export async function failWorkflow(
   if (terminalCleanupToken !== undefined) {
     stateUpdate.terminalCleanupToken = terminalCleanupToken;
   }
-  const failureResult = await updateWorkflowState(internals, workflowId, stateUpdate, {
-    // See FORCIBLY_TERMINABLE_STATUSES — 'suspended' included so a cross-process
-    // resume whose services are unavailable can fail the run (the fail path runs
-    // before the suspended→running flip) instead of stranding it 'suspended'.
-    allowedStatuses: FORCIBLY_TERMINABLE_STATUSES,
-    buildAdditionalOperations: (_previousState, updatedAt) => {
-      finalizePendingTimelineEntry(internals, workflowId, 'failed', error.message, updatedAt);
-      const pendingTimelineOperation = buildPendingTimelineOperation(internals, workflowId);
-      return [
-        ...(pendingTimelineOperation ? [pendingTimelineOperation] : []),
-        ...(terminalCleanupToken !== undefined
-          ? buildTerminalCleanupTimerOperations(
-              internals,
-              workflowId,
-              false,
-              updatedAt,
-              terminalCleanupToken,
-            )
-          : []),
-      ];
+  const failureResult = await updateWorkflowState(
+    internals,
+    workflowId,
+    stateUpdate,
+    // failWorkflow is a SELF-transition (ADR 0002): this engine is finishing
+    // its own workflow, so the write fences on this engine's own claim rather
+    // than rotating the epoch.
+    'self',
+    {
+      // See FORCIBLY_TERMINABLE_STATUSES — 'suspended' included so a cross-process
+      // resume whose services are unavailable can fail the run (the fail path runs
+      // before the suspended→running flip) instead of stranding it 'suspended'.
+      allowedStatuses: FORCIBLY_TERMINABLE_STATUSES,
+      buildAdditionalOperations: (_previousState, updatedAt) => {
+        finalizePendingTimelineEntry(internals, workflowId, 'failed', error.message, updatedAt);
+        const pendingTimelineOperation = buildPendingTimelineOperation(internals, workflowId);
+        return [
+          ...(pendingTimelineOperation ? [pendingTimelineOperation] : []),
+          ...(terminalCleanupToken !== undefined
+            ? buildTerminalCleanupTimerOperations(
+                internals,
+                workflowId,
+                false,
+                updatedAt,
+                terminalCleanupToken,
+              )
+            : []),
+        ];
+      },
     },
-  });
+  );
   if (!failureResult) {
     return;
   }

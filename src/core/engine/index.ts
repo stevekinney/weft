@@ -215,6 +215,8 @@ import {
   handleTimerFired as handleTimerFiredFromInternals,
   type TimeOperationCallbacks,
 } from './operations-time.ts';
+import { bootstrapWorkflowLeaseOwnership } from './ownership-bootstrap.ts';
+import { bootstrapOwnershipGates } from './ownership-mode-marker.ts';
 import { assertCompatiblePersistedDataVersion } from './persisted-data-version.ts';
 import { query as queryWorkflow } from './queries.ts';
 import {
@@ -278,6 +280,7 @@ import {
 } from './updates.ts';
 import { isTerminalWorkflowStatus } from './validation.ts';
 import { coerceScheduleId } from './validation/schedule.ts';
+import type { WorkflowClaimRegistry } from './workflow-claim-registry.ts';
 import {
   replayWorkflowFeed,
   snapshotWorkflowFeedTail,
@@ -321,9 +324,18 @@ export {
 } from './errors.ts';
 export { HANDLE_RESULT_PROMISE, WorkflowHandle } from './handles.ts';
 export {
+  WeftWorkflowClaimLostWarning,
+  WeftWorkflowWakeDiscardedWarning,
+  WORKFLOW_CLAIM_LOST_WARNING_NAME,
+  WORKFLOW_WAKE_DISCARDED_WARNING_NAME,
+} from './lease-deposition.ts';
+export type { WorkflowWakeKind } from './lease-deposition.ts';
+export {
   EngineLeaseAcquisitionTimeoutError,
   EngineLeaseCorruptedError,
   EngineLeaseNotHeldError,
+  OwnershipModeMismatchError,
+  WorkflowClaimUnavailableError,
 } from './lease-errors.ts';
 export type { EngineLeaseHealth, LeaseLostReason } from './lease-health.ts';
 export type { RecoverAllOptions, RecoveredWorkflowInfo } from './lifecycle.ts';
@@ -550,6 +562,13 @@ export class Engine<
         engine.register(definition);
       }
 
+      // Run the `ownership: 'workflow-lease'` construction-time gates (Gate 1
+      // storage capability, Gate 2 ownership-mode marker) and construct this
+      // engine's claim registry/renewal task BEFORE recovery, the scheduler,
+      // or any claim acquisition — ADR 0002's boot-gate ordering. A no-op for
+      // every other `ownership` posture.
+      await engine.#bootstrapOwnershipIfConfigured();
+
       // Acquire single-writer ownership BEFORE recovery so a rolling deploy is a
       // clean handoff: the incoming instance parks here until the outgoing one
       // releases (or its lease expires), and only then recovers. On the try's
@@ -673,9 +692,13 @@ export class Engine<
       // engine cannot drop a timer while its callback's fenced reschedule/clear
       // was rejected. Empty base conditions: the only guard is the epoch fence,
       // so under single-engine ownership this commits like the unfenced default.
+      // Engine-scoped: one tick's cleanup batch can span fired timers from
+      // MANY distinct workflows (deadline, delayed-start, schedule, terminal
+      // cleanup, teardown), so there is no single workflowId to fence against.
       commitTimerCleanup: (operations) =>
         commitFencedEngineWrite(
           getInternals(this),
+          null,
           operations,
           [],
           () => new Error('Timer cleanup lost its fenced CAS race'),
@@ -743,7 +766,16 @@ export class Engine<
     getInternals(this).secondInstanceDetectionInterval = null;
     getInternals(this).secondInstanceDetector = null;
     getInternals(this).leaseManager = null;
+    // Populated by `#bootstrapOwnershipIfConfigured` for `ownership:
+    // 'workflow-lease'` (Gate 1/Gate 2, then the claim registry and its renewal
+    // task). Folding `acquire()` into start/resume/delayed-start-fire is a
+    // later, separate stage — `commitFencedEngineWrite` already reads this
+    // field for every workflow-scoped write regardless.
+    getInternals(this).workflowClaimRegistry = null;
+    getInternals(this).workflowClaimRenewalTask = null;
+    getInternals(this).workflowClaimMetrics = null;
     getInternals(this).inFlightLeaseAcquire = null;
+    getInternals(this).inFlightOwnershipBootstrap = null;
     getInternals(this).deposed = false;
     getInternals(this).tearDownAfterDeposition = (): void => {
       this.#disposeAfterDeposition();
@@ -923,6 +955,128 @@ export class Engine<
   }
 
   /**
+   * Run the `ownership: 'workflow-lease'` construction-time bootstrap (ADR
+   * 0002 § Construction-time capability gates): Gate 1 (storage capability),
+   * Gate 2 (the store-wide ownership-mode marker), then construct this
+   * engine's `WorkflowClaimRegistry` and claim-renewal task. No-op for
+   * `'none'`/`'lease'` — `'lease'` keeps its own, separate, unchanged
+   * `#acquireLeaseIfConfigured` gate. Called before `recoverAll()`, before the
+   * scheduler starts, and at the top of `runMaintenance()` — no claim
+   * acquisition, recovery scan, or scheduler/renewal poll may proceed until
+   * this has completed successfully.
+   *
+   * Idempotent across concurrent `Engine.create` + `recoverAll` (and repeated
+   * `recoverAll`/`runMaintenance`) callers, mirroring
+   * `#acquireLeaseIfConfigured`'s shape: the in-flight bootstrap promise (not
+   * `workflowClaimRegistry`, which is only assigned on success) is the genuine
+   * "bootstrap in progress" signal a second concurrent caller awaits. Unlike
+   * the lease path, nothing here needs an "assign before await" trick — Gate
+   * 2's marker CAS is a store-wide stamp with no per-engine handle to release
+   * on a disposal race, so there is nothing durable to leak by waiting until
+   * the gates fully resolve before touching `internals` at all.
+   */
+  async #bootstrapOwnershipIfConfigured(): Promise<void> {
+    const internals = getInternals(this);
+    const ownershipMode = internals.options.ownershipMode;
+    if (ownershipMode === 'none') return;
+    if (internals.disposed) throw new EngineDisposedError();
+    if (ownershipMode === 'lease') {
+      // A global-lease engine runs the same two gates and stamps the same
+      // store-wide marker. Without this, the marker would only ever be written
+      // by `workflow-lease` engines, so Gate 2's cross-MODE exclusivity — the
+      // whole reason the marker exists — would not hold against a `'lease'`
+      // engine sharing the store, which is exactly the mixed-mode hazard the
+      // ADR names. It runs before lease acquisition, so a capability or mode
+      // mismatch fails construction before any lease is taken.
+      await bootstrapOwnershipGates({
+        storage: internals.storage,
+        ownershipMode,
+        getNow: internals.options.getNow,
+      });
+      return;
+    }
+    if (internals.inFlightOwnershipBootstrap !== null) {
+      await internals.inFlightOwnershipBootstrap;
+      return;
+    }
+    if (internals.workflowClaimRegistry !== null) return;
+    const bootstrap = (async () => {
+      const result = await bootstrapWorkflowLeaseOwnership({
+        storage: internals.storage,
+        getNow: internals.options.getNow,
+        claimTtlMs: internals.options.workflowClaimTtlMs,
+        claimRenewIntervalMs: internals.options.workflowClaimRenewIntervalMs,
+      });
+      if (internals.disposed) {
+        // Disposal raced the gates. Nothing durable-and-per-engine was taken
+        // (the marker stamp is store-wide and permanent either way), so there
+        // is nothing to release — just discard the freshly built registry/task
+        // and throw, matching `#acquireLeaseIfConfigured`'s "await resolves
+        // only when genuinely bootstrapped" contract.
+        throw new EngineDisposedError();
+      }
+      internals.workflowClaimRegistry = result.registry;
+      internals.workflowClaimRenewalTask = result.renewalTask;
+      internals.workflowClaimMetrics = result.metrics;
+      // Independent of the durable-timer scheduler and of `startScheduler`:
+      // renewal must keep running even when `startScheduler: false` stops
+      // timers. Only 'automatic' mode starts the interval — 'manual' mode
+      // renews solely via `runMaintenance()`'s explicit `runOnce()` call.
+      if (internals.options.backgroundTaskMode === 'automatic') {
+        result.renewalTask.start();
+      }
+    })();
+    internals.inFlightOwnershipBootstrap = bootstrap;
+    try {
+      await bootstrap;
+    } finally {
+      if (internals.inFlightOwnershipBootstrap === bootstrap) {
+        internals.inFlightOwnershipBootstrap = null;
+      }
+    }
+  }
+
+  /**
+   * Stop this engine's per-workflow claim-renewal task (idempotent, synchronous
+   * — `WorkflowClaimRenewalTask.stop()` only clears an interval) and detach the
+   * claim registry, renewal task, and metrics recorder from `internals`,
+   * mirroring `disposeLeaseManager`'s "stop, don't release" split for the
+   * global lease. Releasing the claims the registry held is a separate,
+   * best-effort step (`WorkflowClaimRegistry.releaseAll()`, which never
+   * rejects) that each `disposeEngine` call site drives on its own schedule —
+   * fire-and-forget for synchronous teardown, awaited for the async path — so
+   * this helper hands the captured registry back rather than releasing it
+   * itself. A no-op under `ownership: 'none'`/`'lease'`, where every field it
+   * touches is always `null`.
+   */
+  #detachWorkflowClaimOwnership(): { registry: WorkflowClaimRegistry | null } {
+    const internals = getInternals(this);
+    const registry = internals.workflowClaimRegistry;
+    internals.workflowClaimRenewalTask?.stop();
+    internals.workflowClaimRenewalTask = null;
+    internals.workflowClaimRegistry = null;
+    internals.workflowClaimMetrics = null;
+    return { registry };
+  }
+
+  /**
+   * Best-effort release of every claim `registry` (the value
+   * {@link Engine#detachWorkflowClaimOwnership} returned) held, for a
+   * disposal call site to fire-and-forget or await as it sees fit.
+   * `WorkflowClaimRegistry.releaseAll()` already swallows every per-workflow
+   * failure internally and never rejects; the `.catch` here is defense in
+   * depth against that contract ever changing, not a load-bearing guard. A
+   * no-op when `registry` is `null` (every mode except `'workflow-lease'`, or
+   * `'workflow-lease'` before the ownership bootstrap ever assigned one).
+   * Extracted to its own method (rather than an inline `registry?.releaseAll()`
+   * at each call site) purely to keep every dispose call site's own cyclomatic
+   * complexity under the repository's ceiling.
+   */
+  async #releaseWorkflowClaimsBestEffort(registry: WorkflowClaimRegistry | null): Promise<void> {
+    await registry?.releaseAll().catch(() => {});
+  }
+
+  /**
    * Tear down this engine after it has been deposed (a fenced durable write lost
    * its CAS to a newer lease epoch, or the lease manager reported a confirmed
    * `'deposed'` loss). Wired onto `internals.tearDownAfterDeposition` at
@@ -940,6 +1094,10 @@ export class Engine<
     const internals = getInternals(this);
     if (internals.disposed) return;
     const leaseManager = internals.leaseManager;
+    // Global `ownership: 'lease'`-only path (see this method's doc) — always a
+    // no-op under `'workflow-lease'`/`'none'`, where both fields stay `null`.
+    // Included defensively so this teardown stays correct if that ever changes.
+    const { registry: workflowClaimRegistry } = this.#detachWorkflowClaimOwnership();
     disposeEngine(internals);
     if (this.#synchronousDisposeResult === null) {
       this.#synchronousDisposeResult = (leaseManager?.release() ?? Promise.resolve(true)).catch(
@@ -947,6 +1105,7 @@ export class Engine<
       );
     }
     void this.#synchronousDisposeResult;
+    void this.#releaseWorkflowClaimsBestEffort(workflowClaimRegistry);
   }
 
   #startSecondInstanceDetection(): void {
@@ -1349,16 +1508,27 @@ export class Engine<
     );
   }
   /**
-   * Run one host-driven maintenance cycle. This fires due durable timers,
-   * deletes expired update responses, applies configured retention, and
-   * re-evaluates alert rules without relying on process-local intervals.
+   * Run one host-driven maintenance cycle. This runs the `ownership:
+   * 'workflow-lease'` construction gates (idempotent — a no-op once already
+   * bootstrapped) and one per-workflow claim-renewal pass, fires due durable
+   * timers, deletes expired update responses, applies configured retention,
+   * and re-evaluates alert rules without relying on process-local intervals.
    *
    * Use with `backgroundTasks: 'manual'` from a serverless alarm, Cron trigger,
    * or another externally scheduled wake-up. Concurrent calls are safe, but a
-   * host should await each cycle before scheduling another.
+   * host should await each cycle before scheduling another. Under `ownership:
+   * 'workflow-lease'`, this is also the ONLY thing that renews this engine's
+   * per-workflow claims in manual mode — no interval is ever started for
+   * `backgroundTasks: 'manual'`, so a host that calls this less often than
+   * `workflowClaimRenewInterval` will see its own live claims lapse.
    */
   async runMaintenance(now = getInternals(this).options.getNow()): Promise<void> {
     const internals = getInternals(this);
+    await this.#bootstrapOwnershipIfConfigured();
+    // Renew claims before firing timers so a workflow woken by this same tick's
+    // scheduler.tick() resumes under a freshly confirmed claim rather than one
+    // that is about to lapse.
+    await internals.workflowClaimRenewalTask?.runOnce();
     await internals.scheduler.tick(now);
     try {
       await internals.updateCoordinator.cleanupExpiredResponses();
@@ -1804,6 +1974,12 @@ export class Engine<
    * siblings in the same call.
    */
   async recoverAll(options?: RecoverAllOptions): Promise<WorkflowHandle[]> {
+    // Run the `ownership: 'workflow-lease'` boot gates on the `new Engine()` +
+    // `recoverAll()` construction path too, not just via `Engine.create` — ADR
+    // 0002 is explicit that attaching them to `Engine.create` alone leaves a
+    // direct-construction hole. Idempotent — a no-op when `Engine.create`
+    // already ran the bootstrap.
+    await this.#bootstrapOwnershipIfConfigured();
     // Acquire the ownership lease before recovery on the `new Engine()` +
     // `recoverAll()` boot path too, not just via `Engine.create`. Idempotent —
     // a no-op when `Engine.create` already acquired it. NOTE: a caller that
@@ -2139,11 +2315,19 @@ export class Engine<
         ENGINE_LEASE_SYNCHRONOUS_DISPOSE_WARNING_NAME,
       );
     }
+    // Stop and detach this engine's per-workflow claim renewal task the same
+    // way: synchronous disposal cannot await the storage round-trips
+    // `WorkflowClaimRegistry.releaseAll()` needs, so its release is
+    // fire-and-forget too. `releaseAll()` never rejects (every per-workflow
+    // failure is swallowed internally), so the `.catch` here is defense in
+    // depth, not a load-bearing guard.
+    const { registry: workflowClaimRegistry } = this.#detachWorkflowClaimOwnership();
     disposeEngine(getInternals(this));
     if (this.#synchronousDisposeResult === null) {
       this.#synchronousDisposeResult = leaseManager?.release() ?? Promise.resolve(true);
     }
     void this.#synchronousDisposeResult;
+    void this.#releaseWorkflowClaimsBestEffort(workflowClaimRegistry);
   }
   /**
    * Async teardown (`await using engine = ...`). Drains pending inline launches
@@ -2183,6 +2367,10 @@ export class Engine<
         // (and stops lease renewals) — it issues no storage writes itself. The
         // caller owns the storage lifecycle (`await using storage`), so storage
         // stays open and the awaited release below can still delete the holder.
+        // Stop and detach this engine's per-workflow claim renewal task the same
+        // way disposeEngine stops the global lease's renewals: synchronously,
+        // before any awaited release.
+        const { registry: workflowClaimRegistry } = this.#detachWorkflowClaimOwnership();
         disposeEngine(getInternals(this));
         // A lease acquire may still be parked (waiting for handoff) when disposal
         // runs. disposeEngine() set `disposed` and stopped the manager, so the
@@ -2202,6 +2390,11 @@ export class Engine<
         const releaseResult =
           this.#synchronousDisposeResult ?? leaseManager?.release() ?? Promise.resolve(true);
         leaseReleased = await releaseResult;
+        // Best-effort per-workflow claim release: never let this block or fail
+        // engine shutdown. `releaseAll()` never rejects (every per-workflow
+        // failure is swallowed internally); the `.catch` here is defense in
+        // depth against that contract ever changing, not a load-bearing guard.
+        await this.#releaseWorkflowClaimsBestEffort(workflowClaimRegistry);
       }
       if (drainFailure !== null) {
         throw new EngineDisposalError(drainFailure.error, leaseReleased);

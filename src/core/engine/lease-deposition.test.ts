@@ -37,8 +37,16 @@ import {
   commitFencedEngineWrite,
   commitFencedEngineWriteAllowingPreconditionFailure,
 } from './fenced-write.ts';
-import { Engine, ENGINE_LEASE_LOST_WARNING_NAME, EngineLeaseNotHeldError } from './index.ts';
+import { ENGINE_LEASE_LOST_WARNING_NAME, Engine, EngineLeaseNotHeldError } from './index.ts';
 import { getInternals } from './internals.ts';
+import {
+  WORKFLOW_CLAIM_LOST_WARNING_NAME,
+  WORKFLOW_WAKE_DISCARDED_WARNING_NAME,
+  WeftWorkflowClaimLostWarning,
+  WeftWorkflowWakeDiscardedWarning,
+  emitWorkflowClaimLostWarning,
+  emitWorkflowWakeDiscardedWarning,
+} from './lease-deposition.ts';
 
 const waiterWorkflow = workflow({ name: 'deposition-waiter' }).execute(async function* (
   ctx: WorkflowContext,
@@ -208,6 +216,7 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     await expect(
       commitFencedEngineWrite(
         internals,
+        null,
         [{ type: 'put', key: 'k', value: new Uint8Array([1]) }],
         [],
         () => new Error('unused'),
@@ -237,6 +246,7 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     await expect(
       commitFencedEngineWrite(
         internals,
+        null,
         [{ type: 'put', key: KEYS.checkpoint('x'), value: new Uint8Array([1]) }],
         // Require-absent on a key we pre-populate, forcing a base-condition failure
         // with the epoch condition still satisfied.
@@ -281,7 +291,7 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     const ops: BatchOperation[] = [{ type: 'put', key: 'k', value: new Uint8Array([7]) }];
     // No base conditions + ownership: 'none' => plain batch with EXACTLY the ops
     // passed (no epoch condition appended, no conditionalBatch path taken).
-    await commitFencedEngineWrite(internals, ops, [], () => new Error('unused'));
+    await commitFencedEngineWrite(internals, null, ops, [], () => new Error('unused'));
 
     expect(conditionalUsed).toBe(false);
     // Identity check via boolean to avoid the `toBe(null)` overload narrowing the
@@ -321,6 +331,7 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     const baseConditions: ConditionalBatchCondition[] = [{ key: 'guard', expectedValue: null }];
     await commitFencedEngineWrite(
       internals,
+      null,
       [{ type: 'put', key: 'guarded', value: new Uint8Array([1]) }],
       baseConditions,
       () => new Error('unused'),
@@ -529,6 +540,7 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     await expect(
       commitFencedEngineWrite(
         internals,
+        null,
         [{ type: 'put', key: 'k', value: new Uint8Array([1]) }],
         [],
         () => new Error('unused'),
@@ -584,6 +596,7 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     await expect(
       commitFencedEngineWrite(
         internals,
+        null,
         [{ type: 'put', key: 'k', value: new Uint8Array([1]) }],
         [],
         () => new Error('should not surface — re-read threw, so we halt as deposed'),
@@ -615,6 +628,7 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     await storage.put('exists', new Uint8Array([1]));
     const conflicted = await commitFencedEngineWriteAllowingPreconditionFailure(
       internals,
+      null,
       [{ type: 'put', key: 'k', value: new Uint8Array([2]) }],
       [{ key: 'exists', expectedValue: null }], // require-absent on a present key → fail
     );
@@ -626,6 +640,7 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     await expect(
       commitFencedEngineWriteAllowingPreconditionFailure(
         internals,
+        null,
         [{ type: 'put', key: 'k2', value: new Uint8Array([3]) }],
         [],
       ),
@@ -737,6 +752,7 @@ describe('#470 Step 2: fenced-write fan-out — behavior-level coverage', () => 
       await expect(
         commitFencedEngineWrite(
           internals,
+          null,
           [{ type: 'put', key: KEYS.checkpoint('x'), value: new Uint8Array([1]) }],
           [],
           () => new Error('unused'),
@@ -766,7 +782,7 @@ describe('#470 Step 2: fenced-write fan-out — behavior-level coverage', () => 
     // therefore loses one atomic compare-and-swap covering both — proving the
     // side-effect path is genuinely fenced (not committed unconditionally).
     const { stageAtomicWorkflowCommitSideEffects } = await import('./checkpoint-side-effects.ts');
-    const { commitFencedWorkflowStateOperations } = await import('./storage-io.ts');
+    const { commitSelfWorkflowStateOperations } = await import('./storage-io.ts');
     const base = new BunSQLiteStorage(':memory:');
     const failedConditions: string[] = [];
     const storage: Storage = {
@@ -802,7 +818,7 @@ describe('#470 Step 2: fenced-write fan-out — behavior-level coverage', () => 
     await stealLease(storage, 2, 'successor');
     const now = internals.options.getNow();
     await expect(
-      commitFencedWorkflowStateOperations(
+      commitSelfWorkflowStateOperations(
         internals,
         {
           id: 'sfx-run',
@@ -835,7 +851,7 @@ describe('#470 Step 2: fenced-write fan-out — behavior-level coverage', () => 
     // successor). This is an ordinary lost race — it throws the precondition error
     // and the engine is NOT deposed.
     const { stageAtomicWorkflowCommitSideEffects } = await import('./checkpoint-side-effects.ts');
-    const { commitFencedWorkflowStateOperations } = await import('./storage-io.ts');
+    const { commitSelfWorkflowStateOperations } = await import('./storage-io.ts');
     const storage = new BunSQLiteStorage(':memory:');
     const engine = await Engine.create({
       storage,
@@ -857,7 +873,7 @@ describe('#470 Step 2: fenced-write fan-out — behavior-level coverage', () => 
 
     const now = internals.options.getNow();
     await expect(
-      commitFencedWorkflowStateOperations(
+      commitSelfWorkflowStateOperations(
         internals,
         {
           id: 'race-run',
@@ -936,5 +952,119 @@ describe('#470 Step 2: fenced-write fan-out — behavior-level coverage', () => 
       await engine[Symbol.asyncDispose]();
       storage[Symbol.dispose]?.();
     }
+  });
+});
+
+/**
+ * ADR 0002 (MultiEngine per-workflow ownership): the two new per-workflow
+ * warning types and their injectable emission seam. Unlike the deposition
+ * tests above, these are pure-value unit tests — no engine or storage is
+ * involved yet, since claim renewal and `wakeOwnershipCheck` (the real call
+ * sites for these emitters) land in a later stage. What is covered here is
+ * that the emitted object carries the right structured fields, that the
+ * default emission path really is `process.emitWarning(warning)`, and that
+ * the injected seam lets a caller assert on the emitted instance
+ * deterministically instead of scraping `process`'s global `warning` event.
+ */
+describe('ADR 0002 workflow-lease warnings', () => {
+  describe('WeftWorkflowClaimLostWarning', () => {
+    it('carries workflowId and a stable warning name', () => {
+      const warning = new WeftWorkflowClaimLostWarning('wf-1');
+      expect(warning).toBeInstanceOf(Error);
+      expect(warning.workflowId).toBe('wf-1');
+      expect(warning.name).toBe(WORKFLOW_CLAIM_LOST_WARNING_NAME);
+      expect(warning.message).toContain('wf-1');
+    });
+  });
+
+  describe('WeftWorkflowWakeDiscardedWarning', () => {
+    it('carries workflowId, wakeKind, and a stable warning name', () => {
+      const warning = new WeftWorkflowWakeDiscardedWarning('wf-2', 'signal');
+      expect(warning).toBeInstanceOf(Error);
+      expect(warning.workflowId).toBe('wf-2');
+      expect(warning.wakeKind).toBe('signal');
+      expect(warning.name).toBe(WORKFLOW_WAKE_DISCARDED_WARNING_NAME);
+      expect(warning.message).toContain('wf-2');
+      expect(warning.message).toContain('signal');
+    });
+
+    it.each([
+      'sleep',
+      'wait-condition',
+      'signal',
+      'async-activity',
+      'child-completion',
+      'inline-macrotask-drive',
+    ] as const)('accepts wakeKind %s', (wakeKind) => {
+      const warning = new WeftWorkflowWakeDiscardedWarning('wf-3', wakeKind);
+      expect(warning.wakeKind).toBe(wakeKind);
+    });
+  });
+
+  describe('emitWorkflowClaimLostWarning', () => {
+    it('invokes the injected seam with a WeftWorkflowClaimLostWarning instance', () => {
+      const emitted: Error[] = [];
+      emitWorkflowClaimLostWarning('wf-1', (warning) => {
+        emitted.push(warning);
+      });
+      expect(emitted).toHaveLength(1);
+      expect(emitted[0]).toBeInstanceOf(WeftWorkflowClaimLostWarning);
+      expect((emitted[0] as WeftWorkflowClaimLostWarning).workflowId).toBe('wf-1');
+    });
+
+    it('defaults to process.emitWarning(warning) when no seam is injected', () => {
+      const captured: unknown[] = [];
+      const originalEmitWarning = process.emitWarning;
+      // process.emitWarning is a Bun/Node global with several overloads; the
+      // default seam calls it with a single Error argument, which is the
+      // overload this stub captures.
+      process.emitWarning = (warning: unknown) => {
+        captured.push(warning);
+      };
+      try {
+        emitWorkflowClaimLostWarning('wf-default');
+      } finally {
+        process.emitWarning = originalEmitWarning;
+      }
+      expect(captured).toHaveLength(1);
+      expect(captured[0]).toBeInstanceOf(WeftWorkflowClaimLostWarning);
+      expect((captured[0] as WeftWorkflowClaimLostWarning).workflowId).toBe('wf-default');
+      expect((captured[0] as WeftWorkflowClaimLostWarning).name).toBe(
+        WORKFLOW_CLAIM_LOST_WARNING_NAME,
+      );
+    });
+  });
+
+  describe('emitWorkflowWakeDiscardedWarning', () => {
+    it('invokes the injected seam with a WeftWorkflowWakeDiscardedWarning instance', () => {
+      const emitted: Error[] = [];
+      emitWorkflowWakeDiscardedWarning('wf-2', 'child-completion', (warning) => {
+        emitted.push(warning);
+      });
+      expect(emitted).toHaveLength(1);
+      expect(emitted[0]).toBeInstanceOf(WeftWorkflowWakeDiscardedWarning);
+      const warning = emitted[0] as WeftWorkflowWakeDiscardedWarning;
+      expect(warning.workflowId).toBe('wf-2');
+      expect(warning.wakeKind).toBe('child-completion');
+    });
+
+    it('defaults to process.emitWarning(warning) when no seam is injected', () => {
+      const captured: unknown[] = [];
+      const originalEmitWarning = process.emitWarning;
+      process.emitWarning = (warning: unknown) => {
+        captured.push(warning);
+      };
+      try {
+        emitWorkflowWakeDiscardedWarning('wf-default', 'async-activity');
+      } finally {
+        process.emitWarning = originalEmitWarning;
+      }
+      expect(captured).toHaveLength(1);
+      expect(captured[0]).toBeInstanceOf(WeftWorkflowWakeDiscardedWarning);
+      const warning = captured[0] as WeftWorkflowWakeDiscardedWarning;
+      expect(warning.workflowId).toBe('wf-default');
+      expect(warning.wakeKind).toBe('async-activity');
+      expect(warning.name).toBe(WORKFLOW_WAKE_DISCARDED_WARNING_NAME);
+    });
   });
 });

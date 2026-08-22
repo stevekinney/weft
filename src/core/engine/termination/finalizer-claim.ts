@@ -166,6 +166,7 @@ export async function rearmTeardownTimer(
   try {
     await commitFencedEngineWrite(
       internals,
+      workflowId,
       teardownTimerOperations(token, workflowId, fireAt),
       [],
       () => new Error('teardown self-heal re-arm lost the lease fence'),
@@ -192,6 +193,7 @@ export async function clearTeardownMarker(
   try {
     return await commitFencedEngineWriteAllowingPreconditionFailure(
       internals,
+      workflowId,
       [{ type: 'delete', key: KEYS.teardownOwed(workflowId) }],
       [{ key: KEYS.teardownOwed(workflowId), expectedValue: expectedBytes }],
     );
@@ -217,6 +219,7 @@ export async function claimTeardownMarker(
   const runningBytes = encodeRunningClaim(attempts, token, internals.options.getNow());
   const claimed = await commitFencedEngineWriteAllowingPreconditionFailure(
     internals,
+    workflowId,
     [{ type: 'put', key: KEYS.teardownOwed(workflowId), value: runningBytes }],
     [{ key: KEYS.teardownOwed(workflowId), expectedValue: expectedBytes }],
   );
@@ -236,7 +239,7 @@ export async function settleOnRunningClaim(
   runningBytes: Uint8Array,
   operations: BatchOperation[],
 ): Promise<boolean> {
-  return commitFencedEngineWriteAllowingPreconditionFailure(internals, operations, [
+  return commitFencedEngineWriteAllowingPreconditionFailure(internals, workflowId, operations, [
     { key: KEYS.teardownOwed(workflowId), expectedValue: runningBytes },
   ]);
 }

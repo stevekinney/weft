@@ -20,6 +20,7 @@ import {
   EngineDisposedError,
   HttpClientError,
   IdempotencyKeyPurgedError,
+  OwnershipModeMismatchError,
   PayloadSizeExceededError,
   PersistedDataIncompatibleError,
   ReviewTimeoutError,
@@ -133,6 +134,8 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
   IdempotencyKeyPurgedError: () => new IdempotencyKeyPurgedError('wf-1'),
   WorkerManifestBuildError: () =>
     new WorkerManifestBuildError('workflow "checkout" not registered'),
+  OwnershipModeMismatchError: () =>
+    new OwnershipModeMismatchError('workflow-lease', 'lease', 1_700_000_000_000),
 };
 
 describe('WeftError', () => {

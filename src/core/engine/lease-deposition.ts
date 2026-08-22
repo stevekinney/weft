@@ -96,3 +96,184 @@ export function handleDeposition(internals: EngineInternals): void {
       .catch(() => {});
   }
 }
+
+/**
+ * `name` of the operator warning emitted when `ownership: 'workflow-lease'`
+ * loses one workflow's claim — a renewal CAS failure (a successor stole the
+ * claim) or a fenced write rejected because a newer epoch now holds it. Unlike
+ * {@link ENGINE_LEASE_LOST_WARNING_NAME}, this is per-workflow, not per-engine:
+ * the rest of this engine's claimed workflows are unaffected and keep running.
+ *
+ * @example
+ * ```ts
+ * import { WORKFLOW_CLAIM_LOST_WARNING_NAME } from '@lostgradient/weft';
+ *
+ * process.on('warning', (warning) => {
+ *   if (warning.name === WORKFLOW_CLAIM_LOST_WARNING_NAME) {
+ *     console.error('lost a workflow claim', warning.message);
+ *   }
+ * });
+ * ```
+ */
+export const WORKFLOW_CLAIM_LOST_WARNING_NAME = 'WeftWorkflowClaimLostWarning';
+
+/**
+ * Operator diagnostic for a lost per-workflow ownership claim under
+ * `ownership: 'workflow-lease'` (see
+ * [ADR 0002](../../../documentation/contributing/architecture-decisions/0002-multiengine-per-workflow-ownership.md)).
+ * Carries the affected `workflowId` as a real field — `process.emitWarning(message,
+ * name)` only accepts strings, so this is emitted as the warning object itself
+ * (`process.emitWarning(warning)`) rather than passed as a message, which lets
+ * consumers read `warning.workflowId` directly instead of parsing it back out
+ * of the message text.
+ *
+ * @example
+ * ```ts
+ * import { WeftWorkflowClaimLostWarning } from '@lostgradient/weft';
+ *
+ * process.on('warning', (warning) => {
+ *   if (warning instanceof WeftWorkflowClaimLostWarning) {
+ *     console.error('deposed workflow:', warning.workflowId);
+ *   }
+ * });
+ * ```
+ */
+export class WeftWorkflowClaimLostWarning extends Error {
+  readonly workflowId: string;
+
+  constructor(workflowId: string) {
+    super(
+      `workflow "${workflowId}" lost its ownership claim: another engine now holds it at a newer ` +
+        'epoch. This engine stops driving that workflow; the rest of its claimed workflows are unaffected.',
+    );
+    this.name = WORKFLOW_CLAIM_LOST_WARNING_NAME;
+    this.workflowId = workflowId;
+  }
+}
+
+/**
+ * The wake path a stale in-memory resolver was discarded from, for
+ * {@link WeftWorkflowWakeDiscardedWarning}. Mirrors the `wakeOwnershipCheck`
+ * call sites named in ADR 0002: a durable timer firing, a re-evaluated
+ * `ctx.waitUntil()` condition, a delivered signal, an async-activity
+ * completion/failure, a child workflow's termination, or a deferred inline
+ * macrotask drive.
+ *
+ * @example
+ * ```ts
+ * import type { WorkflowWakeKind } from '@lostgradient/weft';
+ *
+ * const kind: WorkflowWakeKind = 'signal';
+ * void kind;
+ * ```
+ */
+export type WorkflowWakeKind =
+  | 'sleep'
+  | 'wait-condition'
+  | 'signal'
+  | 'async-activity'
+  | 'child-completion'
+  | 'inline-macrotask-drive';
+
+/**
+ * `name` of the operator warning emitted when `wakeOwnershipCheck` discards a
+ * stale in-memory wake resolver — it re-read the durable holder record and
+ * found this engine no longer holds the generation (engine id AND epoch) it
+ * parked the workflow under, so the resolver is dropped without driving the
+ * generator.
+ *
+ * @example
+ * ```ts
+ * import { WORKFLOW_WAKE_DISCARDED_WARNING_NAME } from '@lostgradient/weft';
+ *
+ * process.on('warning', (warning) => {
+ *   if (warning.name === WORKFLOW_WAKE_DISCARDED_WARNING_NAME) {
+ *     console.error('discarded a stale wake', warning.message);
+ *   }
+ * });
+ * ```
+ */
+export const WORKFLOW_WAKE_DISCARDED_WARNING_NAME = 'WeftWorkflowWakeDiscardedWarning';
+
+/**
+ * Operator diagnostic emitted whenever `wakeOwnershipCheck` discards a stale
+ * in-memory wake resolver under `ownership: 'workflow-lease'` (see
+ * [ADR 0002](../../../documentation/contributing/architecture-decisions/0002-multiengine-per-workflow-ownership.md)).
+ * Carries the affected `workflowId` and the `wakeKind` that was discarded as
+ * real fields, for the same reason {@link WeftWorkflowClaimLostWarning} does —
+ * `process.emitWarning(message, name)` cannot carry structured data, so this is
+ * emitted as the warning object itself.
+ *
+ * @example
+ * ```ts
+ * import { WeftWorkflowWakeDiscardedWarning } from '@lostgradient/weft';
+ *
+ * process.on('warning', (warning) => {
+ *   if (warning instanceof WeftWorkflowWakeDiscardedWarning) {
+ *     console.error('discarded wake', warning.workflowId, warning.wakeKind);
+ *   }
+ * });
+ * ```
+ */
+export class WeftWorkflowWakeDiscardedWarning extends Error {
+  readonly workflowId: string;
+  readonly wakeKind: WorkflowWakeKind;
+
+  constructor(workflowId: string, wakeKind: WorkflowWakeKind) {
+    super(
+      `discarded a stale "${wakeKind}" wake for workflow "${workflowId}": this engine no longer ` +
+        'holds the ownership-claim generation it parked under. The in-memory resolver is dropped ' +
+        'without driving the generator.',
+    );
+    this.name = WORKFLOW_WAKE_DISCARDED_WARNING_NAME;
+    this.workflowId = workflowId;
+    this.wakeKind = wakeKind;
+  }
+}
+
+/**
+ * Emit one of the two per-workflow warnings above. Injected as a seam
+ * (defaulting to `process.emitWarning(warning)`) so later stages — the claim
+ * renewal loop and `wakeOwnershipCheck` — get deterministic test coverage of
+ * their emission sites, mirroring the `warn` option
+ * {@link createSecondInstanceDetector} already takes. Unlike that seam, which
+ * is message-only because its warning name is a single fixed constant, this
+ * one takes the warning *instance* — `WeftWorkflowClaimLostWarning` and
+ * `WeftWorkflowWakeDiscardedWarning` carry different fields, so a caller
+ * filtering or asserting on a specific warning needs the real object, not a
+ * pre-flattened string.
+ */
+export type EmitWorkflowLeaseWarning = (
+  warning: WeftWorkflowClaimLostWarning | WeftWorkflowWakeDiscardedWarning,
+) => void;
+
+const defaultEmitWorkflowLeaseWarning: EmitWorkflowLeaseWarning = (warning) => {
+  process.emitWarning(warning);
+};
+
+/**
+ * Emit {@link WeftWorkflowClaimLostWarning} for `workflowId`. `emit` defaults
+ * to `process.emitWarning(warning)`; pass a test double to assert on the
+ * emitted instance deterministically instead of scraping `process`'s global
+ * `warning` event.
+ */
+export function emitWorkflowClaimLostWarning(
+  workflowId: string,
+  emit: EmitWorkflowLeaseWarning = defaultEmitWorkflowLeaseWarning,
+): void {
+  emit(new WeftWorkflowClaimLostWarning(workflowId));
+}
+
+/**
+ * Emit {@link WeftWorkflowWakeDiscardedWarning} for `workflowId`/`wakeKind`.
+ * `emit` defaults to `process.emitWarning(warning)`; pass a test double to
+ * assert on the emitted instance deterministically instead of scraping
+ * `process`'s global `warning` event.
+ */
+export function emitWorkflowWakeDiscardedWarning(
+  workflowId: string,
+  wakeKind: WorkflowWakeKind,
+  emit: EmitWorkflowLeaseWarning = defaultEmitWorkflowLeaseWarning,
+): void {
+  emit(new WeftWorkflowWakeDiscardedWarning(workflowId, wakeKind));
+}

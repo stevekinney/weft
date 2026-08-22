@@ -88,6 +88,7 @@ export async function persistCompletedReviewRecord(
   const completedReview = toCompletedReviewEntry(reviewData, decisionResult);
   await commitFencedEngineWrite(
     internals,
+    reviewData.workflowId,
     [
       {
         type: 'put',

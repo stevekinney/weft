@@ -298,8 +298,14 @@ export interface EngineOptions<TServices = unknown> {
    * writing after its lease expired. Epoch fencing of durable writes is what
    * closes that gap. Keep infrastructure-level single-instance enforcement as the
    * real control.
+   *
+   * `'workflow-lease'` (ADR 0002) fences execution per workflow instead of the
+   * whole store, so multiple engines may share one durable store. Mutually
+   * exclusive with `'lease'` (enforced across processes via a store-wide
+   * marker) and rejected with `detectSecondInstance: true`; unlike `'lease'`,
+   * compatible with `backgroundTasks: 'manual'` via `runMaintenance()`.
    */
-  ownership?: 'none' | 'lease';
+  ownership?: 'none' | 'lease' | 'workflow-lease';
   /**
    * Lease time-to-live for `ownership: 'lease'` (default `30s`). A holder renews
    * well within this window; once it lapses without renewal, a waiting instance
@@ -324,6 +330,16 @@ export interface EngineOptions<TServices = unknown> {
    * Ignored when `ownership` is not `'lease'`.
    */
   leaseWaitTimeout?: Duration;
+  /**
+   * Claim time-to-live for `ownership: 'workflow-lease'` (default `30s`); like
+   * {@link EngineOptions.leaseTtl} but scoped per workflow. Ignored otherwise.
+   */
+  workflowClaimTtl?: Duration;
+  /**
+   * Claim renewal interval for `ownership: 'workflow-lease'` (default `5s`);
+   * like {@link EngineOptions.leaseRenewInterval}, scoped per workflow.
+   */
+  workflowClaimRenewInterval?: Duration;
   /**
    * History circuit-breaker thresholds. When `history.maxEvents` is set, a
    * workflow whose event-log record count would exceed it is forced to a

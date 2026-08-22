@@ -364,6 +364,7 @@ export async function executeActivityOperationResult(
       try {
         await commitActivityReconciliationTransitionWithFencedWrite(
           internals,
+          workflowId,
           reference,
           started,
           completedRecord,

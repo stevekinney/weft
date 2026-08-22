@@ -19,7 +19,8 @@ import { buildWorkflowTagIndexOperations, normalizeWorkflowTags } from '../workf
 import { WorkflowNotFoundError } from './errors.ts';
 import type { EngineInternals } from './internals.ts';
 import {
-  commitFencedWorkflowStateOperations,
+  commitExternalTerminalWorkflowStateOperations,
+  commitSelfWorkflowStateOperations,
   runSerializedWorkflowStateWrite,
 } from './storage-io.ts';
 import {
@@ -31,6 +32,17 @@ import { buildWorkflowVisibilityIndexTransition } from './workflow-indexes.ts';
 import { streamMatchingWorkflowStates } from './workflow-state-stream.ts';
 
 const EMPTY_STORAGE_VALUE = new Uint8Array(0);
+
+/**
+ * `updateWorkflowState`'s two callers commit very different transitions per
+ * ADR 0002: `failWorkflow` is a SELF-transition (this engine finishing its
+ * own workflow) while `terminateWorkflow` (cancel/timeout) is an EXTERNAL
+ * terminal transition (any engine may commit it, and it rotates the claim
+ * epoch under `ownership: 'workflow-lease'`). `category` is a REQUIRED
+ * positional parameter rather than an optional options field so a caller
+ * cannot silently default into the wrong fencing shape.
+ */
+export type WorkflowStateTransitionCategory = 'self' | 'external-terminal';
 
 type WorkflowStateUpdateOptions = {
   allowedStatuses?: readonly WorkflowStatus[];
@@ -130,6 +142,7 @@ export async function updateWorkflowState(
   internals: EngineInternals,
   workflowId: string,
   updates: Partial<WorkflowState>,
+  category: WorkflowStateTransitionCategory,
   options: WorkflowStateUpdateOptions = {},
 ): Promise<WorkflowStateUpdateResult | null> {
   return await runSerializedWorkflowStateWrite(internals, workflowId, async () => {
@@ -151,12 +164,18 @@ export async function updateWorkflowState(
     };
     const additionalOperations = options.buildAdditionalOperations?.(state, updatedAt) ?? [];
 
-    // `updateWorkflowState` only ever applies an engine-generator-owned workflow
-    // STATUS transition (its sole callers are the terminal completion/failure
-    // paths), so it is ALWAYS fenced on the lease epoch (issue #470 Step 2) — a
-    // deposed engine cannot write terminal state over a successor's run. Operator
-    // tag/attribute mutations do NOT use this helper; they batch directly.
-    await commitFencedWorkflowStateOperations(
+    // `updateWorkflowState` applies an engine-generator-owned workflow STATUS
+    // transition, always fenced — a deposed engine cannot write terminal
+    // state over a successor's run. WHICH fence depends on `category`: a
+    // SELF-transition (failWorkflow) fences on this engine's own claim; an
+    // EXTERNAL terminal transition (terminateWorkflow: cancel/timeout)
+    // rotates the claim epoch instead (ADR 0002). Operator tag/attribute
+    // mutations do NOT use this helper; they batch directly.
+    const commit =
+      category === 'self'
+        ? commitSelfWorkflowStateOperations
+        : commitExternalTerminalWorkflowStateOperations;
+    await commit(
       internals,
       state,
       [

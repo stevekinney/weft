@@ -366,6 +366,7 @@ export async function registerPendingAsyncActivity(
   internals.pendingAsyncActivities.set(pending.token, pending);
   await commitFencedEngineWrite(
     internals,
+    pending.workflowId,
     [buildPersistPendingAsyncActivityOperation(pending)],
     [],
     () =>
