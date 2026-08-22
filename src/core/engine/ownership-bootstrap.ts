@@ -7,13 +7,12 @@
  * idempotency, disposal-race, and background-task-mode wiring in
  * `src/core/engine/index.ts` stay thin call sites over one tested unit.
  *
- * **`ownership: 'lease'` is deliberately untouched here.** ADR 0002 describes
- * Gate 2 (the ownership-mode marker) as "extending the existing `ownership:
- * 'lease'` check" — this module does not do that. Wiring Gate 2 into the
- * `'lease'` path is out of scope for this stage, which requires `'lease'`
- * acquisition, fencing, health, and disposal to stay byte-for-byte unchanged.
- * This is a real, intentional ADR/code gap left for a follow-up stage, not an
- * oversight.
+ * **Both fencing modes run the gates.** This module builds the
+ * `workflow-lease` machinery, but `Engine`'s ownership bootstrap also runs
+ * Gate 1 and Gate 2 for `ownership: 'lease'` before it acquires the global
+ * lease, so the store-wide mode marker rejects a mismatched pairing in either
+ * direction. `'lease'` acquisition, fencing, health, and disposal are
+ * otherwise unchanged.
  *
  * **The renewal task's reclaim scan is fully wired here**, via
  * {@link createWorkflowClaimReclaimTarget}: candidate discovery
@@ -63,6 +62,13 @@ export type WorkflowLeaseOwnershipBootstrapOptions = {
    * paragraph. Omitted leaves `result.signalPoll` `undefined` on every pass.
    */
   signalPollTarget?: OwnerSideSignalPollTarget;
+  /**
+   * Invoked after this engine reclaims a stranded claim, to actually drive the
+   * workflow. Taking the claim only moves durable ownership keys; without this
+   * the reclaimed workflow makes no progress while this engine's renewal keeps
+   * its claim alive, shielding it from any engine that would have resumed it.
+   */
+  onWorkflowClaimReclaimed?: (workflowId: string) => Promise<void>;
 };
 
 /**
@@ -132,6 +138,7 @@ export function createWorkflowClaimReclaimTarget(
   registry: WorkflowClaimRegistry,
   storage: Storage,
   metrics: WorkflowClaimMetricsCollector,
+  onReclaimed?: (workflowId: string) => Promise<void>,
 ): WorkflowClaimReclaimTarget {
   return {
     listReclaimCandidateWorkflowIds: () =>
@@ -141,6 +148,16 @@ export function createWorkflowClaimReclaimTarget(
         const result = await registry.takeover(workflowId);
         switch (result.status) {
           case 'acquired':
+            // Reclaiming the claim is only half the job: drive the workflow too,
+            // or it sits idle while this engine's renewal keeps its claim alive.
+            if (onReclaimed !== undefined) {
+              try {
+                await onReclaimed(workflowId);
+              } catch {
+                // The claim is held either way; a failed drive is retried by the
+                // next pass rather than failing the whole reclaim scan.
+              }
+            }
             return { status: 'reclaimed' };
           case 'backoff-skipped':
             metrics.recordClaimAttempt('backoff_skipped');
@@ -192,7 +209,12 @@ export async function bootstrapWorkflowLeaseOwnership(
   const metrics = new WorkflowClaimMetricsCollector();
   const renewalTask = createWorkflowClaimRenewalTask({
     target: createWorkflowClaimRenewalTarget(registry),
-    reclaimTarget: createWorkflowClaimReclaimTarget(registry, options.storage, metrics),
+    reclaimTarget: createWorkflowClaimReclaimTarget(
+      registry,
+      options.storage,
+      metrics,
+      options.onWorkflowClaimReclaimed,
+    ),
     ...(options.signalPollTarget === undefined
       ? {}
       : { signalPollTarget: options.signalPollTarget }),

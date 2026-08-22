@@ -8,10 +8,10 @@
  * (a single store-wide lease), and `'workflow-lease'` (per-workflow fencing,
  * ADR 0002 at
  * `documentation/contributing/architecture-decisions/0002-multiengine-per-workflow-ownership.md`).
- * This module only widens and validates the option surface: it resolves the
+ * This module resolves and validates the option surface only: it resolves the
  * `workflowClaimTtl`/`workflowClaimRenewInterval` tuning fields and rejects
- * incoherent configuration, but no engine behavior yet claims to fence
- * per-workflow execution — that lands in a later stage of the ADR rollout.
+ * incoherent configuration. The fencing behavior itself lives in the claim
+ * registry, the ownership bootstrap, and the fenced-write path.
  *
  * @module core/engine/ownership-options
  */

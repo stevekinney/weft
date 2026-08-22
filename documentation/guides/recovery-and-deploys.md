@@ -58,27 +58,15 @@ Weft throws here rather than skipping because abandoned workflows are almost alw
 
 ## One engine per durable store
 
-The supported deployment model is **a single engine process per durable storage backend** — one
-owner driving recovery and execution for that store. Recovery runs on boot (the default) and sweeps
-the store for in-flight workflows; with one owner, that sweep is safe.
+The default and most common deployment model is **a single engine process per durable storage backend**—one owner driving recovery and execution for that store. Recovery runs on boot (the default) and sweeps the store for in-flight workflows; with one owner, that sweep is safe.
 
-Do **not** point two engines at the same durable store. Multi-process recovery is not coordinated: two
-engines booting against one store can both resume the same workflow and both execute its next step,
-producing duplicate side effects (the next activity firing twice). Safe multi-process recovery — a
-fenced ownership claim acquired before a resumed workflow executes — is a future `MultiEngine`
-capability that is **not yet implemented**. Its protocol is specified as an accepted contract in
-[ADR 0002—Fenced Per-Workflow Ownership](../contributing/architecture-decisions/0002-multiengine-per-workflow-ownership.md);
-that document describes what the runtime must do, not what it does today. Until it lands, treat
-single-engine-per-store as a hard operational constraint.
+Under the default `ownership: 'none'`, do **not** point two engines at the same durable store. Multi-process recovery is not coordinated: two engines booting against one store can both resume the same workflow and both execute its next step, producing duplicate side effects (the next activity firing twice). There is no lock, lease, or fence preventing this under `'none'`, so single-engine-per-store is a hard operational constraint you enforce at the deployment layer—see [Running Weft as a Singleton Service](singleton-service-deployment.md).
 
-`ownership: 'lease'` does not lift this constraint. It is the global single-writer mode: exactly one
-engine holds the store-wide lease, so it gives you a clean rolling-deploy handoff and epoch-fenced
-writes, but it serializes the whole store behind one writer rather than letting distinct workflows
-progress on distinct engines.
+`ownership: 'lease'` does not lift this constraint either. It is the global single-writer mode: exactly one engine holds the store-wide lease, so it gives you a clean rolling-deploy handoff and epoch-fenced writes, but it serializes the whole store behind one writer rather than letting distinct workflows progress on distinct engines.
 
-For the operator's checklist on enforcing this—infrastructure-level single-instance configuration,
-boot assertions, backup/restore, and an optional second-instance detector—see
-[Running Weft as a Singleton Service](singleton-service-deployment.md).
+`ownership: 'workflow-lease'` is the shipped exception: a fenced, per-workflow ownership claim acquired before a resumed workflow executes lets multiple engine processes safely share one durable store, each executing a disjoint set of workflows. Its protocol is specified in [ADR 0002—Fenced Per-Workflow Ownership](../contributing/architecture-decisions/0002-multiengine-per-workflow-ownership.md) and its operator guidance lives in [Per-workflow ownership (`workflow-lease`)](singleton-service-deployment.md#per-workflow-ownership-workflow-lease). It requires every engine sharing the store to run code that implements the claim protocol—an engine predating this feature has no claim-checking code and is not blocked from executing workflows it does not own.
+
+For the operator's checklist on the default singleton topology—infrastructure-level single-instance configuration, boot assertions, backup/restore, and an optional second-instance detector—see [Running Weft as a Singleton Service](singleton-service-deployment.md).
 
 ## Rebuilding per-run services
 

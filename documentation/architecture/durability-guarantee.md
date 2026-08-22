@@ -22,4 +22,4 @@ Out-of-band async activity completion is acknowledged durably: `completeAsyncAct
 
 ## Operational Boundary
 
-Durability also depends on topology. `MemoryStorage` is not durable, and production recovery currently supports one engine process per durable store. Do not point two engines at the same store until the future `MultiEngine` fenced-ownership work lands. The supported deployment shape is documented in [Running Weft as a Singleton Service](../guides/singleton-service-deployment.md).
+Durability also depends on topology. `MemoryStorage` is not durable, and production recovery defaults to one engine process per durable store under `ownership: 'none'` or `'lease'`. Do not point two engines at the same store under those modes. `ownership: 'workflow-lease'`—the shipped `MultiEngine` fenced-ownership mode—is the supported way to share one store across multiple engine processes. The supported deployment shapes are documented in [Running Weft as a Singleton Service](../guides/singleton-service-deployment.md).
