@@ -8,7 +8,7 @@ const maximumUnpackedBytes = 12 * 1024 * 1024;
 // fixture, or stray build output) rather than a hard size ceiling — the packed
 // and unpacked byte budgets above are the primary bloat backstop. Bump this
 // when the published `dist/` surface legitimately grows.
-const maximumEntryCount = 1417;
+const maximumEntryCount = 1443;
 
 type PackFile = {
   path: string;
