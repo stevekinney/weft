@@ -139,6 +139,9 @@ describe('query()', () => {
         }),
         getParkedContext: () => undefined,
       },
+      // EngineInternals types this as `WorkflowClaimRegistry | null`, never
+      // undefined; omitting it made the ownership guard read undefined and throw.
+      workflowClaimRegistry: null,
     } as unknown as Parameters<typeof query>[0];
     expect(await query(internals, 'wf-1', 'q', 'in')).toBe('handled:in');
     expect(handler).toHaveBeenCalledWith('in');
@@ -155,6 +158,7 @@ describe('query()', () => {
         }),
         getParkedContext: () => undefined,
       },
+      workflowClaimRegistry: null,
     } as unknown as Parameters<typeof query>[0];
     expect(await query(internals, 'wf-1', 'a')).toBe('accessor-value');
   });
@@ -166,8 +170,65 @@ describe('query()', () => {
         getContext: () => ({ queryHandlers: new Map(), exposedAccessors: new Map() }),
         getParkedContext: () => undefined,
       },
+      workflowClaimRegistry: null,
     } as unknown as Parameters<typeof query>[0];
     expect(await query(internals, 'wf-1', 'missing')).toBeUndefined();
+  });
+
+  it('invokes the handler without any ownership read when no claim registry is installed', async () => {
+    const handler = mock((input: unknown) => `handled:${String(input)}`);
+    const internals = {
+      heartbeatDetails: new Map(),
+      inlineStrategy: {
+        getContext: () => ({
+          queryHandlers: new Map([['q', handler]]),
+          exposedAccessors: new Map(),
+        }),
+        getParkedContext: () => undefined,
+      },
+      workflowClaimRegistry: null,
+    } as unknown as Parameters<typeof query>[0];
+    expect(await query(internals, 'wf-1', 'q', 'in')).toBe('handled:in');
+    expect(handler).toHaveBeenCalledWith('in');
+  });
+
+  it('throws WorkflowNotLocallyOwnedError instead of serving a stale live context when a durable claim names another engine', async () => {
+    const storage = new MemoryStorage();
+    await storage.batch([
+      {
+        type: 'put',
+        key: KEYS.workflowOwnerHolder('wf-1'),
+        value: encodeWorkflowClaimHolder({
+          engineId: 'engine-b',
+          epoch: 2,
+          expiresAt: Date.now() + 1_000,
+          claimedAt: Date.now(),
+        }),
+      },
+    ]);
+    const handler = mock((input: unknown) => `handled:${String(input)}`);
+    const internals = {
+      heartbeatDetails: new Map(),
+      inlineStrategy: {
+        // A deposed engine keeps its live Context until some later fenced
+        // write unwinds the execution — this simulates that stale Context.
+        getContext: () => ({
+          queryHandlers: new Map([['q', handler]]),
+          exposedAccessors: new Map(),
+        }),
+        getParkedContext: () => undefined,
+      },
+      // This engine's local tracking already lost the claim (e.g. a `renew`
+      // self-deposition already cleared it), so the check must fall through
+      // to the durable read rather than trusting a stale local epoch.
+      workflowClaimRegistry: fakeClaimRegistry(null),
+      storage,
+    } as unknown as Parameters<typeof query>[0];
+
+    const rejection = expect(query(internals, 'wf-1', 'q', 'in')).rejects;
+    await rejection.toBeInstanceOf(WorkflowNotLocallyOwnedError);
+    await rejection.toMatchObject({ workflowId: 'wf-1' });
+    expect(handler).not.toHaveBeenCalled();
   });
 });
 

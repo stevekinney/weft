@@ -216,7 +216,12 @@ import {
   handleTimerFired as handleTimerFiredFromInternals,
   type TimeOperationCallbacks,
 } from './operations-time.ts';
-import { bootstrapWorkflowLeaseOwnership } from './ownership-bootstrap.ts';
+import type { OwnerSideSignalPollTarget } from './owner-side-signal-poll.ts';
+import {
+  bootstrapWorkflowLeaseOwnership,
+  buildOwnerSideSignalPollTarget,
+  type OwnerSideSignalPollSources,
+} from './ownership-bootstrap.ts';
 import { bootstrapOwnershipGates } from './ownership-mode-marker.ts';
 import { assertCompatiblePersistedDataVersion } from './persisted-data-version.ts';
 import { query as queryWorkflow } from './queries.ts';
@@ -254,7 +259,11 @@ import {
   createSecondInstanceDetectionTick,
   createSecondInstanceDetector,
 } from './second-instance-detector.ts';
-import { signal as signalWorkflow } from './signals.ts';
+import {
+  hasBufferedSignal as hasBufferedSignalFromInternals,
+  releaseSignalWaiter,
+  signal as signalWorkflow,
+} from './signals.ts';
 import {
   loadScheduleState,
   loadWorkflowState,
@@ -1013,6 +1022,11 @@ export class Engine<
         onWorkflowClaimReclaimed: async (workflowId: string) => {
           await resumeFromLifecycle(internals, workflowId, this.#createLifecycleCallbacks());
         },
+        // Owner-side signal polling (ADR 0002): without this, a signal
+        // delivered to a non-owning engine is durably buffered but nobody
+        // wakes this engine's parked workflow — see
+        // `#buildOwnerSideSignalPollTarget`'s doc comment.
+        signalPollTarget: this.#buildOwnerSideSignalPollTarget(),
       });
       if (internals.disposed) {
         // Disposal raced the gates. Nothing durable-and-per-engine was taken
@@ -1181,6 +1195,60 @@ export class Engine<
   }
   #createInlineParkingCallbacks(): InlineParkingCallbacks {
     return createInlineParkingCallbacksForEngine(this);
+  }
+  /**
+   * Build the real owner-side signal-poll target (ADR 0002 § "Signal
+   * delivery needs more than a classification") for `ownership:
+   * 'workflow-lease'`. `ownership-bootstrap.ts`'s
+   * `buildOwnerSideSignalPollTarget` stays independent of `EngineInternals`;
+   * this is the one place that supplies its `OwnerSideSignalPollSources` as
+   * closures over `getInternals(this)`, covering both in-memory populations
+   * a parked `waitForSignal()` can land in — checkpoint-parked workflows
+   * (`internals.parkedInlineWorkflows`/`pendingTimelineEntries`) and live
+   * signal waiters (`internals.signalWaiters`/`signalWaitersByWorkflow`, the
+   * `ctx.race`/`ctx.all` and query/update-handler population). Without this
+   * wiring `bootstrapWorkflowLeaseOwnership` never receives a
+   * `signalPollTarget`, and a signal delivered to a non-owning engine hangs
+   * the parked workflow until an unrelated wake happens to occur.
+   */
+  #buildOwnerSideSignalPollTarget(): OwnerSideSignalPollTarget {
+    const internals = getInternals(this);
+    const sources: OwnerSideSignalPollSources = {
+      listParkedInlineWorkflowIds: () => internals.parkedInlineWorkflows,
+      isParkedInlineWorkflow: (workflowId) => internals.parkedInlineWorkflows.has(workflowId),
+      parkedSignalName: (workflowId) => {
+        const pending = internals.pendingTimelineEntries.get(workflowId);
+        return pending?.entry.operationType === 'wait-signal'
+          ? pending.entry.operationLabel
+          : undefined;
+      },
+      listSignalWaiterEntries: function* signalWaiterEntries() {
+        for (const [workflowId, waiterKeys] of internals.signalWaitersByWorkflow) {
+          if (typeof waiterKeys === 'string') {
+            yield [workflowId, waiterKeys] as const;
+            continue;
+          }
+          for (const waiterKey of waiterKeys) {
+            yield [workflowId, waiterKey] as const;
+          }
+        }
+      },
+      hasBufferedSignal: (workflowId, signalName) =>
+        hasBufferedSignalFromInternals(internals, workflowId, signalName),
+      resumeParkedInlineWorkflow: (workflowId) =>
+        resumeParkedInlineWorkflowFromInternals(
+          internals,
+          workflowId,
+          this.#createInlineParkingCallbacks(),
+        ),
+      wakeSignalWaiter: (workflowId, waiterKey) => {
+        const waiter = internals.signalWaiters.get(waiterKey);
+        if (waiter === undefined) return;
+        releaseSignalWaiter(internals, workflowId, waiterKey, waiter);
+        waiter();
+      },
+    };
+    return buildOwnerSideSignalPollTarget(sources);
   }
   #createUpdateCallbacks(): UpdateCallbacks {
     return createUpdateCallbacksForEngine(this);

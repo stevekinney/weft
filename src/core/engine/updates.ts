@@ -5,7 +5,7 @@ import type { CoordinatedUpdateResult } from '../types.ts';
 import { UpdateValidationError, type UpdateRequest, type UpdateResponse } from '../updates.ts';
 import { notifyConditionWaiters } from './condition-waiters.ts';
 import type { EngineInternals } from './internals.ts';
-import { isWorkflowClaimedByAnotherEngine } from './queries.ts';
+import { isLiveContextStale, isWorkflowClaimedByAnotherEngine } from './queries.ts';
 import { trackWaiterKey, untrackWaiterKey } from './signals.ts';
 import { waitForUpdateResponse } from './waiting-update-response.ts';
 
@@ -113,10 +113,13 @@ export async function tryInlineUpdateHandler(
 ): Promise<InlineUpdateAttemptResult> {
   const handler = internals.inlineStrategy?.getContext(workflowId)?.updateHandlers.get(name);
   if (!handler) {
-    const reason = (await isWorkflowClaimedByAnotherEngine(internals, workflowId))
-      ? 'not-owned-locally'
-      : 'no-handler';
-    return { handled: false, reason };
+    const claimed = await isWorkflowClaimedByAnotherEngine(internals, workflowId);
+    return { handled: false, reason: claimed ? 'not-owned-locally' : 'no-handler' };
+  }
+  // A live handler is not proof of ownership; see `isLiveContextStale`.
+  const stale = isLiveContextStale(internals, workflowId);
+  if (stale !== false && (await stale)) {
+    return { handled: false, reason: 'not-owned-locally' };
   }
 
   const updateId = crypto.randomUUID();

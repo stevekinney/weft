@@ -111,12 +111,15 @@ function scheduleCrossEngineResultPollIfPending(
   // `backgroundTasks: 'manual'` is documented to start no timers at all; that
   // mode drives this through an awaited `runMaintenance()` instead.
   if (internals.options.backgroundTaskMode !== 'automatic') return;
-  // Only a workflow this engine does NOT hold can terminate somewhere else
-  // without touching this resolver map. When the claim is local — the common
-  // case, since every `ctx.startChild()` await is for a workflow this engine
-  // just started — our own terminal path settles the waiter and re-reading
-  // state on a timer would be pure overhead.
-
+  // Deliberately NOT skipped when this engine's own claim registry currently
+  // tracks `workflowId` — there is no early return here for that case. Local
+  // ownership at THIS scheduling moment proves nothing about ownership at
+  // the moment the awaited workflow actually terminates: a live claim can
+  // still be lost to `renew`'s self-deposition before then, and a skip here
+  // previously hung the suite for exactly that reason (a workflow deposed
+  // after being scheduled was never re-polled and its waiter never settled).
+  // Every pending waiter is therefore polled unconditionally on this
+  // interval; see this function's JSDoc above for the full rationale.
   const handle = setTimeout(() => {
     void bootstrapWorkflowResultResolver(internals, workflowId, waiter).then(() =>
       scheduleCrossEngineResultPollIfPending(internals, workflowId, waiter),
@@ -160,34 +163,52 @@ export async function bootstrapWorkflowResultResolver(
   workflowId: string,
   waiter: WorkflowResultWaiter,
 ): Promise<void> {
+  let state;
   try {
-    const state = await loadWorkflowState(internals, workflowId);
-    if (linkToReplacementWaiter(internals, workflowId, waiter)) {
-      return;
-    }
-
-    if (!state) {
-      internals.resultResolvers.delete(workflowId);
-      waiter.reject(new Error(`Workflow "${workflowId}" not found in storage`));
-      return;
-    }
-
-    // A suspended workflow has not produced a result and will be resumed later,
-    // so the waiter must stay pending — same as running/pending. (For a waiter
-    // created before suspend, the existing-waiter branch above already keeps it
-    // pending; this covers a fresh result() call made while suspended.)
-    if (state.status === 'running' || state.status === 'pending' || state.status === 'suspended') {
-      return;
-    }
-
-    try {
-      const result = await loadWorkflowResult(internals, workflowId);
-      clearResultWaiter(internals, workflowId, waiter);
-      waiter.resolve(result);
-    } catch (error) {
+    state = await loadWorkflowState(internals, workflowId);
+  } catch (error) {
+    // A `loadWorkflowState` failure here is ambiguous — it says nothing about
+    // whether the workflow is still running, terminal, or gone, only that
+    // THIS read attempt failed — so it must not be treated as a terminal
+    // result. Under `ownership: 'workflow-lease'` a guaranteed periodic
+    // retry already exists (the `setTimeout` loop in
+    // `scheduleCrossEngineResultPollIfPending`, or the host's
+    // `runMaintenance()` under `backgroundTasks: 'manual'` driving
+    // `pollPendingCrossEngineResultWaiters`), so leave the waiter pending for
+    // that retry instead of permanently failing `handle.result()` on a
+    // transient storage blip for a workflow that may still be running,
+    // possibly on another engine. Under `ownership: 'none'`/`'lease'` there
+    // is no such retry — this bootstrap call is the only chance — so
+    // preserve today's immediate rejection there.
+    if (internals.workflowClaimRegistry === null) {
       clearResultWaiter(internals, workflowId, waiter);
       waiter.reject(error);
     }
+    return;
+  }
+
+  if (linkToReplacementWaiter(internals, workflowId, waiter)) {
+    return;
+  }
+
+  if (!state) {
+    internals.resultResolvers.delete(workflowId);
+    waiter.reject(new Error(`Workflow "${workflowId}" not found in storage`));
+    return;
+  }
+
+  // A suspended workflow has not produced a result and will be resumed later,
+  // so the waiter must stay pending — same as running/pending. (For a waiter
+  // created before suspend, the existing-waiter branch above already keeps it
+  // pending; this covers a fresh result() call made while suspended.)
+  if (state.status === 'running' || state.status === 'pending' || state.status === 'suspended') {
+    return;
+  }
+
+  try {
+    const result = await loadWorkflowResult(internals, workflowId);
+    clearResultWaiter(internals, workflowId, waiter);
+    waiter.resolve(result);
   } catch (error) {
     clearResultWaiter(internals, workflowId, waiter);
     waiter.reject(error);

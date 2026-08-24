@@ -302,6 +302,64 @@ describe('tryInlineUpdateHandler ownership distinguishability', () => {
     expect(result).toEqual({ handled: false, reason: 'not-owned-locally' });
   });
 
+  it('invokes the handler without any ownership read when no claim registry is installed', async () => {
+    const handler = mock(async (payload: unknown) => `handled:${String(payload)}`);
+    const internals = {
+      inlineStrategy: { getContext: () => ({ updateHandlers: new Map([['rename', handler]]) }) },
+      conditionWaiters: new Map(),
+      workflowClaimRegistry: null,
+    } as any;
+
+    const result = await tryInlineUpdateHandler(
+      internals,
+      'workflow-1',
+      'rename',
+      'payload',
+      noopUpdateCallbacks,
+    );
+
+    expect(result).toEqual({ handled: true, value: 'handled:payload' });
+    expect(handler).toHaveBeenCalledWith('payload');
+  });
+
+  it('returns reason: "not-owned-locally" instead of invoking a stale live handler when a durable claim names another engine', async () => {
+    const storage = new MemoryStorage();
+    await storage.batch([
+      {
+        type: 'put',
+        key: KEYS.workflowOwnerHolder('workflow-1'),
+        value: encodeWorkflowClaimHolder({
+          engineId: 'engine-b',
+          epoch: 2,
+          expiresAt: Date.now() + 1_000,
+          claimedAt: Date.now(),
+        }),
+      },
+    ]);
+    const handler = mock(async (payload: unknown) => `handled:${String(payload)}`);
+    const internals = {
+      // A deposed engine keeps its live Context — and its registered
+      // handlers — until some later fenced write unwinds the execution.
+      inlineStrategy: { getContext: () => ({ updateHandlers: new Map([['rename', handler]]) }) },
+      // This engine's local tracking already lost the claim (e.g. a `renew`
+      // self-deposition already cleared it), so the check must fall through
+      // to the durable read rather than trusting a stale local epoch.
+      workflowClaimRegistry: fakeClaimRegistry(null),
+      storage,
+    } as any;
+
+    const result = await tryInlineUpdateHandler(
+      internals,
+      'workflow-1',
+      'rename',
+      'payload',
+      noopUpdateCallbacks,
+    );
+
+    expect(result).toEqual({ handled: false, reason: 'not-owned-locally' });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it('update() still resolves through the coordinated path when not owned locally', async () => {
     // Documents the deliberate behavior-preservation decision: unlike
     // `query()`, `update()`'s coordinated path is already durable and

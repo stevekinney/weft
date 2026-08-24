@@ -2,11 +2,19 @@ import { describe, expect, it, mock } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
 import { serializeCheckpoint } from '../checkpoint/serialization.ts';
 import { decode, encode } from '../codec.ts';
 import { DevelopmentWarningEvent } from '../events.ts';
 import { buildTimerBatchOperations } from '../scheduler.ts';
-import type { Checkpoint, TimerEntry, WorkflowState } from '../types.ts';
+import {
+  workflow,
+  type Checkpoint,
+  type TimerEntry,
+  type WorkflowContext,
+  type WorkflowState,
+} from '../types.ts';
+import { Engine } from './index.ts';
 import {
   processSleepOperation,
   startDelayedWorkflow,
@@ -793,4 +801,83 @@ describe('processSleepOperation', () => {
     // The tick settled the resolver normally — no spurious marker must remain.
     expect(firedWithoutResolver.size).toBe(0);
   });
+});
+
+describe('handleTimerFired "wait-condition" + Scheduler: WFT-79 findings 1 & 2 regression (two real engines, one durable store)', () => {
+  const sharedConditionWorkflow = workflow({ name: 'wft-79-shared-wait-condition' }).execute(
+    async function* (ctx: WorkflowContext) {
+      const met = yield* ctx.waitUntil(() => false, '5m');
+      return met;
+    },
+  );
+  type SharedConditionWorkflows = {
+    'wft-79-shared-wait-condition': typeof sharedConditionWorkflow;
+  };
+  const sharedConditionWorkflows: SharedConditionWorkflows = {
+    'wft-79-shared-wait-condition': sharedConditionWorkflow,
+  };
+
+  async function createSharedStoreEngine(storage: MemoryStorage, getNow: () => number) {
+    // Driven by hand via `.scheduler.tick(now)` — see the sibling sleep-timer
+    // regression suite in `sleep-timer-acknowledgements.test.ts` for why.
+    return Engine.create({
+      storage,
+      workflows: sharedConditionWorkflows,
+      ownership: 'workflow-lease',
+      getNow,
+      backgroundTasks: 'manual',
+      startScheduler: false,
+    });
+  }
+
+  async function countConditionTimerIndexKeys(storage: MemoryStorage): Promise<number> {
+    let count = 0;
+    for await (const [_key] of storage.scan('timer-idx:cond:')) count += 1;
+    return count;
+  }
+
+  it('a non-owner engine scanning the same expired wait-condition deadline retains the durable key; the true owner still wakes and deletes it', async () => {
+    const storage = new MemoryStorage();
+    let now = 1_000_000;
+
+    await using owner = await createSharedStoreEngine(storage, () => now);
+    await using nonOwner = await createSharedStoreEngine(storage, () => now);
+
+    const handle = await owner.start('wft-79-shared-wait-condition', null);
+    await sleepForTesting(10);
+    expect(await owner.get(handle.id).then((state) => state?.status)).toBe('running');
+    expect(await countConditionTimerIndexKeys(storage)).toBe(1);
+
+    now += 5 * 60 * 1000 + 1;
+
+    // `nonOwner` never acquired a claim for this workflow id. Finding 1: prior
+    // to the fix, `handleTimerFired` returned before the ownership check (and
+    // any wake dispatch) had settled, so the Scheduler deleted the timer key
+    // regardless. Finding 2: even once awaited, a `'discard'` outcome must not
+    // itself be treated as "processed" — it must retain the durable key for
+    // the true owner.
+    await nonOwner.scheduler.tick(now);
+
+    expect(await owner.get(handle.id).then((state) => state?.status)).toBe('running');
+    expect(await countConditionTimerIndexKeys(storage)).toBe(1);
+
+    // The true owner's own copy of this same fire performs the real wake —
+    // the predicate never became true, so the deadline resolves `false` — and
+    // this time actually deletes the durable timer key.
+    await owner.scheduler.tick(now);
+    await expect(handle.result()).resolves.toBe(false);
+    expect(await countConditionTimerIndexKeys(storage)).toBe(0);
+  });
+
+  // Note: unlike `sleep`, cancelling a workflow parked on `ctx.waitUntil()`
+  // proactively removes its durable deadline timer as part of that same
+  // cancel commit — there is no leftover-timer-on-a-terminal-workflow window
+  // to reproduce here the way `sleep-timer-acknowledgements.test.ts` does
+  // (sleep timers deliberately OUTLIVE terminal cleanup; see that module's
+  // doc comment). The shared "never retry a terminal orphan forever"
+  // property `retainDiscardedDurableTimer`/`resolveDiscardedTimerDisposition`
+  // provide is still fully covered: end to end for `sleep` in that sibling
+  // file, and in isolation (every `WorkflowStatus`) by
+  // `resolveDiscardedTimerDisposition`'s own describe block there — both wake
+  // kinds share that exact same disposition helper.
 });
