@@ -60,6 +60,29 @@ export async function isWorkflowClaimedByAnotherEngine(
   return decodeWorkflowClaimHolder(raw) !== null;
 }
 
+/**
+ * `internals.workflowClaimRegistry !== null && (await isWorkflowClaimedByAnotherEngine(...))`,
+ * factored out so every "revalidate before serving a possibly-stale live
+ * Context" call site — `query()` below and `tryInlineUpdateHandler` in
+ * `updates.ts` — shares the exact same registry-gated short-circuit. The
+ * registry-null check is a plain property read, not an unconditional await,
+ * so `ownership: 'none'`/`'lease'` stay exactly as synchronous as they are
+ * today; only `'workflow-lease'` pays for the cheap durable read.
+ */
+export function isLiveContextStale(
+  internals: EngineInternals,
+  workflowId: string,
+): boolean | Promise<boolean> {
+  // Returns a plain `false` — not a resolved promise — when no claim registry
+  // exists, so a caller can skip the `await` entirely. An `async` function
+  // suspends at its first `await` even when the callee returns synchronously,
+  // so awaiting unconditionally would defer query answers and update-handler
+  // invocation by a microtask under `ownership: 'none'` and `'lease'`, which
+  // must stay byte-identical.
+  if (internals.workflowClaimRegistry === null) return false;
+  return isWorkflowClaimedByAnotherEngine(internals, workflowId);
+}
+
 /** Resolve a workflow query from built-in progress state or exposed inline accessors. */
 export async function query(
   internals: EngineInternals,
@@ -90,6 +113,14 @@ export async function query(
       throw new WorkflowNotLocallyOwnedError(workflowId);
     }
     return undefined;
+  }
+  // A live Context here is not proof this engine still owns the workflow: a
+  // DEPOSED engine keeps its Context until some later fenced write unwinds
+  // the execution, so serving from it unconditionally would let a deposed
+  // engine answer a query from stale state. See `isLiveContextStale`.
+  const staleCheck = isLiveContextStale(internals, workflowId);
+  if (staleCheck !== false && (await staleCheck)) {
+    throw new WorkflowNotLocallyOwnedError(workflowId);
   }
   const queryHandler = context.queryHandlers.get(name);
   if (queryHandler) return queryHandler(input);

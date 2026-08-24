@@ -6,7 +6,7 @@ import type { ContextOperationRequest } from '../context.ts';
 import { buildTimerBatchOperations, normalizeStorageTimestamp } from '../scheduler.ts';
 import type { Checkpoint, Duration, StartOptions, TimerEntry, WorkflowState } from '../types.ts';
 import type { WorkflowVersionTuple } from '../workflow-version-tuple.ts';
-import { notifyConditionWaiters } from './condition-waiters.ts';
+import { notifyConditionWaiters, notifyConditionWaitersForTimerFire } from './condition-waiters.ts';
 import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
 import { reprovideRecoveredServices } from './lifecycle/recovered-services.ts';
@@ -14,6 +14,7 @@ import {
   acknowledgeSupersededSleepTimers,
   handleSleepTimerWithAcknowledgement,
   resolveSleepTimer,
+  retainDiscardedDurableTimer,
 } from './sleep-timer-acknowledgements.ts';
 import { commitWithWorkflowClaimFold, prepareWorkflowClaimFold } from './workflow-claim-fold.ts';
 import { buildWorkflowVisibilityIndexTransition } from './workflow-indexes.ts';
@@ -414,7 +415,7 @@ export async function handleTimerFired(
     | 'workflowVersionTupleFromState'
   >,
 ): Promise<void> {
-  if (entry.id.startsWith('review-escalation:') || entry.id.startsWith('review-timeout:')) {
+  if (isReviewTimerEntry(entry)) {
     await handleReviewTimer(internals, entry, callbacks);
     return;
   }
@@ -442,28 +443,41 @@ export async function handleTimerFired(
   if (entry.kind === 'sleep') {
     await handleSleepTimerWithAcknowledgement(internals, entry, callbacks.loadWorkflowState);
   } else if (entry.kind === 'wait-condition') {
-    resolveConditionTimer(internals, entry);
+    // registry null: unchanged sync fast path ('none'/'lease'), no async hop.
+    if (internals.workflowClaimRegistry === null) {
+      resolveConditionTimer(internals, entry);
+    } else {
+      await resolveConditionTimerConfirmingOwnership(internals, entry, callbacks.loadWorkflowState);
+    }
   } else if (entry.kind === 'execution-deadline') {
     await callbacks.timeout(entry.workflowId);
   }
 }
 
-/**
- * Wake a parked `ctx.waitUntil` whose deadline timer fired. The processor's loop
- * re-checks the predicate first, then observes the elapsed deadline and completes
- * with `false`. The timer's only job is to GUARANTEE a wake at the deadline — it
- * does not itself decide the outcome, so a predicate that became true at the
- * deadline still resolves as met. The timer id encodes `step`
- * (`cond:${workflowId}:${step}`) for deterministic replay-safe scheduling, but the
- * in-process waiter is keyed by `workflowId` alone (one active wait per workflow),
- * so the wake looks up by `entry.workflowId` — the timer's `step` is irrelevant
- * here.
- */
+function isReviewTimerEntry(entry: TimerEntry): boolean {
+  return entry.id.startsWith('review-escalation:') || entry.id.startsWith('review-timeout:');
+}
+
+/** Wakes a parked `ctx.waitUntil`. `'none'`/`'lease'` fast path; see `handleTimerFired`. */
 function resolveConditionTimer(internals: EngineInternals, entry: TimerEntry): void {
-  // Delegates to condition-waiters.ts's notifyConditionWaiters, which runs the
-  // `wakeOwnershipCheck` guard (ADR 0002's `wait-condition` kind) before
-  // resolving the parked waiter — see that function's doc comment.
   notifyConditionWaiters(internals, entry.workflowId);
+}
+
+/**
+ * `'workflow-lease'` counterpart to {@link resolveConditionTimer}: awaits the
+ * ownership-confirmed wake so the Scheduler never treats this fire as
+ * "processed" before the decision (and wake) has happened. On `'discard'`,
+ * retains-or-collects like `sleep` does.
+ */
+async function resolveConditionTimerConfirmingOwnership(
+  internals: EngineInternals,
+  entry: TimerEntry,
+  loadWorkflowState: (workflowId: string) => Promise<WorkflowState | null>,
+): Promise<void> {
+  const decision = await notifyConditionWaitersForTimerFire(internals, entry.workflowId);
+  if (decision === 'discard') {
+    await retainDiscardedDurableTimer(entry.id, entry.workflowId, loadWorkflowState);
+  }
 }
 
 async function handleReviewTimer(

@@ -27,6 +27,27 @@ class WorkflowStateReadFailureStorage extends MemoryStorage {
   }
 }
 
+/** Fails the `failingWorkflowId` state read exactly `failures` times, then behaves normally. */
+class FlakyWorkflowStateStorage extends MemoryStorage {
+  #failuresRemaining: number;
+
+  constructor(
+    private readonly failingWorkflowId: string,
+    failures: number,
+  ) {
+    super();
+    this.#failuresRemaining = failures;
+  }
+
+  override async get(key: string): Promise<Uint8Array | null> {
+    if (key === KEYS.workflow(this.failingWorkflowId) && this.#failuresRemaining > 0) {
+      this.#failuresRemaining -= 1;
+      throw new Error(`transient read failure for ${this.failingWorkflowId}`);
+    }
+    return super.get(key);
+  }
+}
+
 describe('workflow result resolution', () => {
   it('rejects the waiter when loading workflow state throws', async () => {
     await using engine = new Engine({
@@ -39,6 +60,36 @@ describe('workflow result resolution', () => {
 
     await expect(waiter.promise).rejects.toThrow('failed to read wf-state-read-failure');
     expect(internals.resultResolvers.has('wf-state-read-failure')).toBe(false);
+  });
+
+  it('leaves a pending waiter registered — not rejected — after a transient state-read failure under ownership: "workflow-lease"', async () => {
+    const storage = new FlakyWorkflowStateStorage('poll-transient-1', 1);
+    await using engine = await Engine.create({
+      storage,
+      ownership: 'workflow-lease',
+      workflowClaimTtl: 200,
+      workflowClaimRenewInterval: 20,
+      recover: false,
+    });
+    const internals = getInternals(engine);
+    const waiter = createWorkflowResultWaiter(internals, 'poll-transient-1');
+    void waiter.promise.catch(() => {});
+
+    // First attempt: the storage read throws. Unlike the `ownership: 'none'`
+    // case above, a guaranteed periodic retry exists under `workflow-lease`
+    // (the poll loop / `runMaintenance()`-driven drain), so a read failure —
+    // which says nothing about whether the workflow is still running,
+    // possibly on another engine — must NOT reject or remove the waiter.
+    await bootstrapWorkflowResultResolver(internals, 'poll-transient-1', waiter);
+    expect(internals.resultResolvers.get('poll-transient-1')).toBe(waiter);
+
+    // Second attempt (standing in for the guaranteed retry): storage has
+    // recovered, so the SAME waiter — never replaced or leaked — now
+    // settles normally (this workflow id was never actually started, so it
+    // resolves to the ordinary "not found" terminal outcome).
+    await bootstrapWorkflowResultResolver(internals, 'poll-transient-1', waiter);
+    await expect(waiter.promise).rejects.toThrow('not found in storage');
+    expect(internals.resultResolvers.has('poll-transient-1')).toBe(false);
   });
 
   it('links a replacement waiter to the current waiter promise', async () => {

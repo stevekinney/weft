@@ -3,7 +3,7 @@ import { describe, expect, it } from 'bun:test';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { yieldToEventLoop } from '../../testing/fake-timers.test-support.ts';
-import { notifyConditionWaiters } from './condition-waiters.ts';
+import { notifyConditionWaiters, notifyConditionWaitersForTimerFire } from './condition-waiters.ts';
 import { Engine } from './index.ts';
 import { getInternals, type EngineInternals } from './internals.ts';
 import {
@@ -113,5 +113,57 @@ describe('notifyConditionWaiters', () => {
 
     expect(staleCalled).toBe(false);
     expect(freshCalled).toBe(true);
+  });
+});
+
+describe('notifyConditionWaitersForTimerFire', () => {
+  it("resolves the waiter and returns 'proceed' when workflowClaimRegistry is null ('none'/'lease')", async () => {
+    const { internals } = await createBareEngine();
+    expect(internals.workflowClaimRegistry).toBeNull();
+
+    let resolved = false;
+    internals.conditionWaiters.set('wf-sync', () => {
+      resolved = true;
+    });
+
+    const decision = await notifyConditionWaitersForTimerFire(internals, 'wf-sync');
+
+    expect(decision).toBe('proceed');
+    expect(resolved).toBe(true);
+  });
+
+  it("resolves the waiter and returns 'proceed' once the ownership check confirms a match, ONLY after being awaited", async () => {
+    const { internals } = await createBareEngine();
+    await installAndAcquireClaim(internals, 'wf-match');
+
+    let resolved = false;
+    internals.conditionWaiters.set('wf-match', () => {
+      resolved = true;
+    });
+
+    const decisionPromise = notifyConditionWaitersForTimerFire(internals, 'wf-match');
+    // Not yet — unlike notifyConditionWaiters's fire-and-forget branch, the
+    // caller (operations-time.ts) is expected to await this promise before
+    // treating the fire as settled, which is exactly what this proves.
+    expect(resolved).toBe(false);
+
+    expect(await decisionPromise).toBe('proceed');
+    expect(resolved).toBe(true);
+  });
+
+  it("never resolves the waiter and returns 'discard' when the ownership check discards a stale generation", async () => {
+    const { internals } = await createBareEngine();
+    await installAndAcquireClaim(internals, 'wf-stale');
+    await internals.storage.delete(KEYS.workflowOwnerHolder('wf-stale'));
+
+    let resolved = false;
+    internals.conditionWaiters.set('wf-stale', () => {
+      resolved = true;
+    });
+
+    const decision = await notifyConditionWaitersForTimerFire(internals, 'wf-stale');
+
+    expect(decision).toBe('discard');
+    expect(resolved).toBe(false);
   });
 });
