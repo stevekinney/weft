@@ -1007,12 +1007,6 @@ export class Engine<
         getNow: internals.options.getNow,
         claimTtlMs: internals.options.workflowClaimTtlMs,
         claimRenewIntervalMs: internals.options.workflowClaimRenewIntervalMs,
-        // Reclaiming a stranded claim only moves ownership keys; without
-        // driving the workflow it sits idle while this engine's renewal keeps
-        // the claim alive, shielding it from any engine that would resume it.
-        onWorkflowClaimReclaimed: async (workflowId: string) => {
-          await resumeFromLifecycle(internals, workflowId, this.#createLifecycleCallbacks());
-        },
       });
       if (internals.disposed) {
         // Disposal raced the gates. Nothing durable-and-per-engine was taken
