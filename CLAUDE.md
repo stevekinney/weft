@@ -198,6 +198,22 @@ If an `as` cast is genuinely necessary (e.g., deserializing from storage where t
 - CLI version-surface changes must preserve leading-token semantics: `weft --version`, `weft -v`, and `weft version` print the bare `VERSION` string and exit 0, while subcommand-local flags such as `weft serve --version` remain owned by that subcommand and reject unknown options.
 - CLI command-suggestion refactors must preserve user-visible wording and thresholds: top-level subcommands use distance `2`, `weft api` operation suggestions use distance `6`, and tie breaks keep the first candidate. Pin those invariants in `src/cli/command-suggestions.test.ts` and parser integration tests.
 
+### Diagnosing a `coverage` job failure
+
+`bun run scripts/check-coverage.ts` fails in a distinctive, misleading way when Bun's coverage instrumentation dies: the captured stdout ends **mid-line**, there is no `(fail)` line anywhere, and no coverage summary is printed — only `coverage shard exited with code 1` / `Coverage execution failed.` That is a crashed process, not a failing assertion. `scripts/check-coverage.ts` already carries a note that forcing this repository into one instrumented process "can crash Bun before it writes LCOV on large suites."
+
+Work the following list before theorizing, in this order. Each of these was learned the expensive way during WFT-79, where the real cause was found last:
+
+- **Check the Bun version on both sides first.** `.github/workflows/ci.yaml` pins `bun-version:` in every job; local development may be on a different release. A version gap explains "coverage passes locally, fails on CI" more cheaply than any theory about the diff, and every experiment run on the local version is void if the bug is version-specific.
+- **Check the base commit's own CI result**, not `main`'s latest. A branch cut from a commit whose `coverage` job was red inherits that failure — this happened once already, and the fix was a rebase, not a code change.
+- **Read where the run died.** Test files are grouped in path order, so `src/testing/**` near the tail means the run got nearly to the end (a report-writing crash) while an early group means it died mid-suite. Different causes, different fixes.
+- **Do not reach for `--parallel` to tune it.** `bun test --parallel` implies `--isolate`, so it changes execution semantics rather than just worker count, and it makes the coverage run fail on this repository at any value — including on a known-good base. `runCoverageShard` accepts a `parallelism` option; leaving it unset is deliberate.
+- **Sharding the coverage run is not currently implementable.** Bun's lcov reporter emits `FNF`/`FNH` per-file summaries but no `FN:` or `FNDA:` records, so per-function hits cannot be merged across shards: summing over-counts (false passes on a release gate) and taking the maximum under-counts (false failures). Line coverage would merge correctly via `DA:`, function coverage would not. Do not build a merge that silently miscounts the gate that guards publication.
+
+### Fetching CI logs
+
+`gh run view --log` refuses while any job in the run is still in progress, and truncates long single-line output. `gh api --allow-escape-sequences /repos/<owner>/<repo>/actions/jobs/<jobId>/logs` returns a completed job's full log immediately, without waiting for its siblings. Without `--allow-escape-sequences`, `gh` writes nothing and reports only that the response contains terminal escapes — which reads like an empty log rather than a refusal.
+
 ### Testing Approach
 
 - Tests use Bun's built-in test runner with `describe`, `it`, `expect`.
