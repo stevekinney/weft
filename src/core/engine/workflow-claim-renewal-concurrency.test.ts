@@ -110,4 +110,20 @@ describe('claim renewal runs through a bounded pool', () => {
     expect(result.renewedCount).toBe(1);
     expect(result.outcomes).toEqual([{ workflowId: 'workflow-only', status: 'renewed' }]);
   });
+
+  it('isolates a failure on the pool-free single-claim path', async () => {
+    // The <=1 branch duplicates the pool's try/catch rather than delegating
+    // to it (see the module doc); a failing single claim must still surface
+    // as a `'failed'` outcome instead of rejecting the pass.
+    const probe = createConcurrencyProbe(new Set(['workflow-only']));
+
+    const pass = runRenewalSubPass(probe.target, ['workflow-only']);
+    await probe.drain();
+    const result = await pass;
+
+    expect(result.failedCount).toBe(1);
+    expect(result.renewedCount).toBe(0);
+    expect(result.outcomes[0]?.status).toBe('failed');
+    expect((result.outcomes[0] as { error: unknown }).error).toBeInstanceOf(Error);
+  });
 });

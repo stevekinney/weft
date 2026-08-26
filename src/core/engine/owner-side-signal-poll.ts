@@ -26,11 +26,15 @@
  * `src/core/engine/signals.ts` or `src/core/engine/inline-parking.ts`
  * directly — the dependencies below are small structural types this module
  * owns, so it stays independent of those modules' concrete shapes. Each
- * type's doc comment names the existing function it is expected to be
- * satisfied by once a later stage wires this in. This module is also NOT a
- * recurring task by itself (compare `workflow-claim-renewal-task.ts`) — a
- * later stage is expected to call {@link runOwnerSideSignalPoll} from the
- * same lifecycle cadence that drives claim renewal.
+ * type's doc comment names the existing function it satisfies. This module
+ * is also NOT a recurring task by itself (compare
+ * `workflow-claim-renewal-task.ts`) — it is production-wired by
+ * `ownership-bootstrap.ts`'s {@link buildOwnerSideSignalPollTarget}, which
+ * composes {@link OwnerSideSignalPollSources} (from `EngineInternals` and
+ * `inline-parking.ts`) into a real {@link OwnerSideSignalPollTarget}, and by
+ * `workflow-claim-renewal-task.ts`, which calls {@link runOwnerSideSignalPoll}
+ * against that target from the same lifecycle cadence that drives claim
+ * renewal.
  *
  * @module core/engine/owner-side-signal-poll
  */
@@ -42,9 +46,10 @@ export type ParkedSignalWait = {
 };
 
 /**
- * The minimal structural shape this poll needs. A later wiring stage is
- * expected to satisfy this from `EngineInternals` and `signals.ts` /
- * `inline-parking.ts` without this module importing either.
+ * The minimal structural shape this poll needs. Satisfied in production by
+ * `ownership-bootstrap.ts`'s `buildOwnerSideSignalPollTarget`, composed from
+ * `EngineInternals` and `signals.ts` / `inline-parking.ts` — without this
+ * module importing either.
  */
 export type OwnerSideSignalPollTarget = {
   /**

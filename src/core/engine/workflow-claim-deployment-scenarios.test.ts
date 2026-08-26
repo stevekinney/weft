@@ -546,6 +546,52 @@ describe('WFT-79: workflow-lease deployment scenarios (two real engines, one sto
       await engineA[Symbol.dispose]();
       await engineB[Symbol.asyncDispose]();
     });
+
+    /**
+     * WFT-79 review finding: `acquireStandaloneClaimBeforeResume` used to
+     * skip its durable re-check entirely whenever this engine's LOCAL claim
+     * cache still had an epoch for the workflow — the exact stale-cache
+     * hazard this test isolates. Unlike the test above, engineA's own
+     * renewal pass never runs here, so `currentEpoch(takenOverId)` is STILL
+     * the pre-takeover value when the signal-driven resume happens — the
+     * "stalled, deposed, not yet self-detected" window the old shortcut
+     * treated as proof of live ownership.
+     */
+    it('a checkpoint-parked resume does not trust a stale local claim cache when the durable holder already shows a takeover', async () => {
+      const storage = new MemoryStorage();
+      let nowA = 5_500_000;
+      const engineA = await createDeploymentEngine(storage, () => nowA);
+
+      const id = 'stale-cache-resume';
+      await startParkedWorkflow(engineA, storage, id);
+      expect(getInternals(engineA).workflowClaimRegistry?.currentEpoch(id)).toBe(1);
+
+      // Successor takes over directly, past expiry+grace — engineA's own
+      // renewal pass is deliberately never run, so its local cache still
+      // reports epoch 1 for `id`.
+      const nowB = nowA + CLAIM_TTL_MS + WORKFLOW_CLAIM_TAKEOVER_GRACE_MULTIPLIER * 1_000 + 1;
+      const engineB = await createDeploymentEngine(storage, () => nowB);
+      const takeoverResult = await getInternals(engineB).workflowClaimRegistry!.takeover(id);
+      expect(takeoverResult.status).toBe('acquired');
+      expect(getInternals(engineA).workflowClaimRegistry?.currentEpoch(id)).toBe(1);
+
+      // Signal engineA's copy: `deliverBufferedSignals` →
+      // `resumeParkedInlineWorkflow` → `resumeWorkflowFromStorage` →
+      // `acquireStandaloneClaimBeforeResume`, hitting the stale-cache branch.
+      await engineA.getHandle(id)?.signal('go');
+      // fixed delay: negative assertion — proving the stale generator never advanced has no observable event to await instead.
+      await waitForRealTimersForTesting(50);
+      expect(runCountFor(id, 'after')).toBe(0);
+
+      // The successor completes it normally, consuming the durably-buffered signal.
+      const handle = await engineB.resume(id);
+      await expect(handle.result()).resolves.toBe('ran');
+      expect(runCountFor(id, 'before')).toBe(1);
+      expect(runCountFor(id, 'after')).toBe(1);
+
+      await engineA[Symbol.dispose]();
+      await engineB[Symbol.asyncDispose]();
+    });
   });
 
   describe('ROLLBACK', () => {

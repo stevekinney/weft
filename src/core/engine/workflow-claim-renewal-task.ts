@@ -76,29 +76,12 @@ import {
   runReclaimPass,
   runRenewalSubPass,
   runSignalPollSubPass,
-  type WorkflowClaimReclaimAttemptResult,
-  type WorkflowClaimReclaimOutcome,
   type WorkflowClaimReclaimPassResult,
   type WorkflowClaimReclaimTarget,
   type WorkflowClaimRenewalOutcome,
   type WorkflowClaimRenewalTarget,
   type WorkflowClaimSignalPollOutcome,
 } from './workflow-claim-renewal-subpasses.ts';
-
-// Re-exported so existing import sites (e.g. `ownership-bootstrap.ts`) keep
-// importing these structural target/result types from this module's path —
-// `workflow-claim-renewal-subpasses.ts` is where they are actually defined
-// (see that module's doc for why the sub-passes and their shared types moved
-// out of this file).
-export type {
-  WorkflowClaimReclaimAttemptResult,
-  WorkflowClaimReclaimOutcome,
-  WorkflowClaimReclaimPassResult,
-  WorkflowClaimReclaimTarget,
-  WorkflowClaimRenewalOutcome,
-  WorkflowClaimRenewalTarget,
-  WorkflowClaimSignalPollOutcome,
-};
 
 /**
  * The result of one full pass ({@link WorkflowClaimRenewalTask.runOnce}).

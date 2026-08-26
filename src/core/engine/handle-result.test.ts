@@ -378,13 +378,40 @@ describe('WFT-79 F1: generator-owned child-result fencing', () => {
   const childWorkflow = workflow({ name: 'wft-79-f1-child' }).execute(async function* () {
     return 'child-done';
   });
-  const workflows = { 'wft-79-f1-child': childWorkflow };
+  const failingChildWorkflow = workflow({ name: 'wft-79-f1-failing-child' }).execute(
+    async function* () {
+      throw new Error('child-failed');
+    },
+  );
+  const workflows = {
+    'wft-79-f1-child': childWorkflow,
+    'wft-79-f1-failing-child': failingChildWorkflow,
+  };
   const ownershipOptions = {
     ownership: 'workflow-lease' as const,
     workflowClaimTtl: 200,
     workflowClaimRenewInterval: 20,
     recover: false,
   };
+
+  it('delivers a failed child result through the fence when the parent still holds its claim', async () => {
+    const storage = new MemoryStorage();
+    await using engine = await Engine.create({ storage, workflows, ...ownershipOptions });
+    const internals = getInternals(engine);
+    const registry = internals.workflowClaimRegistry!;
+
+    const acquired = await registry.acquire('parent-failing');
+    expect(acquired.status).toBe('acquired');
+
+    const childHandle = await engine.start('wft-79-f1-failing-child', null, {
+      id: 'child-failing',
+    });
+    await expect(childHandle.result()).rejects.toThrow('child-failed');
+
+    await expect(
+      getGeneratorOwnedWorkflowResultPromise(internals, 'child-failing', 'parent-failing'),
+    ).rejects.toThrow('child-failed');
+  });
 
   it('never settles a generator-owned waiter once the parent generation is confirmed lost', async () => {
     const storage = new MemoryStorage();
@@ -511,6 +538,39 @@ describe('WFT-79 F1: generator-owned child-result fencing', () => {
     await expect(
       getGeneratorOwnedWorkflowResultPromise(internals, 'child-2', 'parent-2'),
     ).resolves.toBe('child-done');
+  });
+
+  it("proceeds (matching confirmWakeOwnership's own thrown-read policy) when the ownership pre-check itself throws", async () => {
+    const storage = new MemoryStorage();
+    await using engine = await Engine.create({ storage, workflows, ...ownershipOptions });
+    const internals = getInternals(engine);
+    const registry = internals.workflowClaimRegistry!;
+
+    const acquired = await registry.acquire('parent-3');
+    expect(acquired.status).toBe('acquired');
+
+    const childHandle = await engine.start('wft-79-f1-child', null, { id: 'child-3' });
+    await expect(childHandle.result()).resolves.toBe('child-done');
+
+    // Simulate a thrown pre-check read (e.g. a transient failure reading the
+    // registry's own cached epoch) rather than a confirmed loss of ownership.
+    // Scoped to the PARENT id only — `getWorkflowResultPromise`'s own
+    // unrelated `currentEpoch` check for the CHILD id must keep behaving
+    // normally, or this stubs out more than the scenario intends.
+    const originalCurrentEpoch = registry.currentEpoch.bind(registry);
+    const currentEpochSpy = spyOn(registry, 'currentEpoch').mockImplementation(
+      (workflowId: string) => {
+        if (workflowId === 'parent-3') throw new Error('transient pre-check failure');
+        return originalCurrentEpoch(workflowId);
+      },
+    );
+    try {
+      await expect(
+        getGeneratorOwnedWorkflowResultPromise(internals, 'child-3', 'parent-3'),
+      ).resolves.toBe('child-done');
+    } finally {
+      currentEpochSpy.mockRestore();
+    }
   });
 });
 

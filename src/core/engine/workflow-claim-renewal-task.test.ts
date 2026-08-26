@@ -2,13 +2,15 @@ import { describe, expect, it } from 'bun:test';
 
 import { createDeferred, flushMicrotasks } from '../../testing/fake-timers.test-support.ts';
 import type { OwnerSideSignalPollTarget } from './owner-side-signal-poll.ts';
+import type {
+  WorkflowClaimReclaimAttemptResult,
+  WorkflowClaimReclaimTarget,
+  WorkflowClaimRenewalTarget,
+} from './workflow-claim-renewal-subpasses.ts';
 import {
   createWorkflowClaimRenewalTask,
-  type WorkflowClaimReclaimAttemptResult,
-  type WorkflowClaimReclaimTarget,
   type WorkflowClaimRenewalIntervalScheduler,
   type WorkflowClaimRenewalPassResult,
-  type WorkflowClaimRenewalTarget,
 } from './workflow-claim-renewal-task.ts';
 
 /** A controllable clock whose value the test advances explicitly. */

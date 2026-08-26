@@ -13,6 +13,7 @@ import { collectWorkflowPurgeDeleteOperations } from './bulk-operations-purge.ts
 import { createLifecycleCallbacks as createEngineLifecycleCallbacks } from './callback-creators.ts';
 import { Engine } from './index.ts';
 import { getInternals } from './internals.ts';
+import { WorkflowClaimUnavailableError } from './lease-errors.ts';
 import {
   beginWorkflowExecution,
   buildForkBatchOperations,
@@ -42,6 +43,7 @@ import {
   workflowStateWithVersionTuple,
   workflowVersionTupleFromState,
 } from './lifecycle.ts';
+import { encodeWorkflowClaimHolder } from './workflow-claim-codec.ts';
 
 function createLifecycleCallbacks(overrides: Record<string, unknown> = {}) {
   return {
@@ -1156,6 +1158,46 @@ describe('engine lifecycle coverage helpers', () => {
         createLifecycleCallbacks() as never,
       ),
     ).rejects.toThrow('Cannot resume workflow "workflow-resume-completed": status is "completed"');
+  });
+
+  it('resumeWorkflowFromStorage rejects a stale-cached claim generation before touching the checkpoint (WFT-79)', async () => {
+    // `acquireStandaloneClaimBeforeResume` must not trust a cached
+    // `currentEpoch(workflowId) !== null` alone as proof of live ownership:
+    // the durable holder here already names a different engine at a newer
+    // epoch, so the resume must reject with `WorkflowClaimUnavailableError`
+    // BEFORE it ever reaches the checkpoint load — deliberately no
+    // checkpoint is seeded, so the old (buggy) shortcut would instead throw
+    // the unrelated "Checkpoint not found" error.
+    const storage = new MemoryStorage();
+    const workflowId = 'workflow-resume-stale-claim';
+
+    await storage.put(KEYS.workflow(workflowId), encode(createWorkflowState(workflowId)));
+    await storage.put(
+      KEYS.workflowOwnerHolder(workflowId),
+      encodeWorkflowClaimHolder({
+        engineId: 'successor-engine',
+        epoch: 2,
+        expiresAt: 60_000,
+        claimedAt: 1_000,
+      }),
+    );
+
+    await expect(
+      resumeWorkflowFromStorage(
+        {
+          registrations: new Map(),
+          storage,
+          options: { ownershipMode: 'workflow-lease' },
+          workflowClaimRegistry: {
+            engineId: 'stale-engine',
+            currentEpoch: () => 1,
+          },
+        } as never,
+        workflowId,
+        true,
+        createLifecycleCallbacks() as never,
+      ),
+    ).rejects.toThrow(WorkflowClaimUnavailableError);
   });
 
   it('resumeWorkflowFromStorage rejects running states whose workflow type is no longer registered', async () => {

@@ -43,9 +43,9 @@ import { bootstrapOwnershipGates } from './ownership-mode-marker.ts';
 import { WorkflowClaimMetricsCollector } from './workflow-claim-metrics.ts';
 import { createWorkflowClaimReclaimTarget } from './workflow-claim-reclaim-target.ts';
 import { WorkflowClaimRegistry } from './workflow-claim-registry.ts';
+import type { WorkflowClaimRenewalTarget } from './workflow-claim-renewal-subpasses.ts';
 import {
   createWorkflowClaimRenewalTask,
-  type WorkflowClaimRenewalTarget,
   type WorkflowClaimRenewalTask,
 } from './workflow-claim-renewal-task.ts';
 
@@ -168,10 +168,13 @@ export type OwnerSideSignalPollSources = {
    *
    * **Not called for the checkpoint-parked branch above.** A checkpoint-parked
    * resume goes through `resumeParkedInlineWorkflow` →
-   * `resumeWorkflowFromStorage`'s standalone-acquire path, which already
-   * re-acquires (or re-confirms) this engine's claim on its own — guarding it
-   * here too would be redundant, not unsafe, but the finding is scoped to the
-   * live-waiter release this module makes directly.
+   * `resumeWorkflowFromStorage`'s `acquireStandaloneClaimBeforeResume`, which
+   * re-confirms this engine's cached claim generation against the durable
+   * holder (via `wakeOwnershipCheck`) before resuming, and throws
+   * `WorkflowClaimUnavailableError` rather than replaying against a stale
+   * generation when that check fails — guarding it here too would be
+   * redundant, not unsafe, but the finding is scoped to the live-waiter
+   * release this module makes directly.
    *
    * **Required, deliberately.** This module cannot call `confirmWakeOwnership`
    * directly: that helper takes `EngineInternals`, and this module stays

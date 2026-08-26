@@ -48,10 +48,18 @@ export class WorkflowNotLocallyOwnedError extends Error {
  * `wakeOwnershipCheck`-style storage read (one `storage.get`, no
  * `conditionalBatch`), not the actual safety mechanism. Always `false`
  * (inert) under `ownership: 'none'`/`'lease'`, where no claim registry is
- * installed, and whenever THIS engine's own claim registry already tracks
- * the workflow — a live local claim with no local context is the existing,
- * unrelated "not currently active in-memory" ambiguity this check does not
- * change.
+ * installed.
+ *
+ * Always re-reads the durable holder rather than trusting this engine's own
+ * cached `registry.currentEpoch(workflowId)`: after a takeover elsewhere,
+ * this engine's local claim entry stays populated (and its cached epoch
+ * stale) until its next renewal CAS independently detects the loss — a
+ * `registry.currentEpoch(workflowId) !== null` shortcut would let a stale
+ * engine keep answering `false` (and so keep serving queries/updates from a
+ * deposed context) for up to a full renewal interval. Deciding by the
+ * durable holder's `engineId` alone — not epoch — is sufficient here: this
+ * engine reacquiring the same workflow at a new epoch after a release still
+ * means the holder names THIS engine, correctly answering `false`.
  */
 export async function isWorkflowClaimedByAnotherEngine(
   internals: EngineInternals,
@@ -59,10 +67,11 @@ export async function isWorkflowClaimedByAnotherEngine(
 ): Promise<boolean> {
   const registry = internals.workflowClaimRegistry;
   if (registry === null) return false;
-  if (registry.currentEpoch(workflowId) !== null) return false;
   const raw = await internals.storage.get(KEYS.workflowOwnerHolder(workflowId));
   if (raw === null) return false;
-  return decodeWorkflowClaimHolder(raw) !== null;
+  const holder = decodeWorkflowClaimHolder(raw);
+  if (holder === null) return false;
+  return holder.engineId !== registry.engineId;
 }
 
 /**

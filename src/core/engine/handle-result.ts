@@ -111,20 +111,14 @@ function fenceResultOnParentGeneration(
   promise: Promise<unknown>,
 ): Promise<unknown> {
   const gate = Promise.withResolvers<unknown>();
-  void promise
-    .then(
-      async (value) => {
-        if (await parentStillOwnsGeneration(internals, parentWorkflowId)) gate.resolve(value);
-      },
-      async (error: unknown) => {
-        if (await parentStillOwnsGeneration(internals, parentWorkflowId)) gate.reject(error);
-      },
-    )
-    .catch(() => {
-      // Unreachable in practice: `parentStillOwnsGeneration` swallows its own
-      // failures. Present so a future edit cannot turn a stray rejection into
-      // an unhandled one.
-    });
+  void promise.then(
+    async (value) => {
+      if (await parentStillOwnsGeneration(internals, parentWorkflowId)) gate.resolve(value);
+    },
+    async (error: unknown) => {
+      if (await parentStillOwnsGeneration(internals, parentWorkflowId)) gate.reject(error);
+    },
+  );
   return gate.promise;
 }
 

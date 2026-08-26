@@ -23,7 +23,7 @@ import type { WorkflowClaimRegistry } from './workflow-claim-registry.ts';
 import type {
   WorkflowClaimReclaimAttemptResult,
   WorkflowClaimReclaimTarget,
-} from './workflow-claim-renewal-task.ts';
+} from './workflow-claim-renewal-subpasses.ts';
 
 /** Bound on retrying a lost-race `takeover` CAS for one reclaim candidate within one pass — ADR 0002's `takeover` row. */
 export const WORKFLOW_CLAIM_TAKEOVER_MAX_ATTEMPTS = 5;

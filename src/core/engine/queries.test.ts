@@ -33,21 +33,17 @@ function createWorkflowState(
   };
 }
 
-/** Minimal stand-in for `WorkflowClaimRegistry` — only `currentEpoch` is read here. */
-function fakeClaimRegistry(epoch: number | null): { currentEpoch: (id: string) => number | null } {
-  return { currentEpoch: () => epoch };
+/** Minimal stand-in for `WorkflowClaimRegistry` — only `currentEpoch`/`engineId` are read here. */
+function fakeClaimRegistry(
+  epoch: number | null,
+  engineId = 'engine-a',
+): { currentEpoch: (id: string) => number | null; engineId: string } {
+  return { currentEpoch: () => epoch, engineId };
 }
 
 describe('isWorkflowClaimedByAnotherEngine', () => {
   it('is false when no claim registry is installed (ownership: "none"/"lease")', async () => {
     const internals = { workflowClaimRegistry: null } as unknown as Parameters<
-      typeof isWorkflowClaimedByAnotherEngine
-    >[0];
-    expect(await isWorkflowClaimedByAnotherEngine(internals, 'wf-1')).toBe(false);
-  });
-
-  it('is false when this engine already tracks the claim locally', async () => {
-    const internals = { workflowClaimRegistry: fakeClaimRegistry(3) } as unknown as Parameters<
       typeof isWorkflowClaimedByAnotherEngine
     >[0];
     expect(await isWorkflowClaimedByAnotherEngine(internals, 'wf-1')).toBe(false);
@@ -90,6 +86,51 @@ describe('isWorkflowClaimedByAnotherEngine', () => {
     ]);
     const internals = {
       workflowClaimRegistry: fakeClaimRegistry(null),
+      storage,
+    } as unknown as Parameters<typeof isWorkflowClaimedByAnotherEngine>[0];
+    expect(await isWorkflowClaimedByAnotherEngine(internals, 'wf-1')).toBe(true);
+  });
+
+  it('is false when the durable holder names THIS engine, even after this engine reacquired at a new epoch', async () => {
+    const storage = new MemoryStorage();
+    await storage.batch([
+      {
+        type: 'put',
+        key: KEYS.workflowOwnerHolder('wf-1'),
+        value: encodeWorkflowClaimHolder({
+          engineId: 'engine-a',
+          epoch: 7,
+          expiresAt: Date.now() + 1_000,
+          claimedAt: Date.now(),
+        }),
+      },
+    ]);
+    const internals = {
+      workflowClaimRegistry: fakeClaimRegistry(7, 'engine-a'),
+      storage,
+    } as unknown as Parameters<typeof isWorkflowClaimedByAnotherEngine>[0];
+    expect(await isWorkflowClaimedByAnotherEngine(internals, 'wf-1')).toBe(false);
+  });
+
+  it('is true when this engine still caches a local claim but the durable holder shows a takeover (stale-cache regression)', async () => {
+    // The bug this closes: a `currentEpoch(workflowId) !== null` shortcut
+    // would answer `false` here from the stale local cache alone, without
+    // ever reading the durable holder that already shows engine-b's takeover.
+    const storage = new MemoryStorage();
+    await storage.batch([
+      {
+        type: 'put',
+        key: KEYS.workflowOwnerHolder('wf-1'),
+        value: encodeWorkflowClaimHolder({
+          engineId: 'engine-b',
+          epoch: 8,
+          expiresAt: Date.now() + 1_000,
+          claimedAt: Date.now(),
+        }),
+      },
+    ]);
+    const internals = {
+      workflowClaimRegistry: fakeClaimRegistry(7, 'engine-a'),
       storage,
     } as unknown as Parameters<typeof isWorkflowClaimedByAnotherEngine>[0];
     expect(await isWorkflowClaimedByAnotherEngine(internals, 'wf-1')).toBe(true);

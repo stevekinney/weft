@@ -13,7 +13,6 @@ import { rehydrateChildCancellationHandlers } from '../child-workflow-cancellati
 import { commitFencedEngineWrite } from '../fenced-write.ts';
 import { getWorkflowExecutionStartedAt, type WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
-import { WorkflowClaimUnavailableError } from '../lease-errors.ts';
 import { loadWorkflowState } from '../storage-io.ts';
 import { getComposedWorkflowInterceptor } from '../strategy-helpers.ts';
 import { decodeWorkflowState } from '../validation.ts';
@@ -33,6 +32,7 @@ import {
   type RecoveredWorkflowInfo,
   type RegistrationEntry,
 } from './shared.ts';
+import { acquireStandaloneClaimBeforeResume } from './standalone-claim-acquire.ts';
 
 type SerializedResumeArgs = {
   workflowId: string;
@@ -337,43 +337,6 @@ async function reactivateSuspendedWorkflowState(
     [],
     () => new Error(`Resume of workflow "${state.id}" lost its CAS race.`),
   );
-}
-
-/**
- * ADR 0002 § "Two additional transitions": `acquire (standalone resume)`. A
- * workflow found `running` OR `suspended` at recovery has no other enabling
- * write here to fold a claim into, so this commits the acquire fragment
- * ALONE — the one named exception to "never a standalone commit". Attempted
- * BEFORE `prepareResumeState`, `onRecoveredWorkflow`, and generator relaunch,
- * so no user code — and no earlier fenced write this function makes, such as
- * the history-policy circuit breaker or a services-unavailable failure —
- * can run without a held claim.
- *
- * Deliberately covers `running` and `suspended` the same way. The ADR
- * describes `suspended` as folding `acquire` into the status flip itself
- * (`reactivateSuspendedWorkflowState`'s commit below), but the EARLIER
- * fenced writes above need a held claim regardless of final status, so one
- * early standalone acquire is the pragmatic shape for both — a documented
- * deviation from that row, not an oversight.
- *
- * A no-op when folding does not apply (`ownership !== 'workflow-lease'`, no
- * registry constructed yet) or when this engine already tracks a claim for
- * `workflowId` — a parked signal-driven wake (`inline-parking.ts`, which
- * never released the claim at park) or a bulk retry that already folded
- * `acquire` into its own reactivation write before calling `resume`
- * (`bulk-operations.ts`).
- */
-async function acquireStandaloneClaimBeforeResume(
-  internals: EngineInternals,
-  workflowId: string,
-): Promise<void> {
-  if (internals.options.ownershipMode !== 'workflow-lease') return;
-  const registry = internals.workflowClaimRegistry;
-  if (registry === null || registry.currentEpoch(workflowId) !== null) return;
-  const result = await registry.acquire(workflowId);
-  if (result.status === 'lost-race') {
-    throw new WorkflowClaimUnavailableError(workflowId, result.heldBy);
-  }
 }
 
 export async function resumeWorkflowFromStorage(
