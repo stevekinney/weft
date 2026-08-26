@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-08-26
+
+### Added — `ownership: 'workflow-lease'` fenced per-workflow ownership
+
+`Engine.create({ ownership: 'workflow-lease' })` is now a working mode: multiple
+engine processes can share one durable store, and every workflow has exactly
+one fenced owner before its generator advances. Previously only
+`ownership: 'lease'` (one engine process per store) and `ownership: 'none'`
+were supported; `'workflow-lease'` closes the gap where two engines racing to
+resume the same workflow could both execute user code before a checkpoint
+commit picked a winner — the loser's already-observable side effects (an
+external API call inside `ctx.run()`, for example) could not be undone by a
+losing compare-and-swap.
+
+Ownership claims are taken before a workflow's generator advances, renewed on
+a dedicated lifecycle task, and reclaimed from a crashed or deposed owner by a
+recurring sweep that also drives the reclaimed workflow forward rather than
+leaving it idle. Cross-engine signal delivery, `ctx.startChild()` completion,
+`query()`, and inline update handlers are all ownership-aware, so a
+non-owning engine no longer serves stale reads or silently drops signals and
+child results. Deployment scenarios — rolling release, graceful shutdown,
+crash, claim-expiry, takeover, and rollback — are covered against two real
+engines sharing one store (see [ADR
+0002](documentation/contributing/architecture-decisions/0002-multiengine-per-workflow-ownership.md)).
+
+`ownership: 'none'` and `ownership: 'lease'` are unchanged. Documentation
+previously described `'workflow-lease'` as "not yet available"; that guidance
+is corrected in the configuration reference, the singleton guide, `README.md`,
+and `AGENTS.md`/`CLAUDE.md`.
+
+### Changed
+
+- The release workflow no longer opens downstream "bump" issues in other
+  repositories after publishing to npm; the `notify-downstream-repositories`
+  job and its repository list are removed. Downstream consumers should track
+  new releases directly (npm, GitHub releases, or their own polling) rather
+  than relying on an automatically filed issue.
+
+## [0.20.0] - 2026-08-21
+
 ### Added — `weft.tasks.get` / `GET /v1/tasks/detail/:operationId`
 
 A new read-only operation returns one task's full durable ledger state over
@@ -28,6 +68,12 @@ if the stored record exists but fails to decode — a data-integrity signal,
 not a normal absence. Purely additive — no existing operation's behavior
 changes. Adoption stays same-process-only; there is no HTTP path to
 `adoptTaskResult`.
+
+### Fixed
+
+- Hardened `prepack`'s real-Node resolution against Bun-compat shim confusion,
+  where a re-delegating shim on `PATH` could be mistaken for a genuine Node.js
+  binary.
 
 ## [0.19.0] - 2026-08-20
 
