@@ -79,6 +79,14 @@ export type WorkflowLeaseOwnershipBootstrapOptions = {
    * its claim alive, shielding it from any engine that would have resumed it.
    */
   onWorkflowClaimReclaimed?: (workflowId: string) => Promise<void>;
+  /**
+   * Optional workflow-type eligibility check, forwarded to
+   * {@link createWorkflowClaimReclaimTarget}'s `isTypeRegistered` parameter.
+   * Omitted skips the check, matching that function's own default. See its
+   * doc for why an engine that cannot execute a candidate's registered type
+   * must never win its claim in the first place.
+   */
+  isWorkflowTypeRegistered?: (workflowType: string) => boolean;
 };
 
 /**
@@ -349,6 +357,7 @@ export async function bootstrapWorkflowLeaseOwnership(
     options.storage,
     metrics,
     options.onWorkflowClaimReclaimed,
+    options.isWorkflowTypeRegistered,
   );
   const rawRenewalTask = createWorkflowClaimRenewalTask({
     target: createWorkflowClaimRenewalTarget(registry, metrics),

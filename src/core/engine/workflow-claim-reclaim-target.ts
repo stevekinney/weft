@@ -49,6 +49,33 @@ async function isWorkflowStillRunning(storage: Storage, workflowId: string): Pro
 }
 
 /**
+ * Fresh read: is `workflowId`'s persisted `type` one this engine has
+ * registered? Used to gate a takeover/acquire CAS behind eligibility to
+ * actually run the workflow. Without this, an engine in a fleet whose
+ * members register different workflow subsets can win an expired claim for a
+ * type it cannot execute; `onReclaimed` (bound to a replay that constructs
+ * the generator from the registered definition) then deterministically
+ * throws, and — because a failed drive is retried in place, never released,
+ * per this module's doc — that incapable engine retains and renews the claim
+ * forever, permanently blocking a capable engine from ever reclaiming it.
+ * Absent or corrupt state reads as "not eligible" (fail closed, matching
+ * {@link isWorkflowStillRunning}'s own posture).
+ */
+async function isWorkflowTypeRegistered(
+  storage: Storage,
+  workflowId: string,
+  isTypeRegistered: (workflowType: string) => boolean,
+): Promise<boolean> {
+  const bytes = await storage.get(KEYS.workflow(workflowId));
+  if (bytes === null) return false;
+  try {
+    return isTypeRegistered(decodeWorkflowState(bytes).type);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * A {@link WorkflowClaimReclaimTarget} with one additional, non-interface
  * method: {@link markDisposing}. Structurally still a valid
  * `WorkflowClaimReclaimTarget` (every caller that only knows that narrower
@@ -130,6 +157,15 @@ export function createWorkflowClaimReclaimTarget(
   storage: Storage,
   metrics: WorkflowClaimMetricsCollector,
   onReclaimed?: (workflowId: string) => Promise<void>,
+  /**
+   * Optional workflow-type eligibility check, consulted before this engine
+   * ever attempts a fresh takeover/acquire CAS for a candidate (never for a
+   * `redriveAlreadyHeldClaim` retry, since that claim already passed this
+   * check when it was first taken). Omitted (the default) skips the check —
+   * every existing caller/test that does not care about mixed workflow-type
+   * fleets keeps working unchanged.
+   */
+  isTypeRegistered?: (workflowType: string) => boolean,
 ): WorkflowClaimReclaimTargetHandle {
   // Workflow ids whose reclaim succeeded (this engine durably holds the
   // claim) but whose `onReclaimed` drive most recently threw. Reclaim
@@ -179,6 +215,31 @@ export function createWorkflowClaimReclaimTarget(
    */
   async function releaseClaimAcquiredWhileDisposing(workflowId: string): Promise<void> {
     await registry.release(workflowId);
+  }
+
+  /**
+   * Close the running-state/acquire(or takeover) TOCTOU: `isWorkflowStillRunning`
+   * is checked before the CAS, but a terminal transition (external cancel,
+   * timeout, or a normal completion racing this reclaim attempt) can commit
+   * between that check and the CAS landing. `registry.acquire`/`registry.takeover`
+   * only fence on the holder/epoch keys, not workflow status, so the CAS
+   * happily lands for a workflow that is no longer running. Re-check status
+   * AFTER the claim is held; if it is no longer running, release it —
+   * generation-safely, only when `registry.currentEpoch(workflowId)` is still
+   * the exact epoch this call just acquired, so a claim someone else already
+   * took over out from under a stale local read is never released — and never
+   * drive a terminal workflow. Returns `true` when the caller should proceed
+   * to drive the claim it just landed.
+   */
+  async function confirmStillRunningOrReleaseFreshClaim(
+    workflowId: string,
+    acquiredEpoch: number,
+  ): Promise<boolean> {
+    if (await isWorkflowStillRunning(storage, workflowId)) return true;
+    if (registry.currentEpoch(workflowId) === acquiredEpoch) {
+      await registry.release(workflowId);
+    }
+    return false;
   }
 
   // Redrive-only candidate: this engine already durably holds the claim (a
@@ -246,6 +307,9 @@ export function createWorkflowClaimReclaimTarget(
       await releaseClaimAcquiredWhileDisposing(workflowId);
       return { status: 'not-eligible' };
     }
+    if (!(await confirmStillRunningOrReleaseFreshClaim(workflowId, acquireResult.epoch))) {
+      return { status: 'not-eligible' };
+    }
     return await driveReclaimedWorkflow(workflowId);
   }
 
@@ -256,10 +320,20 @@ export function createWorkflowClaimReclaimTarget(
   // `acquireOwnerlessRunningClaim` applies for its own `'acquired'` outcome.
   async function handleTakeoverAcquired(
     workflowId: string,
+    acquiredEpoch: number,
   ): Promise<WorkflowClaimReclaimAttemptResult> {
     metrics.recordClaimAttempt('takeover');
     if (disposing) {
       await releaseClaimAcquiredWhileDisposing(workflowId);
+      return { status: 'not-eligible' };
+    }
+    // An expired holder can remain beside an already-terminal workflow state
+    // (e.g. the previous holder crashed after completing but before this
+    // engine's next reclaim scan runs). The takeover CAS only fences on the
+    // holder/epoch keys, never workflow status, so confirm the workflow is
+    // still running before driving it — same gate as the ownerless-acquire
+    // path above.
+    if (!(await confirmStillRunningOrReleaseFreshClaim(workflowId, acquiredEpoch))) {
       return { status: 'not-eligible' };
     }
     // Reclaiming the claim is only half the job: drive the workflow too, or
@@ -271,15 +345,30 @@ export function createWorkflowClaimReclaimTarget(
   // for `workflowId` to redrive. Split out of `attemptWorkflowClaimTakeover`
   // purely to keep that function's own cyclomatic complexity under the
   // repository's ceiling — see {@link WORKFLOW_CLAIM_TAKEOVER_MAX_ATTEMPTS}.
+  // Check eligibility BEFORE ever attempting a CAS: an engine that cannot
+  // execute this workflow's type must not win the claim at all, rather than
+  // winning it and then failing `onReclaimed` deterministically on every
+  // redrive attempt (see `isWorkflowTypeRegistered`'s doc for why that
+  // retry-in-place strands the workflow away from a capable engine). Split
+  // out of `takeoverWithRetries` purely to keep that function's own
+  // cyclomatic complexity under the repository's ceiling.
+  async function isEligibleForFreshTakeover(workflowId: string): Promise<boolean> {
+    if (isTypeRegistered === undefined) return true;
+    return await isWorkflowTypeRegistered(storage, workflowId, isTypeRegistered);
+  }
+
   async function takeoverWithRetries(
     workflowId: string,
   ): Promise<WorkflowClaimReclaimAttemptResult> {
+    if (!(await isEligibleForFreshTakeover(workflowId))) {
+      return { status: 'not-eligible' };
+    }
     for (let attempt = 0; attempt < WORKFLOW_CLAIM_TAKEOVER_MAX_ATTEMPTS; attempt += 1) {
       if (disposing) return { status: 'not-eligible' };
       const result = await registry.takeover(workflowId);
       switch (result.status) {
         case 'acquired':
-          return await handleTakeoverAcquired(workflowId);
+          return await handleTakeoverAcquired(workflowId, result.epoch);
         case 'backoff-skipped':
           metrics.recordClaimAttempt('backoff_skipped');
           return { status: 'backoff-skipped' };

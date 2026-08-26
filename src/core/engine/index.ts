@@ -1017,6 +1017,14 @@ export class Engine<
         getNow: internals.options.getNow,
         claimTtlMs: internals.options.workflowClaimTtlMs,
         claimRenewIntervalMs: internals.options.workflowClaimRenewIntervalMs,
+        // In a fleet whose engines register different workflow subsets, an
+        // engine that cannot execute a candidate's type must never win its
+        // claim — `onReclaimed` below would deterministically throw on every
+        // redrive attempt, and a failed drive is retried in place rather than
+        // released, permanently stranding the workflow away from a capable
+        // engine.
+        isWorkflowTypeRegistered: (workflowType: string) =>
+          internals.workflowDefinitionsByName.has(workflowType),
         // Reclaiming a stranded claim only moves ownership keys; without
         // driving the workflow it sits idle while this engine's renewal keeps
         // the claim alive, shielding it from any engine that would resume it.

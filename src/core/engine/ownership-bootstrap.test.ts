@@ -398,6 +398,7 @@ describe('createWorkflowClaimReclaimTarget', () => {
     const clock = makeClock();
     const storage = new MemoryStorage();
     await putHolder(storage, 'wf-1', 'engine-b');
+    await putWorkflowState(storage, 'wf-1');
     clock.advance(TTL_MS * 10); // far past any grace-adjusted expiry
     const registry = new WorkflowClaimRegistry({
       storage,
@@ -499,6 +500,7 @@ describe('createWorkflowClaimReclaimTarget', () => {
     const clock = makeClock();
     const storage = new MemoryStorage();
     await putHolder(storage, 'wf-1', 'engine-b');
+    await putWorkflowState(storage, 'wf-1');
     clock.advance(TTL_MS * 10);
     const gated = createWorkflowClaimTestStorage(storage);
     for (let attempt = 0; attempt < WORKFLOW_CLAIM_TAKEOVER_MAX_ATTEMPTS - 1; attempt += 1) {
@@ -558,6 +560,7 @@ describe('bootstrapWorkflowLeaseOwnership · reclaim scan (end-to-end)', () => {
       claimRenewIntervalMs: RENEW_MS,
     });
     await crashed.registry.acquire('wf-stranded');
+    await putWorkflowState(storage, 'wf-stranded');
     // A second, still-healthy claim on the same crashed engine's storage,
     // freshly re-stamped as live right before the successor's pass runs.
     await putHolder(storage, 'wf-live', 'engine-still-healthy');

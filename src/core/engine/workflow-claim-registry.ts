@@ -382,7 +382,15 @@ export class WorkflowClaimRegistry {
         fragment.conditions,
         fragment.operations,
       );
-      this.#claims.delete(workflowId);
+      // Identity-guarded, matching `#performRenew`'s success/failure guards: a
+      // concurrent `takeover`/`acquire` can install a fresh entry for this
+      // workflow id while the conditional batch above is in flight (e.g. a
+      // replacement `start-new` run). Deleting unconditionally would drop that
+      // REPLACEMENT's tracked entry, not the generation this call actually
+      // captured and released.
+      if (this.#claims.get(workflowId) === entry) {
+        this.#claims.delete(workflowId);
+      }
       return { status: committed ? 'released' : 'lost-race', workflowId };
     } finally {
       this.#releasing.delete(workflowId);

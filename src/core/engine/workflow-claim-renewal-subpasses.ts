@@ -115,10 +115,28 @@ export type WorkflowClaimSignalPollOutcome =
   | { status: 'failed'; error: unknown };
 
 /**
- * Run one reclaim-scan sub-pass: list candidates, attempt each once, and
- * catch both a per-candidate throw and the listing call itself throwing. See
+ * How many reclaim attempts may be in flight at once within a single pass.
+ *
+ * A serial loop lets one stuck candidate block every later one indefinitely —
+ * `attemptWorkflowClaimTakeover` can await an `onReclaimed` drive that never
+ * settles (e.g. a stalled storage read during replay), and a serial `for`
+ * loop never reaches the next candidate until that await resolves. Each
+ * candidate's takeover/acquire CAS and drive are independent per-workflow
+ * operations, so running them through the same bounded pool
+ * `runRenewalSubPass` uses for renewals is safe here too — see that
+ * function's doc for why a fixed-width pool is the right middle ground
+ * between full serialization and an unbounded stampede.
+ */
+export const WORKFLOW_CLAIM_RECLAIM_CONCURRENCY = 16;
+
+/**
+ * Run one reclaim-scan sub-pass: list candidates, attempt each through a
+ * bounded pool (see {@link WORKFLOW_CLAIM_RECLAIM_CONCURRENCY}), and catch
+ * both a per-candidate throw and the listing call itself throwing. See
  * {@link WorkflowClaimReclaimPassResult}'s doc for why discovery failure is a
- * result, not a rejection.
+ * result, not a rejection. `outcomes` stays in `candidates` order regardless
+ * of the order attempts actually settle, matching `runRenewalSubPass`'s own
+ * positional-result discipline.
  */
 export async function runReclaimPass(
   target: WorkflowClaimReclaimTarget,
@@ -129,15 +147,42 @@ export async function runReclaimPass(
   } catch (error) {
     return { status: 'discovery-failed', error };
   }
-  const outcomes: WorkflowClaimReclaimOutcome[] = [];
-  for (const workflowId of candidates) {
+
+  const outcomes = Array.from<WorkflowClaimReclaimOutcome>({ length: candidates.length });
+
+  async function attemptOne(index: number): Promise<void> {
+    const workflowId = candidates[index]!;
     try {
       const attempt = await target.attemptWorkflowClaimTakeover(workflowId);
-      outcomes.push({ workflowId, ...attempt });
+      outcomes[index] = { workflowId, ...attempt };
     } catch (error) {
-      outcomes.push({ workflowId, status: 'error', error });
+      outcomes[index] = { workflowId, status: 'error', error };
     }
   }
+
+  // Mirrors `runRenewalSubPass`'s single-claim fast path: with at most one
+  // candidate there is nothing to overlap, so skip the pool's extra async
+  // frames.
+  if (candidates.length <= 1) {
+    for (const [index] of candidates.entries()) {
+      await attemptOne(index);
+    }
+  } else {
+    let nextIndex = 0;
+    // Single-threaded JS makes this index handout safe without a lock: each
+    // worker takes an index synchronously before its first await.
+    async function attemptFromQueue(): Promise<void> {
+      for (;;) {
+        const index = nextIndex;
+        nextIndex += 1;
+        if (index >= candidates.length) return;
+        await attemptOne(index);
+      }
+    }
+    const workerCount = Math.min(WORKFLOW_CLAIM_RECLAIM_CONCURRENCY, candidates.length);
+    await Promise.all(Array.from({ length: workerCount }, attemptFromQueue));
+  }
+
   return {
     status: 'completed',
     outcomes,

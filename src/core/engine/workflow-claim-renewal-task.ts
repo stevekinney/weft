@@ -31,25 +31,30 @@
  * task's only failure handling is: catch, record the outcome, move on to the
  * next workflow.
  *
- * **Renewal cadence is independent of the reclaim scan and signal poll in
+ * **Renewal, reclaim, and signal poll each run on independent cadences in
  * interval mode.** `runOnce()` (the `backgroundTasks: 'manual'` entry point,
  * and what every test drives directly) still runs all three sub-steps
  * sequentially in one awaited call, exactly as ADR 0002 describes—a host
- * calling `runMaintenance()` gets one coherent pass. But
- * `start()`/interval-mode `tick()` gives renewal and the
- * reclaim-scan-plus-signal-poll pair *separate* single-flight slots. The
- * reclaim scan is an unbounded store-wide operation (a holder-keyed prefix
- * scan, a running-status prefix scan with serial point reads, and serial
- * takeover attempts) that can run past `intervalMs`, even past
- * `workflowClaimTtl`, on a large or high-latency shared store. Renewal
- * itself is cheap—one `conditionalBatch` per held claim—and MUST keep
- * firing on every tick regardless of how long the previous tick's
- * reclaim/poll work is still running, or an engine can lose claims it is
- * actively renewing simply because its own reclaim scan from an earlier
- * tick has not finished yet. Coupling them behind one shared single-flight
- * slot was the WFT-79 Finding 2 defect this module now avoids; see
- * `workflow-claim-renewal-task.test.ts`'s "renewal keeps its own cadence"
- * tests for the regression coverage.
+ * calling `runMaintenance()` gets one coherent pass (serialized against any
+ * other concurrent `runOnce()` call — see `inFlightManualPass`). But
+ * `start()`/interval-mode `tick()` gives renewal, reclaim, and signal poll
+ * *three separate* single-flight slots. The reclaim scan is an unbounded
+ * store-wide operation (a holder-keyed prefix scan, a running-status prefix
+ * scan with serial point reads, and serial takeover attempts — any one of
+ * which can await an `onReclaimed` drive that never settles) that can run
+ * past `intervalMs`, even past `workflowClaimTtl`, on a large or
+ * high-latency shared store. Renewal itself is cheap—one `conditionalBatch`
+ * per held claim—and MUST keep firing on every tick regardless of how long
+ * the previous tick's reclaim/poll work is still running, or an engine can
+ * lose claims it is actively renewing simply because its own reclaim scan
+ * from an earlier tick has not finished yet. Signal poll is likewise cheap
+ * and time-sensitive — ADR 0002 advertises cross-engine signal delivery
+ * within one renewal interval — so it MUST NOT share reclaim's slot either:
+ * a slow or hung reclaim scan must never delay waking a parked
+ * `waitForSignal` workflow. Coupling any two of these behind one shared
+ * single-flight slot was the WFT-79 Finding 2 defect this module now avoids;
+ * see `workflow-claim-renewal-task.test.ts`'s "renewal keeps its own
+ * cadence" tests for the regression coverage.
  *
  * **The same cadence also drives two more ADR 0002 responsibilities**, each
  * OPTIONAL and each following the identical decoupling discipline: a reclaim
@@ -172,10 +177,15 @@ export type WorkflowClaimRenewalTask = {
    * This is the entry point `backgroundTasks: 'manual'` hosts drive from an
    * awaited host tick (`Engine#runMaintenance()`), and the one tests use to
    * step the task deterministically. Bypasses the interval-mode single-flight
-   * guard by design — same as `renewOnce()` does relative to
+   * slots by design — same as `renewOnce()` does relative to
    * `startRenewal()`'s timer in `lease-manager.ts` — so an explicit caller
-   * always gets a fresh pass rather than being silently skipped because an
-   * interval-driven pass happens to be in flight.
+   * is never silently skipped because an interval-driven pass happens to be
+   * in flight. It IS, however, deduped against another concurrent `runOnce()`
+   * call: `Engine.create()` documents concurrent `runMaintenance()` calls as
+   * safe, and two independent combined passes sharing this task's targets
+   * could otherwise both act on the same stale reclaim candidate. An
+   * overlapping caller receives the already-running pass's result rather
+   * than starting a second one.
    */
   runOnce(): Promise<WorkflowClaimRenewalPassResult>;
   /**
@@ -241,13 +251,31 @@ export function createWorkflowClaimRenewalTask(
   const scheduler: WorkflowClaimRenewalIntervalScheduler = options.scheduler ?? defaultScheduler();
 
   let intervalHandle: unknown = null;
-  // Interval mode uses TWO independent single-flight slots, not one shared
-  // slot, so a slow reclaim-scan-plus-signal-poll sub-pass from an earlier
-  // tick can never block renewal from firing on a later tick. See the module
-  // doc's "Renewal cadence is independent..." section for why this split
-  // exists (WFT-79 Finding 2).
+  // Interval mode uses THREE independent single-flight slots, not one shared
+  // slot, so a slow sub-pass from an earlier tick can never block a different
+  // sub-pass from firing on a later tick. See the module doc's "Renewal
+  // cadence is independent..." section for why renewal is split from the rest
+  // (WFT-79 Finding 2). Reclaim and signal-poll are ALSO split from each
+  // other: `runReclaimPass` is an unbounded, store-wide scan that can await
+  // every takeover/redrive candidate — including one whose `onReclaimed`
+  // drive never settles — before returning, and sharing one slot with signal
+  // polling would make cross-engine signal delivery's advertised
+  // one-renewal-interval bound unbounded whenever reclaim runs long or hangs.
   let inFlightRenewal: Promise<WorkflowClaimRenewalPassResult> | null = null;
-  let inFlightReclaimAndPoll: Promise<WorkflowClaimRenewalPassResult> | null = null;
+  let inFlightReclaim: Promise<WorkflowClaimRenewalPassResult> | null = null;
+  let inFlightSignalPoll: Promise<WorkflowClaimRenewalPassResult> | null = null;
+  // `runOnce()` bypasses the interval-mode single-flight slots above by
+  // design (see that method's own doc), but two concurrent MANUAL calls
+  // (`backgroundTasks: 'manual'` hosts calling `Engine.runMaintenance()`
+  // concurrently, which `Engine.create` documents as safe) still share the
+  // same underlying `target`/`reclaimTarget`/`signalPollTarget`. Without this
+  // guard, two overlapping `runOnce()` reclaim passes can both observe the
+  // same stale local epoch for a redrive candidate and both invoke
+  // `onReclaimed` for it concurrently. This is a plain reentrancy guard, not
+  // one of the interval-mode cadence slots: a manual caller always gets a
+  // pass that reflects the most current state once its turn comes, it just
+  // never overlaps another manual pass.
+  let inFlightManualPass: Promise<WorkflowClaimRenewalPassResult> | null = null;
 
   /**
    * Fire `onPassComplete` for one completed sub-pass (or combined pass),
@@ -265,12 +293,11 @@ export function createWorkflowClaimRenewalTask(
 
   /**
    * The full combined pass: renewal, then reclaim, then signal poll, in one
-   * awaited call. This is `runOnce()`'s implementation, and is what
-   * `backgroundTasks: 'manual'` hosts get from `Engine#runMaintenance()` — a
-   * single coherent pass per ADR 0002, not split across two slots the way
-   * interval mode's `tick()` is below.
+   * awaited call. This is what {@link runOnce} serializes behind
+   * `inFlightManualPass` — a single coherent pass per ADR 0002, not split
+   * across the independent slots the way interval mode's `tick()` is below.
    */
-  async function runOnce(): Promise<WorkflowClaimRenewalPassResult> {
+  async function runCombinedPass(): Promise<WorkflowClaimRenewalPassResult> {
     const startedAt = getNow();
     const workflowIds = [...target.listHeldWorkflowIds()];
     const renewal = await runRenewalSubPass(target, workflowIds);
@@ -294,6 +321,30 @@ export function createWorkflowClaimRenewalTask(
   }
 
   /**
+   * `Engine.runMaintenance()`'s entry point. `Engine.create()` documents
+   * concurrent `runMaintenance()` calls as safe, but a second overlapping
+   * call sharing this task's `target`/`reclaimTarget`/`signalPollTarget` can
+   * otherwise observe the same stale local state a first call has not
+   * finished updating yet — e.g. both calls seeing the same redrive
+   * candidate's pre-takeover epoch and both invoking `onReclaimed` for it
+   * concurrently. Dedupe to one in-flight combined pass at a time: an
+   * overlapping caller gets the SAME promise as the pass already running,
+   * rather than starting a second one, so "safe to call concurrently" holds
+   * without ever double-driving a candidate. This is a plain reentrancy
+   * guard, unrelated to interval mode's per-sub-pass cadence slots — a manual
+   * caller still gets one coherent pass reflecting current state, it is just
+   * never allowed to overlap another manual pass.
+   */
+  async function runOnce(): Promise<WorkflowClaimRenewalPassResult> {
+    if (inFlightManualPass !== null) return inFlightManualPass;
+    const pass = runCombinedPass().finally(() => {
+      inFlightManualPass = null;
+    });
+    inFlightManualPass = pass;
+    return pass;
+  }
+
+  /**
    * Interval mode's standalone renewal sub-pass: renewal only, `reclaim` and
    * `signalPoll` left `undefined` on the reported result. Runs under its own
    * `inFlightRenewal` slot, independent of {@link runReclaimAndPollTickPass}.
@@ -309,20 +360,17 @@ export function createWorkflowClaimRenewalTask(
   }
 
   /**
-   * Interval mode's standalone reclaim-scan-plus-signal-poll sub-pass:
-   * `outcomes` is always empty (no renewal ran in this sub-pass). Runs under
-   * its own `inFlightReclaimAndPoll` slot — deliberately decoupled from
-   * {@link runRenewalTickPass} so this sub-pass's unbounded store-wide work
-   * never delays the next renewal tick. Only invoked by `tick()` when at
-   * least one of `reclaimTarget`/`signalPollTarget` is configured.
+   * Interval mode's standalone reclaim-scan sub-pass: `outcomes` is always
+   * empty (no renewal ran in this sub-pass). Runs under its own
+   * `inFlightReclaim` slot — deliberately decoupled from
+   * {@link runRenewalTickPass} AND from {@link runSignalPollTickPass} so this
+   * sub-pass's unbounded, potentially-hanging store-wide work never delays
+   * the next renewal tick or blocks cross-engine signal delivery. Only
+   * invoked by `tick()` when `reclaimTarget` is configured.
    */
-  async function runReclaimAndPollTickPass(): Promise<WorkflowClaimRenewalPassResult> {
+  async function runReclaimTickPass(): Promise<WorkflowClaimRenewalPassResult> {
     const startedAt = getNow();
-    const reclaim = reclaimTarget === undefined ? undefined : await runReclaimPass(reclaimTarget);
-    const signalPoll =
-      signalPollTarget === undefined
-        ? undefined
-        : await runSignalPollSubPass(signalPollTarget, getNow);
+    const reclaim = await runReclaimPass(reclaimTarget!);
     const finishedAt = getNow();
     const result: WorkflowClaimRenewalPassResult = {
       startedAt,
@@ -330,23 +378,50 @@ export function createWorkflowClaimRenewalTask(
       outcomes: [],
       renewedCount: 0,
       failedCount: 0,
-      ...(reclaim === undefined ? {} : { reclaim }),
-      ...(signalPoll === undefined ? {} : { signalPoll }),
+      reclaim,
     };
     emitPassComplete(result);
     return result;
   }
 
   /**
-   * Interval-tick entry point. Starts up to two independent sub-passes per
+   * Interval mode's standalone signal-poll sub-pass: `outcomes` is always
+   * empty. Runs under its own `inFlightSignalPoll` slot, independent of both
+   * {@link runRenewalTickPass} and {@link runReclaimTickPass} — see this
+   * module's "Renewal cadence is independent..." doc section (WFT-79 Finding
+   * 2) for why reclaim's unbounded scan must never gate signal delivery's
+   * advertised one-renewal-interval bound. Only invoked by `tick()` when
+   * `signalPollTarget` is configured.
+   */
+  async function runSignalPollTickPass(): Promise<WorkflowClaimRenewalPassResult> {
+    const startedAt = getNow();
+    const signalPoll = await runSignalPollSubPass(signalPollTarget!, getNow);
+    const finishedAt = getNow();
+    const result: WorkflowClaimRenewalPassResult = {
+      startedAt,
+      finishedAt,
+      outcomes: [],
+      renewedCount: 0,
+      failedCount: 0,
+      signalPoll,
+    };
+    emitPassComplete(result);
+    return result;
+  }
+
+  /**
+   * Interval-tick entry point. Starts up to three independent sub-passes per
    * tick, each single-flight guarded on its OWN slot:
    *
    * - Renewal ({@link runRenewalTickPass}), guarded by `inFlightRenewal`. A
    *   tick is skipped only when the PREVIOUS RENEWAL sub-pass is still
-   *   running — never because a reclaim/poll sub-pass is still running.
-   * - Reclaim-plus-poll ({@link runReclaimAndPollTickPass}), guarded by
-   *   `inFlightReclaimAndPoll`, and only started at all when at least one of
-   *   `reclaimTarget`/`signalPollTarget` was configured.
+   *   running — never because reclaim or signal-poll is still running.
+   * - Reclaim ({@link runReclaimTickPass}), guarded by `inFlightReclaim`, and
+   *   only started when `reclaimTarget` was configured.
+   * - Signal poll ({@link runSignalPollTickPass}), guarded by
+   *   `inFlightSignalPoll`, and only started when `signalPollTarget` was
+   *   configured. Independent of reclaim's slot so a slow or hung reclaim
+   *   scan can never stall cross-engine signal delivery.
    *
    * Never lets a rejection (e.g. `listHeldWorkflowIds` or
    * `listReclaimCandidateWorkflowIds` throwing) escape as an unhandled
@@ -370,20 +445,31 @@ export function createWorkflowClaimRenewalTask(
         });
     }
 
-    if (
-      inFlightReclaimAndPoll === null &&
-      (reclaimTarget !== undefined || signalPollTarget !== undefined)
-    ) {
-      const pass = runReclaimAndPollTickPass();
-      inFlightReclaimAndPoll = pass;
+    if (inFlightReclaim === null && reclaimTarget !== undefined) {
+      const pass = runReclaimTickPass();
+      inFlightReclaim = pass;
       void pass
         .catch(() => {
           // Swallow for the same reason as the renewal branch above:
-          // runReclaimAndPollTickPass already captures discovery/poll
-          // failures as result fields, not rejections.
+          // runReclaimTickPass already captures discovery/attempt failures as
+          // result fields, not rejections.
         })
         .finally(() => {
-          inFlightReclaimAndPoll = null;
+          inFlightReclaim = null;
+        });
+    }
+
+    if (inFlightSignalPoll === null && signalPollTarget !== undefined) {
+      const pass = runSignalPollTickPass();
+      inFlightSignalPoll = pass;
+      void pass
+        .catch(() => {
+          // Swallow for the same reason as the renewal branch above:
+          // runSignalPollTickPass already captures poll failures as a result
+          // field, not a rejection.
+        })
+        .finally(() => {
+          inFlightSignalPoll = null;
         });
     }
   }
