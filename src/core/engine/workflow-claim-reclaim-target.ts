@@ -174,7 +174,15 @@ export function createWorkflowClaimReclaimTarget(
   // (ADR 0002's exact "stay stranded" failure mode, just relocated from "no
   // claim" to "an idle claim"). Merged back into the candidate list on every
   // pass and drained (or re-armed) by `attemptWorkflowClaimTakeover`.
-  const pendingRedriveWorkflowIds = new Set<string>();
+  // Keyed by workflow id, valued by the EXACT epoch the failed drive ran
+  // under (WFT-79). A bare `Set<string>` cannot distinguish "this engine
+  // still holds the same generation whose drive failed" from "a terminated-
+  // then-`start-new`-replaced run now occupies this id under a NEW epoch,
+  // actively executing on this same engine" — both read as "currentEpoch is
+  // non-null" from the id alone. Conflating them would force-replay an
+  // actively running replacement generator as though it were the failed one,
+  // duplicating its pre-checkpoint effects.
+  const pendingRedriveWorkflowIds = new Map<string, number>();
 
   // See `WorkflowClaimReclaimTargetHandle.markDisposing`'s doc. Checked at
   // entry to every attempt and again after every `await` inside one, so a
@@ -184,6 +192,7 @@ export function createWorkflowClaimReclaimTarget(
 
   async function driveReclaimedWorkflow(
     workflowId: string,
+    epoch: number,
   ): Promise<WorkflowClaimReclaimAttemptResult> {
     if (onReclaimed === undefined) {
       pendingRedriveWorkflowIds.delete(workflowId);
@@ -194,7 +203,9 @@ export function createWorkflowClaimReclaimTarget(
       pendingRedriveWorkflowIds.delete(workflowId);
       return { status: 'reclaimed' };
     } catch (error) {
-      pendingRedriveWorkflowIds.add(workflowId);
+      // Record the EXACT epoch this drive ran under, not just the id — see
+      // `pendingRedriveWorkflowIds`'s doc.
+      pendingRedriveWorkflowIds.set(workflowId, epoch);
       // Rethrow (rather than swallow) so the renewal task's per-candidate
       // error handling records `{ status: 'error', error }` for this pass —
       // the claim is held either way, but a silently swallowed drive failure
@@ -248,14 +259,13 @@ export function createWorkflowClaimReclaimTarget(
   // one would be pure overhead against a claim already held.
   async function redriveAlreadyHeldClaim(
     workflowId: string,
+    // The exact epoch the caller confirmed both `pendingRedriveWorkflowIds`
+    // and `registry.currentEpoch(workflowId)` agree on — see the call site's
+    // doc for why this must be the pending-redrive entry's OWN recorded
+    // epoch, not just "some epoch is currently held" (WFT-79).
+    expectedEpoch: number,
   ): Promise<WorkflowClaimReclaimAttemptResult> {
     if (disposing) return { status: 'not-eligible' };
-    // Captured before the only await in this function so a concurrent
-    // `onTerminalConflict: 'start-new'` replacing this terminal run on the
-    // same id (WFT-79 Finding 3) is detectable: if the epoch this engine
-    // tracks for `workflowId` differs by the time the read below resolves,
-    // the registry's entry is no longer the generation this call inspected.
-    const expectedEpoch = registry.currentEpoch(workflowId);
     if (!(await isWorkflowStillRunning(storage, workflowId))) {
       // The workflow reached a terminal state while its redrive was pending
       // (e.g. an external cancel/timeout landed on it). Redriving a terminal
@@ -274,7 +284,7 @@ export function createWorkflowClaimReclaimTarget(
       return { status: 'not-eligible' };
     }
     if (disposing) return { status: 'not-eligible' };
-    return await driveReclaimedWorkflow(workflowId);
+    return await driveReclaimedWorkflow(workflowId, expectedEpoch);
   }
 
   // `takeover` returned `'no-claim'` — no holder record at all, which
@@ -310,7 +320,7 @@ export function createWorkflowClaimReclaimTarget(
     if (!(await confirmStillRunningOrReleaseFreshClaim(workflowId, acquireResult.epoch))) {
       return { status: 'not-eligible' };
     }
-    return await driveReclaimedWorkflow(workflowId);
+    return await driveReclaimedWorkflow(workflowId, acquireResult.epoch);
   }
 
   // Handles `takeover`'s `'acquired'` outcome: split out of
@@ -338,7 +348,7 @@ export function createWorkflowClaimReclaimTarget(
     }
     // Reclaiming the claim is only half the job: drive the workflow too, or
     // it sits idle while this engine's renewal keeps its claim alive.
-    return await driveReclaimedWorkflow(workflowId);
+    return await driveReclaimedWorkflow(workflowId, acquiredEpoch);
   }
 
   // The bounded `takeover` retry loop itself, once this engine holds nothing
@@ -396,17 +406,35 @@ export function createWorkflowClaimReclaimTarget(
       );
       // WFT-79 Finding 4: merge through a `Set` so a workflow id present in
       // both collections is attempted at most once per pass.
-      return [...new Set([...discovered, ...pendingRedriveWorkflowIds])];
+      return [...new Set([...discovered, ...pendingRedriveWorkflowIds.keys()])];
     },
     async attemptWorkflowClaimTakeover(workflowId): Promise<WorkflowClaimReclaimAttemptResult> {
       if (disposing) return { status: 'not-eligible' };
-      if (registry.currentEpoch(workflowId) !== null) {
-        return await redriveAlreadyHeldClaim(workflowId);
+      const currentEpoch = registry.currentEpoch(workflowId);
+      if (currentEpoch !== null) {
+        const pendingRedriveEpoch = pendingRedriveWorkflowIds.get(workflowId);
+        // A pending-redrive entry recorded at a DIFFERENT epoch than the one
+        // this engine currently holds means a `start-new` replacement now
+        // actively executes under a new epoch (WFT-79) — the entry is stale
+        // bookkeeping from the generation that failed to drive, not this
+        // one. Force-replaying via redrive would corrupt the actively
+        // running replacement. Drop the stale entry and fall through to the
+        // ordinary takeover/acquire path, which is a safe no-op
+        // (`'not-expired'` → `'not-eligible'`) against a claim this engine
+        // already actively holds. No pending entry at all, or one that
+        // matches the currently held epoch, both redrive normally — the
+        // former covers the ordinary "first redrive attempt for a claim this
+        // engine holds but has not yet driven" case.
+        if (pendingRedriveEpoch !== undefined && pendingRedriveEpoch !== currentEpoch) {
+          pendingRedriveWorkflowIds.delete(workflowId);
+          return await takeoverWithRetries(workflowId);
+        }
+        return await redriveAlreadyHeldClaim(workflowId, currentEpoch);
       }
-      // Stale bookkeeping: this engine no longer holds the claim (lost via a
-      // failed renewal since being marked pending-redrive) — fall through to
-      // the ordinary takeover/acquire path below instead of forcing a
-      // redrive against a claim it does not have.
+      // This engine no longer holds the claim at all (lost via a failed
+      // renewal since being marked pending-redrive) — fall through to the
+      // ordinary takeover/acquire path below instead of forcing a redrive
+      // against a claim it does not have.
       pendingRedriveWorkflowIds.delete(workflowId);
       return await takeoverWithRetries(workflowId);
     },

@@ -334,7 +334,16 @@ async function deliverBufferedSignals(
     const waiterKey = `${workflowId}:${signalName}`;
     const waiter = internals.signalWaiters.get(waiterKey);
     if (waiter) {
-      if ((await confirmWakeOwnership(internals, workflowId, 'signal')) === 'discard') {
+      // Guard the `await` itself, not just its result. An async call
+      // suspends at its first `await` even when the callee returns
+      // synchronously, so awaiting unconditionally would defer this waiter's
+      // resolution by a microtask under `ownership: 'none'`/`'lease'`, where
+      // the check is a no-op anyway. Those modes must stay byte-identical —
+      // mirrors `async-activity-completion.ts`'s own registry-gated await.
+      if (
+        internals.workflowClaimRegistry !== null &&
+        (await confirmWakeOwnership(internals, workflowId, 'signal')) === 'discard'
+      ) {
         continue;
       }
       // Invoke ONLY the waiter this call removed. Replay or a fresh park can

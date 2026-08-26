@@ -740,6 +740,63 @@ describe('createWorkflowClaimReclaimTarget · redrive retry on a failed onReclai
     const result = await reclaimTarget.attemptWorkflowClaimTakeover('wf-1');
     expect(result).toEqual({ status: 'backoff-skipped' });
   });
+
+  it('does not force-replay a start-new replacement now actively held under a new epoch, even though the id is still pending-redrive (WFT-79)', async () => {
+    const clock = makeClock();
+    const storage = new MemoryStorage();
+    await putHolder(storage, 'wf-1', 'engine-b');
+    await putWorkflowState(storage, 'wf-1');
+    clock.advance(TTL_MS * 10);
+    const registry = new WorkflowClaimRegistry({
+      storage,
+      engineId: 'engine-a',
+      getNow: clock.now,
+      claimTtlMs: TTL_MS,
+      claimRenewIntervalMs: RENEW_MS,
+    });
+    const driven: string[] = [];
+    const reclaimTarget = createWorkflowClaimReclaimTarget(
+      registry,
+      storage,
+      new WorkflowClaimMetricsCollector(),
+      async (workflowId) => {
+        driven.push(workflowId);
+        throw new Error('drive failed');
+      },
+    );
+    // First pass: takeover succeeds under epoch E1, drive throws — wf-1 is
+    // now pending-redrive at E1.
+    await expect(reclaimTarget.attemptWorkflowClaimTakeover('wf-1')).rejects.toThrow();
+    const originalEpoch = registry.currentEpoch('wf-1');
+    expect(originalEpoch).not.toBeNull();
+    expect(driven).toEqual(['wf-1']);
+
+    // This SAME engine loses the claim (e.g. a renewal loss), then
+    // re-acquires the SAME workflow id under a brand-new epoch E2 — modeling
+    // `onTerminalConflict: 'start-new'` replacing the terminated run with a
+    // new one this engine happens to pick up, now ACTIVELY EXECUTING. The
+    // pending-redrive entry from E1 is still sitting there, unrelated to E2.
+    await registry.release('wf-1');
+    expect(registry.currentEpoch('wf-1')).toBeNull();
+    const reacquireResult = await registry.acquire('wf-1');
+    expect(reacquireResult.status).toBe('acquired');
+    const newEpoch = registry.currentEpoch('wf-1');
+    expect(newEpoch).not.toBeNull();
+    expect(newEpoch).not.toBe(originalEpoch);
+
+    // A later reclaim pass must NOT force-replay this actively-executing
+    // replacement as though it were the E1 generation that failed to drive —
+    // that would call `onReclaimed` a second time and duplicate whatever
+    // pre-checkpoint effects the E2 generator has already produced.
+    const result = await reclaimTarget.attemptWorkflowClaimTakeover('wf-1');
+
+    expect(result).toEqual({ status: 'not-eligible' });
+    expect(driven).toEqual(['wf-1']); // still just the one E1 drive — never re-driven for E2
+    // The stale E1 pending-redrive entry was dropped: this id no longer
+    // surfaces as a redrive candidate for a generation that no longer exists.
+    const candidates = await reclaimTarget.listReclaimCandidateWorkflowIds();
+    expect(candidates).not.toContain('wf-1');
+  });
 });
 
 describe('createWorkflowClaimReclaimTarget · ownerless-but-running acquire fallback (WFT-79 Finding 3)', () => {
