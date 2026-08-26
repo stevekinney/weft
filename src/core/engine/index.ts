@@ -751,6 +751,7 @@ export class Engine<
     getInternals(this).cancelHandlersByWorkflow = new Map();
     getInternals(this).reviewTimerIds = new Map();
     getInternals(this).pendingWebhooks = new Set();
+    getInternals(this).pendingResultPollTimers = new Set();
     getInternals(this).pendingTimelineEntries = new Map();
     getInternals(this).pendingAtomicWorkflowCommitSideEffects = new Map();
     getInternals(this).cleanupIntervalDisposalTracker = null;

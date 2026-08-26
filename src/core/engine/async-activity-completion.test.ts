@@ -12,7 +12,6 @@ import { describe, expect, it, mock } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
-import { yieldToEventLoop } from '../../testing/fake-timers.test-support.ts';
 import type { OperationOutcome } from '../types.ts';
 import { AsyncActivityDeferral, parkDeferredAsyncActivity } from './async-activity-completion.ts';
 import {
@@ -76,6 +75,50 @@ function makeCallbacks() {
   };
 }
 
+/**
+ * A deterministic completion signal for `deliverPendingAsyncActivityResolution`'s
+ * gated ownership read, replacing a fixed number of `yieldToEventLoop()` calls
+ * (an implementation-depth guess that a legitimate extra async boundary could
+ * silently invalidate — see this test's WFT-79 review history). That function
+ * awaits exactly one `internals.storage.get` read (inside `wakeOwnershipCheck`)
+ * before its fully synchronous remainder — either `return` (discard) or the
+ * `finalizeTimeline`/`feedOperationResult` calls (deliver) — so awaiting that
+ * read settling, plus one microtask for the synchronous remainder to run, is
+ * an exact signal rather than a guess.
+ *
+ * MUST be installed BEFORE firing `parkDeferredAsyncActivity`: the queued-
+ * resolution branch's call chain down to that `storage.get` read is entirely
+ * synchronous (no intervening `await` yields control back to the caller until
+ * the read's own await), so installing the wrapper after firing the call
+ * would install it after the real read already happened, and the returned
+ * `settled` promise would never resolve. Wraps (and — via `restore` — undoes)
+ * `storage.get` rather than reaching into
+ * `deliverPendingAsyncActivityResolution` itself, which is module-private.
+ */
+function installOwnershipCheckSettledSignal(internals: EngineInternals): {
+  settled: Promise<void>;
+  restore: () => void;
+} {
+  const original = internals.storage.get.bind(internals.storage);
+  const { promise, resolve } = Promise.withResolvers<void>();
+  internals.storage.get = async (key) => {
+    const result = await original(key);
+    resolve();
+    return result;
+  };
+  return {
+    // The synchronous remainder after that read runs in the same microtask
+    // queue turn the read's own `await` resumes into; yield one microtask so
+    // it has definitely completed before the caller asserts.
+    settled: promise.then(async () => {
+      await Promise.resolve();
+    }),
+    restore: () => {
+      internals.storage.get = original;
+    },
+  };
+}
+
 const OUTCOME: OperationOutcome = { status: 'completed', value: 'delivered' };
 
 function queueResolution(internals: EngineInternals, workflowId: string, token: string): void {
@@ -97,8 +140,9 @@ describe('parkDeferredAsyncActivity: buffered-resolution redelivery ownership ch
     const callbacks = makeCallbacks();
     // parkDeferredAsyncActivity's queued-resolution branch awaits delivery
     // before returning a never-settling promise, so the returned promise
-    // itself never resolves — never await it directly. Fire it and drain the
-    // event loop until the in-flight ownership check settles instead.
+    // itself never resolves — never await it directly. Fire it and await the
+    // deterministic ownership-check-settled signal instead.
+    const ownershipCheckSignal = installOwnershipCheckSettledSignal(internals);
     void parkDeferredAsyncActivity(
       internals,
       new AsyncActivityDeferral('tok-deliver'),
@@ -111,9 +155,8 @@ describe('parkDeferredAsyncActivity: buffered-resolution redelivery ownership ch
       },
       callbacks,
     );
-    await yieldToEventLoop();
-    await yieldToEventLoop();
-    await yieldToEventLoop();
+    await ownershipCheckSignal.settled;
+    ownershipCheckSignal.restore();
 
     expect(callbacks.finalizeTimeline).toHaveBeenCalledTimes(1);
     expect(callbacks.finalizeTimeline).toHaveBeenCalledWith('wf-deliver', 'completed', 'delivered');
@@ -142,6 +185,7 @@ describe('parkDeferredAsyncActivity: buffered-resolution redelivery ownership ch
     );
 
     const callbacks = makeCallbacks();
+    const ownershipCheckSignal = installOwnershipCheckSettledSignal(internals);
     void parkDeferredAsyncActivity(
       internals,
       new AsyncActivityDeferral('tok-discard'),
@@ -154,9 +198,8 @@ describe('parkDeferredAsyncActivity: buffered-resolution redelivery ownership ch
       },
       callbacks,
     );
-    await yieldToEventLoop();
-    await yieldToEventLoop();
-    await yieldToEventLoop();
+    await ownershipCheckSignal.settled;
+    ownershipCheckSignal.restore();
 
     expect(callbacks.finalizeTimeline).not.toHaveBeenCalled();
     expect(callbacks.feedOperationResult).not.toHaveBeenCalled();

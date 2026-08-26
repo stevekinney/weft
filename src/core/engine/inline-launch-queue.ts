@@ -192,6 +192,32 @@ export async function drainQueuedInlineWorkflowStarts(
   // is discarded by the synchronous dispose that follows.
 }
 
+/**
+ * `confirmWakeOwnership` validated the HOLDER, but a linearizable holder read
+ * can still return the pre-replacement generation while a cancellation
+ * followed by `onTerminalConflict: 'start-new'` commits a REPLACEMENT run on
+ * this same workflow id during that await — the new run's registry epoch can
+ * already be live, so subsequent writes would use it while this queued start
+ * still carries the OLD run's checkpoint and input. Re-read the run identity
+ * and require it to still be the exact run this launch was queued for,
+ * closing the gap the holder check alone cannot: a workflow id surviving a
+ * status/holder check is not proof it is still the SAME run. Split out of
+ * `startQueuedInlineWorkflowExecution` purely to keep that function's own
+ * cyclomatic complexity under the repository's ceiling.
+ */
+async function isQueuedStartStillTheLiveRun(
+  internals: EngineInternals,
+  start: QueuedInlineWorkflowExecutionStart,
+): Promise<boolean> {
+  const currentState = await loadWorkflowState(internals, start.workflowId);
+  return (
+    currentState !== null &&
+    currentState.status === 'running' &&
+    (start.workflowExecutionToken === undefined ||
+      currentState.workflowExecutionToken === start.workflowExecutionToken)
+  );
+}
+
 async function startQueuedInlineWorkflowExecution(
   internals: EngineInternals,
   start: QueuedInlineWorkflowExecutionStart,
@@ -218,6 +244,10 @@ async function startQueuedInlineWorkflowExecution(
       (await confirmWakeOwnership(internals, start.workflowId, 'inline-macrotask-drive')) ===
       'discard'
     ) {
+      return;
+    }
+
+    if (!(await isQueuedStartStillTheLiveRun(internals, start))) {
       return;
     }
 

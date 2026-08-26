@@ -229,10 +229,14 @@ function scheduleCrossEngineResultPollIfPending(
   // mode drives this through an awaited `runMaintenance()` instead.
   if (internals.options.backgroundTaskMode !== 'automatic') return;
   const handle = setTimeout(() => {
+    internals.pendingResultPollTimers.delete(handle);
     void bootstrapWorkflowResultResolver(internals, workflowId, waiter).then(() =>
       scheduleCrossEngineResultPollIfPending(internals, workflowId, waiter),
     );
   }, internals.options.workflowClaimRenewIntervalMs);
+  // Tracked so disposal can cancel it — see `pendingResultPollTimers`'s doc on
+  // `EngineInternals` for why an untracked timer here outlives disposal.
+  internals.pendingResultPollTimers.add(handle);
   // Never let a pending cross-engine poll hold an otherwise-idle process open,
   // matching the renewal task's own interval handling.
   (handle as { unref?: () => void }).unref?.();

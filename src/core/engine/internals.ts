@@ -386,6 +386,17 @@ export interface EngineInternals {
   cancelHandlersByWorkflow: Map<string, Array<() => Promise<void> | void>>;
   reviewTimerIds: Map<string, string[]>;
   pendingWebhooks: Set<AbortController>;
+  /**
+   * Every `setTimeout` handle `scheduleCrossEngineResultPollIfPending`
+   * (`handle-result.ts`) currently has pending, so disposal can cancel them.
+   * Without this, disposing an automatic-mode engine while a cross-engine
+   * result waiter is parked rejects and clears the waiter but leaves this
+   * untracked timer alive — the timer queue retains the waiter, engine
+   * internals, and storage reference until `workflowClaimRenewIntervalMs`
+   * elapses, and its callback then calls `bootstrapWorkflowResultResolver`
+   * against already-disposed storage.
+   */
+  pendingResultPollTimers: Set<ReturnType<typeof setTimeout>>;
   alertManager: AlertManager | null;
   eventLogHeads: Map<string, Readonly<EventHeadRecord>>;
   workflowFeedListeners: Map<string, Set<WorkflowFeedListener>>;

@@ -19,45 +19,35 @@
  * successful `acquire`/`takeover`/folded-acquire calls {@link clear}, and
  * `takeover` consults {@link isActive} before attempting its CAS.
  *
- * **Curve.** Exponential, starting at `workflowClaimRenewInterval` and capped
- * at `workflowClaimTtl * WORKFLOW_CLAIM_TAKEOVER_COOLDOWN_CAP_MULTIPLIER`
- * (ADR proposal; the exact curve is an open question there). Each
- * {@link recordDeposition} call doubles the previous window instead of
- * restarting it — through `WorkflowClaimRegistry`'s real call graph a second
- * deposition for the same id is only reachable after an intervening
- * successful (re)acquire has already cleared the cooldown, so doubling does
- * not compound in practice today; it is implemented and unit-tested here
- * directly against the tracker so the shape is correct if a future stage
- * changes that call graph.
+ * **Curve.** A fixed window of `workflowClaimRenewInterval`, not exponential.
+ * Through `WorkflowClaimRegistry`'s real call graph, a second
+ * `recordDeposition` for the same id is only reachable after an intervening
+ * successful (re)acquire has already {@link clear}ed the tracked entry — this
+ * class never observes consecutive depositions for the same id without a
+ * clear between them, so a growing window would never actually grow. An
+ * exponential curve was tried here and found unreachable in review; keep this
+ * simple until a call-graph change (preserving loss history across successful
+ * reacquisition) makes a growing window meaningful.
  *
  * @module core/engine/workflow-claim-cooldown
  */
 
-/** `workflowClaimTtl` times this multiplier is the cooldown's cap. */
-export const WORKFLOW_CLAIM_TAKEOVER_COOLDOWN_CAP_MULTIPLIER = 4;
-
-/** Options for {@link WorkflowClaimTakeoverCooldown}. Mirrors `WorkflowClaimRegistryOptions`'s same-named fields, so the caller need not compute the cap itself. */
+/** Options for {@link WorkflowClaimTakeoverCooldown}. Mirrors `WorkflowClaimRegistryOptions`'s same-named field, so the caller need not compute the window itself. */
 export type WorkflowClaimTakeoverCooldownOptions = {
-  /** Cooldown's starting window (ms) — `workflowClaimRenewInterval`. */
+  /** Cooldown window (ms) — `workflowClaimRenewInterval`. */
   claimRenewIntervalMs: number;
-  /** `workflowClaimTtl` (ms); scaled by {@link WORKFLOW_CLAIM_TAKEOVER_COOLDOWN_CAP_MULTIPLIER} for the cap. */
-  claimTtlMs: number;
 };
-
-type CooldownEntry = { untilMs: number; windowMs: number };
 
 /**
  * Tracks one engine's per-workflow-id takeover cooldown. See the module doc
  * for the mechanism and curve.
  */
 export class WorkflowClaimTakeoverCooldown {
-  readonly #baseMs: number;
-  readonly #capMs: number;
-  readonly #entries = new Map<string, CooldownEntry>();
+  readonly #windowMs: number;
+  readonly #untilMsByWorkflowId = new Map<string, number>();
 
   constructor(options: WorkflowClaimTakeoverCooldownOptions) {
-    this.#baseMs = options.claimRenewIntervalMs;
-    this.#capMs = options.claimTtlMs * WORKFLOW_CLAIM_TAKEOVER_COOLDOWN_CAP_MULTIPLIER;
+    this.#windowMs = options.claimRenewIntervalMs;
   }
 
   /**
@@ -67,24 +57,20 @@ export class WorkflowClaimTakeoverCooldown {
    * expiry judgment.
    */
   isActive(workflowId: string, now: number): boolean {
-    const entry = this.#entries.get(workflowId);
-    return entry !== undefined && now < entry.untilMs;
+    const untilMs = this.#untilMsByWorkflowId.get(workflowId);
+    return untilMs !== undefined && now < untilMs;
   }
 
   /**
    * Record that this engine just lost ownership of `workflowId` via a failed
-   * `renew`. Starts a fresh window at `baseMs` when none is tracked yet, or
-   * doubles the previous window (capped at `capMs`) when one already is.
+   * `renew`. Starts (or restarts) a fixed-length cooldown window.
    */
   recordDeposition(workflowId: string, now: number): void {
-    const existing = this.#entries.get(workflowId);
-    const windowMs =
-      existing === undefined ? this.#baseMs : Math.min(existing.windowMs * 2, this.#capMs);
-    this.#entries.set(workflowId, { untilMs: now + windowMs, windowMs });
+    this.#untilMsByWorkflowId.set(workflowId, now + this.#windowMs);
   }
 
   /** Clear any tracked cooldown for `workflowId` — call on a successful (re)acquire or takeover. */
   clear(workflowId: string): void {
-    this.#entries.delete(workflowId);
+    this.#untilMsByWorkflowId.delete(workflowId);
   }
 }
