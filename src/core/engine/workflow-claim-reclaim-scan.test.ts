@@ -265,6 +265,19 @@ describe('listWorkflowClaimReclaimCandidates', () => {
       expect(candidates).toEqual(['wf-real']);
     });
 
+    it('skips an undecodable `wf:` record instead of throwing, and still surfaces a genuine holderless running workflow scanned in the same pass', async () => {
+      const storage = new MemoryStorage();
+      // A workflow-record key holding bytes that are not valid MessagePack —
+      // e.g. a partially-written or corrupted record — must not crash the
+      // scan or be surfaced as a reclaim candidate.
+      await storage.put(KEYS.workflow('wf-corrupt'), new Uint8Array([0xc1]));
+      await putWorkflowWithoutVisibilityIndex(storage, 'wf-real');
+
+      const candidates = await listWorkflowClaimReclaimCandidates(storage, new Set());
+
+      expect(candidates).toEqual(['wf-real']);
+    });
+
     it('the exact WFT-79 Finding 2 rolling-handoff sequence: an index-less workflow released mid-handoff is found by a later scan instead of stranded forever', async () => {
       const storage = new MemoryStorage();
       // A pre-backfill workflow: outgoing engine's live holder, no

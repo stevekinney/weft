@@ -827,6 +827,54 @@ describe('createWorkflowClaimRenewalTask · start/stop (interval mode, no real t
     expect(target.listCalls).toBe(2);
   });
 
+  it('does not leak an unhandled rejection when the reclaim-and-poll tick pass itself rejects, and recovers on the next tick', async () => {
+    const clock = makeClock();
+    const target = createFakeTarget([]);
+    const reclaimTarget = createFakeReclaimTarget(['wf-a']);
+    const boom = new Error('clock unavailable');
+    // `tick()` calls `runRenewalTickPass()` synchronously first (its
+    // `getNow()` read for `startedAt` is call #1), then
+    // `runReclaimAndPollTickPass()` synchronously second (its own
+    // `getNow()` read for `startedAt` is call #2) — both happen before
+    // either pass reaches its first `await`, so the call count
+    // deterministically attributes call #2 to the reclaim-and-poll pass.
+    // Failing only that call makes `runReclaimAndPollTickPass()` reject
+    // synchronously at its very first line, independent of the renewal
+    // pass (which already succeeded on call #1).
+    let callCount = 0;
+    const getNow = (): number => {
+      callCount += 1;
+      if (callCount === 2) throw boom;
+      return clock.now();
+    };
+    const scheduler = createFakeScheduler();
+    const task = createWorkflowClaimRenewalTask({
+      target,
+      reclaimTarget,
+      getNow,
+      intervalMs: 1_000,
+      scheduler,
+    });
+
+    task.start();
+    scheduler.fire();
+    await flushMicrotasks();
+
+    // No unhandled rejection escaped `tick()` for the reclaim-and-poll
+    // sub-pass, and the reclaim target was never reached because the pass
+    // rejected before it could call `listReclaimCandidateWorkflowIds()`.
+    expect(reclaimTarget.calls).toEqual([]);
+
+    // The `inFlightReclaimAndPoll` slot must have been cleared despite the
+    // rejection, so a later tick starts a fresh pass rather than being
+    // permanently wedged — this time with a working clock, so it actually
+    // reaches the reclaim target.
+    scheduler.fire();
+    await flushMicrotasks();
+
+    expect(reclaimTarget.calls).toEqual(['wf-a']);
+  });
+
   it('runOnce bypasses the interval single-flight guard even while a tick-driven pass is in flight', async () => {
     const clock = makeClock();
     const target = createFakeTarget(['workflow-a', 'workflow-b']);
