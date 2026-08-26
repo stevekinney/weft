@@ -12,11 +12,11 @@
 import { describe, expect, it } from 'bun:test';
 
 import { createDeferred } from '../../testing/fake-timers.test-support.ts';
+import type { WorkflowClaimRenewalTarget } from './workflow-claim-renewal-subpasses.ts';
 import {
   runRenewalSubPass,
   WORKFLOW_CLAIM_RENEWAL_CONCURRENCY,
 } from './workflow-claim-renewal-subpasses.ts';
-import type { WorkflowClaimRenewalTarget } from './workflow-claim-renewal-task.ts';
 
 /**
  * A renewal target that never settles a call until released, recording how many
