@@ -183,6 +183,19 @@ async function consumePendingAsyncActivity(
   if (!pending) {
     throw new AsyncActivityTokenNotFoundError(token);
   }
+  // `recoverAll()`'s global async-activity scan (`workflowId === undefined`)
+  // runs BEFORE per-workflow ownership is determined, so on a shared
+  // `workflow-lease` store every engine loads every token into this map —
+  // including ones for workflows it will never actually claim. Without this
+  // check, a completion reaching a non-owner would pass the lookup above and
+  // then fail unfenced inside `commitFencedEngineWrite` with
+  // `EngineDeposedError`, an unexpected server failure rather than the
+  // documented wrong-engine `AsyncActivityTokenNotFoundError` a caller behind
+  // a load balancer should see and retry elsewhere.
+  const registry = internals.workflowClaimRegistry;
+  if (registry !== null && registry.currentEpoch(pending.workflowId) === null) {
+    throw new AsyncActivityTokenNotFoundError(token);
+  }
   // Claim the in-memory token SYNCHRONOUSLY, before any await. Two concurrent
   // completions for the same token (trivially race-able now that the token is
   // resolvable over a public HTTP endpoint) would otherwise both pass the
