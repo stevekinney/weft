@@ -115,23 +115,34 @@ export async function signal(
   }
 }
 
+/**
+ * Remove the signal waiter registered under `waiterKey`, optionally only when
+ * it is still `expectedResolve`.
+ *
+ * Returns whether THIS call removed that exact waiter. Callers that go on to
+ * invoke the resolver must gate on the return value: a waiter captured before
+ * an await can be replaced by replay or a fresh park while that await is in
+ * flight, and invoking the captured resolver anyway advances a superseded
+ * generator even though the replacement was correctly left in place.
+ */
 export function releaseSignalWaiter(
   internals: EngineInternals,
   workflowId: string,
   waiterKey: string,
   expectedResolve?: () => void,
-): void {
+): boolean {
   const currentWaiter = internals.signalWaiters.get(waiterKey);
   if (!currentWaiter) {
-    return;
+    return false;
   }
 
   if (expectedResolve && currentWaiter !== expectedResolve) {
-    return;
+    return false;
   }
 
   internals.signalWaiters.delete(waiterKey);
   untrackWaiterKey(internals.signalWaitersByWorkflow, workflowId, waiterKey);
+  return true;
 }
 
 export async function bufferSignalPayloads(
@@ -326,8 +337,13 @@ async function deliverBufferedSignals(
       if ((await confirmWakeOwnership(internals, workflowId, 'signal')) === 'discard') {
         continue;
       }
-      releaseSignalWaiter(internals, workflowId, waiterKey, waiter);
-      waiter();
+      // Invoke ONLY the waiter this call removed. Replay or a fresh park can
+      // replace it while the ownership read above is in flight; `release`
+      // correctly leaves the replacement alone, but calling the captured
+      // resolver anyway would advance the superseded generator.
+      if (releaseSignalWaiter(internals, workflowId, waiterKey, waiter)) {
+        waiter();
+      }
       continue;
     }
 

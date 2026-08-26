@@ -1274,8 +1274,12 @@ export class Engine<
       wakeSignalWaiter: (workflowId, waiterKey) => {
         const waiter = internals.signalWaiters.get(waiterKey);
         if (waiter === undefined) return;
-        releaseSignalWaiter(internals, workflowId, waiterKey, waiter);
-        waiter();
+        // Only invoke the waiter this call actually removed — see
+        // `releaseSignalWaiter`. The poll's ownership confirmation above is an
+        // await, so the waiter can be replaced meanwhile.
+        if (releaseSignalWaiter(internals, workflowId, waiterKey, waiter)) {
+          waiter();
+        }
       },
     };
     return buildOwnerSideSignalPollTarget(sources);
