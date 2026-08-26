@@ -238,18 +238,25 @@ await withRatchetStash('/unused', async () => {
       },
     });
 
-    await ready;
-    subprocess.kill('SIGINT');
-    const listenerCount = await Promise.race([
-      restoreStarted,
-      new Promise<never>((_resolve, reject) =>
-        setTimeout(() => reject(new Error('Repeated-signal fixture did not start cleanup')), 2_000),
-      ),
-    ]);
-    expect(listenerCount).toBe(1);
-    subprocess.kill('SIGINT');
-    subprocess.send('release');
-    expect(await subprocess.exited).toBe(130);
+    try {
+      await ready;
+      subprocess.kill('SIGINT');
+      const listenerCount = await Promise.race([
+        restoreStarted,
+        new Promise<never>((_resolve, reject) =>
+          setTimeout(
+            () => reject(new Error('Repeated-signal fixture did not start cleanup')),
+            2_000,
+          ),
+        ),
+      ]);
+      expect(listenerCount).toBe(1);
+      subprocess.kill('SIGINT');
+      subprocess.send('release');
+      expect(await subprocess.exited).toBe(130);
+    } finally {
+      subprocess.kill('SIGKILL');
+    }
   });
 
   it('keeps signal handlers installed when the interrupted operation rejects during cleanup', async () => {
@@ -372,27 +379,31 @@ await withRatchetStash(${JSON.stringify(repositoryRoot)}, async () => {
         },
       });
 
-      // fixed delay: hang guard on the signal-cleanup subprocess
-      await Promise.race([
-        ready,
-        new Promise<never>((_resolve, reject) =>
-          setTimeout(() => reject(new Error('Interrupt fixture did not become ready')), 2_000),
-        ),
-      ]);
-      subprocess.kill(signal);
-      const exitCode = await Promise.race([
-        subprocess.exited,
+      try {
         // fixed delay: hang guard on the signal-cleanup subprocess
-        new Promise<never>((_resolve, reject) =>
-          setTimeout(() => reject(new Error('Interrupted fixture did not exit')), 2_000),
-        ),
-      ]);
+        await Promise.race([
+          ready,
+          new Promise<never>((_resolve, reject) =>
+            setTimeout(() => reject(new Error('Interrupt fixture did not become ready')), 2_000),
+          ),
+        ]);
+        subprocess.kill(signal);
+        const exitCode = await Promise.race([
+          subprocess.exited,
+          // fixed delay: hang guard on the signal-cleanup subprocess
+          new Promise<never>((_resolve, reject) =>
+            setTimeout(() => reject(new Error('Interrupted fixture did not exit')), 2_000),
+          ),
+        ]);
 
-      expect(exitCode).toBe(expectedExitCode);
-      expect(await Bun.file(join(repositoryRoot, 'tracked.txt')).text()).toBe(
-        'base\ninterrupted change\n',
-      );
-      expect(await stashList(repositoryRoot)).not.toContain(RATCHET_STASH_MESSAGE);
+        expect(exitCode).toBe(expectedExitCode);
+        expect(await Bun.file(join(repositoryRoot, 'tracked.txt')).text()).toBe(
+          'base\ninterrupted change\n',
+        );
+        expect(await stashList(repositoryRoot)).not.toContain(RATCHET_STASH_MESSAGE);
+      } finally {
+        subprocess.kill('SIGKILL');
+      }
     });
   }
 });
