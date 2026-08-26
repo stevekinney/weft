@@ -1020,7 +1020,27 @@ export class Engine<
         // driving the workflow it sits idle while this engine's renewal keeps
         // the claim alive, shielding it from any engine that would resume it.
         onWorkflowClaimReclaimed: async (workflowId: string) => {
-          await resumeFromLifecycle(internals, workflowId, this.#createLifecycleCallbacks());
+          // `forceReplayFromStorage` is mandatory here. Deposition drops only
+          // the registry's claim entry; contexts, generators, parked markers
+          // and local checkpoints all survive. Without it, `resume()`'s
+          // local-ownership fast path would hand back the pre-deposition
+          // handle, and this reclaim would renew a workflow that never
+          // actually restarted from durable state.
+          // Reload this workflow's async-activity records BEFORE replay. A
+          // resolution acknowledged by the expired owner was discarded by that
+          // engine's wake-ownership check, leaving only the durable record;
+          // this engine's startup scan already ran, so without this bounded
+          // per-workflow reload the replayed run would re-park on the same
+          // deterministic token and wait forever for a delivery the completion
+          // caller was already told had succeeded.
+          await recoverPendingAsyncActivities(internals, workflowId);
+          await resumeFromLifecycle(
+            internals,
+            workflowId,
+            this.#createLifecycleCallbacks(),
+            undefined,
+            { forceReplayFromStorage: true },
+          );
         },
         // Owner-side signal polling (ADR 0002): without this, a signal
         // delivered to a non-owning engine is durably buffered but nobody

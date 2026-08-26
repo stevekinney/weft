@@ -2,12 +2,14 @@ import type { ContextOperationRequest } from '../context.ts';
 import { UpdateCompletedEvent, UpdateReceivedEvent } from '../events.ts';
 import { isGeneratorResult } from '../step-context.ts';
 import type { CoordinatedUpdateResult } from '../types.ts';
-import { UpdateValidationError, type UpdateRequest, type UpdateResponse } from '../updates.ts';
+import type { UpdateRequest, UpdateResponse } from '../updates.ts';
 import { notifyConditionWaiters } from './condition-waiters.ts';
 import type { EngineInternals } from './internals.ts';
 import { isLiveContextStale, isWorkflowClaimedByAnotherEngine } from './queries.ts';
 import { trackWaiterKey, untrackWaiterKey } from './signals.ts';
+import { runUpdateValidator } from './update-validation.ts';
 import { waitForUpdateResponse } from './waiting-update-response.ts';
+import { confirmWakeOwnership } from './wake-ownership-guard.ts';
 
 export type UpdateCallbacks = {
   dispatchEvent: (event: Event) => boolean;
@@ -70,10 +72,25 @@ export async function update(
   if (inlineResult.handled) {
     return inlineResult.value;
   }
-  // `inlineResult.reason` distinguishes "not owned locally" from "no handler
-  // registered", but both fall through the same way: unlike `query()`, the
-  // coordinated path below is already durable/cross-engine correct, so
-  // branching on `reason` here would add risk without fixing anything.
+  // `'not-owned-locally'` must skip the in-memory waiter path entirely. Losing a
+  // renewal drops this engine's claim entry from the registry but leaves
+  // `internals.updateWaiters` populated, so a deposed engine still holds a live
+  // `ctx.waitForUpdate()` waiter. Resolving that waiter here would advance the
+  // deposed generator while the successor independently advances its replayed
+  // one — the duplicate execution ADR 0002 exists to prevent — and it would do
+  // so before the old generator's next fenced write could catch it. Route
+  // straight to the durable coordinated path, which is already cross-engine
+  // correct.
+  //
+  // `'no-handler'` is the genuinely different case: this engine owns the
+  // workflow and simply has no handler registered for `name`, so the waiter
+  // path below still applies. Both reasons are unreachable without a claim
+  // registry (`isWorkflowClaimedByAnotherEngine` and `isLiveContextStale` both
+  // short-circuit on a null registry), so `ownership: 'none'`/`'lease'` reach
+  // `tryWaitingUpdateHandler` exactly as they do today.
+  if (inlineResult.reason === 'not-owned-locally') {
+    return await runCoordinatedUpdate(internals, workflowId, name, payload, timeout, callbacks);
+  }
 
   const waitingResult = await tryWaitingUpdateHandler(
     internals,
@@ -393,6 +410,21 @@ export async function deliverCoordinatedUpdateToWaiterIfAvailable(
     return false;
   }
 
+  // Resolving this in-memory waiter advances the workflow's generator, so it is
+  // a claim-requiring wake path like sleep, wait-condition and async-activity.
+  // A lost renewal drops this engine's registry entry but leaves
+  // `internals.updateWaiters` populated, so without this fence a deposed engine
+  // would resolve its stale `ctx.waitForUpdate()` waiter and advance the old
+  // generator while the successor independently advances its replayed one.
+  //
+  // Returning `false` — rather than deleting the durable request — deliberately
+  // leaves the coordinated record in place so the engine that actually holds
+  // the claim delivers it. Inert under `ownership: 'none'`/`'lease'`, where no
+  // claim registry is installed and `confirmWakeOwnership` always proceeds.
+  if ((await confirmWakeOwnership(internals, workflowId, 'update')) === 'discard') {
+    return false;
+  }
+
   await internals.updateCoordinator.deleteRequest(workflowId, updateRequest.updateId);
   internals.updateWaiters.delete(waiterKey);
   untrackWaiterKey(internals.updateWaitersByWorkflow, workflowId, waiterKey);
@@ -439,61 +471,4 @@ export async function invokeUpdateHandler(
     );
   }
   return await result;
-}
-
-/**
- * Run the pre-acceptance validator for an update, if one is registered.
- * Throws `UpdateValidationError` if the validator rejects (by throwing or by
- * returning a Standard Schema `{ issues: [...] }` failure result).
- */
-async function runUpdateValidator(
-  internals: EngineInternals,
-  workflowId: string,
-  name: string,
-  payload: unknown,
-): Promise<void> {
-  const validator = internals.inlineStrategy?.getContext(workflowId)?.updateValidators.get(name);
-  if (validator === undefined) return;
-
-  let result: unknown;
-  try {
-    result = await validator(payload);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new UpdateValidationError(name, [{ message }]);
-  }
-
-  const issues = extractStandardSchemaIssues(result);
-  if (issues !== null && issues.length > 0) {
-    throw new UpdateValidationError(name, issues);
-  }
-}
-
-/**
- * Extract issues from a Standard Schema v1 failure result, or null if absent.
- * No string-`message` entries yields `[]`; callers reject only on a non-empty
- * array, so `null` and `[]` both mean acceptance. Preserves `path` (RFC 6901).
- */
-export function extractStandardSchemaIssues(
-  result: unknown,
-): Array<{ message: string; path?: string }> | null {
-  if (result === null || typeof result !== 'object' || !('issues' in result)) return null;
-  const { issues } = result;
-  if (!Array.isArray(issues)) return null;
-  return issues.flatMap((issue: unknown) => {
-    if (issue === null || typeof issue !== 'object') return [];
-    const obj = issue as Record<string, unknown>;
-    if (typeof obj['message'] !== 'string') return [];
-    const entry: { message: string; path?: string } = { message: obj['message'] };
-    if (Array.isArray(obj['path']) && obj['path'].length > 0) {
-      entry.path = (obj['path'] as unknown[]).reduce((p: string, seg: unknown) => {
-        const k =
-          seg !== null && typeof seg === 'object' && 'key' in (seg as Record<string, unknown>)
-            ? String((seg as { key: unknown }).key)
-            : String(seg);
-        return p + '/' + k.replace(/~/g, '~0').replace(/\//g, '~1');
-      }, '');
-    }
-    return [entry];
-  });
 }

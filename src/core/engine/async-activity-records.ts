@@ -391,14 +391,29 @@ export async function registerPendingAsyncActivity(
  * before the recovered workflow has replayed far enough to re-register it —
  * and so an acknowledged-but-not-yet-checkpointed resolution is redelivered
  * when replay re-parks on the same deterministic token.
+ *
+ * Pass `workflowId` to reload just one workflow's records. ADR 0002's
+ * reclaim-driven resume needs this: a resolution acknowledged by an expired
+ * owner is discarded by that engine's `confirmWakeOwnership` check, leaving
+ * only the durable record. The engine that takes the workflow over finished
+ * its startup scan long ago, so without a per-workflow reload it never
+ * discovers a resolution written after that scan — the workflow re-parks and
+ * waits forever even though the completion caller was told it succeeded. The
+ * scan is bounded to {@link asyncActivityWorkflowPrefix}, so a takeover pays
+ * for one workflow rather than a store-wide sweep.
  */
-export async function recoverPendingAsyncActivities(internals: EngineInternals): Promise<void> {
+export async function recoverPendingAsyncActivities(
+  internals: EngineInternals,
+  workflowId?: string,
+): Promise<void> {
   // Global scan prefix shared with `KEYS.asyncActivity`; the per-token suffix
   // (`<workflowId>:<token>`) follows this base. The same namespace also holds
   // acknowledged-but-not-yet-checkpointed resolution records
   // (`<workflowId>:<token>:resolution`); each record is discriminated by its
   // decode guard, never by key shape.
-  for await (const [, bytes] of internals.storage.scan(ASYNC_ACTIVITY_KEY_PREFIX)) {
+  const scanPrefix =
+    workflowId === undefined ? ASYNC_ACTIVITY_KEY_PREFIX : asyncActivityWorkflowPrefix(workflowId);
+  for await (const [, bytes] of internals.storage.scan(scanPrefix)) {
     const decoded = decode(bytes);
     if (isPersistedAsyncActivity(decoded)) {
       internals.pendingAsyncActivities.set(decoded.token, {

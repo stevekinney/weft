@@ -3,9 +3,9 @@ import { describe, expect, it, mock } from 'bun:test';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import type { UpdateRequest } from '../updates.ts';
+import { extractStandardSchemaIssues } from './update-validation.ts';
 import {
   deliverCoordinatedUpdateToWaiterIfAvailable,
-  extractStandardSchemaIssues,
   processWaitUpdateOperation,
   tryInlineUpdateHandler,
   update,
@@ -153,6 +153,11 @@ describe('engine update helpers', () => {
     const waiterKey = 'workflow-1:rename';
     const updateRequest = createUpdateRequest();
     const internals = {
+      // `EngineInternals.workflowClaimRegistry` is `WorkflowClaimRegistry | null`
+      // and is always initialized to `null` in production. Omitting it left it
+      // `undefined`, which the ADR 0002 wake fence's `=== null` check correctly
+      // does not treat as "no registry".
+      workflowClaimRegistry: null,
       updateCoordinator: { deleteRequest },
       updateWaiters: new Map([[waiterKey, waiter]]),
       updateWaitersByWorkflow: new Map<string, Set<string>>([['workflow-1', new Set([waiterKey])]]),

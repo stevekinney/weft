@@ -215,14 +215,30 @@ export async function recoverAll(
   return handles;
 }
 
+/** Options for {@link resume}. */
+export type ResumeOptions = {
+  /**
+   * Skip the local-ownership fast path and always replay from durable storage.
+   *
+   * Required by ADR 0002 reclaim-driven resume: deposition drops only the
+   * registry's claim entry, so local checkpoints, parked markers, contexts and
+   * generators survive. Without this, a reclaim by the same engine returns the
+   * pre-deposition handle without reaching `resumeWorkflowFromStorage()` and
+   * renews a run that never restarted from durable state. Ordinary
+   * `engine.resume()` leaves it `false` — nothing was deposed there.
+   */
+  readonly forceReplayFromStorage?: boolean;
+};
+
 export async function resume(
   internals: EngineInternals,
   workflowId: string,
   callbacks: LifecycleCallbacks,
   onRecoveredWorkflow?: RecoverAllOptions['onRecoveredWorkflow'],
+  options?: ResumeOptions,
 ): Promise<WorkflowHandle> {
   const workflowState = await loadWorkflowState(internals, workflowId);
-  if (workflowState !== null) {
+  if (workflowState !== null && options?.forceReplayFromStorage !== true) {
     const locallyOwned =
       callbacks.isInlineWorkflowLocallyOwned(workflowId, workflowState.status) ||
       callbacks.hasLocalCheckpointOwnership(workflowId, workflowState.status);

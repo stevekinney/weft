@@ -233,6 +233,51 @@ describe('engine lifecycle coverage helpers', () => {
     expect(resumed).toBe(handle as never);
   });
 
+  it('resume bypasses the local fast path when reclaim forces replay from storage', async () => {
+    // ADR 0002: after deposition the registry drops only the claim entry, so a
+    // locally-owned handle can still be present when the same engine reclaims
+    // the workflow. Returning it would renew a run that never restarted from
+    // durable state, so reclaim-driven resume must reach
+    // `resumeWorkflowFromStorage` even though every local-ownership predicate
+    // reports `true`.
+    const storage = new MemoryStorage();
+    const workflowId = 'workflow-reclaim-forced-replay';
+    await storage.put(KEYS.workflow(workflowId), encode(createWorkflowState(workflowId)));
+
+    const staleHandle = { id: workflowId };
+    let reachedFastPath = false;
+
+    const attempt = import('./lifecycle.ts').then(({ resume }) =>
+      resume(
+        { storage, options: { historyPolicy: { maxEvents: null } } } as never,
+        workflowId,
+        createLifecycleCallbacks({
+          getHandle: () => {
+            reachedFastPath = true;
+            return staleHandle;
+          },
+          isInlineWorkflowLocallyOwned: () => true,
+          hasLocalCheckpointOwnership: () => true,
+        }) as never,
+        undefined,
+        { forceReplayFromStorage: true },
+      ),
+    );
+
+    // The minimal stub cannot complete a real replay; whether it resolves or
+    // rejects, the load-bearing assertion is that the stale local handle was
+    // never handed back.
+    const outcome = await attempt.then(
+      (value) => ({ ok: true as const, value }),
+      () => ({ ok: false as const, value: undefined }),
+    );
+
+    expect(reachedFastPath).toBe(false);
+    if (outcome.ok) {
+      expect(outcome.value).not.toBe(staleHandle as never);
+    }
+  });
+
   it('resume returns existing local handles for checkpoint-owned workflows', async () => {
     const storage = new MemoryStorage();
     const workflowId = 'workflow-checkpoint-owned-resume';

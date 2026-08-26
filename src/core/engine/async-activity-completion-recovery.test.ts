@@ -113,4 +113,49 @@ describe('async activity completion recovery buffering', () => {
 
     engine[Symbol.dispose]();
   });
+  it('reloads only the requested workflow when scoped to a single id', async () => {
+    // ADR 0002 reclaim-driven resume calls this with a workflowId so a takeover
+    // pays for one workflow instead of a store-wide sweep. An unbounded scan
+    // would still "work" for the reclaimed run, so the load-bearing assertion
+    // is that the OTHER workflow's token is NOT pulled into memory.
+    await using storage = new MemoryStorage();
+
+    const scopedWorkflow = workflow({ name: 'scoped-recovery-order' })
+      .activities({ awaitCallback })
+      .execute(async function* (ctx: WorkflowContext) {
+        const approval = yield* ctx.run(awaitCallback);
+        return { approval };
+      });
+
+    let reclaimedWorkflowId: string;
+    let reclaimedToken: string;
+    let siblingToken: string;
+    {
+      const firstEngine = new Engine({ storage });
+      firstEngine.register(scopedWorkflow);
+
+      const reclaimedTokenPromise = nextAsyncPendingToken(firstEngine);
+      const reclaimedHandle = await firstEngine.start('scoped-recovery-order', null);
+      reclaimedWorkflowId = reclaimedHandle.id;
+      reclaimedToken = await reclaimedTokenPromise;
+
+      const siblingTokenPromise = nextAsyncPendingToken(firstEngine);
+      await firstEngine.start('scoped-recovery-order', null);
+      siblingToken = await siblingTokenPromise;
+
+      firstEngine[Symbol.dispose]();
+    }
+
+    expect(reclaimedToken).not.toBe(siblingToken);
+
+    const recoveredEngine = new Engine({ storage });
+    recoveredEngine.register(scopedWorkflow);
+    await recoverPendingAsyncActivities(getInternals(recoveredEngine), reclaimedWorkflowId);
+
+    const pending = getInternals(recoveredEngine).pendingAsyncActivities;
+    expect(pending.has(reclaimedToken)).toBe(true);
+    expect(pending.has(siblingToken)).toBe(false);
+
+    recoveredEngine[Symbol.dispose]();
+  });
 });
