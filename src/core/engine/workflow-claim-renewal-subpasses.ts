@@ -146,10 +146,43 @@ export async function runReclaimPass(
 }
 
 /**
- * Renew every id in `workflowIds` in turn, continuing past a per-workflow
- * failure. Pure loop — no clock reads, no `onPassComplete` — so it is shared
- * verbatim by `workflow-claim-renewal-task.ts`'s combined `runOnce()` pass
- * and interval mode's standalone renewal sub-pass.
+ * How many claim renewals may be in flight at once within a single pass.
+ *
+ * A serial loop costs one storage round trip per held claim before returning to
+ * the first one, so with many claims on a high-latency shared store the pass
+ * itself can outlast `workflowClaimTtl`: later claims expire before their first
+ * renewal, and earlier ones expire before the next pass. Separating the reclaim
+ * scan out of the renewal single-flight does not help — this loop is unbounded
+ * in the number of claims, independently of what else shares the tick.
+ *
+ * The opposite extreme is just as wrong: renewing every claim at once turns
+ * starvation into a storage stampede that the store may then rate-limit or
+ * queue, reproducing the latency it was meant to avoid. So renewals run through
+ * a fixed-width pool.
+ *
+ * Sixteen is chosen to be wide enough that per-request latency dominates rather
+ * than accumulates — it cuts a 1000-claim pass from 1000 sequential round trips
+ * to 63 — while staying within the connection budget a modest remote store
+ * offers. It is deliberately a constant rather than an option: it trades two
+ * failure modes against each other and neither is something a caller is well
+ * placed to tune. Revisit it with measurements, not intuition.
+ */
+export const WORKFLOW_CLAIM_RENEWAL_CONCURRENCY = 16;
+
+/**
+ * Renew every id in `workflowIds`, continuing past a per-workflow failure.
+ *
+ * Renewals run through a bounded pool (see
+ * {@link WORKFLOW_CLAIM_RENEWAL_CONCURRENCY}) rather than one at a time, so a
+ * large claim set cannot push the pass past the claim validity window. Losing
+ * one claim still stops only that workflow: each renewal keeps its own
+ * `try`/`catch`, and `outcomes` stays in `workflowIds` order regardless of the
+ * order results actually arrive, so callers and tests see a stable, positional
+ * result.
+ *
+ * Pure — no clock reads, no `onPassComplete` — so it is shared verbatim by
+ * `workflow-claim-renewal-task.ts`'s combined `runOnce()` pass and interval
+ * mode's standalone renewal sub-pass.
  */
 export async function runRenewalSubPass(
   target: WorkflowClaimRenewalTarget,
@@ -159,15 +192,47 @@ export async function runRenewalSubPass(
   renewedCount: number;
   failedCount: number;
 }> {
-  const outcomes: WorkflowClaimRenewalOutcome[] = [];
-  for (const workflowId of workflowIds) {
-    try {
-      await target.renewWorkflowClaim(workflowId);
-      outcomes.push({ workflowId, status: 'renewed' });
-    } catch (error) {
-      outcomes.push({ workflowId, status: 'failed', error });
+  const outcomes = Array.from<WorkflowClaimRenewalOutcome>({ length: workflowIds.length });
+  let nextIndex = 0;
+
+  // Single-threaded JS makes this index handout safe without a lock: each
+  // worker takes an index synchronously before its first await.
+  async function renewFromQueue(): Promise<void> {
+    for (;;) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= workflowIds.length) return;
+      const workflowId = workflowIds[index]!;
+      try {
+        await target.renewWorkflowClaim(workflowId);
+        outcomes[index] = { workflowId, status: 'renewed' };
+      } catch (error) {
+        outcomes[index] = { workflowId, status: 'failed', error };
+      }
     }
   }
+
+  // With at most one claim there is nothing to overlap, so the pool is pure
+  // overhead. The loop is written out rather than delegated to
+  // `renewFromQueue` so this path keeps the exact async-frame shape it had
+  // before the pool existed: callers observe a single-claim pass settling in
+  // the same number of microtask turns, and nothing that interleaves against it
+  // shifts. Small duplication, deliberately, in exchange for not perturbing the
+  // overwhelmingly common case.
+  if (workflowIds.length <= 1) {
+    for (const [index, workflowId] of workflowIds.entries()) {
+      try {
+        await target.renewWorkflowClaim(workflowId);
+        outcomes[index] = { workflowId, status: 'renewed' };
+      } catch (error) {
+        outcomes[index] = { workflowId, status: 'failed', error };
+      }
+    }
+  } else {
+    const workerCount = Math.min(WORKFLOW_CLAIM_RENEWAL_CONCURRENCY, workflowIds.length);
+    await Promise.all(Array.from({ length: workerCount }, renewFromQueue));
+  }
+
   return {
     outcomes,
     renewedCount: outcomes.filter((outcome) => outcome.status === 'renewed').length,
