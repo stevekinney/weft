@@ -437,11 +437,63 @@ describe('WFT-79 F1: generator-owned child-result fencing', () => {
     // fixed delay: negative assertion — proving the waiter never settles has no observable event to await instead
     await waitForRealTimersForTesting(50);
 
+    // The parent's view never settles: the successor replays that parent, and
+    // this engine's copy must not advance.
     expect(settled).toBe(false);
     expect(rejected).toBe(false);
-    // Left registered — never resolved or rejected — so only engine disposal
-    // ever settles it, matching every other discarded claim-requiring wake.
-    expect(internals.resultResolvers.has('child-1')).toBe(true);
+    // The SHARED waiter is not held hostage by the parent's fence. The child's
+    // result is durable and an observational caller is entitled to it, so the
+    // waiter settles and is removed; only the parent's derived promise is
+    // withheld. (This assertion previously required the opposite — the shared
+    // waiter pinned forever — which is what starved unrelated observers.)
+    expect(internals.resultResolvers.has('child-1')).toBe(false);
+  });
+
+  it('still delivers the child result to an observational caller sharing the waiter', async () => {
+    // `resultResolvers` dedupes to one waiter per workflow id, so a parked
+    // parent and an external `handle.result()` observer can share it. Applying
+    // the parent's fence to that shared entry starved the observer of a result
+    // that was already durable.
+    const storage = new MemoryStorage();
+    await using engine = await Engine.create({ storage, workflows, ...ownershipOptions });
+    const internals = getInternals(engine);
+    const registry = internals.workflowClaimRegistry!;
+    const parentClaim = await registry.acquire('parent-2');
+    expect(parentClaim.status).toBe('acquired');
+
+    const childHandle = await engine.start('wft-79-f1-child', null, { id: 'child-2' });
+    await expect(childHandle.result()).resolves.toBe('child-done');
+
+    // Parent attaches first, observer second — both land on one waiter.
+    let parentSettled = false;
+    void getGeneratorOwnedWorkflowResultPromise(internals, 'child-2', 'parent-2').then(
+      () => {
+        parentSettled = true;
+      },
+      () => {
+        parentSettled = true;
+      },
+    );
+    const observed = getWorkflowResultPromise(internals, 'child-2');
+
+    // The successor takes over the PARENT only; the child is untouched.
+    await storage.batch([
+      { type: 'put', key: KEYS.workflowOwnerEpoch('parent-2'), value: encodeEpoch(2) },
+      {
+        type: 'put',
+        key: KEYS.workflowOwnerHolder('parent-2'),
+        value: encodeWorkflowClaimHolder({
+          engineId: 'successor-engine',
+          epoch: 2,
+          expiresAt: internals.options.getNow() + 60_000,
+          claimedAt: internals.options.getNow(),
+        }),
+      },
+    ]);
+
+    // The observer gets the durable result even though the parent is deposed.
+    await expect(observed).resolves.toBe('child-done');
+    expect(parentSettled).toBe(false);
   });
 
   it('settles a generator-owned waiter normally when the parent still holds its claim', async () => {

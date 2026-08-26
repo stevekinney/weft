@@ -4,8 +4,8 @@ import { UpdateValidationError } from '../updates.ts';
 import { notifyConditionWaiters } from './condition-waiters.ts';
 import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
+import { invokeUpdateHandler as invokeUpdateHandlerFromInternals } from './invoke-update-handler.ts';
 import { extractStandardSchemaIssues } from './update-validation.ts';
-import { invokeUpdateHandler as invokeUpdateHandlerFromInternals } from './updates.ts';
 
 type PendingUpdateCallbacks = {
   dispatchEvent: (event: Event) => boolean;

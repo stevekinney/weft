@@ -1,10 +1,10 @@
 import type { ContextOperationRequest } from '../context.ts';
 import { UpdateCompletedEvent, UpdateReceivedEvent } from '../events.ts';
-import { isGeneratorResult } from '../step-context.ts';
 import type { CoordinatedUpdateResult } from '../types.ts';
 import type { UpdateRequest, UpdateResponse } from '../updates.ts';
 import { notifyConditionWaiters } from './condition-waiters.ts';
 import type { EngineInternals } from './internals.ts';
+import { invokeUpdateHandler, type InlineUpdateHandler } from './invoke-update-handler.ts';
 import { isLiveContextStale, isWorkflowClaimedByAnotherEngine } from './queries.ts';
 import { trackWaiterKey, untrackWaiterKey } from './signals.ts';
 import { runUpdateValidator } from './update-validation.ts';
@@ -110,6 +110,26 @@ export async function update(
 type UpdateAttemptResult = { handled: true; value: unknown } | { handled: false };
 
 /**
+ * Re-read the update handler after the durable ownership check awaited: a
+ * same-owner signal resume can install a fresh context — different closure, or
+ * none — while that read is in flight, and the captured closure would then run
+ * against retired workflow-local state. Ownership never changes in this race,
+ * so only re-reading catches it (as in `queries.ts`). A plain `false` `stale`
+ * means no await happened, so the captured handler stands and
+ * `ownership: 'none'`/`'lease'` pay nothing.
+ */
+function refreshUpdateHandlerAfterAwait(
+  internals: EngineInternals,
+  workflowId: string,
+  name: string,
+  capturedHandler: InlineUpdateHandler,
+  stale: boolean | Promise<boolean>,
+): InlineUpdateHandler | undefined {
+  if (stale === false) return capturedHandler;
+  return internals.inlineStrategy?.getContext(workflowId)?.updateHandlers.get(name);
+}
+
+/**
  * `handled: false` used to conflate two reasons: no live local context at all
  * (`'not-owned-locally'`, possible under `ownership: 'workflow-lease'` when
  * another engine holds the claim) versus a live context with no handler
@@ -139,10 +159,17 @@ export async function tryInlineUpdateHandler(
     return { handled: false, reason: 'not-owned-locally' };
   }
 
+  const liveHandler = refreshUpdateHandlerAfterAwait(internals, workflowId, name, handler, stale);
+  if (!liveHandler) {
+    // The context went away mid-read (terminal cleanup or suspend). Fall
+    // through to the durable coordinated path rather than throwing.
+    return { handled: false, reason: 'no-handler' };
+  }
+
   const updateId = crypto.randomUUID();
   callbacks.dispatchEvent(new UpdateReceivedEvent(updateId, workflowId, name, payload));
   try {
-    const result = await invokeUpdateHandler(internals, name, handler, payload);
+    const result = await invokeUpdateHandler(internals, name, liveHandler, payload);
     callbacks.dispatchEvent(new UpdateCompletedEvent(updateId, workflowId, name, result));
     callbacks.broadcast({ type: 'update:completed', workflowId, updateId });
     // Re-drive live `ctx.waitUntil` waiters: the handler may have mutated
@@ -450,25 +477,4 @@ export async function findPendingUpdateByName(
 ): Promise<UpdateRequest | undefined> {
   const pendingUpdates = await internals.updateCoordinator.getPendingUpdates(workflowId);
   return pendingUpdates.find((updateRequest) => updateRequest.name === name);
-}
-
-/**
- * Invoke an update handler, checking that it does not return a generator.
- * Centralises the runtime generator guard for both the inline-handler path
- * in `update()` and the pending-drain path on resume.
- */
-export async function invokeUpdateHandler(
-  _internals: EngineInternals,
-  name: string,
-  handler: (payload: unknown) => unknown,
-  payload: unknown,
-): Promise<unknown> {
-  const result = handler(payload);
-  if (isGeneratorResult(result)) {
-    throw new TypeError(
-      `Update handler "${name}" returned a generator. ` +
-        'Update handlers must return a plain value or a Promise, not a generator.',
-    );
-  }
-  return await result;
 }

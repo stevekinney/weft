@@ -50,6 +50,10 @@ function createInternals() {
     // tests exercise child-workflow logic without a storage round trip.
     resultResolvers: new Map<string, { promise: Promise<unknown> }>(),
     disposed: false,
+    // `EngineInternals.workflowClaimRegistry` is `WorkflowClaimRegistry | null`
+    // and production always initializes it to `null`. Leaving it `undefined`
+    // makes the ADR 0002 wake fence's `=== null` check miss.
+    workflowClaimRegistry: null,
   };
 }
 

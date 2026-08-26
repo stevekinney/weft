@@ -5,39 +5,6 @@ import type { EngineInternals } from './internals.ts';
 import { loadWorkflowResult, loadWorkflowState } from './storage-io.ts';
 import { confirmWakeOwnership } from './wake-ownership-guard.ts';
 
-/**
- * Identifies a result waiter created for a parked parent generator's
- * `ctx.startChild()` await (`parentClosePolicy: 'await'`), as opposed to an
- * observational `handle.result()` caller. Tracked out-of-band in a
- * module-local `WeakMap` — see {@link getGeneratorOwnedWorkflowResultPromise}
- * — rather than as a field on {@link WorkflowResultWaiter}, so this file
- * needs no change to `engine-internal-types.ts`.
- */
-type GeneratorOwnership = { readonly parentWorkflowId: string };
-
-/**
- * Waiter → owning parent workflow id, for waiters created by
- * {@link getGeneratorOwnedWorkflowResultPromise}. Because
- * `internals.resultResolvers` dedupes to one waiter per workflow id (see
- * {@link getWorkflowResultPromise}), a waiter that a generator-owned caller
- * and a later observational `handle.result()` caller both attach to is
- * treated as generator-owned: the observational caller rides along on the
- * same fencing. This mixed-caller case is not covered by ADR 0002 and is
- * called out here deliberately rather than resolved silently.
- */
-const generatorOwnedWaiters = new WeakMap<WorkflowResultWaiter, GeneratorOwnership>();
-
-/**
- * Waiters permanently fenced off by a confirmed loss of their parent
- * generator's claim (`confirmWakeOwnership` returned `'discard'`). Such a
- * waiter is deliberately left registered in `resultResolvers` — never
- * resolved or rejected by this module again — so only `disposeEngine`'s
- * synchronous map sweep ever settles it (by rejection), matching every other
- * discarded claim-requiring wake. Recorded here purely to stop this module's
- * own polling from repeating the (already-decided) ownership check forever.
- */
-const discardedGeneratorOwnedWaiters = new WeakSet<WorkflowResultWaiter>();
-
 export function createWorkflowHandleWithResultPromise(
   internals: EngineInternals,
   workflowId: string,
@@ -114,12 +81,70 @@ export function getGeneratorOwnedWorkflowResultPromise(
   workflowId: string,
   parentWorkflowId: string,
 ): Promise<unknown> {
-  const promise = getWorkflowResultPromise(internals, workflowId);
-  const waiter = internals.resultResolvers.get(workflowId);
-  if (waiter) {
-    generatorOwnedWaiters.set(waiter, { parentWorkflowId });
+  return fenceResultOnParentGeneration(
+    internals,
+    parentWorkflowId,
+    getWorkflowResultPromise(internals, workflowId),
+  );
+}
+
+/**
+ * Withhold a settled child result from a parent generator that no longer holds
+ * the claim generation it parked under.
+ *
+ * This wraps the SHARED waiter's promise rather than marking the waiter itself.
+ * `internals.resultResolvers` dedupes to one waiter per workflow id, so an
+ * observational `handle.result()` caller and a parked parent can attach to the
+ * same waiter in either order. Marking that shared entry applied the parent's
+ * fence to the observer too, and a deposed parent then starved an unrelated
+ * caller of a result that was already durable — so the fence lives on the
+ * parent's view, and the shared waiter settles normally for everyone else.
+ *
+ * A discarded parent's promise never settles, matching every other discarded
+ * claim-requiring wake: the successor engine replays that parent, and this
+ * engine's copy must not advance. Inert under `ownership: 'none'`/`'lease'`,
+ * where `confirmWakeOwnership` always proceeds.
+ */
+function fenceResultOnParentGeneration(
+  internals: EngineInternals,
+  parentWorkflowId: string,
+  promise: Promise<unknown>,
+): Promise<unknown> {
+  const gate = Promise.withResolvers<unknown>();
+  void promise
+    .then(
+      async (value) => {
+        if (await parentStillOwnsGeneration(internals, parentWorkflowId)) gate.resolve(value);
+      },
+      async (error: unknown) => {
+        if (await parentStillOwnsGeneration(internals, parentWorkflowId)) gate.reject(error);
+      },
+    )
+    .catch(() => {
+      // Unreachable in practice: `parentStillOwnsGeneration` swallows its own
+      // failures. Present so a future edit cannot turn a stray rejection into
+      // an unhandled one.
+    });
+  return gate.promise;
+}
+
+async function parentStillOwnsGeneration(
+  internals: EngineInternals,
+  parentWorkflowId: string,
+): Promise<boolean> {
+  try {
+    return (
+      (await confirmWakeOwnership(internals, parentWorkflowId, 'child-completion')) === 'proceed'
+    );
+  } catch {
+    // A thrown pre-check is not a confirmed loss of the claim, and this fence
+    // is only a cheap guard — the epoch-conditioned durable write the parent
+    // makes next is the real backstop. Proceeding matches
+    // `confirmWakeOwnership`'s own documented thrown-read policy; swallowing
+    // the throw into a withheld result would strand the parent permanently on
+    // a transient blip.
+    return true;
   }
-  return promise;
 }
 
 /**
@@ -202,7 +227,6 @@ function scheduleCrossEngineResultPollIfPending(
   const registry = internals.workflowClaimRegistry;
   if (registry === null) return;
   if (internals.resultResolvers.get(workflowId) !== waiter) return;
-  if (discardedGeneratorOwnedWaiters.has(waiter)) return;
   // `backgroundTasks: 'manual'` is documented to start no timers at all; that
   // mode drives this through an awaited `runMaintenance()` instead.
   if (internals.options.backgroundTaskMode !== 'automatic') return;
@@ -234,10 +258,6 @@ export async function pollPendingCrossEngineResultWaiters(
   // mutating a Map mid-iteration can skip entries.
   const pending = Array.from(internals.resultResolvers.entries());
   for (const [workflowId, waiter] of pending) {
-    // WFT-79 F1: a generator-owned waiter already confirmed discarded (its
-    // parent generation lost) never settles again — see
-    // `discardedGeneratorOwnedWaiters`'s doc.
-    if (discardedGeneratorOwnedWaiters.has(waiter)) continue;
     // WFT-79 F2: give this engine's own in-flight `notifyCompletionWaiters()`
     // one macrotask to settle the waiter before this poll would, so normal
     // terminal-delivery ordering wins. This must NOT be a bare
@@ -299,34 +319,6 @@ function settleOrRetryOnTransientReadFailure(
 }
 
 /**
- * WFT-79 F1: before this waiter settles with a terminal outcome, confirm a
- * generator-owned waiter's parent still holds the claim generation it parked
- * under (`confirmWakeOwnership`, `'child-completion'`). A `'discard'`
- * permanently fences the waiter — see {@link discardedGeneratorOwnedWaiters}
- * — so a deposed parent generator is never advanced twice. Observational
- * waiters (no entry in {@link generatorOwnedWaiters}) are a no-op here by
- * design: cross-engine `handle.result()` polling has no generator to
- * duplicate and must remain settleable from durable state alone.
- */
-async function confirmGeneratorOwnershipBeforeSettling(
-  internals: EngineInternals,
-  waiter: WorkflowResultWaiter,
-): Promise<'proceed' | 'discard'> {
-  const ownership = generatorOwnedWaiters.get(waiter);
-  if (!ownership) return 'proceed';
-
-  const decision = await confirmWakeOwnership(
-    internals,
-    ownership.parentWorkflowId,
-    'child-completion',
-  );
-  if (decision === 'discard') {
-    discardedGeneratorOwnedWaiters.add(waiter);
-  }
-  return decision;
-}
-
-/**
  * WFT-79 F2: closes the ordering race described on
  * {@link scheduleCrossEngineResultPollIfPending} without reintroducing the
  * unsound "skip the read whenever locally claimed" version of the fix (see
@@ -374,9 +366,6 @@ async function prepareToSettleTerminalWaiter(
   workflowId: string,
   waiter: WorkflowResultWaiter,
 ): Promise<'proceed' | Extract<ResultResolutionOutcome, 'discarded' | 'settled'>> {
-  if ((await confirmGeneratorOwnershipBeforeSettling(internals, waiter)) === 'discard') {
-    return 'discarded';
-  }
   if (await deferToLocalTerminalDeliveryIfPending(internals, workflowId, waiter)) {
     return 'settled';
   }
