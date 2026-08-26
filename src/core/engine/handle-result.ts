@@ -424,8 +424,38 @@ export async function bootstrapWorkflowResultResolver(
     waiter.resolve(result);
     return 'settled';
   } catch (error) {
-    return settleOrRetryOnTransientReadFailure(internals, workflowId, waiter, error);
+    return settleTerminalResultReadFailure(internals, workflowId, waiter, error, state.status);
   }
+}
+
+/**
+ * Decide what a throw from `loadWorkflowResult()` means for an already-terminal
+ * workflow.
+ *
+ * That helper THROWS the persisted terminal error for `failed`, `cancelled` and
+ * `timed-out` — the throw IS the result there, not a read failure. Retrying it
+ * leaves the waiter pending forever (re-reading throws again every time), so a
+ * parent awaiting a failed child never gets its rejection and hangs.
+ * `terminalStatus` is the discriminator: only `completed` reaching here means a
+ * genuine storage problem worth retrying.
+ *
+ * A blip while reading a non-`completed` workflow therefore rejects with the
+ * blip rather than the persisted error — deliberate, since rejection is the
+ * correct disposition either way and a vaguer error beats a hang.
+ */
+function settleTerminalResultReadFailure(
+  internals: EngineInternals,
+  workflowId: string,
+  waiter: WorkflowResultWaiter,
+  error: unknown,
+  terminalStatus: string,
+): ResultResolutionOutcome {
+  if (terminalStatus !== 'completed') {
+    clearResultWaiter(internals, workflowId, waiter);
+    waiter.reject(error);
+    return 'settled';
+  }
+  return settleOrRetryOnTransientReadFailure(internals, workflowId, waiter, error);
 }
 
 function linkToReplacementWaiter(
