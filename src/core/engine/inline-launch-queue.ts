@@ -3,6 +3,7 @@ import type { QueuedInlineWorkflowExecutionStart } from './engine-internal-types
 import type { EngineInternals } from './internals.ts';
 import { startWorkflowExecution } from './lifecycle.ts';
 import { loadWorkflowState } from './storage-io.ts';
+import { confirmWakeOwnership } from './wake-ownership-guard.ts';
 
 export type InlineLaunchQueueCallbacks = {
   processPendingUpdatesAfterInlineAdvance: (workflowId: string) => Promise<void>;
@@ -191,6 +192,32 @@ export async function drainQueuedInlineWorkflowStarts(
   // is discarded by the synchronous dispose that follows.
 }
 
+/**
+ * `confirmWakeOwnership` validated the HOLDER, but a linearizable holder read
+ * can still return the pre-replacement generation while a cancellation
+ * followed by `onTerminalConflict: 'start-new'` commits a REPLACEMENT run on
+ * this same workflow id during that await — the new run's registry epoch can
+ * already be live, so subsequent writes would use it while this queued start
+ * still carries the OLD run's checkpoint and input. Re-read the run identity
+ * and require it to still be the exact run this launch was queued for,
+ * closing the gap the holder check alone cannot: a workflow id surviving a
+ * status/holder check is not proof it is still the SAME run. Split out of
+ * `startQueuedInlineWorkflowExecution` purely to keep that function's own
+ * cyclomatic complexity under the repository's ceiling.
+ */
+async function isQueuedStartStillTheLiveRun(
+  internals: EngineInternals,
+  start: QueuedInlineWorkflowExecutionStart,
+): Promise<boolean> {
+  const currentState = await loadWorkflowState(internals, start.workflowId);
+  return (
+    currentState !== null &&
+    currentState.status === 'running' &&
+    (start.workflowExecutionToken === undefined ||
+      currentState.workflowExecutionToken === start.workflowExecutionToken)
+  );
+}
+
 async function startQueuedInlineWorkflowExecution(
   internals: EngineInternals,
   start: QueuedInlineWorkflowExecutionStart,
@@ -200,6 +227,27 @@ async function startQueuedInlineWorkflowExecution(
   try {
     const state = await loadWorkflowState(internals, start.workflowId);
     if (!state || state.status !== 'running') {
+      return;
+    }
+
+    // ADR 0002's `inline-macrotask-drive` wake kind: this launch was queued at
+    // an earlier tick, and the gap before this deferred macrotask actually
+    // runs is unbounded under load — long enough that this engine's claim for
+    // `start.workflowId` (acquired at enqueue time via a folded enabling
+    // write) may since have been taken over. Unlike a timer-driven wake, no
+    // in-memory-only sanity check can bound that latency against any
+    // configured TTL, so this is a REAL `wakeOwnershipCheck`, not a cheaper
+    // local guard. A discard is a silent no-op here: this engine no longer
+    // owns the workflow, so its own copy of the queued start must not drive
+    // the generator's first turn — the takeover winner starts it instead.
+    if (
+      (await confirmWakeOwnership(internals, start.workflowId, 'inline-macrotask-drive')) ===
+      'discard'
+    ) {
+      return;
+    }
+
+    if (!(await isQueuedStartStillTheLiveRun(internals, start))) {
       return;
     }
 

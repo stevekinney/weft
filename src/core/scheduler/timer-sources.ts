@@ -138,8 +138,25 @@ export function selectNextTimerSource(timerSources: TimerSource[]): TimerSource 
   return selectedSource;
 }
 
+/**
+ * `true` for a timer kind whose `timer-idx:` reverse-index entry is safe to
+ * delete unconditionally on fire, with no read-and-compare first.
+ * `'terminal-cleanup'`/`'teardown'` get no reverse index at all (never
+ * cancelled out-of-band). `'schedule'`/`'sleep'`/`'wait-condition'` are
+ * EXCLUDED even though this function's signature still accepts them —
+ * `scheduler-class.ts`'s `#buildTimerIndexDeleteOperation` checks those three
+ * kinds and routes them through the lookup-and-compare path BEFORE ever
+ * calling this function, because each can have its deterministic id re-armed
+ * by a legitimate successor (schedule's own re-arm-on-every-tick; a
+ * `start-new` replacement reusing a sleep/wait-condition id) while the
+ * original fire is still being cleaned up.
+ */
 export function shouldDeleteTimerIndexWithoutLookup(entry: TimerEntry): boolean {
   return (
-    entry.kind !== 'schedule' && entry.kind !== 'terminal-cleanup' && entry.kind !== 'teardown'
+    entry.kind !== 'schedule' &&
+    entry.kind !== 'terminal-cleanup' &&
+    entry.kind !== 'teardown' &&
+    entry.kind !== 'sleep' &&
+    entry.kind !== 'wait-condition'
   );
 }

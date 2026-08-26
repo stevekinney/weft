@@ -187,6 +187,49 @@ describe('termination helpers', () => {
     engine[Symbol.dispose]();
   });
 
+  it('completeWorkflow is a no-op when the workflow already reached a terminal state', async () => {
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+
+    const alreadyTerminalWorkflow = workflow({ name: 'completion-already-terminal' }).execute(
+      async function* (ctx: WorkflowContext) {
+        yield* ctx.waitForSignal('finish');
+        return 'done';
+      },
+    );
+    engine.register(alreadyTerminalWorkflow);
+
+    const handle = await engine.start('completion-already-terminal', null, {
+      id: 'completion-already-terminal-id',
+    });
+    await flush();
+
+    const internals = getInternals(engine);
+    const callbacks = createTerminationCallbacks({
+      loadWorkflowState: async (workflowId) => await loadWorkflowState(internals, workflowId),
+      runSerializedWorkflowStateWrite: async (workflowId, writeOperation) =>
+        await runSerializedWorkflowStateWrite(internals, workflowId, writeOperation),
+      commitSelfWorkflowStateOperations: async (state, operations) =>
+        await commitSelfWorkflowStateOperations(internals, state, operations),
+    });
+
+    // First call durably completes the workflow.
+    await completeWorkflow(internals, handle.id, 'done', callbacks);
+    const stateAfterFirstComplete = await loadWorkflowState(internals, handle.id);
+    expect(stateAfterFirstComplete?.status).toBe('completed');
+
+    // A second call — modeling a lost race where two callers both observed
+    // 'running' before either committed — must hit the already-terminal
+    // guard and return without throwing, double-notifying, or overwriting
+    // the already-persisted terminal state.
+    await completeWorkflow(internals, handle.id, 'a different result', callbacks);
+    const stateAfterSecondComplete = await loadWorkflowState(internals, handle.id);
+    expect(stateAfterSecondComplete?.status).toBe('completed');
+    expect(stateAfterSecondComplete?.result).toBe('done');
+
+    engine[Symbol.dispose]();
+  });
+
   it('failWorkflow returns quietly when the workflow is already missing', async () => {
     const engine = new Engine({ storage: new MemoryStorage() });
     const internals = getInternals(engine);

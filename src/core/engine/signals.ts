@@ -15,6 +15,7 @@ import { commitAnonymousSignalOperations } from './anonymous-signal-sequence.ts'
 import { stageAtomicWorkflowCommitSideEffects } from './checkpoint-side-effects.ts';
 import type { EngineInternals } from './internals.ts';
 import { isTerminalWorkflowStatus } from './validation.ts';
+import { confirmWakeOwnership } from './wake-ownership-guard.ts';
 
 type TrackedWaiterKeys = string | Set<string>;
 
@@ -114,23 +115,34 @@ export async function signal(
   }
 }
 
+/**
+ * Remove the signal waiter registered under `waiterKey`, optionally only when
+ * it is still `expectedResolve`.
+ *
+ * Returns whether THIS call removed that exact waiter. Callers that go on to
+ * invoke the resolver must gate on the return value: a waiter captured before
+ * an await can be replaced by replay or a fresh park while that await is in
+ * flight, and invoking the captured resolver anyway advances a superseded
+ * generator even though the replacement was correctly left in place.
+ */
 export function releaseSignalWaiter(
   internals: EngineInternals,
   workflowId: string,
   waiterKey: string,
   expectedResolve?: () => void,
-): void {
+): boolean {
   const currentWaiter = internals.signalWaiters.get(waiterKey);
   if (!currentWaiter) {
-    return;
+    return false;
   }
 
   if (expectedResolve && currentWaiter !== expectedResolve) {
-    return;
+    return false;
   }
 
   internals.signalWaiters.delete(waiterKey);
   untrackWaiterKey(internals.signalWaitersByWorkflow, workflowId, waiterKey);
+  return true;
 }
 
 export async function bufferSignalPayloads(
@@ -185,7 +197,7 @@ export async function bufferSignalPayloads(
       return;
     }
     markTerminalCleanupTracked(internals, workflowId);
-    deliverBufferedSignals(internals, workflowId, deliveries, callbacks);
+    await deliverBufferedSignals(internals, workflowId, deliveries, callbacks);
     return;
   }
 
@@ -196,7 +208,7 @@ export async function bufferSignalPayloads(
     (operations) => appendTerminalCleanupOperation(internals, workflowId, operations),
     () => markTerminalCleanupTracked(internals, workflowId),
   );
-  deliverBufferedSignals(internals, workflowId, deliveries, callbacks);
+  await deliverBufferedSignals(internals, workflowId, deliveries, callbacks);
 }
 
 function createExplicitSignalOperations(
@@ -286,12 +298,31 @@ function markTerminalCleanupTracked(internals: EngineInternals, workflowId: stri
   internals.workflowsNeedingTerminalCleanup.add(workflowId);
 }
 
-function deliverBufferedSignals(
+/**
+ * Deliver freshly buffered signals to this engine's in-memory state.
+ *
+ * The durable buffering has already committed by the time this runs, and any
+ * engine may buffer a signal for any workflow — that part is deliberately
+ * unfenced. Waking a live waiter is different: it advances the workflow's
+ * generator, so it is a claim-requiring wake path (ADR 0002). Deposition drops
+ * the registry's claim entry but leaves `internals.signalWaiters` populated, so
+ * without this fence `engine.signal()` against a deposed engine would advance
+ * its stale generator while the successor advances the replayed one.
+ *
+ * Discarding here loses nothing: the signal is already durable, and the true
+ * owner's owner-side signal poll picks it up from the buffer — which is exactly
+ * what that poll exists for.
+ *
+ * The parked-workflow resume below is deliberately NOT fenced:
+ * `resumeParkedInlineWorkflow` re-acquires (or re-confirms) this engine's claim
+ * itself, so guarding it here would be redundant rather than unsafe.
+ */
+async function deliverBufferedSignals(
   internals: EngineInternals,
   workflowId: string,
   deliveries: BufferedSignalDelivery[],
   callbacks: SignalCallbacks,
-): void {
+): Promise<void> {
   let shouldResumeParkedWorkflow = false;
 
   for (const { signalName, payload, options } of deliveries) {
@@ -303,8 +334,25 @@ function deliverBufferedSignals(
     const waiterKey = `${workflowId}:${signalName}`;
     const waiter = internals.signalWaiters.get(waiterKey);
     if (waiter) {
-      releaseSignalWaiter(internals, workflowId, waiterKey, waiter);
-      waiter();
+      // Guard the `await` itself, not just its result. An async call
+      // suspends at its first `await` even when the callee returns
+      // synchronously, so awaiting unconditionally would defer this waiter's
+      // resolution by a microtask under `ownership: 'none'`/`'lease'`, where
+      // the check is a no-op anyway. Those modes must stay byte-identical —
+      // mirrors `async-activity-completion.ts`'s own registry-gated await.
+      if (
+        internals.workflowClaimRegistry !== null &&
+        (await confirmWakeOwnership(internals, workflowId, 'signal')) === 'discard'
+      ) {
+        continue;
+      }
+      // Invoke ONLY the waiter this call removed. Replay or a fresh park can
+      // replace it while the ownership read above is in flight; `release`
+      // correctly leaves the replacement alone, but calling the captured
+      // resolver anyway would advance the superseded generator.
+      if (releaseSignalWaiter(internals, workflowId, waiterKey, waiter)) {
+        waiter();
+      }
       continue;
     }
 

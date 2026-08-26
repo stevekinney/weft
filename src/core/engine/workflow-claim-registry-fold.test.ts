@@ -17,6 +17,7 @@ import {
   type WorkflowClaimRegistryOptions,
 } from './workflow-claim-registry.ts';
 import type { WorkflowClaimTransitionFragment } from './workflow-claim-transitions.ts';
+import { createWorkflowClaimTestStorage } from './workflow-claim.test-support.ts';
 
 const TTL_MS = 30_000;
 const RENEW_MS = 5_000;
@@ -130,5 +131,34 @@ describe('WorkflowClaimRegistry.prepareAcquireFragment / recordFoldedAcquire', (
 
     expect(registry.currentEpoch('wf-uncommitted')).toBe(1);
     expect(await storage.get(KEYS.workflowOwnerEpoch('wf-uncommitted'))).toBeNull();
+  });
+
+  it('recordFoldedAcquire clears an active anti-thrash takeover cooldown for that id', async () => {
+    const storage = new MemoryStorage();
+    const gated = createWorkflowClaimTestStorage(storage);
+    const registry = new WorkflowClaimRegistry(
+      registryOptions({ storage: gated.storage, getNow: () => 1_000 }),
+    );
+    await registry.acquire('wf-refold');
+
+    // Deposition: force the renewal CAS false so the cooldown starts, without
+    // actually changing storage — the durable holder from `acquire` above
+    // stays in place.
+    gated.queueForceFalse();
+    expect(await registry.renew('wf-refold')).toEqual({ status: 'lost', workflowId: 'wf-refold' });
+
+    // Simulate the holder clearing out-of-band (e.g. a graceful release
+    // elsewhere) so a fresh acquire fragment can commit against an absent key.
+    await storage.delete(KEYS.workflowOwnerHolder('wf-refold'));
+
+    const preparation = await registry.prepareAcquireFragment('wf-refold');
+    expect(await commitFragmentAsExternalCaller(storage, preparation.fragment)).toBe(true);
+    registry.recordFoldedAcquire('wf-refold', preparation);
+
+    // If the cooldown were still active, `takeover` would short-circuit to
+    // `'backoff-skipped'` before ever reading storage; `'not-expired'` proves
+    // recordFoldedAcquire cleared it and the real (live) holder was read.
+    const takeoverResult = await registry.takeover('wf-refold');
+    expect(takeoverResult.status).toBe('not-expired');
   });
 });

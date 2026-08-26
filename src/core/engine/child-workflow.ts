@@ -13,6 +13,7 @@ import {
   registerChildCancellationHandler,
 } from './child-workflow-cancellation.ts';
 import { WorkflowAlreadyExistsError } from './errors.ts';
+import { getGeneratorOwnedWorkflowResultPromise } from './handle-result.ts';
 import type { WorkflowHandle } from './handles.ts';
 import type { EngineInternals } from './internals.ts';
 import { encodedValuesEqual } from './state-utilities.ts';
@@ -244,7 +245,15 @@ export async function executeChildWorkflow(
       registerChildCancellationHandler(internals, workflowId, childHandle.id, callbacks);
       return createChildWorkflowHandleReference(childHandle.id);
     }
-    return childHandle.result();
+    // NOT `childHandle.result()`. That returns an observational waiter, which
+    // the cross-engine poll settles from durable state with no ownership check
+    // — correct for a caller watching from outside, wrong here. This waiter is
+    // generator-owned: settling it advances THIS parent's generator. If the
+    // parent's claim is lost while it awaits the child, an observational
+    // waiter would advance the deposed parent while the successor advances its
+    // replayed one (ADR 0002). Marking it generator-owned fences the settle on
+    // the parent's claim generation.
+    return getGeneratorOwnedWorkflowResultPromise(internals, childHandle.id, workflowId);
   };
 
   const composedInterceptor = callbacks.getComposedWorkflowInterceptor();

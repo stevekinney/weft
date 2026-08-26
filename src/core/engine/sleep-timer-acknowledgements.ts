@@ -5,17 +5,47 @@ import type {
   EngineInternals,
   SleepTimerAcknowledgementWaiter,
 } from './internals.ts';
+import { isTerminalWorkflowStatus } from './validation.ts';
+import { confirmWakeOwnership } from './wake-ownership-guard.ts';
 
 export type SleepTimerAcknowledgement = {
   cancel: () => void;
   promise: Promise<void>;
 };
 
+/**
+ * Durable sleep timers fire globally — under `ownership: 'workflow-lease'`
+ * every engine sharing the store observes the same expired timer, not only
+ * the workflow's owner (see ADR 0002's entry-point classification: the
+ * scheduler dispatch shell is claim-acquiring only for claim-ACQUIRING
+ * branches; this one is claim-REQUIRING and checks for itself). Running
+ * `confirmWakeOwnership` FIRST — before `shouldIgnoreUnclaimedSleepTimer`
+ * even loads workflow state — matters: on a non-owning engine that state
+ * legitimately reads `'running'` (the true owner is actively driving it),
+ * which would otherwise hit `shouldIgnoreUnclaimedSleepTimer`'s "fired
+ * before ready" throw meant for a same-engine registration race, not a
+ * cross-engine ownership miss.
+ *
+ * A discard is NOT a silent no-op: `handleTimerFired`'s caller — the
+ * `Scheduler` — treats a callback that returns without throwing as
+ * "processed" and durably deletes the fired timer key
+ * (`commitTimerCleanup`, engine-scoped and unfenced on any single workflow's
+ * claim, since one tick's cleanup batch can span fired timers from many
+ * workflows — see `src/core/engine/index.ts`'s `Scheduler` wiring). If a
+ * discarding non-owner let that deletion proceed, it would delete the true
+ * owner's only durable record of this fire before the owner ever observes
+ * it — see `retainDiscardedDurableTimer` below.
+ */
 export async function handleSleepTimerWithAcknowledgement(
   internals: EngineInternals,
   entry: TimerEntry,
   loadWorkflowState: (workflowId: string) => Promise<WorkflowState | null>,
 ): Promise<void> {
+  if ((await confirmWakeOwnership(internals, entry.workflowId, 'sleep')) === 'discard') {
+    await retainDiscardedDurableTimer(entry.id, entry.workflowId, loadWorkflowState);
+    return;
+  }
+
   const operationId = entry.id.replace('sleep:', '');
   if (await shouldIgnoreUnclaimedSleepTimer(internals, entry, operationId, loadWorkflowState))
     return;
@@ -30,6 +60,75 @@ export async function handleSleepTimerWithAcknowledgement(
     return;
   }
   await acknowledgement?.promise;
+}
+
+/** What to do with a durable timer key once a claim-requiring wake has discarded it. */
+export type DiscardedTimerDisposition = 'retain' | 'collect';
+
+/**
+ * Decide what a discarded claim-requiring timer fire (ADR 0002's `sleep` and
+ * `wait-condition` wake kinds — see `operations-time.ts`'s
+ * `resolveConditionTimer` for the second caller) should do with its durable
+ * timer key. Shared by both wake kinds because they share the exact same
+ * hazard: `commitTimerCleanup` batches deletes across many workflows in one
+ * engine-scoped, unfenced write, so a non-owner that discards must not let
+ * the Scheduler treat the fire as "processed" while some other engine still
+ * needs the same durable record to perform the real wake.
+ *
+ * "Not locally owned" is not by itself proof the timer is stale, though —
+ * `resolveSleepTimer`'s own comment documents that a durable sleep timer
+ * OUTLIVES terminal cleanup (cleanup only drops the in-memory resolver, not
+ * the durable key). Blindly retaining on every discard would turn an
+ * orphaned post-terminal timer into an immortal one: every engine sharing
+ * the store would rediscover it, discard it, and retain it again on every
+ * Scheduler tick forever. So this reads the workflow's CURRENT persisted
+ * status to disambiguate:
+ * - `null`, or a terminal status ({@link isTerminalWorkflowStatus}):
+ *   `'collect'` — no engine holds or will ever again acquire a claim for
+ *   this workflow, so nothing will ever consume this fire; let the
+ *   Scheduler's normal cleanup remove the orphaned key, matching
+ *   pre-ADR-0002 behavior for an unclaimed timer.
+ * - `'suspended'`: `'collect'` — `engine.suspend()`'s durable re-arm
+ *   establishes its own fresh timer on resume; the pre-suspend fire being
+ *   discarded here is not the one that wakes the resumed run.
+ * - any other status (`'running'`, `'pending'`): `'retain'` — some engine
+ *   still holds, or will still acquire, a live claim for this workflow;
+ *   leave the durable key so that engine's own copy of this same fire
+ *   performs the real wake and deletes it for real, bounded by that
+ *   engine's own next Scheduler poll.
+ */
+export async function resolveDiscardedTimerDisposition(
+  workflowId: string,
+  loadWorkflowState: (workflowId: string) => Promise<WorkflowState | null>,
+): Promise<DiscardedTimerDisposition> {
+  const state = await loadWorkflowState(workflowId);
+  if (state === null) return 'collect';
+  if (state.status === 'suspended' || isTerminalWorkflowStatus(state.status)) return 'collect';
+  return 'retain';
+}
+
+/**
+ * Apply {@link resolveDiscardedTimerDisposition} to a discarded claim-requiring
+ * timer fire: throws when the durable key must be retained, so the
+ * `Scheduler`'s `#processSelectedTimer` catch block treats this fire as
+ * `'retry'` — leaving the timer key in storage instead of collecting it —
+ * and resolves normally when the workflow is gone, terminal, or suspended,
+ * so a genuinely orphaned timer is still collected exactly as it was before
+ * this ownership check existed.
+ */
+export async function retainDiscardedDurableTimer(
+  timerId: string,
+  workflowId: string,
+  loadWorkflowState: (workflowId: string) => Promise<WorkflowState | null>,
+): Promise<void> {
+  if ((await resolveDiscardedTimerDisposition(workflowId, loadWorkflowState)) !== 'retain') {
+    return;
+  }
+  throw new Error(
+    `Durable timer "${timerId}" for workflow "${workflowId}" was discarded by a non-owning ` +
+      `engine under ownership: 'workflow-lease'; retaining it in storage for the true owner ` +
+      `instead of letting the scheduler delete it.`,
+  );
 }
 
 async function shouldIgnoreUnclaimedSleepTimer(

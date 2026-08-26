@@ -185,6 +185,9 @@ export async function terminateWorkflow(
     if (!terminationResult) {
       return;
     }
+    // Captured synchronously, immediately after the commit resolved — see
+    // `releaseWorkflowClaimAfterTerminalSettlement`'s doc.
+    const claimEpoch = captureCurrentClaimEpoch(internals, workflowId);
     // Run teardown handlers only after the state transition succeeds — this
     // prevents handlers from firing when the workflow was already terminal.
     await runCancellationHandlersForStatus(internals, workflowId, status, callbacks);
@@ -205,6 +208,7 @@ export async function terminateWorkflow(
 
     const resolver = internals.resultResolvers.get(workflowId);
     const terminalError = buildTerminalError(workflowId, status, elapsed, reason);
+    await releaseWorkflowClaimAfterTerminalSettlement(internals, workflowId, claimEpoch);
 
     try {
       await cleanupTerminalWorkflowSynchronously(internals, workflowId, true, callbacks);
@@ -347,6 +351,76 @@ function notifyCompletionWaiters(
   }
 }
 
+/**
+ * Release this engine's `workflow-lease` claim (if any) once a terminal
+ * transition has durably committed. Without this, `completeWorkflow`,
+ * `failWorkflow`, and `terminateWorkflow` (cancel/timeout) leave a terminated
+ * workflow's claim registry entry in place — the recurring renewal pass
+ * (`workflow-claim-renewal-task.ts`) keeps renewing it, and the held set only
+ * shrinks via retention, purge, or engine disposal, unboundedly inflating
+ * active claims and renewal writes on a long-lived engine with lengthy or
+ * disabled retention.
+ *
+ * Must run AFTER the terminal commit resolved (never before): a `'self'`-
+ * fenced write (completeWorkflow/failWorkflow) still needs this engine's
+ * claim to land, and even an `'external-terminal'`-fenced write
+ * (terminateWorkflow) needs the ordering fixed relative to the state
+ * transition it accompanies. Best-effort, matching
+ * `WorkflowClaimRegistry.releaseAll()`'s own posture: a lost CAS or a storage
+ * error here just leaves the claim for TTL/grace expiry — strictly no worse
+ * than today's behavior, and never worth failing an already-committed
+ * terminal transition over. A harmless no-op when this engine holds no claim
+ * for `workflowId` (an `'external-terminal'` writer that never actually
+ * owned the workflow, or `ownership: 'none'`/`'lease'`, where
+ * `workflowClaimRegistry` is `null`).
+ *
+ * Called BEFORE this engine's own in-process result-waiter settlement
+ * (`notifyCompletionWaiters`'s `resolver.resolve()`, or this file's own
+ * `resolver.reject()` calls), not after: resolving/rejecting a `Promise` a
+ * second time is a documented no-op, so releasing first and then settling is
+ * safe even if a concurrent cross-engine result poll
+ * (`handle-result.ts`'s `deferToLocalTerminalDeliveryIfPending`) observes "no
+ * local epoch" and settles the SAME shared waiter itself first — both paths
+ * derive the identical result from the same durably-committed terminal
+ * state. Releasing AFTER, by contrast, would let an external caller that
+ * merely awaited `handle.result()` observe completion before the claim
+ * release it might depend on (e.g. a subsequent reclaim-scan assertion in a
+ * test) has actually happened, since `resolve()`/`reject()` only schedules
+ * the awaiting `.then()` as a later microtask — it proves nothing about
+ * synchronous code still running after it in this same function.
+ *
+ * `capturedEpoch` MUST be read synchronously (no intervening `await`)
+ * immediately after the terminal write commits — never re-read fresh at the
+ * top of this function. Every call site already awaits at least one thing
+ * (`releaseWorkflowConcurrencySlot`, or this file's own cleanup/notify calls)
+ * between the commit and this call; `onTerminalConflict: 'start-new'` can
+ * replace the workflow and install a NEW registry entry for the same id
+ * during that exact gap. Releasing unconditionally would then delete the
+ * REPLACEMENT's holder and stop its renewal instead of the generation that
+ * actually completed — the release is therefore conditioned on the registry
+ * still tracking the exact epoch this call captured, mirroring
+ * `confirmStillRunningOrReleaseFreshClaim`'s same generation-safety pattern
+ * in `workflow-claim-reclaim-target.ts`.
+ */
+function captureCurrentClaimEpoch(internals: EngineInternals, workflowId: string): number | null {
+  return internals.workflowClaimRegistry?.currentEpoch(workflowId) ?? null;
+}
+
+async function releaseWorkflowClaimAfterTerminalSettlement(
+  internals: EngineInternals,
+  workflowId: string,
+  capturedEpoch: number | null,
+): Promise<void> {
+  const registry = internals.workflowClaimRegistry;
+  if (registry === null || capturedEpoch === null) return;
+  if (registry.currentEpoch(workflowId) !== capturedEpoch) return;
+  try {
+    await registry.release(workflowId);
+  } catch {
+    // Best-effort — see this function's doc.
+  }
+}
+
 export async function completeWorkflow(
   internals: EngineInternals,
   workflowId: string,
@@ -410,12 +484,21 @@ export async function completeWorkflow(
       await callbacks.commitSelfWorkflowStateOperations(state, completionOperations, {
         includePendingAtomicSideEffects: true,
       });
-      return { duration };
+      // Captured synchronously, immediately after the commit resolves — see
+      // `releaseWorkflowClaimAfterTerminalSettlement`'s doc for why this
+      // must not be re-read after the awaits below.
+      const claimEpoch = captureCurrentClaimEpoch(internals, workflowId);
+      return { duration, claimEpoch };
     },
   );
   if (!completionMetadata) return;
 
   await releaseWorkflowConcurrencySlot(internals, workflowId);
+  await releaseWorkflowClaimAfterTerminalSettlement(
+    internals,
+    workflowId,
+    completionMetadata.claimEpoch,
+  );
   notifyCompletionWaiters(internals, workflowId, result, completionMetadata.duration, callbacks);
 }
 
@@ -482,6 +565,9 @@ export async function failWorkflow(
   if (!failureResult) {
     return;
   }
+  // Captured synchronously, immediately after the commit resolved — see
+  // `releaseWorkflowClaimAfterTerminalSettlement`'s doc.
+  const claimEpoch = captureCurrentClaimEpoch(internals, workflowId);
 
   await releaseWorkflowConcurrencySlot(internals, workflowId);
 
@@ -497,6 +583,7 @@ export async function failWorkflow(
   await writeRetainedTerminalSearchAttributes(internals, workflowId, retainedAttributes);
 
   const resolver = internals.resultResolvers.get(workflowId);
+  await releaseWorkflowClaimAfterTerminalSettlement(internals, workflowId, claimEpoch);
   try {
     await cleanupTerminalWorkflowSynchronously(internals, workflowId, false, callbacks);
 

@@ -173,6 +173,7 @@ export type WorkflowWakeKind =
   | 'signal'
   | 'async-activity'
   | 'child-completion'
+  | 'update'
   | 'inline-macrotask-drive';
 
 /**

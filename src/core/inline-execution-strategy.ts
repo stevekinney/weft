@@ -238,6 +238,32 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
   }
 
   /**
+   * Synchronously evict a workflow's live/parked context, generator, and
+   * abort controller the moment a same-engine reclaim begins (WFT-79) —
+   * BEFORE `onReclaimed`'s `recoverPendingAsyncActivities`/`resumeFromLifecycle`
+   * await anything. `takeover()` installing a new local epoch does not, by
+   * itself, evict this engine's OLD in-memory state for a workflow it
+   * previously held and was deposed from (deposition only drops the claim
+   * registry entry; contexts/generators survive — see `index.ts`'s
+   * `onWorkflowClaimReclaimed`). Without this, `query()` and
+   * `tryInlineUpdateHandler()`'s engine-id-only staleness check
+   * (`isWorkflowClaimedByAnotherEngine`) sees the SAME engine as both the old
+   * and new holder and answers "not stale," serving reads/handler invocations
+   * from the pre-reclaim closure throughout the async-activity reload and
+   * force-replay preparation window. Evicting here makes that window
+   * observably contextless instead — `query()` falls through to its
+   * documented not-locally-owned/undefined handling, and
+   * `tryInlineUpdateHandler()` falls through to `'not-owned-locally'` — until
+   * `adoptWorkflow` installs the fresh generation.
+   */
+  evictContextForReclaim(workflowId: string): void {
+    this.#generators.delete(workflowId);
+    this.#abortControllers.delete(workflowId);
+    this.#contexts.delete(workflowId);
+    this.#parkedContexts.delete(workflowId);
+  }
+
+  /**
    * Store a context and generator created externally (engine resume path).
    * Clears any retained parked context so a concurrent query sees the new
    * live context rather than the stale parked one.
@@ -282,7 +308,12 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
     generator: AsyncGenerator,
     lastResult: unknown,
   ): Promise<void> {
-    return this.#advanceGenerator(workflowId, () => generator.next(lastResult), undefined);
+    return this.#advanceGenerator(
+      workflowId,
+      generator,
+      () => generator.next(lastResult),
+      undefined,
+    );
   }
 
   #throwIntoGenerator(
@@ -293,13 +324,29 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
   ): Promise<void> {
     return this.#advanceGenerator(
       workflowId,
+      generator,
       () => generator.throw(error),
       operationFailureCategory,
     );
   }
 
+  /**
+   * A workflow reclaimed via `adoptWorkflow` (WFT-79) installs a fresh
+   * generator/context/abortController for `workflowId` WITHOUT aborting or
+   * awaiting whatever advance this OLD generation still has in flight — see
+   * that method's doc. Without this identity check, an old generation's
+   * `generator.next()`/`generator.throw()` settling after that swap would
+   * still reach `#handleIterationResult`/`#cleanup(workflowId)` below, which
+   * key purely on `workflowId` and would delete the NEWLY adopted execution
+   * state or emit the stale generation's own checkpoint/completion message
+   * over the new one's. Comparing the generator this call captured against
+   * whatever is currently registered for `workflowId` detects exactly that
+   * supersession — a superseded advance settling here has nothing left to do
+   * and is dropped silently.
+   */
   #advanceGenerator(
     workflowId: string,
+    generator: AsyncGenerator,
     advance: () => Promise<IteratorResult<unknown, unknown>>,
     fallbackFailureCategory: FailureCategory | undefined,
   ): Promise<void> {
@@ -310,8 +357,11 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
           const abortController = this.#abortControllers.get(workflowId);
           if (abortController?.signal.aborted) return;
 
-          this.#handleIterationResult(workflowId, await advance());
+          const iterationResult = await advance();
+          if (this.#generators.get(workflowId) !== generator) return;
+          this.#handleIterationResult(workflowId, iterationResult);
         } catch (error) {
+          if (this.#generators.get(workflowId) !== generator) return;
           this.#cleanup(workflowId, {
             preserveTrackedAdvance: true,
             preserveTrackedTurn: true,

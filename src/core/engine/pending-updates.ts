@@ -4,10 +4,9 @@ import { UpdateValidationError } from '../updates.ts';
 import { notifyConditionWaiters } from './condition-waiters.ts';
 import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
-import {
-  extractStandardSchemaIssues,
-  invokeUpdateHandler as invokeUpdateHandlerFromInternals,
-} from './updates.ts';
+import { invokeUpdateHandler as invokeUpdateHandlerFromInternals } from './invoke-update-handler.ts';
+import { isLiveContextStale } from './queries.ts';
+import { extractStandardSchemaIssues } from './update-validation.ts';
 
 type PendingUpdateCallbacks = {
   dispatchEvent: (event: Event) => boolean;
@@ -121,6 +120,64 @@ async function runPendingUpdateValidator(
 }
 
 /**
+ * Re-verify ownership after the durable pending-update scan `processPendingUpdatesForHandlers`
+ * awaits, and re-read the context rather than trusting the pre-await closure.
+ * A takeover can land on a DIFFERENT engine during that await, or (same-engine
+ * reclaim) `evictContextForReclaim` can have swapped this engine's own
+ * context out from under this call, per `index.ts`'s `onWorkflowClaimReclaimed`.
+ * Mirrors `tryInlineUpdateHandler`'s identical dance in `updates.ts` —
+ * invoking a stale handler here has no durable-write fence to catch it the
+ * way `deliverPendingUpdate`'s `commitFencedEngineWrite` fences the RESPONSE:
+ * the user-visible handler side effects would already have run on both the
+ * deposed and the current owner. Split out of `processPendingUpdatesForHandlers`
+ * purely to keep that function's own cyclomatic complexity under the
+ * repository's ceiling.
+ */
+async function resolveLiveHandlerContext(
+  internals: EngineInternals,
+  workflowId: string,
+): Promise<ReturnType<NonNullable<EngineInternals['inlineStrategy']>['getContext']> | undefined> {
+  const stale = isLiveContextStale(internals, workflowId);
+  if (stale !== false && (await stale)) return undefined;
+  return internals.inlineStrategy?.getContext(workflowId);
+}
+
+/**
+ * Process one pending update against the given (already-verified-live)
+ * context: claim it for delivery, validate, and either reject or deliver.
+ * Returns `true` when the handler actually ran (rejection does not count —
+ * see `processPendingUpdatesForHandlers`'s `handlerRan` doc). Split out
+ * purely to keep that function's own cyclomatic complexity under the
+ * repository's ceiling.
+ */
+async function processOnePendingUpdate(
+  internals: EngineInternals,
+  workflowId: string,
+  update: UpdateRequest,
+  handlers: NonNullable<
+    ReturnType<NonNullable<EngineInternals['inlineStrategy']>['getContext']>
+  >['updateHandlers'],
+  context: NonNullable<ReturnType<NonNullable<EngineInternals['inlineStrategy']>['getContext']>>,
+  callbacks: PendingUpdateCallbacks,
+): Promise<boolean> {
+  const handler = handlers.get(update.name);
+  if (!handler) return false;
+
+  // Claim the id synchronously before any `await`, so a racing drain that
+  // scanned the same id (before this drain's durable delete commits) skips it.
+  if (!claimPendingUpdateForDelivery(internals, workflowId, update.updateId)) return false;
+
+  const validatorRejectionError = await runValidatorIfPresent(context, update);
+  if (validatorRejectionError !== null) {
+    await rejectPendingUpdate(internals, workflowId, update, validatorRejectionError, callbacks);
+    return false;
+  }
+
+  await deliverPendingUpdate(internals, workflowId, update, handler, callbacks);
+  return true;
+}
+
+/**
  * Drain a workflow's buffered coordinated updates and deliver each to its
  * handler exactly once, even when several drains race.
  *
@@ -142,14 +199,16 @@ export async function processPendingUpdatesForHandlers(
   workflowId: string,
   callbacks: PendingUpdateCallbacks,
 ): Promise<void> {
-  const context = internals.inlineStrategy?.getContext(workflowId);
-  if (!context) return;
-
-  const handlers = context.updateHandlers;
-  if (handlers.size === 0) return;
+  const initialContext = internals.inlineStrategy?.getContext(workflowId);
+  if (!initialContext || initialContext.updateHandlers.size === 0) return;
 
   const pendingUpdates = await internals.updateCoordinator.getPendingUpdates(workflowId);
   if (pendingUpdates.length === 0) return;
+
+  const context = await resolveLiveHandlerContext(internals, workflowId);
+  if (!context) return;
+  const handlers = context.updateHandlers;
+  if (handlers.size === 0) return;
 
   // Whether any handler ran (mutating state a predicate may read). Tracked in
   // `finally` so the re-drive still fires if a LATER update's durable write
@@ -159,27 +218,11 @@ export async function processPendingUpdatesForHandlers(
   let handlerRan = false;
   try {
     for (const update of pendingUpdates) {
-      const handler = handlers.get(update.name);
-      if (!handler) continue;
-
-      // Claim the id synchronously before any `await`, so a racing drain that
-      // scanned the same id (before this drain's durable delete commits) skips it.
-      if (!claimPendingUpdateForDelivery(internals, workflowId, update.updateId)) continue;
-
-      const validatorRejectionError = await runValidatorIfPresent(context, update);
-      if (validatorRejectionError !== null) {
-        await rejectPendingUpdate(
-          internals,
-          workflowId,
-          update,
-          validatorRejectionError,
-          callbacks,
-        );
-        continue;
+      if (
+        await processOnePendingUpdate(internals, workflowId, update, handlers, context, callbacks)
+      ) {
+        handlerRan = true;
       }
-
-      handlerRan = true;
-      await deliverPendingUpdate(internals, workflowId, update, handler, callbacks);
     }
   } finally {
     if (handlerRan) {

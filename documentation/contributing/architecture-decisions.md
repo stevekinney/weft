@@ -130,7 +130,7 @@ A handful of design questions came up early and have been settled:
 
 ## Fenced Per-Workflow Ownership (MultiEngine)
 
-Multiple engine processes may share one durable store once each workflow has exactly one fenced owner, claimed _before_ that workflow's generator resumes—not merely before its next write commits. The new `ownership: 'workflow-lease'` mode adds a per-workflow claim keyspace (`wf-owner-epoch:<id>`, `wf-owner-holder:<id>`) with acquire, renew, release, expire, and takeover transitions, layered on top of—not replacing—the existing checkpoint-CAS and global `ownership: 'lease'` mechanisms. This is an accepted contract, not shipped runtime behavior yet.
+Multiple engine processes can share one durable store once each workflow has exactly one fenced owner, claimed _before_ that workflow's generator resumes—not merely before its next write commits. The `ownership: 'workflow-lease'` mode adds a per-workflow claim keyspace (`wf-owner-epoch:<id>`, `wf-owner-holder:<id>`) with acquire, renew, release, expire, and takeover transitions, layered on top of—not replacing—the existing checkpoint-CAS and global `ownership: 'lease'` mechanisms. This mode has shipped.
 
 See [ADR 0002](./architecture-decisions/0002-multiengine-per-workflow-ownership.md).
 

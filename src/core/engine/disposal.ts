@@ -12,6 +12,17 @@ function settleSleepResolverReadyWaitersForTesting(internals: EngineInternals): 
 }
 
 /**
+ * Cancel every pending cross-engine result-poll timer — see
+ * `pendingResultPollTimers`'s doc on `EngineInternals`. Split out of
+ * `disposeEngine` purely to keep that function's own cyclomatic complexity
+ * under the repository's ceiling.
+ */
+function clearPendingResultPollTimers(internals: EngineInternals): void {
+  for (const timer of internals.pendingResultPollTimers) clearTimeout(timer);
+  internals.pendingResultPollTimers.clear();
+}
+
+/**
  * Synchronous teardown for an {@link Engine}. Moved verbatim from
  * `Engine[Symbol.dispose]` — the operation order is correctness-sensitive
  * (abort before clearing waiters, dispose strategies before nulling them) and
@@ -71,6 +82,7 @@ export function disposeEngine(internals: EngineInternals): void {
   internals.reviewTimerIds.clear();
   for (const controller of internals.pendingWebhooks) controller.abort();
   internals.pendingWebhooks.clear();
+  clearPendingResultPollTimers(internals);
   internals.sleepResolvers.clear();
   internals.sleepResolversByWorkflow.clear();
   settleSleepResolverReadyWaitersForTesting(internals);

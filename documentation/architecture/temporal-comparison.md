@@ -4,19 +4,19 @@ Temporal's replay-based architecture creates a cascade of constraints—determin
 
 Here's the mental model comparison for someone writing their first workflow.
 
-| Concept                               | Temporal                                                | Weft                                                                               |
-| ------------------------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Core mental model                     | Replay determinism                                      | Generators pause and resume                                                        |
-| Activity invocation                   | `proxyActivities()` + type import                       | `yield* ctx.run('activityName', input)`                                            |
-| Timer                                 | Deterministic `workflow.sleep()`                        | `yield* ctx.sleep("1 hour")`                                                       |
-| Signal                                | `setHandler` + `condition`                              | `yield* ctx.waitForSignal(name)`                                                   |
-| Human review                          | Signals, queries, and updates as application primitives | `yield* ctx.review(...)` with durable review records and decision APIs             |
-| Multi-worker horizontal scale         | Task Queues load-balance across Worker Processes        | Single engine per durable store today; `MultiEngine` is pre-1.0 roadmap work       |
-| Versioning                            | `patched()` / `deprecatePatch()`                        | Stored and registered versions must match during recovery                          |
-| Long-running workflows                | `continueAsNew()`                                       | Nothing (checkpoints are fixed-size)                                               |
-| Dev environment                       | Docker Compose + Temporal server                        | `bun add @lostgradient/weft`                                                       |
-| Bundling                              | Webpack for workflow sandbox                            | None                                                                               |
-| Activity liveness / heartbeat timeout | `heartbeatTimeout` in `proxyActivities()`               | `visibilityTimeout` on the activity definition or per-call override (default 30 s) |
+| Concept                               | Temporal                                                | Weft                                                                                                                            |
+| ------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Core mental model                     | Replay determinism                                      | Generators pause and resume                                                                                                     |
+| Activity invocation                   | `proxyActivities()` + type import                       | `yield* ctx.run('activityName', input)`                                                                                         |
+| Timer                                 | Deterministic `workflow.sleep()`                        | `yield* ctx.sleep("1 hour")`                                                                                                    |
+| Signal                                | `setHandler` + `condition`                              | `yield* ctx.waitForSignal(name)`                                                                                                |
+| Human review                          | Signals, queries, and updates as application primitives | `yield* ctx.review(...)` with durable review records and decision APIs                                                          |
+| Multi-worker horizontal scale         | Task Queues load-balance across Worker Processes        | Single engine per durable store by default; `ownership: 'workflow-lease'` (`MultiEngine`) lets multiple engines share one store |
+| Versioning                            | `patched()` / `deprecatePatch()`                        | Stored and registered versions must match during recovery                                                                       |
+| Long-running workflows                | `continueAsNew()`                                       | Nothing (checkpoints are fixed-size)                                                                                            |
+| Dev environment                       | Docker Compose + Temporal server                        | `bun add @lostgradient/weft`                                                                                                    |
+| Bundling                              | Webpack for workflow sandbox                            | None                                                                                                                            |
+| Activity liveness / heartbeat timeout | `heartbeatTimeout` in `proxyActivities()`               | `visibilityTimeout` on the activity definition or per-call override (default 30 s)                                              |
 
 Now let's walk through each of the ten design failures in detail.
 
@@ -130,7 +130,7 @@ temporal server start-dev     # ... or the dev shortcut that still needs Docker
 Weft's CLI also includes `weft doctor`, a diagnostic command that reports database health, workflow statistics, queue depths, performance metrics, and actionable recommendations—all without any external monitoring infrastructure.
 
 > [!NOTE]
-> **Scaling boundary:** Temporal's [Task Queue documentation](https://docs.temporal.io/task-queue) says Task Queues enable load balancing across many Worker Processes, and its [worker deployment guidance](https://docs.temporal.io/best-practices/worker) recommends at least two Workers per Task Queue. Weft's current production topology is intentionally narrower: one engine process per durable store, with future fenced ownership tracked as `MultiEngine`. See [Running Weft as a Singleton Service](../guides/singleton-service-deployment.md).
+> **Scaling boundary:** Temporal's [Task Queue documentation](https://docs.temporal.io/task-queue) says Task Queues enable load balancing across many Worker Processes, and its [worker deployment guidance](https://docs.temporal.io/best-practices/worker) recommends at least two Workers per Task Queue. Weft's default production topology is intentionally narrower: one engine process per durable store. `ownership: 'workflow-lease'`, the fenced per-workflow ownership mode tracked as `MultiEngine`, is a shipped opt-in for sharing one store across multiple engines. See [Running Weft as a Singleton Service](../guides/singleton-service-deployment.md).
 
 ## Performance out of the box
 

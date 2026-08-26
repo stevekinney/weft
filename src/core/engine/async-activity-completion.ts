@@ -67,6 +67,7 @@ import {
 import { stageAtomicWorkflowCommitSideEffects } from './checkpoint-side-effects.ts';
 import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
+import { confirmWakeOwnership } from './wake-ownership-guard.ts';
 
 type AsyncActivityResolutionCallbacks = {
   feedOperationResult: (
@@ -146,7 +147,7 @@ export async function parkDeferredAsyncActivity(
     deferral.token,
   );
   if (queuedResolution !== undefined) {
-    deliverPendingAsyncActivityResolution(
+    await deliverPendingAsyncActivityResolution(
       internals,
       details.workflowId,
       queuedResolution,
@@ -182,6 +183,19 @@ async function consumePendingAsyncActivity(
   if (!pending) {
     throw new AsyncActivityTokenNotFoundError(token);
   }
+  // `recoverAll()`'s global async-activity scan (`workflowId === undefined`)
+  // runs BEFORE per-workflow ownership is determined, so on a shared
+  // `workflow-lease` store every engine loads every token into this map —
+  // including ones for workflows it will never actually claim. Without this
+  // check, a completion reaching a non-owner would pass the lookup above and
+  // then fail unfenced inside `commitFencedEngineWrite` with
+  // `EngineDeposedError`, an unexpected server failure rather than the
+  // documented wrong-engine `AsyncActivityTokenNotFoundError` a caller behind
+  // a load balancer should see and retry elsewhere.
+  const registry = internals.workflowClaimRegistry;
+  if (registry !== null && registry.currentEpoch(pending.workflowId) === null) {
+    throw new AsyncActivityTokenNotFoundError(token);
+  }
   // Claim the in-memory token SYNCHRONOUSLY, before any await. Two concurrent
   // completions for the same token (trivially race-able now that the token is
   // resolvable over a public HTTP endpoint) would otherwise both pass the
@@ -206,12 +220,39 @@ async function consumePendingAsyncActivity(
   return pending;
 }
 
-function deliverPendingAsyncActivityResolution(
+/**
+ * `wakeOwnershipCheck` runs FIRST, before either the durable side-effect
+ * staging or `feedOperationResult` — this is the ADR's `async-activity`
+ * claim-requiring wake kind. It matters even though `consumePendingAsyncActivity`
+ * already ran a fresh, CAS-fenced write: this function has a SECOND call site
+ * (`parkDeferredAsyncActivity`'s buffered-resolution replay drain) that
+ * delivers a previously-acknowledged, LOCALLY QUEUED resolution with no fresh
+ * write alongside it — nothing else fences that path against a stale
+ * generation driving the generator. On discard, neither the resolution
+ * record's delete nor the timeline/`feedOperationResult` calls run: the
+ * durable resolution record survives untouched, so this workflow's true
+ * current owner redelivers it (idempotent for a deterministic token) the next
+ * time replay reaches this same token.
+ */
+async function deliverPendingAsyncActivityResolution(
   internals: EngineInternals,
   workflowId: string,
   resolution: PendingAsyncActivityResolution,
   callbacks: AsyncActivityResolutionCallbacks,
-): void {
+): Promise<void> {
+  // Guard the `await` itself, not just its result. An async call suspends at
+  // its first `await` even when the callee returns synchronously, and this
+  // function was fully synchronous before the ownership work: awaiting
+  // unconditionally would defer every side effect below by a microtask under
+  // `ownership: 'none'` and `'lease'`, where the check is a no-op anyway.
+  // Those modes must stay byte-identical, so the await only happens when a
+  // claim registry actually exists.
+  if (internals.workflowClaimRegistry !== null) {
+    if ((await confirmWakeOwnership(internals, workflowId, 'async-activity')) === 'discard') {
+      return;
+    }
+  }
+
   // Retire the durable resolution record with the checkpoint that records the
   // delivered result. Staging (rather than deleting standalone) keeps the
   // outcome recoverable until the workflow has durably adopted it; a record
@@ -257,7 +298,7 @@ async function resolvePendingAsyncActivity(
     queuePendingAsyncActivityResolution(internals, pending.workflowId, resolution);
     return;
   }
-  deliverPendingAsyncActivityResolution(internals, pending.workflowId, resolution, callbacks);
+  await deliverPendingAsyncActivityResolution(internals, pending.workflowId, resolution, callbacks);
 }
 
 /**

@@ -26,42 +26,35 @@
  * that error itself. Per the ADR, background scanning never throws it either
  * — it skips the workflow and continues — so every method here returns a
  * discriminated result instead of throwing on a lost CAS, leaving that
- * decision to the caller. Still out of scope for this module: the
- * per-workflow-id anti-thrash takeover cooldown, `weft_workflow_claim_*`
- * metrics, `wakeOwnershipCheck`, and external terminal-transition rotation
- * (cancel/timeout/suspend/purge — any engine may commit those, and they do
- * not condition on this engine's cached bytes).
+ * decision to the caller — `takeover` also gates on a per-workflow-id
+ * anti-thrash cooldown ({@link WorkflowClaimTakeoverCooldown}). Still out of
+ * scope: `weft_workflow_claim_*` metrics, `wakeOwnershipCheck`, and external
+ * terminal-transition rotation (any engine may commit those unconditioned).
  *
  * **Renewal-vs-release serialization.** A per-workflow in-flight-renewal
  * promise (mirroring `lease-manager.ts`'s single `inFlightRenewal`) lets
- * `release()` await any renewal already in progress before it reads the
- * cached bytes it conditions on — otherwise the two would race the same
- * holder bytes and whichever commits second would lose its CAS. A
- * `releasing` set additionally stops a NEW renewal from starting once
- * release has begun for that id, so a `renew()` call that arrives mid-release
- * fails fast as `'not-held'` instead of entering a race it cannot win. A
- * renewal that THROWS (a transient storage error, not a CAS-false result) is
- * not treated as a lost claim: it propagates to its own caller and leaves the
- * cached bytes untouched, and `release()`'s wait swallows that rejection
- * rather than propagating it — a storage hiccup during renewal must not make
- * a terminal/suspend/shutdown release fail.
+ * `release()` await a renewal already in progress before reading the cached
+ * bytes it conditions on; otherwise both race the same holder bytes and
+ * whichever commits second loses its CAS. A `releasing` set stops a NEW
+ * renewal from starting once release has begun, so a `renew()` arriving
+ * mid-release fails fast as `'not-held'`. A renewal that THROWS (a transient
+ * storage error, not a CAS-false result) is not a lost claim: it propagates
+ * to its caller leaving cached bytes untouched, and `release()`'s wait
+ * swallows it — a storage hiccup must not fail a terminal or shutdown release.
  *
  * @module core/engine/workflow-claim-registry
  */
 
-import {
-  KEYS,
-  storageConditionalBatch,
-  type BatchOperation,
-  type Storage,
-} from '../../storage/interface.ts';
+import { KEYS, storageConditionalBatch, type Storage } from '../../storage/interface.ts';
 import { emitWorkflowClaimLostWarning, type EmitWorkflowLeaseWarning } from './lease-deposition.ts';
 import { decodeEpoch, decodeWorkflowClaimHolder } from './workflow-claim-codec.ts';
+import { WorkflowClaimTakeoverCooldown } from './workflow-claim-cooldown.ts';
 import {
   buildWorkflowClaimAcquireTransition,
   buildWorkflowClaimReleaseTransition,
   buildWorkflowClaimRenewTransition,
   buildWorkflowClaimTakeoverTransition,
+  extractPutOperationValue,
   isWorkflowClaimExpired,
   type WorkflowClaimTransitionFragment,
 } from './workflow-claim-transitions.ts';
@@ -128,27 +121,8 @@ export type WorkflowClaimTakeoverResult =
   | { status: 'acquired'; workflowId: string; epoch: number }
   | { status: 'lost-race'; workflowId: string; heldBy: string | null }
   | { status: 'not-expired'; workflowId: string; heldBy: string | null; expiresAt: number }
-  | { status: 'no-claim'; workflowId: string };
-
-/**
- * Pull the exact bytes a just-built transition fragment wrote for `key`,
- * rather than re-encoding a value from the fields the caller happens to
- * know. This is what lets {@link WorkflowClaimRegistry} cache "the bytes it
- * actually wrote" without silently drifting if `workflow-claim-transitions.ts`'s
- * internal object-literal field order ever changed. Exported so the
- * not-found branch — unreachable through the registry itself, since every
- * fragment it extracts from is one it just built — has direct unit coverage.
- */
-export function extractPutOperationValue(operations: BatchOperation[], key: string): Uint8Array {
-  const operation = operations.find(
-    (candidate): candidate is Extract<BatchOperation, { type: 'put' }> =>
-      candidate.type === 'put' && candidate.key === key,
-  );
-  if (operation === undefined) {
-    throw new Error(`workflow-claim-registry: expected a "put" operation for key "${key}"`);
-  }
-  return operation.value;
-}
+  | { status: 'no-claim'; workflowId: string }
+  | { status: 'backoff-skipped'; workflowId: string };
 
 /** `(decode(bytes) ?? 0) + 1` — mirrors `workflow-claim-transitions.ts`'s private minting rule; never a literal. */
 function mintNextEpoch(observedEpochBytes: Uint8Array | null): number {
@@ -172,6 +146,7 @@ export class WorkflowClaimRegistry {
   readonly #claims = new Map<string, ClaimTrackingEntry>();
   readonly #inFlightRenewals = new Map<string, Promise<WorkflowClaimRenewResult>>();
   readonly #releasing = new Set<string>();
+  readonly #takeoverCooldown: WorkflowClaimTakeoverCooldown;
 
   constructor(options: WorkflowClaimRegistryOptions) {
     this.#claimStorage = options.storage;
@@ -180,11 +155,17 @@ export class WorkflowClaimRegistry {
     this.#claimTtlMs = options.claimTtlMs;
     this.#claimRenewIntervalMs = options.claimRenewIntervalMs;
     this.#warn = options.warn;
+    this.#takeoverCooldown = new WorkflowClaimTakeoverCooldown(options);
   }
 
   /** The epoch this engine currently believes it holds for `workflowId`, or `null` if untracked. */
   currentEpoch(workflowId: string): number | null {
     return this.#claims.get(workflowId)?.epoch ?? null;
+  }
+
+  /** This engine's identity; with {@link currentEpoch} it forms the generation a wake check compares. */
+  get engineId(): string {
+    return this.#engineId;
   }
 
   /**
@@ -255,6 +236,7 @@ export class WorkflowClaimRegistry {
       KEYS.workflowOwnerHolder(workflowId),
     );
     this.#claims.set(workflowId, { epoch, claimedAt: now, epochBytes, holderBytes });
+    this.#takeoverCooldown.clear(workflowId);
     return { status: 'acquired', workflowId, epoch };
   }
 
@@ -307,6 +289,7 @@ export class WorkflowClaimRegistry {
       epochBytes,
       holderBytes,
     });
+    this.#takeoverCooldown.clear(workflowId);
   }
 
   /**
@@ -345,13 +328,14 @@ export class WorkflowClaimRegistry {
       fragment.operations,
     );
     if (!committed) {
-      // Only forget the claim if the tracked entry is still the one this renewal
-      // read. A `takeover` for the same id can land while this CAS is in flight
-      // and install a fresh entry that storage now durably backs; deleting
-      // unconditionally would drop a claim this engine still owns, so it would
-      // stop renewing a live claim and let a successor steal it at expiry.
+      // Only forget the claim — and start the anti-thrash cooldown — if the
+      // tracked entry is still the one this renewal read. A concurrent
+      // `takeover` can land mid-CAS and install a fresh entry; acting
+      // unconditionally would drop or throttle a claim this engine still
+      // owns under that newer generation, not one it actually lost.
       if (this.#claims.get(workflowId) === entry) {
         this.#claims.delete(workflowId);
+        this.#takeoverCooldown.recordDeposition(workflowId, this.#getNow());
       }
       emitWorkflowClaimLostWarning(workflowId, this.#warn);
       return { status: 'lost', workflowId };
@@ -398,7 +382,15 @@ export class WorkflowClaimRegistry {
         fragment.conditions,
         fragment.operations,
       );
-      this.#claims.delete(workflowId);
+      // Identity-guarded, matching `#performRenew`'s success/failure guards: a
+      // concurrent `takeover`/`acquire` can install a fresh entry for this
+      // workflow id while the conditional batch above is in flight (e.g. a
+      // replacement `start-new` run). Deleting unconditionally would drop that
+      // REPLACEMENT's tracked entry, not the generation this call actually
+      // captured and released.
+      if (this.#claims.get(workflowId) === entry) {
+        this.#claims.delete(workflowId);
+      }
       return { status: committed ? 'released' : 'lost-race', workflowId };
     } finally {
       this.#releasing.delete(workflowId);
@@ -417,13 +409,15 @@ export class WorkflowClaimRegistry {
    * treated defensively as nothing safe to fence a takeover against.
    */
   async takeover(workflowId: string): Promise<WorkflowClaimTakeoverResult> {
+    const now = this.#getNow();
+    if (this.#takeoverCooldown.isActive(workflowId, now))
+      return { status: 'backoff-skipped', workflowId };
     const observedHolderBytes = await this.#claimStorage.get(KEYS.workflowOwnerHolder(workflowId));
     if (observedHolderBytes === null) return { status: 'no-claim', workflowId };
     const observedEpochBytes = await this.#claimStorage.get(KEYS.workflowOwnerEpoch(workflowId));
     if (observedEpochBytes === null) return { status: 'no-claim', workflowId };
 
     const holder = decodeWorkflowClaimHolder(observedHolderBytes);
-    const now = this.#getNow();
     if (
       holder !== null &&
       !isWorkflowClaimExpired({
@@ -467,6 +461,7 @@ export class WorkflowClaimRegistry {
       KEYS.workflowOwnerHolder(workflowId),
     );
     this.#claims.set(workflowId, { epoch, claimedAt: now, epochBytes, holderBytes });
+    this.#takeoverCooldown.clear(workflowId);
     return { status: 'acquired', workflowId, epoch };
   }
 

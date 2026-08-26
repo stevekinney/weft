@@ -112,6 +112,7 @@ import {
   untagAll as untagAllWorkflows,
 } from './bulk-operations.ts';
 import { createTimeOperationCallbacks as createTimeOperationCallbacksForEngine } from './callback-creators-bundles.ts';
+import { createPendingUpdateCallbacks as createPendingUpdateCallbacksForEngine } from './callback-creators-core.ts';
 import {
   createBroadcastCallbacks as createBroadcastCallbacksForEngine,
   createInlineParkingCallbacks as createInlineParkingCallbacksForEngine,
@@ -178,6 +179,7 @@ import { getFinalizerStatus as getFinalizerStatusFromInternals } from './finaliz
 import {
   createWorkflowHandleWithResultPromise as createWorkflowHandleWithResultPromiseFromInternals,
   getWorkflowResultPromise as getWorkflowResultPromiseFromInternals,
+  pollPendingCrossEngineResultWaiters,
 } from './handle-result.ts';
 import { HANDLE_RESULT_PROMISE, WorkflowHandle } from './handles.ts';
 import { hasQueuedInlineWorkflowStart } from './inline-launch-queue.ts';
@@ -215,8 +217,15 @@ import {
   handleTimerFired as handleTimerFiredFromInternals,
   type TimeOperationCallbacks,
 } from './operations-time.ts';
-import { bootstrapWorkflowLeaseOwnership } from './ownership-bootstrap.ts';
+import type { OwnerSideSignalPollTarget } from './owner-side-signal-poll.ts';
+import type { OwnerSideUpdatePollTarget } from './owner-side-update-poll.ts';
+import {
+  bootstrapWorkflowLeaseOwnership,
+  buildOwnerSideSignalPollTarget,
+  type OwnerSideSignalPollSources,
+} from './ownership-bootstrap.ts';
 import { bootstrapOwnershipGates } from './ownership-mode-marker.ts';
+import { processPendingUpdatesForHandlers as processPendingUpdatesForHandlersFromInternals } from './pending-updates.ts';
 import { assertCompatiblePersistedDataVersion } from './persisted-data-version.ts';
 import { query as queryWorkflow } from './queries.ts';
 import {
@@ -253,7 +262,11 @@ import {
   createSecondInstanceDetectionTick,
   createSecondInstanceDetector,
 } from './second-instance-detector.ts';
-import { signal as signalWorkflow } from './signals.ts';
+import {
+  hasBufferedSignal as hasBufferedSignalFromInternals,
+  releaseSignalWaiter,
+  signal as signalWorkflow,
+} from './signals.ts';
 import {
   loadScheduleState,
   loadWorkflowState,
@@ -273,6 +286,7 @@ import {
   type TerminationCallbacks,
 } from './termination.ts';
 import {
+  deliverCoordinatedUpdateToWaiterIfAvailable as deliverCoordinatedUpdateToWaiterIfAvailableFromInternals,
   getUpdateResult as getUpdateResultFromInternals,
   submitCoordinatedUpdate as submitCoordinatedUpdateFromInternals,
   update as updateFromInternals,
@@ -280,6 +294,7 @@ import {
 } from './updates.ts';
 import { isTerminalWorkflowStatus } from './validation.ts';
 import { coerceScheduleId } from './validation/schedule.ts';
+import { confirmWakeOwnership } from './wake-ownership-guard.ts';
 import type { WorkflowClaimRegistry } from './workflow-claim-registry.ts';
 import {
   replayWorkflowFeed,
@@ -736,9 +751,11 @@ export class Engine<
     getInternals(this).parkedInlineWorkflows = new Set();
     getInternals(this).terminalizingWorkflows = new Set();
     getInternals(this).deliveredPendingUpdateIds = new Map();
+    getInternals(this).onRecoveredWorkflowHook = undefined;
     getInternals(this).cancelHandlersByWorkflow = new Map();
     getInternals(this).reviewTimerIds = new Map();
     getInternals(this).pendingWebhooks = new Set();
+    getInternals(this).pendingResultPollTimers = new Set();
     getInternals(this).pendingTimelineEntries = new Map();
     getInternals(this).pendingAtomicWorkflowCommitSideEffects = new Map();
     getInternals(this).cleanupIntervalDisposalTracker = null;
@@ -1006,6 +1023,74 @@ export class Engine<
         getNow: internals.options.getNow,
         claimTtlMs: internals.options.workflowClaimTtlMs,
         claimRenewIntervalMs: internals.options.workflowClaimRenewIntervalMs,
+        // In a fleet whose engines register different workflow subsets, an
+        // engine that cannot execute a candidate's type must never win its
+        // claim — `onReclaimed` below would deterministically throw on every
+        // redrive attempt, and a failed drive is retried in place rather than
+        // released, permanently stranding the workflow away from a capable
+        // engine.
+        isWorkflowTypeRegistered: (workflowType: string) =>
+          internals.workflowDefinitionsByName.has(workflowType),
+        // Reclaiming a stranded claim only moves ownership keys; without
+        // driving the workflow it sits idle while this engine's renewal keeps
+        // the claim alive, shielding it from any engine that would resume it.
+        onWorkflowClaimReclaimed: async (workflowId: string) => {
+          // Same-engine reclaim (this engine held the claim, was deposed, and
+          // later reclaimed it): deposition drops only the registry's claim
+          // entry, so this engine's OLD in-memory context/generator/abort
+          // controller for `workflowId` survive untouched. Evict them
+          // SYNCHRONOUSLY, before any await below, so `query()` and
+          // `tryInlineUpdateHandler()`'s engine-id-only staleness check
+          // cannot see the same engine as both old and new holder and serve
+          // reads/handler invocations from the pre-reclaim closure during this
+          // async-activity-reload-and-replay window. Also drop this
+          // workflow's delivered-pending-update-id claims: a claim recorded
+          // by the deposed generation before losing its claim (added
+          // synchronously, but its fenced response commit can still be
+          // in-flight or have failed) would otherwise make every post-replay
+          // drain treat that update as already delivered, and its caller
+          // would never receive a response.
+          internals.inlineStrategy?.evictContextForReclaim(workflowId);
+          internals.deliveredPendingUpdateIds.delete(workflowId);
+          // `forceReplayFromStorage` is mandatory here. Deposition drops only
+          // the registry's claim entry; contexts, generators, parked markers
+          // and local checkpoints all survive. Without it, `resume()`'s
+          // local-ownership fast path would hand back the pre-deposition
+          // handle, and this reclaim would renew a workflow that never
+          // actually restarted from durable state.
+          // Reload this workflow's async-activity records BEFORE replay. A
+          // resolution acknowledged by the expired owner was discarded by that
+          // engine's wake-ownership check, leaving only the durable record;
+          // this engine's startup scan already ran, so without this bounded
+          // per-workflow reload the replayed run would re-park on the same
+          // deterministic token and wait forever for a delivery the completion
+          // caller was already told had succeeded.
+          await recoverPendingAsyncActivities(internals, workflowId);
+          // Disposal can land while the reload above was in flight — recheck
+          // rather than replay against a torn-down host. `markDisposing()` on
+          // the reclaim target (see `ownership-bootstrap.ts`) closes the
+          // takeover-CAS side of this race; this closes the drive side for a
+          // takeover that had already landed before disposal was signaled.
+          if (internals.disposed) return;
+          await resumeFromLifecycle(
+            internals,
+            workflowId,
+            this.#createLifecycleCallbacks(),
+            internals.onRecoveredWorkflowHook,
+            { forceReplayFromStorage: true },
+          );
+        },
+        // Owner-side signal polling (ADR 0002): without this, a signal
+        // delivered to a non-owning engine is durably buffered but nobody
+        // wakes this engine's parked workflow — see
+        // `#buildOwnerSideSignalPollTarget`'s doc comment.
+        signalPollTarget: this.#buildOwnerSideSignalPollTarget(),
+        // Owner-side coordinated-update polling (WFT-79): without this, a
+        // coordinated update delivered to a non-owning engine (or one that
+        // arrives with no live handler/waiter yet) is durably buffered but
+        // nothing drives the true owner to look again — see
+        // `#buildOwnerSideUpdatePollTarget`'s doc comment.
+        updatePollTarget: this.#buildOwnerSideUpdatePollTarget(),
       });
       if (internals.disposed) {
         // Disposal raced the gates. Nothing durable-and-per-engine was taken
@@ -1175,8 +1260,123 @@ export class Engine<
   #createInlineParkingCallbacks(): InlineParkingCallbacks {
     return createInlineParkingCallbacksForEngine(this);
   }
+  /**
+   * Build the real owner-side signal-poll target (ADR 0002 § "Signal
+   * delivery needs more than a classification") for `ownership:
+   * 'workflow-lease'`. `ownership-bootstrap.ts`'s
+   * `buildOwnerSideSignalPollTarget` stays independent of `EngineInternals`;
+   * this is the one place that supplies its `OwnerSideSignalPollSources` as
+   * closures over `getInternals(this)`, covering both in-memory populations
+   * a parked `waitForSignal()` can land in — checkpoint-parked workflows
+   * (`internals.parkedInlineWorkflows`/`pendingTimelineEntries`) and live
+   * signal waiters (`internals.signalWaiters`/`signalWaitersByWorkflow`, the
+   * `ctx.race`/`ctx.all` and query/update-handler population). Without this
+   * wiring `bootstrapWorkflowLeaseOwnership` never receives a
+   * `signalPollTarget`, and a signal delivered to a non-owning engine hangs
+   * the parked workflow until an unrelated wake happens to occur.
+   */
+  #buildOwnerSideSignalPollTarget(): OwnerSideSignalPollTarget {
+    const internals = getInternals(this);
+    const sources: OwnerSideSignalPollSources = {
+      listParkedInlineWorkflowIds: () => internals.parkedInlineWorkflows,
+      isParkedInlineWorkflow: (workflowId) => internals.parkedInlineWorkflows.has(workflowId),
+      parkedSignalName: (workflowId) => {
+        const pending = internals.pendingTimelineEntries.get(workflowId);
+        return pending?.entry.operationType === 'wait-signal'
+          ? pending.entry.operationLabel
+          : undefined;
+      },
+      listSignalWaiterEntries: function* signalWaiterEntries() {
+        for (const [workflowId, waiterKeys] of internals.signalWaitersByWorkflow) {
+          if (typeof waiterKeys === 'string') {
+            yield [workflowId, waiterKeys] as const;
+            continue;
+          }
+          for (const waiterKey of waiterKeys) {
+            yield [workflowId, waiterKey] as const;
+          }
+        }
+      },
+      hasBufferedSignal: (workflowId, signalName) =>
+        hasBufferedSignalFromInternals(internals, workflowId, signalName),
+      resumeParkedInlineWorkflow: (workflowId) =>
+        resumeParkedInlineWorkflowFromInternals(
+          internals,
+          workflowId,
+          this.#createInlineParkingCallbacks(),
+        ),
+      // Waking a signal waiter advances the workflow's generator, so it is a
+      // claim-requiring wake path. `runOnce()` continues into signal polling
+      // even after a failed renewal has dropped this engine's claim entry, so
+      // without this a buffered signal would wake a deposed generator while the
+      // successor advances its replayed one. `ownership-bootstrap.ts` cannot
+      // call `confirmWakeOwnership` itself — it deliberately does not depend on
+      // `EngineInternals` — so the engine supplies it here.
+      confirmSignalWakeOwnership: (workflowId) =>
+        confirmWakeOwnership(internals, workflowId, 'signal'),
+      wakeSignalWaiter: (workflowId, waiterKey) => {
+        const waiter = internals.signalWaiters.get(waiterKey);
+        if (waiter === undefined) return;
+        // Only invoke the waiter this call actually removed — see
+        // `releaseSignalWaiter`. The poll's ownership confirmation above is an
+        // await, so the waiter can be replaced meanwhile.
+        if (releaseSignalWaiter(internals, workflowId, waiterKey, waiter)) {
+          waiter();
+        }
+      },
+    };
+    return buildOwnerSideSignalPollTarget(sources);
+  }
   #createUpdateCallbacks(): UpdateCallbacks {
     return createUpdateCallbacksForEngine(this);
+  }
+  /**
+   * Build the real owner-side update-poll target (WFT-79) for `ownership:
+   * 'workflow-lease'`. `deliverCoordinatedUpdateToWaiterIfAvailable` and
+   * `processPendingUpdatesForHandlers` already discard/refuse to act when
+   * this engine no longer owns the workflow (`confirmWakeOwnership`/
+   * `isLiveContextStale`), and are otherwise idempotent — safe to call
+   * against a workflow with no pending updates or no matching handler/waiter
+   * at all — so this poll drains unconditionally rather than needing its own
+   * ownership pre-check. Without this wiring, a coordinated update or a
+   * parked `ctx.waitForUpdate()` on the true owner is never re-checked once
+   * the original `setTimeout(0)` drain (fired only on the engine that
+   * RECEIVED the update call) has run its course, leaving the request
+   * durable but undelivered until something unrelated drives that workflow.
+   */
+  #buildOwnerSideUpdatePollTarget(): OwnerSideUpdatePollTarget {
+    const internals = getInternals(this);
+    return {
+      listHeldWorkflowIds: () => internals.workflowClaimRegistry?.listHeldWorkflowIds() ?? [],
+      hasPendingUpdates: async (workflowId) => {
+        const pending = await internals.updateCoordinator.getPendingUpdates(workflowId);
+        return pending.length > 0;
+      },
+      drainPendingUpdates: async (workflowId) => {
+        await processPendingUpdatesForHandlersFromInternals(
+          internals,
+          workflowId,
+          createPendingUpdateCallbacksForEngine(this),
+        );
+        // `processPendingUpdatesForHandlers` only drains updates matching a
+        // currently-registered `ctx.onUpdate()` handler. Remaining pending
+        // updates may instead have a parked `ctx.waitForUpdate()` waiter —
+        // `deliverCoordinatedUpdateToWaiterIfAvailable` is itself a no-op
+        // when no waiter is registered for a given update's name, so calling
+        // it for every still-pending record is safe.
+        const stillPending = await internals.updateCoordinator.getPendingUpdates(workflowId);
+        const updateCallbacks = this.#createUpdateCallbacks();
+        for (const updateRequest of stillPending) {
+          await deliverCoordinatedUpdateToWaiterIfAvailableFromInternals(
+            internals,
+            workflowId,
+            updateRequest,
+            false,
+            updateCallbacks,
+          );
+        }
+      },
+    };
   }
   #createTimeOperationCallbacks(): TimeOperationCallbacks {
     return createTimeOperationCallbacksForEngine(this);
@@ -1529,6 +1729,11 @@ export class Engine<
     // scheduler.tick() resumes under a freshly confirmed claim rather than one
     // that is about to lapse.
     await internals.workflowClaimRenewalTask?.runOnce();
+    // No timer runs in this mode, so the cross-engine result poll that
+    // `getWorkflowResultPromise` would otherwise schedule is driven here.
+    // Without it a manual-mode engine awaiting a child claimed by another
+    // engine would never observe that child terminate.
+    await pollPendingCrossEngineResultWaiters(internals);
     await internals.scheduler.tick(now);
     try {
       await internals.updateCoordinator.cleanupExpiredResponses();
@@ -2000,6 +2205,11 @@ export class Engine<
     // before (or during) workflow replay still resolves a parked activity.
     await recoverPendingAsyncActivities(getInternals(this));
     await recoverOrphanedScheduleTimers(getInternals(this));
+    // Retained for a LATER same-engine reclaim (ADR 0002's recurring scan) to
+    // reuse — see `onRecoveredWorkflowHook`'s doc on `EngineInternals` for why
+    // a reclaim-driven resume must not silently skip this hook just because it
+    // was installed here rather than passed to that reclaim's own call.
+    getInternals(this).onRecoveredWorkflowHook = options?.onRecoveredWorkflow;
     return recoverAllFromLifecycle(getInternals(this), this.#createLifecycleCallbacks(), options);
   }
 
