@@ -765,7 +765,7 @@ describe('createWorkflowClaimRenewalTask · start/stop (interval mode, no real t
       await flushMicrotasks();
     });
 
-    it('the reclaim-plus-poll sub-pass has its own single-flight slot, independent of renewal', async () => {
+    it('the reclaim sub-pass has its own single-flight slot, independent of renewal', async () => {
       const clock = makeClock();
       const target = createFakeTarget([]);
       const reclaimTarget = createFakeReclaimTarget(['wf-stranded']);
@@ -799,6 +799,42 @@ describe('createWorkflowClaimRenewalTask · start/stop (interval mode, no real t
       await flushMicrotasks();
 
       expect(listCalls).toBe(2);
+    });
+
+    it('a later signal-poll tick still wakes its waiter while an earlier reclaim scan is still hanging', async () => {
+      const clock = makeClock();
+      const target = createFakeTarget([]);
+      const reclaimTarget = createFakeReclaimTarget(['wf-stranded']);
+      const signalPollTarget = createFakeSignalPollTarget([
+        { workflowId: 'wf-parked', signalName: 'go' },
+      ]);
+      signalPollTarget.bufferedFor.add('wf-parked');
+      const scheduler = createFakeScheduler();
+      const task = createWorkflowClaimRenewalTask({
+        target,
+        reclaimTarget,
+        signalPollTarget,
+        getNow: clock.now,
+        intervalMs: 1_000,
+        scheduler,
+      });
+      // The reclaim scan hangs indefinitely — modeling an unbounded store-wide
+      // scan, or a candidate whose `onReclaimed` drive never settles.
+      const hangingList = createDeferred<readonly string[]>();
+      reclaimTarget.listReclaimCandidateWorkflowIds = () => hangingList.promise;
+
+      task.start();
+      scheduler.fire(); // tick 1: starts reclaim (hangs) and signal poll
+      await flushMicrotasks();
+
+      // The bug this regresses: signal poll shared reclaim's single-flight
+      // slot, so cross-engine signal delivery inherited reclaim's unbounded
+      // latency. With signal poll on its own slot, it still wakes the parked
+      // waiter on the very first tick, before reclaim ever settles.
+      expect(signalPollTarget.wokenIds).toEqual(['wf-parked']);
+
+      hangingList.resolve([]);
+      await flushMicrotasks();
     });
   });
 

@@ -796,6 +796,146 @@ describe('createWorkflowClaimReclaimTarget · ownerless-but-running acquire fall
   });
 });
 
+describe('createWorkflowClaimReclaimTarget · running-state/acquire TOCTOU (WFT-79)', () => {
+  /**
+   * Gate the storage read `WorkflowClaimRegistry.acquire`/`takeover` performs
+   * first (`wf-owner-holder:<id>`), so the terminal transition can be forced
+   * to commit strictly BETWEEN the pre-CAS `isWorkflowStillRunning` read and
+   * the CAS itself landing — the exact window `confirmStillRunningOrReleaseFreshClaim`
+   * exists to close via its OWN fresh post-acquire read.
+   */
+  function createHolderReadGatedStorage(
+    base: MemoryStorage,
+    workflowId: string,
+    onGateReached: () => void,
+  ): { storage: Storage; release: () => void } {
+    let releaseGate: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    let gated = false;
+    const storage: Storage = {
+      capabilities: () => base.capabilities(),
+      async get(key) {
+        if (key === KEYS.workflowOwnerHolder(workflowId) && !gated) {
+          gated = true;
+          onGateReached();
+          await gate;
+        }
+        return base.get(key);
+      },
+      put: (key, value) => base.put(key, value),
+      delete: (key) => base.delete(key),
+      scan: (prefix, options) => base.scan(prefix, options),
+      batch: (operations) => base.batch(operations),
+      conditionalBatch: base.conditionalBatch?.bind(base),
+      [Symbol.dispose]: () => base[Symbol.dispose](),
+    };
+    return {
+      storage,
+      release: () => releaseGate?.(),
+    };
+  }
+
+  it('acquireOwnerlessRunningClaim releases (and does not drive) a workflow that turned terminal during the acquire CAS', async () => {
+    const clock = makeClock();
+    const base = new MemoryStorage();
+    await putWorkflowState(base, 'wf-race'); // running; no holder record — the ownerless-acquire path.
+    let signalReached!: () => void;
+    const reached = new Promise<void>((resolve) => {
+      signalReached = resolve;
+    });
+    const { storage: gatedStorage, release } = createHolderReadGatedStorage(
+      base,
+      'wf-race',
+      signalReached,
+    );
+    const registry = new WorkflowClaimRegistry({
+      storage: gatedStorage,
+      engineId: 'engine-a',
+      getNow: clock.now,
+      claimTtlMs: TTL_MS,
+      claimRenewIntervalMs: RENEW_MS,
+    });
+    const driven: string[] = [];
+    const reclaimTarget = createWorkflowClaimReclaimTarget(
+      registry,
+      gatedStorage,
+      new WorkflowClaimMetricsCollector(),
+      async (workflowId) => {
+        driven.push(workflowId);
+      },
+    );
+
+    const attemptPromise = reclaimTarget.attemptWorkflowClaimTakeover('wf-race');
+    await reached;
+
+    // A terminal transition commits while the acquire CAS's own holder read
+    // is gated in flight — the state read `isWorkflowStillRunning` already
+    // performed before this call started acquire cannot see this.
+    await putWorkflowState(base, 'wf-race', { status: 'completed' });
+    release();
+
+    const result = await attemptPromise;
+
+    expect(result).toEqual({ status: 'not-eligible' });
+    expect(driven).toEqual([]);
+    // The claim landed by the CAS, then was released by the fresh post-acquire
+    // check — never left held and renewed indefinitely.
+    expect(registry.currentEpoch('wf-race')).toBeNull();
+    expect(await base.get(KEYS.workflowOwnerHolder('wf-race'))).toBeNull();
+  });
+
+  it('handleTakeoverAcquired releases (and does not drive) a workflow whose expired holder sits beside an already-terminal state', async () => {
+    const clock = makeClock();
+    const base = new MemoryStorage();
+    await putHolder(base, 'wf-expired', 'engine-b');
+    await putWorkflowState(base, 'wf-expired');
+    clock.advance(TTL_MS * 10); // far past any grace-adjusted expiry
+    let signalReached!: () => void;
+    const reached = new Promise<void>((resolve) => {
+      signalReached = resolve;
+    });
+    const { storage: gatedStorage, release } = createHolderReadGatedStorage(
+      base,
+      'wf-expired',
+      signalReached,
+    );
+    const registry = new WorkflowClaimRegistry({
+      storage: gatedStorage,
+      engineId: 'engine-a',
+      getNow: clock.now,
+      claimTtlMs: TTL_MS,
+      claimRenewIntervalMs: RENEW_MS,
+    });
+    const driven: string[] = [];
+    const reclaimTarget = createWorkflowClaimReclaimTarget(
+      registry,
+      gatedStorage,
+      new WorkflowClaimMetricsCollector(),
+      async (workflowId) => {
+        driven.push(workflowId);
+      },
+    );
+
+    const attemptPromise = reclaimTarget.attemptWorkflowClaimTakeover('wf-expired');
+    await reached;
+
+    // The previous holder crashed after the workflow completed but before
+    // this engine's reclaim scan runs — the takeover CAS only fences on the
+    // holder/epoch keys, never workflow status.
+    await putWorkflowState(base, 'wf-expired', { status: 'completed' });
+    release();
+
+    const result = await attemptPromise;
+
+    expect(result).toEqual({ status: 'not-eligible' });
+    expect(driven).toEqual([]);
+    expect(registry.currentEpoch('wf-expired')).toBeNull();
+    expect(await base.get(KEYS.workflowOwnerHolder('wf-expired'))).toBeNull();
+  });
+});
+
 describe('buildOwnerSideSignalPollTarget (WFT-79 Finding 1)', () => {
   function makeSources(overrides: Partial<OwnerSideSignalPollSources> = {}): {
     sources: OwnerSideSignalPollSources;
