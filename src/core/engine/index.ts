@@ -112,6 +112,7 @@ import {
   untagAll as untagAllWorkflows,
 } from './bulk-operations.ts';
 import { createTimeOperationCallbacks as createTimeOperationCallbacksForEngine } from './callback-creators-bundles.ts';
+import { createPendingUpdateCallbacks as createPendingUpdateCallbacksForEngine } from './callback-creators-core.ts';
 import {
   createBroadcastCallbacks as createBroadcastCallbacksForEngine,
   createInlineParkingCallbacks as createInlineParkingCallbacksForEngine,
@@ -217,12 +218,14 @@ import {
   type TimeOperationCallbacks,
 } from './operations-time.ts';
 import type { OwnerSideSignalPollTarget } from './owner-side-signal-poll.ts';
+import type { OwnerSideUpdatePollTarget } from './owner-side-update-poll.ts';
 import {
   bootstrapWorkflowLeaseOwnership,
   buildOwnerSideSignalPollTarget,
   type OwnerSideSignalPollSources,
 } from './ownership-bootstrap.ts';
 import { bootstrapOwnershipGates } from './ownership-mode-marker.ts';
+import { processPendingUpdatesForHandlers as processPendingUpdatesForHandlersFromInternals } from './pending-updates.ts';
 import { assertCompatiblePersistedDataVersion } from './persisted-data-version.ts';
 import { query as queryWorkflow } from './queries.ts';
 import {
@@ -283,6 +286,7 @@ import {
   type TerminationCallbacks,
 } from './termination.ts';
 import {
+  deliverCoordinatedUpdateToWaiterIfAvailable as deliverCoordinatedUpdateToWaiterIfAvailableFromInternals,
   getUpdateResult as getUpdateResultFromInternals,
   submitCoordinatedUpdate as submitCoordinatedUpdateFromInternals,
   update as updateFromInternals,
@@ -1081,6 +1085,12 @@ export class Engine<
         // wakes this engine's parked workflow — see
         // `#buildOwnerSideSignalPollTarget`'s doc comment.
         signalPollTarget: this.#buildOwnerSideSignalPollTarget(),
+        // Owner-side coordinated-update polling (WFT-79): without this, a
+        // coordinated update delivered to a non-owning engine (or one that
+        // arrives with no live handler/waiter yet) is durably buffered but
+        // nothing drives the true owner to look again — see
+        // `#buildOwnerSideUpdatePollTarget`'s doc comment.
+        updatePollTarget: this.#buildOwnerSideUpdatePollTarget(),
       });
       if (internals.disposed) {
         // Disposal raced the gates. Nothing durable-and-per-engine was taken
@@ -1319,6 +1329,54 @@ export class Engine<
   }
   #createUpdateCallbacks(): UpdateCallbacks {
     return createUpdateCallbacksForEngine(this);
+  }
+  /**
+   * Build the real owner-side update-poll target (WFT-79) for `ownership:
+   * 'workflow-lease'`. `deliverCoordinatedUpdateToWaiterIfAvailable` and
+   * `processPendingUpdatesForHandlers` already discard/refuse to act when
+   * this engine no longer owns the workflow (`confirmWakeOwnership`/
+   * `isLiveContextStale`), and are otherwise idempotent — safe to call
+   * against a workflow with no pending updates or no matching handler/waiter
+   * at all — so this poll drains unconditionally rather than needing its own
+   * ownership pre-check. Without this wiring, a coordinated update or a
+   * parked `ctx.waitForUpdate()` on the true owner is never re-checked once
+   * the original `setTimeout(0)` drain (fired only on the engine that
+   * RECEIVED the update call) has run its course, leaving the request
+   * durable but undelivered until something unrelated drives that workflow.
+   */
+  #buildOwnerSideUpdatePollTarget(): OwnerSideUpdatePollTarget {
+    const internals = getInternals(this);
+    return {
+      listHeldWorkflowIds: () => internals.workflowClaimRegistry?.listHeldWorkflowIds() ?? [],
+      hasPendingUpdates: async (workflowId) => {
+        const pending = await internals.updateCoordinator.getPendingUpdates(workflowId);
+        return pending.length > 0;
+      },
+      drainPendingUpdates: async (workflowId) => {
+        await processPendingUpdatesForHandlersFromInternals(
+          internals,
+          workflowId,
+          createPendingUpdateCallbacksForEngine(this),
+        );
+        // `processPendingUpdatesForHandlers` only drains updates matching a
+        // currently-registered `ctx.onUpdate()` handler. Remaining pending
+        // updates may instead have a parked `ctx.waitForUpdate()` waiter —
+        // `deliverCoordinatedUpdateToWaiterIfAvailable` is itself a no-op
+        // when no waiter is registered for a given update's name, so calling
+        // it for every still-pending record is safe.
+        const stillPending = await internals.updateCoordinator.getPendingUpdates(workflowId);
+        const updateCallbacks = this.#createUpdateCallbacks();
+        for (const updateRequest of stillPending) {
+          await deliverCoordinatedUpdateToWaiterIfAvailableFromInternals(
+            internals,
+            workflowId,
+            updateRequest,
+            false,
+            updateCallbacks,
+          );
+        }
+      },
+    };
   }
   #createTimeOperationCallbacks(): TimeOperationCallbacks {
     return createTimeOperationCallbacksForEngine(this);

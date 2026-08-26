@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { createDeferred, flushMicrotasks } from '../../testing/fake-timers.test-support.ts';
 import type { OwnerSideSignalPollTarget } from './owner-side-signal-poll.ts';
+import type { OwnerSideUpdatePollTarget } from './owner-side-update-poll.ts';
 import type {
   WorkflowClaimReclaimAttemptResult,
   WorkflowClaimReclaimTarget,
@@ -289,6 +290,42 @@ describe('createWorkflowClaimRenewalTask · runOnce', () => {
     expect(consoleErrors[0]?.[1]).toBe(sinkError);
   });
 
+  it('survives a throwing onPassComplete sink in interval mode too (workflow-claim-renewal-interval.ts has its own emitPassComplete)', async () => {
+    const clock = makeClock();
+    const target = createFakeTarget(['workflow-a']);
+    const sinkError = new Error('interval sink exploded');
+    const consoleErrors: unknown[][] = [];
+    const originalConsoleError = console.error;
+    console.error = (...args: unknown[]) => {
+      consoleErrors.push(args);
+    };
+    const scheduler = createFakeScheduler();
+
+    try {
+      const task = createWorkflowClaimRenewalTask({
+        target,
+        getNow: clock.now,
+        intervalMs: 1_000,
+        scheduler,
+        onPassComplete: () => {
+          throw sinkError;
+        },
+      });
+
+      task.start();
+      scheduler.fire();
+      await flushMicrotasks();
+
+      // The renewal itself already committed before the sink ran.
+      expect(target.calls).toEqual(['workflow-a']);
+    } finally {
+      console.error = originalConsoleError;
+    }
+
+    expect(consoleErrors).toHaveLength(1);
+    expect(consoleErrors[0]?.[1]).toBe(sinkError);
+  });
+
   it('rejects when listHeldWorkflowIds itself throws, without swallowing it', async () => {
     const clock = makeClock();
     const target = createFakeTarget([]);
@@ -371,6 +408,38 @@ function createFakeSignalPollTarget(
     },
     failHasBufferedNext(error) {
       hasBufferedFailure = { error };
+    },
+  };
+}
+
+function createFakeUpdatePollTarget(
+  heldWorkflowIds: readonly string[] = [],
+): OwnerSideUpdatePollTarget & {
+  drainedIds: string[];
+  pendingFor: Set<string>;
+  failHasPendingNext(error: unknown): void;
+} {
+  const pendingFor = new Set<string>();
+  const drainedIds: string[] = [];
+  let hasPendingFailure: { error: unknown } | null = null;
+
+  return {
+    drainedIds,
+    pendingFor,
+    listHeldWorkflowIds: () => [...heldWorkflowIds],
+    async hasPendingUpdates(workflowId) {
+      if (hasPendingFailure !== null) {
+        const { error } = hasPendingFailure;
+        hasPendingFailure = null;
+        throw error;
+      }
+      return pendingFor.has(workflowId);
+    },
+    async drainPendingUpdates(workflowId) {
+      drainedIds.push(workflowId);
+    },
+    failHasPendingNext(error) {
+      hasPendingFailure = { error };
     },
   };
 }
@@ -522,6 +591,64 @@ describe('createWorkflowClaimRenewalTask · runOnce · owner-side signal poll', 
     // Renewal (an independent sub-step) still committed and is unaffected.
     expect(result.renewedCount).toBe(1);
     expect(result.signalPoll).toEqual({ status: 'failed', error: boom });
+  });
+});
+
+describe('createWorkflowClaimRenewalTask · runOnce · owner-side update poll (WFT-79)', () => {
+  it('leaves result.updatePoll undefined when no updatePollTarget is configured', async () => {
+    const clock = makeClock();
+    const target = createFakeTarget([]);
+    const task = createWorkflowClaimRenewalTask({ target, getNow: clock.now, intervalMs: 1_000 });
+
+    const result = await task.runOnce();
+
+    expect(result.updatePoll).toBeUndefined();
+  });
+
+  it('drains a held workflow with pending coordinated updates', async () => {
+    const clock = makeClock();
+    const target = createFakeTarget([]);
+    const updatePollTarget = createFakeUpdatePollTarget(['wf-owned']);
+    updatePollTarget.pendingFor.add('wf-owned');
+    const task = createWorkflowClaimRenewalTask({
+      target,
+      updatePollTarget,
+      getNow: clock.now,
+      intervalMs: 1_000,
+    });
+
+    const result = await task.runOnce();
+
+    expect(result.updatePoll).toEqual({
+      status: 'completed',
+      result: {
+        startedAt: expect.any(Number),
+        finishedAt: expect.any(Number),
+        outcomes: [{ workflowId: 'wf-owned', status: 'drained' }],
+        drainedCount: 1,
+      },
+    });
+    expect(updatePollTarget.drainedIds).toEqual(['wf-owned']);
+  });
+
+  it('reports failed, without rejecting the pass, when the poll itself throws', async () => {
+    const clock = makeClock();
+    const target = createFakeTarget(['workflow-a']);
+    const updatePollTarget = createFakeUpdatePollTarget(['wf-owned']);
+    const boom = new Error('pending-update probe failed');
+    updatePollTarget.failHasPendingNext(boom);
+    const task = createWorkflowClaimRenewalTask({
+      target,
+      updatePollTarget,
+      getNow: clock.now,
+      intervalMs: 1_000,
+    });
+
+    const result = await task.runOnce();
+
+    // Renewal (an independent sub-step) still committed and is unaffected.
+    expect(result.renewedCount).toBe(1);
+    expect(result.updatePoll).toEqual({ status: 'failed', error: boom });
   });
 });
 
@@ -836,6 +963,41 @@ describe('createWorkflowClaimRenewalTask · start/stop (interval mode, no real t
       hangingList.resolve([]);
       await flushMicrotasks();
     });
+
+    it('a later update-poll tick still drains its pending updates while an earlier reclaim scan is still hanging (WFT-79)', async () => {
+      const clock = makeClock();
+      const target = createFakeTarget([]);
+      const reclaimTarget = createFakeReclaimTarget(['wf-stranded']);
+      const updatePollTarget = createFakeUpdatePollTarget(['wf-owned']);
+      updatePollTarget.pendingFor.add('wf-owned');
+      const scheduler = createFakeScheduler();
+      const task = createWorkflowClaimRenewalTask({
+        target,
+        reclaimTarget,
+        updatePollTarget,
+        getNow: clock.now,
+        intervalMs: 1_000,
+        scheduler,
+      });
+      // The reclaim scan hangs indefinitely — modeling an unbounded store-wide
+      // scan, or a candidate whose `onReclaimed` drive never settles.
+      const hangingList = createDeferred<readonly string[]>();
+      reclaimTarget.listReclaimCandidateWorkflowIds = () => hangingList.promise;
+
+      task.start();
+      scheduler.fire(); // tick 1: starts reclaim (hangs) and update poll
+      await flushMicrotasks();
+
+      // Update poll must not share reclaim's single-flight slot: it drains
+      // its pending updates on the very first tick, before reclaim ever
+      // settles — otherwise a coordinated update or a parked
+      // `ctx.waitForUpdate()` on the true owner would never be re-checked
+      // until an unrelated reclaim scan happened to finish.
+      expect(updatePollTarget.drainedIds).toEqual(['wf-owned']);
+
+      hangingList.resolve([]);
+      await flushMicrotasks();
+    });
   });
 
   it('does not leak an unhandled rejection when an interval-driven pass rejects, and recovers on the next tick', async () => {
@@ -911,6 +1073,86 @@ describe('createWorkflowClaimRenewalTask · start/stop (interval mode, no real t
     await flushMicrotasks();
 
     expect(reclaimTarget.calls).toEqual(['wf-a']);
+  });
+
+  it('does not leak an unhandled rejection when the signal-poll tick pass itself rejects, and recovers on the next tick', async () => {
+    const clock = makeClock();
+    const target = createFakeTarget([]);
+    const signalPollTarget = createFakeSignalPollTarget([
+      { workflowId: 'wf-parked', signalName: 'approval' },
+    ]);
+    signalPollTarget.bufferedFor.add('wf-parked');
+    const boom = new Error('clock unavailable');
+    // `tick()` calls `runRenewalTickPass()` synchronously first (its
+    // `getNow()` read for `startedAt` is call #1), then
+    // `runSignalPollTickPass()` synchronously second (call #2) — both
+    // happen before either pass reaches its first `await`. Failing only
+    // call #2 makes `runSignalPollTickPass()` reject at its very first line.
+    let callCount = 0;
+    const getNow = (): number => {
+      callCount += 1;
+      if (callCount === 2) throw boom;
+      return clock.now();
+    };
+    const scheduler = createFakeScheduler();
+    const task = createWorkflowClaimRenewalTask({
+      target,
+      signalPollTarget,
+      getNow,
+      intervalMs: 1_000,
+      scheduler,
+    });
+
+    task.start();
+    scheduler.fire();
+    await flushMicrotasks();
+
+    // No unhandled rejection escaped `tick()`, and the poll target was
+    // never reached because the pass rejected before calling it.
+    expect(signalPollTarget.wokenIds).toEqual([]);
+
+    // The `inFlightSignalPoll` slot must have been cleared despite the
+    // rejection, so a later tick starts a fresh pass rather than being
+    // permanently wedged.
+    scheduler.fire();
+    await flushMicrotasks();
+
+    expect(signalPollTarget.wokenIds).toEqual(['wf-parked']);
+  });
+
+  it('does not leak an unhandled rejection when the update-poll tick pass itself rejects, and recovers on the next tick (WFT-79)', async () => {
+    const clock = makeClock();
+    const target = createFakeTarget([]);
+    const updatePollTarget = createFakeUpdatePollTarget(['wf-owned']);
+    updatePollTarget.pendingFor.add('wf-owned');
+    const boom = new Error('clock unavailable');
+    // Same technique as the signal-poll case above: `runUpdatePollTickPass()`
+    // is the second synchronous `getNow()` call within one `tick()`.
+    let callCount = 0;
+    const getNow = (): number => {
+      callCount += 1;
+      if (callCount === 2) throw boom;
+      return clock.now();
+    };
+    const scheduler = createFakeScheduler();
+    const task = createWorkflowClaimRenewalTask({
+      target,
+      updatePollTarget,
+      getNow,
+      intervalMs: 1_000,
+      scheduler,
+    });
+
+    task.start();
+    scheduler.fire();
+    await flushMicrotasks();
+
+    expect(updatePollTarget.drainedIds).toEqual([]);
+
+    scheduler.fire();
+    await flushMicrotasks();
+
+    expect(updatePollTarget.drainedIds).toEqual(['wf-owned']);
   });
 
   it('runOnce bypasses the interval single-flight guard even while a tick-driven pass is in flight', async () => {

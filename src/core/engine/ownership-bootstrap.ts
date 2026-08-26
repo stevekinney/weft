@@ -39,6 +39,7 @@
 
 import type { Storage } from '../../storage/interface.ts';
 import type { OwnerSideSignalPollTarget, ParkedSignalWait } from './owner-side-signal-poll.ts';
+import type { OwnerSideUpdatePollTarget } from './owner-side-update-poll.ts';
 import { bootstrapOwnershipGates } from './ownership-mode-marker.ts';
 import { WorkflowClaimMetricsCollector } from './workflow-claim-metrics.ts';
 import { createWorkflowClaimReclaimTarget } from './workflow-claim-reclaim-target.ts';
@@ -72,6 +73,16 @@ export type WorkflowLeaseOwnershipBootstrapOptions = {
    * paragraph. Omitted leaves `result.signalPoll` `undefined` on every pass.
    */
   signalPollTarget?: OwnerSideSignalPollTarget;
+  /**
+   * Optional owner-side update-poll target (WFT-79), built by a caller with
+   * access to `EngineInternals` — typically `index.ts`'s
+   * `#buildOwnerSideUpdatePollTarget`. Omitted leaves `result.updatePoll`
+   * `undefined` on every pass. See `owner-side-update-poll.ts`'s module doc
+   * for why the owning engine must re-check its own held workflows' pending
+   * coordinated-update queues rather than relying solely on the
+   * `setTimeout(0)` drain the receiving engine fires.
+   */
+  updatePollTarget?: OwnerSideUpdatePollTarget;
   /**
    * Invoked after this engine reclaims a stranded claim, to actually drive the
    * workflow. Taking the claim only moves durable ownership keys; without this
@@ -365,6 +376,9 @@ export async function bootstrapWorkflowLeaseOwnership(
     ...(options.signalPollTarget === undefined
       ? {}
       : { signalPollTarget: options.signalPollTarget }),
+    ...(options.updatePollTarget === undefined
+      ? {}
+      : { updatePollTarget: options.updatePollTarget }),
     getNow: options.getNow,
     intervalMs: options.claimRenewIntervalMs,
     onPassComplete: (result) => {

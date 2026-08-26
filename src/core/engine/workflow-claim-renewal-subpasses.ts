@@ -23,6 +23,11 @@ import {
   type OwnerSideSignalPollResult,
   type OwnerSideSignalPollTarget,
 } from './owner-side-signal-poll.ts';
+import {
+  runOwnerSideUpdatePoll,
+  type OwnerSideUpdatePollResult,
+  type OwnerSideUpdatePollTarget,
+} from './owner-side-update-poll.ts';
 
 /**
  * The minimal structural shape the renewal sub-pass needs from a per-workflow
@@ -113,6 +118,63 @@ export type WorkflowClaimReclaimPassResult =
 export type WorkflowClaimSignalPollOutcome =
   | { status: 'completed'; result: OwnerSideSignalPollResult }
   | { status: 'failed'; error: unknown };
+
+/**
+ * The owner-side update-poll sub-pass's result (WFT-79). `'failed'` covers
+ * {@link runOwnerSideUpdatePoll} itself rejecting (e.g. its target's
+ * `hasPendingUpdates` throwing) — same non-fatal-to-the-enclosing-pass
+ * treatment as {@link WorkflowClaimSignalPollOutcome}'s `'failed'`.
+ */
+export type WorkflowClaimUpdatePollOutcome =
+  | { status: 'completed'; result: OwnerSideUpdatePollResult }
+  | { status: 'failed'; error: unknown };
+
+/**
+ * The result of one full claim-renewal pass
+ * (`workflow-claim-renewal-task.ts`'s `WorkflowClaimRenewalTask.runOnce`, or
+ * one of `workflow-claim-renewal-interval.ts`'s interval-mode sub-passes).
+ * `reclaim`/`signalPoll`/`updatePoll` are `undefined` exactly when the
+ * matching target option was omitted — that omission is how a caller (or a
+ * test exercising renewal alone) opts out of running that sub-step at all.
+ * Defined here (rather than in `workflow-claim-renewal-task.ts`) so both that
+ * module and `workflow-claim-renewal-interval.ts` can depend on it without a
+ * cycle between them; `workflow-claim-renewal-task.ts` re-exports it for
+ * backward-compatible import paths.
+ */
+export type WorkflowClaimRenewalPassResult = {
+  /** `getNow()` read at the start of the pass, before any renewal call. */
+  startedAt: number;
+  /** `getNow()` read after renewal, reclaim, and signal-poll have all settled. */
+  finishedAt: number;
+  /** One entry per workflow id the pass attempted, in iteration order. */
+  outcomes: WorkflowClaimRenewalOutcome[];
+  /** `outcomes.filter(o => o.status === 'renewed').length`, precomputed for observability consumers. */
+  renewedCount: number;
+  /** `outcomes.filter(o => o.status === 'failed').length`, precomputed for observability consumers. */
+  failedCount: number;
+  /** Present only when this task was constructed with a `reclaimTarget`. */
+  reclaim?: WorkflowClaimReclaimPassResult;
+  /** Present only when this task was constructed with a `signalPollTarget`. */
+  signalPoll?: WorkflowClaimSignalPollOutcome;
+  /** Present only when this task was constructed with an `updatePollTarget`. */
+  updatePoll?: WorkflowClaimUpdatePollOutcome;
+};
+
+/**
+ * The interval-scheduling seam `workflow-claim-renewal-interval.ts` drives
+ * its interval-mode cadence through. The handle type is deliberately
+ * `unknown` on this public interface — nothing inspects a handle, only
+ * round-trips whatever `setInterval` returned back into `clearInterval` — so
+ * a test double can use a plain number, object, or anything else as its
+ * handle without either side needing to know the real timer type. Defined
+ * here for the same cross-module-without-a-cycle reason as
+ * {@link WorkflowClaimRenewalPassResult}; `workflow-claim-renewal-task.ts`
+ * re-exports it.
+ */
+export type WorkflowClaimRenewalIntervalScheduler = {
+  setInterval(callback: () => void, intervalMs: number): unknown;
+  clearInterval(handle: unknown): void;
+};
 
 /**
  * How many reclaim attempts may be in flight at once within a single pass.
@@ -299,6 +361,26 @@ export async function runSignalPollSubPass(
     return {
       status: 'completed',
       result: await runOwnerSideSignalPoll({ target: signalPollTarget, getNow }),
+    };
+  } catch (error) {
+    return { status: 'failed', error };
+  }
+}
+
+/**
+ * Run the owner-side update-poll sub-step (WFT-79), translating a throw into
+ * the `'failed'` result shape rather than letting it reject. Shared by
+ * `workflow-claim-renewal-task.ts`'s combined `runOnce()` pass and interval
+ * mode's standalone update-poll sub-pass.
+ */
+export async function runUpdatePollSubPass(
+  updatePollTarget: OwnerSideUpdatePollTarget,
+  getNow: () => number,
+): Promise<WorkflowClaimUpdatePollOutcome> {
+  try {
+    return {
+      status: 'completed',
+      result: await runOwnerSideUpdatePoll({ target: updatePollTarget, getNow }),
     };
   } catch (error) {
     return { status: 'failed', error };

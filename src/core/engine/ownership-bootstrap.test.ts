@@ -6,7 +6,7 @@
  * `recoverAll`, before the scheduler starts, on both construction paths) is
  * pinned separately in `workflow-lease-ownership.test.ts`.
  */
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, mock } from 'bun:test';
 
 import type { Storage, StorageCapabilities } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
@@ -796,6 +796,127 @@ describe('createWorkflowClaimReclaimTarget · ownerless-but-running acquire fall
   });
 });
 
+describe('createWorkflowClaimReclaimTarget · workflow-type eligibility (WFT-79)', () => {
+  it('skips a fresh takeover for a workflow type this engine has not registered', async () => {
+    const clock = makeClock();
+    const storage = new MemoryStorage();
+    await putHolder(storage, 'wf-unregistered-type', 'engine-b');
+    await putWorkflowState(storage, 'wf-unregistered-type', { type: 'other-workflow-type' });
+    clock.advance(TTL_MS * 10); // far past any grace-adjusted expiry
+    const registry = new WorkflowClaimRegistry({
+      storage,
+      engineId: 'engine-a',
+      getNow: clock.now,
+      claimTtlMs: TTL_MS,
+      claimRenewIntervalMs: RENEW_MS,
+    });
+    const driven: string[] = [];
+    const reclaimTarget = createWorkflowClaimReclaimTarget(
+      registry,
+      storage,
+      new WorkflowClaimMetricsCollector(),
+      async (workflowId) => {
+        driven.push(workflowId);
+      },
+      (workflowType) => workflowType === 'a-registered-type', // this engine never registers 'other-workflow-type'
+    );
+
+    const result = await reclaimTarget.attemptWorkflowClaimTakeover('wf-unregistered-type');
+
+    expect(result).toEqual({ status: 'not-eligible' });
+    expect(driven).toEqual([]);
+    // Never even attempted the CAS — the holder record is untouched.
+    expect(registry.currentEpoch('wf-unregistered-type')).toBeNull();
+    const holderBytes = await storage.get(KEYS.workflowOwnerHolder('wf-unregistered-type'));
+    expect(holderBytes).not.toBeNull();
+  });
+
+  it('proceeds with a fresh takeover for a workflow type this engine has registered', async () => {
+    const clock = makeClock();
+    const storage = new MemoryStorage();
+    await putHolder(storage, 'wf-registered-type', 'engine-b');
+    await putWorkflowState(storage, 'wf-registered-type', { type: 'a-registered-type' });
+    clock.advance(TTL_MS * 10);
+    const registry = new WorkflowClaimRegistry({
+      storage,
+      engineId: 'engine-a',
+      getNow: clock.now,
+      claimTtlMs: TTL_MS,
+      claimRenewIntervalMs: RENEW_MS,
+    });
+    const driven: string[] = [];
+    const reclaimTarget = createWorkflowClaimReclaimTarget(
+      registry,
+      storage,
+      new WorkflowClaimMetricsCollector(),
+      async (workflowId) => {
+        driven.push(workflowId);
+      },
+      (workflowType) => workflowType === 'a-registered-type',
+    );
+
+    const result = await reclaimTarget.attemptWorkflowClaimTakeover('wf-registered-type');
+
+    expect(result).toEqual({ status: 'reclaimed' });
+    expect(driven).toEqual(['wf-registered-type']);
+    expect(registry.currentEpoch('wf-registered-type')).not.toBeNull();
+  });
+
+  it('runs the fresh-takeover eligibility check against the persisted type, absent state reading as not eligible', async () => {
+    const storage = new MemoryStorage();
+    const registry = new WorkflowClaimRegistry({
+      storage,
+      engineId: 'engine-a',
+      getNow: () => 0,
+      claimTtlMs: TTL_MS,
+      claimRenewIntervalMs: RENEW_MS,
+    });
+    const isTypeRegistered = mock(() => true);
+    const reclaimTarget = createWorkflowClaimReclaimTarget(
+      registry,
+      storage,
+      new WorkflowClaimMetricsCollector(),
+      undefined,
+      isTypeRegistered,
+    );
+
+    // No persisted state at all for this id — the eligibility helper reads
+    // absent state as "not eligible" (fail closed) without ever invoking the
+    // caller's `isTypeRegistered` predicate at all, matching
+    // `isWorkflowStillRunning`'s own absent-state posture.
+    const result = await reclaimTarget.attemptWorkflowClaimTakeover('wf-never-existed');
+
+    expect(result).toEqual({ status: 'not-eligible' });
+    expect(isTypeRegistered).not.toHaveBeenCalled();
+  });
+
+  it('treats an undecodable workflow record as not eligible rather than throwing', async () => {
+    const storage = new MemoryStorage();
+    await putHolder(storage, 'wf-corrupt-type-check', 'engine-b');
+    await storage.put(KEYS.workflow('wf-corrupt-type-check'), new Uint8Array([0xff, 0xfe, 0x00]));
+    const registry = new WorkflowClaimRegistry({
+      storage,
+      engineId: 'engine-a',
+      getNow: () => 100_000_000, // far past any grace-adjusted expiry
+      claimTtlMs: TTL_MS,
+      claimRenewIntervalMs: RENEW_MS,
+    });
+    const isTypeRegistered = mock(() => true);
+    const reclaimTarget = createWorkflowClaimReclaimTarget(
+      registry,
+      storage,
+      new WorkflowClaimMetricsCollector(),
+      undefined,
+      isTypeRegistered,
+    );
+
+    const result = await reclaimTarget.attemptWorkflowClaimTakeover('wf-corrupt-type-check');
+
+    expect(result).toEqual({ status: 'not-eligible' });
+    expect(registry.currentEpoch('wf-corrupt-type-check')).toBeNull();
+  });
+});
+
 describe('createWorkflowClaimReclaimTarget · running-state/acquire TOCTOU (WFT-79)', () => {
   /**
    * Gate the storage read `WorkflowClaimRegistry.acquire`/`takeover` performs
@@ -808,19 +929,33 @@ describe('createWorkflowClaimReclaimTarget · running-state/acquire TOCTOU (WFT-
     base: MemoryStorage,
     workflowId: string,
     onGateReached: () => void,
+    // Which occurrence of the `wf-owner-holder:<id>` read to gate (1-based).
+    // `WorkflowClaimRegistry.takeover()` itself reads this key first, before
+    // `WorkflowClaimRegistry.acquire()` ever runs — for a workflow with NO
+    // holder record at all, `takeover()` returns `'no-claim'` from that FIRST
+    // read alone, so gating occurrence 1 pauses inside `takeover()`, not
+    // `acquire()`. Callers exercising the ownerless-acquire path's own
+    // post-acquire race must gate occurrence 2 (`acquire()`'s own read)
+    // instead, or the state flip becomes visible to the PRE-acquire
+    // `isWorkflowStillRunning` check instead of the intended POST-acquire one.
+    gateOccurrence = 1,
   ): { storage: Storage; release: () => void } {
     let releaseGate: (() => void) | null = null;
     const gate = new Promise<void>((resolve) => {
       releaseGate = resolve;
     });
+    let occurrence = 0;
     let gated = false;
     const storage: Storage = {
       capabilities: () => base.capabilities(),
       async get(key) {
         if (key === KEYS.workflowOwnerHolder(workflowId) && !gated) {
-          gated = true;
-          onGateReached();
-          await gate;
+          occurrence += 1;
+          if (occurrence === gateOccurrence) {
+            gated = true;
+            onGateReached();
+            await gate;
+          }
         }
         return base.get(key);
       },
@@ -849,6 +984,11 @@ describe('createWorkflowClaimReclaimTarget · running-state/acquire TOCTOU (WFT-
       base,
       'wf-race',
       signalReached,
+      // No holder record exists at all, so `takeover()`'s own read (occurrence
+      // 1) already returns 'no-claim' immediately — gate `acquire()`'s read
+      // (occurrence 2) instead, so the state flip below happens strictly
+      // between the pre-acquire status check and the acquire CAS landing.
+      2,
     );
     const registry = new WorkflowClaimRegistry({
       storage: gatedStorage,

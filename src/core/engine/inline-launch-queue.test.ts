@@ -148,5 +148,79 @@ describe('inline launch queue', () => {
       expect(onStarted).toHaveBeenCalledTimes(1);
       expect(internalsB.queuedInlineWorkflowStartIds.has('wf-successor-owned')).toBe(false);
     });
+
+    it('discards a queued start whose workflowExecutionToken no longer matches the live run (WFT-79)', async () => {
+      await using storage = new MemoryStorage();
+      await using engine = await Engine.create({
+        storage,
+        workflows: { 'inline-launch-queue-ownership-parked': parkOnSignal },
+      });
+
+      let startedCount = 0;
+      engine.addEventListener('workflow:started', () => {
+        startedCount += 1;
+      });
+      const onStarted = mock(() => {});
+      const internals = getInternals(engine);
+
+      // The real, live run for this id — `defer: false` awaits its queued
+      // macrotask start completing, so by the time this resolves the
+      // durably-persisted state carries the REAL token and
+      // `queuedInlineWorkflowStartIds` no longer contains this id.
+      await engine.start('inline-launch-queue-ownership-parked', null, {
+        id: 'wf-replaced-run',
+        defer: false,
+      });
+      expect(startedCount).toBe(1);
+
+      // Modeling `onTerminalConflict: 'start-new'` replacing this run on the
+      // same workflow id while a DIFFERENT, now-stale queued launch was still
+      // waiting: manually re-enqueue a start for the same id carrying a
+      // token that does not match the live run's actual (real) token — the
+      // id and 'running' status a status-only check would see are unchanged.
+      queueInlineWorkflowExecutionStart(
+        internals,
+        {
+          workflowId: 'wf-replaced-run',
+          workflowExecutionToken: 'stale-pre-replacement-token',
+          workflowType: 'inline-launch-queue-ownership-parked',
+          input: null,
+          checkpoint: {
+            workflowId: 'wf-replaced-run',
+            step: 0,
+            locals: {},
+            accumulatedResults: [],
+            searchAttributes: {},
+            version: '1',
+            schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
+            createdAt: 0,
+          },
+          nestingDepth: 0,
+          executionDeadline: undefined,
+          executionStateOwnerId: 'wf-replaced-run-owner',
+          onStarted,
+        },
+        {
+          processPendingUpdatesAfterInlineAdvance: async () => {},
+          swallowPromiseRejection: async (promise) => {
+            await promise;
+          },
+        },
+      );
+
+      await flushQueuedInlineWorkflowStartsDirectly(internals, {
+        processPendingUpdatesAfterInlineAdvance: async () => {},
+        swallowPromiseRejection: async (promise) => {
+          await promise;
+        },
+      });
+
+      // Discarded: the stale-token queued launch never drove a SECOND
+      // generator for this id (only the real `engine.start()` above's own
+      // 'workflow:started' fired), yet the liveness callback still settles.
+      expect(startedCount).toBe(1);
+      expect(onStarted).toHaveBeenCalledTimes(1);
+      expect(internals.queuedInlineWorkflowStartIds.has('wf-replaced-run')).toBe(false);
+    });
   });
 });

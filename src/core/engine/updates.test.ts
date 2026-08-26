@@ -412,3 +412,62 @@ describe('tryInlineUpdateHandler ownership distinguishability', () => {
     expect(result).toBe('coordinated-result');
   });
 });
+
+describe('tryWaitingUpdateHandler ownership recheck (WFT-79)', () => {
+  it('falls through to the coordinated path instead of consuming the waiter when this engine no longer holds the claim generation', async () => {
+    const waiterKey = 'workflow-1:rename';
+    const updateWaiter = mock(() => {});
+    const updateWaiters = new Map([[waiterKey, updateWaiter]]);
+    const updateWaitersByWorkflow = new Map<string, Set<string>>();
+
+    const internals = {
+      // No handler registered for "rename" — tryInlineUpdateHandler falls
+      // through to 'no-handler' (not 'not-owned-locally') so update()
+      // proceeds into tryWaitingUpdateHandler.
+      inlineStrategy: {
+        getContext: () => ({ updateHandlers: new Map(), updateValidators: new Map() }),
+      },
+      // No durable holder record read is needed for tryInlineUpdateHandler's
+      // own claimed-by-another-engine check to answer "not claimed" — a
+      // null registry there is equivalent, since `isLiveContextStale` and
+      // `isWorkflowClaimedByAnotherEngine` both short-circuit before ever
+      // reading it.
+      storage: { get: mock(async () => null) },
+      updateWaiters,
+      updateWaitersByWorkflow,
+      // `currentEpoch(...) === null` makes `confirmWakeOwnership` discard
+      // immediately (this engine tracks no epoch for the workflow at all —
+      // e.g. a renewal loss dropped the local claim entry between the
+      // waiter's registration and this call), without needing a durable
+      // holder read.
+      workflowClaimRegistry: { currentEpoch: () => null, engineId: 'engine-a' },
+      updateCoordinator: {
+        createRequest: mock(async () => 'coordinated-update-1'),
+        waitForResponse: mock(async () => ({
+          updateId: 'coordinated-update-1',
+          result: 'coordinated-result',
+        })),
+      },
+    } as any;
+
+    const result = await update(internals, 'workflow-1', 'rename', 'payload', undefined, {
+      guardTerminalWorkflow: mock(async () => {}),
+      guardTerminalWorkflowAfterCoordinatedRequest: mock(async () => {}),
+      schedulePendingInlineUpdateDrain: mock(() => {}),
+      dispatchEvent: mock(() => true),
+      broadcast: mock(() => {}),
+      completeOperation: mock(() => {}),
+      persistCoordinatedUpdateResponse: mock(async () => {}),
+      deliverCoordinatedUpdateToWaiterIfAvailable: mock(async () => false),
+      dispatchPendingUpdateReceived: mock(() => {}),
+      createCoordinatedUpdateResponder: mock(() => () => {}),
+      findPendingUpdateByName: mock(async () => undefined),
+    });
+
+    expect(result).toBe('coordinated-result');
+    // The discarded waiter was never consumed: still registered, never
+    // invoked. A deposed generator must not be advanced by it.
+    expect(updateWaiters.get(waiterKey)).toBe(updateWaiter);
+    expect(updateWaiter).not.toHaveBeenCalled();
+  });
+});
