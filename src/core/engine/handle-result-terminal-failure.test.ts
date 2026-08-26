@@ -106,10 +106,14 @@ describe('terminal workflow failures settle the waiter instead of retrying forev
     expect(String(rejection)).toContain('cancelled');
   });
 
-  it('still retries a genuine read failure on a completed workflow', async () => {
-    // The complement. A `completed` workflow reaching the same catch means the
-    // second read genuinely failed, which is the transient case the retry
-    // policy exists for; losing that would reintroduce the bug it fixed.
+  it('settles a completed workflow from the loaded snapshot with exactly one storage read (WFT-79 [25])', async () => {
+    // A `completed` workflow can no longer reach the catch block at all:
+    // `deriveWorkflowResultFromState` derives the result from the SAME
+    // `WorkflowState` snapshot `bootstrapWorkflowResultResolver` already
+    // loaded, with no further storage access — closing the window where an
+    // independent second read could observe a DIFFERENT (replaced) run. A
+    // storage wrapper that would fail — or return something else entirely —
+    // on any read past the first proves no second read happens.
     const storage = new MemoryStorage();
     await seedState(storage, {
       id: WORKFLOW_ID,
@@ -121,14 +125,12 @@ describe('terminal workflow failures settle the waiter instead of retrying forev
     });
 
     let reads = 0;
-    const flakyStorage = {
+    const singleReadStorage = {
       capabilities: () => storage.capabilities(),
       get: (key: string) => {
         if (key === KEYS.workflow(WORKFLOW_ID)) {
           reads += 1;
-          // Read 1 establishes terminal status; read 2 is
-          // `loadWorkflowResult`'s internal re-read, failed here transiently.
-          if (reads === 2) return Promise.reject(new Error('transient blip'));
+          if (reads > 1) return Promise.reject(new Error('unexpected second read'));
         }
         return storage.get(key);
       },
@@ -141,13 +143,11 @@ describe('terminal workflow failures settle the waiter instead of retrying forev
       [Symbol.dispose]: () => {},
     };
 
-    const internals = createInternals(flakyStorage);
-    const waiter = createWorkflowResultWaiter(internals, WORKFLOW_ID);
-    void waiter.promise.catch(() => {});
+    const internals = createInternals(singleReadStorage);
+    const { outcome, rejected } = await settleAndCapture(internals);
 
-    const outcome = await bootstrapWorkflowResultResolver(internals, WORKFLOW_ID, waiter);
-
-    expect(outcome).toBe('pending');
-    expect(internals.resultResolvers.get(WORKFLOW_ID)).toBe(waiter);
+    expect(outcome).toBe('settled');
+    expect(rejected).toBe(false);
+    expect(reads).toBe(1);
   });
 });

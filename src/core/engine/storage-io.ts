@@ -90,13 +90,18 @@ export async function loadWorkflowState(
   return decodeWorkflowState(bytes);
 }
 
-/** Load a terminal workflow result or throw the persisted terminal error. */
-export async function loadWorkflowResult(
-  internals: EngineInternals,
-  workflowId: string,
-): Promise<unknown> {
-  const state = await loadWorkflowState(internals, workflowId);
-  if (!state) throw new Error(`Workflow "${workflowId}" not found`);
+/**
+ * Derive a terminal result (or throw the persisted terminal error) from an
+ * ALREADY-LOADED `WorkflowState` — pure, no storage read. Callers that hold a
+ * state snapshot they have already validated as terminal (e.g.
+ * `bootstrapWorkflowResultResolver`) must use this instead of
+ * {@link loadWorkflowResult}: a second independent `loadWorkflowState` read
+ * can observe a DIFFERENT run than the one the caller validated, if
+ * `onTerminalConflict: 'start-new'` replaces the workflow between the two
+ * reads — attributing a replacement run's result (or a spurious "still
+ * running") to a waiter that was made terminal by the original run.
+ */
+export function deriveWorkflowResultFromState(state: WorkflowState): unknown {
   if (state.status === 'completed') return state.result;
   if (state.status === 'failed') {
     const restoredError = new Error(state.error ?? 'Workflow failed');
@@ -108,9 +113,19 @@ export async function loadWorkflowResult(
     const elapsed = state.executionDeadline
       ? state.executionDeadline - getWorkflowExecutionStartedAt(state)
       : 0;
-    throw new WorkflowTimeoutError(workflowId, 'execution', elapsed, state.terminationReason);
+    throw new WorkflowTimeoutError(state.id, 'execution', elapsed, state.terminationReason);
   }
-  throw new Error(`Workflow "${workflowId}" is still ${state.status}`);
+  throw new Error(`Workflow "${state.id}" is still ${state.status}`);
+}
+
+/** Load a terminal workflow result or throw the persisted terminal error. */
+export async function loadWorkflowResult(
+  internals: EngineInternals,
+  workflowId: string,
+): Promise<unknown> {
+  const state = await loadWorkflowState(internals, workflowId);
+  if (!state) throw new Error(`Workflow "${workflowId}" not found`);
+  return deriveWorkflowResultFromState(state);
 }
 
 type WorkflowStateCommitOptions = {

@@ -3,12 +3,13 @@ import { describe, expect, it, spyOn } from 'bun:test';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import {
+  createDeferred,
   flushMicrotasks,
   waitForCondition,
-  waitForRealTimersForTesting,
 } from '../../testing/fake-timers.test-support.ts';
+import { encode } from '../codec.ts';
 import { Engine } from '../engine.ts';
-import { workflow, type WorkflowContext } from '../types.ts';
+import { workflow, type WorkflowContext, type WorkflowState } from '../types.ts';
 import {
   bootstrapWorkflowResultResolver,
   createWorkflowHandleWithResultPromise,
@@ -49,6 +50,65 @@ class FlakyWorkflowStateStorage extends MemoryStorage {
     if (key === KEYS.workflow(this.failingWorkflowId) && this.#failuresRemaining > 0) {
       this.#failuresRemaining -= 1;
       throw new Error(`transient read failure for ${this.failingWorkflowId}`);
+    }
+    return super.get(key);
+  }
+}
+
+/** Minimal valid `WorkflowState` fixture for `KEYS.workflow(id)` records. */
+function createWorkflowState(
+  workflowId: string,
+  overrides: Partial<WorkflowState> = {},
+): WorkflowState {
+  return {
+    createdAt: 1_000,
+    id: workflowId,
+    input: null,
+    result: 'done',
+    startedAt: 1_000,
+    status: 'completed',
+    type: 'workflow',
+    updatedAt: 1_000,
+    versionTuple: { workflowVersion: '1' },
+    ...overrides,
+  };
+}
+
+/**
+ * Deterministically gates the durable holder read for one workflow id —
+ * `wakeOwnershipCheck`'s `storage.get(KEYS.workflowOwnerHolder(workflowId))`
+ * — instead of a fixed wall-clock wait. Inert until `startGating()` is
+ * called (so setup reads of the same key, e.g. the initial `registry.acquire()`,
+ * pass through normally). Once gating, `armed()` resolves as soon as the
+ * gated read has been issued (safe to mutate storage underneath it — e.g.
+ * simulate a takeover — before releasing), and `release()` lets that read
+ * proceed with whatever storage now holds.
+ */
+class GatedHolderReadStorage extends MemoryStorage {
+  #gating = false;
+  #armedSignal = createDeferred();
+  #releaseSignal = createDeferred();
+
+  constructor(private readonly gatedWorkflowId: string) {
+    super();
+  }
+
+  startGating(): void {
+    this.#gating = true;
+  }
+
+  armed(): Promise<void> {
+    return this.#armedSignal.promise;
+  }
+
+  release(): void {
+    this.#releaseSignal.resolve();
+  }
+
+  override async get(key: string): Promise<Uint8Array | null> {
+    if (this.#gating && key === KEYS.workflowOwnerHolder(this.gatedWorkflowId)) {
+      this.#armedSignal.resolve();
+      await this.#releaseSignal.promise;
     }
     return super.get(key);
   }
@@ -414,7 +474,7 @@ describe('WFT-79 F1: generator-owned child-result fencing', () => {
   });
 
   it('never settles a generator-owned waiter once the parent generation is confirmed lost', async () => {
-    const storage = new MemoryStorage();
+    const storage = new GatedHolderReadStorage('parent-1');
     await using engine = await Engine.create({ storage, workflows, ...ownershipOptions });
     const internals = getInternals(engine);
     const registry = internals.workflowClaimRegistry!;
@@ -427,6 +487,10 @@ describe('WFT-79 F1: generator-owned child-result fencing', () => {
     // The child completes normally and durably.
     const childHandle = await engine.start('wft-79-f1-child', null, { id: 'child-1' });
     await expect(childHandle.result()).resolves.toBe('child-done');
+
+    // Gate parent-1's durable holder read from here on — the exact read
+    // `confirmWakeOwnership` issues once the child settles below.
+    storage.startGating();
 
     // A generator-owned waiter created AFTER the child is already terminal —
     // same as a fresh `getGeneratorOwnedWorkflowResultPromise` call racing a
@@ -442,8 +506,11 @@ describe('WFT-79 F1: generator-owned child-result fencing', () => {
       },
     );
 
-    // Simulate a successor engine taking over the PARENT (not the child)
-    // before this waiter's bootstrap resolves.
+    // Wait until the ownership pre-check's holder read is actually blocked,
+    // THEN simulate a successor engine taking over the PARENT (not the
+    // child) — proving the takeover is observed even when it lands exactly
+    // inside this read, not merely before it.
+    await storage.armed();
     await storage.batch([
       { type: 'put', key: KEYS.workflowOwnerEpoch('parent-1'), value: encodeEpoch(2) },
       {
@@ -457,12 +524,16 @@ describe('WFT-79 F1: generator-owned child-result fencing', () => {
         }),
       },
     ]);
+    storage.release();
 
-    // Give the generator-owned waiter's ownership confirmation every chance
-    // to run and (wrongly, if unfenced) settle.
-    await flushMicrotasks();
-    // fixed delay: negative assertion — proving the waiter never settles has no observable event to await instead
-    await waitForRealTimersForTesting(50);
+    // The gated read has now resolved with the takeover already visible;
+    // drain the microtask chain from there through `wakeOwnershipCheck` →
+    // `confirmWakeOwnership` → `parentStillOwnsGeneration` → the `.then`
+    // callback's `if (...) gate.resolve(...)` check → the outer `.then`
+    // this test attached. `flushMicrotasks()`'s default 3 turns is not deep
+    // enough for this many chained `await`s — an explicit, still fixed
+    // (non-wall-clock) turn count is required, not a timing guess.
+    await flushMicrotasks(20);
 
     // The parent's view never settles: the successor replays that parent, and
     // this engine's copy must not advance.
@@ -630,18 +701,22 @@ describe('WFT-79 F2: local-claim settling never races notifyCompletionWaiters or
   });
 });
 
-describe('WFT-79 F3: transient loadWorkflowResult failure retries under "workflow-lease"', () => {
-  it('leaves a pending waiter registered — not rejected — after a transient failure on the SECOND (result) read', async () => {
-    // `loadWorkflowResult` re-reads the SAME `KEYS.workflow(...)` key that
-    // `bootstrapWorkflowResultResolver`'s own `loadWorkflowState` already
-    // read. Complete a real workflow first so the durable record is
-    // authentic, THEN swap this engine's own `storage.get` for a wrapper that
-    // fails only on the SECOND read of that key — `loadWorkflowResult`'s
-    // internal re-read — mirroring `wake-ownership-guard.test.ts`'s
-    // storage-swap pattern.
+describe('WFT-79 F3/[25]: terminal result derivation never re-reads storage', () => {
+  it('settles from the SAME state snapshot already validated as terminal, never a second read of that key', async () => {
+    // Earlier design: `bootstrapWorkflowResultResolver` read `state` once,
+    // then called `loadWorkflowResult()`, which did its OWN independent
+    // second read+decode of `KEYS.workflow(workflowId)`. If
+    // `onTerminalConflict: 'start-new'` replaced the workflow between those
+    // two reads, the second read could observe the REPLACEMENT run and
+    // attribute its result to a waiter the ORIGINAL run made terminal.
+    // `deriveWorkflowResultFromState` closes this by deriving the result
+    // from the already-loaded snapshot with no further storage access —
+    // proven here by making a second read of the same key return a
+    // DIFFERENT (replacement-shaped) state and asserting it is never
+    // observed.
     const storage = new MemoryStorage();
     const completedWorkflow = workflow({ name: 'wft-79-f3-instant' }).execute(async function* () {
-      return 'f3-result';
+      return 'first-run-result';
     });
     await using engine = await Engine.create({
       storage,
@@ -652,18 +727,22 @@ describe('WFT-79 F3: transient loadWorkflowResult failure retries under "workflo
       recover: false,
     });
     const handle = await engine.start('wft-79-f3-instant', null, { id: 'f3-transient-1' });
-    await expect(handle.result()).resolves.toBe('f3-result');
+    await expect(handle.result()).resolves.toBe('first-run-result');
 
     const internals = getInternals(engine);
     const recordKey = KEYS.workflow('f3-transient-1');
     let reads = 0;
+    const replacementState = createWorkflowState('f3-transient-1', {
+      status: 'completed',
+      result: 'replacement-run-result',
+    });
     internals.storage = {
       capabilities: () => storage.capabilities(),
       get: (key) => {
         if (key === recordKey) {
           reads += 1;
-          if (reads === 2) {
-            return Promise.reject(new Error('transient read failure for f3-transient-1 (read #2)'));
+          if (reads > 1) {
+            return Promise.resolve(encode(replacementState));
           }
         }
         return storage.get(key);
@@ -680,16 +759,9 @@ describe('WFT-79 F3: transient loadWorkflowResult failure retries under "workflo
     const waiter = createWorkflowResultWaiter(internals, 'f3-transient-1');
     void waiter.promise.catch(() => {});
 
-    // Read #1 (bootstrap's own loadWorkflowState) succeeds, sees `completed`;
-    // Read #2 (loadWorkflowResult's internal re-read) throws. Without the
-    // F3 fix this rejects and removes the waiter; with the fix it must stay
-    // pending for the guaranteed periodic retry.
     await bootstrapWorkflowResultResolver(internals, 'f3-transient-1', waiter);
-    expect(internals.resultResolvers.get('f3-transient-1')).toBe(waiter);
 
-    // Retry: storage has recovered, the SAME waiter now settles normally.
-    await bootstrapWorkflowResultResolver(internals, 'f3-transient-1', waiter);
-    await expect(waiter.promise).resolves.toBe('f3-result');
-    expect(internals.resultResolvers.has('f3-transient-1')).toBe(false);
+    await expect(waiter.promise).resolves.toBe('first-run-result');
+    expect(reads).toBe(1);
   });
 });

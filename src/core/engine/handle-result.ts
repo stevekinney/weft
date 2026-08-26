@@ -2,7 +2,7 @@ import type { WorkflowResultWaiter } from './engine-internal-types.ts';
 import { EngineDisposedError } from './errors.ts';
 import { WorkflowHandle } from './handles.ts';
 import type { EngineInternals } from './internals.ts';
-import { loadWorkflowResult, loadWorkflowState } from './storage-io.ts';
+import { deriveWorkflowResultFromState, loadWorkflowState } from './storage-io.ts';
 import { confirmWakeOwnership } from './wake-ownership-guard.ts';
 
 export function createWorkflowHandleWithResultPromise(
@@ -72,9 +72,11 @@ export function getWorkflowResultPromise(
  *
  * If `internals.resultResolvers` already holds a waiter for `workflowId` —
  * e.g. an observational `handle.result()` caller got there first — that
- * SHARED waiter is marked generator-owned too, so the observational caller's
- * promise inherits this fencing. See {@link generatorOwnedWaiters}'s doc for
- * why this mixed-caller case is accepted rather than resolved.
+ * SHARED waiter is untouched: {@link fenceResultOnParentGeneration} wraps
+ * only THIS caller's derived promise, so the observational caller's own
+ * promise settles normally from the shared waiter regardless of the parent's
+ * claim generation. See that function's doc for why fencing lives on the
+ * parent's view instead of the shared waiter itself.
  */
 export function getGeneratorOwnedWorkflowResultPromise(
   internals: EngineInternals,
@@ -204,9 +206,11 @@ async function parentStillOwnsGeneration(
  * generator racing the claim-holding `engineOwner`.)
  *
  * The only stop conditions for rescheduling are the waiter settling or being
- * replaced (`internals.resultResolvers.get(workflowId) !== waiter`) or being
- * permanently discarded (see {@link discardedGeneratorOwnedWaiters}) — which
- * also covers engine disposal for free: {@link disposeEngine} is fully
+ * replaced (`internals.resultResolvers.get(workflowId) !== waiter`) — a
+ * generator-owned caller's fence living on its own derived promise
+ * (`fenceResultOnParentGeneration`) rather than on this shared waiter means
+ * a discarded parent generation never needs a stop condition here at all —
+ * which also covers engine disposal for free: {@link disposeEngine} is fully
  * synchronous and rejects+clears every `resultResolvers` entry before any
  * other code can run, so no separate `internals.disposed` check can ever
  * observe disposal without this map check already having caught it too.
@@ -275,14 +279,15 @@ export async function pollPendingCrossEngineResultWaiters(
  * this file's callers to decide whether to keep polling:
  *
  * - `'settled'`: the waiter was resolved or rejected.
- * - `'pending'`: no terminal result yet (still running, a transient read
- *   failure under a guaranteed-retry ownership mode, or a discarded
- *   generator-owned waiter's parent — see WFT-79 F1). Keep polling.
- * - `'discarded'`: a generator-owned waiter's parent generation was
- *   confirmed lost; the waiter is deliberately left unsettled forever (see
- *   {@link discardedGeneratorOwnedWaiters}). Callers must stop rescheduling.
+ * - `'pending'`: no terminal result yet (still running, or a transient read
+ *   failure under a guaranteed-retry ownership mode). Keep polling.
+ *
+ * A generator-owned caller's discarded parent generation needs no outcome
+ * here at all: `fenceResultOnParentGeneration` withholds settlement on that
+ * caller's own derived promise, independent of whether the SHARED waiter
+ * this function settles ever resolves.
  */
-type ResultResolutionOutcome = 'settled' | 'pending' | 'discarded';
+type ResultResolutionOutcome = 'settled' | 'pending';
 
 /**
  * WFT-79 F3: policy shared by both durable reads this function performs
@@ -359,7 +364,7 @@ async function prepareToSettleTerminalWaiter(
   internals: EngineInternals,
   workflowId: string,
   waiter: WorkflowResultWaiter,
-): Promise<'proceed' | Extract<ResultResolutionOutcome, 'discarded' | 'settled'>> {
+): Promise<'proceed' | Extract<ResultResolutionOutcome, 'settled'>> {
   if (await deferToLocalTerminalDeliveryIfPending(internals, workflowId, waiter)) {
     return 'settled';
   }
@@ -402,43 +407,27 @@ export async function bootstrapWorkflowResultResolver(
   if (outcome !== 'proceed') return outcome;
 
   try {
-    const result = await loadWorkflowResult(internals, workflowId);
+    // Derived from the SAME `state` snapshot already validated as terminal
+    // above — not a second independent storage read. A fresh read here
+    // could observe a DIFFERENT run if `onTerminalConflict: 'start-new'`
+    // replaced the workflow in between, attributing the replacement's
+    // result (or a spurious "still running") to this waiter.
+    const result = deriveWorkflowResultFromState(state);
     clearResultWaiter(internals, workflowId, waiter);
     waiter.resolve(result);
     return 'settled';
   } catch (error) {
-    return settleTerminalResultReadFailure(internals, workflowId, waiter, error, state.status);
-  }
-}
-
-/**
- * Decide what a throw from `loadWorkflowResult()` means for an already-terminal
- * workflow.
- *
- * That helper THROWS the persisted terminal error for `failed`, `cancelled` and
- * `timed-out` — the throw IS the result there, not a read failure. Retrying it
- * leaves the waiter pending forever (re-reading throws again every time), so a
- * parent awaiting a failed child never gets its rejection and hangs.
- * `terminalStatus` is the discriminator: only `completed` reaching here means a
- * genuine storage problem worth retrying.
- *
- * A blip while reading a non-`completed` workflow therefore rejects with the
- * blip rather than the persisted error — deliberate, since rejection is the
- * correct disposition either way and a vaguer error beats a hang.
- */
-function settleTerminalResultReadFailure(
-  internals: EngineInternals,
-  workflowId: string,
-  waiter: WorkflowResultWaiter,
-  error: unknown,
-  terminalStatus: string,
-): ResultResolutionOutcome {
-  if (terminalStatus !== 'completed') {
+    // `deriveWorkflowResultFromState` does no I/O — for a `state` already
+    // known terminal (checked above) it only ever throws the persisted
+    // terminal error itself (`failed`/`cancelled`/`timed-out`), never a
+    // storage blip. The throw IS the result here, so it settles the waiter
+    // immediately rather than retrying — retrying would leave a parent
+    // awaiting a failed child hanging forever (re-deriving throws the same
+    // way every time).
     clearResultWaiter(internals, workflowId, waiter);
     waiter.reject(error);
     return 'settled';
   }
-  return settleOrRetryOnTransientReadFailure(internals, workflowId, waiter, error);
 }
 
 function linkToReplacementWaiter(
