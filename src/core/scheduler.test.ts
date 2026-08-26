@@ -319,6 +319,55 @@ describe('Scheduler — implementation-specific', () => {
     expect(timerIndexReadCount).toBe(0);
   });
 
+  it("does not delete a replacement sleep timer's index when a start-new re-arms the same deterministic id before cleanup commits (WFT-79)", async () => {
+    const sharedId = 'sleep:workflow-1:0';
+    const originalEntry = makeTimer({
+      id: sharedId,
+      workflowId: 'workflow-1',
+      fireAt: now() - 1000,
+      kind: 'sleep',
+    });
+    await scheduler.schedule(originalEntry);
+
+    const replacementEntry = makeTimer({
+      id: sharedId,
+      workflowId: 'workflow-1',
+      // A different deadline, so the replacement's deadline key differs from
+      // the original's — modeling `onTerminalConflict: 'start-new'` re-arming
+      // the same deterministic sleep id at a fresh deadline.
+      fireAt: now() + 50_000,
+      kind: 'sleep',
+    });
+
+    const schedulerWithReArmingCallback = new Scheduler({
+      storage,
+      onTimerFired: async (entry) => {
+        firedEntries.push(entry);
+        if (entry.id === sharedId) {
+          // The replacement's re-arm lands strictly BETWEEN the fired
+          // timer's callback and the scheduler's own cleanup batch — the
+          // exact window this fix must not corrupt.
+          await schedulerWithReArmingCallback.schedule(replacementEntry);
+        }
+      },
+      pollIntervalMs: 100,
+      getNow: () => context.getCurrentTime(),
+    });
+
+    await schedulerWithReArmingCallback.tick(now());
+    schedulerWithReArmingCallback[Symbol.dispose]();
+
+    expect(firedEntries).toHaveLength(1);
+
+    const replacementDeadlineKey = KEYS.deadline(replacementEntry.fireAt, sharedId);
+    const replacementDeadlineBytes = await storage.get(replacementDeadlineKey);
+    expect(replacementDeadlineBytes).not.toBeNull();
+
+    const indexBytes = await storage.get(`timer-idx:${sharedId}`);
+    expect(indexBytes).not.toBeNull();
+    expect(decode(indexBytes!)).toBe(replacementDeadlineKey);
+  });
+
   it('preserves stable ordering when expired deadline and delayed-start timers share a fireAt', async () => {
     const deadlineEntry = makeTimer({
       id: 'deadline-workflow-1',

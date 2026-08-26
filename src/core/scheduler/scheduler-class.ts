@@ -307,8 +307,22 @@ export class Scheduler implements Disposable {
     nextEntry: ScannedTimerEntry,
   ): Promise<BatchOperation | null> {
     const indexKey = `timer-idx:${nextEntry.entry.id}`;
-    if (nextEntry.entry.kind === 'schedule') {
-      return this.#buildScheduleTimerIndexDeleteOperation(nextEntry, indexKey);
+    // `sleep`/`wait-condition` (ADR 0002's claim-requiring wake kinds — see
+    // `sleep-timer-acknowledgements.ts`) and `schedule` all reuse a
+    // deterministic id that a REPLACEMENT run can re-arm at a different
+    // deadline (`onTerminalConflict: 'start-new'` for sleep/wait-condition;
+    // schedule's own re-arm-on-every-tick for schedule). Deleting the shared
+    // `timer-idx:` entry unconditionally in that window would delete the
+    // replacement's own fresh index, leaving its sleep/condition wait or next
+    // tick permanently unable to be looked up. Route all three through the
+    // same lookup-and-compare check: only delete when the index still points
+    // at the exact deadline key that just fired.
+    if (
+      nextEntry.entry.kind === 'schedule' ||
+      nextEntry.entry.kind === 'sleep' ||
+      nextEntry.entry.kind === 'wait-condition'
+    ) {
+      return this.#buildLookupBasedTimerIndexDeleteOperation(nextEntry, indexKey);
     }
 
     return shouldDeleteTimerIndexWithoutLookup(nextEntry.entry)
@@ -316,7 +330,7 @@ export class Scheduler implements Disposable {
       : null;
   }
 
-  async #buildScheduleTimerIndexDeleteOperation(
+  async #buildLookupBasedTimerIndexDeleteOperation(
     nextEntry: ScannedTimerEntry,
     indexKey: string,
   ): Promise<BatchOperation | null> {
@@ -327,9 +341,11 @@ export class Scheduler implements Disposable {
 
     const decodedIndexValue = decode(indexValue);
 
-    // Schedule callbacks re-arm the next tick with the same timer id.
-    // Only remove the index when it still points at the timer that just
-    // fired; otherwise we would delete the freshly-registered next tick.
+    // Schedule callbacks re-arm the next tick with the same timer id, and a
+    // `start-new` replacement can re-arm a sleep/wait-condition timer at the
+    // same deterministic id. Only remove the index when it still points at
+    // the timer that just fired; otherwise we would delete the
+    // freshly-registered replacement's own index entry.
     return typeof decodedIndexValue !== 'string' || decodedIndexValue === nextEntry.key
       ? { type: 'delete', key: indexKey }
       : null;
