@@ -205,6 +205,20 @@ async function tryWaitingUpdateHandler(
     return { handled: false };
   }
 
+  // Resolving this in-memory waiter advances the workflow's generator, exactly
+  // like `deliverCoordinatedUpdateToWaiterIfAvailable`'s own fence below. The
+  // ownership check inside `tryInlineUpdateHandler()` (this update's earlier
+  // call, per `update()`'s dispatch order) only reflects ownership observed
+  // THEN; another engine can win a takeover during the
+  // `findPendingUpdateByName` await just above, after which this waiter is
+  // still registered (nothing durable removes it on takeover) and would
+  // otherwise be consumed unfenced, advancing a deposed generator. Recheck
+  // immediately before consuming it, and fall through to the coordinated path
+  // on discard — same as that function's own `'discard'` branch.
+  if ((await confirmWakeOwnership(internals, workflowId, 'update')) === 'discard') {
+    return { handled: false };
+  }
+
   internals.updateWaiters.delete(waiterKey);
   untrackWaiterKey(internals.updateWaitersByWorkflow, workflowId, waiterKey);
   const updateId = crypto.randomUUID();

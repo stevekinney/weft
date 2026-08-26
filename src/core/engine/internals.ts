@@ -37,6 +37,7 @@ import type { Scheduler } from '../scheduler.ts';
 import type { Checkpoint, StartWorkflowOptions } from '../types.ts';
 import type { UpdateCoordinator } from '../updates.ts';
 import type { WorkflowVersionTuple } from '../workflow-version-tuple.ts';
+import type { RecoveredWorkflowInfo } from './lifecycle/shared.ts';
 
 import type { ActivityHeartbeatKey } from './activity-heartbeat-tracking.ts';
 import type {
@@ -370,6 +371,18 @@ export interface EngineInternals {
    * updates whose delete never committed).
    */
   deliveredPendingUpdateIds: Map<string, Set<string>>;
+  /**
+   * The most recent `recoverAll({ onRecoveredWorkflow })` hook installed by
+   * this host, retained so a LATER same-engine reclaim (ADR 0002's recurring
+   * scan, after `recover: false` skipped this workflow entirely at startup
+   * because another engine held it then) still runs it before resuming.
+   * Without this, `index.ts`'s `onWorkflowClaimReclaimed` callback would pass
+   * `undefined` for every reclaim-driven resume, silently skipping whatever
+   * host initialization/validation the hook contract guarantees runs before
+   * recovered execution. `undefined` until `recoverAll()` is ever called with
+   * this option.
+   */
+  onRecoveredWorkflowHook: ((info: RecoveredWorkflowInfo) => void | Promise<void>) | undefined;
   cancelHandlersByWorkflow: Map<string, Array<() => Promise<void> | void>>;
   reviewTimerIds: Map<string, string[]>;
   pendingWebhooks: Set<AbortController>;

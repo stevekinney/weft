@@ -747,6 +747,7 @@ export class Engine<
     getInternals(this).parkedInlineWorkflows = new Set();
     getInternals(this).terminalizingWorkflows = new Set();
     getInternals(this).deliveredPendingUpdateIds = new Map();
+    getInternals(this).onRecoveredWorkflowHook = undefined;
     getInternals(this).cancelHandlersByWorkflow = new Map();
     getInternals(this).reviewTimerIds = new Map();
     getInternals(this).pendingWebhooks = new Set();
@@ -1029,6 +1030,23 @@ export class Engine<
         // driving the workflow it sits idle while this engine's renewal keeps
         // the claim alive, shielding it from any engine that would resume it.
         onWorkflowClaimReclaimed: async (workflowId: string) => {
+          // Same-engine reclaim (this engine held the claim, was deposed, and
+          // later reclaimed it): deposition drops only the registry's claim
+          // entry, so this engine's OLD in-memory context/generator/abort
+          // controller for `workflowId` survive untouched. Evict them
+          // SYNCHRONOUSLY, before any await below, so `query()` and
+          // `tryInlineUpdateHandler()`'s engine-id-only staleness check
+          // cannot see the same engine as both old and new holder and serve
+          // reads/handler invocations from the pre-reclaim closure during this
+          // async-activity-reload-and-replay window. Also drop this
+          // workflow's delivered-pending-update-id claims: a claim recorded
+          // by the deposed generation before losing its claim (added
+          // synchronously, but its fenced response commit can still be
+          // in-flight or have failed) would otherwise make every post-replay
+          // drain treat that update as already delivered, and its caller
+          // would never receive a response.
+          internals.inlineStrategy?.evictContextForReclaim(workflowId);
+          internals.deliveredPendingUpdateIds.delete(workflowId);
           // `forceReplayFromStorage` is mandatory here. Deposition drops only
           // the registry's claim entry; contexts, generators, parked markers
           // and local checkpoints all survive. Without it, `resume()`'s
@@ -1043,11 +1061,17 @@ export class Engine<
           // deterministic token and wait forever for a delivery the completion
           // caller was already told had succeeded.
           await recoverPendingAsyncActivities(internals, workflowId);
+          // Disposal can land while the reload above was in flight — recheck
+          // rather than replay against a torn-down host. `markDisposing()` on
+          // the reclaim target (see `ownership-bootstrap.ts`) closes the
+          // takeover-CAS side of this race; this closes the drive side for a
+          // takeover that had already landed before disposal was signaled.
+          if (internals.disposed) return;
           await resumeFromLifecycle(
             internals,
             workflowId,
             this.#createLifecycleCallbacks(),
-            undefined,
+            internals.onRecoveredWorkflowHook,
             { forceReplayFromStorage: true },
           );
         },
@@ -2122,6 +2146,11 @@ export class Engine<
     // before (or during) workflow replay still resolves a parked activity.
     await recoverPendingAsyncActivities(getInternals(this));
     await recoverOrphanedScheduleTimers(getInternals(this));
+    // Retained for a LATER same-engine reclaim (ADR 0002's recurring scan) to
+    // reuse — see `onRecoveredWorkflowHook`'s doc on `EngineInternals` for why
+    // a reclaim-driven resume must not silently skip this hook just because it
+    // was installed here rather than passed to that reclaim's own call.
+    getInternals(this).onRecoveredWorkflowHook = options?.onRecoveredWorkflow;
     return recoverAllFromLifecycle(getInternals(this), this.#createLifecycleCallbacks(), options);
   }
 
