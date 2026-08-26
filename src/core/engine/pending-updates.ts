@@ -120,23 +120,6 @@ async function runPendingUpdateValidator(
 }
 
 /**
- * Drain a workflow's buffered coordinated updates and deliver each to its
- * handler exactly once, even when several drains race.
- *
- * Several triggers can fire near-simultaneously: each `engine.update()` schedules
- * a `setTimeout(0)` drain, and the post-advance path drains too. Their consume-
- * deletes are durable (`storage.batch`) and lag the in-memory `getPendingUpdates`
- * scan, so two overlapping drains both see the same pending set. Each update id
- * is therefore CLAIMED synchronously in `deliveredPendingUpdateIds` before
- * delivery (no `await` between the membership check and the add, so a concurrent
- * drain cannot interleave): a racing drain that re-reads the same id skips it.
- *
- * After the drain, re-drive a parked `ctx.waitUntil` once. A coordinated update
- * buffered before `ctx.onUpdate` was registered drains here (not on the inline
- * `tryInlineUpdateHandler` path), and a handler may have mutated the workflow-
- * local state a predicate reads, so the wait must be poked to re-evaluate.
- */
-/**
  * Re-verify ownership after the durable pending-update scan `processPendingUpdatesForHandlers`
  * awaits, and re-read the context rather than trusting the pre-await closure.
  * A takeover can land on a DIFFERENT engine during that await, or (same-engine
@@ -194,6 +177,23 @@ async function processOnePendingUpdate(
   return true;
 }
 
+/**
+ * Drain a workflow's buffered coordinated updates and deliver each to its
+ * handler exactly once, even when several drains race.
+ *
+ * Several triggers can fire near-simultaneously: each `engine.update()` schedules
+ * a `setTimeout(0)` drain, and the post-advance path drains too. Their consume-
+ * deletes are durable (`storage.batch`) and lag the in-memory `getPendingUpdates`
+ * scan, so two overlapping drains both see the same pending set. Each update id
+ * is therefore CLAIMED synchronously in `deliveredPendingUpdateIds` before
+ * delivery (no `await` between the membership check and the add, so a concurrent
+ * drain cannot interleave): a racing drain that re-reads the same id skips it.
+ *
+ * After the drain, re-drive a parked `ctx.waitUntil` once. A coordinated update
+ * buffered before `ctx.onUpdate` was registered drains here (not on the inline
+ * `tryInlineUpdateHandler` path), and a handler may have mutated the workflow-
+ * local state a predicate reads, so the wait must be poked to re-evaluate.
+ */
 export async function processPendingUpdatesForHandlers(
   internals: EngineInternals,
   workflowId: string,
