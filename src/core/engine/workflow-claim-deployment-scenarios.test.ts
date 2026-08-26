@@ -676,4 +676,55 @@ describe('WFT-79: workflow-lease deployment scenarios (two real engines, one sto
       await noneEngine[Symbol.asyncDispose]();
     });
   });
+
+  describe('TERMINAL RELEASE (WFT-79)', () => {
+    it('releases the claim on completion, so a completed workflow is absent from the next renewal pass', async () => {
+      const storage = new MemoryStorage();
+      let now = 8_000_000;
+      const engine = await createDeploymentEngine(storage, () => now, {
+        startScheduler: false,
+      });
+
+      const id = 'terminal-release-complete';
+      await startParkedWorkflow(engine, storage, id);
+      expect(getInternals(engine).workflowClaimRegistry?.currentEpoch(id)).not.toBeNull();
+
+      const handle = engine.getHandle(id);
+      await handle.signal('go');
+      const result = await handle.result();
+      expect(result).toBe('ran');
+
+      // The completed workflow's claim is gone — not merely renewed forever.
+      expect(getInternals(engine).workflowClaimRegistry?.currentEpoch(id)).toBeNull();
+      expect(await storage.get(KEYS.workflowOwnerHolder(id))).toBeNull();
+
+      // And the next renewal pass no longer lists or renews it.
+      const pass = await getInternals(engine).workflowClaimRenewalTask!.runOnce();
+      expect(pass.outcomes.map((outcome) => outcome.workflowId)).not.toContain(id);
+
+      await engine[Symbol.asyncDispose]();
+    });
+
+    it('releases the claim on external cancellation too', async () => {
+      const storage = new MemoryStorage();
+      let now = 9_000_000;
+      const engine = await createDeploymentEngine(storage, () => now, {
+        startScheduler: false,
+      });
+
+      const id = 'terminal-release-cancel';
+      await startParkedWorkflow(engine, storage, id);
+      expect(getInternals(engine).workflowClaimRegistry?.currentEpoch(id)).not.toBeNull();
+
+      await engine.cancel(id);
+
+      expect(getInternals(engine).workflowClaimRegistry?.currentEpoch(id)).toBeNull();
+      expect(await storage.get(KEYS.workflowOwnerHolder(id))).toBeNull();
+
+      const pass = await getInternals(engine).workflowClaimRenewalTask!.runOnce();
+      expect(pass.outcomes.map((outcome) => outcome.workflowId)).not.toContain(id);
+
+      await engine[Symbol.asyncDispose]();
+    });
+  });
 });

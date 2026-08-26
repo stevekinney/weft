@@ -205,6 +205,7 @@ export async function terminateWorkflow(
 
     const resolver = internals.resultResolvers.get(workflowId);
     const terminalError = buildTerminalError(workflowId, status, elapsed, reason);
+    await releaseWorkflowClaimAfterTerminalSettlement(internals, workflowId);
 
     try {
       await cleanupTerminalWorkflowSynchronously(internals, workflowId, true, callbacks);
@@ -347,6 +348,57 @@ function notifyCompletionWaiters(
   }
 }
 
+/**
+ * Release this engine's `workflow-lease` claim (if any) once a terminal
+ * transition has durably committed. Without this, `completeWorkflow`,
+ * `failWorkflow`, and `terminateWorkflow` (cancel/timeout) leave a terminated
+ * workflow's claim registry entry in place — the recurring renewal pass
+ * (`workflow-claim-renewal-task.ts`) keeps renewing it, and the held set only
+ * shrinks via retention, purge, or engine disposal, unboundedly inflating
+ * active claims and renewal writes on a long-lived engine with lengthy or
+ * disabled retention.
+ *
+ * Must run AFTER the terminal commit resolved (never before): a `'self'`-
+ * fenced write (completeWorkflow/failWorkflow) still needs this engine's
+ * claim to land, and even an `'external-terminal'`-fenced write
+ * (terminateWorkflow) needs the ordering fixed relative to the state
+ * transition it accompanies. Best-effort, matching
+ * `WorkflowClaimRegistry.releaseAll()`'s own posture: a lost CAS or a storage
+ * error here just leaves the claim for TTL/grace expiry — strictly no worse
+ * than today's behavior, and never worth failing an already-committed
+ * terminal transition over. A harmless no-op when this engine holds no claim
+ * for `workflowId` (an `'external-terminal'` writer that never actually
+ * owned the workflow, or `ownership: 'none'`/`'lease'`, where
+ * `workflowClaimRegistry` is `null`).
+ *
+ * Called BEFORE this engine's own in-process result-waiter settlement
+ * (`notifyCompletionWaiters`'s `resolver.resolve()`, or this file's own
+ * `resolver.reject()` calls), not after: resolving/rejecting a `Promise` a
+ * second time is a documented no-op, so releasing first and then settling is
+ * safe even if a concurrent cross-engine result poll
+ * (`handle-result.ts`'s `deferToLocalTerminalDeliveryIfPending`) observes "no
+ * local epoch" and settles the SAME shared waiter itself first — both paths
+ * derive the identical result from the same durably-committed terminal
+ * state. Releasing AFTER, by contrast, would let an external caller that
+ * merely awaited `handle.result()` observe completion before the claim
+ * release it might depend on (e.g. a subsequent reclaim-scan assertion in a
+ * test) has actually happened, since `resolve()`/`reject()` only schedules
+ * the awaiting `.then()` as a later microtask — it proves nothing about
+ * synchronous code still running after it in this same function.
+ */
+async function releaseWorkflowClaimAfterTerminalSettlement(
+  internals: EngineInternals,
+  workflowId: string,
+): Promise<void> {
+  const registry = internals.workflowClaimRegistry;
+  if (registry === null || registry.currentEpoch(workflowId) === null) return;
+  try {
+    await registry.release(workflowId);
+  } catch {
+    // Best-effort — see this function's doc.
+  }
+}
+
 export async function completeWorkflow(
   internals: EngineInternals,
   workflowId: string,
@@ -416,6 +468,7 @@ export async function completeWorkflow(
   if (!completionMetadata) return;
 
   await releaseWorkflowConcurrencySlot(internals, workflowId);
+  await releaseWorkflowClaimAfterTerminalSettlement(internals, workflowId);
   notifyCompletionWaiters(internals, workflowId, result, completionMetadata.duration, callbacks);
 }
 
@@ -497,6 +550,7 @@ export async function failWorkflow(
   await writeRetainedTerminalSearchAttributes(internals, workflowId, retainedAttributes);
 
   const resolver = internals.resultResolvers.get(workflowId);
+  await releaseWorkflowClaimAfterTerminalSettlement(internals, workflowId);
   try {
     await cleanupTerminalWorkflowSynchronously(internals, workflowId, false, callbacks);
 
