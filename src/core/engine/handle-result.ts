@@ -3,6 +3,40 @@ import { EngineDisposedError } from './errors.ts';
 import { WorkflowHandle } from './handles.ts';
 import type { EngineInternals } from './internals.ts';
 import { loadWorkflowResult, loadWorkflowState } from './storage-io.ts';
+import { confirmWakeOwnership } from './wake-ownership-guard.ts';
+
+/**
+ * Identifies a result waiter created for a parked parent generator's
+ * `ctx.startChild()` await (`parentClosePolicy: 'await'`), as opposed to an
+ * observational `handle.result()` caller. Tracked out-of-band in a
+ * module-local `WeakMap` — see {@link getGeneratorOwnedWorkflowResultPromise}
+ * — rather than as a field on {@link WorkflowResultWaiter}, so this file
+ * needs no change to `engine-internal-types.ts`.
+ */
+type GeneratorOwnership = { readonly parentWorkflowId: string };
+
+/**
+ * Waiter → owning parent workflow id, for waiters created by
+ * {@link getGeneratorOwnedWorkflowResultPromise}. Because
+ * `internals.resultResolvers` dedupes to one waiter per workflow id (see
+ * {@link getWorkflowResultPromise}), a waiter that a generator-owned caller
+ * and a later observational `handle.result()` caller both attach to is
+ * treated as generator-owned: the observational caller rides along on the
+ * same fencing. This mixed-caller case is not covered by ADR 0002 and is
+ * called out here deliberately rather than resolved silently.
+ */
+const generatorOwnedWaiters = new WeakMap<WorkflowResultWaiter, GeneratorOwnership>();
+
+/**
+ * Waiters permanently fenced off by a confirmed loss of their parent
+ * generator's claim (`confirmWakeOwnership` returned `'discard'`). Such a
+ * waiter is deliberately left registered in `resultResolvers` — never
+ * resolved or rejected by this module again — so only `disposeEngine`'s
+ * synchronous map sweep ever settles it (by rejection), matching every other
+ * discarded claim-requiring wake. Recorded here purely to stop this module's
+ * own polling from repeating the (already-decided) ownership check forever.
+ */
+const discardedGeneratorOwnedWaiters = new WeakSet<WorkflowResultWaiter>();
 
 export function createWorkflowHandleWithResultPromise(
   internals: EngineInternals,
@@ -55,6 +89,40 @@ export function getWorkflowResultPromise(
 }
 
 /**
+ * Result promise for a parent generator parked on `ctx.startChild()`'s
+ * default `parentClosePolicy: 'await'` — the ONLY intended caller (see
+ * `child-workflow.ts`'s `executeChildWorkflow`, which must call this instead
+ * of the plain `childHandle.result()` / `handle.result()` path). Identical to
+ * {@link getWorkflowResultPromise} except the waiter this settles is marked
+ * generator-owned for `parentWorkflowId`: under `ownership: 'workflow-lease'`
+ * a settle attempt first confirms `parentWorkflowId` still holds the claim
+ * generation it parked under (`confirmWakeOwnership`, `'child-completion'`),
+ * fencing duplicate generator advancement (WFT-79 F1) — see
+ * {@link bootstrapWorkflowResultResolver}. Top-level, non-generator callers
+ * must keep using {@link getWorkflowResultPromise}, which stays unfenced by
+ * design: cross-engine `handle.result()` polling has no generator to
+ * duplicate and must remain settleable from durable state alone.
+ *
+ * If `internals.resultResolvers` already holds a waiter for `workflowId` —
+ * e.g. an observational `handle.result()` caller got there first — that
+ * SHARED waiter is marked generator-owned too, so the observational caller's
+ * promise inherits this fencing. See {@link generatorOwnedWaiters}'s doc for
+ * why this mixed-caller case is accepted rather than resolved.
+ */
+export function getGeneratorOwnedWorkflowResultPromise(
+  internals: EngineInternals,
+  workflowId: string,
+  parentWorkflowId: string,
+): Promise<unknown> {
+  const promise = getWorkflowResultPromise(internals, workflowId);
+  const waiter = internals.resultResolvers.get(workflowId);
+  if (waiter) {
+    generatorOwnedWaiters.set(waiter, { parentWorkflowId });
+  }
+  return promise;
+}
+
+/**
  * Closes the cross-engine parent/child completion gap ADR 0002 § Open
  * questions names as a blocking correctness gap: `WorkflowHandle.result()`
  * (the sole production path here, per `[HANDLE_RESULT_PROMISE]` in
@@ -87,15 +155,41 @@ export function getWorkflowResultPromise(
  * record, no new `EngineInternals` field (state lives in this closure, not
  * on `internals`), and no `index.ts`/`internals.ts`/renewal-task changes.
  *
- * Deliberately polls even when THIS engine's own claim registry currently
- * tracks `workflowId`: local ownership at waiter-creation time proves
- * nothing about ownership at the moment the awaited workflow actually
- * terminates (a live claim can still be lost to `renew`'s self-deposition
- * before then). The only safe stop conditions are the waiter settling or
- * being replaced (`internals.resultResolvers.get(workflowId) !== waiter`)
- * — which also covers engine disposal for free: {@link disposeEngine} is
- * fully synchronous and rejects+clears every `resultResolvers` entry before
- * any other code can run, so no separate `internals.disposed` check can ever
+ * WFT-79 F2: terminal delivery for a workflow this engine currently owns
+ * normally runs through `termination/complete.ts`'s own ordering —
+ * `completeWorkflow()` commits state, then (after concurrency-slot release)
+ * `notifyCompletionWaiters()` resolves this same waiter and dispatches
+ * completion events. A poll tick that observed the just-committed terminal
+ * state and settled the waiter itself, ahead of that ordering, would let
+ * `handle.result()` or a parked parent generator observe completion before
+ * `notifyCompletionWaiters()`'s in-memory cleanup and event dispatch have
+ * run. This function still reads storage on every tick regardless of local
+ * claim ownership (see the deliberate choice above) — the race is instead
+ * closed inside {@link bootstrapWorkflowResultResolver} via
+ * `deferToLocalTerminalDeliveryIfPending`, which gives an in-flight
+ * `notifyCompletionWaiters()` one macrotask to resolve+remove this exact
+ * waiter before this poll would settle it itself. Skipping the read outright
+ * whenever the claim is locally held (an earlier version of this fix) is
+ * UNSOUND: local claim ownership does not guarantee THIS engine's own
+ * `notifyCompletionWaiters()` will ever run for `workflowId` — e.g. a
+ * different, non-claim-holding engine's still-live in-memory generator
+ * (started before a claim was ever contested) can independently drive the
+ * same workflow to completion first, in which case `completeWorkflow()` on
+ * THIS engine finds the state already non-`'running'` and returns without
+ * ever calling `notifyCompletionWaiters()` — permanently orphaning this
+ * waiter if the poll always deferred to "local ownership implies delivery".
+ * (Confirmed by reproduction: `handle-result.test.ts`'s
+ * "resolves a pending waiter once the awaited workflow terminates on a
+ * DIFFERENT engine" test hangs forever under a skip-the-read version of this
+ * fix, because the `seedEngine` in that test keeps a stale in-memory
+ * generator racing the claim-holding `engineOwner`.)
+ *
+ * The only stop conditions for rescheduling are the waiter settling or being
+ * replaced (`internals.resultResolvers.get(workflowId) !== waiter`) or being
+ * permanently discarded (see {@link discardedGeneratorOwnedWaiters}) — which
+ * also covers engine disposal for free: {@link disposeEngine} is fully
+ * synchronous and rejects+clears every `resultResolvers` entry before any
+ * other code can run, so no separate `internals.disposed` check can ever
  * observe disposal without this map check already having caught it too.
  * Inert under `ownership: 'none'`/`'lease'`, where no claim registry is
  * installed at all.
@@ -108,18 +202,10 @@ function scheduleCrossEngineResultPollIfPending(
   const registry = internals.workflowClaimRegistry;
   if (registry === null) return;
   if (internals.resultResolvers.get(workflowId) !== waiter) return;
+  if (discardedGeneratorOwnedWaiters.has(waiter)) return;
   // `backgroundTasks: 'manual'` is documented to start no timers at all; that
   // mode drives this through an awaited `runMaintenance()` instead.
   if (internals.options.backgroundTaskMode !== 'automatic') return;
-  // Deliberately NOT skipped when this engine's own claim registry currently
-  // tracks `workflowId` — there is no early return here for that case. Local
-  // ownership at THIS scheduling moment proves nothing about ownership at
-  // the moment the awaited workflow actually terminates: a live claim can
-  // still be lost to `renew`'s self-deposition before then, and a skip here
-  // previously hung the suite for exactly that reason (a workflow deposed
-  // after being scheduled was never re-polled and its waiter never settled).
-  // Every pending waiter is therefore polled unconditionally on this
-  // interval; see this function's JSDoc above for the full rationale.
   const handle = setTimeout(() => {
     void bootstrapWorkflowResultResolver(internals, workflowId, waiter).then(() =>
       scheduleCrossEngineResultPollIfPending(internals, workflowId, waiter),
@@ -148,7 +234,19 @@ export async function pollPendingCrossEngineResultWaiters(
   // mutating a Map mid-iteration can skip entries.
   const pending = Array.from(internals.resultResolvers.entries());
   for (const [workflowId, waiter] of pending) {
-    if (registry.currentEpoch(workflowId) !== null) continue;
+    // WFT-79 F1: a generator-owned waiter already confirmed discarded (its
+    // parent generation lost) never settles again — see
+    // `discardedGeneratorOwnedWaiters`'s doc.
+    if (discardedGeneratorOwnedWaiters.has(waiter)) continue;
+    // WFT-79 F2: give this engine's own in-flight `notifyCompletionWaiters()`
+    // one macrotask to settle the waiter before this poll would, so normal
+    // terminal-delivery ordering wins. This must NOT be a bare
+    // `currentEpoch(workflowId) !== null` skip: holding the claim does not
+    // guarantee this engine's `notifyCompletionWaiters()` ever runs, so an
+    // unconditional skip orphans the waiter for as long as the claim is held.
+    // The automatic poll uses the same helper for the same reason; the two
+    // paths disagreeing is what produced this finding.
+    if (await deferToLocalTerminalDeliveryIfPending(internals, workflowId, waiter)) continue;
     try {
       await bootstrapWorkflowResultResolver(internals, workflowId, waiter);
     } catch {
@@ -158,43 +256,155 @@ export async function pollPendingCrossEngineResultWaiters(
   }
 }
 
+/**
+ * Outcome of one {@link bootstrapWorkflowResultResolver} attempt, used by
+ * this file's callers to decide whether to keep polling:
+ *
+ * - `'settled'`: the waiter was resolved or rejected.
+ * - `'pending'`: no terminal result yet (still running, a transient read
+ *   failure under a guaranteed-retry ownership mode, or a discarded
+ *   generator-owned waiter's parent — see WFT-79 F1). Keep polling.
+ * - `'discarded'`: a generator-owned waiter's parent generation was
+ *   confirmed lost; the waiter is deliberately left unsettled forever (see
+ *   {@link discardedGeneratorOwnedWaiters}). Callers must stop rescheduling.
+ */
+type ResultResolutionOutcome = 'settled' | 'pending' | 'discarded';
+
+/**
+ * WFT-79 F3: policy shared by both durable reads this function performs
+ * (`loadWorkflowState` and `loadWorkflowResult`) for a read failure that says
+ * nothing about whether the awaited workflow is actually terminal. Under
+ * `ownership: 'workflow-lease'` a guaranteed periodic retry already exists
+ * (the `setTimeout` loop in `scheduleCrossEngineResultPollIfPending`, or the
+ * host's `runMaintenance()` under `backgroundTasks: 'manual'` driving
+ * `pollPendingCrossEngineResultWaiters`), so leave the waiter pending for
+ * that retry instead of permanently failing `handle.result()` — including a
+ * parked cross-engine parent — on a transient storage blip. Under
+ * `ownership: 'none'`/`'lease'` there is no such retry — this bootstrap call
+ * is the only chance for either read — so reject immediately there, matching
+ * today's behavior.
+ */
+function settleOrRetryOnTransientReadFailure(
+  internals: EngineInternals,
+  workflowId: string,
+  waiter: WorkflowResultWaiter,
+  error: unknown,
+): ResultResolutionOutcome {
+  if (internals.workflowClaimRegistry === null) {
+    clearResultWaiter(internals, workflowId, waiter);
+    waiter.reject(error);
+    return 'settled';
+  }
+  return 'pending';
+}
+
+/**
+ * WFT-79 F1: before this waiter settles with a terminal outcome, confirm a
+ * generator-owned waiter's parent still holds the claim generation it parked
+ * under (`confirmWakeOwnership`, `'child-completion'`). A `'discard'`
+ * permanently fences the waiter — see {@link discardedGeneratorOwnedWaiters}
+ * — so a deposed parent generator is never advanced twice. Observational
+ * waiters (no entry in {@link generatorOwnedWaiters}) are a no-op here by
+ * design: cross-engine `handle.result()` polling has no generator to
+ * duplicate and must remain settleable from durable state alone.
+ */
+async function confirmGeneratorOwnershipBeforeSettling(
+  internals: EngineInternals,
+  waiter: WorkflowResultWaiter,
+): Promise<'proceed' | 'discard'> {
+  const ownership = generatorOwnedWaiters.get(waiter);
+  if (!ownership) return 'proceed';
+
+  const decision = await confirmWakeOwnership(
+    internals,
+    ownership.parentWorkflowId,
+    'child-completion',
+  );
+  if (decision === 'discard') {
+    discardedGeneratorOwnedWaiters.add(waiter);
+  }
+  return decision;
+}
+
+/**
+ * WFT-79 F2: closes the ordering race described on
+ * {@link scheduleCrossEngineResultPollIfPending} without reintroducing the
+ * unsound "skip the read whenever locally claimed" version of the fix (see
+ * that function's JSDoc for the reproduction that ruled it out). Called only
+ * once this function has already decided `waiter` is about to settle from a
+ * terminal read. When `workflowId`'s claim is NOT currently held by this
+ * engine, there is no ordering race to avoid — proceed immediately (`false`).
+ * When it IS held, an in-flight `completeWorkflow()` → `notifyCompletionWaiters()`
+ * on THIS engine may be about to resolve+remove this exact waiter; yield one
+ * macrotask (`setTimeout(0)`, well past the microtask gap between
+ * `completeWorkflow()`'s `releaseWorkflowConcurrencySlot` await and its
+ * `notifyCompletionWaiters()` call) to let that happen first, then re-check:
+ * a waiter that changed identity or is no longer registered was already
+ * settled by that normal path — defer to it (`true`), and the caller must not
+ * settle it again. A waiter that is STILL the exact same object was never
+ * going to be settled by local terminal delivery (e.g. a different, non-
+ * claim-holding engine's stale in-memory generator completed the workflow
+ * first — `completeWorkflow()` on THIS engine then found the state already
+ * non-`'running'` and returned without ever calling
+ * `notifyCompletionWaiters()`); this function's caller is the only path left
+ * and must settle it now (`false`).
+ */
+async function deferToLocalTerminalDeliveryIfPending(
+  internals: EngineInternals,
+  workflowId: string,
+  waiter: WorkflowResultWaiter,
+): Promise<boolean> {
+  if (internals.workflowClaimRegistry?.currentEpoch(workflowId) == null) {
+    return false;
+  }
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  return internals.resultResolvers.get(workflowId) !== waiter;
+}
+
+/**
+ * Combines the two settle-time guards every terminal-outcome branch of
+ * {@link bootstrapWorkflowResultResolver} needs (WFT-79 F1 and F2) into one
+ * call, keeping that function's cyclomatic complexity down. Returns
+ * `'proceed'` when the caller should go ahead and settle `waiter` itself;
+ * otherwise returns the {@link ResultResolutionOutcome} the caller must
+ * return immediately without touching `waiter` again.
+ */
+async function prepareToSettleTerminalWaiter(
+  internals: EngineInternals,
+  workflowId: string,
+  waiter: WorkflowResultWaiter,
+): Promise<'proceed' | Extract<ResultResolutionOutcome, 'discarded' | 'settled'>> {
+  if ((await confirmGeneratorOwnershipBeforeSettling(internals, waiter)) === 'discard') {
+    return 'discarded';
+  }
+  if (await deferToLocalTerminalDeliveryIfPending(internals, workflowId, waiter)) {
+    return 'settled';
+  }
+  return 'proceed';
+}
+
 export async function bootstrapWorkflowResultResolver(
   internals: EngineInternals,
   workflowId: string,
   waiter: WorkflowResultWaiter,
-): Promise<void> {
+): Promise<ResultResolutionOutcome> {
   let state;
   try {
     state = await loadWorkflowState(internals, workflowId);
   } catch (error) {
-    // A `loadWorkflowState` failure here is ambiguous — it says nothing about
-    // whether the workflow is still running, terminal, or gone, only that
-    // THIS read attempt failed — so it must not be treated as a terminal
-    // result. Under `ownership: 'workflow-lease'` a guaranteed periodic
-    // retry already exists (the `setTimeout` loop in
-    // `scheduleCrossEngineResultPollIfPending`, or the host's
-    // `runMaintenance()` under `backgroundTasks: 'manual'` driving
-    // `pollPendingCrossEngineResultWaiters`), so leave the waiter pending for
-    // that retry instead of permanently failing `handle.result()` on a
-    // transient storage blip for a workflow that may still be running,
-    // possibly on another engine. Under `ownership: 'none'`/`'lease'` there
-    // is no such retry — this bootstrap call is the only chance — so
-    // preserve today's immediate rejection there.
-    if (internals.workflowClaimRegistry === null) {
-      clearResultWaiter(internals, workflowId, waiter);
-      waiter.reject(error);
-    }
-    return;
+    return settleOrRetryOnTransientReadFailure(internals, workflowId, waiter, error);
   }
 
   if (linkToReplacementWaiter(internals, workflowId, waiter)) {
-    return;
+    return 'settled';
   }
 
   if (!state) {
+    const outcome = await prepareToSettleTerminalWaiter(internals, workflowId, waiter);
+    if (outcome !== 'proceed') return outcome;
     internals.resultResolvers.delete(workflowId);
     waiter.reject(new Error(`Workflow "${workflowId}" not found in storage`));
-    return;
+    return 'settled';
   }
 
   // A suspended workflow has not produced a result and will be resumed later,
@@ -202,16 +412,19 @@ export async function bootstrapWorkflowResultResolver(
   // created before suspend, the existing-waiter branch above already keeps it
   // pending; this covers a fresh result() call made while suspended.)
   if (state.status === 'running' || state.status === 'pending' || state.status === 'suspended') {
-    return;
+    return 'pending';
   }
+
+  const outcome = await prepareToSettleTerminalWaiter(internals, workflowId, waiter);
+  if (outcome !== 'proceed') return outcome;
 
   try {
     const result = await loadWorkflowResult(internals, workflowId);
     clearResultWaiter(internals, workflowId, waiter);
     waiter.resolve(result);
+    return 'settled';
   } catch (error) {
-    clearResultWaiter(internals, workflowId, waiter);
-    waiter.reject(error);
+    return settleOrRetryOnTransientReadFailure(internals, workflowId, waiter, error);
   }
 }
 

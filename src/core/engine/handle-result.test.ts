@@ -2,17 +2,23 @@ import { describe, expect, it, spyOn } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
-import { flushMicrotasks, waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import {
+  flushMicrotasks,
+  waitForCondition,
+  waitForRealTimersForTesting,
+} from '../../testing/fake-timers.test-support.ts';
 import { Engine } from '../engine.ts';
 import { workflow, type WorkflowContext } from '../types.ts';
 import {
   bootstrapWorkflowResultResolver,
   createWorkflowHandleWithResultPromise,
   createWorkflowResultWaiter,
+  getGeneratorOwnedWorkflowResultPromise,
   getWorkflowResultPromise,
   pollPendingCrossEngineResultWaiters,
 } from './handle-result.ts';
 import { getInternals } from './internals.ts';
+import { encodeEpoch, encodeWorkflowClaimHolder } from './workflow-claim-codec.ts';
 
 class WorkflowStateReadFailureStorage extends MemoryStorage {
   constructor(private readonly failingWorkflowId: string) {
@@ -248,7 +254,7 @@ describe('pollPendingCrossEngineResultWaiters (backgroundTasks: "manual" drain)'
     await expect(pollPendingCrossEngineResultWaiters(internals)).resolves.toBeUndefined();
   });
 
-  it('skips a workflow this engine already holds a claim for', async () => {
+  it('defers to local terminal delivery for a claim this engine holds, without settling early', async () => {
     using storage = new MemoryStorage();
     await using engine = await Engine.create({ storage, workflows, ...manualOptions });
     const internals = getInternals(engine);
@@ -256,13 +262,77 @@ describe('pollPendingCrossEngineResultWaiters (backgroundTasks: "manual" drain)'
     await engine.start('wft-79-poll-fallback', null, { id: 'drain-owned-1' });
     expect(internals.workflowClaimRegistry?.currentEpoch('drain-owned-1')).not.toBeNull();
 
-    // A locally-held claim settles through this engine's own terminal path, so
-    // the drain must not spend a state read on it.
-    const loadSpy = spyOn(storage, 'get');
-    const before = loadSpy.mock.calls.length;
+    // Registering the waiter is what makes this test exercise the drain's
+    // locally-owned branch at all. Without it `resultResolvers` is empty, the
+    // loop body never runs, and the assertion below holds no matter what the
+    // branch does — which is how the previous version of this test passed
+    // vacuously while claiming to pin the behavior.
+    let settled = false;
+    // The catch is required, not decorative: this waiter is still pending when
+    // the enclosing `await using` disposes the engine, and `disposeEngine`
+    // rejects every pending waiter. Without it that rejection is unhandled.
+    void getWorkflowResultPromise(internals, 'drain-owned-1').then(
+      () => {
+        settled = true;
+      },
+      () => {},
+    );
+    await flushMicrotasks();
+    expect(internals.resultResolvers.has('drain-owned-1')).toBe(true);
+
     await pollPendingCrossEngineResultWaiters(internals);
-    expect(loadSpy.mock.calls.length).toBe(before);
-    loadSpy.mockRestore();
+
+    // The workflow is parked on its signal, so the drain must leave the waiter
+    // pending for this engine's own terminal path to settle.
+    //
+    // This deliberately no longer asserts zero storage reads. The drain now
+    // yields a macrotask and re-checks instead of skipping outright, because a
+    // held claim does NOT guarantee this engine's `notifyCompletionWaiters()`
+    // ever runs for the workflow — an unconditional skip orphans the waiter for
+    // as long as the claim is held. The automatic poll made the same trade for
+    // the same reason; one read per pending waiter per drain is the cost of not
+    // hanging.
+    expect(settled).toBe(false);
+    expect(internals.resultResolvers.has('drain-owned-1')).toBe(true);
+  });
+
+  it('settles a waiter for a claim this engine holds when the workflow terminated elsewhere', async () => {
+    // The orphaning scenario an unconditional locally-owned skip creates.
+    // Holding the claim does NOT imply this engine's own
+    // `notifyCompletionWaiters()` ever runs: `seedEngine` keeps a live
+    // in-memory generator and drives the workflow to completion itself, so the
+    // claim-holding engine's terminal path never fires for it. The waiter must
+    // be created while the workflow is still running — otherwise the initial
+    // `bootstrapWorkflowResultResolver` settles it immediately and the drain is
+    // never the deciding path.
+    using storage = new MemoryStorage();
+    await using seedEngine = await Engine.create({ storage, workflows, recover: false });
+    const seeded = await seedEngine.start('wft-79-poll-fallback', null, { id: 'drain-orphan-1' });
+
+    await using owner = await Engine.create({ storage, workflows, ...manualOptions });
+    const internals = getInternals(owner);
+    const acquired = await internals.workflowClaimRegistry?.acquire('drain-orphan-1');
+    expect(acquired?.status).toBe('acquired');
+
+    // Created while running, so it stays pending rather than self-settling.
+    let settled: unknown = null;
+    void getWorkflowResultPromise(internals, 'drain-orphan-1').then(
+      (value) => {
+        settled = value;
+      },
+      () => {},
+    );
+    await flushMicrotasks();
+    expect(settled).toBeNull();
+
+    // Terminates on the OTHER engine, so nothing local will ever deliver it.
+    await seedEngine.getHandle('drain-orphan-1').signal('go');
+    await expect(seeded.result()).resolves.toBe('poll-fallback-done');
+
+    await pollPendingCrossEngineResultWaiters(internals);
+    await waitForCondition(() => settled === 'poll-fallback-done', {
+      label: 'manual-mode drain settling a locally-claimed waiter terminated elsewhere',
+    });
   });
 
   it('settles a waiter for a workflow this engine does not own', async () => {
@@ -301,5 +371,213 @@ describe('pollPendingCrossEngineResultWaiters (backgroundTasks: "manual" drain)'
     // One unreadable workflow must not stop the pass; both entries are visited
     // and the call resolves rather than rejecting.
     await expect(pollPendingCrossEngineResultWaiters(internals)).resolves.toBeUndefined();
+  });
+});
+
+describe('WFT-79 F1: generator-owned child-result fencing', () => {
+  const childWorkflow = workflow({ name: 'wft-79-f1-child' }).execute(async function* () {
+    return 'child-done';
+  });
+  const workflows = { 'wft-79-f1-child': childWorkflow };
+  const ownershipOptions = {
+    ownership: 'workflow-lease' as const,
+    workflowClaimTtl: 200,
+    workflowClaimRenewInterval: 20,
+    recover: false,
+  };
+
+  it('never settles a generator-owned waiter once the parent generation is confirmed lost', async () => {
+    const storage = new MemoryStorage();
+    await using engine = await Engine.create({ storage, workflows, ...ownershipOptions });
+    const internals = getInternals(engine);
+    const registry = internals.workflowClaimRegistry!;
+
+    // Stand in for a parent parked on `ctx.startChild()`: this engine holds a
+    // claim for the parent id, without needing an actual running generator.
+    const acquired = await registry.acquire('parent-1');
+    expect(acquired.status).toBe('acquired');
+
+    // The child completes normally and durably.
+    const childHandle = await engine.start('wft-79-f1-child', null, { id: 'child-1' });
+    await expect(childHandle.result()).resolves.toBe('child-done');
+
+    // A generator-owned waiter created AFTER the child is already terminal —
+    // same as a fresh `getGeneratorOwnedWorkflowResultPromise` call racing a
+    // recovered-successor takeover of the parent.
+    let settled = false;
+    let rejected = false;
+    void getGeneratorOwnedWorkflowResultPromise(internals, 'child-1', 'parent-1').then(
+      () => {
+        settled = true;
+      },
+      () => {
+        rejected = true;
+      },
+    );
+
+    // Simulate a successor engine taking over the PARENT (not the child)
+    // before this waiter's bootstrap resolves.
+    await storage.batch([
+      { type: 'put', key: KEYS.workflowOwnerEpoch('parent-1'), value: encodeEpoch(2) },
+      {
+        type: 'put',
+        key: KEYS.workflowOwnerHolder('parent-1'),
+        value: encodeWorkflowClaimHolder({
+          engineId: 'successor-engine',
+          epoch: 2,
+          expiresAt: internals.options.getNow() + 60_000,
+          claimedAt: internals.options.getNow(),
+        }),
+      },
+    ]);
+
+    // Give the generator-owned waiter's ownership confirmation every chance
+    // to run and (wrongly, if unfenced) settle.
+    await flushMicrotasks();
+    // fixed delay: negative assertion — proving the waiter never settles has no observable event to await instead
+    await waitForRealTimersForTesting(50);
+
+    expect(settled).toBe(false);
+    expect(rejected).toBe(false);
+    // Left registered — never resolved or rejected — so only engine disposal
+    // ever settles it, matching every other discarded claim-requiring wake.
+    expect(internals.resultResolvers.has('child-1')).toBe(true);
+  });
+
+  it('settles a generator-owned waiter normally when the parent still holds its claim', async () => {
+    const storage = new MemoryStorage();
+    await using engine = await Engine.create({ storage, workflows, ...ownershipOptions });
+    const internals = getInternals(engine);
+    const registry = internals.workflowClaimRegistry!;
+
+    const acquired = await registry.acquire('parent-2');
+    expect(acquired.status).toBe('acquired');
+
+    const childHandle = await engine.start('wft-79-f1-child', null, { id: 'child-2' });
+    await expect(childHandle.result()).resolves.toBe('child-done');
+
+    await expect(
+      getGeneratorOwnedWorkflowResultPromise(internals, 'child-2', 'parent-2'),
+    ).resolves.toBe('child-done');
+  });
+});
+
+describe('WFT-79 F2: local-claim settling never races notifyCompletionWaiters ordering', () => {
+  const raceWorkflow = workflow({ name: 'wft-79-f2-race' }).execute(async function* (
+    ctx: WorkflowContext,
+  ) {
+    yield* ctx.waitForSignal('go');
+    return 'race-done';
+  });
+  const workflows = { 'wft-79-f2-race': raceWorkflow };
+
+  /**
+   * Reproduces the scenario that hangs forever under a "skip settling
+   * outright whenever the local claim is held" implementation of F2: a
+   * SEPARATE engine (`seedEngine`) keeps a stale in-memory generator for the
+   * SAME workflow id that `engineOwner` later resumes and claims. When
+   * `seedEngine`'s own copy independently drives the workflow to
+   * completion first, `engineOwner`'s own `completeWorkflow()` finds the
+   * state already non-`'running'` and returns WITHOUT ever calling
+   * `notifyCompletionWaiters()` — so a poll that always deferred to "local
+   * claim implies terminal delivery" would leave `engineOwner`'s own
+   * `handle.result()` waiter unsettled forever, even though the workflow is
+   * durably terminal.
+   */
+  it('settles a locally-claimed waiter from durable state when this engine never calls notifyCompletionWaiters for it', async () => {
+    const storage = new MemoryStorage();
+
+    // seedEngine starts the workflow and keeps a live in-memory generator for
+    // it — deliberately never disposed for the duration of this test.
+    await using seedEngine = await Engine.create({ storage, workflows, recover: false });
+    await seedEngine.start('wft-79-f2-race', null, { id: 'race-1' });
+    await waitForCondition(async () => (await storage.get(KEYS.checkpoint('race-1'))) !== null, {
+      label: 'checkpoint for parked workflow',
+    });
+
+    await using engineOwner = await Engine.create({
+      storage,
+      workflows,
+      ownership: 'workflow-lease',
+      workflowClaimTtl: 200,
+      workflowClaimRenewInterval: 20,
+      recover: false,
+    });
+    await engineOwner.resume('race-1');
+
+    const ownerHandle = engineOwner.getHandle('race-1');
+    const resultPromise = ownerHandle.result();
+
+    // seedEngine's stale in-memory generator observes the signal and
+    // completes the workflow FIRST, racing engineOwner's own claim-holding
+    // generator. Either engine may win the durable write; the assertion below
+    // only requires that engineOwner's own waiter still settles correctly.
+    await seedEngine.getHandle('race-1').signal('go');
+
+    await expect(resultPromise).resolves.toBe('race-done');
+  });
+});
+
+describe('WFT-79 F3: transient loadWorkflowResult failure retries under "workflow-lease"', () => {
+  it('leaves a pending waiter registered — not rejected — after a transient failure on the SECOND (result) read', async () => {
+    // `loadWorkflowResult` re-reads the SAME `KEYS.workflow(...)` key that
+    // `bootstrapWorkflowResultResolver`'s own `loadWorkflowState` already
+    // read. Complete a real workflow first so the durable record is
+    // authentic, THEN swap this engine's own `storage.get` for a wrapper that
+    // fails only on the SECOND read of that key — `loadWorkflowResult`'s
+    // internal re-read — mirroring `wake-ownership-guard.test.ts`'s
+    // storage-swap pattern.
+    const storage = new MemoryStorage();
+    const completedWorkflow = workflow({ name: 'wft-79-f3-instant' }).execute(async function* () {
+      return 'f3-result';
+    });
+    await using engine = await Engine.create({
+      storage,
+      workflows: { 'wft-79-f3-instant': completedWorkflow },
+      ownership: 'workflow-lease',
+      workflowClaimTtl: 200,
+      workflowClaimRenewInterval: 20,
+      recover: false,
+    });
+    const handle = await engine.start('wft-79-f3-instant', null, { id: 'f3-transient-1' });
+    await expect(handle.result()).resolves.toBe('f3-result');
+
+    const internals = getInternals(engine);
+    const recordKey = KEYS.workflow('f3-transient-1');
+    let reads = 0;
+    internals.storage = {
+      capabilities: () => storage.capabilities(),
+      get: (key) => {
+        if (key === recordKey) {
+          reads += 1;
+          if (reads === 2) {
+            return Promise.reject(new Error('transient read failure for f3-transient-1 (read #2)'));
+          }
+        }
+        return storage.get(key);
+      },
+      put: (key, value) => storage.put(key, value),
+      delete: (key) => storage.delete(key),
+      scan: (prefix, options) => storage.scan(prefix, options),
+      batch: (operations) => storage.batch(operations),
+      conditionalBatch: (conditions, operations) =>
+        storage.conditionalBatch(conditions, operations),
+      [Symbol.dispose]: () => storage[Symbol.dispose](),
+    };
+
+    const waiter = createWorkflowResultWaiter(internals, 'f3-transient-1');
+    void waiter.promise.catch(() => {});
+
+    // Read #1 (bootstrap's own loadWorkflowState) succeeds, sees `completed`;
+    // Read #2 (loadWorkflowResult's internal re-read) throws. Without the
+    // F3 fix this rejects and removes the waiter; with the fix it must stay
+    // pending for the guaranteed periodic retry.
+    await bootstrapWorkflowResultResolver(internals, 'f3-transient-1', waiter);
+    expect(internals.resultResolvers.get('f3-transient-1')).toBe(waiter);
+
+    // Retry: storage has recovered, the SAME waiter now settles normally.
+    await bootstrapWorkflowResultResolver(internals, 'f3-transient-1', waiter);
+    await expect(waiter.promise).resolves.toBe('f3-result');
+    expect(internals.resultResolvers.has('f3-transient-1')).toBe(false);
   });
 });

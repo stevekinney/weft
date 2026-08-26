@@ -43,7 +43,26 @@ function createInternals() {
     pendingNestingDepth: undefined,
     pendingParentHeaders: undefined,
     workflowHeaders: new Map([['parent', new Map([['traceparent', '00-parent']])]]),
+    // `executeChildWorkflow` awaits the child through
+    // `getGeneratorOwnedWorkflowResultPromise`, not `childHandle.result()`, so
+    // the parent's waiter can be fenced on its claim generation (ADR 0002).
+    // That reads `resultResolvers`; `seedChildResult` pre-seeds it so these
+    // tests exercise child-workflow logic without a storage round trip.
+    resultResolvers: new Map<string, { promise: Promise<unknown> }>(),
+    disposed: false,
   };
+}
+
+/**
+ * Pre-seed the already-settled result waiter `getWorkflowResultPromise` returns
+ * for an existing entry, so these tests never reach the storage bootstrap.
+ */
+function seedChildResult(
+  internals: { resultResolvers: Map<string, { promise: Promise<unknown> }> },
+  workflowId: string,
+  value: unknown,
+): void {
+  internals.resultResolvers.set(workflowId, { promise: Promise.resolve(value) });
 }
 
 describe('engine child workflow helpers', () => {
@@ -82,7 +101,8 @@ describe('engine child workflow helpers', () => {
 
   it('reuses an existing matching child workflow after an id collision', async () => {
     const internals = createInternals();
-    const childHandle = { result: mock(async () => 'cached-child-result') };
+    seedChildResult(internals, 'child-id', 'cached-child-result');
+    const childHandle = { id: 'child-id', result: mock(async () => 'cached-child-result') };
 
     await expect(
       executeChildWorkflow(
@@ -110,7 +130,11 @@ describe('engine child workflow helpers', () => {
       ),
     ).resolves.toBe('cached-child-result');
 
-    expect(childHandle.result).toHaveBeenCalled();
+    // Deliberately NOT `expect(childHandle.result).toHaveBeenCalled()`. The
+    // parent now awaits the child through the generator-owned waiter so the
+    // settle can be fenced on the parent's claim generation; going through the
+    // handle's own `result()` would produce an unfenced observational waiter.
+    expect(childHandle.result).not.toHaveBeenCalled();
   });
 
   it('rejects an existing child workflow whose stored state differs', async () => {
@@ -175,6 +199,7 @@ describe('engine child workflow helpers', () => {
 
   it('wraps child workflow execution with the composed workflow interceptor', async () => {
     const internals = createInternals();
+    seedChildResult(internals, 'child-id', 'child-result');
 
     await expect(
       executeChildWorkflow(
@@ -199,10 +224,10 @@ describe('engine child workflow helpers', () => {
                 result: await next(interception),
               }),
             }) as never,
-          getHandle: () => ({ result: async () => 'child-result' }) as never,
+          getHandle: () => ({ id: 'child-id', result: async () => 'child-result' }) as never,
           loadWorkflowState: async (workflowId) =>
             workflowId === 'parent' ? createWorkflowState('parent') : null,
-          start: async () => ({ result: async () => 'child-result' }) as never,
+          start: async () => ({ id: 'child-id', result: async () => 'child-result' }) as never,
         },
       ),
     ).resolves.toEqual({
