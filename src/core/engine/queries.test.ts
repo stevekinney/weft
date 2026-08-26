@@ -3,14 +3,35 @@ import { describe, expect, it, mock } from 'bun:test';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
-import { workflow, type WorkflowContext } from '../types.ts';
+import { encode } from '../codec.ts';
+import { workflow, type WorkflowContext, type WorkflowState } from '../types.ts';
 import { Engine } from './index.ts';
 import {
   isWorkflowClaimedByAnotherEngine,
+  isWorkflowLocallyTerminalOrMissing,
   query,
   WorkflowNotLocallyOwnedError,
 } from './queries.ts';
 import { encodeWorkflowClaimHolder } from './workflow-claim-codec.ts';
+
+/** Minimal valid `WorkflowState` fixture for `KEYS.workflow(id)` records. */
+function createWorkflowState(
+  workflowId: string,
+  overrides: Partial<WorkflowState> = {},
+): WorkflowState {
+  return {
+    createdAt: 1_000,
+    id: workflowId,
+    input: null,
+    result: 'done',
+    startedAt: 1_000,
+    status: 'completed',
+    type: 'workflow',
+    updatedAt: 1_000,
+    versionTuple: { workflowVersion: '1' },
+    ...overrides,
+  };
+}
 
 /** Minimal stand-in for `WorkflowClaimRegistry` — only `currentEpoch` is read here. */
 function fakeClaimRegistry(epoch: number | null): { currentEpoch: (id: string) => number | null } {
@@ -114,6 +135,14 @@ describe('query()', () => {
           expiresAt: Date.now() + 1_000,
           claimedAt: Date.now(),
         }),
+      },
+      // A real durable holder implies a started (at least persisted, and
+      // here still-active) WorkflowState — see the F2 regression describe
+      // block below for the "terminal workflow, stale holder" counterpart.
+      {
+        type: 'put',
+        key: KEYS.workflow('wf-1'),
+        value: encode(createWorkflowState('wf-1', { status: 'running', result: undefined })),
       },
     ]);
     const internals = {
@@ -229,6 +258,187 @@ describe('query()', () => {
     await rejection.toBeInstanceOf(WorkflowNotLocallyOwnedError);
     await rejection.toMatchObject({ workflowId: 'wf-1' });
     expect(handler).not.toHaveBeenCalled();
+  });
+});
+
+describe('isWorkflowLocallyTerminalOrMissing', () => {
+  it('is true when no persisted WorkflowState exists (never existed or purged)', async () => {
+    const storage = new MemoryStorage();
+    const internals = { storage } as unknown as Parameters<
+      typeof isWorkflowLocallyTerminalOrMissing
+    >[0];
+    expect(await isWorkflowLocallyTerminalOrMissing(internals, 'wf-1')).toBe(true);
+  });
+
+  it('is true when the persisted WorkflowState is terminal', async () => {
+    const storage = new MemoryStorage();
+    await storage.batch([
+      { type: 'put', key: KEYS.workflow('wf-1'), value: encode(createWorkflowState('wf-1')) },
+    ]);
+    const internals = { storage } as unknown as Parameters<
+      typeof isWorkflowLocallyTerminalOrMissing
+    >[0];
+    expect(await isWorkflowLocallyTerminalOrMissing(internals, 'wf-1')).toBe(true);
+  });
+
+  it('is false when the persisted WorkflowState is still active', async () => {
+    const storage = new MemoryStorage();
+    await storage.batch([
+      {
+        type: 'put',
+        key: KEYS.workflow('wf-1'),
+        value: encode(createWorkflowState('wf-1', { status: 'running', result: undefined })),
+      },
+    ]);
+    const internals = { storage } as unknown as Parameters<
+      typeof isWorkflowLocallyTerminalOrMissing
+    >[0];
+    expect(await isWorkflowLocallyTerminalOrMissing(internals, 'wf-1')).toBe(false);
+  });
+});
+
+describe('query() F1: re-reads the context after ownership validation', () => {
+  it('serves the fresh context installed by a same-owner signal resume that raced the ownership read, not the stale pre-await context', async () => {
+    const staleHandler = mock(() => 'stale');
+    const freshHandler = mock(() => 'fresh');
+    const parkedContext = {
+      queryHandlers: new Map<string, (input: unknown) => unknown>([['q', staleHandler]]),
+      exposedAccessors: new Map<string, () => unknown>(),
+    };
+    let freshContext: typeof parkedContext | undefined;
+
+    const storage = {
+      // Simulate a signal resuming the parked workflow — installing a fresh
+      // Context — while this ownership-validation storage read is pending.
+      get: mock(async () => {
+        freshContext = {
+          queryHandlers: new Map([['q', freshHandler]]),
+          exposedAccessors: new Map(),
+        };
+        return null;
+      }),
+    };
+    const internals = {
+      heartbeatDetails: new Map(),
+      inlineStrategy: {
+        getContext: () => freshContext,
+        getParkedContext: () => parkedContext,
+      },
+      workflowClaimRegistry: fakeClaimRegistry(null),
+      storage,
+    } as unknown as Parameters<typeof query>[0];
+
+    expect(await query(internals, 'wf-1', 'q', 'in')).toBe('fresh');
+    expect(freshHandler).toHaveBeenCalledWith('in');
+    expect(staleHandler).not.toHaveBeenCalled();
+  });
+
+  it('returns undefined when the same-owner context is torn down (terminal cleanup) while the ownership read was pending', async () => {
+    const staleHandler = mock(() => 'stale');
+    const parkedContext = {
+      queryHandlers: new Map<string, (input: unknown) => unknown>([['q', staleHandler]]),
+      exposedAccessors: new Map<string, () => unknown>(),
+    };
+    let contextTornDown = false;
+
+    const storage = {
+      get: mock(async () => {
+        contextTornDown = true;
+        return null;
+      }),
+    };
+    const internals = {
+      heartbeatDetails: new Map(),
+      inlineStrategy: {
+        getContext: () => undefined,
+        getParkedContext: () => (contextTornDown ? undefined : parkedContext),
+      },
+      workflowClaimRegistry: fakeClaimRegistry(null),
+      storage,
+    } as unknown as Parameters<typeof query>[0];
+
+    expect(await query(internals, 'wf-1', 'q', 'in')).toBeUndefined();
+    expect(staleHandler).not.toHaveBeenCalled();
+  });
+});
+
+describe('query() F2: ignores a stale durable holder for a locally terminal workflow', () => {
+  it('returns undefined (not WorkflowNotLocallyOwnedError) when the persisted workflow is terminal but the durable holder still names another engine', async () => {
+    const storage = new MemoryStorage();
+    await storage.batch([
+      {
+        type: 'put',
+        key: KEYS.workflowOwnerHolder('wf-1'),
+        value: encodeWorkflowClaimHolder({
+          engineId: 'engine-b',
+          epoch: 1,
+          expiresAt: Date.now() + 1_000,
+          claimedAt: Date.now(),
+        }),
+      },
+      { type: 'put', key: KEYS.workflow('wf-1'), value: encode(createWorkflowState('wf-1')) },
+    ]);
+    const internals = {
+      heartbeatDetails: new Map(),
+      inlineStrategy: { getContext: () => undefined, getParkedContext: () => undefined },
+      workflowClaimRegistry: fakeClaimRegistry(null),
+      storage,
+    } as unknown as Parameters<typeof query>[0];
+
+    expect(await query(internals, 'wf-1', 'custom')).toBeUndefined();
+  });
+
+  it('still throws WorkflowNotLocallyOwnedError when the persisted workflow is active and the durable holder names another engine', async () => {
+    const storage = new MemoryStorage();
+    await storage.batch([
+      {
+        type: 'put',
+        key: KEYS.workflowOwnerHolder('wf-1'),
+        value: encodeWorkflowClaimHolder({
+          engineId: 'engine-b',
+          epoch: 1,
+          expiresAt: Date.now() + 1_000,
+          claimedAt: Date.now(),
+        }),
+      },
+      {
+        type: 'put',
+        key: KEYS.workflow('wf-1'),
+        value: encode(createWorkflowState('wf-1', { status: 'running', result: undefined })),
+      },
+    ]);
+    const internals = {
+      heartbeatDetails: new Map(),
+      inlineStrategy: { getContext: () => undefined, getParkedContext: () => undefined },
+      workflowClaimRegistry: fakeClaimRegistry(null),
+      storage,
+    } as unknown as Parameters<typeof query>[0];
+
+    const rejection = expect(query(internals, 'wf-1', 'custom')).rejects;
+    await rejection.toBeInstanceOf(WorkflowNotLocallyOwnedError);
+    await rejection.toMatchObject({ workflowId: 'wf-1' });
+  });
+});
+
+describe('query() performance: no storage read for ownership: "none"/"lease"', () => {
+  it('never calls storage.get when no claim registry is installed', async () => {
+    const handler = mock((input: unknown) => `handled:${String(input)}`);
+    const getSpy = mock(async () => null);
+    const internals = {
+      heartbeatDetails: new Map(),
+      inlineStrategy: {
+        getContext: () => ({
+          queryHandlers: new Map([['q', handler]]),
+          exposedAccessors: new Map(),
+        }),
+        getParkedContext: () => undefined,
+      },
+      workflowClaimRegistry: null,
+      storage: { get: getSpy },
+    } as unknown as Parameters<typeof query>[0];
+
+    expect(await query(internals, 'wf-1', 'q', 'in')).toBe('handled:in');
+    expect(getSpy).not.toHaveBeenCalled();
   });
 });
 

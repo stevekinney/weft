@@ -5,7 +5,10 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { encode } from '../codec.ts';
 import type { WorkflowState } from '../types.ts';
 import { encodeWorkflowClaimHolder } from './workflow-claim-codec.ts';
-import { listWorkflowClaimReclaimCandidates } from './workflow-claim-reclaim-scan.ts';
+import {
+  listWorkflowClaimReclaimCandidates,
+  WORKFLOW_CLAIM_RECLAIM_AUTHORITATIVE_SCAN_LIMIT,
+} from './workflow-claim-reclaim-scan.ts';
 
 async function putHolder(storage: MemoryStorage, workflowId: string): Promise<void> {
   await storage.put(
@@ -45,6 +48,20 @@ async function putRunningWorkflow(
   const state = createWorkflowState(workflowId, overrides);
   await storage.put(KEYS.workflow(workflowId), encode(state));
   await storage.put(KEYS.workflowVisibilityStatus(state.status, workflowId), new Uint8Array(0));
+}
+
+/**
+ * Writes ONLY the workflow-state record — no visibility-index entry —
+ * modeling a pre-backfill Bun SQLite workflow (WFT-79 Finding 2). See
+ * `documentation/guides/workflow-visibility-backfill.md`.
+ */
+async function putWorkflowWithoutVisibilityIndex(
+  storage: MemoryStorage,
+  workflowId: string,
+  overrides: Partial<WorkflowState> = {},
+): Promise<void> {
+  const state = createWorkflowState(workflowId, overrides);
+  await storage.put(KEYS.workflow(workflowId), encode(state));
 }
 
 describe('listWorkflowClaimReclaimCandidates', () => {
@@ -190,6 +207,112 @@ describe('listWorkflowClaimReclaimCandidates', () => {
       // holder-keyed scan alone has nothing left to enumerate.
       const afterRelease = await listWorkflowClaimReclaimCandidates(storage, new Set());
       expect(afterRelease).toEqual(['wf-handoff']);
+    });
+  });
+
+  describe('authoritative-record fallback for workflows with no visibility-index entry at all (WFT-79 Finding 2)', () => {
+    it('finds a running, holderless workflow that has no visibility-index entry — the pre-backfill gap the index-based scans alone miss', async () => {
+      const storage = new MemoryStorage();
+      await putWorkflowWithoutVisibilityIndex(storage, 'wf-unbackfilled');
+
+      const candidates = await listWorkflowClaimReclaimCandidates(storage, new Set());
+
+      expect(candidates).toEqual(['wf-unbackfilled']);
+    });
+
+    it('does not include an index-less workflow that already has a holder record — the holder-keyed scan already covers it', async () => {
+      const storage = new MemoryStorage();
+      await putWorkflowWithoutVisibilityIndex(storage, 'wf-unbackfilled');
+      await putHolder(storage, 'wf-unbackfilled');
+
+      const candidates = await listWorkflowClaimReclaimCandidates(storage, new Set());
+
+      // Exactly once, not duplicated across the holder scan and the fallback.
+      expect(candidates).toEqual(['wf-unbackfilled']);
+    });
+
+    it('does not include a non-running, index-less workflow', async () => {
+      const storage = new MemoryStorage();
+      await putWorkflowWithoutVisibilityIndex(storage, 'wf-done', { status: 'completed' });
+
+      const candidates = await listWorkflowClaimReclaimCandidates(storage, new Set());
+
+      expect(candidates).toEqual([]);
+    });
+
+    it('excludes an index-less ownerless-running id already in excludeWorkflowIds', async () => {
+      const storage = new MemoryStorage();
+      await putWorkflowWithoutVisibilityIndex(storage, 'wf-unbackfilled');
+
+      const candidates = await listWorkflowClaimReclaimCandidates(
+        storage,
+        new Set(['wf-unbackfilled']),
+      );
+
+      expect(candidates).toEqual([]);
+    });
+
+    it('does not misclassify a checkpoint or timeline record sharing the `wf:` prefix as a workflow id', async () => {
+      const storage = new MemoryStorage();
+      await putWorkflowWithoutVisibilityIndex(storage, 'wf-real');
+      // Side records that share the `wf:` prefix with the real workflow
+      // record but are not themselves workflow-state records.
+      await storage.put(KEYS.checkpoint('wf-real'), encode({ not: 'a workflow state' }));
+      await storage.put(KEYS.timeline('wf-real', 1), encode({ not: 'a workflow state' }));
+
+      const candidates = await listWorkflowClaimReclaimCandidates(storage, new Set());
+
+      expect(candidates).toEqual(['wf-real']);
+    });
+
+    it('the exact WFT-79 Finding 2 rolling-handoff sequence: an index-less workflow released mid-handoff is found by a later scan instead of stranded forever', async () => {
+      const storage = new MemoryStorage();
+      // A pre-backfill workflow: outgoing engine's live holder, no
+      // visibility-index entry.
+      await putWorkflowWithoutVisibilityIndex(storage, 'wf-unbackfilled-handoff');
+      await putHolder(storage, 'wf-unbackfilled-handoff');
+
+      // While the outgoing engine is still live, only the holder-keyed scan
+      // finds it.
+      const whileLive = await listWorkflowClaimReclaimCandidates(storage, new Set());
+      expect(whileLive).toEqual(['wf-unbackfilled-handoff']);
+
+      // Outgoing engine disposes gracefully: `releaseAll()` deletes the
+      // holder without writing a visibility-index entry (there never was
+      // one). Without the authoritative-record fallback this workflow has
+      // NO holder key and NO index entry — invisible to both index-based
+      // scans, and stranded forever.
+      await storage.delete(KEYS.workflowOwnerHolder('wf-unbackfilled-handoff'));
+
+      const afterRelease = await listWorkflowClaimReclaimCandidates(storage, new Set());
+      expect(afterRelease).toEqual(['wf-unbackfilled-handoff']);
+    });
+
+    it('bounds the fallback scan per pass and rotates its cursor across passes to cover a backlog larger than the limit', async () => {
+      const storage = new MemoryStorage();
+      const total = WORKFLOW_CLAIM_RECLAIM_AUTHORITATIVE_SCAN_LIMIT + 5;
+      const ids = Array.from(
+        { length: total },
+        (_, index) => `wf-unbackfilled-${String(index).padStart(5, '0')}`,
+      );
+      for (const id of ids) {
+        await putWorkflowWithoutVisibilityIndex(storage, id);
+      }
+
+      const firstPass = await listWorkflowClaimReclaimCandidates(storage, new Set());
+      // Bounded: never more than the per-pass limit from this scan alone.
+      expect(firstPass.length).toBeLessThanOrEqual(WORKFLOW_CLAIM_RECLAIM_AUTHORITATIVE_SCAN_LIMIT);
+      expect(firstPass.length).toBeGreaterThan(0);
+
+      const secondPass = await listWorkflowClaimReclaimCandidates(storage, new Set());
+      expect(secondPass.length).toBeGreaterThan(0);
+
+      // No duplicate work across the two passes' cursor windows, and no
+      // workflow silently starved: the union of a bounded number of passes
+      // covers the whole backlog.
+      const seenAcrossPasses = new Set([...firstPass, ...secondPass]);
+      expect(seenAcrossPasses.size).toBe(firstPass.length + secondPass.length);
+      expect(seenAcrossPasses.size).toBeGreaterThanOrEqual(total);
     });
   });
 });

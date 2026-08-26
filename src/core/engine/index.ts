@@ -290,6 +290,7 @@ import {
 } from './updates.ts';
 import { isTerminalWorkflowStatus } from './validation.ts';
 import { coerceScheduleId } from './validation/schedule.ts';
+import { confirmWakeOwnership } from './wake-ownership-guard.ts';
 import type { WorkflowClaimRegistry } from './workflow-claim-registry.ts';
 import {
   replayWorkflowFeed,
@@ -1261,6 +1262,15 @@ export class Engine<
           workflowId,
           this.#createInlineParkingCallbacks(),
         ),
+      // Waking a signal waiter advances the workflow's generator, so it is a
+      // claim-requiring wake path. `runOnce()` continues into signal polling
+      // even after a failed renewal has dropped this engine's claim entry, so
+      // without this a buffered signal would wake a deposed generator while the
+      // successor advances its replayed one. `ownership-bootstrap.ts` cannot
+      // call `confirmWakeOwnership` itself — it deliberately does not depend on
+      // `EngineInternals` — so the engine supplies it here.
+      confirmSignalWakeOwnership: (workflowId) =>
+        confirmWakeOwnership(internals, workflowId, 'signal'),
       wakeSignalWaiter: (workflowId, waiterKey) => {
         const waiter = internals.signalWaiters.get(waiterKey);
         if (waiter === undefined) return;

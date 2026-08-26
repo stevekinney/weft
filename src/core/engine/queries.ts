@@ -1,6 +1,11 @@
 import { KEYS } from '../../storage/interface.ts';
+import type { InlineExecutionStrategy } from '../inline-execution-strategy.ts';
 import type { EngineInternals } from './internals.ts';
+import { decodeWorkflowState, isTerminalWorkflowStatus } from './validation.ts';
 import { decodeWorkflowClaimHolder } from './workflow-claim-codec.ts';
+
+/** The live/parked query-dispatch context an `InlineExecutionStrategy` hands back. */
+type QueryDispatchContext = NonNullable<ReturnType<InlineExecutionStrategy['getContext']>>;
 
 /**
  * Thrown by `query()` when this engine has no live local execution context for
@@ -61,6 +66,30 @@ export async function isWorkflowClaimedByAnotherEngine(
 }
 
 /**
+ * `true` when `workflowId`'s persisted `WorkflowState` is missing (never
+ * existed, or already purged) or terminal. Used to ignore a durably stale
+ * `wf-owner-holder:<id>` record: a normal owner-side complete/fail commit is
+ * fenced but does not delete the holder record (only an explicit `release`
+ * — graceful shutdown or the reclaim scan's redrive-detects-terminal path —
+ * or a `takeover`/rotation does), so a contextless query for an already-
+ * terminal workflow can otherwise see a holder record naming a DIFFERENT
+ * engine and incorrectly throw `WorkflowNotLocallyOwnedError` for a workflow
+ * every engine agrees has already finished. Documented behavior is that
+ * terminal, purged, or unknown workflows keep resolving to plain
+ * `undefined` — this check restores that for the `workflow-lease` claim
+ * path specifically.
+ */
+export async function isWorkflowLocallyTerminalOrMissing(
+  internals: EngineInternals,
+  workflowId: string,
+): Promise<boolean> {
+  const stateBytes = await internals.storage.get(KEYS.workflow(workflowId));
+  if (stateBytes === null) return true;
+  const state = decodeWorkflowState(stateBytes);
+  return isTerminalWorkflowStatus(state.status);
+}
+
+/**
  * `internals.workflowClaimRegistry !== null && (await isWorkflowClaimedByAnotherEngine(...))`,
  * factored out so every "revalidate before serving a possibly-stale live
  * Context" call site — `query()` below and `tryInlineUpdateHandler` in
@@ -81,6 +110,39 @@ export function isLiveContextStale(
   // must stay byte-identical.
   if (internals.workflowClaimRegistry === null) return false;
   return isWorkflowClaimedByAnotherEngine(internals, workflowId);
+}
+
+/**
+ * Plain (non-`async`) lookup for the live-or-parked dispatch Context, shared
+ * by `query()`'s initial read and its post-stale-check re-read. Kept
+ * synchronous and out of `query()`'s own branch count so the two call sites
+ * stay cheap to read without inflating `query()`'s cyclomatic complexity.
+ */
+function resolveDispatchContext(
+  inlineStrategy: InlineExecutionStrategy,
+  workflowId: string,
+): QueryDispatchContext | undefined {
+  return inlineStrategy.getContext(workflowId) ?? inlineStrategy.getParkedContext(workflowId);
+}
+
+/**
+ * Handles `query()`'s "no live/parked Context" case: throws
+ * `WorkflowNotLocallyOwnedError` only when the workflow is durably claimed by
+ * a different engine AND still locally active; otherwise resolves to plain
+ * `undefined` (terminal, purged, unknown, or genuinely unclaimed).
+ */
+async function resolveContextlessQueryResult(
+  internals: EngineInternals,
+  workflowId: string,
+): Promise<undefined> {
+  const claimedByAnotherEngine = await isWorkflowClaimedByAnotherEngine(internals, workflowId);
+  if (
+    claimedByAnotherEngine &&
+    !(await isWorkflowLocallyTerminalOrMissing(internals, workflowId))
+  ) {
+    throw new WorkflowNotLocallyOwnedError(workflowId);
+  }
+  return undefined;
 }
 
 /** Resolve a workflow query from built-in progress state or exposed inline accessors. */
@@ -106,25 +168,37 @@ export async function query(
   // handlers or exposed accessors that inline-parking does not park — is served
   // by getContext below.) Check the live context first so a query racing with a
   // resume always sees the freshly installed context.
-  const context =
-    inlineStrategy.getContext(workflowId) ?? inlineStrategy.getParkedContext(workflowId);
+  const context = resolveDispatchContext(inlineStrategy, workflowId);
   if (!context) {
-    if (await isWorkflowClaimedByAnotherEngine(internals, workflowId)) {
-      throw new WorkflowNotLocallyOwnedError(workflowId);
-    }
-    return undefined;
+    return resolveContextlessQueryResult(internals, workflowId);
   }
   // A live Context here is not proof this engine still owns the workflow: a
   // DEPOSED engine keeps its Context until some later fenced write unwinds
   // the execution, so serving from it unconditionally would let a deposed
-  // engine answer a query from stale state. See `isLiveContextStale`.
+  // engine answer a query from stale state. See `isLiveContextStale`. This
+  // stays a plain (non-`async`) branch — not a helper call — so `staleCheck
+  // === false` never pays a microtask, matching `isLiveContextStale`'s own
+  // "skip the `await` entirely" contract for `ownership: 'none'`/`'lease'`.
   const staleCheck = isLiveContextStale(internals, workflowId);
-  if (staleCheck !== false && (await staleCheck)) {
-    throw new WorkflowNotLocallyOwnedError(workflowId);
+  let liveContext: QueryDispatchContext = context;
+  if (staleCheck !== false) {
+    if (await staleCheck) {
+      throw new WorkflowNotLocallyOwnedError(workflowId);
+    }
+    // Re-read the Context AFTER the ownership-validation await: `context`
+    // was captured before that `await`, so a signal delivered while the
+    // durable holder read was pending can resume this same-owner parked
+    // workflow (or drive it to terminal cleanup) and install/remove a
+    // Context in the meantime. Dispatching against the pre-await `context`
+    // here would invoke a superseded parked handler/accessor instead of the
+    // fresh one, or serve a torn-down Context past its lifetime.
+    const refreshedContext = resolveDispatchContext(inlineStrategy, workflowId);
+    if (!refreshedContext) return undefined;
+    liveContext = refreshedContext;
   }
-  const queryHandler = context.queryHandlers.get(name);
+  const queryHandler = liveContext.queryHandlers.get(name);
   if (queryHandler) return queryHandler(input);
-  const accessor = context.exposedAccessors.get(name);
+  const accessor = liveContext.exposedAccessors.get(name);
   if (!accessor) return undefined;
   return accessor();
 }

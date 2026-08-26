@@ -807,6 +807,10 @@ describe('buildOwnerSideSignalPollTarget (WFT-79 Finding 1)', () => {
       parkedSignalName: () => undefined,
       listSignalWaiterEntries: () => [],
       hasBufferedSignal: async () => false,
+      // Mirrors `confirmWakeOwnership`'s behavior when no claim registry is
+      // installed (`ownership: 'none'`/`'lease'`), which is the default posture
+      // these cases assume. Cases about the fence itself override it.
+      confirmSignalWakeOwnership: async () => 'proceed',
       resumeParkedInlineWorkflow: async (workflowId) => {
         resumed.push(workflowId);
       },
@@ -876,5 +880,349 @@ describe('buildOwnerSideSignalPollTarget (WFT-79 Finding 1)', () => {
 
     expect(resumed).toEqual([]);
     expect(woken).toEqual([]);
+  });
+
+  it('wakeWorkflow does not release a live waiter when confirmSignalWakeOwnership discards it (WFT-79 Finding 1)', async () => {
+    const { sources, woken } = makeSources({
+      listSignalWaiterEntries: () => [['wf-race', 'wf-race:approve']],
+      hasBufferedSignal: async () => true,
+      confirmSignalWakeOwnership: async () => 'discard',
+    });
+    const target = buildOwnerSideSignalPollTarget(sources);
+
+    await target.wakeWorkflow('wf-race');
+
+    expect(woken).toEqual([]);
+  });
+
+  it('wakeWorkflow releases a confirmed-buffered live waiter when confirmSignalWakeOwnership proceeds', async () => {
+    const { sources, woken } = makeSources({
+      listSignalWaiterEntries: () => [['wf-race', 'wf-race:approve']],
+      hasBufferedSignal: async () => true,
+      confirmSignalWakeOwnership: async () => 'proceed',
+    });
+    const target = buildOwnerSideSignalPollTarget(sources);
+
+    await target.wakeWorkflow('wf-race');
+
+    expect(woken).toEqual([{ workflowId: 'wf-race', waiterKey: 'wf-race:approve' }]);
+  });
+
+  it('wakeWorkflow releases a confirmed-buffered live waiter when no claim registry is installed', async () => {
+    // `confirmSignalWakeOwnership` is a REQUIRED source field: an optional
+    // fence is one a call site can silently forget, which is how the owner-side
+    // signal poll shipped unwired. Engines without a claim registry still pass
+    // one — `confirmWakeOwnership` returns `'proceed'` there — so this pins the
+    // `ownership: 'none'`/`'lease'` path as unchanged rather than unfenced.
+    const { sources, woken } = makeSources({
+      listSignalWaiterEntries: () => [['wf-race', 'wf-race:approve']],
+      hasBufferedSignal: async () => true,
+      confirmSignalWakeOwnership: async () => 'proceed',
+    });
+    const target = buildOwnerSideSignalPollTarget(sources);
+
+    await target.wakeWorkflow('wf-race');
+
+    expect(woken).toEqual([{ workflowId: 'wf-race', waiterKey: 'wf-race:approve' }]);
+  });
+});
+
+describe('createWorkflowClaimReclaimTarget · candidate dedup across discovery and pending-redrive (WFT-79 Finding 4)', () => {
+  it('never returns the same workflow id twice, even when it is both a discovered foreign holder and pending-redrive', async () => {
+    const clock = makeClock();
+    const storage = new MemoryStorage();
+    await putWorkflowState(storage, 'wf-1');
+    const registry = new WorkflowClaimRegistry({
+      storage,
+      engineId: 'engine-a',
+      getNow: clock.now,
+      claimTtlMs: TTL_MS,
+      claimRenewIntervalMs: RENEW_MS,
+    });
+    await registry.acquire('wf-1');
+    const reclaimTarget = createWorkflowClaimReclaimTarget(
+      registry,
+      storage,
+      new WorkflowClaimMetricsCollector(),
+      async () => {
+        throw new Error('drive failed');
+      },
+    );
+
+    // Mark wf-1 pending-redrive: this engine holds the claim, but the drive
+    // callback throws.
+    await expect(reclaimTarget.attemptWorkflowClaimTakeover('wf-1')).rejects.toThrow();
+    const candidatesWhileHeld = await reclaimTarget.listReclaimCandidateWorkflowIds();
+    // Excluded from ordinary discovery (this engine's own held id), present
+    // only via pending-redrive.
+    expect(candidatesWhileHeld).toEqual(['wf-1']);
+
+    // This engine now loses the claim to a competitor (e.g. a stalled
+    // renewal), so wf-1 becomes independently discoverable as a foreign
+    // holder too — while `pendingRedriveWorkflowIds` still (staleley)
+    // contains it, since only `attemptWorkflowClaimTakeover` clears that
+    // bookkeeping.
+    const competitor = new WorkflowClaimRegistry({
+      storage,
+      engineId: 'engine-b',
+      getNow: () => clock.now() + TTL_MS * 10,
+      claimTtlMs: TTL_MS,
+      claimRenewIntervalMs: RENEW_MS,
+    });
+    const competitorTakeover = await competitor.takeover('wf-1');
+    expect(competitorTakeover.status).toBe('acquired');
+    expect(await registry.renew('wf-1')).toEqual({ status: 'lost', workflowId: 'wf-1' });
+    expect(registry.currentEpoch('wf-1')).toBeNull();
+
+    const candidatesAfterLoss = await reclaimTarget.listReclaimCandidateWorkflowIds();
+
+    // Without the Set merge, 'wf-1' would appear twice here (once from
+    // `listWorkflowClaimReclaimCandidates`'s foreign-holder scan, once from
+    // `pendingRedriveWorkflowIds`), and the renewal task's pass would call
+    // `attemptWorkflowClaimTakeover('wf-1')` twice — doubling the advertised
+    // 5-attempt-per-pass bound to 10.
+    expect(candidatesAfterLoss.filter((id) => id === 'wf-1')).toHaveLength(1);
+  });
+});
+
+describe('createWorkflowClaimReclaimTarget · epoch-fenced release across an await (WFT-79 Finding 3)', () => {
+  it('does not release a replacement run’s claim when a start-new races the pending terminal-state read', async () => {
+    const clock = makeClock();
+    const base = new MemoryStorage();
+    await putWorkflowState(base, 'wf-1', { status: 'completed' });
+    const registry = new WorkflowClaimRegistry({
+      storage: base,
+      engineId: 'engine-a',
+      getNow: clock.now,
+      claimTtlMs: TTL_MS,
+      claimRenewIntervalMs: RENEW_MS,
+    });
+    await registry.acquire('wf-1');
+    const originalEpoch = registry.currentEpoch('wf-1');
+    expect(originalEpoch).not.toBeNull();
+
+    const gateState: { release: (() => void) | null } = { release: null };
+    let signalReached!: () => void;
+    const reached = new Promise<void>((resolve) => {
+      signalReached = resolve;
+    });
+    const gatedStorage: Storage = {
+      capabilities: () => base.capabilities(),
+      async get(key) {
+        const bytes = await base.get(key);
+        if (key === KEYS.workflow('wf-1') && gateState.release === null) {
+          const gatePromise = new Promise<void>((resolve) => {
+            gateState.release = resolve;
+          });
+          signalReached();
+          await gatePromise;
+        }
+        return bytes;
+      },
+      put: (key, value) => base.put(key, value),
+      delete: (key) => base.delete(key),
+      scan: (prefix, options) => base.scan(prefix, options),
+      batch: (operations) => base.batch(operations),
+      conditionalBatch: base.conditionalBatch?.bind(base),
+      [Symbol.dispose]: () => base[Symbol.dispose](),
+    };
+    const reclaimTarget = createWorkflowClaimReclaimTarget(
+      registry,
+      gatedStorage,
+      new WorkflowClaimMetricsCollector(),
+      async () => {
+        throw new Error('drive must never run: the workflow is terminal');
+      },
+    );
+
+    const attemptPromise = reclaimTarget.attemptWorkflowClaimTakeover('wf-1');
+
+    // Deterministically wait for the terminal-state read to be in flight and
+    // paused at the gate, rather than a fixed-delay sleep.
+    await reached;
+
+    // A `start-new` replaces the terminal run on the same workflow id while
+    // the read above is pending: release the old generation and mint a new
+    // one.
+    const releaseResult = await registry.release('wf-1');
+    expect(releaseResult.status).toBe('released');
+    const reacquireResult = await registry.acquire('wf-1');
+    expect(reacquireResult.status).toBe('acquired');
+    const replacementEpoch = registry.currentEpoch('wf-1');
+    expect(replacementEpoch).not.toBe(originalEpoch);
+
+    // Let the pending terminal-state read resolve.
+    gateState.release?.();
+
+    const result = await attemptPromise;
+
+    expect(result).toEqual({ status: 'not-eligible' });
+    // The replacement run's claim must survive: `release(workflowId)` keys
+    // only on workflow id, so calling it unconditionally here would have
+    // deleted the REPLACEMENT's live holder record instead of the terminal
+    // generation this call actually inspected.
+    expect(registry.currentEpoch('wf-1')).toBe(replacementEpoch);
+    expect(await base.get(KEYS.workflowOwnerHolder('wf-1'))).not.toBeNull();
+  });
+});
+
+describe('createWorkflowClaimReclaimTarget · disposal quiescence (WFT-79 Finding 2)', () => {
+  it('releases a claim that lands mid-disposal instead of driving or stranding it', async () => {
+    const clock = makeClock();
+    const base = new MemoryStorage();
+    await putWorkflowState(base, 'wf-1');
+    await putHolder(base, 'wf-1', 'engine-b');
+    clock.advance(TTL_MS * 10); // far past grace-adjusted expiry, so takeover is eligible
+    const gated = createWorkflowClaimTestStorage(base);
+    const registry = new WorkflowClaimRegistry({
+      storage: gated.storage,
+      engineId: 'engine-a',
+      getNow: clock.now,
+      claimTtlMs: TTL_MS,
+      claimRenewIntervalMs: RENEW_MS,
+    });
+    const driven: string[] = [];
+    const reclaimTarget = createWorkflowClaimReclaimTarget(
+      registry,
+      gated.storage,
+      new WorkflowClaimMetricsCollector(),
+      async (workflowId) => {
+        driven.push(workflowId);
+      },
+    );
+
+    // Suspend the takeover CAS mid-flight.
+    const gate = gated.queueGate();
+    const attemptPromise = reclaimTarget.attemptWorkflowClaimTakeover('wf-1');
+    await gate.reached;
+
+    // Disposal begins while the CAS is in flight — mirrors
+    // `bootstrapWorkflowLeaseOwnership`'s wrapped `renewalTask.stop()`
+    // calling this synchronously before `Engine`'s disposal path releases
+    // every claim via `registry.releaseAll()`.
+    reclaimTarget.markDisposing();
+    gate.release();
+
+    const result = await attemptPromise;
+
+    expect(result).toEqual({ status: 'not-eligible' });
+    // `onReclaimed` must never run against a disposing host.
+    expect(driven).toEqual([]);
+    // The claim landed by the CAS (which had already committed by the time
+    // disposal was noticed) must not be left stranded until TTL/grace expiry.
+    expect(registry.currentEpoch('wf-1')).toBeNull();
+    expect(await base.get(KEYS.workflowOwnerHolder('wf-1'))).toBeNull();
+  });
+
+  it('releases a claim landed via the ownerless-running acquire fallback if disposal begins mid-acquire', async () => {
+    const base = new MemoryStorage();
+    await putWorkflowState(base, 'wf-free'); // running; no holder record at all, so `takeover` reports 'no-claim'.
+    const gated = createWorkflowClaimTestStorage(base);
+    const registry = new WorkflowClaimRegistry({
+      storage: gated.storage,
+      engineId: 'engine-a',
+      getNow: () => 0,
+      claimTtlMs: TTL_MS,
+      claimRenewIntervalMs: RENEW_MS,
+    });
+    const driven: string[] = [];
+    const reclaimTarget = createWorkflowClaimReclaimTarget(
+      registry,
+      gated.storage,
+      new WorkflowClaimMetricsCollector(),
+      async (workflowId) => {
+        driven.push(workflowId);
+      },
+    );
+
+    // Suspend the standalone `acquire()` CAS mid-flight (the "no-claim"
+    // fallback path never calls `takeover`'s own CAS, so this is the only
+    // `conditionalBatch` call this attempt makes).
+    const gate = gated.queueGate();
+    const attemptPromise = reclaimTarget.attemptWorkflowClaimTakeover('wf-free');
+    await gate.reached;
+
+    reclaimTarget.markDisposing();
+    gate.release();
+
+    const result = await attemptPromise;
+
+    expect(result).toEqual({ status: 'not-eligible' });
+    expect(driven).toEqual([]);
+    expect(registry.currentEpoch('wf-free')).toBeNull();
+    expect(await base.get(KEYS.workflowOwnerHolder('wf-free'))).toBeNull();
+  });
+
+  it('never discovers or attempts a new candidate once disposing', async () => {
+    const storage = new MemoryStorage();
+    await putWorkflowState(storage, 'wf-1');
+    await putHolder(storage, 'wf-1', 'engine-b');
+    const registry = new WorkflowClaimRegistry({
+      storage,
+      engineId: 'engine-a',
+      getNow: () => 1_000_000_000, // far past any grace-adjusted expiry
+      claimTtlMs: TTL_MS,
+      claimRenewIntervalMs: RENEW_MS,
+    });
+    const reclaimTarget = createWorkflowClaimReclaimTarget(
+      registry,
+      storage,
+      new WorkflowClaimMetricsCollector(),
+    );
+
+    reclaimTarget.markDisposing();
+
+    expect(await reclaimTarget.listReclaimCandidateWorkflowIds()).toEqual([]);
+    expect(await reclaimTarget.attemptWorkflowClaimTakeover('wf-1')).toEqual({
+      status: 'not-eligible',
+    });
+    expect(registry.currentEpoch('wf-1')).toBeNull();
+  });
+});
+
+describe('bootstrapWorkflowLeaseOwnership · renewalTask.stop() quiesces the reclaim target (WFT-79 Finding 2 wiring)', () => {
+  it('a pass run after stop() reclaims nothing, even for an otherwise-eligible stranded claim', async () => {
+    using storage = new MemoryStorage();
+    const clock = makeClock();
+    await putWorkflowState(storage, 'wf-stranded');
+    await putHolder(storage, 'wf-stranded', 'engine-crashed');
+    clock.advance(TTL_MS * 10);
+
+    const { renewalTask } = await bootstrapWorkflowLeaseOwnership({
+      storage,
+      getNow: clock.now,
+      claimTtlMs: TTL_MS,
+      claimRenewIntervalMs: RENEW_MS,
+    });
+
+    renewalTask.stop();
+    const pass = await renewalTask.runOnce();
+
+    // Disposing short-circuits candidate discovery itself, so the pass finds
+    // nothing to attempt at all — the stranded claim is left exactly as it
+    // was for a successor engine's own reclaim scan to pick up later.
+    expect(pass.reclaim).toEqual({ status: 'completed', outcomes: [], reclaimedCount: 0 });
+  });
+
+  it('a pass run before stop() still reclaims normally (stop() has no ambient effect until called)', async () => {
+    using storage = new MemoryStorage();
+    const clock = makeClock();
+    await putWorkflowState(storage, 'wf-stranded');
+    await putHolder(storage, 'wf-stranded', 'engine-crashed');
+    clock.advance(TTL_MS * 10);
+
+    const { renewalTask } = await bootstrapWorkflowLeaseOwnership({
+      storage,
+      getNow: clock.now,
+      claimTtlMs: TTL_MS,
+      claimRenewIntervalMs: RENEW_MS,
+    });
+
+    const pass = await renewalTask.runOnce();
+
+    expect(pass.reclaim).toMatchObject({
+      status: 'completed',
+      outcomes: [{ workflowId: 'wf-stranded', status: 'reclaimed' }],
+    });
   });
 });

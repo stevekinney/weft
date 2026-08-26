@@ -692,6 +692,114 @@ describe('createWorkflowClaimRenewalTask · start/stop (interval mode, no real t
     expect(target.calls).toEqual(['workflow-a', 'workflow-a']);
   });
 
+  describe('renewal keeps its own cadence independent of a slow reclaim/poll sub-pass (WFT-79 Finding 2)', () => {
+    it('renewal fires on a later tick even while the reclaim scan from an earlier tick is still in flight', async () => {
+      const clock = makeClock();
+      const target = createFakeTarget(['workflow-a']);
+      const reclaimTarget = createFakeReclaimTarget(['wf-stranded']);
+      const scheduler = createFakeScheduler();
+      const task = createWorkflowClaimRenewalTask({
+        target,
+        reclaimTarget,
+        getNow: clock.now,
+        intervalMs: 1_000,
+        scheduler,
+      });
+      // The reclaim scan's candidate listing hangs — modeling an unbounded
+      // store-wide scan on a large or high-latency shared store that runs
+      // well past `intervalMs`.
+      const hangingList = createDeferred<readonly string[]>();
+      reclaimTarget.listReclaimCandidateWorkflowIds = () => hangingList.promise;
+
+      task.start();
+      scheduler.fire(); // tick 1: starts renewal (resolves fast) and reclaim (hangs)
+      await flushMicrotasks();
+
+      expect(target.calls).toEqual(['workflow-a']);
+
+      scheduler.fire(); // tick 2: reclaim from tick 1 is STILL in flight
+      await flushMicrotasks();
+
+      // The bug this regresses: renewal was gated behind the shared
+      // single-flight slot the reclaim scan also occupied, so this second
+      // tick's renewal would have been silently skipped. With renewal on its
+      // own slot, it fires again regardless of the still-hanging reclaim scan.
+      expect(target.calls).toEqual(['workflow-a', 'workflow-a']);
+
+      // Clean up the still-hanging reclaim scan so it does not leak into a
+      // later test.
+      hangingList.resolve([]);
+      await flushMicrotasks();
+    });
+
+    it('a slow reclaim scan does not delay the renewed-claim outcome reported to onPassComplete', async () => {
+      const clock = makeClock();
+      const target = createFakeTarget(['workflow-a']);
+      const reclaimTarget = createFakeReclaimTarget([]);
+      const scheduler = createFakeScheduler();
+      const reported: WorkflowClaimRenewalPassResult[] = [];
+      const task = createWorkflowClaimRenewalTask({
+        target,
+        reclaimTarget,
+        getNow: clock.now,
+        intervalMs: 1_000,
+        scheduler,
+        onPassComplete: (result) => reported.push(result),
+      });
+      const hangingList = createDeferred<readonly string[]>();
+      reclaimTarget.listReclaimCandidateWorkflowIds = () => hangingList.promise;
+
+      task.start();
+      scheduler.fire();
+      await flushMicrotasks();
+
+      // The renewal sub-pass already reported completion — it did not wait on
+      // the still-hanging reclaim sub-pass.
+      const renewalReport = reported.find((result) => result.outcomes.length > 0);
+      expect(renewalReport).toMatchObject({ renewedCount: 1 });
+      expect(renewalReport?.reclaim).toBeUndefined();
+
+      hangingList.resolve([]);
+      await flushMicrotasks();
+    });
+
+    it('the reclaim-plus-poll sub-pass has its own single-flight slot, independent of renewal', async () => {
+      const clock = makeClock();
+      const target = createFakeTarget([]);
+      const reclaimTarget = createFakeReclaimTarget(['wf-stranded']);
+      const scheduler = createFakeScheduler();
+      const task = createWorkflowClaimRenewalTask({
+        target,
+        reclaimTarget,
+        getNow: clock.now,
+        intervalMs: 1_000,
+        scheduler,
+      });
+      const hangingList = createDeferred<readonly string[]>();
+      let listCalls = 0;
+      reclaimTarget.listReclaimCandidateWorkflowIds = () => {
+        listCalls += 1;
+        return listCalls === 1 ? hangingList.promise : Promise.resolve([]);
+      };
+
+      task.start();
+      scheduler.fire(); // starts a reclaim sub-pass that hangs
+      await flushMicrotasks();
+      scheduler.fire(); // should be skipped: the reclaim sub-pass is still in flight
+      await flushMicrotasks();
+
+      expect(listCalls).toBe(1);
+
+      hangingList.resolve([]);
+      await flushMicrotasks();
+
+      scheduler.fire(); // the slot is free again: a fresh reclaim sub-pass starts
+      await flushMicrotasks();
+
+      expect(listCalls).toBe(2);
+    });
+  });
+
   it('does not leak an unhandled rejection when an interval-driven pass rejects, and recovers on the next tick', async () => {
     const clock = makeClock();
     const target = createFakeTarget([]);
