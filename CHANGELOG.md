@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-08-26
+
 ### Added
 
 - `weft.tasks.diagnostics` and `GET /v1/tasks/diagnostics` can now expose expected delayed queued attempts and elapsed unadopted terminal results through the typed `delayed` and `unadopted-terminal` diagnostic variants. Delayed visibility remains opt-in with `includeExpectedDelayed`; terminal non-adoption uses the configurable `unadoptedAfterMs` threshold.
