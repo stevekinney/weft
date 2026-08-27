@@ -26,6 +26,8 @@ import {
   encodeRemoteTaskRecord,
   taskLedgerKey,
   type RemoteTaskDeadLettered,
+  type RemoteTaskQueued,
+  type RemoteTaskTerminalResolved,
 } from '../server/task-ledger.ts';
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
@@ -71,6 +73,57 @@ function deadLetteredLedgerFixture(operationId: string): RemoteTaskDeadLettered 
     requeueCount: 0,
     deadLetteredAt: 0,
     persistenceFailureReason: 'lost the compare-and-swap race',
+  };
+}
+
+function delayedLedgerFixture(operationId: string, availableAt: number): RemoteTaskQueued {
+  return {
+    recordVersion: 1,
+    operationId,
+    workflowId: 'workflow-diagnostics',
+    workflowType: 'test',
+    activityName: 'charge',
+    queue: 'payments',
+    input: null,
+    headers: {},
+    visibilityTimeoutMilliseconds: 30_000,
+    createdAt: 0,
+    generation: 0,
+    state: 'queued',
+    attempt: 2,
+    availableAt,
+    firstQueuedAt: 0,
+    lastQueuedAt: 0,
+    retryCount: 1,
+    requeueCount: 1,
+  };
+}
+
+function unadoptedTerminalLedgerFixture(
+  operationId: string,
+  terminalAt: number,
+): RemoteTaskTerminalResolved {
+  return {
+    recordVersion: 1,
+    operationId,
+    workflowId: 'workflow-diagnostics',
+    workflowType: 'test',
+    activityName: 'charge',
+    queue: 'payments',
+    input: null,
+    headers: {},
+    visibilityTimeoutMilliseconds: 30_000,
+    createdAt: 0,
+    generation: 2,
+    state: 'terminal',
+    disposition: 'resolved',
+    attempt: 1,
+    attemptToken: 'attempt-token',
+    status: 'completed',
+    resultDigest: 'digest',
+    terminalAt,
+    adopted: false,
+    retentionGeneration: 0,
   };
 }
 
@@ -303,6 +356,71 @@ describe('HttpClient catalog operations', () => {
       status: 'disabled',
       holdsLease: false,
     });
+  });
+
+  it('returns typed delayed and unadopted-terminal diagnostics over REST and generated JSON-RPC', async () => {
+    const capturedNow = Date.now();
+    const delayed = delayedLedgerFixture('http-delayed', capturedNow + 30_000);
+    const unadopted = unadoptedTerminalLedgerFixture('http-unadopted', capturedNow - 120_000);
+    await engine.storage.put(taskLedgerKey(delayed.operationId), encodeRemoteTaskRecord(delayed));
+    await engine.storage.put(
+      taskLedgerKey(unadopted.operationId),
+      encodeRemoteTaskRecord(unadopted),
+    );
+
+    const input = {
+      workflowId: 'workflow-diagnostics',
+      queue: 'payments',
+      includeExpectedDelayed: true,
+      unadoptedAfterMs: 60_000,
+      staleQueuedAfterMs: 60_000,
+      staleHeartbeatAfterMs: 60_000,
+      retryStormMinimumAttempts: 3,
+      limit: 50,
+    };
+    const jsonRpcResult = await client.operations['weft.tasks.diagnostics'](input);
+    const restResponse = await fetch(
+      `${server.url}/v1/tasks/diagnostics?workflowId=workflow-diagnostics&queue=payments&includeExpectedDelayed=true&unadoptedAfterMs=60000`,
+      { headers: { Authorization: 'Bearer catalog-ops-secret' } },
+    );
+    expect(restResponse.status).toBe(200);
+    const restResult = (await restResponse.json()) as typeof jsonRpcResult;
+
+    for (const result of [jsonRpcResult, restResult]) {
+      expect(result.summary.delayed).toBe(1);
+      expect(result.summary.unadoptedTerminal).toBe(1);
+      expect(result.items).toContainEqual({
+        kind: 'delayed',
+        state: 'queued',
+        operationId: 'http-delayed',
+        workflowId: 'workflow-diagnostics',
+        queue: 'payments',
+        retryCount: 1,
+        requeueCount: 1,
+        availableAt: delayed.availableAt,
+        evidence: [`Task is delayed until ${delayed.availableAt} on queue "payments"`],
+      });
+      expect(result.items).toContainEqual(
+        expect.objectContaining({
+          kind: 'unadopted-terminal',
+          state: 'resolved',
+          operationId: 'http-unadopted',
+          workflowId: 'workflow-diagnostics',
+          queue: 'payments',
+          terminalAt: unadopted.terminalAt,
+          adopted: false,
+        }),
+      );
+    }
+
+    const excludedResponse = await fetch(
+      `${server.url}/v1/tasks/diagnostics?operationId=http-delayed&includeExpectedDelayed=false`,
+      { headers: { Authorization: 'Bearer catalog-ops-secret' } },
+    );
+    expect(excludedResponse.status).toBe(200);
+    const excludedResult = (await excludedResponse.json()) as typeof jsonRpcResult;
+    expect(excludedResult.summary.delayed).toBe(0);
+    expect(excludedResult.items).toEqual([]);
   });
 
   it('routes get-system-registry over JSON-RPC', async () => {

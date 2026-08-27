@@ -197,12 +197,38 @@ function stringEnumMembers(schema: Record<string, unknown>): readonly string[] |
 /**
  * Parse a JSON Schema fragment into a normalized {@link TypeNode}. Reproduces
  * exactly the schema subset the emitter supports: primitives, arrays,
- * string `enum` literal unions, `type: []` string unions, objects (honoring
- * `required`), no-`properties` objects as `Record<string, unknown>`, and an
- * `unknown` fallback for every other schema feature (non-string `enum`, const,
- * anyOf/oneOf/allOf, additionalProperties, nullable patterns).
+ * string `enum` literal unions, primitive `const` literals, `type: []` unions,
+ * `anyOf` unions, objects (honoring `required`), no-`properties` objects as
+ * `Record<string, unknown>`, and an `unknown` fallback for every other schema
+ * feature (non-string `enum`, oneOf/allOf, additionalProperties, nullable patterns).
  */
 function schemaToNode(schema: Record<string, unknown>): TypeNode {
+  const constant = schema['const'];
+  if (
+    typeof constant === 'string' ||
+    typeof constant === 'number' ||
+    typeof constant === 'boolean' ||
+    constant === null
+  ) {
+    return { kind: 'primitive', text: JSON.stringify(constant) };
+  }
+
+  const anyOf = schema['anyOf'];
+  if (Array.isArray(anyOf) && anyOf.length > 0) {
+    const members = anyOf.map((member) =>
+      isRecord(member)
+        ? schemaToNode(member)
+        : ({ kind: 'primitive', text: 'unknown' } satisfies TypeNode),
+    );
+    if (members.some((member) => member.kind === 'primitive' && member.text === 'unknown')) {
+      return { kind: 'primitive', text: 'unknown' };
+    }
+    return {
+      kind: 'union',
+      members,
+    };
+  }
+
   // A string `enum` is tighter than its `type: 'string'`, so emit the literal
   // union and preserve the operation's discriminant (e.g. startorsignal's
   // `outcome: 'started' | 'signalled'`) instead of widening to `string`. Members
@@ -304,6 +330,8 @@ function renderNode(
       return `{ ${fields.join(' ')} }`;
     }
   }
+
+  return node satisfies never;
 }
 
 /**

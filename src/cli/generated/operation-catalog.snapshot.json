@@ -1620,6 +1620,10 @@
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
+          "includeExpectedDelayed": {
+            "default": false,
+            "type": "boolean"
+          },
           "limit": {
             "default": 50,
             "maximum": 200,
@@ -1652,6 +1656,12 @@
             "minimum": 0,
             "type": "integer"
           },
+          "unadoptedAfterMs": {
+            "default": 60000,
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
           "workflowId": {
             "minLength": 1,
             "type": "string"
@@ -1661,6 +1671,8 @@
           "staleQueuedAfterMs",
           "staleHeartbeatAfterMs",
           "retryStormMinimumAttempts",
+          "includeExpectedDelayed",
+          "unadoptedAfterMs",
           "limit"
         ],
         "type": "object"
@@ -1670,90 +1682,193 @@
         "properties": {
           "items": {
             "items": {
-              "additionalProperties": false,
-              "properties": {
-                "activityName": {
-                  "type": "string"
-                },
-                "deadLetterReason": {
-                  "const": "result-resolution-storage-exhausted",
-                  "type": "string"
-                },
-                "deadLetteredAt": {
-                  "minimum": 0,
-                  "type": "number"
-                },
-                "evidence": {
-                  "items": {
-                    "type": "string"
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "activityName": {
+                      "type": "string"
+                    },
+                    "deadLetterReason": {
+                      "const": "result-resolution-storage-exhausted",
+                      "type": "string"
+                    },
+                    "deadLetteredAt": {
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    "evidence": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "executionLatencyMs": {
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    "heartbeatAgeMs": {
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    "kind": {
+                      "enum": [
+                        "stuck-queued",
+                        "stale-inflight",
+                        "retry-storm",
+                        "all-workers-at-capacity",
+                        "dead-lettered"
+                      ],
+                      "type": "string"
+                    },
+                    "lastRequeueReason": {
+                      "type": "string"
+                    },
+                    "operationId": {
+                      "type": "string"
+                    },
+                    "queue": {
+                      "type": "string"
+                    },
+                    "queueLatencyMs": {
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    "requeueCount": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "resolutionReason": {
+                      "type": "string"
+                    },
+                    "retryAttempts": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "retryCount": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "state": {
+                      "enum": ["queued", "inflight", "resolved", "capacity", "dead-lettered"],
+                      "type": "string"
+                    },
+                    "storageError": {
+                      "type": "string"
+                    },
+                    "workerId": {
+                      "type": "string"
+                    },
+                    "workflowId": {
+                      "type": "string"
+                    }
                   },
-                  "type": "array"
+                  "required": ["kind", "state", "retryCount", "requeueCount", "evidence"],
+                  "type": "object"
                 },
-                "executionLatencyMs": {
-                  "minimum": 0,
-                  "type": "number"
-                },
-                "heartbeatAgeMs": {
-                  "minimum": 0,
-                  "type": "number"
-                },
-                "kind": {
-                  "enum": [
-                    "stuck-queued",
-                    "stale-inflight",
-                    "retry-storm",
-                    "all-workers-at-capacity",
-                    "dead-lettered"
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "availableAt": {
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    "evidence": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "kind": {
+                      "const": "delayed",
+                      "type": "string"
+                    },
+                    "operationId": {
+                      "type": "string"
+                    },
+                    "queue": {
+                      "type": "string"
+                    },
+                    "requeueCount": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "retryCount": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "state": {
+                      "const": "queued",
+                      "type": "string"
+                    },
+                    "workflowId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "state",
+                    "operationId",
+                    "queue",
+                    "retryCount",
+                    "requeueCount",
+                    "availableAt",
+                    "evidence"
                   ],
-                  "type": "string"
+                  "type": "object"
                 },
-                "lastRequeueReason": {
-                  "type": "string"
-                },
-                "operationId": {
-                  "type": "string"
-                },
-                "queue": {
-                  "type": "string"
-                },
-                "queueLatencyMs": {
-                  "minimum": 0,
-                  "type": "number"
-                },
-                "requeueCount": {
-                  "maximum": 9007199254740991,
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "resolutionReason": {
-                  "type": "string"
-                },
-                "retryAttempts": {
-                  "maximum": 9007199254740991,
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "retryCount": {
-                  "maximum": 9007199254740991,
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "state": {
-                  "enum": ["queued", "inflight", "resolved", "capacity", "dead-lettered"],
-                  "type": "string"
-                },
-                "storageError": {
-                  "type": "string"
-                },
-                "workerId": {
-                  "type": "string"
-                },
-                "workflowId": {
-                  "type": "string"
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "adopted": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "evidence": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "kind": {
+                      "const": "unadopted-terminal",
+                      "type": "string"
+                    },
+                    "operationId": {
+                      "type": "string"
+                    },
+                    "queue": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "const": "resolved",
+                      "type": "string"
+                    },
+                    "terminalAt": {
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    "workflowId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "state",
+                    "operationId",
+                    "queue",
+                    "terminalAt",
+                    "adopted",
+                    "evidence"
+                  ],
+                  "type": "object"
                 }
-              },
-              "required": ["kind", "state", "retryCount", "requeueCount", "evidence"],
-              "type": "object"
+              ]
             },
             "type": "array"
           },
@@ -1775,6 +1890,11 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "delayed": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
               "retryStorms": {
                 "maximum": 9007199254740991,
                 "minimum": 0,
@@ -1789,6 +1909,11 @@
                 "maximum": 9007199254740991,
                 "minimum": 0,
                 "type": "integer"
+              },
+              "unadoptedTerminal": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
               }
             },
             "required": [
@@ -1796,7 +1921,9 @@
               "staleInflight",
               "retryStorms",
               "allWorkersAtCapacity",
-              "deadLettered"
+              "deadLettered",
+              "delayed",
+              "unadoptedTerminal"
             ],
             "type": "object"
           }

@@ -4,29 +4,27 @@
  * Scans the durable task ledger (WFT-24 — previously the retired
  * `op:queued:`/`op:inflight:`/`op:resolved:`/`op:dead-letter:` keys, which
  * nothing has written since the WFT-22 ledger cutover) and live worker state
- * to identify queue pressure, stale in-flight work, retry storms, dead
- * letters, and worker capacity saturation. Results are intentionally bounded
- * and low-cardinality so operators can use them in a dashboard without
- * turning workflow or worker identifiers into metrics labels.
+ * to identify queue pressure, expected delayed attempts, stale in-flight
+ * work, retry storms, elapsed terminal non-adoption, dead letters, and worker
+ * capacity saturation. Results are intentionally bounded and low-cardinality
+ * so operators can use them in a dashboard without turning workflow or worker
+ * identifiers into metrics labels.
  *
- * The output schema's field names and `kind`/`state` vocabulary are
- * unchanged from the pre-ledger version — only the internal scan and
- * classification logic changed — so existing dashboards built against this
- * endpoint's shape keep working. `leased`, `completing`, and `cancelling`
- * ledger states are all reported as diagnostic `state: 'inflight'`: they
- * share the same lease-holder/heartbeat shape and the same operator
- * question ("is a worker still making progress on this attempt?"), so
- * exposing the ledger's more granular internal states here would add
- * distinctions operators cannot act on differently.
+ * `leased`, `completing`, and `cancelling` ledger states are all reported as
+ * diagnostic `state: 'inflight'`: they share the same lease-holder/heartbeat
+ * shape and the same operator question ("is a worker still making progress on
+ * this attempt?"), so exposing the ledger's more granular internal states
+ * here would add distinctions operators cannot act on differently. Terminal
+ * records reported as `unadopted-terminal` use the coarse `resolved` state and
+ * expose no attempt-count history.
  *
  * Retry-storm detection (`kind: 'retry-storm'`) no longer covers `terminal`
  * records: `RemoteTaskTerminal` carries no `retryCount`/`requeueCount` (WFT-25
  * deliberately dropped attempt-count history once a task resolves), so
  * there is nothing left to detect a storm from once an attempt reaches a
- * disposition. The `resolved` value in the `state` enum is kept in the
- * output schema for backward compatibility but nothing produces it anymore.
- * `dead-lettered` diagnostics are unaffected — that is a distinct, separate
- * `kind`.
+ * disposition. Terminal records are classified only by elapsed non-adoption;
+ * that diagnostic does not claim an adoption attempt failed. `dead-lettered`
+ * diagnostics remain a distinct kind for result-persistence exhaustion.
  *
  * Unlike the pre-ledger scan, the full ledger scan this operation performs
  * is one combined keyspace across every state (queued through terminal),
@@ -60,6 +58,7 @@ import {
 const DEFAULT_STALE_QUEUED_AFTER_MS = 60_000;
 const DEFAULT_STALE_HEARTBEAT_AFTER_MS = 60_000;
 const DEFAULT_RETRY_STORM_MINIMUM_ATTEMPTS = 3;
+const DEFAULT_UNADOPTED_AFTER_MS = 60_000;
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
 
@@ -69,11 +68,19 @@ const taskDiagnosticKindSchema = z.enum([
   'retry-storm',
   'all-workers-at-capacity',
   'dead-lettered',
+  'delayed',
+  'unadopted-terminal',
 ]);
 
-const taskDiagnosticItemSchema = z
+const existingTaskDiagnosticItemSchema = z
   .object({
-    kind: taskDiagnosticKindSchema,
+    kind: z.enum([
+      'stuck-queued',
+      'stale-inflight',
+      'retry-storm',
+      'all-workers-at-capacity',
+      'dead-lettered',
+    ]),
     state: z.enum(['queued', 'inflight', 'resolved', 'capacity', 'dead-lettered']),
     operationId: z.string().optional(),
     workflowId: z.string().optional(),
@@ -95,6 +102,39 @@ const taskDiagnosticItemSchema = z
   })
   .strict();
 
+const delayedTaskDiagnosticItemSchema = z
+  .object({
+    kind: z.literal('delayed'),
+    state: z.literal('queued'),
+    operationId: z.string(),
+    workflowId: z.string().optional(),
+    queue: z.string(),
+    retryCount: z.number().int().nonnegative(),
+    requeueCount: z.number().int().nonnegative(),
+    availableAt: z.number().nonnegative(),
+    evidence: z.array(z.string()),
+  })
+  .strict();
+
+const unadoptedTerminalTaskDiagnosticItemSchema = z
+  .object({
+    kind: z.literal('unadopted-terminal'),
+    state: z.literal('resolved'),
+    operationId: z.string(),
+    workflowId: z.string().optional(),
+    queue: z.string(),
+    terminalAt: z.number().nonnegative(),
+    adopted: z.literal(false),
+    evidence: z.array(z.string()),
+  })
+  .strict();
+
+const taskDiagnosticItemSchema = z.union([
+  existingTaskDiagnosticItemSchema,
+  delayedTaskDiagnosticItemSchema,
+  unadoptedTerminalTaskDiagnosticItemSchema,
+]);
+
 const taskDiagnosticsSummarySchema = z
   .object({
     stuckQueued: z.number().int().nonnegative(),
@@ -102,6 +142,8 @@ const taskDiagnosticsSummarySchema = z
     retryStorms: z.number().int().nonnegative(),
     allWorkersAtCapacity: z.number().int().nonnegative(),
     deadLettered: z.number().int().nonnegative(),
+    delayed: z.number().int().nonnegative(),
+    unadoptedTerminal: z.number().int().nonnegative(),
   })
   .strict();
 
@@ -120,6 +162,8 @@ const getTaskDiagnosticsInput = z.object({
   staleQueuedAfterMs: z.number().int().nonnegative().default(DEFAULT_STALE_QUEUED_AFTER_MS),
   staleHeartbeatAfterMs: z.number().int().nonnegative().default(DEFAULT_STALE_HEARTBEAT_AFTER_MS),
   retryStormMinimumAttempts: z.number().int().min(1).default(DEFAULT_RETRY_STORM_MINIMUM_ATTEMPTS),
+  includeExpectedDelayed: z.boolean().default(false),
+  unadoptedAfterMs: z.number().int().nonnegative().default(DEFAULT_UNADOPTED_AFTER_MS),
   limit: z.number().int().min(1).max(MAX_LIMIT).default(DEFAULT_LIMIT),
 });
 
@@ -246,6 +290,8 @@ async function collectTaskDiagnostics({
     retryStorms: 0,
     allWorkersAtCapacity: 0,
     deadLettered: 0,
+    delayed: 0,
+    unadoptedTerminal: 0,
   };
   const relevantQueues = new Set<string>();
 
@@ -283,6 +329,9 @@ function addRecordDiagnostics(
 ): void {
   switch (decoded.state) {
     case 'queued':
+      if (input.includeExpectedDelayed && decoded.availableAt > currentTime) {
+        addDelayedDiagnostic(decoded, addItem);
+      }
       if (decoded.availableAt <= currentTime) {
         addQueuedDiagnostics(decoded, input, currentTime, addItem);
       }
@@ -298,7 +347,7 @@ function addRecordDiagnostics(
       // No RemoteTaskAttemptFields (retryCount/requeueCount) on terminal
       // records — WFT-25 deliberately did not carry attempt-count history
       // past resolution, so retry-storm detection cannot apply here.
-      // Nothing else about a finished attempt is diagnostically stuck.
+      addUnadoptedTerminalDiagnostic(decoded, input, currentTime, addItem);
       return;
     case 'deadLettered':
       addDeadLetterDiagnostics(decoded, addItem);
@@ -310,6 +359,42 @@ function addRecordDiagnostics(
       void exhaustive;
     }
   }
+}
+
+function addDelayedDiagnostic(
+  record: RemoteTaskRecord & { state: 'queued' },
+  addItem: (item: TaskDiagnosticItem) => void,
+): void {
+  addItem({
+    kind: 'delayed',
+    state: 'queued',
+    operationId: record.operationId,
+    workflowId: record.workflowId,
+    queue: record.queue,
+    retryCount: record.retryCount,
+    requeueCount: record.requeueCount,
+    availableAt: record.availableAt,
+    evidence: [`Task is delayed until ${record.availableAt} on queue "${record.queue}"`],
+  });
+}
+
+function addUnadoptedTerminalDiagnostic(
+  record: RemoteTaskRecord & { state: 'terminal' },
+  input: GetTaskDiagnosticsInput,
+  currentTime: number,
+  addItem: (item: TaskDiagnosticItem) => void,
+): void {
+  if (record.adopted || record.terminalAt > currentTime - input.unadoptedAfterMs) return;
+  addItem({
+    kind: 'unadopted-terminal',
+    state: 'resolved',
+    operationId: record.operationId,
+    workflowId: record.workflowId,
+    queue: record.queue,
+    terminalAt: record.terminalAt,
+    adopted: false,
+    evidence: [`Terminal task has remained unadopted for ${currentTime - record.terminalAt}ms`],
+  });
 }
 
 function addQueuedDiagnostics(
@@ -525,11 +610,24 @@ function incrementSummary(summary: TaskDiagnosticsSummary, kind: TaskDiagnosticK
     case 'dead-lettered':
       summary.deadLettered += 1;
       return;
+    case 'delayed':
+      summary.delayed += 1;
+      return;
+    case 'unadopted-terminal':
+      summary.unadoptedTerminal += 1;
+      return;
   }
 }
 
 function parseOptionalNumber(value: string | null): number | undefined {
   return value === null || value.length === 0 ? undefined : Number(value);
+}
+
+function parseOptionalBoolean(value: string | null): boolean | string | undefined {
+  if (value === null || value.length === 0) return undefined;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return value;
 }
 
 export const getTaskDiagnosticsRestBinding: UnknownRestBinding = {
@@ -544,6 +642,8 @@ export const getTaskDiagnosticsRestBinding: UnknownRestBinding = {
     staleQueuedAfterMs: { kind: 'query', queryParam: 'staleQueuedAfterMs' },
     staleHeartbeatAfterMs: { kind: 'query', queryParam: 'staleHeartbeatAfterMs' },
     retryStormMinimumAttempts: { kind: 'query', queryParam: 'retryStormMinimumAttempts' },
+    includeExpectedDelayed: { kind: 'query', queryParam: 'includeExpectedDelayed' },
+    unadoptedAfterMs: { kind: 'query', queryParam: 'unadoptedAfterMs' },
     limit: { kind: 'query', queryParam: 'limit' },
   },
   extractInput: async (request) => {
@@ -557,6 +657,8 @@ export const getTaskDiagnosticsRestBinding: UnknownRestBinding = {
       retryStormMinimumAttempts: parseOptionalNumber(
         url.searchParams.get('retryStormMinimumAttempts'),
       ),
+      includeExpectedDelayed: parseOptionalBoolean(url.searchParams.get('includeExpectedDelayed')),
+      unadoptedAfterMs: parseOptionalNumber(url.searchParams.get('unadoptedAfterMs')),
       limit: parseOptionalNumber(url.searchParams.get('limit')),
     };
   },

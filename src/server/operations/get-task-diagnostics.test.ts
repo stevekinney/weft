@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
+import { encode } from '../../core/codec.ts';
 import { Engine } from '../../core/engine.ts';
 import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
@@ -38,6 +39,18 @@ function createEngine(storage: MemoryStorage): Engine {
   const engine = new Engine({ storage });
   engine.register(echoWorkflow);
   return engine;
+}
+
+class ThrowingScanStorage extends MemoryStorage {
+  override scan(): AsyncIterable<[string, Uint8Array]> {
+    return {
+      [Symbol.asyncIterator]: (): AsyncIterator<[string, Uint8Array]> => ({
+        next: async (): Promise<IteratorResult<[string, Uint8Array]>> => {
+          throw new Error('diagnostics scan failed');
+        },
+      }),
+    };
+  }
 }
 
 function queuedFixture(overrides: Partial<RemoteTaskQueued> = {}): RemoteTaskQueued {
@@ -268,6 +281,8 @@ describe('weft.tasks.diagnostics', () => {
       retryStorms: 1,
       allWorkersAtCapacity: 1,
       deadLettered: 0,
+      delayed: 0,
+      unadoptedTerminal: 0,
     });
     expect(new Set(diagnostics.items.map((item) => item.kind))).toEqual(
       new Set(['all-workers-at-capacity', 'retry-storm', 'stale-inflight', 'stuck-queued']),
@@ -369,6 +384,8 @@ describe('weft.tasks.diagnostics', () => {
       retryStorms: 0,
       allWorkersAtCapacity: 0,
       deadLettered: 0,
+      delayed: 0,
+      unadoptedTerminal: 0,
     });
   });
 
@@ -399,6 +416,213 @@ describe('weft.tasks.diagnostics', () => {
     if (!result.ok) throw new Error('expected diagnostics result');
     const diagnostics = result.value as GetTaskDiagnosticsOutput;
     expect(diagnostics.items).toHaveLength(0);
+  });
+
+  it('includes expected delayed tasks only when requested and uses a strict availability boundary', async () => {
+    const storage = new MemoryStorage();
+    const engine = createEngine(storage);
+    const registry = new WorkerRegistry();
+    const taskQueue = new TaskQueue();
+
+    await putLedgerRecord(
+      storage,
+      queuedFixture({
+        operationId: 'delayed-future',
+        workflowId: 'workflow-a',
+        queue: 'payments',
+        availableAt: 40_000,
+        retryCount: 2,
+        requeueCount: 1,
+      }),
+    );
+    await putLedgerRecord(
+      storage,
+      queuedFixture({ operationId: 'available-now', availableAt: 10_000 }),
+    );
+
+    const omitted = await runDiagnostics({
+      engine,
+      registry,
+      taskQueue,
+      input: { operationId: 'delayed-future' },
+    });
+    expect(omitted.ok).toBe(true);
+    if (!omitted.ok) throw new Error('expected diagnostics result');
+    expect((omitted.value as GetTaskDiagnosticsOutput).items).toEqual([]);
+
+    const included = await runDiagnostics({
+      engine,
+      registry,
+      taskQueue,
+      input: { includeExpectedDelayed: true },
+    });
+    expect(included.ok).toBe(true);
+    if (!included.ok) throw new Error('expected diagnostics result');
+    const diagnostics = included.value as GetTaskDiagnosticsOutput;
+    expect(diagnostics.summary.delayed).toBe(1);
+    expect(diagnostics.items).toContainEqual({
+      kind: 'delayed',
+      state: 'queued',
+      operationId: 'delayed-future',
+      workflowId: 'workflow-a',
+      queue: 'payments',
+      retryCount: 2,
+      requeueCount: 1,
+      availableAt: 40_000,
+      evidence: ['Task is delayed until 40000 on queue "payments"'],
+    });
+    expect(diagnostics.items.some((item) => item.operationId === 'available-now')).toBe(false);
+  });
+
+  it('reports only unadopted terminal tasks at or beyond the configured age', async () => {
+    const storage = new MemoryStorage();
+    const engine = createEngine(storage);
+    const registry = new WorkerRegistry();
+    const taskQueue = new TaskQueue();
+
+    await putLedgerRecord(
+      storage,
+      terminalFixture({
+        operationId: 'unadopted-old',
+        workflowId: 'workflow-a',
+        queue: 'payments',
+        terminalAt: 9_000,
+      }),
+    );
+    await putLedgerRecord(
+      storage,
+      terminalFixture({ operationId: 'unadopted-young', terminalAt: 9_001 }),
+    );
+    await putLedgerRecord(
+      storage,
+      terminalFixture({ operationId: 'already-adopted', terminalAt: 0, adopted: true }),
+    );
+
+    const result = await runDiagnostics({
+      engine,
+      registry,
+      taskQueue,
+      input: { unadoptedAfterMs: 1_000 },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected diagnostics result');
+    const diagnostics = result.value as GetTaskDiagnosticsOutput;
+    expect(diagnostics.summary.unadoptedTerminal).toBe(1);
+    expect(diagnostics.items).toContainEqual({
+      kind: 'unadopted-terminal',
+      state: 'resolved',
+      operationId: 'unadopted-old',
+      workflowId: 'workflow-a',
+      queue: 'payments',
+      terminalAt: 9_000,
+      adopted: false,
+      evidence: ['Terminal task has remained unadopted for 1000ms'],
+    });
+  });
+
+  it('combines record filters with AND and counts new kinds before truncation', async () => {
+    const storage = new MemoryStorage();
+    const engine = createEngine(storage);
+    const registry = new WorkerRegistry();
+    const taskQueue = new TaskQueue();
+
+    await putLedgerRecord(
+      storage,
+      queuedFixture({
+        operationId: 'matching-delayed',
+        workflowId: 'workflow-a',
+        queue: 'payments',
+        availableAt: 20_000,
+      }),
+    );
+    await putLedgerRecord(
+      storage,
+      terminalFixture({
+        operationId: 'matching-terminal',
+        workflowId: 'workflow-a',
+        queue: 'payments',
+        terminalAt: 0,
+      }),
+    );
+    await putLedgerRecord(
+      storage,
+      queuedFixture({
+        operationId: 'wrong-queue',
+        workflowId: 'workflow-a',
+        queue: 'shipping',
+        availableAt: 20_000,
+      }),
+    );
+
+    const result = await runDiagnostics({
+      engine,
+      registry,
+      taskQueue,
+      input: {
+        workflowId: 'workflow-a',
+        queue: 'payments',
+        includeExpectedDelayed: true,
+        unadoptedAfterMs: 1_000,
+        limit: 1,
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected diagnostics result');
+    const diagnostics = result.value as GetTaskDiagnosticsOutput;
+    expect(diagnostics.items).toHaveLength(1);
+    expect(diagnostics.summary.delayed).toBe(1);
+    expect(diagnostics.summary.unadoptedTerminal).toBe(1);
+
+    const operationFiltered = await runDiagnostics({
+      engine,
+      registry,
+      taskQueue,
+      input: {
+        operationId: 'matching-delayed',
+        workflowId: 'workflow-a',
+        queue: 'payments',
+        includeExpectedDelayed: true,
+      },
+    });
+    expect(operationFiltered.ok).toBe(true);
+    if (!operationFiltered.ok) throw new Error('expected diagnostics result');
+    expect((operationFiltered.value as GetTaskDiagnosticsOutput).items).toHaveLength(1);
+  });
+
+  it('excludes malformed ledger rows from items and summary', async () => {
+    const storage = new MemoryStorage();
+    const engine = createEngine(storage);
+    await storage.put(taskLedgerKey('malformed'), encode({ state: 'queued' }));
+
+    const result = await runDiagnostics({
+      engine,
+      registry: new WorkerRegistry(),
+      taskQueue: new TaskQueue(),
+      input: { includeExpectedDelayed: true, unadoptedAfterMs: 0 },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected diagnostics result');
+    const diagnostics = result.value as GetTaskDiagnosticsOutput;
+    expect(diagnostics.items).toEqual([]);
+    expect(diagnostics.summary.delayed).toBe(0);
+    expect(diagnostics.summary.unadoptedTerminal).toBe(0);
+  });
+
+  it('propagates storage scan failures through the existing server fault path', async () => {
+    const engine = createEngine(new ThrowingScanStorage());
+
+    const result = await runDiagnostics({
+      engine,
+      registry: new WorkerRegistry(),
+      taskQueue: new TaskQueue(),
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected server fault');
+    expect(result.fault.code).toBe('EngineFailure');
   });
 
   it('bounds diagnostic result items while retaining summary counts', async () => {

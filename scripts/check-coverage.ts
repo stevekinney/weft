@@ -204,9 +204,9 @@ const BASE_COVERAGE_ALLOWANCES = buildAllowanceLayer('BASE_COVERAGE_ALLOWANCES',
     'scripts/generate-operation-client.ts',
     {
       reason:
-        'Process-entry and failure-exit behavior runs in child processes whose hits are not attributed to the parent Bun LCOV report.',
+        'Process-entry and failure-exit behavior runs in child processes whose hits are not attributed to the parent Bun LCOV report; the exhaustive renderer guard is unreachable by construction.',
       functions: 1,
-      lines: new Set([160, 161, 162, 163, 164, 165, 305]),
+      lines: new Set([160, 161, 162, 163, 164, 165, 331, 334]),
       requireUncoveredLines: true,
     },
   ],
@@ -1346,7 +1346,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       {
         reason:
           'Compile-time exhaustiveness guard for a closed discriminated union has no reachable runtime path to test without an unsafe cast.',
-        lines: new Set([306, 309, 310, 311]),
+        lines: new Set([355, 358, 359, 360]),
       },
     ],
     [
