@@ -219,7 +219,7 @@ export class HTTPStorage implements Storage {
     await this.#request(this.#storageKeyUrl(key), {
       method: 'PUT',
       headers: { 'content-type': 'application/octet-stream' },
-      body: new Blob([value]),
+      body: new Blob([new Uint8Array(value)]),
     });
   }
 

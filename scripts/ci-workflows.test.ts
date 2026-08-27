@@ -9,6 +9,19 @@ async function readWorkflow(name: string): Promise<string> {
 }
 
 describe('coverage workflow gates', () => {
+  it('uses Bun 1.4 isolated installs in CI and release jobs', async () => {
+    for (const workflowName of ['ci.yaml', 'release.yaml']) {
+      const workflow = await readWorkflow(workflowName);
+      const installs = workflow.match(/bun install --frozen-lockfile[^\n]*/g) ?? [];
+      const bunVersions = workflow.match(/bun-version: [^\n]*/g) ?? [];
+
+      expect(installs.length).toBeGreaterThan(0);
+      expect(installs.every((install) => install.endsWith('--linker=isolated'))).toBe(true);
+      expect(bunVersions.length).toBeGreaterThan(0);
+      expect(bunVersions.every((version) => version === 'bun-version: 1.4.0')).toBe(true);
+    }
+  });
+
   it('runs adjusted coverage for pull requests and merge groups without replacing ordinary tests', async () => {
     const workflow = await readWorkflow('ci.yaml');
 

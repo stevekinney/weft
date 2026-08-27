@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { describe, expect, it } from 'bun:test';
+import { describe, it } from 'bun:test';
 
 interface BunEntrypointResult {
   exitCode: number | null;
@@ -44,7 +44,7 @@ function expectEntrypointSuccess(result: BunEntrypointResult): void {
 
 describe('durableActivity portability', () => {
   it('keeps package-root browser imports buildable without process.getBuiltinModule', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'weft-durable-activity-portability-'));
+    const directory = await mkdtemp(join(process.cwd(), 'weft-durable-activity-portability-'));
     try {
       const entrypoint = join(directory, 'entry.ts');
       await writeFile(
@@ -55,23 +55,36 @@ describe('durableActivity portability', () => {
         ].join('\n'),
       );
 
-      const result = await Bun.build({
-        entrypoints: [entrypoint],
-        target: 'browser',
-        format: 'esm',
-        outdir: directory,
-        external: ['@opentelemetry/api', 'lmdb', '@libsql/client', '@neondatabase/serverless'],
+      const buildResult = Bun.spawnSync({
+        cmd: [
+          process.execPath,
+          'build',
+          '--target=browser',
+          '--format=esm',
+          '--outdir',
+          directory,
+          '--external=@opentelemetry/api',
+          '--external=lmdb',
+          '--external=@libsql/client',
+          '--external=@neondatabase/serverless',
+          entrypoint,
+        ],
+        cwd: process.cwd(),
+        stderr: 'pipe',
+        stdout: 'pipe',
       });
-
-      expect(result.success).toBe(true);
-      const outputPath = result.outputs.find((output) => output.path.endsWith('.js'))?.path;
-      expect(outputPath).toBeDefined();
+      expectEntrypointSuccess({
+        exitCode: buildResult.exitCode,
+        stderr: textDecoder.decode(buildResult.stderr),
+        stdout: textDecoder.decode(buildResult.stdout),
+      });
+      const outputPath = join(directory, 'entry.js');
       const runner = join(directory, 'run-built-browser-bundle.ts');
       await writeFile(
         runner,
         [
           'delete (globalThis as { process?: unknown }).process;',
-          `await import(${JSON.stringify(pathToFileURL(outputPath!).href)});`,
+          `await import(${JSON.stringify(pathToFileURL(outputPath).href)});`,
         ].join('\n'),
       );
       expectEntrypointSuccess(runBunEntrypoint(runner));

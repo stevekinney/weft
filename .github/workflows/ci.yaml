@@ -13,8 +13,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
-          bun-version: 1.3.14
-      - run: bun install --frozen-lockfile
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile --linker=isolated
       - run: bun run lint
   typecheck:
     runs-on: ubuntu-latest
@@ -22,8 +22,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
-          bun-version: 1.3.14
-      - run: bun install --frozen-lockfile
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile --linker=isolated
       - run: bun run typecheck
   test:
     runs-on: ubuntu-latest
@@ -31,8 +31,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
-          bun-version: 1.3.14
-      - run: bun install --frozen-lockfile
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile --linker=isolated
       - run: |
           bun test --bail --timeout 15000 \
             --path-ignore-patterns '**/benchmarks/**' \
@@ -50,8 +50,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
-          bun-version: 1.3.14
-      - run: bun install --frozen-lockfile
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile --linker=isolated
       - run: bun run test:coverage
   # Exercises PostgresStorage against a REAL Postgres over the pg wire protocol
   # (TCP, BYTEA marshalling, command-tag rowCounts, SERIALIZABLE conflict retries).
@@ -76,8 +76,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
-          bun-version: 1.3.14
-      - run: bun install --frozen-lockfile
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile --linker=isolated
       - run: bun test src/storage/postgres.test.ts --timeout 15000
         env:
           WEFT_TEST_POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/postgres
@@ -95,8 +95,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
-          bun-version: 1.3.14
-      - run: bun install --frozen-lockfile
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile --linker=isolated
       # Cache Playwright's pinned browser binary (keyed on the lockfile, which
       # pins the playwright version). The Linux system libraries are NOT stored
       # under ~/.cache/ms-playwright, so they are (re)installed on every run via
@@ -119,8 +119,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
-          bun-version: 1.3.14
-      - run: bun install --frozen-lockfile
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile --linker=isolated
       - run: bun run build
   order-processing-example:
     runs-on: ubuntu-latest
@@ -128,10 +128,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
-          bun-version: 1.3.14
-      - run: bun install --frozen-lockfile
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile --linker=isolated
       - run: bun run build
-      - run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile --linker=isolated
         working-directory: examples/order-processing
       - run: bun run verify
         working-directory: examples/order-processing
@@ -143,10 +143,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
-          bun-version: 1.3.14
-      - run: bun install --frozen-lockfile
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile --linker=isolated
       - run: bun run build
-      - run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile --linker=isolated
         working-directory: examples/checkout
       - run: bun run verify
         working-directory: examples/checkout
@@ -156,10 +156,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
-          bun-version: 1.3.14
-      - run: bun install --frozen-lockfile
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile --linker=isolated
       - run: bun run build
-      - run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile --linker=isolated
         working-directory: examples/hello-world
       - run: bun run verify
         working-directory: examples/hello-world
