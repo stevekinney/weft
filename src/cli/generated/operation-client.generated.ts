@@ -157,14 +157,20 @@ export const CLIENT_REST_OPERATION_BINDINGS = {
   },
 } as const satisfies Readonly<Record<string, ClientRestOperationBinding>>;
 
-type SharedAttributesBulkConcurrenc_ff397168 = {
+type SharedAttributesBulkConcurrenc_0f0d07d6 = {
   readonly attributes?: ReadonlyArray<SharedGtGteKey_e658e64c>;
   readonly bulkConcurrency?: number;
   readonly confirmationToken?: string;
   readonly createdAt?: SharedGtGteLt_d9a61361;
   readonly dryRun?: boolean;
   readonly executionDeadline?: SharedGtGteLt_d9a61361;
-  readonly failureCategory?: unknown;
+  readonly failureCategory?:
+    | 'application'
+    | 'timeout'
+    | 'cancellation'
+    | 'resource'
+    | 'system'
+    | ReadonlyArray<'application' | 'timeout' | 'cancellation' | 'resource' | 'system'>;
   readonly idPrefix?: string;
   readonly limit?: number;
   readonly offset?: number;
@@ -172,23 +178,49 @@ type SharedAttributesBulkConcurrenc_ff397168 = {
   readonly parentWorkflowId?: string;
   readonly requestId?: string;
   readonly scheduleId?: string;
-  readonly status?: unknown;
+  readonly status?:
+    | 'pending'
+    | 'running'
+    | 'completed'
+    | 'failed'
+    | 'cancelled'
+    | 'timed-out'
+    | 'suspended'
+    | ReadonlyArray<
+        'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'suspended'
+      >;
   readonly tags?: ReadonlyArray<string>;
   readonly type?: string;
   readonly updatedAt?: SharedGtGteLt_d9a61361;
 };
-type SharedAttributesCreatedAtExecu_0caddefc = {
+type SharedAttributesCreatedAtExecu_47f8e20e = {
   readonly attributes?: ReadonlyArray<SharedGtGteKey_e658e64c>;
   readonly createdAt?: SharedGtGteLt_d9a61361;
   readonly executionDeadline?: SharedGtGteLt_d9a61361;
-  readonly failureCategory?: unknown;
+  readonly failureCategory?:
+    | 'application'
+    | 'timeout'
+    | 'cancellation'
+    | 'resource'
+    | 'system'
+    | ReadonlyArray<'application' | 'timeout' | 'cancellation' | 'resource' | 'system'>;
   readonly idPrefix?: string;
   readonly limit?: number;
   readonly offset?: number;
   readonly parentWorkflowExecutionToken?: string;
   readonly parentWorkflowId?: string;
   readonly scheduleId?: string;
-  readonly status?: unknown;
+  readonly status?:
+    | 'pending'
+    | 'running'
+    | 'completed'
+    | 'failed'
+    | 'cancelled'
+    | 'timed-out'
+    | 'suspended'
+    | ReadonlyArray<
+        'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'suspended'
+      >;
   readonly tags?: ReadonlyArray<string>;
   readonly type?: string;
   readonly updatedAt?: SharedGtGteLt_d9a61361;
@@ -211,7 +243,7 @@ type SharedGtGteLt_d9a61361 = {
 export type ClientOperationTypes = {
   'weft.activities.complete': {
     readonly input: { readonly result?: unknown; readonly token: string };
-    readonly output: { readonly ok: boolean };
+    readonly output: { readonly ok: true };
     readonly faults: 'InvalidParams' | 'NotFound';
   };
   'weft.activities.fail': {
@@ -219,7 +251,7 @@ export type ClientOperationTypes = {
       readonly error: { readonly message: string; readonly name?: string };
       readonly token: string;
     };
-    readonly output: { readonly ok: boolean };
+    readonly output: { readonly ok: true };
     readonly faults: 'InvalidParams' | 'NotFound';
   };
   'weft.alerts.list': {
@@ -227,10 +259,10 @@ export type ClientOperationTypes = {
     readonly output: {
       readonly items: ReadonlyArray<{
         readonly currentValue: number;
-        readonly firedAt: unknown;
+        readonly firedAt: number | null;
         readonly metric: 'workflow.failure_rate' | 'activity.p99_duration' | 'storage.size';
         readonly threshold: number;
-        readonly window: unknown;
+        readonly window: string | null;
       }>;
     };
     readonly faults: never;
@@ -254,7 +286,7 @@ export type ClientOperationTypes = {
       readonly sectionDecisions?: unknown;
       readonly workflowId?: unknown;
     };
-    readonly output: { readonly ok: boolean };
+    readonly output: { readonly ok: true };
     readonly faults: 'NotFound';
   };
   'weft.reviews.get': {
@@ -268,7 +300,39 @@ export type ClientOperationTypes = {
       readonly status?: 'pending' | 'completed';
       readonly workflowId?: string;
     };
-    readonly output: { readonly items: ReadonlyArray<unknown> };
+    readonly output: {
+      readonly items: ReadonlyArray<
+        | {
+            readonly allowPartial: boolean;
+            readonly artifact: unknown;
+            readonly createdAt: number;
+            readonly reviewId: string;
+            readonly reviewType: string;
+            readonly reviewers: ReadonlyArray<string>;
+            readonly status: 'pending';
+            readonly timeout?: number;
+            readonly webhookUrl?: string;
+            readonly workflowId: string;
+          }
+        | {
+            readonly allowPartial: boolean;
+            readonly artifact: unknown;
+            readonly createdAt: number;
+            readonly decision: 'approved' | 'rejected' | 'needs-changes';
+            readonly feedback?: string;
+            readonly reviewId: string;
+            readonly reviewType: string;
+            readonly reviewer: string;
+            readonly reviewers: ReadonlyArray<string>;
+            readonly sectionDecisions?: Record<string, unknown>;
+            readonly status: 'completed';
+            readonly timeout?: number;
+            readonly timestamp: number;
+            readonly webhookUrl?: string;
+            readonly workflowId: string;
+          }
+      >;
+    };
     readonly faults: never;
   };
   'weft.schedules.cancel': {
@@ -388,7 +452,7 @@ export type ClientOperationTypes = {
         | 'system:read'
         | 'system:admin'
       >;
-      readonly subject: unknown;
+      readonly subject: string | null;
     };
     readonly faults: never;
   };
@@ -396,7 +460,7 @@ export type ClientOperationTypes = {
     readonly input: {};
     readonly output: {
       readonly activities: unknown;
-      readonly registryVersion: number;
+      readonly registryVersion: 1;
       readonly workflows: unknown;
     };
     readonly faults: never;
@@ -408,8 +472,8 @@ export type ClientOperationTypes = {
         readonly backlog: number;
         readonly connectedWorkers: number;
         readonly inFlight: number;
-        readonly oldestEnqueuedAt: unknown;
-        readonly oldestQueuedAgeMs: unknown;
+        readonly oldestEnqueuedAt: number | null;
+        readonly oldestQueuedAgeMs: number | null;
         readonly queue: string;
         readonly schedulingPolicy: 'priority' | 'fifo' | 'lifo';
         readonly waitingPollers: number;
@@ -419,55 +483,82 @@ export type ClientOperationTypes = {
   };
   'weft.tasks.diagnostics': {
     readonly input: {
+      readonly includeExpectedDelayed: boolean;
       readonly limit: number;
       readonly operationId?: string;
       readonly queue?: string;
       readonly retryStormMinimumAttempts: number;
       readonly staleHeartbeatAfterMs: number;
       readonly staleQueuedAfterMs: number;
+      readonly unadoptedAfterMs: number;
       readonly workflowId?: string;
     };
     readonly output: {
-      readonly items: ReadonlyArray<{
-        readonly activityName?: string;
-        readonly deadLetterReason?: string;
-        readonly deadLetteredAt?: number;
-        readonly evidence: ReadonlyArray<string>;
-        readonly executionLatencyMs?: number;
-        readonly heartbeatAgeMs?: number;
-        readonly kind:
-          | 'stuck-queued'
-          | 'stale-inflight'
-          | 'retry-storm'
-          | 'all-workers-at-capacity'
-          | 'dead-lettered';
-        readonly lastRequeueReason?: string;
-        readonly operationId?: string;
-        readonly queue?: string;
-        readonly queueLatencyMs?: number;
-        readonly requeueCount: number;
-        readonly resolutionReason?: string;
-        readonly retryAttempts?: number;
-        readonly retryCount: number;
-        readonly state: 'queued' | 'inflight' | 'resolved' | 'capacity' | 'dead-lettered';
-        readonly storageError?: string;
-        readonly workerId?: string;
-        readonly workflowId?: string;
-      }>;
+      readonly items: ReadonlyArray<
+        | {
+            readonly activityName?: string;
+            readonly deadLetterReason?: 'result-resolution-storage-exhausted';
+            readonly deadLetteredAt?: number;
+            readonly evidence: ReadonlyArray<string>;
+            readonly executionLatencyMs?: number;
+            readonly heartbeatAgeMs?: number;
+            readonly kind:
+              | 'stuck-queued'
+              | 'stale-inflight'
+              | 'retry-storm'
+              | 'all-workers-at-capacity'
+              | 'dead-lettered';
+            readonly lastRequeueReason?: string;
+            readonly operationId?: string;
+            readonly queue?: string;
+            readonly queueLatencyMs?: number;
+            readonly requeueCount: number;
+            readonly resolutionReason?: string;
+            readonly retryAttempts?: number;
+            readonly retryCount: number;
+            readonly state: 'queued' | 'inflight' | 'resolved' | 'capacity' | 'dead-lettered';
+            readonly storageError?: string;
+            readonly workerId?: string;
+            readonly workflowId?: string;
+          }
+        | {
+            readonly availableAt: number;
+            readonly evidence: ReadonlyArray<string>;
+            readonly kind: 'delayed';
+            readonly operationId: string;
+            readonly queue: string;
+            readonly requeueCount: number;
+            readonly retryCount: number;
+            readonly state: 'queued';
+            readonly workflowId?: string;
+          }
+        | {
+            readonly adopted: false;
+            readonly evidence: ReadonlyArray<string>;
+            readonly kind: 'unadopted-terminal';
+            readonly operationId: string;
+            readonly queue: string;
+            readonly state: 'resolved';
+            readonly terminalAt: number;
+            readonly workflowId?: string;
+          }
+      >;
       readonly limit: number;
       readonly summary: {
         readonly allWorkersAtCapacity: number;
         readonly deadLettered: number;
+        readonly delayed: number;
         readonly retryStorms: number;
         readonly staleInflight: number;
         readonly stuckQueued: number;
+        readonly unadoptedTerminal: number;
       };
     };
     readonly faults: never;
   };
   'weft.tasks.diagnostics.deadletters.clear': {
     readonly input: { readonly operationId: string };
-    readonly output: { readonly ok: boolean };
+    readonly output: { readonly ok: true };
     readonly faults: 'NotFound';
   };
   'weft.tasks.get': {
@@ -492,7 +583,31 @@ export type ClientOperationTypes = {
   };
   'weft.workers.diagnostics': {
     readonly input: { readonly workerId: string };
-    readonly output: { readonly worker: unknown };
+    readonly output: {
+      readonly worker: {
+        readonly deploymentVersion: {
+          readonly artifactDigest: string;
+          readonly buildId: string;
+          readonly deploymentName: string;
+          readonly manifestDigest: string;
+          readonly manifestVersion: number;
+          readonly protocolVersion: number;
+          readonly runtimeName: string;
+          readonly runtimeVersion: string;
+          readonly sdkVersion: string;
+          readonly workflows: Record<string, unknown>;
+        };
+        readonly instance: {
+          readonly connectedAt: number;
+          readonly health: 'active' | 'draining' | 'drained';
+          readonly heartbeatAgeMs: number;
+          readonly lastHeartbeatAt: number;
+          readonly queue: string;
+          readonly startedAt: number;
+          readonly workerId: string;
+        };
+      } | null;
+    };
     readonly faults: never;
   };
   'weft.workers.drain': {
@@ -505,14 +620,14 @@ export type ClientOperationTypes = {
     readonly output: {
       readonly deployments: ReadonlyArray<{
         readonly activeWorkers: number;
-        readonly buildId: unknown;
-        readonly deploymentName: unknown;
+        readonly buildId: string | null;
+        readonly deploymentName: string | null;
         readonly drainedWorkers: number;
         readonly drainingWorkers: number;
         readonly health: 'active' | 'draining' | 'drained';
         readonly inFlight: number;
-        readonly oldestStartedAt: unknown;
-        readonly runtimeVersion: unknown;
+        readonly oldestStartedAt: number | null;
+        readonly runtimeVersion: string | null;
         readonly workers: number;
       }>;
       readonly items: ReadonlyArray<{
@@ -584,20 +699,36 @@ export type ClientOperationTypes = {
       readonly attributes?: ReadonlyArray<SharedGtGteKey_e658e64c>;
       readonly createdAt?: SharedGtGteLt_d9a61361;
       readonly executionDeadline?: SharedGtGteLt_d9a61361;
-      readonly failureCategory?: unknown;
-      readonly groupBy: unknown;
+      readonly failureCategory?:
+        | 'application'
+        | 'timeout'
+        | 'cancellation'
+        | 'resource'
+        | 'system'
+        | ReadonlyArray<'application' | 'timeout' | 'cancellation' | 'resource' | 'system'>;
+      readonly groupBy: 'status' | 'type' | 'failureCategory' | { readonly attribute: string };
       readonly idPrefix?: string;
       readonly limit?: number;
       readonly parentWorkflowExecutionToken?: string;
       readonly parentWorkflowId?: string;
       readonly scheduleId?: string;
-      readonly status?: unknown;
+      readonly status?:
+        | 'pending'
+        | 'running'
+        | 'completed'
+        | 'failed'
+        | 'cancelled'
+        | 'timed-out'
+        | 'suspended'
+        | ReadonlyArray<
+            'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'suspended'
+          >;
       readonly tags?: ReadonlyArray<string>;
       readonly type?: string;
       readonly updatedAt?: SharedGtGteLt_d9a61361;
     };
     readonly output: {
-      readonly groups: ReadonlyArray<{ readonly count: number; readonly key: unknown }>;
+      readonly groups: ReadonlyArray<{ readonly count: number; readonly key: string | null }>;
       readonly total: number;
       readonly truncated: boolean;
     };
@@ -610,21 +741,21 @@ export type ClientOperationTypes = {
   };
   'weft.workflows.attributes.set': {
     readonly input: { readonly attributes?: unknown; readonly workflowId: string };
-    readonly output: { readonly ok: boolean };
+    readonly output: { readonly ok: true };
     readonly faults: never;
   };
   'weft.workflows.bulk.cancel': {
-    readonly input: SharedAttributesBulkConcurrenc_ff397168;
+    readonly input: SharedAttributesBulkConcurrenc_0f0d07d6;
     readonly output: unknown;
     readonly faults: never;
   };
   'weft.workflows.bulk.delete': {
-    readonly input: SharedAttributesBulkConcurrenc_ff397168;
+    readonly input: SharedAttributesBulkConcurrenc_0f0d07d6;
     readonly output: unknown;
     readonly faults: 'Unprocessable';
   };
   'weft.workflows.bulk.retryfailed': {
-    readonly input: SharedAttributesBulkConcurrenc_ff397168;
+    readonly input: SharedAttributesBulkConcurrenc_0f0d07d6;
     readonly output: unknown;
     readonly faults: never;
   };
@@ -636,7 +767,13 @@ export type ClientOperationTypes = {
       readonly createdAt?: SharedGtGteLt_d9a61361;
       readonly dryRun?: boolean;
       readonly executionDeadline?: SharedGtGteLt_d9a61361;
-      readonly failureCategory?: unknown;
+      readonly failureCategory?:
+        | 'application'
+        | 'timeout'
+        | 'cancellation'
+        | 'resource'
+        | 'system'
+        | ReadonlyArray<'application' | 'timeout' | 'cancellation' | 'resource' | 'system'>;
       readonly idPrefix?: string;
       readonly limit?: number;
       readonly name: string;
@@ -646,7 +783,17 @@ export type ClientOperationTypes = {
       readonly payload?: unknown;
       readonly requestId?: string;
       readonly scheduleId?: string;
-      readonly status?: unknown;
+      readonly status?:
+        | 'pending'
+        | 'running'
+        | 'completed'
+        | 'failed'
+        | 'cancelled'
+        | 'timed-out'
+        | 'suspended'
+        | ReadonlyArray<
+            'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'suspended'
+          >;
       readonly tags?: ReadonlyArray<string>;
       readonly type?: string;
       readonly updatedAt?: SharedGtGteLt_d9a61361;
@@ -659,7 +806,7 @@ export type ClientOperationTypes = {
       readonly bulkConcurrency?: number;
       readonly confirmationToken?: string;
       readonly dryRun?: boolean;
-      readonly filter?: SharedAttributesCreatedAtExecu_0caddefc;
+      readonly filter?: SharedAttributesCreatedAtExecu_47f8e20e;
       readonly operation: 'add' | 'remove';
       readonly requestId?: string;
       readonly tags: ReadonlyArray<string>;
@@ -707,15 +854,15 @@ export type ClientOperationTypes = {
       readonly attributes?: ReadonlyArray<SharedGtGteKey_e658e64c>;
       readonly createdAt?: SharedGtGteLt_d9a61361;
       readonly executionDeadline?: SharedGtGteLt_d9a61361;
-      readonly failureCategory?: unknown;
+      readonly failureCategory?: string | ReadonlyArray<string>;
       readonly idPrefix?: string;
-      readonly include?: unknown;
+      readonly include?: string | ReadonlyArray<string>;
       readonly limit?: number;
       readonly offset?: number;
       readonly parentWorkflowExecutionToken?: string;
       readonly parentWorkflowId?: string;
       readonly scheduleId?: string;
-      readonly status?: unknown;
+      readonly status?: string | ReadonlyArray<string>;
       readonly tags?: ReadonlyArray<string>;
       readonly type?: string;
       readonly updatedAt?: SharedGtGteLt_d9a61361;
@@ -724,7 +871,7 @@ export type ClientOperationTypes = {
     readonly faults: 'Unprocessable';
   };
   'weft.workflows.purge': {
-    readonly input: SharedAttributesCreatedAtExecu_0caddefc;
+    readonly input: SharedAttributesCreatedAtExecu_47f8e20e;
     readonly output: unknown;
     readonly faults: never;
   };
@@ -738,7 +885,7 @@ export type ClientOperationTypes = {
     readonly faults: 'NotImplemented';
   };
   'weft.workflows.replay': {
-    readonly input: { readonly step: unknown; readonly workflowId: string };
+    readonly input: { readonly step: string | number; readonly workflowId: string };
     readonly output: unknown;
     readonly faults: 'Conflict' | 'NotFound';
   };
@@ -754,7 +901,7 @@ export type ClientOperationTypes = {
   };
   'weft.workflows.scheduleprovenance.get': {
     readonly input: { readonly workflowId: string };
-    readonly output: unknown;
+    readonly output: { readonly occurrence?: number; readonly scheduleId: string } | null;
     readonly faults: never;
   };
   'weft.workflows.signal': {
@@ -764,7 +911,7 @@ export type ClientOperationTypes = {
       readonly signalName: string;
       readonly workflowId: string;
     };
-    readonly output: { readonly ok: boolean };
+    readonly output: { readonly ok: true };
     readonly faults: 'NotFound';
   };
   'weft.workflows.start': {
@@ -813,12 +960,12 @@ export type ClientOperationTypes = {
   };
   'weft.workflows.tags.add': {
     readonly input: { readonly tags?: unknown; readonly workflowId: string };
-    readonly output: { readonly ok: boolean };
+    readonly output: { readonly ok: true };
     readonly faults: 'NotFound' | 'Unprocessable';
   };
   'weft.workflows.tags.remove': {
     readonly input: { readonly tags?: unknown; readonly workflowId: string };
-    readonly output: { readonly ok: boolean };
+    readonly output: { readonly ok: true };
     readonly faults: 'NotFound' | 'Unprocessable';
   };
   'weft.workflows.timeline.get': {

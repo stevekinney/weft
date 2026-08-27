@@ -91,8 +91,26 @@ describe('schemaToNode + renderNode — emitted text contract', () => {
     expect(renderInline({ type: ['string', 'number', 'null'] })).toBe('string | number | null');
   });
 
+  it('renders primitive const literals and anyOf unions', () => {
+    expect(renderInline({ const: 'delayed', type: 'string' })).toBe('"delayed"');
+    expect(renderInline({ const: false, type: 'boolean' })).toBe('false');
+    expect(
+      renderInline({
+        anyOf: [
+          {
+            type: 'object',
+            properties: { kind: { const: 'delayed', type: 'string' } },
+            required: ['kind'],
+          },
+          { type: 'null' },
+        ],
+      }),
+    ).toBe('{ readonly "kind": "delayed"; } | null');
+  });
+
   it('falls back to unknown for unsupported type-array members', () => {
     expect(renderInline({ type: ['string', 123] })).toBe('string | unknown');
+    expect(renderInline({ anyOf: [{ type: 'string' }, 123] })).toBe('unknown');
   });
 
   it('renders objects with sorted fields and required handling', () => {
@@ -140,8 +158,7 @@ describe('schemaToNode + renderNode — emitted text contract', () => {
     expect(renderInline({ enum: [1, 2] })).toBe('unknown');
     expect(renderInline({ enum: ['a', 2] })).toBe('unknown');
     expect(renderInline({ enum: [] })).toBe('unknown');
-    expect(renderInline({ const: 'x' })).toBe('unknown');
-    expect(renderInline({ anyOf: [{ type: 'string' }] })).toBe('unknown');
+    expect(renderInline({ const: { unsupported: true } })).toBe('unknown');
     expect(renderInline({})).toBe('unknown');
   });
 });
@@ -231,6 +248,32 @@ describe('generated client transport coverage', () => {
     const input: Input = { operationId: 'op-1' };
     const output: Output = { ok: true };
     expect({ input, output }).toEqual({ input: { operationId: 'op-1' }, output: { ok: true } });
+  });
+
+  it('types delayed and unadopted-terminal diagnostics without unknown output', () => {
+    type Item = ClientOperationTypes['weft.tasks.diagnostics']['output']['items'][number];
+    const delayed: Item = {
+      kind: 'delayed',
+      state: 'queued',
+      operationId: 'op-delayed',
+      queue: 'payments',
+      retryCount: 1,
+      requeueCount: 1,
+      availableAt: 30_000,
+      evidence: ['delayed'],
+    };
+    const unadopted: Item = {
+      kind: 'unadopted-terminal',
+      state: 'resolved',
+      operationId: 'op-terminal',
+      queue: 'payments',
+      terminalAt: 1_000,
+      adopted: false,
+      evidence: ['unadopted'],
+    };
+    expect([delayed.kind, unadopted.kind]).toEqual(['delayed', 'unadopted-terminal']);
+    // @ts-expect-error terminal diagnostics deliberately expose no attempt-count history.
+    unadopted.retryCount;
   });
 });
 

@@ -263,7 +263,7 @@ assertion on the workflow's behalf).
 
 ### `GET /api/v1/tasks/diagnostics`
 
-Returns bounded task diagnostics for queued, in-flight, and task-result dead-letter activity records. The REST endpoint is backed by the `weft.tasks.diagnostics` operation and requires `system:read`.
+Returns bounded task diagnostics for queued, in-flight, terminal, and task-result dead-letter activity records. The REST endpoint is backed by the `weft.tasks.diagnostics` operation and requires `system:read`.
 
 ```http
 GET /api/v1/tasks/diagnostics?workflowId=checkout-123&queue=payments&limit=25
@@ -271,17 +271,21 @@ GET /api/v1/tasks/diagnostics?workflowId=checkout-123&queue=payments&limit=25
 
 Query parameters:
 
-| Parameter                   | Type     | Default | Description                                               |
-| --------------------------- | -------- | ------- | --------------------------------------------------------- |
-| `operationId`               | `string` |         | Limit results to one activity operation.                  |
-| `workflowId`                | `string` |         | Limit results to one workflow.                            |
-| `queue`                     | `string` |         | Limit results to one task queue.                          |
-| `staleQueuedAfterMs`        | `number` | `60000` | Queue latency threshold for `stuck-queued` diagnostics.   |
-| `staleHeartbeatAfterMs`     | `number` | `60000` | Heartbeat age threshold for `stale-inflight` diagnostics. |
-| `retryStormMinimumAttempts` | `number` | `3`     | Minimum retry count for `retry-storm` diagnostics.        |
-| `limit`                     | `number` | `50`    | Maximum returned items. The server caps this at `200`.    |
+| Parameter                   | Type      | Default | Description                                                  |
+| --------------------------- | --------- | ------- | ------------------------------------------------------------ |
+| `operationId`               | `string`  |         | Limit results to one activity operation.                     |
+| `workflowId`                | `string`  |         | Limit results to one workflow.                               |
+| `queue`                     | `string`  |         | Limit results to one task queue.                             |
+| `staleQueuedAfterMs`        | `number`  | `60000` | Queue latency threshold for `stuck-queued` diagnostics.      |
+| `staleHeartbeatAfterMs`     | `number`  | `60000` | Heartbeat age threshold for `stale-inflight` diagnostics.    |
+| `retryStormMinimumAttempts` | `number`  | `3`     | Minimum retry count for `retry-storm` diagnostics.           |
+| `includeExpectedDelayed`    | `boolean` | `false` | Include queued attempts whose availability is in the future. |
+| `unadoptedAfterMs`          | `number`  | `60000` | Elapsed terminal non-adoption threshold.                     |
+| `limit`                     | `number`  | `50`    | Maximum returned items. The server caps this at `200`.       |
 
-Each item has a `kind` of `stuck-queued`, `stale-inflight`, `retry-storm`, `all-workers-at-capacity`, or `dead-lettered`, plus bounded evidence strings. `retry-storm` only ever reports queued or in-flight tasks — the durable task ledger does not retain attempt-count history once a task resolves, so a resolved task cannot trigger it. A dead-lettered entry is the task's current authoritative ledger state, created when a worker's result cannot be durably persisted after storage retries are exhausted; the operationId stays blocked from a fresh dispatch until the entry is cleared.
+Each item has a `kind` of `stuck-queued`, `stale-inflight`, `retry-storm`, `all-workers-at-capacity`, `dead-lettered`, `delayed`, or `unadopted-terminal`, plus bounded evidence strings. A `delayed` item is a queued ledger record whose `availableAt` is strictly later than the request's captured time; it is returned only when `includeExpectedDelayed=true` and includes `retryCount`, `requeueCount`, and `availableAt`. An `unadopted-terminal` item has `adopted: false` and a `terminalAt` at or before the captured time minus `unadoptedAfterMs`. It reports elapsed non-adoption, not evidence that an adoption attempt failed, and it does not expose terminal attempt history.
+
+`operationId`, `workflowId`, and `queue` combine with AND for every record-backed kind. Summary counts include all matching items before `limit`; the returned items retain the ledger scan's deterministic order and existing truncation behavior. `retry-storm` only ever reports queued or in-flight tasks—the durable task ledger does not retain attempt-count history once a task resolves, so a resolved task cannot trigger it. A dead-lettered entry is the task's current authoritative ledger state, created when a worker's result cannot be durably persisted after storage retries are exhausted; the operationId stays blocked from a fresh dispatch until the entry is cleared.
 
 Use the clear action after the storage problem is understood and the operator is ready to let the operationId be dispatched again:
 
