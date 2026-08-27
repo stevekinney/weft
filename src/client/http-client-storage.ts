@@ -65,7 +65,7 @@ export function createHttpClientStorage(
       await requestResponse(baseUrl, `/storage/${encodeURIComponent(key)}`, headers, {
         method: 'PUT',
         headers: { 'content-type': 'application/octet-stream' },
-        body: new Blob([value]),
+        body: new Blob([new Uint8Array(value)]),
       });
     },
     async delete(key) {

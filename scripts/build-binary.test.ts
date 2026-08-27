@@ -170,6 +170,25 @@ describe('outputNameForTarget', () => {
   });
 });
 
+describe('buildForTarget command', () => {
+  it('compiles ESM bytecode into the standalone binary', async () => {
+    let command: string[] | undefined;
+    const result = await buildForTarget('bun-linux-x64', 'dist', (spawnedCommand) => {
+      command = spawnedCommand;
+      return {
+        exited: Promise.resolve(0),
+        stdout: new Response('').body,
+        stderr: new Response('').body,
+      };
+    });
+
+    expect(result.success).toBe(true);
+    expect(command).toContain('--compile');
+    expect(command).toContain('--bytecode');
+    expect(command).toContain('--format=esm');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Build for current platform (integration test)
 // ---------------------------------------------------------------------------
@@ -252,25 +271,20 @@ describe('buildForTarget (current platform)', () => {
   });
 
   it('returns a failed result when bun build exits non-zero', async () => {
-    const result = await buildForTarget(
-      'bun-linux-x64',
-      outdir,
-      () =>
-        ({
-          exited: Promise.resolve(1),
-          stdout: new ReadableStream<Uint8Array>({
-            start(controller) {
-              controller.close();
-            },
-          }),
-          stderr: new ReadableStream<Uint8Array>({
-            start(controller) {
-              controller.enqueue(new TextEncoder().encode('compile failed'));
-              controller.close();
-            },
-          }),
-        }) as ReturnType<typeof Bun.spawn>,
-    );
+    const result = await buildForTarget('bun-linux-x64', outdir, () => ({
+      exited: Promise.resolve(1),
+      stdout: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.close();
+        },
+      }),
+      stderr: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('compile failed'));
+          controller.close();
+        },
+      }),
+    }));
 
     expect(result.success).toBe(false);
     expect(result.error).toBe('compile failed');

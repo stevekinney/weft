@@ -30,8 +30,8 @@ describe('HTTPStorage capabilities()', () => {
   });
 });
 
-function encode(value: string): Uint8Array {
-  return new TextEncoder().encode(value);
+function encode(value: string): Uint8Array<ArrayBuffer> {
+  return new Uint8Array(new TextEncoder().encode(value));
 }
 
 function decode(value: Uint8Array | null): string | null {
@@ -136,7 +136,9 @@ describe('HTTPStorage', () => {
     });
     try {
       const storage = new HTTPStorage({ baseUrl: 'https://example.test/root' });
-      await storage.put('plain:key', encode('value'));
+      const sharedValue = new Uint8Array(new SharedArrayBuffer(5));
+      sharedValue.set(encode('value'));
+      await storage.put('plain:key', sharedValue);
       await storage.delete('plain:key');
 
       const scoped = storage.scoped('scope:');

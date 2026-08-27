@@ -147,6 +147,8 @@ export async function buildForTarget(
         'bun',
         'build',
         '--compile',
+        '--bytecode',
+        '--format=esm',
         '--target',
         bunTarget,
         '--outfile',

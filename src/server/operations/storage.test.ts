@@ -9,8 +9,8 @@ import { createLiveOperationRegistry } from '../rest-bindings.ts';
 import { storageCapabilitiesOperation } from './storage-capabilities.ts';
 import { storageGetOperation } from './storage.ts';
 
-function encode(value: string): Uint8Array {
-  return new TextEncoder().encode(value);
+function encode(value: string): Uint8Array<ArrayBuffer> {
+  return new Uint8Array(new TextEncoder().encode(value));
 }
 
 function decode(value: Uint8Array | null): string | null {

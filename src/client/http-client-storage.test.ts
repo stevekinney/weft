@@ -13,6 +13,25 @@ function fetchImplementation(
 }
 
 describe('HTTP client storage facade', () => {
+  it('uploads bytes backed by shared memory', async () => {
+    let requestBody: BodyInit | null | undefined;
+    spyOn(globalThis, 'fetch').mockImplementation(
+      fetchImplementation(async (_input, init) => {
+        requestBody = init?.body;
+        return new Response(null, { status: 204 });
+      }),
+    );
+    const bytes = new Uint8Array(new SharedArrayBuffer(3));
+    bytes.set([1, 2, 3]);
+
+    await createHttpClientStorage('https://weft.example', {}).put('shared', bytes);
+
+    expect(requestBody).toBeInstanceOf(Blob);
+    expect(Array.from(new Uint8Array(await (requestBody as Blob).arrayBuffer()))).toEqual(
+      Array.from(bytes),
+    );
+  });
+
   it('encodes delete batches and defined scan options', async () => {
     const requests: Array<{ url: string; init: RequestInit | undefined }> = [];
     spyOn(globalThis, 'fetch').mockImplementation(
