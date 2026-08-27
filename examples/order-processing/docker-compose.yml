@@ -1,6 +1,6 @@
 services:
   order-processing:
-    image: oven/bun:1.3.13
+    image: oven/bun:1.4.0
     working_dir: /workspace
     command: >
       bash -lc "bun install --frozen-lockfile --ignore-scripts &&
