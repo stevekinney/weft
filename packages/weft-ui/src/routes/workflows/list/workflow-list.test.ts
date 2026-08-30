@@ -3,7 +3,7 @@ import type { DetachedWindowAPI } from 'happy-dom';
 
 import type { WorkflowSummary } from '@lostgradient/weft';
 import { QueryClient } from '@tanstack/svelte-query';
-import { render } from '@testing-library/svelte';
+import { fireEvent, render, waitFor } from '@testing-library/svelte';
 
 import { router } from '../../../lib/router.svelte.ts';
 import type { Principal } from '../../../lib/scopes.svelte.ts';
@@ -93,6 +93,38 @@ describe('WorkflowList', () => {
     });
 
     expect(await findByText('order-processing')).not.toBeNull();
+  });
+
+  test('filtering from a later page requests and renders the first filtered page', async () => {
+    resetLocation('/workflows?offset=50');
+    fetchScript.enqueueJson({
+      items: [summary({ id: 'wf_later_page', type: 'later-page-workflow' })],
+      total: 51,
+      offset: 50,
+      limit: 50,
+    });
+    fetchScript.enqueueJson({
+      items: [
+        summary({ id: 'wf_first_filtered', type: 'first-filtered-workflow', status: 'failed' }),
+      ],
+      total: 1,
+      offset: 0,
+      limit: 50,
+    });
+
+    const { findByText, getByRole } = render(WorkflowListHarness, {
+      props: { client: realClient(), principal: GRANTED_PRINCIPAL, queryClient: newQueryClient() },
+    });
+
+    expect(await findByText('later-page-workflow')).not.toBeNull();
+    await fireEvent.click(getByRole('button', { name: 'Failed' }));
+
+    expect(await findByText('first-filtered-workflow')).not.toBeNull();
+    await waitFor(() => {
+      const requestUrl = new URL(fetchScript.calls.at(-1)!.url);
+      expect(requestUrl.searchParams.get('offset')).toBe('0');
+      expect(requestUrl.searchParams.get('status')).toBe('failed');
+    });
   });
 
   test('shows the "no workflows yet" empty state when the list is empty and no filter is active', async () => {
