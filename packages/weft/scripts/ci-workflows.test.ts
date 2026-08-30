@@ -27,10 +27,18 @@ describe('coverage workflow gates', () => {
 
     expect(workflow).toContain('pull_request:');
     expect(workflow).toContain('merge_group:');
-    expect(workflow).toMatch(
-      /\n  coverage:\n(?:(?!\n {2}\S).)*?bunx turbo run test:coverage --filter=@lostgradient\/weft\n/s,
-    );
+    expect(workflow).toMatch(/\n  coverage:\n[\s\S]*?bun run test:coverage/);
     expect(workflow).toMatch(/\n  test:\n[\s\S]*?bun test --bail/);
+  });
+
+  it('uses remote caching for deterministic jobs only', async () => {
+    const workflow = await readWorkflow('ci.yaml');
+    const cacheTokens = workflow.match(/TURBO_TOKEN: \$\{\{ secrets\.TURBO_TOKEN \}\}/g) ?? [];
+    const cacheTeams = workflow.match(/TURBO_TEAM: kinney/g) ?? [];
+
+    expect(cacheTokens).toHaveLength(7);
+    expect(cacheTeams).toHaveLength(7);
+    expect(workflow).not.toMatch(/\n  coverage:\n(?:(?!\n {2}\S).)*?TURBO_TOKEN:/s);
   });
 
   it('keeps the ordinary CI test job aligned with the browser-smoke exclusion boundary', async () => {
