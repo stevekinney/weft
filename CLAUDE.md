@@ -12,6 +12,6 @@ This repository is a Turborepo-powered monorepo using Bun workspaces.
 - Run `bun install` at the repository root; there is one root `bun.lock` for the whole workspace.
 - Root scripts fan out through Turborepo: `bun run build`, `bun run lint`, `bun run typecheck`, `bun run test` each run `turbo run <task>` across packages. Use `bunx turbo run <task> --filter=<package>` or `cd` into a package to scope to one package.
 - Git hooks live at the repository root (`.husky/`) and delegate into each package's `scripts/husky/` hooks with the package directory as the working directory.
-- GitHub workflows live at the repository root and run package jobs with `working-directory` set to the package.
+- GitHub workflows live at the repository root. Jobs that invoke `turbo run <task> --filter=<package>` run from the repository root (no `working-directory` override); jobs that run a package's bespoke, non-turbo commands still set `working-directory` to that package.
 - Each package keeps its own lint, formatting, TypeScript, and test configuration. Do not hoist package configuration to the root.
 - The `v*.*.*` release tags publish `@lostgradient/weft` only. `@lostgradient/weft-ui` is not yet published.

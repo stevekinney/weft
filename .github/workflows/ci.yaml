@@ -9,30 +9,28 @@ on:
 jobs:
   lint:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: packages/weft
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile --linker=isolated
-        working-directory: .
-      - run: bun run lint
+      - run: bunx turbo run lint --filter=@lostgradient/weft
+        env:
+          TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+          TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
   typecheck:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: packages/weft
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile --linker=isolated
-        working-directory: .
-      - run: bun run typecheck
+      - run: bunx turbo run typecheck --filter=@lostgradient/weft
+        env:
+          TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+          TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
   test:
     runs-on: ubuntu-latest
     defaults:
@@ -58,17 +56,16 @@ jobs:
   # while this job enforces the LCOV-backed 100 percent adjusted threshold.
   coverage:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: packages/weft
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile --linker=isolated
-        working-directory: .
-      - run: bun run test:coverage
+      - run: bunx turbo run test:coverage --filter=@lostgradient/weft
+        env:
+          TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+          TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
   # Exercises PostgresStorage against a REAL Postgres over the pg wire protocol
   # (TCP, BYTEA marshalling, command-tag rowCounts, SERIALIZABLE conflict retries).
   # The main `test` job runs the hermetic PGlite-backed conformance; this job lights
@@ -139,17 +136,16 @@ jobs:
       - run: bun run test:browser-smoke
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: packages/weft
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile --linker=isolated
-        working-directory: .
-      - run: bun run build
+      - run: bunx turbo run build --filter=@lostgradient/weft
+        env:
+          TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+          TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
   order-processing-example:
     runs-on: ubuntu-latest
     defaults:
@@ -208,46 +204,40 @@ jobs:
 
   ui-lint:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: packages/weft-ui
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile --linker=isolated
-        working-directory: .
-      - run: bun run lint
+      - run: bunx turbo run lint --filter=@lostgradient/weft-ui
+        env:
+          TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+          TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
   ui-typecheck:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: packages/weft-ui
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile --linker=isolated
-        working-directory: .
-      - name: Build the @lostgradient/weft workspace dependency
-        run: bun run build
-        working-directory: packages/weft
-      - run: bun run typecheck
+      - run: bunx turbo run typecheck --filter=@lostgradient/weft-ui
+        env:
+          TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+          TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
   ui-format-check:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: packages/weft-ui
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile --linker=isolated
-        working-directory: .
-      - run: bun run format:check
+      - run: bunx turbo run format:check --filter=@lostgradient/weft-ui
+        env:
+          TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+          TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
   ui-test:
     runs-on: ubuntu-latest
     defaults:
@@ -270,20 +260,16 @@ jobs:
   # composes.
   ui-build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: packages/weft-ui
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile --linker=isolated
-        working-directory: .
-      - name: Build the @lostgradient/weft workspace dependency
-        run: bun run build
-        working-directory: packages/weft
-      - run: bun run build
+      - run: bunx turbo run build --filter=@lostgradient/weft-ui
+        env:
+          TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+          TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
   # Deterministic adjusted-coverage gate (packages/weft-ui/docs/implementation-plan.md
   # §11, scripts/check-coverage.ts): runs its own `bun run test:coverage` pass and
   # fails if that run fails/crashes or if any area's line/function coverage
