@@ -231,6 +231,9 @@ jobs:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile --linker=isolated
         working-directory: .
+      - name: Build the @lostgradient/weft workspace dependency
+        run: bun run build
+        working-directory: packages/weft
       - run: bun run typecheck
   ui-format-check:
     runs-on: ubuntu-latest
@@ -257,6 +260,9 @@ jobs:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile --linker=isolated
         working-directory: .
+      - name: Build the @lostgradient/weft workspace dependency
+        run: bun run build
+        working-directory: packages/weft
       - run: bun run test
   # `bun run build` chains `vite build` with the bundle-size budget gate
   # (`bun run check:bundle`, scripts/check-bundle-size.ts) — one command, so
@@ -274,6 +280,9 @@ jobs:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile --linker=isolated
         working-directory: .
+      - name: Build the @lostgradient/weft workspace dependency
+        run: bun run build
+        working-directory: packages/weft
       - run: bun run build
   # Deterministic adjusted-coverage gate (packages/weft-ui/docs/implementation-plan.md
   # §11, scripts/check-coverage.ts): runs its own `bun run test:coverage` pass and
@@ -293,6 +302,9 @@ jobs:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile --linker=isolated
         working-directory: .
+      - name: Build the @lostgradient/weft workspace dependency
+        run: bun run build
+        working-directory: packages/weft
       - run: bun run check:coverage
       # Uploaded unconditionally so a baseline re-measurement (raising the
       # Linux floor in scripts/coverage-baseline.ts) always has exact
@@ -317,6 +329,9 @@ jobs:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile --linker=isolated
         working-directory: .
+      - name: Build the @lostgradient/weft workspace dependency
+        run: bun run build
+        working-directory: packages/weft
       # Cache Playwright's pinned Chromium binary (keyed on the lockfile,
       # which pins the playwright version), mirroring the weft browser-smoke
       # job. Linux system libraries aren't stored under ~/.cache/ms-playwright,
