@@ -52,7 +52,7 @@
 
   import { formatRelativeTime, truncateId } from '../../../lib/format/index.ts';
   import { queryKeys } from '../../../lib/query.ts';
-  import { router } from '../../../lib/router.svelte.ts';
+  import { router, workflowDetailPath } from '../../../lib/router.svelte.ts';
   import { workflowStatusBadge } from '../list/workflow-status-badge.ts';
   import WorkflowStatusIcon from '../list/workflow-status-icon.svelte';
   import { getScheduleProvenance, scheduleProvenanceQueryKey } from './workflow-observability.ts';
@@ -103,7 +103,7 @@
   const thisRunBadge = $derived(workflowStatusBadge(workflow.status));
 
   function goToWorkflow(id: string): void {
-    router.navigate(`/workflows/${id}`);
+    router.navigate(workflowDetailPath(id));
   }
 
   function goToSchedule(scheduleId: string): void {
@@ -178,7 +178,7 @@
           <Skeleton height="1rem" width="8rem" />
         {:else}
           <a
-            href={router.href(`/workflows/${forkedFrom.workflowId}`)}
+            href={router.href(workflowDetailPath(forkedFrom.workflowId))}
             onclick={(event) => {
               event.preventDefault();
               goToWorkflow(forkedFrom.workflowId);
@@ -210,7 +210,7 @@
             {@const badge = workflowStatusBadge(child.status)}
             <a
               class="weft-lineage-panel__child-row weft-lineage-panel__child-row--link"
-              href={router.href(`/workflows/${child.id}`)}
+              href={router.href(workflowDetailPath(child.id))}
               onclick={(event) => {
                 event.preventDefault();
                 goToWorkflow(child.id);

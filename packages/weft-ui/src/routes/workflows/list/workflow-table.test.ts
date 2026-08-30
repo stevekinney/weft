@@ -1,8 +1,10 @@
 import { fireEvent, render } from '@testing-library/svelte';
 import { describe, expect, test } from 'bun:test';
+import type { DetachedWindowAPI } from 'happy-dom';
 
 import type { WorkflowSummary } from '@lostgradient/weft';
 
+import { router } from '../../../lib/router.svelte.ts';
 import WorkflowTable from './workflow-table.svelte';
 
 function summary(overrides: Partial<WorkflowSummary> = {}): WorkflowSummary {
@@ -37,11 +39,31 @@ describe('WorkflowTable', () => {
     expect(getByText('nightly')).not.toBeNull();
   });
 
-  test('the id link points at the workflow detail route', async () => {
-    const { getByRole } = render(WorkflowTable, { props: { rows: [summary()] } });
+  test('an id containing URL delimiters navigates to the exact workflow detail route', async () => {
+    (window as unknown as { happyDOM: DetachedWindowAPI }).happyDOM.setURL('http://localhost/');
+    router.navigate('/workflows', { replace: true });
+    const workflowId = 'wf/orders?region=west#retry';
+    const { getByRole } = render(WorkflowTable, {
+      props: { rows: [summary({ id: workflowId })] },
+    });
 
     const link = getByRole('link');
-    expect(link.getAttribute('href')).toBe('/workflows/wf_4a9f1234567890abcdef2c10');
+    expect(link.getAttribute('href')).toBe('/workflows/wf%2Forders%3Fregion%3Dwest%23retry');
+    await fireEvent.click(link);
+    expect(router.current.params['id']).toBe(workflowId);
+  });
+
+  test('a dot-only id is not normalized away by browser navigation', async () => {
+    (window as unknown as { happyDOM: DetachedWindowAPI }).happyDOM.setURL('http://localhost/');
+    router.navigate('/workflows', { replace: true });
+    const { getByRole } = render(WorkflowTable, {
+      props: { rows: [summary({ id: '..' })] },
+    });
+
+    const link = getByRole('link');
+    expect(link.getAttribute('href')).toBe('/workflows/_?__weft_workflow_id=..');
+    await fireEvent.click(link);
+    expect(router.current.params['id']).toBe('..');
   });
 
   test('no selection column when selectedIds is omitted', async () => {

@@ -13,7 +13,7 @@ import { beforeEach, describe, expect, test } from 'bun:test';
 import type { DetachedWindowAPI } from 'happy-dom';
 
 import { routes } from '../app/routes.ts';
-import { matchRoute, router } from './router.svelte.ts';
+import { matchRoute, router, workflowDetailPath } from './router.svelte.ts';
 
 function happyDomAPI(): DetachedWindowAPI {
   return (window as unknown as { happyDOM: DetachedWindowAPI }).happyDOM;
@@ -97,6 +97,18 @@ describe('router singleton', () => {
   test('navigate() to a dynamic route decodes params', () => {
     router.navigate('/workflows/wf_123');
     expect(router.match).toEqual({ pattern: '/workflows/:id', params: { id: 'wf_123' } });
+  });
+
+  test('workflow detail paths preserve dot-only identifiers without changing legacy tilde links', () => {
+    for (const workflowId of ['.', '..']) {
+      router.navigate(workflowDetailPath(workflowId));
+      expect(router.current.params['id']).toBe(workflowId);
+    }
+
+    router.navigate('/workflows/~legacy-link');
+    expect(router.current.params['id']).toBe('~legacy-link');
+    router.navigate(workflowDetailPath('~new-link'));
+    expect(router.current.params['id']).toBe('~new-link');
   });
 
   test('navigate() to an unowned path yields no match', () => {

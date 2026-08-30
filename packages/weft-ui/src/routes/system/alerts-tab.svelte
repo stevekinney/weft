@@ -41,7 +41,7 @@
   import { getClient } from '../../lib/client.ts';
   import type { FleetEventFrame } from '../../lib/live-source/fleet-event-source.svelte.ts';
   import { formatBytes, formatDuration } from '../../lib/format/index.ts';
-  import { router } from '../../lib/router.svelte.ts';
+  import { router, workflowDetailPath } from '../../lib/router.svelte.ts';
   import {
     AlertsStore,
     isAlertEventKind,
@@ -148,7 +148,7 @@
   };
 
   function detailsHref(row: AlertRow): string {
-    return row.workflowId ? `/workflows/${row.workflowId}` : '/system';
+    return row.workflowId ? workflowDetailPath(row.workflowId) : '/system';
   }
 
   function formatTime(atMs: number): string {

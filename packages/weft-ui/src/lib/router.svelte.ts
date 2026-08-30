@@ -49,6 +49,22 @@ function matchPattern(pattern: string, pathname: string): Record<string, string>
   return params;
 }
 
+/**
+ * Builds a workflow detail path. Dot-only identifiers use a query-carried
+ * escape because browsers normalize those exact path segments before the
+ * client router can read them; every other identifier retains its legacy URL.
+ */
+export function workflowDetailPath(
+  workflowId: string,
+  search: URLSearchParams = new URLSearchParams(),
+): string {
+  const nextSearch = new URLSearchParams(search);
+  const dotOnly = workflowId === '.' || workflowId === '..';
+  if (dotOnly) nextSearch.set('__weft_workflow_id', workflowId);
+  const query = nextSearch.toString();
+  return `/workflows/${dotOnly ? '_' : encodeURIComponent(workflowId)}${query ? `?${query}` : ''}`;
+}
+
 interface RouteDefinitionMatch {
   readonly definition: RouteDefinition;
   readonly params: Record<string, string>;
@@ -100,10 +116,17 @@ class ConsoleRouter {
   /** The fully parsed `{ route, params, search }` view of the current location. */
   get current(): RouteState {
     const found = findRouteDefinition(this.pathname, routes);
+    const search = this.search;
+    const escapedWorkflowId =
+      found?.definition.pattern === '/workflows/:id' ? search.get('__weft_workflow_id') : null;
+    const params =
+      (escapedWorkflowId === '.' || escapedWorkflowId === '..') && found
+        ? { ...found.params, id: escapedWorkflowId }
+        : (found?.params ?? {});
     return {
       route: found?.definition ?? null,
-      params: found?.params ?? {},
-      search: this.search,
+      params,
+      search,
     };
   }
 

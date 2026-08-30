@@ -32,7 +32,7 @@
   import type { WorkflowSummary } from '@lostgradient/weft';
 
   import { formatRelativeTime, truncateId } from '../../../lib/format/index.ts';
-  import { router } from '../../../lib/router.svelte.ts';
+  import { router, workflowDetailPath } from '../../../lib/router.svelte.ts';
   import { workflowStatusBadge } from './workflow-status-badge.ts';
   import WorkflowStatusIcon from './workflow-status-icon.svelte';
 
@@ -90,7 +90,7 @@
       return;
     }
     event.preventDefault();
-    router.navigate(`/workflows/${workflowId}`);
+    router.navigate(workflowDetailPath(workflowId));
   }
 </script>
 
@@ -139,7 +139,7 @@
             <Tooltip text={row.id} placement="top">
               <a
                 class="weft-workflows-table__id-link"
-                href={router.href(`/workflows/${row.id}`)}
+                href={router.href(workflowDetailPath(row.id))}
                 onclick={(event) => onIdLinkClick(event, row.id)}
               >
                 <code>{truncateId(row.id)}</code>

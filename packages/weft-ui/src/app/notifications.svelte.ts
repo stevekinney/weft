@@ -34,6 +34,7 @@
  * module feeds.
  */
 import type { FleetEventFrame } from '../lib/live-source/fleet-event-source.svelte.ts';
+import { workflowDetailPath } from '../lib/router.svelte.ts';
 
 export type NotificationTier = 'critical' | 'warning' | 'info';
 
@@ -84,7 +85,7 @@ function workflowBody(frame: FleetEventFrame, fallback: string): string {
 }
 
 function workflowHref(frame: FleetEventFrame): string {
-  return frame.workflowId ? `/workflows/${frame.workflowId}` : '/workflows';
+  return frame.workflowId ? workflowDetailPath(frame.workflowId) : '/workflows';
 }
 
 /** Every client-visible fleet event kind mapped to its notification treatment. */

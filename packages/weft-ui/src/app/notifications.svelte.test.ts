@@ -81,6 +81,14 @@ describe('classifyFleetEvent', () => {
     expect(classified?.href).toBe('/workflows/wf_1234567890abcdef1234');
   });
 
+  test('encodes URL delimiters in workflow notification links', () => {
+    const classified = classifyFleetEvent(
+      frame('workflow:started', { workflowId: 'wf/orders?region=west#retry' }),
+    );
+
+    expect(classified?.href).toBe('/workflows/wf%2Forders%3Fregion%3Dwest%23retry');
+  });
+
   test('falls back to a generic body/href when workflowId is absent', () => {
     const classified = classifyFleetEvent(frame('worker:connected', { payload: {} }));
     expect(classified?.body).toBe('A worker joined the fleet');
