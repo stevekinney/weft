@@ -214,7 +214,7 @@ describe('weft tail', () => {
     const previousFetch = globalThis.fetch;
     const previousWrite = process.stdout.write;
     globalThis.fetch = fetchImpl as unknown as typeof fetch;
-    process.stdout.write = writeSpy as unknown as typeof process.stdout.write;
+    process.stdout.write = writeSpy;
 
     try {
       const result = await executeTail({

@@ -305,7 +305,7 @@ function isTailRecord(value: unknown): value is { sequence: number } {
     typeof value === 'object' &&
     value !== null &&
     'sequence' in value &&
-    Number.isSafeInteger((value as { sequence: unknown }).sequence)
+    Number.isSafeInteger(value.sequence)
   );
 }
 

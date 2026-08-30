@@ -342,7 +342,7 @@ describe('executeOperation — step 5: unknown-key policy', () => {
         inputSchema: z.object({ id: z.string() }),
         outputSchema: z.object({}),
         invoke: async ({ input }) => {
-          prototypes.push(Object.getPrototypeOf(input as object));
+          prototypes.push(Object.getPrototypeOf(input));
           return {};
         },
         unknownKeyPolicy: { http: 'passthrough', jsonRpc: 'reject' },

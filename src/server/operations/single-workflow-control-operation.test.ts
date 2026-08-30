@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
-import type { Engine } from '../../core/engine.ts';
 import { anonymousPrincipal } from '../principal.ts';
 import {
   createSingleWorkflowControlOperation,
@@ -33,7 +32,7 @@ describe('single-workflow control operation helpers', () => {
 
     const result = operation.invoke({
       input: { workflowId: 'missing-workflow' },
-      engine: {} as Engine,
+      engine: {},
       principal: anonymousPrincipal(),
       transport: 'http-rest',
     });
@@ -69,7 +68,7 @@ describe('single-workflow control operation helpers', () => {
 
     const result = operation.invoke({
       input: { workflowId: 'completed-workflow' },
-      engine: {} as Engine,
+      engine: {},
       principal: anonymousPrincipal(),
       transport: 'http-rest',
     });

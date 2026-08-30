@@ -140,7 +140,7 @@ export async function withFakeIndexedDb(
   let currentVersion = 0;
 
   try {
-    indexedDB.open = ((_name: string, version?: number) => {
+    indexedDB.open = (_name: string, version?: number) => {
       const request = {
         result: database,
         error: null,
@@ -166,7 +166,7 @@ export async function withFakeIndexedDb(
       });
 
       return request;
-    }) as typeof indexedDB.open;
+    };
 
     await body();
   } finally {
@@ -185,7 +185,7 @@ export async function withFailingIndexedDbOpen(
   const originalOpen = indexedDB.open.bind(indexedDB);
 
   try {
-    indexedDB.open = (() => {
+    indexedDB.open = () => {
       const request = {
         result: undefined,
         error: openError,
@@ -200,7 +200,7 @@ export async function withFailingIndexedDbOpen(
       });
 
       return request;
-    }) as typeof indexedDB.open;
+    };
 
     await body();
   } finally {

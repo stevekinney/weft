@@ -24,7 +24,7 @@ export const pauseScheduleOperation = defineOperation<PauseScheduleInput, PauseS
   destructive: false,
   tags: ['Schedules'],
   inputSchema: pauseScheduleInput,
-  outputSchema: pauseScheduleOutput as z.ZodType<PauseScheduleOutput>,
+  outputSchema: pauseScheduleOutput,
   access: { kind: 'public' },
   producibleFaults: ['NotFound', 'Conflict'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },

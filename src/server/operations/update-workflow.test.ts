@@ -51,7 +51,7 @@ describe('weft.workflows.update', () => {
         return {
           updateId: 'update-123',
           result: { ok: true },
-        } as Awaited<ReturnType<Engine['submitCoordinatedUpdate']>>;
+        };
       };
 
       const response = await handleRequest(
@@ -88,7 +88,7 @@ describe('weft.workflows.update', () => {
         return {
           updateId: 'update-mistyped',
           result: null,
-        } as Awaited<ReturnType<Engine['submitCoordinatedUpdate']>>;
+        };
       };
 
       const response = await handleRequest(
@@ -118,7 +118,7 @@ describe('weft.workflows.update', () => {
         return {
           updateId: 'update-invalid-json',
           result: null,
-        } as Awaited<ReturnType<Engine['submitCoordinatedUpdate']>>;
+        };
       };
 
       const response = await handleRequest(
@@ -139,11 +139,10 @@ describe('weft.workflows.update', () => {
     const originalSubmit = engine.submitCoordinatedUpdate.bind(engine);
 
     try {
-      engine.submitCoordinatedUpdate = async () =>
-        ({
-          updateId: 'update-error',
-          error: 'workflow rejected update',
-        }) as Awaited<ReturnType<Engine['submitCoordinatedUpdate']>>;
+      engine.submitCoordinatedUpdate = async () => ({
+        updateId: 'update-error',
+        error: 'workflow rejected update',
+      });
 
       const response = await handleRequest(
         jsonRequest('POST', '/v1/workflows/workflow-123/update/rename', { payload: {} }),

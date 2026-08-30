@@ -411,7 +411,7 @@ function describeReceivedValue(value: unknown): string {
   if (value === undefined) return 'undefined';
   if (Array.isArray(value)) return 'array';
   if (typeof value !== 'object') return typeof value;
-  const keys = Object.keys(value as Record<string, unknown>);
+  const keys = Object.keys(value);
   if (keys.length === 0) return 'an empty object';
   return `an object with keys [${keys.slice(0, 5).join(', ')}${keys.length > 5 ? ', …' : ''}]`;
 }

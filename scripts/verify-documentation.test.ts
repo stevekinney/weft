@@ -390,9 +390,9 @@ describe('verifyDocumentation', () => {
     });
 
     expect(() =>
-      runMain(repositoryRoot, { log() {}, error() {} }, ((code?: number) => {
+      runMain(repositoryRoot, { log() {}, error() {} }, (code?: number) => {
         throw new Error(`exit:${code ?? 0}`);
-      }) as (code?: number) => never),
+      }),
     ).toThrow('exit:1');
   });
 });

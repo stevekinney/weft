@@ -261,10 +261,10 @@ export function withChaos<TInput, TOutput>(
 
         case 'delay':
           await sleep(DELAY_FAULT_MS);
-          return mock(input) as Promise<TOutput>;
+          return mock(input);
       }
     }
 
-    return mock(input) as Promise<TOutput>;
+    return mock(input);
   };
 }

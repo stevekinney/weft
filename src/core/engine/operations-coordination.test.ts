@@ -326,7 +326,7 @@ describe('partial-failure preservation worker-mode boundary', () => {
       abortController,
       signalWaiters: new AbortOnSetMap(),
       signalWaitersByWorkflow: new Map(),
-    } as unknown as EngineInternals;
+    };
 
     await processWaitSignalOperation(
       internals,

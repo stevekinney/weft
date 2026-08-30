@@ -1447,13 +1447,13 @@ describe('Engine', () => {
       }),
     );
 
-    engine.dispatchEvent = ((event: Event): boolean => {
+    engine.dispatchEvent = (event: Event): boolean => {
       if (event.type === WorkflowCompletedEvent.type) {
         throw new Error('simulated completion dispatch failure');
       }
 
       return originalDispatchEvent(event);
-    }) as typeof engine.dispatchEvent;
+    };
 
     const handle = await engine.start('dispatch-throws-on-complete', null);
     await flush();
@@ -2277,7 +2277,7 @@ describe('Engine', () => {
   it('ctx.sleep pauses workflow via scheduler', async () => {
     let now = 1000;
     const storage = new MemoryStorage();
-    const engine = new Engine({ storage: storage as WeftStorage, getNow: () => now });
+    const engine = new Engine({ storage: storage, getNow: () => now });
 
     engine.register(
       workflow({ name: 'sleepy' }).execute(async function* (ctx: WorkflowContext) {
@@ -2307,7 +2307,7 @@ describe('Engine', () => {
   it('fireTimer starts a pending delayed workflow when an external scheduler fires its timer', async () => {
     let now = 1000;
     const storage = new MemoryStorage();
-    const engine = new Engine({ storage: storage as WeftStorage, getNow: () => now });
+    const engine = new Engine({ storage: storage, getNow: () => now });
     const executions: string[] = [];
 
     engine.register(
@@ -2425,7 +2425,7 @@ describe('Engine', () => {
         yield {
           type: 'unsupported-operation-type',
           operationId: 'unsupported-operation-id',
-        } as never;
+        };
         return 'unreachable';
       }),
     );
@@ -2893,7 +2893,7 @@ describe('Engine', () => {
   it('execution deadline times out workflow via scheduler', async () => {
     let now = 1000;
     const storage = new MemoryStorage();
-    const engine = new Engine({ storage: storage as WeftStorage, getNow: () => now });
+    const engine = new Engine({ storage: storage, getNow: () => now });
 
     engine.register(
       workflow({ name: 'deadline-test' }).execute(async function* (ctx: WorkflowContext) {
@@ -2927,7 +2927,7 @@ describe('Engine', () => {
   it('execution deadline dispatches WorkflowTimedOutEvent', async () => {
     let now = 1000;
     const storage = new MemoryStorage();
-    const engine = new Engine({ storage: storage as WeftStorage, getNow: () => now });
+    const engine = new Engine({ storage: storage, getNow: () => now });
 
     engine.register(
       workflow({ name: 'timeout-event-test' }).execute(async function* (ctx: WorkflowContext) {
@@ -2962,7 +2962,7 @@ describe('Engine', () => {
   it('deadline key is cleaned up on normal completion', async () => {
     let now = 1000;
     const storage = new MemoryStorage();
-    const engine = new Engine({ storage: storage as WeftStorage, getNow: () => now });
+    const engine = new Engine({ storage: storage, getNow: () => now });
 
     engine.register(
       workflow({ name: 'deadline-cleanup-complete' }).execute(async function* () {
@@ -2995,7 +2995,7 @@ describe('Engine', () => {
   it('deadline key is cleaned up on failure', async () => {
     let now = 1000;
     const storage = new MemoryStorage();
-    const engine = new Engine({ storage: storage as WeftStorage, getNow: () => now });
+    const engine = new Engine({ storage: storage, getNow: () => now });
 
     engine.register(
       workflow({ name: 'deadline-cleanup-fail' }).execute(async function* () {
@@ -3026,7 +3026,7 @@ describe('Engine', () => {
   it('deadline key is cleaned up after timeout', async () => {
     let now = 1000;
     const storage = new MemoryStorage();
-    const engine = new Engine({ storage: storage as WeftStorage, getNow: () => now });
+    const engine = new Engine({ storage: storage, getNow: () => now });
 
     engine.register(
       workflow({ name: 'deadline-cleanup-timeout' }).execute(async function* (
@@ -4595,7 +4595,7 @@ describe('Engine', () => {
     const storage = new MemoryStorage();
 
     // First engine: start a workflow that waits for a signal
-    const engine1 = new Engine({ storage: storage as WeftStorage });
+    const engine1 = new Engine({ storage: storage });
     engine1.register(
       workflow({ name: 'dev-resume' }).execute(async function* (ctx: WorkflowContext) {
         yield* ctx.waitForSignal('go');
@@ -4613,7 +4613,7 @@ describe('Engine', () => {
     // Second engine (development mode): resume the workflow
     const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
     try {
-      const engine2 = new Engine({ development: true, storage: storage as WeftStorage });
+      const engine2 = new Engine({ development: true, storage: storage });
       engine2.register(
         workflow({ name: 'dev-resume' }).execute(async function* (ctx: WorkflowContext) {
           yield* ctx.waitForSignal('go');
@@ -4697,7 +4697,7 @@ describe('Engine', () => {
 
   it('failed workflow preserves error stack through storage round-trip', async () => {
     const storage = new MemoryStorage();
-    const engine = new Engine({ storage: storage as WeftStorage });
+    const engine = new Engine({ storage: storage });
 
     engine.register(
       workflow({ name: 'stack-persist' }).execute(async function* () {
@@ -4721,7 +4721,7 @@ describe('Engine', () => {
 
   it('getHandle for a failed workflow restores the error stack from storage', async () => {
     const storage = new MemoryStorage();
-    const engine = new Engine({ storage: storage as WeftStorage });
+    const engine = new Engine({ storage: storage });
 
     engine.register(
       workflow({ name: 'stack-restore' }).execute(async function* () {
@@ -4764,7 +4764,7 @@ describe('Engine', () => {
     };
     await storage.put(KEYS.workflow('no-error-stack-id'), encodeValue(failedState));
 
-    const engine = new Engine({ storage: storage as WeftStorage });
+    const engine = new Engine({ storage: storage });
     engine.register(
       workflow({ name: 'no-error-stack-workflow' }).execute(async function* () {
         return 'ok';
@@ -7034,7 +7034,7 @@ describe('Engine decode and scoped-state guards', () => {
     });
 
     try {
-      const engine = new Engine({ storage: storage as WeftStorage });
+      const engine = new Engine({ storage: storage });
       const fetched = await engine.get('wf-tampered-owner');
 
       expect(fetched?.executionStateOwnerId).toBeUndefined();

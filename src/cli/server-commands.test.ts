@@ -15,7 +15,7 @@ function healthCommand(overrides: Partial<ServerCommand> = {}): ServerCommand {
     json: false,
     quiet: false,
     ...overrides,
-  } as ServerCommand;
+  };
 }
 
 describe('weft server health', () => {

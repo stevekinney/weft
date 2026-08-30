@@ -390,7 +390,7 @@ export class Context implements WorkflowContext {
     return (yield* parallelOperations.runAll(
       this,
       getInternals(this),
-      branches as Record<string, readonly [Function] | readonly [Function, unknown]>,
+      branches,
     )) as RunAllResult<TBranches>;
   }
   *saga<TFinalOutput = unknown>(

@@ -264,7 +264,7 @@ describe('weft workflow cancel (destructive gate)', () => {
     const priorIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
     const priorStream = Bun.stdin.stream;
     Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
-    Bun.stdin.stream = (() =>
+    Bun.stdin.stream = () =>
       new ReadableStream<Uint8Array<ArrayBuffer>>({
         start(controller) {
           const input = new Uint8Array(new ArrayBuffer(2));
@@ -272,7 +272,7 @@ describe('weft workflow cancel (destructive gate)', () => {
           controller.enqueue(input);
           controller.close();
         },
-      })) as unknown as typeof Bun.stdin.stream;
+      });
     try {
       const result = await executeWorkflow({
         ...base,

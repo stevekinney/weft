@@ -249,10 +249,6 @@ export function hashString(data: string): string {
 // Node built-in module loader — ESM-safe via process.getBuiltinModule
 // ---------------------------------------------------------------------------
 
-type ProcessWithBuiltinModule = NodeJS.Process & {
-  getBuiltinModule?: (id: string) => unknown;
-};
-
 /**
  * Load a Node.js built-in module without a static `node:*` import.
  *
@@ -267,12 +263,11 @@ type ProcessWithBuiltinModule = NodeJS.Process & {
  * @internal
  */
 export function tryLoadNodeBuiltin<T>(id: string): T | undefined {
-  const nodeProcess = getProcess() as ProcessWithBuiltinModule | undefined;
-  const getBuiltinModule = nodeProcess?.getBuiltinModule;
-  if (typeof getBuiltinModule !== 'function') {
+  const nodeProcess = getProcess();
+  if (typeof nodeProcess?.getBuiltinModule !== 'function') {
     return undefined;
   }
-  return getBuiltinModule(id) as T;
+  return nodeProcess.getBuiltinModule(id) as T;
 }
 
 // ---------------------------------------------------------------------------
@@ -306,12 +301,7 @@ export function fileSize(path: string): number {
     return fs.statSync(path).size;
   } catch (error) {
     // Match Bun.file().size behavior: return 0 for missing files.
-    if (
-      typeof error === 'object' &&
-      error !== null &&
-      'code' in error &&
-      (error as { code: unknown }).code === 'ENOENT'
-    ) {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
       return 0;
     }
     throw error;

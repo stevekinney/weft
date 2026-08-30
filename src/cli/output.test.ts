@@ -152,7 +152,7 @@ describe('confirmDestructive', () => {
 
   it('defaultReadLine trims trailing newlines across chunk boundaries', async () => {
     const priorStream = Bun.stdin.stream;
-    Bun.stdin.stream = (() =>
+    Bun.stdin.stream = () =>
       new ReadableStream<Uint8Array<ArrayBuffer>>({
         start(controller) {
           const firstChunk = new Uint8Array(new ArrayBuffer(2));
@@ -164,7 +164,7 @@ describe('confirmDestructive', () => {
           controller.enqueue(secondChunk);
           controller.close();
         },
-      })) as unknown as typeof Bun.stdin.stream;
+      });
 
     try {
       const decision = await confirmDestructive({

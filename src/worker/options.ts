@@ -225,7 +225,7 @@ function buildManifest(options: RemoteWorkerOptions): WorkerManifest {
     // options.capabilities is already worker-authored JSON; RemoteWorkerCapabilities
     // and JSONValue describe the same shape and differ only in readonly-vs-mutable
     // array element typing.
-    capabilities: (options.capabilities ?? {}) as WorkerManifest['capabilities'],
+    capabilities: options.capabilities ?? {},
   };
 }
 

@@ -37,7 +37,7 @@ function cloneWithSeen<T>(value: T, seen: WeakMap<object, unknown>): T {
   }
   const out: Record<string, unknown> = {};
   seen.set(objectValue, out);
-  for (const key of Object.keys(value as Record<string, unknown>)) {
+  for (const key of Object.keys(value)) {
     out[key] = cloneWithSeen((value as Record<string, unknown>)[key], seen);
   }
   return out as T;

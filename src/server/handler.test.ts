@@ -1633,7 +1633,7 @@ describe('handleRequest', () => {
     let capturedFilter: Record<string, unknown> | undefined;
     const originalList = engine.list.bind(engine);
     engine.list = async (filter) => {
-      capturedFilter = filter as Record<string, unknown>;
+      capturedFilter = filter;
       return originalList(filter);
     };
 

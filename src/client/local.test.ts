@@ -505,9 +505,9 @@ describe('LocalClient', () => {
 
       handle.addEventListener(
         WorkflowCompletedEvent.type,
-        (() => {
+        () => {
           callCount++;
-        }) as EventListener,
+        },
         { signal: controller.signal },
       );
 
@@ -538,13 +538,13 @@ describe('LocalClient', () => {
       const handle = await client.start('echo', 'multi');
       const results: string[] = [];
 
-      handle.addEventListener(WorkflowCompletedEvent.type, (() => {
+      handle.addEventListener(WorkflowCompletedEvent.type, () => {
         results.push('listener-a');
-      }) as EventListener);
+      });
 
-      handle.addEventListener(WorkflowCompletedEvent.type, (() => {
+      handle.addEventListener(WorkflowCompletedEvent.type, () => {
         results.push('listener-b');
-      }) as EventListener);
+      });
 
       await handle.result();
 
@@ -695,10 +695,8 @@ describe('LocalClient delegation surface', () => {
 
     const registeredListener = mock(() => {});
     const removedListener = mock(() => {});
-    workflowHandle.addEventListener =
-      registeredListener as unknown as typeof workflowHandle.addEventListener;
-    workflowHandle.removeEventListener =
-      removedListener as unknown as typeof workflowHandle.removeEventListener;
+    workflowHandle.addEventListener = registeredListener;
+    workflowHandle.removeEventListener = removedListener;
 
     const engine = {
       start: mock(async () => workflowHandle),
@@ -831,8 +829,9 @@ describe('LocalClient delegation surface', () => {
     expect(await handle.query('status')).toBe('query-result');
     expect(await handle.getAttributes()).toEqual({ priority: 'high' });
     await handle.setAttributes({ priority: 'critical' });
-    handle.addEventListener('workflow:completed', (() => {}) as EventListener);
-    handle.removeEventListener('workflow:completed', (() => {}) as EventListener);
+    const completionListener = () => {};
+    handle.addEventListener('workflow:completed', completionListener);
+    handle.removeEventListener('workflow:completed', completionListener);
     handle[Symbol.dispose]();
 
     expect(await client.get('delegated-workflow')).toMatchObject({

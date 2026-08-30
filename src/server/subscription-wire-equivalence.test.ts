@@ -118,7 +118,7 @@ describe('subscription wire-format fixtures — current-contract', () => {
     const emitter = makeEmitter();
     const session = createJsonRpcWebSocketSession({
       registry: createOperationRegistry([workflowEventsSubscriptionOperation]),
-      engine: {} as unknown,
+      engine: {},
       principal: principalFromApiKey({ subject: 'test', scopes: ['events:read'] }),
       emitter,
       feed,
@@ -198,7 +198,7 @@ describe('subscription wire-format fixtures — current-contract', () => {
     const emitter = makeEmitter();
     const session = createJsonRpcWebSocketSession({
       registry: createOperationRegistry([workflowEventsSubscriptionOperation]),
-      engine: {} as unknown,
+      engine: {},
       principal: principalFromApiKey({ subject: 'test', scopes: ['events:read'] }),
       emitter,
       feed,
@@ -270,7 +270,7 @@ describe('subscription wire-format fixtures — new-error-contract', () => {
     const emitter = makeEmitter();
     const session = createJsonRpcWebSocketSession({
       registry: createOperationRegistry([failingOp]),
-      engine: {} as unknown,
+      engine: {},
       principal: principalFromApiKey({ subject: 'test', scopes: ['events:read'] }),
       emitter,
       feed,
@@ -346,7 +346,7 @@ describe('subscription wire-format fixtures — new-error-contract', () => {
     const emitter = makeEmitter();
     const session = createJsonRpcWebSocketSession({
       registry: createOperationRegistry([throwingOp]),
-      engine: {} as unknown,
+      engine: {},
       principal: principalFromApiKey({ subject: 'test', scopes: ['events:read'] }),
       emitter,
       feed,

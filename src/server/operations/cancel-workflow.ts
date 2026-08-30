@@ -28,7 +28,7 @@ export const cancelWorkflowOperation = createSingleWorkflowControlOperation<
   destructive: true,
   tags: ['Workflows'],
   inputSchema: cancelWorkflowInput,
-  outputSchema: cancelWorkflowOutput as z.ZodType<CancelWorkflowOutput>,
+  outputSchema: cancelWorkflowOutput,
   producibleFaults: ['NotFound'],
   invoke: async ({ input, engine }): Promise<CancelWorkflowOutput> => {
     await engine.cancel(input.workflowId);

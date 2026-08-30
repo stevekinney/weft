@@ -441,14 +441,14 @@ async function invokeSignalTransport(
     name: string | { readonly name: string },
     payload?: unknown,
   ) => Promise<void>;
-  engine.signal = (async (
+  engine.signal = async (
     workflowId: string,
     name: string | { readonly name: string },
     payload?: unknown,
   ) => {
     callCount += 1;
     return originalSignal(workflowId, name, payload);
-  }) as Engine['signal'];
+  };
 
   const handle = await engine.start('hold', null, { id: `parity-signal-${transport}` });
   await waitForStatus(engine, handle.id, 'running');

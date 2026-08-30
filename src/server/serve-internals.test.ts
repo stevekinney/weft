@@ -342,7 +342,7 @@ describe('registerStackDisposers', () => {
       {
         cleanupWorkflow() {},
         dispose() {},
-      } as unknown as EventBroadcastingHandle,
+      },
       () => {},
     );
 
@@ -386,7 +386,7 @@ describe('registerStackDisposers', () => {
       {
         cleanupWorkflow() {},
         dispose() {},
-      } as unknown as EventBroadcastingHandle,
+      },
       () => {},
     );
 

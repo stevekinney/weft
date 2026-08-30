@@ -106,7 +106,7 @@ describe('engine sub-operations', () => {
         scope,
         type: 'state-read',
       },
-      callbacks as never,
+      callbacks,
     );
     expect(initialSnapshot).toEqual({ value: 1, version: 0 });
 
@@ -122,7 +122,7 @@ describe('engine sub-operations', () => {
         type: 'state-commit',
         value: 2,
       },
-      callbacks as never,
+      callbacks,
     );
     expect(setResult).toEqual({ applied: true, value: 2, version: 1 });
     expect(
@@ -150,7 +150,7 @@ describe('engine sub-operations', () => {
         scope,
         type: 'state-commit',
       },
-      deleteCallbacks as never,
+      deleteCallbacks,
     );
 
     expect(deleteResult).toEqual({ applied: true, value: undefined, version: 2 });
@@ -246,7 +246,7 @@ describe('engine sub-operations', () => {
         ],
         type: 'race',
       },
-      callbacks as never,
+      callbacks,
       outerController.signal,
     );
 

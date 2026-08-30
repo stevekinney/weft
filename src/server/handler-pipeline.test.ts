@@ -115,7 +115,7 @@ function buildPrincipalSpy(): {
   };
   const registry = createOperationRegistry([operation]);
   // Typed strict at the factory, widen at the router boundary.
-  return { registry, bindings: [binding as UnknownRestBinding], captured };
+  return { registry, bindings: [binding], captured };
 }
 
 describe('handler pipeline — restBindings / operationRegistry pairing guard', () => {

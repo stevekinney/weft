@@ -138,7 +138,7 @@ export function registerSerializer<T>(
   const entry: RegistryEntry = {
     tag,
     constructor: key,
-    handlers: handlers as SerializerHandlers<unknown>,
+    handlers: handlers,
   };
   registryByConstructor.set(key, entry);
   registryByTag.set(tag, entry);

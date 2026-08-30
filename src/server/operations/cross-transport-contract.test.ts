@@ -164,10 +164,7 @@ describe('runtime operation cross-transport contract', () => {
       const wsResponsePromise = waitForMessage(
         ws,
         (parsed) =>
-          typeof parsed === 'object' &&
-          parsed !== null &&
-          'id' in parsed &&
-          (parsed as { id: unknown }).id === wsId,
+          typeof parsed === 'object' && parsed !== null && 'id' in parsed && parsed.id === wsId,
       );
       ws.send(
         JSON.stringify({

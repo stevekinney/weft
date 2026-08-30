@@ -337,9 +337,9 @@ function overrideProperty<T extends object, K extends keyof T>(
   replacement: T[K],
 ): () => void {
   const original = target[property];
-  (target as Record<PropertyKey, unknown>)[property as PropertyKey] = replacement as unknown;
+  (target as Record<PropertyKey, unknown>)[property as PropertyKey] = replacement;
   return () => {
-    (target as Record<PropertyKey, unknown>)[property as PropertyKey] = original as unknown;
+    (target as Record<PropertyKey, unknown>)[property as PropertyKey] = original;
   };
 }
 
@@ -1629,15 +1629,17 @@ describe('serve', () => {
   it('disposes the listening server when event broadcasting setup throws', async () => {
     engine = createEngine();
     const originalAddEventListener = engine.addEventListener.bind(engine);
-    const restoreAddEventListener = overrideProperty(engine, 'addEventListener', ((
-      ...args: Parameters<EventTarget['addEventListener']>
-    ) => {
-      const [type] = args;
-      if (type === TokenEvent.type) {
-        throw new Error('broadcast setup failed');
-      }
-      return originalAddEventListener(...args);
-    }) as Engine['addEventListener']);
+    const restoreAddEventListener = overrideProperty(
+      engine,
+      'addEventListener',
+      (...args: Parameters<EventTarget['addEventListener']>) => {
+        const [type] = args;
+        if (type === TokenEvent.type) {
+          throw new Error('broadcast setup failed');
+        }
+        return originalAddEventListener(...args);
+      },
+    );
 
     try {
       expect(() => serveTestServer({ engine, port: 0 })).toThrow('broadcast setup failed');
@@ -2827,17 +2829,23 @@ describe('worker WebSocket protocol', () => {
       // after dispatch's own create+claim write to the same ledger key has
       // already committed, since both go through the same `conditionalBatch`
       // path on `taskLedgerKey('heartbeat-write-fail-op')`.
-      restoreConditionalBatch = overrideProperty(storage, 'conditionalBatch', (async (
-        conditions: Parameters<MemoryStorage['conditionalBatch']>[0],
-        operations: Parameters<MemoryStorage['conditionalBatch']>[1],
-      ) => {
-        if (
-          operations.some((operation) => operation.key === taskLedgerKey('heartbeat-write-fail-op'))
-        ) {
-          throw new Error('heartbeat write failed');
-        }
-        return originalConditionalBatch(conditions, operations);
-      }) as MemoryStorage['conditionalBatch']);
+      restoreConditionalBatch = overrideProperty(
+        storage,
+        'conditionalBatch',
+        async (
+          conditions: Parameters<MemoryStorage['conditionalBatch']>[0],
+          operations: Parameters<MemoryStorage['conditionalBatch']>[1],
+        ) => {
+          if (
+            operations.some(
+              (operation) => operation.key === taskLedgerKey('heartbeat-write-fail-op'),
+            )
+          ) {
+            throw new Error('heartbeat write failed');
+          }
+          return originalConditionalBatch(conditions, operations);
+        },
+      );
 
       ws.send(JSON.stringify({ type: 'heartbeat', workerId: 'w-heartbeat-write-fail' }));
       await waitFor(
@@ -6358,12 +6366,12 @@ describe('worker disconnection triggers task reassignment', () => {
       // Installed after dispatch's own ledger read/write has already
       // committed — the disconnect handler's own read of the same ledger
       // key is what must fail here.
-      restoreGet = overrideProperty(storage, 'get', (async (key: string) => {
+      restoreGet = overrideProperty(storage, 'get', async (key: string) => {
         if (key === taskLedgerKey('disconnect-get-fail-op')) {
           throw new Error('disconnect get failed');
         }
         return originalGet(key);
-      }) as MemoryStorage['get']);
+      });
 
       ws.close();
       await waitFor(
@@ -6423,19 +6431,23 @@ describe('worker disconnection triggers task reassignment', () => {
       // catch-all in `runWorkerDisconnectRequeue` as a `.get()` failure would
       // (see "logs disconnect reassignment failures when storage access
       // throws" above) — same message, different failing storage method.
-      restoreConditionalBatch = overrideProperty(storage, 'conditionalBatch', (async (
-        conditions: Parameters<MemoryStorage['conditionalBatch']>[0],
-        operations: Parameters<MemoryStorage['conditionalBatch']>[1],
-      ) => {
-        if (
-          operations.some(
-            (operation) => operation.key === taskLedgerKey('disconnect-redispatch-fail-op'),
-          )
-        ) {
-          throw new Error('immediate redispatch failed');
-        }
-        return originalConditionalBatch(conditions, operations);
-      }) as MemoryStorage['conditionalBatch']);
+      restoreConditionalBatch = overrideProperty(
+        storage,
+        'conditionalBatch',
+        async (
+          conditions: Parameters<MemoryStorage['conditionalBatch']>[0],
+          operations: Parameters<MemoryStorage['conditionalBatch']>[1],
+        ) => {
+          if (
+            operations.some(
+              (operation) => operation.key === taskLedgerKey('disconnect-redispatch-fail-op'),
+            )
+          ) {
+            throw new Error('immediate redispatch failed');
+          }
+          return originalConditionalBatch(conditions, operations);
+        },
+      );
 
       ws.close();
 
@@ -7132,12 +7144,12 @@ describe('visibility timeout expiry triggers task reassignment', () => {
       // Installed after dispatch's own ledger read/write has already
       // committed, on the same `taskLedgerKey` the fast expiry scanner reads
       // once the visibility timeout above elapses.
-      restoreGet = overrideProperty(storage, 'get', (async (key: string) => {
+      restoreGet = overrideProperty(storage, 'get', async (key: string) => {
         if (key === taskLedgerKey('visibility-retry-op')) {
           throw new Error('visibility get failed');
         }
         return originalGet(key);
-      }) as MemoryStorage['get']);
+      });
 
       await waitFor(
         () =>
@@ -7921,18 +7933,22 @@ describe('retry policy respected on reassignment', () => {
     // requeue, 3: the delayed redispatch's claim) from the earlier ones that
     // must succeed for the scenario to reach the delayed path at all.
     let writeCount = 0;
-    const restoreConditionalBatch = overrideProperty(storage, 'conditionalBatch', (async (
-      conditions: Parameters<MemoryStorage['conditionalBatch']>[0],
-      operations: Parameters<MemoryStorage['conditionalBatch']>[1],
-    ) => {
-      if (operations.some((operation) => operation.key === taskLedgerKey(operationId))) {
-        writeCount++;
-        if (writeCount >= 3) {
-          throw new Error('delayed redispatch failed');
+    const restoreConditionalBatch = overrideProperty(
+      storage,
+      'conditionalBatch',
+      async (
+        conditions: Parameters<MemoryStorage['conditionalBatch']>[0],
+        operations: Parameters<MemoryStorage['conditionalBatch']>[1],
+      ) => {
+        if (operations.some((operation) => operation.key === taskLedgerKey(operationId))) {
+          writeCount++;
+          if (writeCount >= 3) {
+            throw new Error('delayed redispatch failed');
+          }
         }
-      }
-      return originalConditionalBatch(conditions, operations);
-    }) as MemoryStorage['conditionalBatch']);
+        return originalConditionalBatch(conditions, operations);
+      },
+    );
 
     try {
       const { primaryWorker: ws1, secondaryWorker: ws2 } =

@@ -132,7 +132,7 @@ function validateRegisterProtocolVersion(
   value: unknown,
 ): RemoteWorkerProtocolParseResult<RemoteWorkerProtocolVersion> {
   if (value === REMOTE_WORKER_PROTOCOL_VERSION) {
-    return { ok: true, message: value as RemoteWorkerProtocolVersion };
+    return { ok: true, message: value };
   }
   const requestedProtocolVersion = isFiniteNumber(value) ? value : undefined;
   return protocolFailure(

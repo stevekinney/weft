@@ -665,29 +665,26 @@ export async function executeRunAllOperationResult(
   callbacks: Pick<CoordinationOperationCallbacks, 'getActivityOperationCallbacks'>,
   speculativeState?: SpeculativeExecutionState,
 ): Promise<Record<string, unknown>> {
-  return executeRunAllBranches(
-    operation.branches as Parameters<typeof executeRunAllBranches>[0],
-    (fn, input) => {
-      // Only speculative runAll activity branches need the full execution
-      // pipeline so verification and compensation tracking are preserved.
-      if (!speculativeState || !isConfiguredInlineActivity(fn)) {
-        return callActivityFunction(fn, input);
-      }
+  return executeRunAllBranches(operation.branches, (fn, input) => {
+    // Only speculative runAll activity branches need the full execution
+    // pipeline so verification and compensation tracking are preserved.
+    if (!speculativeState || !isConfiguredInlineActivity(fn)) {
+      return callActivityFunction(fn, input);
+    }
 
-      return executeActivityOperationResultFromInternals(
-        internals,
-        workflowId,
-        {
-          type: 'activity',
-          operationId: crypto.randomUUID(),
-          activityName: fn.name,
-          fn,
-          input,
-        },
-        callbacks.getActivityOperationCallbacks(),
-        undefined,
-        speculativeState,
-      );
-    },
-  );
+    return executeActivityOperationResultFromInternals(
+      internals,
+      workflowId,
+      {
+        type: 'activity',
+        operationId: crypto.randomUUID(),
+        activityName: fn.name,
+        fn,
+        input,
+      },
+      callbacks.getActivityOperationCallbacks(),
+      undefined,
+      speculativeState,
+    );
+  });
 }

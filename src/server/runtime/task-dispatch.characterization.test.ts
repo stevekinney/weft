@@ -298,7 +298,7 @@ describe('dispatchTaskImpl', () => {
         operationId: 'op-non-json-input',
         activityName: 'doWork',
         workflowType: 'testWorkflow',
-        input: (() => {}) as never,
+        input: () => {},
       }),
     ).rejects.toThrow('non-JSON-serializable');
   });

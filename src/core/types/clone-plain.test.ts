@@ -30,7 +30,7 @@ describe('clonePlain', () => {
     const cyclic: { self?: unknown } = {};
     cyclic.self = cyclic;
     expect(() => clonePlain(cyclic)).not.toThrow();
-    const cloned = clonePlain(cyclic) as { self?: unknown };
+    const cloned = clonePlain(cyclic);
     expect(cloned.self).toBe(cloned);
   });
 

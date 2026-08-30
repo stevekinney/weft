@@ -232,13 +232,7 @@ let baseUrl: string;
         const countAfter = await storage.count('prefix:');
 
         storage[Symbol.dispose]();
-        return { gotValue, keys, countBefore, afterDelete, countAfter } as {
-          gotValue: number[] | null;
-          keys: string[];
-          countBefore: number;
-          afterDelete: null | number[];
-          countAfter: number;
-        };
+        return { gotValue, keys, countBefore, afterDelete, countAfter };
       }, dbName);
 
       expect(result.gotValue).toEqual([0, 1, 127, 128, 254, 255]);
@@ -289,7 +283,7 @@ let baseUrl: string;
         const value = raw ? Array.from(raw) : null;
         const count = await storage.count('durable:');
         storage[Symbol.dispose]();
-        return { value, count } as { value: number[] | null; count: number };
+        return { value, count };
       }, dbName);
 
       expect(result.value).toEqual([42, 43, 44]);

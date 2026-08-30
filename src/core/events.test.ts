@@ -442,9 +442,9 @@ describe('EventTarget integration', () => {
 
     target.addEventListener(
       WorkflowStartedEvent.type,
-      (() => {
+      () => {
         callCount++;
-      }) as EventListener,
+      },
       { signal: controller.signal },
     );
 
@@ -461,17 +461,17 @@ describe('EventTarget integration', () => {
     const target = new EventTarget();
     const received: string[] = [];
 
-    target.addEventListener(WorkflowStartedEvent.type, (() => {
+    target.addEventListener(WorkflowStartedEvent.type, () => {
       received.push('started');
-    }) as EventListener);
+    });
 
-    target.addEventListener(WorkflowCompletedEvent.type, (() => {
+    target.addEventListener(WorkflowCompletedEvent.type, () => {
       received.push('completed');
-    }) as EventListener);
+    });
 
-    target.addEventListener(ActivityFailedEvent.type, (() => {
+    target.addEventListener(ActivityFailedEvent.type, () => {
       received.push('activity-failed');
-    }) as EventListener);
+    });
 
     target.dispatchEvent(new WorkflowCompletedEvent('wf-300', null, 100));
     target.dispatchEvent(new WorkflowStartedEvent('wf-301', 'Test', null));

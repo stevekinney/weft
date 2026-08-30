@@ -32,7 +32,7 @@ export const setWorkflowAttributesOperation = defineOperation<
   destructive: false,
   tags: ['Attributes'],
   inputSchema: setWorkflowAttributesInput,
-  outputSchema: setWorkflowAttributesOutput as z.ZodType<SetWorkflowAttributesOutput>,
+  outputSchema: setWorkflowAttributesOutput,
   access: { kind: 'public' },
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },

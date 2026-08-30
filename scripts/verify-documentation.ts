@@ -447,7 +447,7 @@ export function verifyDocumentation(options: VerificationOptions = {}): {
 
 type CliConsole = Pick<typeof console, 'error' | 'log'>;
 type ExitFunction = (code?: number) => never;
-const DEFAULT_EXIT: ExitFunction = process.exit.bind(process) as ExitFunction;
+const DEFAULT_EXIT: ExitFunction = process.exit.bind(process);
 
 export function runCli(repositoryRoot = REPOSITORY_ROOT, cliConsole: CliConsole = console): number {
   const { filesChecked, findings } = verifyDocumentation({ repositoryRoot });

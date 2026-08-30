@@ -170,5 +170,5 @@ function attachWorkerProtocol(
     ...message,
     protocolVersion: WORKER_PROTOCOL_VERSION,
     ...(inboundMessage.turnId === undefined ? {} : { turnId: inboundMessage.turnId }),
-  } as WorkerOutboundMessage;
+  };
 }

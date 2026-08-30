@@ -23,7 +23,7 @@ describe('deepFreeze', () => {
     expect(Object.isFrozen(value.outer)).toBe(true);
     expect(Object.isFrozen(value.outer.inner)).toBe(true);
     expect(() => {
-      (value.outer.inner as { value: number }).value = 99;
+      value.outer.inner.value = 99;
     }).toThrow(TypeError);
   });
 

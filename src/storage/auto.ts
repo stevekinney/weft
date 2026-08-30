@@ -163,7 +163,7 @@ const WEB_EXTENSION_STORAGE_MODULE = storageModuleSpecifier(
  * ```
  */
 export async function resolveDefaultStorage(
-  runtimeGlobals: RuntimeGlobalsLike = globalThis as RuntimeGlobalsLike,
+  runtimeGlobals: RuntimeGlobalsLike = globalThis,
 ): Promise<WeftStorage> {
   const detected = detectGlobals(runtimeGlobals);
 

@@ -40,7 +40,7 @@ export const signalWorkflowOperation = createSingleWorkflowControlOperation<
   destructive: true,
   tags: ['Signals'],
   inputSchema: signalWorkflowInput,
-  outputSchema: signalWorkflowOutput as z.ZodType<SignalWorkflowOutput>,
+  outputSchema: signalWorkflowOutput,
   producibleFaults: ['NotFound'],
   invoke: async ({ input, engine }): Promise<SignalWorkflowOutput> => {
     await engine.signal(

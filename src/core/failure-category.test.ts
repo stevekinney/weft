@@ -12,7 +12,6 @@ import { encode } from './codec/api.ts';
 import { Engine } from './engine.ts';
 import { classifyErrorAsFailureCategory } from './failure-categories.ts';
 import { buildIndexOperations as buildSearchAttributeIndexOperations } from './search-attributes.ts';
-import type { FailureCategory } from './types.ts';
 import { workflow } from './types.ts';
 
 /** Drain microtasks so fire-and-forget work completes. */
@@ -168,7 +167,7 @@ describe('failureCategory search attribute indexing', () => {
     }
 
     const result = await engine.list({
-      attributes: [{ key: 'failureCategory', value: 'application' as FailureCategory }],
+      attributes: [{ key: 'failureCategory', value: 'application' }],
     });
 
     expect(result.items.length).toBe(2);
@@ -202,7 +201,7 @@ describe('failureCategory search attribute indexing', () => {
     await flush();
 
     const result = await engine.list({
-      attributes: [{ key: 'failureCategory', value: 'application' as FailureCategory }],
+      attributes: [{ key: 'failureCategory', value: 'application' }],
     });
 
     expect(result.items.length).toBe(1);
@@ -236,7 +235,7 @@ describe('failureCategory search attribute indexing', () => {
 
     const result = await engine.list(
       {
-        attributes: [{ key: 'failureCategory', value: 'application' as FailureCategory }],
+        attributes: [{ key: 'failureCategory', value: 'application' }],
       },
       { includeFailureCategory: true },
     );

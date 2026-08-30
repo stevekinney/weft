@@ -343,8 +343,8 @@ describe('createSecondInstanceDetector', () => {
     };
     // Cast through unknown: these test doubles intentionally violate the async
     // signature to simulate a sync-throwing external Storage implementation.
-    storage.put = syncThrow as unknown as MemoryStorage['put'];
-    storage.delete = syncThrow as unknown as MemoryStorage['delete'];
+    storage.put = syncThrow;
+    storage.delete = syncThrow;
     const detector = createSecondInstanceDetector(detectorOptions({ storage, getNow: clock.now }));
 
     // tick(): the first-tick sweep delete AND the heartbeat put both throw
@@ -694,12 +694,12 @@ describe('createSecondInstanceDetector', () => {
     // Capture BOTH args: the name now rides on the second positional argument
     // (the warning type), not the message, so consumers can filter on
     // `warning.name === 'WeftSecondInstanceWarning'`.
-    process.emitWarning = ((message: string | Error, name?: unknown) => {
+    process.emitWarning = (message: string | Error, name?: unknown) => {
       emitted.push({
         message: typeof message === 'string' ? message : message.message,
         name: typeof name === 'string' ? name : undefined,
       });
-    }) as typeof process.emitWarning;
+    };
     try {
       const detector = createSecondInstanceDetector(
         // No `warn` → falls back to process.emitWarning.

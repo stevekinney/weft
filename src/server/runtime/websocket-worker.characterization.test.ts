@@ -1242,7 +1242,7 @@ describe('handleWorkerWebSocketMessage', () => {
       const context = minimalServerContext();
       const options = minimalServeOptions();
       // Not a worker stream path
-      const ws = createFakeWs('/v1/workflows/wf-1/stream', undefined as unknown as string);
+      const ws = createFakeWs('/v1/workflows/wf-1/stream', undefined);
       ws.data.connectionType = 'stream';
 
       handleWorkerWebSocketMessage(context, options, ws as never, 'not json', NOOP_CLEANUP);

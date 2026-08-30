@@ -132,7 +132,7 @@ function parseAttributeFiltersFromBody(value: unknown): AttributeFilter[] {
         );
       }
 
-      filter[property] = attributeValue as AttributeFilterScalarValue;
+      filter[property] = attributeValue;
     }
 
     return filter;

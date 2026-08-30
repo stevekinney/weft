@@ -186,7 +186,7 @@ describe('review helpers', () => {
         throw new Error('network failed');
       },
       { preconnect: originalFetch.preconnect },
-    ) as typeof fetch;
+    );
 
     try {
       await sendReviewWebhook(

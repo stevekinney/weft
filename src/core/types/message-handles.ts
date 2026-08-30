@@ -193,7 +193,7 @@ export function signal(name: string, options?: SignalOptions<unknown>): SignalDe
   return {
     name,
     ...(options?.inputSchema !== undefined ? { inputSchema: options.inputSchema } : {}),
-  } as SignalDefinition<unknown>;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -268,7 +268,7 @@ export function update(name: string, options?: UpdateOptions<unknown>): UpdateDe
     name,
     ...(options?.inputSchema !== undefined ? { inputSchema: options.inputSchema } : {}),
     ...(options?.outputSchema !== undefined ? { outputSchema: options.outputSchema } : {}),
-  } as UpdateDefinition<unknown>;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -349,7 +349,7 @@ export function query(
     name,
     ...(options?.inputSchema !== undefined ? { inputSchema: options.inputSchema } : {}),
     ...(options?.outputSchema !== undefined ? { outputSchema: options.outputSchema } : {}),
-  } as QueryDefinition<unknown>;
+  };
 }
 
 // ---------------------------------------------------------------------------

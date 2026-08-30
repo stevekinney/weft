@@ -36,7 +36,7 @@ function createDependencies() {
 describe('WorkerExecutionDispatcher', () => {
   it('fails a run workflow locally when postMessage throws', async () => {
     const { dependencies } = createDependencies();
-    const dispatcher = new WorkerExecutionDispatcher(dependencies as any);
+    const dispatcher = new WorkerExecutionDispatcher(dependencies);
 
     await dispatcher.acquireAndSend('wf-run', {
       type: 'run',
@@ -59,7 +59,7 @@ describe('WorkerExecutionDispatcher', () => {
 
   it('discards the worker when a resume postMessage throws', () => {
     const { dependencies, worker } = createDependencies();
-    const dispatcher = new WorkerExecutionDispatcher(dependencies as any);
+    const dispatcher = new WorkerExecutionDispatcher(dependencies);
 
     dispatcher.postResumeMessage(
       worker,

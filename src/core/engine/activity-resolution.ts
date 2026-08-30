@@ -75,10 +75,10 @@ export function getActivityFunctionWithMetadata(
   // implementation when the workflow is builder-registered.
   const resolved = resolveActivityViaRegistries(internals, workflowId, operation.activityName);
   if (resolved) {
-    return resolved.fn as ActivityFunctionWithMetadata;
+    return resolved.fn;
   }
   if (typeof operation.fn === 'function') {
-    return operation.fn as ActivityFunctionWithMetadata;
+    return operation.fn;
   }
   return undefined;
 }
@@ -98,7 +98,7 @@ export function resolveActivityFunction(
 ): (...arguments_: unknown[]) => unknown {
   const resolved = resolveActivityViaRegistries(internals, workflowId, operation.activityName);
   if (resolved) return resolved.fn;
-  if (operation.fn) return operation.fn as (...arguments_: unknown[]) => unknown;
+  if (operation.fn) return operation.fn;
   const workflowType = internals.workflowTypeByWorkflowId.get(workflowId) ?? '<unknown>';
   throw new ActivityResolutionError(workflowType, operation.activityName);
 }

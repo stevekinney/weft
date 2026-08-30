@@ -161,7 +161,7 @@ export const submitReviewDecisionOperation = defineOperation<
   destructive: true,
   tags: ['Reviews'],
   inputSchema: submitReviewDecisionInput,
-  outputSchema: submitReviewDecisionOutput as z.ZodType<SubmitReviewDecisionOutput>,
+  outputSchema: submitReviewDecisionOutput,
   access: { kind: 'public' },
   producibleFaults: ['NotFound'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },

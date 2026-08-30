@@ -605,7 +605,7 @@ describe('real dependency helpers', () => {
     const dependencies = createRealDependencies();
     const stderrWrite = mock((_chunk: string) => true);
     const originalWrite = process.stderr.write.bind(process.stderr);
-    process.stderr.write = stderrWrite as typeof process.stderr.write;
+    process.stderr.write = stderrWrite;
 
     try {
       const result = await dependencies.runCommand(
@@ -629,7 +629,7 @@ describe('real dependency helpers', () => {
     const dependencies = createRealDependencies();
     const stderrWrite = mock((_chunk: string) => true);
     const originalWrite = process.stderr.write.bind(process.stderr);
-    process.stderr.write = stderrWrite as typeof process.stderr.write;
+    process.stderr.write = stderrWrite;
 
     try {
       // fixed delay: hang guard on a real subprocess
@@ -645,7 +645,7 @@ describe('real dependency helpers', () => {
     const dependencies = createRealDependencies();
     const stderrWrite = mock((_chunk: string) => true);
     const originalWrite = process.stderr.write.bind(process.stderr);
-    process.stderr.write = stderrWrite as typeof process.stderr.write;
+    process.stderr.write = stderrWrite;
 
     try {
       // fixed delay: hang guard on a real subprocess that deliberately ignores SIGTERM
@@ -664,7 +664,7 @@ describe('real dependency helpers', () => {
     const dependencies = createRealDependencies();
     const stderrWrite = mock((_chunk: string) => true);
     const originalWrite = process.stderr.write.bind(process.stderr);
-    process.stderr.write = stderrWrite as typeof process.stderr.write;
+    process.stderr.write = stderrWrite;
 
     try {
       const result = await dependencies.runCommand(
@@ -689,7 +689,7 @@ describe('real dependency helpers', () => {
     const processIdPath = join(directory, 'descendant-pid.txt');
     const stderrWrite = mock((_chunk: string) => true);
     const originalWrite = process.stderr.write.bind(process.stderr);
-    process.stderr.write = stderrWrite as typeof process.stderr.write;
+    process.stderr.write = stderrWrite;
     let descendantProcessId: number | undefined;
 
     try {

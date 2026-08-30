@@ -402,9 +402,9 @@ describe('ctx.saga()', () => {
       c.run = function* (fn: (input?: unknown) => unknown, input?: unknown) {
         capturedNames.push(fn.name);
         if (arguments.length === 1) {
-          return yield* originalRun(fn as () => unknown);
+          return yield* originalRun(fn);
         }
-        return yield* originalRun(fn as (input: unknown) => unknown, input);
+        return yield* originalRun(fn, input);
       } as typeof c.run;
 
       yield* c.saga([{ definition: activity, input: 'test' }]);
@@ -447,7 +447,7 @@ describe('ctx.saga()', () => {
         // This input has a 'queue' key, which is a DISCRIMINATOR_KEYS member.
         // If ctx.run() classified every final { queue } object as options, this
         // would be stripped and the activity would receive undefined.
-        yield* c.saga([{ definition: activity as ActivityDefinition, input: { queue: 'orders' } }]);
+        yield* c.saga([{ definition: activity, input: { queue: 'orders' } }]);
       },
     );
     engine.register(optionsLikeSagaWorkflow);
@@ -482,9 +482,7 @@ describe('ctx.saga()', () => {
     const interceptedSagaWorkflow = workflow({ name: 'intercepted-saga' }).execute(async function* (
       ctx: WorkflowContext,
     ) {
-      return yield* ctx.saga([
-        { definition: activity as ActivityDefinition, input: { queue: 'orders' } },
-      ]);
+      return yield* ctx.saga([{ definition: activity, input: { queue: 'orders' } }]);
     });
     engine.register(interceptedSagaWorkflow);
 

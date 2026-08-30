@@ -715,7 +715,7 @@ for (const backend of storageBackends) {
 
       // Setting a number where string is expected should throw
       try {
-        await engine.setAttributes('wf-type-mismatch', { status: 12345 as any });
+        await engine.setAttributes('wf-type-mismatch', { status: 12345 });
         expect.unreachable('should have thrown');
       } catch (error) {
         expect(error).toBeInstanceOf(Error);
@@ -743,7 +743,7 @@ for (const backend of storageBackends) {
       await flush();
 
       try {
-        await engine.setAttributes('wf-type-mismatch-num', { priority: 'high' as any });
+        await engine.setAttributes('wf-type-mismatch-num', { priority: 'high' });
         expect.unreachable('should have thrown');
       } catch (error) {
         expect(error).toBeInstanceOf(Error);

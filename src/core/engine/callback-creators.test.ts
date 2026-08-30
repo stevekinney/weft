@@ -130,7 +130,7 @@ describe('engine callback creators', () => {
       scan: realStorage.scan.bind(realStorage),
       [Symbol.dispose]: () => realStorage[Symbol.dispose](),
     };
-    const engine = new Engine({ storage: storage as never });
+    const engine = new Engine({ storage: storage });
     const warnings: CleanupWarningEvent[] = [];
 
     engine.addEventListener(CleanupWarningEvent.type, (event) => {

@@ -78,7 +78,7 @@ describe('disposeEngine', () => {
     });
     internals.signalWaitersByWorkflow.set('wf-1', new Set(['wf-1']));
     internals.handleCache.set('wf-1', {
-      ref: new WeakRef({} as object),
+      ref: new WeakRef({}),
     } as ReturnType<typeof internals.handleCache.get> & object);
     const abortedWebhook = new AbortController();
     internals.pendingWebhooks.add(abortedWebhook);
@@ -293,7 +293,7 @@ describe('disposeEngine', () => {
     const engine = new Engine();
     const internals = getInternals(engine);
     internals.handleCache.set('wf-1', {
-      ref: new WeakRef({} as object),
+      ref: new WeakRef({}),
     } as ReturnType<typeof internals.handleCache.get> & object);
 
     engine[Symbol.dispose]();

@@ -326,7 +326,7 @@ function isPromise(value: unknown): value is Promise<unknown> {
     typeof value === 'object' &&
     value !== null &&
     'then' in value &&
-    typeof (value as { then: unknown }).then === 'function'
+    typeof value.then === 'function'
   );
 }
 
@@ -335,7 +335,7 @@ function isGenerator(value: unknown): value is Generator<unknown, unknown, unkno
     typeof value === 'object' &&
     value !== null &&
     'next' in value &&
-    typeof (value as { next: unknown }).next === 'function'
+    typeof value.next === 'function'
   );
 }
 

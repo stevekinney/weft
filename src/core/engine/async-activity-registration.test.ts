@@ -10,7 +10,7 @@ describe('async activity registration', () => {
     const storage = new MemoryStorage();
     const epochBytes = encodeEpoch(1);
     await storage.put(KEYS.leaseEpoch(), epochBytes);
-    storage.conditionalBatch = mock(async () => false) as typeof storage.conditionalBatch;
+    storage.conditionalBatch = mock(async () => false);
 
     await expect(
       registerPendingAsyncActivity(

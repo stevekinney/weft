@@ -179,7 +179,7 @@ for (const backend of storageBackends) {
       await flush();
 
       try {
-        await engine.setAttributes(handle.id, { priority: 'high' as any });
+        await engine.setAttributes(handle.id, { priority: 'high' });
         expect.unreachable('should have thrown');
       } catch (error) {
         expect((error as Error).message).toContain('declared as "number"');

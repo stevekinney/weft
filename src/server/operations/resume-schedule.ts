@@ -23,7 +23,7 @@ export const resumeScheduleOperation = defineOperation<ResumeScheduleInput, Resu
   destructive: false,
   tags: ['Schedules'],
   inputSchema: resumeScheduleInput,
-  outputSchema: resumeScheduleOutput as z.ZodType<ResumeScheduleOutput>,
+  outputSchema: resumeScheduleOutput,
   access: { kind: 'public' },
   producibleFaults: ['NotFound', 'Conflict'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },

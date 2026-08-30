@@ -236,12 +236,8 @@ describe('API-key admission — resolver present', () => {
     // from Set.prototype. If these silently mutate, auth state leaks
     // across requests.
     const scopes = result.principal.scopes as Set<AuthorizationScope>;
-    expect(() => scopes.add('workflows:write' as AuthorizationScope)).toThrow(
-      /Cannot mutate scope set/,
-    );
-    expect(() => scopes.delete('workflows:read' as AuthorizationScope)).toThrow(
-      /Cannot mutate scope set/,
-    );
+    expect(() => scopes.add('workflows:write')).toThrow(/Cannot mutate scope set/);
+    expect(() => scopes.delete('workflows:read')).toThrow(/Cannot mutate scope set/);
     expect(() => scopes.clear()).toThrow(/Cannot mutate scope set/);
 
     // Contents unchanged after the failed mutation attempts.

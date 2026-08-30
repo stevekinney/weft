@@ -71,7 +71,7 @@ describe('createFetchHandler', () => {
     const handler = createFetchHandler({ engine: mockEngine as any });
     const event = createMockFetchEvent('https://example.com/weft/v1/health');
 
-    handler(event as any);
+    handler(event);
 
     expect(event.respondWith).toHaveBeenCalledTimes(1);
   });
@@ -80,7 +80,7 @@ describe('createFetchHandler', () => {
     const handler = createFetchHandler({ engine: mockEngine as any });
     const event = createMockFetchEvent('https://example.com/api/data');
 
-    handler(event as any);
+    handler(event);
 
     expect(event.respondWith).not.toHaveBeenCalled();
   });
@@ -92,7 +92,7 @@ describe('createFetchHandler', () => {
     const handler = createFetchHandler({ engine: mockEngine as any });
     const event = createMockFetchEvent('https://example.com/weft/v1/health');
 
-    handler(event as any);
+    handler(event);
 
     expect(event.respondWith).toHaveBeenCalledTimes(1);
     // The argument to respondWith should be a Promise<Response>
@@ -107,11 +107,11 @@ describe('createFetchHandler', () => {
     });
 
     const matchingEvent = createMockFetchEvent('https://example.com/custom/v1/health');
-    handler(matchingEvent as any);
+    handler(matchingEvent);
     expect(matchingEvent.respondWith).toHaveBeenCalledTimes(1);
 
     const nonMatchingEvent = createMockFetchEvent('https://example.com/weft/v1/health');
-    handler(nonMatchingEvent as any);
+    handler(nonMatchingEvent);
     expect(nonMatchingEvent.respondWith).not.toHaveBeenCalled();
   });
 
@@ -119,7 +119,7 @@ describe('createFetchHandler', () => {
     const handler = createFetchHandler({ engine: mockEngine as any });
     const event = createMockFetchEvent('https://example.com/weft/v1/health');
 
-    handler(event as any);
+    handler(event);
 
     const responsePromise = event.respondWith.mock.calls[0]![0] as Promise<Response>;
     const response = await responsePromise;
@@ -132,7 +132,7 @@ describe('createFetchHandler', () => {
   // root-relative paths. Do NOT wire `/api` handling into the service worker.
   it('delegates the canonical /v1 path, never an /api-prefixed one', () => {
     const event = createMockFetchEvent('https://example.com/weft/v1/workflows/abc');
-    const delegated = buildDelegatedRequest(event as any, normalizePathPrefix('/weft/'));
+    const delegated = buildDelegatedRequest(event, normalizePathPrefix('/weft/'));
 
     expect(delegated).not.toBeNull();
     expect(new URL(delegated!.url).pathname).toBe('/v1/workflows/abc');
@@ -149,7 +149,7 @@ describe('createFetchHandler', () => {
       respondWith: mock(() => {}),
     };
 
-    const delegated = buildDelegatedRequest(event as any, normalizePathPrefix('/weft/'));
+    const delegated = buildDelegatedRequest(event, normalizePathPrefix('/weft/'));
 
     expect(delegated).not.toBeNull();
     expect(new URL(delegated!.url).pathname).toBe('/v1/workflows');
@@ -167,7 +167,7 @@ describe('createFetchHandler', () => {
     });
     const event = createMockFetchEvent('https://example.com/weft/v1/health');
 
-    handler(event as any);
+    handler(event);
 
     expect(event.respondWith).toHaveBeenCalledTimes(1);
   });
@@ -176,7 +176,7 @@ describe('createFetchHandler', () => {
     const handler = createFetchHandler({ engine: mockEngine as any });
     const event = createMockFetchEvent('https://example.com/weft/nonexistent');
 
-    handler(event as any);
+    handler(event);
 
     const responsePromise = event.respondWith.mock.calls[0]![0] as Promise<Response>;
     const response = await responsePromise;
@@ -219,7 +219,7 @@ describe('createFetchHandler', () => {
     );
     event.request = new Request(event.request, { headers: { Accept: 'text/event-stream' } });
 
-    handler(event as any);
+    handler(event);
     const response = await (event.respondWith.mock.calls[0]![0] as Promise<Response>);
     expect(response.status).toBe(200);
     await expect(response.text()).resolves.toContain('workflow:started');
@@ -248,7 +248,7 @@ describe('createPeriodicSyncHandler', () => {
     const handler = createPeriodicSyncHandler(scheduler);
     const event = createMockPeriodicSyncEvent('weft-timers');
 
-    handler(event as any);
+    handler(event);
 
     expect(event.waitUntil).toHaveBeenCalledTimes(1);
     expect(tickMock).toHaveBeenCalledTimes(1);
@@ -261,7 +261,7 @@ describe('createPeriodicSyncHandler', () => {
     const handler = createPeriodicSyncHandler(scheduler);
     const event = createMockPeriodicSyncEvent('other-tag');
 
-    handler(event as any);
+    handler(event);
 
     expect(event.waitUntil).not.toHaveBeenCalled();
     expect(tickMock).not.toHaveBeenCalled();
@@ -274,7 +274,7 @@ describe('createPeriodicSyncHandler', () => {
     const handler = createPeriodicSyncHandler(scheduler, 'custom-sync-tag');
     const event = createMockPeriodicSyncEvent('custom-sync-tag');
 
-    handler(event as any);
+    handler(event);
 
     expect(event.waitUntil).toHaveBeenCalledTimes(1);
     expect(tickMock).toHaveBeenCalledTimes(1);
@@ -287,7 +287,7 @@ describe('createPeriodicSyncHandler', () => {
     const handler = createPeriodicSyncHandler(scheduler, 'custom-sync-tag');
     const event = createMockPeriodicSyncEvent('weft-timers');
 
-    handler(event as any);
+    handler(event);
 
     expect(event.waitUntil).not.toHaveBeenCalled();
   });
@@ -308,7 +308,7 @@ describe('createLifecycleHandlers', () => {
     const handlers = createLifecycleHandlers();
     const event = createMockExtendableEvent();
 
-    handlers.install(event as any);
+    handlers.install(event);
 
     expect(event.waitUntil).toHaveBeenCalledTimes(1);
   });
@@ -317,7 +317,7 @@ describe('createLifecycleHandlers', () => {
     const handlers = createLifecycleHandlers();
     const event = createMockExtendableEvent();
 
-    handlers.activate(event as any);
+    handlers.activate(event);
 
     expect(event.waitUntil).toHaveBeenCalledTimes(1);
   });
@@ -326,7 +326,7 @@ describe('createLifecycleHandlers', () => {
     const handlers = createLifecycleHandlers();
     const event = createMockExtendableEvent();
 
-    handlers.install(event as any);
+    handlers.install(event);
 
     const argument = event.waitUntil.mock.calls[0]![0];
     expect(argument).toBeInstanceOf(Promise);
@@ -336,7 +336,7 @@ describe('createLifecycleHandlers', () => {
     const handlers = createLifecycleHandlers();
     const event = createMockExtendableEvent();
 
-    handlers.activate(event as any);
+    handlers.activate(event);
 
     const argument = event.waitUntil.mock.calls[0]![0];
     expect(argument).toBeInstanceOf(Promise);

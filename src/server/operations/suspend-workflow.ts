@@ -31,7 +31,7 @@ export const suspendWorkflowOperation = createSingleWorkflowControlOperation<
   destructive: false,
   tags: ['Workflows'],
   inputSchema: suspendWorkflowInput,
-  outputSchema: suspendWorkflowOutput as z.ZodType<SuspendWorkflowOutput>,
+  outputSchema: suspendWorkflowOutput,
   producibleFaults: ['Unprocessable'],
   invoke: async ({ input, engine }): Promise<SuspendWorkflowOutput> => {
     await engine.suspend(input.workflowId);

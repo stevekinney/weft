@@ -298,7 +298,7 @@ describe('EventLog.verify() with a watermark', () => {
     // so the scan would start at 0 while a watermark now expects 7 (absent→present race).
     const realGet = storage.get.bind(storage);
     let raced = false;
-    storage.get = (async (key: string) => {
+    storage.get = async (key: string) => {
       if (key === KEYS.eventWatermark('wf') && !raced) {
         raced = true;
         const result = await realGet(key); // null on this first read
@@ -306,7 +306,7 @@ describe('EventLog.verify() with a watermark', () => {
         return result;
       }
       return realGet(key);
-    }) as typeof storage.get;
+    };
 
     expect(await log.verify()).toEqual({ valid: true });
   });
@@ -320,7 +320,7 @@ describe('EventLog.verify() with a watermark', () => {
     // Pathological: every watermark read returns a DIFFERENT, ever-advancing
     // watermark so the first scanned sequence never matches → always 'raced'.
     let fake = 15;
-    storage.get = (async (key: string) => {
+    storage.get = async (key: string) => {
       if (key === KEYS.eventWatermark('wf')) {
         fake += 1;
         const { encode } = await import('../codec.ts');
@@ -334,7 +334,7 @@ describe('EventLog.verify() with a watermark', () => {
       }
       // Force the scan to surface a low first sequence that never matches `fake`.
       return new MemoryStorage().get(key);
-    }) as typeof storage.get;
+    };
 
     const result = await log.verify();
     expect(result).toEqual({ valid: false, indeterminate: true, reason: 'concurrent-compaction' });
@@ -355,7 +355,7 @@ describe('EventLog.verify() with a watermark', () => {
     const { encode } = await import('../codec.ts');
     const realGet = storage.get.bind(storage);
     let firstWatermarkRead = true;
-    storage.get = (async (key: string) => {
+    storage.get = async (key: string) => {
       if (key === KEYS.eventWatermark('wf') && firstWatermarkRead) {
         firstWatermarkRead = false;
         // Stale lower watermark with a valid (consistent) shape.
@@ -368,7 +368,7 @@ describe('EventLog.verify() with a watermark', () => {
         });
       }
       return realGet(key);
-    }) as typeof storage.get;
+    };
 
     const log = new EventLog(storage, 'wf');
     expect(await log.verify()).toEqual({ valid: true });
@@ -391,14 +391,14 @@ describe('EventLog.verify() with a watermark', () => {
     const { encode } = await import('../codec.ts');
     const realGet = storage.get.bind(storage);
     let firstHeadRead = true;
-    storage.get = (async (key: string) => {
+    storage.get = async (key: string) => {
       if (key === KEYS.eventHead('wf') && firstHeadRead) {
         firstHeadRead = false;
         // Stale lower head: as if an append committed after this read.
         return encode({ sequence: 8, lastHash: 'stalehash00000000' });
       }
       return realGet(key);
-    }) as typeof storage.get;
+    };
 
     const log = new EventLog(storage, 'wf');
     expect(await log.verify()).toEqual({ valid: true });

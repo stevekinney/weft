@@ -90,7 +90,7 @@ function formatDeterministicRandomUuid(counter: number): RandomUuid {
 
   // The constructed value is a valid UUID-shaped string; TypeScript models
   // crypto.randomUUID() with a template-literal return type.
-  return `00000000-0000-4000-8000-${suffix}` as RandomUuid;
+  return `00000000-0000-4000-8000-${suffix}`;
 }
 
 /**

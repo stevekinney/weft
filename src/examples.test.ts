@@ -110,7 +110,7 @@ describe('bundled examples', () => {
           }
           return await publishedFormatGreetingActivity.execute(input);
         },
-      } as never,
+      },
       '  Grace  ',
     );
     await expect(helloWorldIterator.next()).resolves.toEqual({
@@ -145,7 +145,7 @@ describe('bundled examples', () => {
           }
           return await publishedLoadCustomerProfileActivity.execute(input);
         },
-      } as never,
+      },
       { customerId: '84' },
     );
     await expect(customerProfileIterator.next()).resolves.toEqual({

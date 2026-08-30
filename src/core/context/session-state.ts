@@ -41,7 +41,7 @@ const DISCRIMINATOR_KEYS = new Set<string>([
 /** Detect whether a value is an {@link ActivityCallOptions} object. */
 export function isActivityCallOptions(value: unknown): value is ActivityCallOptions {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
-  const keys = Object.keys(value as Record<string, unknown>);
+  const keys = Object.keys(value);
   if (keys.length === 0) return false;
   for (const key of keys) {
     if (!ACTIVITY_CALL_OPTION_KEYS.has(key)) {
@@ -109,7 +109,7 @@ export function getSessionStateValue<T>(
 export function setSessionStateValue<T>(internals: ContextInternals, key: string, value: T): T {
   assertValidSessionStateKey(key);
   const candidate = cloneSessionStateStore(internals.stateSession) ?? createSessionStateStore();
-  candidate[key] = cloneSessionStateValue(value) as unknown;
+  candidate[key] = cloneSessionStateValue(value);
   validateSessionStateStore(candidate);
   commitSessionStateStore(internals, candidate);
   return cloneSessionStateValue(candidate[key] as T);
@@ -224,14 +224,10 @@ export function stateSession<T>(
   ): Generator<ContextOperationRequest, TResult, unknown> => {
     const merged = mergeSessionStateRunOptions(rest);
     if (!merged.hasInput) {
-      return context.run(fn as () => Promise<TResult> | TResult, merged.options);
+      return context.run(fn, merged.options);
     }
 
-    return context.run(
-      fn as (input: unknown) => Promise<TResult> | TResult,
-      merged.input,
-      merged.options,
-    );
+    return context.run(fn, merged.input, merged.options);
   };
 
   return {

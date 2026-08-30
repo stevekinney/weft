@@ -7,13 +7,7 @@
  * @module server/operations/list-filter-query-extractor
  */
 
-import type {
-  AttributeFilter,
-  FailureCategory,
-  ListFilter,
-  TimeRange,
-  WorkflowStatus,
-} from '../../core/types.ts';
+import type { FailureCategory, ListFilter, TimeRange, WorkflowStatus } from '../../core/types.ts';
 import { parseAttributeFilters } from '../attribute-filters.ts';
 
 /**
@@ -86,7 +80,7 @@ function parseAttributes(params: URLSearchParams): ListFilter['attributes'] | un
     ...(attribute.lt === undefined ? {} : { lt: attribute.lt }),
     ...(attribute.gte === undefined ? {} : { gte: attribute.gte }),
     ...(attribute.lte === undefined ? {} : { lte: attribute.lte }),
-  })) as readonly AttributeFilter[];
+  }));
 }
 
 function parseIdPrefix(params: URLSearchParams): ListFilter['idPrefix'] | undefined {

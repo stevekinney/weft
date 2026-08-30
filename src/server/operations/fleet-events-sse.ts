@@ -86,7 +86,7 @@ export const fleetEventsSseOperation = defineOperation<
 
 function fleetEventStreamOperationContext(engine: unknown): FleetEventStreamOperationContext {
   if (typeof engine !== 'object' || engine === null) return {};
-  return engine as FleetEventStreamOperationContext;
+  return engine;
 }
 
 function unsupportedEventStreamContextFault(message: string): OperationFault {

@@ -72,9 +72,7 @@ describe('activity-worker-entry', () => {
     globalThis.self = fakeSelf as unknown as typeof self;
 
     initializeActivityWorkerMessageLoop((name) =>
-      name === 'double'
-        ? (((input: unknown) => Number(input) * 2) as (...arguments_: unknown[]) => unknown)
-        : undefined,
+      name === 'double' ? (input: unknown) => Number(input) * 2 : undefined,
     );
 
     await messageListener?.({
@@ -98,10 +96,10 @@ describe('activity-worker-entry', () => {
   it('creates a blob URL for serializable handlers', async () => {
     let capturedBlob: Blob | undefined;
 
-    URL.createObjectURL = ((blob: Blob) => {
+    URL.createObjectURL = (blob: Blob) => {
       capturedBlob = blob;
       return 'blob:activity-worker-entry';
-    }) as typeof URL.createObjectURL;
+    };
 
     const url = createActivityWorkerEntryUrl(
       new Map([
@@ -177,9 +175,9 @@ describe('activity-worker-entry', () => {
 
   it('revokes previously-created worker entry URLs', () => {
     const revokedUrls: string[] = [];
-    URL.revokeObjectURL = ((url: string) => {
+    URL.revokeObjectURL = (url: string) => {
       revokedUrls.push(url);
-    }) as typeof URL.revokeObjectURL;
+    };
 
     revokeActivityWorkerEntryUrl('blob:revoke-me');
 

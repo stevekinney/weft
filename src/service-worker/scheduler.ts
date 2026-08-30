@@ -106,7 +106,7 @@ export class ServiceWorkerScheduler implements Disposable {
   constructor(options: ServiceWorkerSchedulerOptions) {
     this.#storage = options.storage;
     this.#onTimerFired = options.onTimerFired;
-    this.#registration = options.registration as RegistrationWithPeriodicSync | undefined;
+    this.#registration = options.registration;
     this.#periodicSyncTag = options.periodicSyncTag ?? DEFAULT_PERIODIC_SYNC_TAG;
     this.#fallbackIntervalMilliseconds =
       options.fallbackIntervalMilliseconds ?? DEFAULT_FALLBACK_INTERVAL_MILLISECONDS;

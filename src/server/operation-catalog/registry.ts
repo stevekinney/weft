@@ -20,7 +20,7 @@ function freezeAccessPolicy(policy: AccessPolicy): AccessPolicy {
     return Object.freeze({
       kind: 'scoped',
       scopes: freezeScopeRequirement(policy.scopes),
-    }) as AccessPolicy;
+    });
   }
   if (policy.kind === 'scopedAlternatives') {
     return Object.freeze({
@@ -29,13 +29,13 @@ function freezeAccessPolicy(policy: AccessPolicy): AccessPolicy {
         ScopeRequirement,
         ...ScopeRequirement[],
       ],
-    }) as AccessPolicy;
+    });
   }
   if (policy.kind === 'optionalAuth') {
     return Object.freeze({
       kind: 'optionalAuth',
       authenticatedScopes: freezeScopeRequirement(policy.authenticatedScopes),
-    }) as AccessPolicy;
+    });
   }
   return Object.freeze({ ...policy });
 }
@@ -48,7 +48,7 @@ function freezeScopeRequirement(requirement: ScopeRequirement): ScopeRequirement
   return Object.freeze({
     kind: requirement.kind,
     scopes,
-  }) as ScopeRequirement;
+  });
 }
 
 function freezeParameterizedAccessHint(

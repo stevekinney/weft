@@ -124,7 +124,7 @@ describe('deliverForwardedWorkerLog (#529)', () => {
     });
     const consoleInfo = mock(() => {});
     const originalConsoleInfo = console.info;
-    console.info = consoleInfo as unknown as typeof console.info;
+    console.info = consoleInfo;
     try {
       let outcome: string | undefined;
       expect(() => {

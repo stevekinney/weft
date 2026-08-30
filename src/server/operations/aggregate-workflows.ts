@@ -55,7 +55,7 @@ export const aggregateWorkflowsOperation = defineOperation<
   destructive: false,
   tags: ['Workflows'],
   inputSchema: aggregateWorkflowsInput,
-  outputSchema: aggregateWorkflowsOutput as z.ZodType<AggregateWorkflowsOutput>,
+  outputSchema: aggregateWorkflowsOutput,
   access: { kind: 'public' },
   producibleFaults: ['Unprocessable'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },

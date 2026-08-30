@@ -396,7 +396,7 @@ describe('operation coverage regressions', () => {
     await expect(
       getStreamChunksOperation.invoke({
         input: { workflowId: 'wf-stream', key: 'tokens', after: 7 },
-        engine: engine as never,
+        engine: engine,
         principal: anonymousPrincipal(),
         transport: 'jsonRpcHttp',
       }),
@@ -406,7 +406,7 @@ describe('operation coverage regressions', () => {
     await expect(
       streamWorkflowSseOperation.invoke({
         input: { workflowId: 'wf-stream', after: 9 },
-        engine: engine as never,
+        engine: engine,
         principal: anonymousPrincipal(),
         transport: 'jsonRpcHttp',
       }),

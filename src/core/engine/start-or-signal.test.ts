@@ -64,10 +64,7 @@ const collectEvents = workflow({ name: 'collect-events' }).execute(async functio
 ) {
   const events: string[] = [];
   for (;;) {
-    const event = (yield* ctx.waitForSignal<{ t: string; stop?: boolean }>('ev')) as {
-      t: string;
-      stop?: boolean;
-    };
+    const event = yield* ctx.waitForSignal<{ t: string; stop?: boolean }>('ev');
     events.push(event.t);
     if (event.stop) return { events };
   }
@@ -397,13 +394,7 @@ describe('engine.start idempotency', () => {
     const engine = createEngine();
     try {
       await expect(
-        startWithIdempotency(
-          getInternals(engine),
-          'wait-for-release',
-          null,
-          {} as never,
-          {} as never,
-        ),
+        startWithIdempotency(getInternals(engine), 'wait-for-release', null, {}, {} as never),
       ).rejects.toThrow('startWithIdempotency requires options.idempotencyKey');
     } finally {
       await engine[Symbol.asyncDispose]();
@@ -1606,7 +1597,7 @@ describe('engine.startOrSignal', () => {
     let competingStartPromise: Promise<ReturnType<Engine['getHandle']>> | undefined;
     let isStartingCompetingWorkflow = false;
 
-    pendingStarts.has = ((workflowId: string) => {
+    pendingStarts.has = (workflowId: string) => {
       const isPendingStart = originalHas(workflowId);
       if (
         workflowId === 'buffered-collision' &&
@@ -1622,7 +1613,7 @@ describe('engine.startOrSignal', () => {
           });
       }
       return isPendingStart;
-    }) as typeof pendingStarts.has;
+    };
 
     try {
       await engine.signal('buffered-collision', 'release', 'winner', { signalId: 'sig-buffered' });

@@ -1507,7 +1507,7 @@ describe('HttpClient request surface', () => {
 
     const handle = await httpClient.start('echo', 'hello');
     const terminalEvent = await new Promise<Event>((resolve) => {
-      handle.addEventListener('workflow:completed', resolve as EventListener);
+      handle.addEventListener('workflow:completed', resolve);
       void (async () => {
         // The subscription opens lazily on addEventListener; once the socket
         // is open and catch-up has run, deliver the live terminal event.

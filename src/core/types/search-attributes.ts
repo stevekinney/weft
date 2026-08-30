@@ -151,10 +151,10 @@ export function searchAttribute<
   type: TDefinition,
 ): SearchAttributeHandle<SearchAttributeValueForDefinition<TDefinition>> {
   if (typeof type === 'string') {
-    return { name, type } as SearchAttributeHandle<SearchAttributeValueForDefinition<TDefinition>>;
+    return { name, type };
   }
 
-  return { name, ...type } as SearchAttributeHandle<SearchAttributeValueForDefinition<TDefinition>>;
+  return { name, ...type };
 }
 
 export function searchAttributeName(attribute: string | { readonly name: string }): string {

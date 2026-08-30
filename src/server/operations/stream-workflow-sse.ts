@@ -112,7 +112,7 @@ function mapTokenChunkToText(chunk: StoredStreamChunk): string | null {
     return chunk.value;
   }
   if (typeof chunk.value === 'object' && chunk.value !== null && 'token' in chunk.value) {
-    const { token } = chunk.value as { token: unknown };
+    const { token } = chunk.value;
     if (typeof token === 'string' && token.length > 0) {
       return token;
     }

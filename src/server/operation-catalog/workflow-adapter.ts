@@ -160,7 +160,7 @@ function resolveCatalogWorkflowPresentation<Input>(options: CatalogWorkflowOptio
 function zodObjectFromRegistrationSchema(schema: unknown): z.ZodObject<z.ZodRawShape> | undefined {
   if (schema === undefined) return undefined;
   if (schema instanceof z.ZodObject) {
-    return schema as z.ZodObject<z.ZodRawShape>;
+    return schema;
   }
   throw new TypeError(
     'catalogWorkflow() can reuse registration.inputSchema only when it is a Zod object. Pass inputSchema explicitly for other DefinitionSchema implementations.',

@@ -2673,7 +2673,7 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
         super.send(data as any);
       }
     }
-    globalThis.WebSocket = ThrowingWebSocket as unknown as typeof WebSocket;
+    globalThis.WebSocket = ThrowingWebSocket;
     return { armThrow: () => (control.shouldThrow = true) };
   }
 

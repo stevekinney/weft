@@ -124,7 +124,7 @@ describe('runN — chaos seed advances per run', () => {
       input: unknown,
     ) {
       const fn = engine.mocks.get(activityFn)?.implementation ?? activityFn;
-      return yield* ctx.run(fn as (input: unknown) => unknown, input);
+      return yield* ctx.run(fn, input);
     });
     engine.register(wf1);
 
@@ -150,7 +150,7 @@ describe('runN — chaos seed advances per run', () => {
       input: unknown,
     ) {
       const fn = engine2.mocks.get(activityFn)?.implementation ?? activityFn;
-      return yield* ctx.run(fn as (input: unknown) => unknown, input);
+      return yield* ctx.run(fn, input);
     });
     engine2.register(wf2);
 
@@ -204,7 +204,7 @@ describe('runN — chaos seed advances per run', () => {
         input: unknown,
       ) {
         const mockFn = eng.mocks.get(fn)?.implementation ?? fn;
-        return yield* ctx.run(mockFn as (input: unknown) => unknown, input);
+        return yield* ctx.run(mockFn, input);
       });
       eng.register(wf);
       return eng;
@@ -291,7 +291,7 @@ describe('runN — consistency', () => {
       input: unknown,
     ) {
       const fn = engine.mocks.get(activityFn)?.implementation ?? activityFn;
-      return yield* ctx.run(fn as (input: unknown) => unknown, input);
+      return yield* ctx.run(fn, input);
     });
     engine.register(wf);
 

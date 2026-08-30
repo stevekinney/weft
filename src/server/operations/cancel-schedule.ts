@@ -24,7 +24,7 @@ export const cancelScheduleOperation = defineOperation<CancelScheduleInput, Canc
   destructive: true,
   tags: ['Schedules'],
   inputSchema: cancelScheduleInput,
-  outputSchema: cancelScheduleOutput as z.ZodType<CancelScheduleOutput>,
+  outputSchema: cancelScheduleOutput,
   access: { kind: 'public' },
   producibleFaults: ['NotFound', 'Conflict'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },

@@ -2099,7 +2099,7 @@ describe('WorkerExecutionStrategy', () => {
       });
       const consoleInfo = mock(() => {});
       const originalConsoleInfo = console.info;
-      console.info = consoleInfo as unknown as typeof console.info;
+      console.info = consoleInfo;
       setup(1, {
         workflowTurnTimeoutMs: 100,
         maxProtocolMessageBytes: 4_096,
