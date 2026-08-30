@@ -8,6 +8,22 @@ async function readWorkflow(name: string): Promise<string> {
   return Bun.file(new URL(`.github/workflows/${name}`, repositoryRoot)).text();
 }
 
+function workflowJob(workflow: string, name: string): string {
+  const heading = `\n  ${name}:\n`;
+  const start = workflow.indexOf(heading);
+  expect(start).toBeGreaterThanOrEqual(0);
+
+  const contentStart = start + heading.length;
+  const remaining = workflow.slice(contentStart);
+  const nextJob = remaining.search(/\n  [a-z][a-z0-9-]*:\n/);
+  return nextJob === -1 ? remaining : remaining.slice(0, nextJob);
+}
+
+function workflowJobNames(workflow: string): string[] {
+  const jobs = workflow.slice(workflow.indexOf('\njobs:\n'));
+  return [...jobs.matchAll(/^  ([a-z][a-z0-9-]*):$/gm)].map((match) => match[1] as string);
+}
+
 describe('coverage workflow gates', () => {
   it('uses Bun 1.4 isolated installs in CI and release jobs', async () => {
     for (const workflowName of ['ci.yaml', 'release.yaml']) {
@@ -27,19 +43,35 @@ describe('coverage workflow gates', () => {
 
     expect(workflow).toContain('pull_request:');
     expect(workflow).toContain('merge_group:');
-    expect(workflow).toMatch(/\n  coverage:\n[\s\S]*?bun run test:coverage/);
-    expect(workflow).toMatch(/\n  test:\n[\s\S]*?bun test --bail/);
+    expect(workflowJob(workflow, 'coverage')).toContain('bun run test:coverage');
+    expect(workflowJob(workflow, 'test')).toContain('bun test --bail');
   });
 
   it('uses remote caching for deterministic jobs only', async () => {
     const workflow = await readWorkflow('ci.yaml');
-    const cacheTokens =
-      workflow.match(/TURBO_TOKEN: (?:\$\{\{ secrets\.TURBO_TOKEN \}\}|"")/g) ?? [];
-    const cacheTeams = workflow.match(/TURBO_TEAM: kinney/g) ?? [];
+    const cachedJobs = new Map([
+      ['lint', 'bunx turbo run lint --filter=@lostgradient/weft'],
+      ['typecheck', 'bunx turbo run typecheck --filter=@lostgradient/weft'],
+      ['build', 'bunx turbo run build --filter=@lostgradient/weft'],
+      ['ui-lint', 'bunx turbo run lint --filter=@lostgradient/weft-ui'],
+      ['ui-typecheck', 'bunx turbo run typecheck --filter=@lostgradient/weft-ui'],
+      ['ui-build', 'bunx turbo run build --filter=@lostgradient/weft-ui'],
+      ['ui-format-check', 'bunx turbo run format:check --filter=@lostgradient/weft-ui'],
+    ]);
 
-    expect(cacheTokens).toHaveLength(7);
-    expect(cacheTeams).toHaveLength(7);
-    expect(workflow).not.toMatch(/\n  coverage:\n(?:(?!\n {2}\S).)*?TURBO_TOKEN:/s);
+    for (const [name, command] of cachedJobs) {
+      const job = workflowJob(workflow, name);
+      expect(job).toContain(command);
+      expect(job).toMatch(/TURBO_TOKEN: (?:\$\{\{ secrets\.TURBO_TOKEN \}\}|"")/);
+      expect(job).toContain('TURBO_TEAM: kinney');
+    }
+
+    for (const name of workflowJobNames(workflow)) {
+      if (cachedJobs.has(name)) continue;
+      const job = workflowJob(workflow, name);
+      expect(job).not.toContain('TURBO_TOKEN:');
+      expect(job).not.toContain('TURBO_TEAM:');
+    }
   });
 
   it('keeps the ordinary CI test job aligned with the browser-smoke exclusion boundary', async () => {
