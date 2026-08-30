@@ -48,9 +48,22 @@ describe('WorkflowTable', () => {
     });
 
     const link = getByRole('link');
-    expect(link.getAttribute('href')).toBe('/workflows/wf%2Forders%3Fregion%3Dwest%23retry');
+    expect(link.getAttribute('href')).toBe('/workflows/~wf%2Forders%3Fregion%3Dwest%23retry');
     await fireEvent.click(link);
     expect(router.current.params['id']).toBe(workflowId);
+  });
+
+  test('a dot-only id is not normalized away by browser navigation', async () => {
+    (window as unknown as { happyDOM: DetachedWindowAPI }).happyDOM.setURL('http://localhost/');
+    router.navigate('/workflows', { replace: true });
+    const { getByRole } = render(WorkflowTable, {
+      props: { rows: [summary({ id: '..' })] },
+    });
+
+    const link = getByRole('link');
+    expect(link.getAttribute('href')).toBe('/workflows/~..');
+    await fireEvent.click(link);
+    expect(router.current.params['id']).toBe('..');
   });
 
   test('no selection column when selectedIds is omitted', async () => {

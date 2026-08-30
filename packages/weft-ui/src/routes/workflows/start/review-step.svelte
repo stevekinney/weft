@@ -12,7 +12,7 @@
   import PayloadInspector from '@lostgradient/cinder/payload-inspector';
 
   import { truncateId } from '../../../lib/format/index.ts';
-  import { router } from '../../../lib/router.svelte.ts';
+  import { router, workflowDetailPath } from '../../../lib/router.svelte.ts';
   import QueryFaultBanner from '../list/query-fault-banner.svelte';
   import type { AdvancedStartOptionsInput } from './start-wizard-state.ts';
 
@@ -67,10 +67,10 @@
       </span>
       <a
         class="weft-start-review__view-link"
-        href={router.href(`/workflows/${encodeURIComponent(submitState.workflowId)}`)}
+        href={router.href(workflowDetailPath(submitState.workflowId))}
         onclick={(event) => {
           event.preventDefault();
-          router.navigate(`/workflows/${encodeURIComponent(submitState.workflowId)}`);
+          router.navigate(workflowDetailPath(submitState.workflowId));
         }}
       >
         View →

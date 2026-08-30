@@ -37,7 +37,7 @@
 
   import { formatRelativeTime, truncateId } from '../../../lib/format/index.ts';
   import { queryKeys } from '../../../lib/query.ts';
-  import { router } from '../../../lib/router.svelte.ts';
+  import { router, workflowDetailPath } from '../../../lib/router.svelte.ts';
   import { workflowStatusBadge } from '../list/workflow-status-badge.ts';
   import WorkflowStatusIcon from '../list/workflow-status-icon.svelte';
 
@@ -65,7 +65,7 @@
   const hasMore = $derived(total > children.length);
 
   function goToWorkflow(id: string): void {
-    router.navigate(`/workflows/${encodeURIComponent(id)}`);
+    router.navigate(workflowDetailPath(id));
   }
 </script>
 
@@ -89,7 +89,7 @@
         {@const badge = workflowStatusBadge(child.status)}
         <a
           class="weft-children-tab__row weft-children-tab__row--link"
-          href={router.href(`/workflows/${encodeURIComponent(child.id)}`)}
+          href={router.href(workflowDetailPath(child.id))}
           onclick={(event) => {
             event.preventDefault();
             goToWorkflow(child.id);

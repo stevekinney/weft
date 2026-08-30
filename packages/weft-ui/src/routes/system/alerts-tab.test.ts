@@ -177,9 +177,9 @@ describe('AlertsTab — session activity log', () => {
     const { findByRole } = await renderAlertsTab();
 
     const detailsLink = await findByRole('link', { name: 'Details' });
-    expect(detailsLink.getAttribute('href')).toBe('/workflows/wf_1');
+    expect(detailsLink.getAttribute('href')).toBe('/workflows/~wf_1');
     await fireEvent.click(detailsLink);
-    expect(router.pathname).toBe('/workflows/wf_1');
+    expect(router.pathname).toBe('/workflows/~wf_1');
   });
 
   test('renders an operational warning as a Warning row', async () => {

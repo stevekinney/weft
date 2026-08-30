@@ -39,7 +39,12 @@ function matchPattern(pattern: string, pathname: string): Record<string, string>
     if (pathSegment === undefined) return null;
 
     if (patternSegment.startsWith(':')) {
-      params[patternSegment.slice(1)] = decodeURIComponent(pathSegment);
+      const parameterName = patternSegment.slice(1);
+      const decoded = decodeURIComponent(pathSegment);
+      params[parameterName] =
+        pattern === '/workflows/:id' && parameterName === 'id' && decoded.startsWith('~')
+          ? decoded.slice(1)
+          : decoded;
       continue;
     }
 
@@ -47,6 +52,15 @@ function matchPattern(pattern: string, pathname: string): Record<string, string>
   }
 
   return params;
+}
+
+/**
+ * Builds a workflow detail path with an explicit segment marker. The marker
+ * keeps dot-only identifiers from being normalized away by the URL parser
+ * and remains collision-free because every encoded identifier receives it.
+ */
+export function workflowDetailPath(workflowId: string): string {
+  return `/workflows/~${encodeURIComponent(workflowId)}`;
 }
 
 interface RouteDefinitionMatch {

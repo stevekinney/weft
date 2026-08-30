@@ -17,7 +17,7 @@
   import type { ReviewListEntry, ScheduleSummary, WorkflowSummary } from '@lostgradient/weft';
   import type { HttpClient } from '@lostgradient/weft/client';
 
-  import { router } from '../../lib/router.svelte.ts';
+  import { router, workflowDetailPath } from '../../lib/router.svelte.ts';
 
   interface CommandPaletteLauncherProps {
     open: boolean;
@@ -140,7 +140,7 @@
             <CommandItem
               value={`workflow-${workflow.id}`}
               description={workflow.type}
-              onSelect={() => goTo(`/workflows/${encodeURIComponent(workflow.id)}`)}
+              onSelect={() => goTo(workflowDetailPath(workflow.id))}
             >
               {workflow.id}
             </CommandItem>

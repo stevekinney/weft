@@ -10,7 +10,7 @@
   import { createMutation } from '@tanstack/svelte-query';
   import { GitFork } from 'lucide-svelte';
 
-  import { router } from '../../../../lib/router.svelte.ts';
+  import { router, workflowDetailPath } from '../../../../lib/router.svelte.ts';
   import type { ForkClient } from './checkpoints-data.ts';
 
   interface ForkDialogProps {
@@ -53,7 +53,7 @@
 
   function viewForkedRun(): void {
     const id = $forkMutation.data?.id;
-    if (id !== undefined) router.navigate(`/workflows/${encodeURIComponent(id)}`);
+    if (id !== undefined) router.navigate(workflowDetailPath(id));
   }
 </script>
 

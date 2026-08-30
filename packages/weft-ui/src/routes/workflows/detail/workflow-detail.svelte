@@ -66,7 +66,7 @@
   import { applyFleetEventFrame } from '../../../lib/live-source/cache-integration.ts';
   import { faultTreatment } from '../../../lib/faults.ts';
   import { queryKeys } from '../../../lib/query.ts';
-  import { router } from '../../../lib/router.svelte.ts';
+  import { router, workflowDetailPath } from '../../../lib/router.svelte.ts';
   import { getFleetEventSource } from '../../../app/engine-status.svelte.ts';
   import CheckpointsTab from './checkpoints/checkpoints-tab.svelte';
   import ChildrenTab from './children-tab.svelte';
@@ -181,7 +181,7 @@
     const search = new URLSearchParams(router.search);
     if (search.get('tab') === next) return;
     search.set('tab', next);
-    router.navigate(`/workflows/${encodeURIComponent(id)}?${search.toString()}`, {
+    router.navigate(`${workflowDetailPath(id)}?${search.toString()}`, {
       replace: true,
     });
   });
