@@ -9,6 +9,7 @@ import {
   coverageTestArguments,
   discoverCoverageTestFiles,
   findRegressions,
+  isPackageLocalFile,
   overallTotals,
   parseLcov,
   percentage,
@@ -264,6 +265,27 @@ describe('areaForFile', () => {
     expect(areaForFile('fixtures/workflows.ts')).toBe('fixtures');
     expect(areaForFile('scripts/check-coverage.ts')).toBe('scripts');
     expect(areaForFile('tests/setup.ts')).toBe('tests');
+  });
+});
+
+describe('isPackageLocalFile', () => {
+  const record = (file: string): FileCoverage => ({
+    file,
+    linesFound: 1,
+    linesHit: 1,
+    functionsFound: 1,
+    functionsHit: 1,
+  });
+
+  it('keeps files inside the package', () => {
+    expect(isPackageLocalFile(record('src/lib/client.ts'))).toBe(true);
+    expect(isPackageLocalFile(record('tests/setup.ts'))).toBe(true);
+  });
+
+  it('drops workspace-sibling, absolute, and node_modules records', () => {
+    expect(isPackageLocalFile(record('../weft/src/index.ts'))).toBe(false);
+    expect(isPackageLocalFile(record('/tmp/outside.ts'))).toBe(false);
+    expect(isPackageLocalFile(record('node_modules/pkg/index.ts'))).toBe(false);
   });
 });
 

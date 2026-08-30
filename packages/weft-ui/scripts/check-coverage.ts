@@ -218,6 +218,19 @@ function addTotals(totals: AreaCoverage, record: FileCoverage): AreaCoverage {
   };
 }
 
+/**
+ * Whether an LCOV record's path stays inside this package. Coverage runs in
+ * the monorepo can attribute hits to workspace siblings (`../weft/…`) or
+ * absolute paths; those files are gated by their own package, not here.
+ */
+export function isPackageLocalFile(record: FileCoverage): boolean {
+  return (
+    !record.file.startsWith('..') &&
+    !record.file.startsWith('/') &&
+    !record.file.split('/').includes('node_modules')
+  );
+}
+
 /** Sum per-file records into per-area totals (see {@link areaForFile}). */
 export function aggregateByArea(records: FileCoverage[]): Map<string, AreaCoverage> {
   const areas = new Map<string, AreaCoverage>();
@@ -398,7 +411,11 @@ async function main(): Promise<boolean> {
     return false;
   }
 
-  const records = parseLcov(lcovContent);
+  // In the monorepo, Bun's coverage instrumentation also reports files it
+  // reached through the @lostgradient/weft workspace symlink as `../weft/…`
+  // records. Those belong to the weft package's own coverage gate, not this
+  // one, so keep only package-local files.
+  const records = parseLcov(lcovContent).filter(isPackageLocalFile);
   const currentAreas = aggregateByArea(records);
   currentAreas.set('OVERALL', overallTotals(records));
 

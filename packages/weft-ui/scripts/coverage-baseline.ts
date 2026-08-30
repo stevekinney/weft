@@ -139,62 +139,75 @@ const DARWIN_BASELINE: CoverageBaseline = {
   // workflows-domain + tooling-fix state and was stale for those three
   // areas (flagged in PR #14 review). This is the final post-all-domain-work
   // measurement.
-  measuredAt: '2026-08-25T00:30:00.000Z',
-  overall: { linesFound: 33847, linesHit: 31753, functionsFound: 6492, functionsHit: 6155 },
+  //
+  // Re-measured 2026-08-30 for the monorepo conversion (weft-console →
+  // packages/weft-ui in stevekinney/weft, renamed @lostgradient/weft-ui).
+  // Two structural shifts, no behavioral coverage loss: (1) check-coverage
+  // now filters LCOV records to package-local files, because instrumentation
+  // in the workspace also reports files reached through the
+  // @lostgradient/weft symlink as `../weft/…` — those are gated by weft's
+  // own 100%-adjusted gate; (2) the weft-console → weft-ui identifier rename
+  // shifted Svelte compiled-output line attribution by a handful of lines in
+  // reviews, schedules, and the test setup helpers (same test suites, all
+  // passing). Darwin and the linux CI artifact from run 33334402102
+  // aggregate identically at area level after the package-local filter, so
+  // both platform entries record the same measured tuples.
+  measuredAt: '2026-08-30T20:45:00.000Z',
+  overall: { linesFound: 36221, linesHit: 34086, functionsFound: 7006, functionsHit: 6662 },
   areas: {
-    fixtures: { linesFound: 698, linesHit: 319, functionsFound: 69, functionsHit: 12 },
-    scripts: { linesFound: 753, linesHit: 682, functionsFound: 36, functionsHit: 35 },
+    fixtures: { linesFound: 698, linesHit: 321, functionsFound: 69, functionsHit: 12 },
+    // The 2026-08-30 monorepo re-measurement note above applies here too:
+    // the package-local LCOV filter added gate-path lines to
+    // check-coverage.ts that only execute during a real gate run, so the
+    // scripts line percentage dips (709/784 vs. 704/775) while its function
+    // coverage rises with the new isPackageLocalFile tests.
+    scripts: { linesFound: 784, linesHit: 709, functionsFound: 37, functionsHit: 36 },
     src: { linesFound: 12, linesHit: 12, functionsFound: 2, functionsHit: 2 },
-    'src/app': { linesFound: 1301, linesHit: 1261, functionsFound: 282, functionsHit: 267 },
-    'src/lib': { linesFound: 1195, linesHit: 1186, functionsFound: 192, functionsHit: 188 },
+    'src/app': { linesFound: 1411, linesHit: 1372, functionsFound: 305, functionsHit: 290 },
+    'src/lib': { linesFound: 1199, linesHit: 1190, functionsFound: 196, functionsHit: 192 },
     'src/routes/dashboard': {
-      linesFound: 1444,
-      linesHit: 1185,
-      functionsFound: 239,
-      functionsHit: 214,
+      linesFound: 1445,
+      linesHit: 1196,
+      functionsFound: 241,
+      functionsHit: 216,
     },
     'src/routes/reviews': {
-      linesFound: 2264,
-      linesHit: 2111,
+      linesFound: 2244,
+      linesHit: 2092,
       functionsFound: 439,
       functionsHit: 418,
     },
     'src/routes/schedules': {
-      linesFound: 3500,
-      linesHit: 3402,
+      linesFound: 3480,
+      linesHit: 3382,
       functionsFound: 727,
       functionsHit: 701,
     },
     'src/routes/storage': {
-      linesFound: 2739,
-      linesHit: 2708,
+      linesFound: 2731,
+      linesHit: 2701,
       functionsFound: 532,
       functionsHit: 520,
     },
     'src/routes/system': {
-      linesFound: 4866,
-      linesHit: 4846,
-      functionsFound: 1002,
-      functionsHit: 985,
+      linesFound: 4901,
+      linesHit: 4881,
+      functionsFound: 1022,
+      functionsHit: 1005,
     },
     'src/routes/workers': {
-      linesFound: 3363,
-      linesHit: 3209,
-      functionsFound: 677,
-      functionsHit: 666,
+      linesFound: 5685,
+      linesHit: 5463,
+      functionsFound: 1141,
+      functionsHit: 1123,
     },
     'src/routes/workflows': {
-      linesFound: 11592,
-      linesHit: 10735,
+      linesFound: 11513,
+      linesHit: 10673,
       functionsFound: 2281,
       functionsHit: 2134,
     },
-    // Bun 1.4 / happy-dom 20.11.0 no longer needs the 25-line
-    // `Element.prototype.remove()` workaround in `tests/setup.ts`. Removing
-    // its two covered functions leaves the same one uncovered test helper;
-    // the lower function percentage (13/14 vs. 15/16) is a denominator-only
-    // source-shape change, while line coverage improves (97/120 vs. 114/145).
-    tests: { linesFound: 120, linesHit: 97, functionsFound: 14, functionsHit: 13 },
+    tests: { linesFound: 118, linesHit: 94, functionsFound: 14, functionsHit: 13 },
   },
 };
 
@@ -278,67 +291,65 @@ const LINUX_BASELINE: CoverageBaseline = {
   // 2291/2144) — a single sample can't rule out the same variance
   // recurring here, so the lower-state tuple is used defensively rather
   // than risk a false Linux CI regression later.
-  measuredAt: '2026-08-25T00:44:00.000Z',
-  overall: { linesFound: 33864, linesHit: 31770, functionsFound: 6498, functionsHit: 6160 },
+  // Re-measured 2026-08-30 for the monorepo conversion — see the darwin
+  // note above; the linux CI artifact from run 33334402102 aggregates
+  // identically after the package-local LCOV filter.
+  measuredAt: '2026-08-30T20:45:00.000Z',
+  overall: { linesFound: 36221, linesHit: 34086, functionsFound: 7006, functionsHit: 6662 },
   areas: {
-    fixtures: { linesFound: 698, linesHit: 319, functionsFound: 69, functionsHit: 12 },
-    scripts: { linesFound: 753, linesHit: 682, functionsFound: 36, functionsHit: 35 },
+    fixtures: { linesFound: 698, linesHit: 321, functionsFound: 69, functionsHit: 12 },
+    // The 2026-08-30 monorepo re-measurement note above applies here too:
+    // the package-local LCOV filter added gate-path lines to
+    // check-coverage.ts that only execute during a real gate run, so the
+    // scripts line percentage dips (709/784 vs. 704/775) while its function
+    // coverage rises with the new isPackageLocalFile tests.
+    scripts: { linesFound: 784, linesHit: 709, functionsFound: 37, functionsHit: 36 },
     src: { linesFound: 12, linesHit: 12, functionsFound: 2, functionsHit: 2 },
-    'src/app': { linesFound: 1301, linesHit: 1261, functionsFound: 282, functionsHit: 267 },
-    'src/lib': { linesFound: 1195, linesHit: 1186, functionsFound: 192, functionsHit: 188 },
+    'src/app': { linesFound: 1411, linesHit: 1372, functionsFound: 305, functionsHit: 290 },
+    'src/lib': { linesFound: 1199, linesHit: 1190, functionsFound: 196, functionsHit: 192 },
     'src/routes/dashboard': {
-      linesFound: 1444,
-      linesHit: 1185,
-      functionsFound: 239,
-      functionsHit: 214,
+      linesFound: 1445,
+      linesHit: 1196,
+      functionsFound: 241,
+      functionsHit: 216,
     },
     'src/routes/reviews': {
-      linesFound: 2264,
-      linesHit: 2111,
+      linesFound: 2244,
+      linesHit: 2092,
       functionsFound: 439,
       functionsHit: 418,
     },
     'src/routes/schedules': {
-      linesFound: 3500,
-      linesHit: 3402,
+      linesFound: 3480,
+      linesHit: 3382,
       functionsFound: 727,
       functionsHit: 701,
     },
     'src/routes/storage': {
-      linesFound: 2739,
-      linesHit: 2708,
+      linesFound: 2731,
+      linesHit: 2701,
       functionsFound: 532,
       functionsHit: 520,
     },
     'src/routes/system': {
-      linesFound: 4866,
-      linesHit: 4846,
-      functionsFound: 1002,
-      functionsHit: 985,
+      linesFound: 4901,
+      linesHit: 4881,
+      functionsFound: 1022,
+      functionsHit: 1005,
     },
     'src/routes/workers': {
-      linesFound: 3380,
-      linesHit: 3226,
-      functionsFound: 683,
-      functionsHit: 672,
+      linesFound: 5685,
+      linesHit: 5463,
+      functionsFound: 1141,
+      functionsHit: 1123,
     },
     'src/routes/workflows': {
-      linesFound: 11592,
-      linesHit: 10735,
+      linesFound: 11513,
+      linesHit: 10673,
       functionsFound: 2281,
-      // Bun 1.4.0 changed Linux-only Svelte coverage attribution for
-      // `timeline-tab.svelte`: the exact pre-upgrade main artifact reported
-      // 531/511 lines and 118/114 functions, while the Bun 1.4 artifact
-      // reports 542/458 and 108/103. The aggregate baseline already carried
-      // the new line vocabulary; this one-function correction records the
-      // measured 1.4 function tuple. All 1,395 tests still pass, and Darwin
-      // remains gated against its independently measured floor above.
-      functionsHit: 2133,
+      functionsHit: 2134,
     },
-    // Same source-shape correction as the Darwin baseline above. The setup
-    // module is platform-independent; Linux CI measures the same test helper
-    // vocabulary even though application LCOV attribution differs by platform.
-    tests: { linesFound: 120, linesHit: 97, functionsFound: 14, functionsHit: 13 },
+    tests: { linesFound: 118, linesHit: 94, functionsFound: 14, functionsHit: 13 },
   },
 };
 
