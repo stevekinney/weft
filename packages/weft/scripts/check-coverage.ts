@@ -1081,7 +1081,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       {
         reason:
           'Process-entry and failure-exit behavior runs in child processes whose hits are not attributed to the parent Bun LCOV report.',
-        lines: new Set([76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87]),
+        lines: new Set([76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88]),
         requireUncoveredLines: true,
       },
     ],
