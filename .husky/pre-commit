@@ -1,5 +1,9 @@
 #!/usr/bin/env sh
 
-# Lightweight wrapper to call Bun-based hook
+# Lightweight wrapper to call the Bun-based hook for each workspace package.
+# Each package hook runs with the package directory as its working directory,
+# that package's node_modules/.bin on PATH (the workspace uses Bun's isolated
+# linker, so binaries live per package), and only considers staged files
+# under that package.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-bun "$SCRIPT_DIR/../scripts/husky/pre-commit.ts"
+cd "$SCRIPT_DIR/../packages/weft" && PATH="$PWD/node_modules/.bin:$PATH" bun scripts/husky/pre-commit.ts

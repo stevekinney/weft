@@ -270,8 +270,15 @@ export function collectWorkflowBunVersionFindings(
   minimumBunVersion: string,
   repositoryRoot = REPOSITORY_ROOT,
 ): Finding[] {
-  const workflowsDirectory = resolve(repositoryRoot, '.github/workflows');
-  if (!existsSync(workflowsDirectory)) return [];
+  // The GitHub workflows live at the monorepo root, two levels above this
+  // package. Fixture repositories in tests keep `.github/` at their own root,
+  // so check the given root first and walk up only when it has no workflows.
+  const candidateRoots = [repositoryRoot, resolve(repositoryRoot, '../..')];
+  const workflowsRoot = candidateRoots.find((candidate) =>
+    existsSync(resolve(candidate, '.github/workflows')),
+  );
+  if (!workflowsRoot) return [];
+  const workflowsDirectory = resolve(workflowsRoot, '.github/workflows');
   const findings: Finding[] = [];
 
   for (const entry of readdirSync(workflowsDirectory, { withFileTypes: true })) {

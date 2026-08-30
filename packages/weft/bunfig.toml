@@ -1,0 +1,32 @@
+[loader]
+".md" = "text"
+
+[run]
+bun = true
+
+[test]
+coveragePathIgnorePatterns = ["scripts/check-coverage.ts"]
+# Nested git worktrees live inside the repo tree (Scrumlord task worktrees under
+# `tmp/worktrees/`, agent worktrees under `.claude/worktrees/`), each holding a
+# full `src/` tree on an unrelated branch. `bun test` discovers tests tree-wide
+# even when given explicit paths (positional paths are prefix filters), so
+# without this it runs thousands of stale tests from those worktrees. Ignoring
+# them here fixes every `bun test` invocation — the pre-commit hook, `--watch`,
+# and bare `bun test` runs from the project root alike.
+# Standalone example packages have their own dependency graph and CI jobs. Keep
+# their package-local tests out of root discovery; each example can override
+# this from a nearer bunfig.toml when run from its own directory.
+pathIgnorePatterns = [
+  "**/tmp/worktrees/**",
+  "**/.claude/worktrees/**",
+  "examples/checkout/**",
+]
+# Runs once before any test file in the shared test process. Installs
+# globalThis.indexedDB (via fake-indexeddb) so the storage suites and their
+# fault harness reach the global without each test file importing the shim and
+# risking order-dependent flakiness. Non-test helpers still import it
+# explicitly. Lives under tests/ (not src/) so it never ships in dist/. The
+# path resolves relative to this file (the package root), not the invocation
+# cwd, so it holds for the pre-commit hook, `--watch`, and coverage runs alike.
+# See tests/test-preload.ts.
+preload = ["./tests/test-preload.ts"]

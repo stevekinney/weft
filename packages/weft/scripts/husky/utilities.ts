@@ -16,7 +16,7 @@ export const warning = (msg: string) => console.log(chalk.yellow(msg));
 export const error = (msg: string) => console.error(chalk.red(msg));
 
 export async function getStagedFiles(): Promise<string[]> {
-  const out = await $`git diff --cached --name-only`.text();
+  const out = await $`git diff --cached --name-only --relative`.text();
   return out.split('\n').filter(Boolean);
 }
 

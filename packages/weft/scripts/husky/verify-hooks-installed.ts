@@ -76,7 +76,8 @@ if (import.meta.main) {
   if (process.env['HUSKY'] === '0') {
     console.log('husky-verify: HUSKY=0 — skipping (hooks intentionally not installed).');
   } else {
-    const repoRoot = resolve(import.meta.dir, '../..');
+    const repoRootOutput = await $`git rev-parse --show-toplevel`.text();
+    const repoRoot = repoRootOutput.trim();
     const result = await verifyHooksInstalled(repoRoot);
     if (!result.ok) {
       console.error(

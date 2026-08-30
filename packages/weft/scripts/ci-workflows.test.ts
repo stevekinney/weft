@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { BROWSER_SMOKE_TEST_PATHS } from './husky/run-tests.ts';
 
-const repositoryRoot = new URL('../', import.meta.url);
+const repositoryRoot = new URL('../../../', import.meta.url);
 
 async function readWorkflow(name: string): Promise<string> {
   return Bun.file(new URL(`.github/workflows/${name}`, repositoryRoot)).text();
