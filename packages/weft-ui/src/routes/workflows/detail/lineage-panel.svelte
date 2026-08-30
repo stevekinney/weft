@@ -103,7 +103,7 @@
   const thisRunBadge = $derived(workflowStatusBadge(workflow.status));
 
   function goToWorkflow(id: string): void {
-    router.navigate(`/workflows/${id}`);
+    router.navigate(`/workflows/${encodeURIComponent(id)}`);
   }
 
   function goToSchedule(scheduleId: string): void {
@@ -178,7 +178,7 @@
           <Skeleton height="1rem" width="8rem" />
         {:else}
           <a
-            href={router.href(`/workflows/${forkedFrom.workflowId}`)}
+            href={router.href(`/workflows/${encodeURIComponent(forkedFrom.workflowId)}`)}
             onclick={(event) => {
               event.preventDefault();
               goToWorkflow(forkedFrom.workflowId);
@@ -210,7 +210,7 @@
             {@const badge = workflowStatusBadge(child.status)}
             <a
               class="weft-lineage-panel__child-row weft-lineage-panel__child-row--link"
-              href={router.href(`/workflows/${child.id}`)}
+              href={router.href(`/workflows/${encodeURIComponent(child.id)}`)}
               onclick={(event) => {
                 event.preventDefault();
                 goToWorkflow(child.id);

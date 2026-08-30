@@ -255,7 +255,7 @@
           {#if schedule.currentWorkflowId !== undefined}
             <a
               class="weft-schedule-detail__current-run"
-              href={router.href(`/workflows/${schedule.currentWorkflowId}`)}
+              href={router.href(`/workflows/${encodeURIComponent(schedule.currentWorkflowId)}`)}
             >
               <StatusDot status="online" labelVisible={false} />
               <span class="weft-schedule-detail__mono"
@@ -272,7 +272,7 @@
                 <li>
                   <a
                     class="weft-schedule-detail__mono"
-                    href={router.href(`/workflows/${queued.workflowId}`)}
+                    href={router.href(`/workflows/${encodeURIComponent(queued.workflowId)}`)}
                   >
                     {truncateId(queued.workflowId)}
                   </a>
@@ -305,7 +305,10 @@
           {#each $historyQuery.data.items as run (run.id)}
             {@const status = workflowStatusPresentation(run.status)}
             <li>
-              <a class="weft-schedule-detail__mono" href={router.href(`/workflows/${run.id}`)}>
+              <a
+                class="weft-schedule-detail__mono"
+                href={router.href(`/workflows/${encodeURIComponent(run.id)}`)}
+              >
                 {truncateId(run.id)}
               </a>
               <Badge variant={status.variant}>{status.label}</Badge>

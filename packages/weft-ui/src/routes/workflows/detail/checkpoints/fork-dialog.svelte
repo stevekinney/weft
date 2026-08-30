@@ -53,7 +53,7 @@
 
   function viewForkedRun(): void {
     const id = $forkMutation.data?.id;
-    if (id !== undefined) router.navigate(`/workflows/${id}`);
+    if (id !== undefined) router.navigate(`/workflows/${encodeURIComponent(id)}`);
   }
 </script>
 

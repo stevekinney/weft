@@ -148,7 +148,7 @@
   };
 
   function detailsHref(row: AlertRow): string {
-    return row.workflowId ? `/workflows/${row.workflowId}` : '/system';
+    return row.workflowId ? `/workflows/${encodeURIComponent(row.workflowId)}` : '/system';
   }
 
   function formatTime(atMs: number): string {

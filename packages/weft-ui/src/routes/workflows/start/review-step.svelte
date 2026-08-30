@@ -67,10 +67,10 @@
       </span>
       <a
         class="weft-start-review__view-link"
-        href={router.href(`/workflows/${submitState.workflowId}`)}
+        href={router.href(`/workflows/${encodeURIComponent(submitState.workflowId)}`)}
         onclick={(event) => {
           event.preventDefault();
-          router.navigate(`/workflows/${submitState.workflowId}`);
+          router.navigate(`/workflows/${encodeURIComponent(submitState.workflowId)}`);
         }}
       >
         View →

@@ -90,7 +90,7 @@
       return;
     }
     event.preventDefault();
-    router.navigate(`/workflows/${workflowId}`);
+    router.navigate(`/workflows/${encodeURIComponent(workflowId)}`);
   }
 </script>
 
@@ -139,7 +139,7 @@
             <Tooltip text={row.id} placement="top">
               <a
                 class="weft-workflows-table__id-link"
-                href={router.href(`/workflows/${row.id}`)}
+                href={router.href(`/workflows/${encodeURIComponent(row.id)}`)}
                 onclick={(event) => onIdLinkClick(event, row.id)}
               >
                 <code>{truncateId(row.id)}</code>

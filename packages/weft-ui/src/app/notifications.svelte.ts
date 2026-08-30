@@ -84,7 +84,7 @@ function workflowBody(frame: FleetEventFrame, fallback: string): string {
 }
 
 function workflowHref(frame: FleetEventFrame): string {
-  return frame.workflowId ? `/workflows/${frame.workflowId}` : '/workflows';
+  return frame.workflowId ? `/workflows/${encodeURIComponent(frame.workflowId)}` : '/workflows';
 }
 
 /** Every client-visible fleet event kind mapped to its notification treatment. */

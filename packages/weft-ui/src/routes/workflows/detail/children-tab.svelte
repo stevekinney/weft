@@ -65,7 +65,7 @@
   const hasMore = $derived(total > children.length);
 
   function goToWorkflow(id: string): void {
-    router.navigate(`/workflows/${id}`);
+    router.navigate(`/workflows/${encodeURIComponent(id)}`);
   }
 </script>
 
@@ -89,7 +89,7 @@
         {@const badge = workflowStatusBadge(child.status)}
         <a
           class="weft-children-tab__row weft-children-tab__row--link"
-          href={router.href(`/workflows/${child.id}`)}
+          href={router.href(`/workflows/${encodeURIComponent(child.id)}`)}
           onclick={(event) => {
             event.preventDefault();
             goToWorkflow(child.id);

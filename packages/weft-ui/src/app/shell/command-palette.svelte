@@ -140,7 +140,7 @@
             <CommandItem
               value={`workflow-${workflow.id}`}
               description={workflow.type}
-              onSelect={() => goTo(`/workflows/${workflow.id}`)}
+              onSelect={() => goTo(`/workflows/${encodeURIComponent(workflow.id)}`)}
             >
               {workflow.id}
             </CommandItem>
