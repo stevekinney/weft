@@ -50,6 +50,11 @@ bun add @lostgradient/weft-ui
 weft serve --console --workflows ./src/workflows.ts
 ```
 
+> [!NOTE] `@lostgradient/weft-ui` is not published to npm yet. Until its first
+> release, build it from [`packages/weft-ui`](../../../weft-ui) in this
+> monorepo and link or path-install the built package; `bun add
+@lostgradient/weft-ui` will start working once the package ships.
+
 The CLI resolves the package from the current project, calls its exported
 `weftUi()` function, and mounts its adjacent `assets/` directory at
 `/assets`. A missing package or invalid export is reported as an error before

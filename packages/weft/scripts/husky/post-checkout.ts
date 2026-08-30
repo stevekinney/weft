@@ -23,7 +23,10 @@ if (prevHead === '0000000000000000000000000000000000000000') process.exit(0);
 header('Post-checkout hook');
 
 const packageChanged = await fileChangedBetween('package.json', prevHead, newHead);
-const lockChanged = await fileChangedBetween('bun.lock', prevHead, newHead);
+// The workspace lockfile lives at the repository root; ':/…' is a
+// root-relative git pathspec, so this works with the package directory as
+// the hook's working directory.
+const lockChanged = await fileChangedBetween(':/bun.lock', prevHead, newHead);
 
 if (packageChanged) info('package.json has changed');
 if (lockChanged) info('bun.lock has changed');
@@ -33,7 +36,8 @@ if (lockChanged) {
   try {
     await $`bun install`;
     success('Dependencies installed');
-    const stat = await $`git diff --stat ${prevHead}..${newHead} -- package.json bun.lock`.text();
+    const stat =
+      await $`git diff --stat ${prevHead}..${newHead} -- package.json ':/bun.lock'`.text();
     await Bun.write(Bun.stdout, stat);
   } catch {
     warning('Failed to install dependencies — run bun install manually');

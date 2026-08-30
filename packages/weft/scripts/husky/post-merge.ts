@@ -21,7 +21,11 @@ header('Post-merge hook');
 const changedList = await $`git diff-tree -r --name-only --no-commit-id ORIG_HEAD HEAD`.text();
 const changed = changedList.split('\n').filter(Boolean);
 
-const has = (f: string) => changed.includes(f);
+// diff-tree prints repository-root-relative paths, while this hook's file
+// vocabulary is package-relative; the workspace root also owns bun.lock and
+// a package.json, so check both spellings.
+const PACKAGE_PREFIX = 'packages/weft/';
+const has = (f: string) => changed.includes(f) || changed.includes(PACKAGE_PREFIX + f);
 const any = (files: string[]) => files.some((f) => has(f));
 
 const configFiles = [
