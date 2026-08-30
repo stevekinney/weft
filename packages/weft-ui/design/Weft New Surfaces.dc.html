@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <meta name="design_doc_mode" content="canvas">
+  <link rel="stylesheet" href="_ds/cinder-design-system-3e8bc53b-41d7-4dc8-99c0-6181feb05c38/styles.css">
+  <script src="_ds/cinder-design-system-3e8bc53b-41d7-4dc8-99c0-6181feb05c38/_ds_bundle.js"></script>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    a { color: var(--cinder-accent-text); } a:hover { color: var(--cinder-accent-text); text-decoration: underline; }
+    [data-lucide] { width: 1em; height: 1em; stroke-width: 1.6; }
+    .cinder-connection-indicator { white-space: nowrap; }
+    @keyframes wf-pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+    @keyframes wf-spin { to { transform: rotate(360deg); } }
+  </style>
+</helmet>
+<div style="width:max-content; min-width:100%; min-height:100vh; padding:44px; background:oklch(24% 0.012 245); color:oklch(92% 0.01 245); font-family:var(--cinder-font-sans); font-size:var(--cinder-text-base); line-height:var(--cinder-leading-normal);">
+
+  <div style="margin-bottom:38px; max-width:900px;">
+    <div style="font-size:11px; font-weight:700; letter-spacing:.18em; color:oklch(72% 0.14 270); margin-bottom:6px;">WEFT · CINDER</div>
+    <h1 style="margin:0 0 4px; font-size:26px; font-weight:600; letter-spacing:-0.01em; color:oklch(96% 0.005 245);">New &amp; changed surfaces</h1>
+    <p style="margin:0; font-size:var(--cinder-text-sm); color:oklch(70% 0.015 245);">Connection indicator · ScheduleBuilder · lineage · notifications · alerts view · linked selection · branch &amp; saga cards · export · conformance. Every frame shown light + dark.</p>
+  </div>
+
+  <!-- ══════════ 0 · CONNECTION INDICATOR ══════════ -->
+  <div data-screen-label="Connection indicator" style="margin-bottom:56px;">
+    <div style="font-size:var(--cinder-text-xs); font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:oklch(70% 0.015 245); margin:0 0 14px;">ConnectionIndicator · state matrix + in context</div>
+    <div style="display:flex; gap:24px; align-items:flex-start; flex-wrap:wrap;">
+      <sc-for list="{{ themes }}" as="t" hint-placeholder-count="2">
+        <div style="flex:none;">
+          <div style="font-size:11px; color:oklch(62% 0.015 245); margin-bottom:8px;">{{ t.label }}</div>
+          <div data-theme="{{ t.name }}" style="width:640px; background:var(--cinder-bg); color:var(--cinder-text); border:1px solid oklch(45% 0.02 245 / .5); border-radius:12px; padding:20px; box-shadow:var(--cinder-shadow-md);">
+            <!-- state matrix — real Cinder ConnectionIndicator (0.10.0) -->
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:18px;">
+              <div style="display:flex; align-items:center; gap:8px; padding:9px 12px; min-width:0; overflow:hidden; background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-md);">
+                <x-import component-from-global-scope="CinderDesignSystem_3e8bc5.ConnectionIndicator" status="connecting" hint-size="110px,22px"></x-import>
+                <span style="margin-left:auto; font-size:10px; color:var(--cinder-text-disabled); font-family:var(--cinder-font-mono);">connecting</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px; padding:9px 12px; min-width:0; overflow:hidden; background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-md);">
+                <x-import component-from-global-scope="CinderDesignSystem_3e8bc5.ConnectionIndicator" status="live" hint-size="70px,22px"></x-import>
+                <span style="margin-left:auto; font-size:10px; color:var(--cinder-text-disabled); font-family:var(--cinder-font-mono);">live</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px; padding:9px 12px; min-width:0; overflow:hidden; background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-md);">
+                <x-import component-from-global-scope="CinderDesignSystem_3e8bc5.ConnectionIndicator" status="reconnecting" attempt="attempt 3" hint-size="160px,22px"></x-import>
+                <span style="margin-left:auto; font-size:10px; color:var(--cinder-text-disabled); font-family:var(--cinder-font-mono);">reconnecting</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px; padding:9px 12px; min-width:0; overflow:hidden; background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-md);">
+                <x-import component-from-global-scope="CinderDesignSystem_3e8bc5.ConnectionIndicator" status="polling" label="Updated every 30s" hint-size="140px,22px"></x-import>
+                <span style="margin-left:auto; font-size:10px; color:var(--cinder-text-disabled); font-family:var(--cinder-font-mono);">polling</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px; padding:9px 12px; min-width:0; overflow:hidden; background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-md);">
+                <x-import component-from-global-scope="CinderDesignSystem_3e8bc5.ConnectionIndicator" status="stale" label="Data may be stale" hint-size="140px,22px"></x-import>
+                <button class="cinder-button" data-cinder-variant="secondary" data-cinder-size="sm" style="margin-left:auto; height:22px; padding:0 8px; font-size:var(--cinder-text-2xs);">Refresh</button>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px; padding:9px 12px; min-width:0; overflow:hidden; background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-md);">
+                <x-import component-from-global-scope="CinderDesignSystem_3e8bc5.ConnectionIndicator" status="closed" label="Live updates off" hint-size="130px,22px"></x-import>
+                <span style="margin-left:auto; font-size:10px; color:var(--cinder-text-disabled); font-family:var(--cinder-font-mono);">closed</span>
+              </div>
+            </div>
+            <!-- in context -->
+            <div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled); margin-bottom:8px;">In context — list header · engine pill · stream tab</div>
+            <div style="display:flex; align-items:center; gap:10px; padding:9px 12px; background:var(--cinder-surface); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-md); margin-bottom:8px;">
+              <span style="font-size:var(--cinder-text-sm); font-weight:600;">Workflows</span>
+              <span style="font-size:var(--cinder-text-xs); color:var(--cinder-text-subtle);">1,204 runs</span>
+              <span style="margin-left:auto; display:flex; align-items:center;">
+                <x-import component-from-global-scope="CinderDesignSystem_3e8bc5.ConnectionIndicator" status="live" hint-size="70px,22px"></x-import>
+              </span>
+            </div>
+            <div style="display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap;">
+              <div style="display:flex; align-items:center; gap:8px; padding:8px 11px; border-radius:var(--cinder-radius-md); background:var(--cinder-surface); border:1px solid var(--cinder-border); white-space:nowrap;">
+                <span class="cinder-status-dot" data-cinder-variant="success" style="animation:wf-pulse 2s ease-in-out infinite;"></span>
+                <span style="font-size:var(--cinder-text-xs); font-weight:600;">Engine healthy</span>
+                <span style="font-size:10px; color:var(--cinder-text-subtle); font-family:var(--cinder-font-mono);">live · lease renews 12s</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px; padding:8px 11px; border-radius:var(--cinder-radius-md); background:var(--cinder-surface); border:1px solid var(--cinder-border); white-space:nowrap;">
+                <span class="cinder-status-dot" data-cinder-variant="success"></span>
+                <span style="font-size:var(--cinder-text-xs); font-weight:600;">Engine healthy</span>
+                <span style="display:flex; align-items:center; gap:5px; font-size:10px; color:var(--cinder-text-subtle);"><i data-lucide="clock" style="width:11px;height:11px;"></i> updated every 30s</span>
+              </div>
+            </div>
+            <div style="display:flex; align-items:flex-end; gap:2px; border-bottom:1px solid var(--cinder-border); padding:0 4px;">
+              <span style="padding:7px 12px; font-size:var(--cinder-text-xs); font-weight:600; border-bottom:2px solid var(--cinder-accent); color:var(--cinder-text); display:flex; align-items:center; gap:7px;">Events
+                <span style="width:6px; height:6px; border-radius:9999px; background:var(--cinder-success); animation:wf-pulse 2s ease-in-out infinite;"></span>
+              </span>
+              <span style="padding:7px 12px; font-size:var(--cinder-text-xs); color:var(--cinder-text-subtle);">Logs</span>
+              <span style="padding:7px 12px; font-size:var(--cinder-text-xs); color:var(--cinder-text-subtle); display:flex; align-items:center; gap:7px;">Metrics <i data-lucide="clock" style="width:11px;height:11px;color:var(--cinder-text-disabled);"></i></span>
+            </div>
+            <div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled); margin-top:10px;">Polling is deliberately quieter than live — no dot, clock glyph, plain text — so 30s-stale is never mistaken for push.</div>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <!-- ══════════ A · SCHEDULEBUILDER ══════════ -->
+  <div data-screen-label="ScheduleBuilder" style="margin-bottom:56px;">
+    <div style="font-size:var(--cinder-text-xs); font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:oklch(70% 0.015 245); margin:0 0 14px;">A · ScheduleBuilder — three lossless modes</div>
+    <div style="display:flex; gap:24px; align-items:flex-start; flex-wrap:wrap;">
+      <sc-for list="{{ themes }}" as="t" hint-placeholder-count="2">
+        <div style="flex:none;">
+          <div style="font-size:11px; color:oklch(62% 0.015 245); margin-bottom:8px;">{{ t.label }}</div>
+          <div data-theme="{{ t.name }}" style="display:flex; gap:18px; align-items:flex-start; background:var(--cinder-bg); color:var(--cinder-text); border:1px solid oklch(45% 0.02 245 / .5); border-radius:12px; padding:20px; box-shadow:var(--cinder-shadow-md);">
+
+            <!-- real Cinder ScheduleBuilder (0.10.0) — one mount per authoring mode -->
+            <div style="width:340px; flex:none;">
+              <div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled); margin-bottom:7px;">Presets mode · live component</div>
+              <div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); padding:14px;">
+                <x-import component-from-global-scope="CinderDesignSystem_3e8bc5.ScheduleBuilder" compute-next-fires="{{ computeNextFires }}" timezone-label="UTC" label="Schedule — presets" hint-size="100%,380px"></x-import>
+              </div>
+            </div>
+
+            <div style="width:340px; flex:none;">
+              <div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled); margin-bottom:7px;">Cron mode · per-field validation</div>
+              <div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); padding:14px;">
+                <x-import component-from-global-scope="CinderDesignSystem_3e8bc5.ScheduleBuilder" value="{{ cronValue }}" compute-next-fires="{{ computeNextFires }}" timezone-label="UTC · engine default" label="Schedule — cron" hint-size="100%,380px"></x-import>
+              </div>
+            </div>
+
+            <div style="width:340px; flex:none;">
+              <div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled); margin-bottom:7px;">Interval mode · and validation error</div>
+              <div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); padding:14px; margin-bottom:14px;">
+                <x-import component-from-global-scope="CinderDesignSystem_3e8bc5.ScheduleBuilder" value="{{ intervalValue }}" compute-next-fires="{{ computeNextFires }}" timezone-label="UTC" label="Schedule — interval" hint-size="100%,300px"></x-import>
+              </div>
+              <div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); padding:14px;">
+                <div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled); margin-bottom:9px;">Validation-error state · cron</div>
+                <div style="display:grid; grid-template-columns:repeat(5, 1fr); gap:6px; margin-bottom:6px;">
+                  <sc-for list="{{ cronFieldsBad }}" as="c" hint-placeholder-count="5">
+                    <div>
+                      <input class="cinder-input" value="{{ c.value }}" aria-invalid="{{ c.invalid }}" style="font-family:var(--cinder-font-mono); text-align:center; padding-left:4px; padding-right:4px;" />
+                      <div style="font-size:9px; color:var(--cinder-text-disabled); text-align:center; margin-top:4px;">{{ c.label }}</div>
+                    </div>
+                  </sc-for>
+                </div>
+                <div style="display:flex; align-items:flex-start; gap:6px; font-size:var(--cinder-text-xs); color:var(--cinder-danger); margin-bottom:10px;"><i data-lucide="circle-x" style="width:13px;height:13px;flex:none;margin-top:1px;"></i> Day of week must be 0–6 or SUN–SAT.</div>
+                <div style="display:flex; align-items:center; gap:7px; font-size:var(--cinder-text-sm); color:var(--cinder-text-disabled); margin-bottom:4px;"><i data-lucide="calendar-clock" style="width:14px;height:14px;"></i> Fix the expression to see a summary</div>
+                <div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled);">Next 5 fires — unavailable until valid</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <!-- ══════════ A2 · CREATE-SCHEDULE SLIDE-OVER ══════════ -->
+  <div data-screen-label="Create schedule slide-over" style="margin-bottom:56px;">
+    <div style="font-size:var(--cinder-text-xs); font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:oklch(70% 0.015 245); margin:0 0 14px;">A · Create-schedule slide-over — full form</div>
+    <div style="display:flex; gap:24px; align-items:flex-start; flex-wrap:wrap;">
+      <sc-for list="{{ themes }}" as="t" hint-placeholder-count="2">
+        <div style="flex:none;">
+          <div style="font-size:11px; color:oklch(62% 0.015 245); margin-bottom:8px;">{{ t.label }}</div>
+          <div data-theme="{{ t.name }}" style="width:640px; height:840px; position:relative; overflow:hidden; background:var(--cinder-bg); color:var(--cinder-text); border:1px solid oklch(45% 0.02 245 / .5); border-radius:12px; box-shadow:var(--cinder-shadow-md);">
+            <div style="position:absolute; inset:0; background:var(--cinder-overlay, oklch(15% 0.01 245 / .45)); backdrop-filter:blur(2px);"></div>
+            <div style="position:absolute; top:0; right:0; bottom:0; width:440px; display:flex; flex-direction:column; background:var(--cinder-surface); border-left:1px solid var(--cinder-border); box-shadow:var(--cinder-shadow-lg);">
+              <div style="flex:none; display:flex; align-items:center; gap:10px; padding:14px 18px; border-bottom:1px solid var(--cinder-border);">
+                <i data-lucide="calendar-plus" style="width:16px;height:16px;color:var(--cinder-accent-text);"></i>
+                <span style="font-size:var(--cinder-text-md, 15px); font-weight:600;">Create schedule</span>
+                <button style="margin-left:auto; display:grid; place-items:center; width:26px; height:26px; border:0; border-radius:6px; background:transparent; color:var(--cinder-text-subtle); cursor:pointer;"><i data-lucide="x" style="width:15px;height:15px;"></i></button>
+              </div>
+              <div style="flex:1; overflow-y:auto; padding:16px 18px;">
+                <label style="display:block; font-size:var(--cinder-text-xs); font-weight:600; margin-bottom:5px;">Name <span style="color:var(--cinder-danger);">*</span></label>
+                <input class="cinder-input" value="nightly-reconcile" style="margin-bottom:12px; font-family:var(--cinder-font-mono);" />
+                <label style="display:block; font-size:var(--cinder-text-xs); font-weight:600; margin-bottom:5px;">Workflow <span style="color:var(--cinder-danger);">*</span></label>
+                <select class="cinder-select" style="margin-bottom:14px;"><option>reconcile-ledger</option><option>settle-payouts</option></select>
+                <div style="border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); background:var(--cinder-surface-raised); padding:12px; margin-bottom:16px;">
+                  <div style="display:inline-flex; gap:3px; padding:3px; border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-md); background:var(--cinder-surface-inset); margin-bottom:12px;">
+                    <span style="padding:3px 10px; border-radius:5px; background:var(--cinder-accent); color:var(--cinder-accent-contrast); font-size:var(--cinder-text-2xs); font-weight:600;">Presets</span>
+                    <span style="padding:3px 10px; font-size:var(--cinder-text-2xs); color:var(--cinder-text-subtle);">Cron</span>
+                    <span style="padding:3px 10px; font-size:var(--cinder-text-2xs); color:var(--cinder-text-subtle);">Interval</span>
+                  </div>
+                  <div style="display:flex; gap:8px; margin-bottom:10px;">
+                    <select class="cinder-select" style="flex:1;"><option>Daily</option></select>
+                    <input class="cinder-input" value="02:00" style="width:90px; font-family:var(--cinder-font-mono);" />
+                  </div>
+                  <div style="display:flex; align-items:center; gap:7px; font-size:var(--cinder-text-sm); font-weight:600; margin-bottom:8px;"><i data-lucide="calendar-clock" style="width:14px;height:14px;color:var(--cinder-accent-text);"></i> Every day at 02:00 UTC</div>
+                  <div style="display:flex; flex-wrap:wrap; gap:5px;">
+                    <span style="padding:2px 8px; background:var(--cinder-surface-inset); border:1px solid var(--cinder-border-muted); border-radius:var(--cinder-radius-sm); font-family:var(--cinder-font-mono); font-size:var(--cinder-text-2xs); color:var(--cinder-text-muted); white-space:nowrap;">Jul 10 · 02:00</span>
+                    <span style="padding:2px 8px; background:var(--cinder-surface-inset); border:1px solid var(--cinder-border-muted); border-radius:var(--cinder-radius-sm); font-family:var(--cinder-font-mono); font-size:var(--cinder-text-2xs); color:var(--cinder-text-muted); white-space:nowrap;">Jul 11 · 02:00</span>
+                    <span style="padding:2px 8px; background:var(--cinder-surface-inset); border:1px solid var(--cinder-border-muted); border-radius:var(--cinder-radius-sm); font-family:var(--cinder-font-mono); font-size:var(--cinder-text-2xs); color:var(--cinder-text-muted); white-space:nowrap;">Jul 12 · 02:00</span>
+                    <span style="padding:2px 8px; background:var(--cinder-surface-inset); border:1px solid var(--cinder-border-muted); border-radius:var(--cinder-radius-sm); font-family:var(--cinder-font-mono); font-size:var(--cinder-text-2xs); color:var(--cinder-text-muted); white-space:nowrap;">Jul 13 · 02:00</span>
+                    <span style="padding:2px 8px; background:var(--cinder-surface-inset); border:1px solid var(--cinder-border-muted); border-radius:var(--cinder-radius-sm); font-family:var(--cinder-font-mono); font-size:var(--cinder-text-2xs); color:var(--cinder-text-muted); white-space:nowrap;">Jul 14 · 02:00</span>
+                  </div>
+                </div>
+                <div style="font-size:var(--cinder-text-xs); font-weight:600; margin-bottom:8px;">If a run is still going when the next fire is due</div>
+                <div style="display:flex; flex-direction:column; gap:7px; margin-bottom:16px;">
+                  <sc-for list="{{ overlapPolicies }}" as="p" hint-placeholder-count="4">
+                    <label style="display:flex; gap:9px; align-items:flex-start; padding:9px 11px; border:1px solid {{ p.border }}; border-radius:var(--cinder-radius-md); background:{{ p.bg }}; cursor:pointer;">
+                      <input type="radio" name="overlap-{{ t.name }}" class="cinder-radio" checked="{{ p.checked }}" style="margin-top:2px;" />
+                      <span style="flex:1;">
+                        <span style="display:block; font-size:var(--cinder-text-xs); font-weight:600;">{{ p.label }}</span>
+                        <span style="display:block; font-size:var(--cinder-text-2xs); color:var(--cinder-text-subtle); margin-top:2px;">{{ p.consequence }}</span>
+                      </span>
+                    </label>
+                  </sc-for>
+                </div>
+                <div style="display:flex; gap:10px; margin-bottom:14px;">
+                  <div style="flex:1;">
+                    <label style="display:block; font-size:var(--cinder-text-xs); font-weight:600; margin-bottom:5px;">Jitter</label>
+                    <input class="cinder-input" value="30s" style="font-family:var(--cinder-font-mono);" />
+                    <div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled); margin-top:4px;">Random delay added to each fire.</div>
+                  </div>
+                  <div style="flex:1;">
+                    <label style="display:flex; align-items:center; justify-content:space-between; font-size:var(--cinder-text-xs); font-weight:600; margin-bottom:5px; cursor:pointer;">Start paused
+                      <span style="width:34px; height:19px; border-radius:9999px; background:var(--cinder-accent); position:relative; display:inline-block;"><span style="position:absolute; top:2px; right:2px; width:15px; height:15px; border-radius:9999px; background:var(--cinder-accent-contrast);"></span></span>
+                    </label>
+                    <div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled);">Created paused — no fires until you resume it.</div>
+                  </div>
+                </div>
+                <label style="display:block; font-size:var(--cinder-text-xs); font-weight:600; margin-bottom:5px;">Backfill range <span style="font-weight:400; color:var(--cinder-text-disabled);">(optional)</span></label>
+                <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+                  <input class="cinder-input" value="2026-07-05 00:00" style="flex:1; font-family:var(--cinder-font-mono); font-size:var(--cinder-text-xs);" />
+                  <span style="color:var(--cinder-text-disabled);">→</span>
+                  <input class="cinder-input" value="2026-07-09 00:00" style="flex:1; font-family:var(--cinder-font-mono); font-size:var(--cinder-text-xs);" />
+                </div>
+                <div style="display:flex; gap:8px; align-items:flex-start; padding:9px 12px; background:var(--cinder-color-warning-bg); border:1px solid var(--cinder-color-warning-border); border-radius:var(--cinder-radius-md); color:var(--cinder-color-warning-fg); font-size:var(--cinder-text-xs);">
+                  <i data-lucide="triangle-alert" style="width:14px;height:14px;flex:none;margin-top:1px;"></i>
+                  <span>Backfill will enqueue <strong>4 runs</strong> immediately on create, subject to the overlap policy above.</span>
+                </div>
+              </div>
+              <div style="flex:none; display:flex; align-items:center; gap:8px; padding:13px 18px; border-top:1px solid var(--cinder-border); background:var(--cinder-surface);">
+                <span style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled);">Runs as schedules service account</span>
+                <button class="cinder-button" data-cinder-variant="ghost" data-cinder-size="sm" style="margin-left:auto;">Cancel</button>
+                <button class="cinder-button" data-cinder-variant="primary" data-cinder-size="sm">Create schedule</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+    <div style="display:flex; gap:24px; margin-top:16px; flex-wrap:wrap;">
+      <sc-for list="{{ themes }}" as="t" hint-placeholder-count="2">
+        <div data-theme="{{ t.name }}" style="width:640px; background:var(--cinder-bg); color:var(--cinder-text); border:1px solid oklch(45% 0.02 245 / .5); border-radius:12px; padding:14px 18px; display:flex; align-items:center; gap:14px;">
+          <span style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled); flex:none;">Missing permission</span>
+          <button class="cinder-button" data-cinder-variant="primary" data-cinder-size="sm" disabled style="opacity:.55; cursor:not-allowed;">Create schedule</button>
+          <span style="display:inline-flex; align-items:center; gap:7px; padding:6px 10px; background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-md); font-size:var(--cinder-text-2xs); color:var(--cinder-text-subtle); box-shadow:var(--cinder-shadow-sm);"><i data-lucide="lock" style="width:12px;height:12px;"></i> Requires schedules:write</span>
+          <span style="margin-left:auto; font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled);">Disabled, never hidden</span>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <!-- ══════════ B · LINEAGE ══════════ -->
+  <div data-screen-label="Workflow lineage" style="margin-bottom:56px;">
+    <div style="font-size:var(--cinder-text-xs); font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:oklch(70% 0.015 245); margin:0 0 14px;">B · Workflow lineage — Overview tab panel</div>
+    <div style="display:flex; gap:24px; align-items:flex-start; flex-wrap:wrap;">
+      <sc-for list="{{ themes }}" as="t" hint-placeholder-count="2">
+        <div style="flex:none;">
+          <div style="font-size:11px; color:oklch(62% 0.015 245); margin-bottom:8px;">{{ t.label }}</div>
+          <div data-theme="{{ t.name }}" style="width:680px; background:var(--cinder-bg); color:var(--cinder-text); border:1px solid oklch(45% 0.02 245 / .5); border-radius:12px; padding:20px; box-shadow:var(--cinder-shadow-md);">
+            <div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); overflow:hidden;">
+              <div style="display:flex; align-items:center; gap:8px; padding:11px 16px; border-bottom:1px solid var(--cinder-border-muted);">
+                <i data-lucide="git-branch" style="width:15px;height:15px;color:var(--cinder-accent-text);"></i>
+                <span style="font-size:var(--cinder-text-sm); font-weight:600;">Lineage</span>
+                <span style="margin-left:auto; font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled);">Everything reachable in one click</span>
+              </div>
+              <div style="padding:14px 16px;">
+                <!-- provenance -->
+                <div style="display:flex; align-items:center; gap:9px; padding:8px 11px; background:var(--cinder-surface-inset); border-radius:var(--cinder-radius-md); margin-bottom:12px; font-size:var(--cinder-text-xs);">
+                  <i data-lucide="calendar-clock" style="width:14px;height:14px;color:var(--cinder-text-subtle);flex:none;"></i>
+                  <span style="color:var(--cinder-text-subtle);">Launched by schedule</span>
+                  <a href="#" style="font-weight:600; text-decoration:none;">nightly-reconcile</a>
+                  <span style="color:var(--cinder-text-subtle);">· occurrence Jul 9, 02:00 UTC</span>
+                  <a href="#" style="margin-left:auto; font-size:var(--cinder-text-2xs); text-decoration:none;">View schedule →</a>
+                </div>
+                <!-- chain -->
+                <div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled); margin-bottom:6px;">Continuation chain · same workflow id</div>
+                <div style="display:flex; align-items:center; gap:6px; margin-bottom:6px;">
+                  <a href="#" style="display:flex; align-items:center; gap:6px; padding:7px 9px; border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-md); background:var(--cinder-surface); text-decoration:none; color:var(--cinder-text); font-size:var(--cinder-text-xs); white-space:nowrap; flex:none;">
+                    <span class="cinder-badge" data-cinder-size="sm" data-cinder-variant="neutral"><i data-lucide="circle-check" style="width:10px;height:10px;"></i> Completed</span>
+                    <span>Previous run</span>
+                    <span style="font-family:var(--cinder-font-mono); font-size:var(--cinder-text-2xs); color:var(--cinder-text-subtle);">gen 41</span>
+                  </a>
+                  <i data-lucide="arrow-right" style="width:14px;height:14px;color:var(--cinder-text-disabled);flex:none;"></i>
+                  <div style="display:flex; align-items:center; gap:6px; padding:7px 9px; border:1.5px solid var(--cinder-accent); border-radius:var(--cinder-radius-md); background:color-mix(in oklch, var(--cinder-accent), transparent 92%); font-size:var(--cinder-text-xs); font-weight:600; white-space:nowrap; flex:none;">
+                    <span class="cinder-badge" data-cinder-size="sm" data-cinder-variant="success"><i data-lucide="play" style="width:10px;height:10px;"></i> Running</span>
+                    <span>This run</span>
+                    <span style="font-family:var(--cinder-font-mono); font-size:var(--cinder-text-2xs); color:var(--cinder-text-subtle); font-weight:400;">gen 42</span>
+                  </div>
+                  <i data-lucide="arrow-right" style="width:14px;height:14px;color:var(--cinder-text-disabled);flex:none;"></i>
+                  <div style="padding:7px 9px; border:1px dashed var(--cinder-border); border-radius:var(--cinder-radius-md); font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled); white-space:nowrap; flex:none;">No successor</div>
+                </div>
+                <div style="display:flex; align-items:center; gap:7px; margin-bottom:14px; font-size:var(--cinder-text-2xs); color:var(--cinder-text-subtle);">
+                  <span>Workflow id</span>
+                  <span style="font-family:var(--cinder-font-mono);" title="wf_4a9f8c31e7b2d05a6f912c10">wf_4a9f8c31…2c10</span>
+                  <i data-lucide="copy" style="width:12px;height:12px;color:var(--cinder-text-disabled);cursor:pointer;"></i>
+                </div>
+                <!-- forked from -->
+                <div style="display:flex; align-items:center; gap:9px; padding:8px 11px; border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-md); margin-bottom:14px; font-size:var(--cinder-text-xs);">
+                  <i data-lucide="git-fork" style="width:14px;height:14px;color:var(--cinder-text-subtle);flex:none;"></i>
+                  <span style="color:var(--cinder-text-subtle);">Forked from</span>
+                  <a href="#" style="font-weight:600; text-decoration:none;">reconcile-ledger run</a>
+                  <span style="font-family:var(--cinder-font-mono); font-size:var(--cinder-text-2xs); color:var(--cinder-text-subtle);" title="wf_9d20aa41c8e3f76b5d180b3e">wf_9d20aa41…0b3e</span>
+                  <i data-lucide="copy" style="width:12px;height:12px;color:var(--cinder-text-disabled);cursor:pointer;"></i>
+                  <span style="margin-left:auto; color:var(--cinder-text-disabled); font-size:var(--cinder-text-2xs);">at step 12 · Jul 8</span>
+                </div>
+                <!-- children -->
+                <div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled); margin-bottom:6px;">Child workflows · 3</div>
+                <div style="display:flex; flex-direction:column;">
+                  <sc-for list="{{ childRuns }}" as="c" hint-placeholder-count="3">
+                    <div style="display:flex; align-items:center; gap:9px; padding:7px 8px 7px {{ c.indent }}; border-radius:var(--cinder-radius-sm); font-size:var(--cinder-text-xs);">
+                      <i data-lucide="corner-down-right" style="width:12px;height:12px;color:var(--cinder-text-disabled);flex:none;"></i>
+                      <a href="#" style="font-weight:600; text-decoration:none;">{{ c.name }}</a>
+                      <span style="font-family:var(--cinder-font-mono); font-size:var(--cinder-text-2xs); color:var(--cinder-text-subtle);" title="{{ c.fullId }}">{{ c.id }}</span>
+                      <i data-lucide="copy" style="width:12px;height:12px;color:var(--cinder-text-disabled);cursor:pointer;"></i>
+                      <span class="cinder-badge" data-cinder-size="sm" data-cinder-variant="{{ c.variant }}" style="margin-left:auto;"><i data-lucide="{{ c.icon }}" style="width:10px;height:10px;"></i> {{ c.status }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+            </div>
+            <div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled); margin-top:10px;">IDs truncated first 8 … last 4, full value on hover, copy on click. Names — never IDs — are the link labels.</div>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <!-- ══════════ C · NOTIFICATION CENTER ══════════ -->
+  <div data-screen-label="Notification center" style="margin-bottom:56px;">
+    <div style="font-size:var(--cinder-text-xs); font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:oklch(70% 0.015 245); margin:0 0 14px;">C · Notification center — bell dropdown · critical strip · toasts</div>
+    <div style="display:flex; gap:24px; align-items:flex-start; flex-wrap:wrap;">
+      <sc-for list="{{ themes }}" as="t" hint-placeholder-count="2">
+        <div style="flex:none;">
+          <div style="font-size:11px; color:oklch(62% 0.015 245); margin-bottom:8px;">{{ t.label }}</div>
+          <div data-theme="{{ t.name }}" style="width:820px; background:var(--cinder-bg); color:var(--cinder-text); border:1px solid oklch(45% 0.02 245 / .5); border-radius:12px; padding:20px; box-shadow:var(--cinder-shadow-md); display:flex; gap:20px; align-items:flex-start;">
+            <!-- dropdown -->
+            <div style="width:400px; flex:none;">
+              <div style="display:flex; justify-content:flex-end; margin-bottom:6px;">
+                <button style="position:relative; display:grid; place-items:center; width:34px; height:34px; border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-md); background:var(--cinder-surface); color:var(--cinder-text-subtle); cursor:pointer;">
+                  <i data-lucide="bell" style="width:17px;height:17px;"></i>
+                  <span style="position:absolute; top:4px; right:4px; min-width:15px; height:15px; padding:0 3px; display:grid; place-items:center; border-radius:9999px; background:var(--cinder-danger); color:var(--cinder-danger-contrast); font-size:9px; font-weight:700;">7</span>
+                </button>
+              </div>
+              <div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); box-shadow:var(--cinder-shadow-lg); overflow:hidden;">
+                <div style="display:flex; align-items:center; gap:8px; padding:11px 14px; border-bottom:1px solid var(--cinder-border-muted);">
+                  <span style="font-size:var(--cinder-text-sm); font-weight:600;">Notifications</span>
+                  <span class="cinder-badge" data-cinder-size="sm" data-cinder-variant="danger" style="border-radius:9999px;">7 unread</span>
+                  <button style="margin-left:auto; border:0; background:transparent; color:var(--cinder-accent-text); font:inherit; font-size:var(--cinder-text-2xs); font-weight:600; cursor:pointer;">Mark all read</button>
+                </div>
+                <div style="padding:7px 14px 3px; font-size:var(--cinder-text-2xs); font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--cinder-color-danger-fg);">Critical</div>
+                <sc-for list="{{ notifCritical }}" as="n" hint-placeholder-count="2">
+                  <a href="#" style="display:flex; gap:10px; align-items:flex-start; padding:9px 14px; text-decoration:none; color:var(--cinder-text); border-left:2px solid var(--cinder-danger);">
+                    <i data-lucide="{{ n.icon }}" style="width:14px;height:14px;flex:none;margin-top:2px;color:var(--cinder-color-danger-fg);"></i>
+                    <span style="flex:1; min-width:0;">
+                      <span style="display:block; font-size:var(--cinder-text-xs); font-weight:600;">{{ n.title }}</span>
+                      <span style="display:block; font-size:var(--cinder-text-2xs); color:var(--cinder-text-subtle); margin-top:1px;">{{ n.body }}</span>
+                    </span>
+                    <span style="flex:none; font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled);">{{ n.time }}</span>
+                  </a>
+                </sc-for>
+                <div style="padding:7px 14px 3px; font-size:var(--cinder-text-2xs); font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--cinder-color-warning-fg); border-top:1px solid var(--cinder-border-muted); margin-top:4px;">Warning</div>
+                <sc-for list="{{ notifWarning }}" as="n" hint-placeholder-count="3">
+                  <a href="#" style="display:flex; gap:10px; align-items:flex-start; padding:9px 14px; text-decoration:none; color:var(--cinder-text); border-left:2px solid var(--cinder-warning);">
+                    <i data-lucide="{{ n.icon }}" style="width:14px;height:14px;flex:none;margin-top:2px;color:var(--cinder-color-warning-fg);"></i>
+                    <span style="flex:1; min-width:0;">
+                      <span style="display:block; font-size:var(--cinder-text-xs); font-weight:600;">{{ n.title }}</span>
+                      <span style="display:block; font-size:var(--cinder-text-2xs); color:var(--cinder-text-subtle); margin-top:1px;">{{ n.body }}</span>
+                    </span>
+                    <span style="flex:none; font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled);">{{ n.time }}</span>
+                  </a>
+                </sc-for>
+                <div style="padding:7px 14px 3px; font-size:var(--cinder-text-2xs); font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--cinder-text-subtle); border-top:1px solid var(--cinder-border-muted); margin-top:4px;">Info</div>
+                <sc-for list="{{ notifInfo }}" as="n" hint-placeholder-count="2">
+                  <a href="#" style="display:flex; gap:10px; align-items:flex-start; padding:9px 14px; text-decoration:none; color:var(--cinder-text); border-left:2px solid transparent; opacity:{{ n.opacity }};">
+                    <i data-lucide="{{ n.icon }}" style="width:14px;height:14px;flex:none;margin-top:2px;color:var(--cinder-text-subtle);"></i>
+                    <span style="flex:1; min-width:0;">
+                      <span style="display:block; font-size:var(--cinder-text-xs); font-weight:{{ n.weight }};">{{ n.title }}</span>
+                      <span style="display:block; font-size:var(--cinder-text-2xs); color:var(--cinder-text-subtle); margin-top:1px;">{{ n.body }}</span>
+                    </span>
+                    <span style="flex:none; font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled);">{{ n.time }}</span>
+                  </a>
+                </sc-for>
+                <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border-top:1px solid var(--cinder-border-muted);">
+                  <span style="display:flex; align-items:center; gap:6px; font-size:var(--cinder-text-2xs); color:var(--cinder-color-success-fg);"><span style="width:6px;height:6px;border-radius:9999px;background:var(--cinder-success);animation:wf-pulse 2s ease-in-out infinite;"></span> Live</span>
+                  <a href="#" style="font-size:var(--cinder-text-2xs); font-weight:600; text-decoration:none;">Open alerts view →</a>
+                </div>
+              </div>
+            </div>
+            <!-- strip + toasts -->
+            <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:14px;">
+              <div>
+                <div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled); margin-bottom:6px;">Critical-alert strip · below header, dismissible</div>
+                <div style="display:flex; align-items:center; gap:10px; padding:9px 14px; background:var(--cinder-color-danger-bg); border:1px solid var(--cinder-color-danger-border); border-radius:var(--cinder-radius-md); color:var(--cinder-color-danger-fg); font-size:var(--cinder-text-xs);">
+                  <i data-lucide="siren" style="width:15px;height:15px;flex:none;"></i>
+                  <span><strong>Alert firing:</strong> dead-letter queue above threshold · 14 tasks</span>
+                  <a href="#" style="font-weight:600; color:inherit;">View alert</a>
+                  <button style="margin-left:auto; display:grid; place-items:center; width:22px; height:22px; border:0; border-radius:5px; background:transparent; color:inherit; cursor:pointer;"><i data-lucide="x" style="width:13px;height:13px;"></i></button>
+                </div>
+              </div>
+              <div>
+                <div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled); margin-bottom:6px;">Toast · high urgency · role="alert" · persists until dismissed</div>
+                <div style="width:360px; display:flex; gap:10px; align-items:flex-start; padding:12px 14px; background:var(--cinder-surface-raised); border:1px solid var(--cinder-color-danger-border); border-left:3px solid var(--cinder-danger); border-radius:var(--cinder-radius-md); box-shadow:var(--cinder-shadow-lg);">
+                  <i data-lucide="circle-x" style="width:16px;height:16px;flex:none;margin-top:1px;color:var(--cinder-color-danger-fg);"></i>
+                  <div style="flex:1; min-width:0;">
+                    <div style="font-size:var(--cinder-text-xs); font-weight:600;">Task dead-lettered</div>
+                    <div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-subtle); margin-top:2px;">charge-card in <span style="font-family:var(--cinder-font-mono);" title="wf_4a9f8c31e7b2d05a6f912c10">wf_4a9f8c31…2c10</span> · retries exhausted</div>
+                    <a href="#" style="display:inline-block; font-size:var(--cinder-text-2xs); font-weight:600; margin-top:6px; text-decoration:none;">Open task →</a>
+                  </div>
+                  <button style="display:grid; place-items:center; width:20px; height:20px; border:0; border-radius:5px; background:transparent; color:var(--cinder-text-disabled); cursor:pointer; flex:none;"><i data-lucide="x" style="width:12px;height:12px;"></i></button>
+                </div>
+              </div>
+              <div>
+                <div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled); margin-bottom:6px;">Toast · normal urgency · role="status" · auto-dismisses 6s</div>
+                <div style="width:360px; display:flex; gap:10px; align-items:flex-start; padding:12px 14px; background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-md); box-shadow:var(--cinder-shadow-md);">
+                  <i data-lucide="user-check" style="width:16px;height:16px;flex:none;margin-top:1px;color:var(--cinder-accent-text);"></i>
+                  <div style="flex:1; min-width:0;">
+                    <div style="font-size:var(--cinder-text-xs); font-weight:600;">Human review requested</div>
+                    <div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-subtle); margin-top:2px;">refund-approval · settle-payouts · waiting on reviewers</div>
+                    <a href="#" style="display:inline-block; font-size:var(--cinder-text-2xs); font-weight:600; margin-top:6px; text-decoration:none;">Open review →</a>
+                  </div>
+                  <button style="display:grid; place-items:center; width:20px; height:20px; border:0; border-radius:5px; background:transparent; color:var(--cinder-text-disabled); cursor:pointer; flex:none;"><i data-lucide="x" style="width:12px;height:12px;"></i></button>
+                </div>
+              </div>
+              <div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled);">~32 event kinds map to three surfaced tiers: critical → strip + alert toast, warning → toast, info → bell only. Every item deep-links.</div>
+            </div>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <!-- ══════════ D · ALERTS VIEW ══════════ -->
+  <div data-screen-label="Alerts view" style="margin-bottom:56px;">
+    <div style="font-size:var(--cinder-text-xs); font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:oklch(70% 0.015 245); margin:0 0 14px;">D · Alerts &amp; operational warnings — System</div>
+    <div style="display:flex; gap:24px; align-items:flex-start; flex-wrap:wrap;">
+      <sc-for list="{{ themes }}" as="t" hint-placeholder-count="2">
+        <div style="flex:none;">
+          <div style="font-size:11px; color:oklch(62% 0.015 245); margin-bottom:8px;">{{ t.label }}</div>
+          <div data-theme="{{ t.name }}" style="width:720px; background:var(--cinder-bg); color:var(--cinder-text); border:1px solid oklch(45% 0.02 245 / .5); border-radius:12px; padding:20px; box-shadow:var(--cinder-shadow-md);">
+            <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:4px;">
+              <h2 style="margin:0; font-size:var(--cinder-text-lg); font-weight:600;">Alerts &amp; warnings</h2>
+              <span style="display:inline-flex; align-items:center; gap:6px; font-size:var(--cinder-text-2xs); color:var(--cinder-color-success-fg);"><span style="width:6px;height:6px;border-radius:9999px;background:var(--cinder-success);animation:wf-pulse 2s ease-in-out infinite;"></span> Live</span>
+            </div>
+            <p style="margin:0 0 14px; font-size:var(--cinder-text-xs); color:var(--cinder-text-subtle); display:flex; align-items:center; gap:6px;"><i data-lucide="info" style="width:13px;height:13px;"></i> Collected since page load (42 min ago). Not a persistent history — earlier alerts may exist.</p>
+            <div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); overflow:hidden;">
+              <sc-for list="{{ alertRows }}" as="a" hint-placeholder-count="5">
+                <div style="display:flex; align-items:center; gap:11px; padding:11px 14px; border-bottom:1px solid var(--cinder-border-muted); border-left:2px solid {{ a.edge }}; opacity:{{ a.opacity }};">
+                  <i data-lucide="{{ a.icon }}" style="width:15px;height:15px;flex:none;color:{{ a.iconColor }};"></i>
+                  <div style="flex:1; min-width:0;">
+                    <div style="font-size:var(--cinder-text-xs); font-weight:600;">{{ a.title }}</div>
+                    <div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-subtle); margin-top:1px;">{{ a.body }}</div>
+                  </div>
+                  <span class="cinder-badge" data-cinder-size="sm" data-cinder-variant="{{ a.variant }}"><i data-lucide="{{ a.stateIcon }}" style="width:10px;height:10px;"></i> {{ a.state }}</span>
+                  <span style="flex:none; font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled); font-family:var(--cinder-font-mono);">{{ a.time }}</span>
+                  <a href="#" style="flex:none; font-size:var(--cinder-text-2xs); font-weight:600; text-decoration:none;">Details</a>
+                </div>
+              </sc-for>
+            </div>
+            <div style="margin-top:14px; border:1px dashed var(--cinder-border); border-radius:var(--cinder-radius-lg); padding:22px; text-align:center;">
+              <i data-lucide="bell-off" style="width:20px;height:20px;color:var(--cinder-text-disabled);"></i>
+              <div style="font-size:var(--cinder-text-sm); font-weight:600; margin-top:8px;">No alerts since page load</div>
+              <div style="font-size:var(--cinder-text-xs); color:var(--cinder-text-subtle); margin-top:3px;">New alerts and warnings will appear here as they fire. For historical faults, open <a href="#" style="text-decoration:none; font-weight:600;">Diagnostics</a>.</div>
+            </div>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <!-- ══════════ E · LINKED SELECTION ══════════ -->
+  <div data-screen-label="Linked selection" style="margin-bottom:56px;">
+    <div style="font-size:var(--cinder-text-xs); font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:oklch(70% 0.015 245); margin:0 0 14px;">E · Linked selection — Timeline ↔ Events ↔ Logs</div>
+    <div style="display:flex; flex-direction:column; gap:24px;">
+      <sc-for list="{{ themes }}" as="t" hint-placeholder-count="2">
+        <div>
+          <div style="font-size:11px; color:oklch(62% 0.015 245); margin-bottom:8px;">{{ t.label }}</div>
+          <div data-theme="{{ t.name }}" style="width:1240px; background:var(--cinder-bg); color:var(--cinder-text); border:1px solid oklch(45% 0.02 245 / .5); border-radius:12px; padding:20px; box-shadow:var(--cinder-shadow-md); display:flex; gap:16px; align-items:flex-start;">
+            <!-- timeline -->
+            <div style="width:360px; flex:none; background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); overflow:hidden;">
+              <div style="display:flex; align-items:center; gap:8px; padding:10px 14px; border-bottom:1px solid var(--cinder-border-muted); font-size:var(--cinder-text-xs); font-weight:600;"><i data-lucide="list-tree" style="width:14px;height:14px;color:var(--cinder-text-subtle);"></i> Timeline</div>
+              <div style="padding:8px;">
+                <sc-for list="{{ tlSteps }}" as="s" hint-placeholder-count="5">
+                  <div style="display:flex; align-items:center; gap:9px; padding:8px 10px; border-radius:var(--cinder-radius-md); background:{{ s.bg }}; border:1px solid {{ s.border }}; margin-bottom:3px;">
+                    <span class="cinder-status-dot" data-cinder-variant="{{ s.dot }}"></span>
+                    <span style="font-size:var(--cinder-text-xs); font-weight:{{ s.weight }}; flex:1;">{{ s.name }}</span>
+                    <span style="font-family:var(--cinder-font-mono); font-size:var(--cinder-text-2xs); color:var(--cinder-text-subtle);">{{ s.dur }}</span>
+                  </div>
+                </sc-for>
+                <div style="display:flex; align-items:center; gap:7px; margin:8px 4px 4px; padding:7px 10px; background:color-mix(in oklch, var(--cinder-accent), transparent 92%); border-radius:var(--cinder-radius-md); font-size:var(--cinder-text-2xs); color:var(--cinder-accent-text);">
+                  <i data-lucide="link" style="width:12px;height:12px;"></i> Selected — Events and Logs filtered to this step
+                  <button style="margin-left:auto; border:0; background:transparent; color:inherit; font:inherit; font-weight:600; cursor:pointer;">Clear</button>
+                </div>
+              </div>
+            </div>
+            <!-- events -->
+            <div style="flex:1; min-width:0; background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); overflow:hidden;">
+              <div style="display:flex; align-items:center; gap:8px; padding:10px 14px; border-bottom:1px solid var(--cinder-border-muted); font-size:var(--cinder-text-xs); font-weight:600;">
+                <i data-lucide="activity" style="width:14px;height:14px;color:var(--cinder-text-subtle);"></i> Events
+                <span style="display:inline-flex; align-items:center; gap:5px; padding:2px 8px; background:color-mix(in oklch, var(--cinder-accent), transparent 90%); color:var(--cinder-accent-text); border-radius:9999px; font-size:var(--cinder-text-2xs);"><i data-lucide="filter" style="width:10px;height:10px;"></i> step: charge-card <i data-lucide="x" style="width:10px;height:10px;cursor:pointer;"></i></span>
+                <span style="margin-left:auto; display:inline-flex; align-items:center; gap:5px; font-size:var(--cinder-text-2xs); font-weight:400; color:var(--cinder-color-success-fg);"><span style="width:6px;height:6px;border-radius:9999px;background:var(--cinder-success);animation:wf-pulse 2s ease-in-out infinite;"></span> Live</span>
+              </div>
+              <div style="padding:6px 0;">
+                <sc-for list="{{ evRows }}" as="e" hint-placeholder-count="6">
+                  <div style="display:flex; align-items:center; gap:9px; padding:6px 14px; background:{{ e.bg }}; border-left:2px solid {{ e.edge }}; opacity:{{ e.opacity }};">
+                    <span style="font-family:var(--cinder-font-mono); font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled); flex:none;">{{ e.seq }}</span>
+                    <span style="font-size:var(--cinder-text-xs); font-weight:{{ e.weight }}; flex:1;">{{ e.kind }}</span>
+                    <span style="font-family:var(--cinder-font-mono); font-size:var(--cinder-text-2xs); color:var(--cinder-text-subtle);">{{ e.time }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+            <!-- logs -->
+            <div style="flex:1.1; min-width:0; background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); overflow:hidden;">
+              <div style="display:flex; align-items:center; gap:8px; padding:10px 14px; border-bottom:1px solid var(--cinder-border-muted); font-size:var(--cinder-text-xs); font-weight:600;">
+                <i data-lucide="terminal" style="width:14px;height:14px;color:var(--cinder-text-subtle);"></i> Logs
+                <span style="display:inline-flex; align-items:center; gap:5px; padding:2px 8px; background:color-mix(in oklch, var(--cinder-accent), transparent 90%); color:var(--cinder-accent-text); border-radius:9999px; font-size:var(--cinder-text-2xs);"><i data-lucide="filter" style="width:10px;height:10px;"></i> step: charge-card <i data-lucide="x" style="width:10px;height:10px;cursor:pointer;"></i></span>
+              </div>
+              <div style="padding:8px 0; background:var(--cinder-surface-inset); font-family:var(--cinder-font-mono); font-size:var(--cinder-text-2xs); line-height:1.9;">
+                <sc-for list="{{ logRows }}" as="l" hint-placeholder-count="6">
+                  <div style="display:flex; gap:10px; padding:0 14px; background:{{ l.bg }}; opacity:{{ l.opacity }};">
+                    <span style="color:var(--cinder-text-disabled); flex:none;">{{ l.time }}</span>
+                    <span style="color:{{ l.levelColor }}; flex:none; width:38px;">{{ l.level }}</span>
+                    <span style="color:var(--cinder-text-muted);">{{ l.msg }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+    <div style="font-size:var(--cinder-text-2xs); color:oklch(62% 0.015 245); margin-top:10px;">Selecting a step tints its row indigo and filters both panels; matching rows carry the indigo left edge, non-matching rows dim. Works in either direction; Clear restores all.</div>
+  </div>
+
+  <!-- ══════════ F · BRANCH & SAGA CARDS ══════════ -->
+  <div data-screen-label="Branch and saga cards" style="margin-bottom:56px;">
+    <div style="font-size:var(--cinder-text-xs); font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:oklch(70% 0.015 245); margin:0 0 14px;">F · Coordination &amp; saga branch cards — RunStepTimeline</div>
+    <div style="display:flex; gap:24px; align-items:flex-start; flex-wrap:wrap;">
+      <sc-for list="{{ themes }}" as="t" hint-placeholder-count="2">
+        <div style="flex:none;">
+          <div style="font-size:11px; color:oklch(62% 0.015 245); margin-bottom:8px;">{{ t.label }}</div>
+          <div data-theme="{{ t.name }}" style="width:640px; background:var(--cinder-bg); color:var(--cinder-text); border:1px solid oklch(45% 0.02 245 / .5); border-radius:12px; padding:20px; box-shadow:var(--cinder-shadow-md);">
+            <div style="display:flex; gap:8px; margin-bottom:14px; align-items:center;">
+              <span style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled);">Special statuses</span>
+              <span class="cinder-badge" data-cinder-variant="warning"><i data-lucide="loader" style="width:11px;height:11px;"></i> Finalizing</span>
+              <span class="cinder-badge" data-cinder-variant="danger"><i data-lucide="triangle-alert" style="width:11px;height:11px;"></i> Cancelled — cleanup failed</span>
+              <a href="#" style="font-size:var(--cinder-text-2xs); font-weight:600; text-decoration:none;">View error →</a>
+            </div>
+            <!-- real Cinder RunStepTimeline (0.10.0–0.12.x) — branch groups, rewound, compensates -->
+            <div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); padding:12px;">
+              <x-import component-from-global-scope="CinderDesignSystem_3e8bc5.RunStepTimeline" steps="{{ sagaEntries }}" label="Order saga timeline" hint-size="100%,540px"></x-import>
+            </div>
+            <!-- finalizer — Weft concept, not a RunStepTimeline primitive -->
+            <div style="margin-top:12px; background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); padding:10px;">
+              <div style="display:flex; align-items:center; gap:7px; padding:0 10px 6px; font-size:var(--cinder-text-2xs); font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--cinder-text-subtle);">
+                <i data-lucide="paintbrush" style="width:12px;height:12px;"></i> Finalizer · runs after cancellation
+              </div>
+              <div style="display:flex; align-items:center; gap:9px; padding:6px 10px; background:var(--cinder-surface-inset); border-radius:var(--cinder-radius-sm); margin-bottom:3px;">
+                <span class="cinder-status-dot" data-cinder-variant="success"></span>
+                <span style="font-size:var(--cinder-text-xs); flex:1;">release-locks</span>
+                <span style="font-family:var(--cinder-font-mono); font-size:var(--cinder-text-2xs); color:var(--cinder-text-subtle);">0.2s</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:9px; padding:6px 10px; background:var(--cinder-surface-inset); border-radius:var(--cinder-radius-sm);">
+                <span class="cinder-status-dot" data-cinder-variant="danger"></span>
+                <span style="font-size:var(--cinder-text-xs); flex:1;">notify-oncall</span>
+                <span class="cinder-badge" data-cinder-size="sm" data-cinder-variant="danger"><i data-lucide="circle-x" style="width:10px;height:10px;"></i> Failed</span>
+                <a href="#" style="font-size:var(--cinder-text-2xs); font-weight:600; text-decoration:none;">Error →</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <!-- ══════════ G + H · EXPORT & CONFORMANCE ══════════ -->
+  <div data-screen-label="Export and conformance" style="margin-bottom:20px;">
+    <div style="font-size:var(--cinder-text-xs); font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:oklch(70% 0.015 245); margin:0 0 14px;">G · Event-history export &nbsp;·&nbsp; H · Conformance panel</div>
+    <div style="display:flex; gap:24px; align-items:flex-start; flex-wrap:wrap;">
+      <sc-for list="{{ themes }}" as="t" hint-placeholder-count="2">
+        <div style="flex:none;">
+          <div style="font-size:11px; color:oklch(62% 0.015 245); margin-bottom:8px;">{{ t.label }}</div>
+          <div data-theme="{{ t.name }}" style="width:620px; background:var(--cinder-bg); color:var(--cinder-text); border:1px solid oklch(45% 0.02 245 / .5); border-radius:12px; padding:20px; box-shadow:var(--cinder-shadow-md); display:flex; flex-direction:column; gap:16px;">
+            <!-- export -->
+            <div>
+              <div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled); margin-bottom:6px;">Events tab header · Download menu open</div>
+              <div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); padding:10px 14px; display:flex; align-items:center; gap:10px; position:relative;">
+                <span style="font-size:var(--cinder-text-sm); font-weight:600;">Events</span>
+                <span style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-subtle);">312 events</span>
+                <span style="display:inline-flex; align-items:center; gap:5px; font-size:var(--cinder-text-2xs); color:var(--cinder-color-success-fg);"><span style="width:6px;height:6px;border-radius:9999px;background:var(--cinder-success);animation:wf-pulse 2s ease-in-out infinite;"></span> Live</span>
+                <div style="margin-left:auto; position:relative;">
+                  <button class="cinder-button" data-cinder-variant="secondary" data-cinder-size="sm" style="display:inline-flex; align-items:center; gap:6px;"><i data-lucide="download" style="width:13px;height:13px;"></i> Download <i data-lucide="chevron-down" style="width:12px;height:12px;"></i></button>
+                  <div style="position:absolute; top:calc(100% + 4px); right:0; width:230px; background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-md); box-shadow:var(--cinder-shadow-lg); padding:4px; z-index:2;">
+                    <div style="display:flex; align-items:center; gap:8px; padding:7px 9px; border-radius:5px; font-size:var(--cinder-text-xs); background:var(--cinder-surface-hover); cursor:pointer;"><i data-lucide="file-json" style="width:13px;height:13px;color:var(--cinder-text-subtle);"></i> Event history · JSON</div>
+                    <div style="display:flex; align-items:center; gap:8px; padding:7px 9px; border-radius:5px; font-size:var(--cinder-text-xs); cursor:pointer;"><i data-lucide="file-json" style="width:13px;height:13px;color:var(--cinder-text-subtle);"></i> Events + timeline · JSON</div>
+                  </div>
+                </div>
+              </div>
+              <div style="height:56px;"></div>
+            </div>
+            <!-- conformance -->
+            <div>
+              <div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled); margin-bottom:6px;">System → Health · conformance panel — link, not a trigger</div>
+              <div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); padding:16px;">
+                <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+                  <i data-lucide="badge-check" style="width:15px;height:15px;color:var(--cinder-accent-text);"></i>
+                  <span style="font-size:var(--cinder-text-sm); font-weight:600;">Conformance</span>
+                </div>
+                <p style="margin:0 0 10px; font-size:var(--cinder-text-xs); color:var(--cinder-text-subtle);">Verify this engine against the Weft conformance suite. Conformance runs from the CLI only — there is no server-side trigger.</p>
+                <div style="display:flex; align-items:center; gap:9px; padding:9px 12px; background:var(--cinder-surface-inset); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-md); font-family:var(--cinder-font-mono); font-size:var(--cinder-text-xs);">
+                  <i data-lucide="terminal" style="width:13px;height:13px;color:var(--cinder-text-disabled);flex:none;"></i>
+                  <span>weft conformance --engine http://localhost:7233</span>
+                  <i data-lucide="copy" style="width:13px;height:13px;color:var(--cinder-text-disabled);margin-left:auto;cursor:pointer;"></i>
+                </div>
+                <div style="display:flex; gap:14px; margin-top:10px;">
+                  <a href="#" style="font-size:var(--cinder-text-2xs); font-weight:600; text-decoration:none; display:inline-flex; align-items:center; gap:5px;"><i data-lucide="book-open" style="width:12px;height:12px;"></i> Conformance guide</a>
+                  <a href="#" style="font-size:var(--cinder-text-2xs); font-weight:600; text-decoration:none; display:inline-flex; align-items:center; gap:5px;"><i data-lucide="external-link" style="width:12px;height:12px;"></i> Suite coverage</a>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;themeOrder&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;light-first&quot;, &quot;dark-first&quot;], &quot;default&quot;: &quot;light-first&quot;, &quot;tsType&quot;: &quot;'light-first' | 'dark-first'&quot;, &quot;section&quot;: &quot;Layout&quot; }
+}">
+class Component extends DCLogic {
+  componentDidMount() {
+    this.renderIcons();
+  }
+  componentDidUpdate() {
+    this.renderIcons();
+  }
+  renderIcons() {
+    clearTimeout(this._t);
+    this._t = setTimeout(() => {
+      if (window.lucide) { try { window.lucide.createIcons(); } catch (e) {} }
+    }, 120);
+  }
+  renderVals() {
+    const themeOrder = this.props.themeOrder ?? 'light-first';
+    const themes = themeOrder === 'dark-first'
+      ? [{ name: 'dark', label: 'Dark' }, { name: 'light', label: 'Light' }]
+      : [{ name: 'light', label: 'Light' }, { name: 'dark', label: 'Dark' }];
+
+    const cronValue = { mode: 'cron', expression: '0 2 * * *' };
+    const intervalValue = { mode: 'interval', every: 2, unit: 'days' };
+    const fmtUTC = (d) => d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' }) + ' UTC';
+    const computeNextFires = (value, count) => {
+      const base = Date.UTC(2026, 6, 20, 14, 0, 0);
+      const out = [];
+      if (value.mode === 'interval') {
+        const unitMs = { minutes: 6e4, hours: 36e5, days: 864e5, weeks: 6048e5 }[value.unit] || 6e4;
+        for (let i = 1; i <= count; i++) out.push({ id: 'f' + i, label: fmtUTC(new Date(base + unitMs * value.every * i)) });
+        return out;
+      }
+      const parts = String(value.expression || '').trim().split(/\s+/);
+      const m = parseInt(parts[0], 10) || 0;
+      const h = parseInt(parts[1], 10);
+      for (let i = 1; i <= count; i++) out.push({ id: 'f' + i, label: fmtUTC(new Date(Date.UTC(2026, 6, 20 + i, isNaN(h) ? 0 : h, m))) });
+      return out;
+    };
+
+    const sagaEntries = [
+      { id: 'validate', label: 'validate-order', status: 'succeeded', duration: '0.4s' },
+      { kind: 'branch', id: 'race-pay', label: 'race() · payment-providers', lanes: [
+        { id: 'stripe', label: 'charge-stripe', outcome: 'won', steps: [{ id: 'stripe-1', label: 'charge-stripe', status: 'succeeded', duration: '1.2s' }] },
+        { id: 'adyen', label: 'charge-adyen', outcome: 'lost', steps: [{ id: 'adyen-1', label: 'charge-adyen', status: 'cancelled' }] },
+        { id: 'braintree', label: 'charge-braintree', outcome: 'lost', steps: [{ id: 'braintree-1', label: 'charge-braintree', status: 'cancelled' }] },
+      ] },
+      { id: 'speculate', label: 'speculate() · inventory-path', status: 'succeeded', duration: '2.1s', children: [
+        { id: 'warehouse-a', label: 'reserve-warehouse-a', status: 'cancelled', rewound: true },
+        { id: 'routes', label: 'precompute-routes', status: 'cancelled', rewound: true },
+        { id: 'warehouse-b', label: 'reserve-warehouse-b', status: 'succeeded', duration: '2.1s' },
+      ] },
+      { id: 'charge', label: 'charge-card', status: 'failed', duration: '8.0s', attemptCount: 3, link: { href: '#', label: 'Error' } },
+      { id: 'refund', label: 'refund-charge', status: 'succeeded', duration: '0.9s', compensates: 'charge' },
+    ];
+
+    const cronFieldsBad = [
+      { value: '0', label: 'minute', invalid: false },
+      { value: '2', label: 'hour', invalid: false },
+      { value: '*', label: 'day', invalid: false },
+      { value: '*', label: 'month', invalid: false },
+      { value: '8', label: 'weekday', invalid: true },
+    ];
+
+    const overlapPolicies = [
+      { label: 'Skip', consequence: 'The new fire is dropped. Nothing queues behind a long run.', checked: true, border: 'var(--cinder-accent)', bg: 'color-mix(in oklch, var(--cinder-accent), transparent 94%)' },
+      { label: 'Buffer one', consequence: 'One fire waits; further fires while it waits are dropped.', checked: false, border: 'var(--cinder-border)', bg: 'transparent' },
+      { label: 'Cancel other', consequence: 'The running run is cancelled so the new fire starts on time.', checked: false, border: 'var(--cinder-border)', bg: 'transparent' },
+      { label: 'Allow all', consequence: 'Fires always start. Runs of this workflow may overlap.', checked: false, border: 'var(--cinder-border)', bg: 'transparent' },
+    ];
+
+    const childRuns = [
+      { name: 'reserve-inventory', id: 'wf_77b0c4d2…9e1f', fullId: 'wf_77b0c4d2a95e33f18c209e1f', status: 'Completed', variant: 'neutral', icon: 'circle-check', indent: '8px' },
+      { name: 'pick-and-pack', id: 'wf_c31d90ab…44e7', fullId: 'wf_c31d90ab6f27e15b830a44e7', status: 'Running', variant: 'success', icon: 'play', indent: '30px' },
+      { name: 'notify-customer', id: 'wf_18ef62aa…b90c', fullId: 'wf_18ef62aa04c7d3915e62b90c', status: 'Pending', variant: 'info', icon: 'clock', indent: '8px' },
+    ];
+
+    const notifCritical = [
+      { icon: 'siren', title: 'Alert fired · dead-letter queue above threshold', body: '14 tasks dead-lettered in the last 10 min', time: '2m' },
+      { icon: 'circle-x', title: 'Task dead-lettered · charge-card', body: 'wf_4a9f8c31…2c10 · retries exhausted', time: '6m' },
+    ];
+    const notifWarning = [
+      { icon: 'calendar-x', title: 'Schedule missed fire · nightly-reconcile', body: 'Fire at 02:00 UTC skipped — overlap policy', time: '18m' },
+      { icon: 'shield-alert', title: 'Constraint violated · max-runtime', body: 'settle-payouts exceeded 30 min budget', time: '31m' },
+      { icon: 'database', title: 'Checkpoint size warning', body: 'reconcile-ledger checkpoint at 8.2 MB of 10 MB limit', time: '44m' },
+    ];
+    const notifInfo = [
+      { icon: 'user-check', title: 'Human review requested · refund-approval', body: 'settle-payouts · waiting on reviewers', time: '9m', weight: 600, opacity: 1 },
+      { icon: 'check-check', title: 'Alert resolved · worker pool degraded', body: 'All 12 workers reconnected', time: '52m', weight: 400, opacity: 0.65 },
+      { icon: 'plug', title: 'Worker connected · worker-eu-3', body: 'Pool payments · 4 task slots', time: '1h', weight: 400, opacity: 0.65 },
+    ];
+
+    const alertRows = [
+      { icon: 'siren', iconColor: 'var(--cinder-color-danger-fg)', edge: 'var(--cinder-danger)', title: 'Dead-letter queue above threshold', body: '14 tasks · queue payments · threshold 5', state: 'Firing', stateIcon: 'flame', variant: 'danger', time: '14:02', opacity: 1 },
+      { icon: 'shield-alert', iconColor: 'var(--cinder-color-danger-fg)', edge: 'var(--cinder-danger)', title: 'Constraint violated · max-runtime', body: 'settle-payouts wf_b82e11f0…7a3d exceeded 30 min budget', state: 'Firing', stateIcon: 'flame', variant: 'danger', time: '13:47', opacity: 1 },
+      { icon: 'database', iconColor: 'var(--cinder-color-warning-fg)', edge: 'var(--cinder-warning)', title: 'Checkpoint size warning', body: 'reconcile-ledger checkpoint at 8.2 MB of 10 MB limit', state: 'Firing', stateIcon: 'flame', variant: 'warning', time: '13:34', opacity: 1 },
+      { icon: 'hard-drive', iconColor: 'var(--cinder-color-warning-fg)', edge: 'var(--cinder-warning)', title: 'Storage size warning', body: 'Event store at 82% of provisioned capacity', state: 'Firing', stateIcon: 'flame', variant: 'warning', time: '13:31', opacity: 1 },
+      { icon: 'plug-zap', iconColor: 'var(--cinder-text-disabled)', edge: 'var(--cinder-border)', title: 'Worker pool degraded', body: 'payments pool dropped to 8 of 12 workers', state: 'Resolved', stateIcon: 'check', variant: 'neutral', time: '13:26', opacity: 0.6 },
+    ];
+
+    const sel = { bg: 'color-mix(in oklch, var(--cinder-accent), transparent 90%)', border: 'var(--cinder-accent)' };
+    const un = { bg: 'transparent', border: 'transparent' };
+    const tlSteps = [
+      { name: 'validate-order', dot: 'neutral', dur: '0.4s', weight: 400, ...un },
+      { name: 'reserve-inventory', dot: 'neutral', dur: '1.8s', weight: 400, ...un },
+      { name: 'charge-card', dot: 'danger', dur: '8.0s', weight: 600, ...sel },
+      { name: 'refund-charge', dot: 'neutral', dur: '0.9s', weight: 400, ...un },
+      { name: 'notify-customer', dot: 'info', dur: '—', weight: 400, ...un },
+    ];
+    const hi = { bg: 'color-mix(in oklch, var(--cinder-accent), transparent 92%)', edge: 'var(--cinder-accent)', weight: 600, opacity: 1 };
+    const lo = { bg: 'transparent', edge: 'transparent', weight: 400, opacity: 0.45 };
+    const evRows = [
+      { seq: '#118', kind: 'StepScheduled · charge-card', time: '14:01:52.104', ...hi },
+      { seq: '#119', kind: 'StepStarted · charge-card', time: '14:01:52.310', ...hi },
+      { seq: '#120', kind: 'TimerStarted · retry backoff', time: '14:01:55.882', ...lo },
+      { seq: '#121', kind: 'StepRetrying · charge-card · attempt 2', time: '14:01:58.031', ...hi },
+      { seq: '#122', kind: 'StepFailed · charge-card', time: '14:02:00.288', ...hi },
+      { seq: '#123', kind: 'StepScheduled · refund-charge', time: '14:02:00.301', ...lo },
+    ];
+    const logRows = [
+      { time: '14:01:52.3', level: 'INFO', levelColor: 'var(--cinder-info)', msg: 'charge-card: authorizing 128.40 USD via stripe', bg: hi.bg, opacity: 1 },
+      { time: '14:01:55.8', level: 'WARN', levelColor: 'var(--cinder-warning)', msg: 'charge-card: provider timeout, retrying in 2s', bg: hi.bg, opacity: 1 },
+      { time: '14:01:58.0', level: 'INFO', levelColor: 'var(--cinder-info)', msg: 'charge-card: attempt 2 of 3', bg: hi.bg, opacity: 1 },
+      { time: '14:02:00.2', level: 'ERROR', levelColor: 'var(--cinder-danger)', msg: 'charge-card: card_declined (do_not_honor)', bg: hi.bg, opacity: 1 },
+      { time: '14:02:00.3', level: 'INFO', levelColor: 'var(--cinder-info)', msg: 'saga: scheduling compensation refund-charge', bg: 'transparent', opacity: 0.45 },
+      { time: '14:02:01.1', level: 'INFO', levelColor: 'var(--cinder-info)', msg: 'refund-charge: reversal submitted', bg: 'transparent', opacity: 0.45 },
+    ];
+
+    return {
+      themes, cronValue, intervalValue, computeNextFires, sagaEntries, cronFieldsBad,
+      overlapPolicies, childRuns, notifCritical, notifWarning, notifInfo,
+      alertRows, tlSteps, evRows, logRows,
+    };
+  }
+}
+</script>
+</body>
+</html>

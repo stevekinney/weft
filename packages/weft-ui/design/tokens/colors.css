@@ -1,0 +1,185 @@
+/* ============================================================
+ * CINDER — COLOR TOKENS
+ * ------------------------------------------------------------
+ * Every color is built on the CSS `light-dark()` function keyed off
+ * `color-scheme`. The default :root sets `color-scheme: light dark`, so the
+ * browser picks based on OS preference. Force a scheme with
+ * `[data-theme='light']` / `[data-theme='dark']` (wired below) or by setting
+ * `color-scheme` directly.
+ *
+ * Hue families:
+ *   • Neutrals  → hue 245 (cool blue-grey)
+ *   • Accent    → hue 270 (indigo)
+ *   • Status    → success 145 / warning 75 / danger 25 / info 230
+ * ============================================================ */
+
+:root {
+  color-scheme: light dark;
+
+  /* ── Backgrounds / surfaces ──────────────────────────────
+   * Three elevations: page bg → surface → surface-raised, plus an inset
+   * variant for sunken regions. A card root sets ONE background; children
+   * inherit. Regions that need contrast (inputs, code blocks) opt into
+   * `--cinder-surface-inset`. */
+  --cinder-bg: light-dark(oklch(96% 0.01 245), oklch(15% 0.035 245));
+  --cinder-surface: light-dark(oklch(98.5% 0.008 245), oklch(20% 0.04 245));
+  --cinder-surface-raised: light-dark(oklch(100% 0.006 245), oklch(26% 0.045 245));
+  --cinder-surface-inset: light-dark(oklch(95.5% 0.01 245), oklch(11% 0.03 245));
+  --cinder-surface-hover: color-mix(
+    in oklch,
+    var(--cinder-surface),
+    light-dark(oklch(0% 0 0), oklch(100% 0 0)) 3%
+  );
+  --cinder-surface-pressed: color-mix(
+    in oklch,
+    var(--cinder-surface),
+    light-dark(oklch(0% 0 0), oklch(100% 0 0)) 8%
+  );
+
+  /* Upcoming step marker bg — keeps the inset (recessed) look in light mode,
+   * but lifts to `surface` in dark where `surface-inset` (0.11) is nearly
+   * invisible against the dark stage. */
+  --cinder-surface-upcoming-marker: light-dark(var(--cinder-surface-inset), var(--cinder-surface));
+
+  /* Inverse surface — used by Tooltip to stay a DARK overlay in both themes.
+   * Light arm mirrors the text/surface swap (dark bg, light fg); dark arm uses
+   * the elevated surface + near-white text so the tooltip reads as a dark
+   * elevated layer rather than inverting to light. `border-inverse` adds a 1px
+   * delineation in dark mode only. */
+  --cinder-surface-inverse: light-dark(var(--cinder-text), var(--cinder-surface-raised));
+  --cinder-text-inverse: light-dark(var(--cinder-surface), var(--cinder-text));
+  --cinder-border-inverse: light-dark(transparent, var(--cinder-border-strong));
+
+  /* ── Text ────────────────────────────────────────────────
+   * Foreground ladder; all but `disabled` clear WCAG AA on `--cinder-surface`. */
+  --cinder-text: light-dark(oklch(20% 0.018 245), oklch(92% 0.02 245));
+  --cinder-text-muted: light-dark(oklch(32% 0.014 245), oklch(82% 0.02 245));
+  --cinder-text-subtle: light-dark(oklch(42% 0.012 245), oklch(72% 0.02 245));
+  --cinder-text-disabled: light-dark(oklch(52% 0.01 245), oklch(64% 0.02 245));
+  /* Neutral fill for DISABLED SOLID controls (disabled-checked checkbox/radio) so they
+   * read plainly inert. The glyph on top must use `--cinder-text-disabled` (not
+   * `--cinder-accent-contrast`) to stay legible on the dark-arm fill. */
+  --cinder-fill-disabled: light-dark(oklch(88% 0.01 245), oklch(30% 0.015 245));
+
+  /* ── Borders ─────────────────────────────────────────────
+   * `--cinder-border` is tuned so card/input edges — and nested-card seams in
+   * dark mode — clear their surface; `border-muted` stays quiet for dividers. */
+  --cinder-border: light-dark(oklch(79% 0.013 245), oklch(40% 0.05 245));
+  --cinder-border-muted: light-dark(oklch(88% 0.01 245), oklch(30% 0.04 245));
+  --cinder-border-strong: light-dark(oklch(72% 0.014 245), oklch(45% 0.06 245));
+
+  /* Toggle track off-state defaults. Light arm aliases the muted/default border;
+   * dark arm lifts to L≈0.45 (rest) / L≈0.52 (hover) for ≥3:1 shape contrast
+   * against the dark surface. The `--cinder-toggle-track-off` override still wins. */
+  --cinder-toggle-track-off-resting: light-dark(var(--cinder-border-muted), oklch(45% 0.02 245));
+  --cinder-toggle-track-off-hover-resting: light-dark(var(--cinder-border), oklch(52% 0.02 245));
+
+  /* ── Accent — indigo (hue 270) ───────────────────────────
+   * `--cinder-accent` is the brand FILL. The light arm is a DEEP indigo at
+   * L=0.50 — dark enough that WHITE clears WCAG AA on it (6.45:1), so the fill
+   * carries white labels in light mode (`--cinder-accent-contrast`). The dark
+   * arm is a bright periwinkle-indigo (chroma clamped to 0.14 to stay in sRGB
+   * gamut at L=0.72) that carries the dark-ink contrast label (7.77:1).
+   * `--cinder-accent-text` is the same brand color used AS text/icon on light
+   * surfaces (a touch darker, L=0.45, for comfortable link/icon legibility).
+   * hover/active derive from the base via `oklch(from …)`, so overriding
+   * `--cinder-accent` re-derives them. */
+  --cinder-accent: light-dark(oklch(50% 0.22 270), oklch(72% 0.14 270));
+  --cinder-accent-contrast: light-dark(oklch(100% 0 0), oklch(15% 0.035 245));
+  --cinder-accent-hover: oklch(from var(--cinder-accent) calc(l - 0.08) c h);
+  --cinder-accent-active: oklch(from var(--cinder-accent) calc(l - 0.15) c h);
+  /* Pressed fill for SOLID accent surfaces that carry the contrast label (primary
+   * Button, FAB). Darkens by a gentler 0.11 so the label stays AA-legible. */
+  --cinder-accent-active-on-fill: oklch(from var(--cinder-accent) calc(l - 0.11) c h);
+  --cinder-accent-text: light-dark(oklch(45% 0.22 270), oklch(72% 0.14 270));
+  --cinder-accent-text-hover: oklch(from var(--cinder-accent-text) calc(l - 0.08) c h);
+
+  /* ── Status — solid (single-value fills: badges, dots) ───
+   * Info nudged to hue 230 so it reads as an unambiguous blue 40° off the
+   * indigo brand. Chroma values fitted to the sRGB gamut so the browser renders
+   * the authored color instead of silently clamping it. */
+  --cinder-info: light-dark(oklch(50% 0.098 230), oklch(78% 0.13 230));
+  --cinder-success: light-dark(oklch(50% 0.157 145), oklch(78% 0.14 145));
+  --cinder-warning: light-dark(oklch(54% 0.113 75), oklch(82% 0.156 75));
+  --cinder-danger: light-dark(oklch(50% 0.202 25), oklch(72% 0.172 25));
+  --cinder-danger-contrast: light-dark(oklch(100% 0 0), oklch(12% 0.02 25));
+  --cinder-success-contrast: light-dark(oklch(100% 0 0), oklch(15% 0.03 145));
+  --cinder-warning-contrast: light-dark(oklch(100% 0 0), oklch(20% 0.04 75));
+  --cinder-info-contrast: light-dark(oklch(100% 0 0), oklch(15% 0.03 230));
+  /* Danger hover/active authored explicitly (not derived): red (h25) is near the
+   * sRGB boundary, so each light-arm state is pinned to its own in-gamut chroma
+   * to keep the darkening monotonic AND in gamut. */
+  --cinder-danger-hover: light-dark(oklch(42% 0.171 25), oklch(64% 0.172 25));
+  --cinder-danger-active: light-dark(oklch(35% 0.142 25), oklch(57% 0.172 25));
+
+  /* ── Status — semantic triples (soft tinted surfaces) ────
+   * fg / bg / border per status. Use in Alert, Toast, Callout, Badge. */
+  --cinder-color-info-bg: light-dark(oklch(96% 0.023 230), oklch(28% 0.057 230));
+  --cinder-color-info-fg: light-dark(oklch(40% 0.079 230), oklch(88% 0.071 230));
+  --cinder-color-info-border: light-dark(oklch(80% 0.05 230), oklch(45% 0.08 230));
+
+  --cinder-color-success-bg: light-dark(oklch(96% 0.04 145), oklch(28% 0.07 145));
+  --cinder-color-success-fg: light-dark(oklch(40% 0.13 145), oklch(88% 0.11 145));
+  --cinder-color-success-border: light-dark(oklch(80% 0.05 145), oklch(45% 0.09 145));
+
+  --cinder-color-warning-bg: light-dark(oklch(96% 0.04 75), oklch(28% 0.08 75));
+  --cinder-color-warning-fg: light-dark(oklch(40% 0.13 75), oklch(90% 0.12 75));
+  --cinder-color-warning-border: light-dark(oklch(80% 0.06 75), oklch(50% 0.1 75));
+
+  --cinder-color-danger-bg: light-dark(oklch(96% 0.04 25), oklch(28% 0.09 25));
+  --cinder-color-danger-fg: light-dark(oklch(42% 0.16 25), oklch(90% 0.12 25));
+  --cinder-color-danger-border: light-dark(oklch(80% 0.06 25), oklch(50% 0.11 25));
+
+  /* ── Transparency checkerboard ───────────────────────────
+   * Shared grid for color-domain components showing alpha over a pattern. */
+  --cinder-color-checker-base: light-dark(#fff, oklch(28% 0.02 245));
+  --cinder-color-checker-tile: light-dark(#ccc, oklch(38% 0.02 245));
+
+  /* ── Scrollbar ───────────────────────────────────────────*/
+  --cinder-scrollbar-size: 0.625rem;
+  --cinder-scrollbar-track: light-dark(oklch(0% 0 0 / 0.04), oklch(100% 0 0 / 0.04));
+  --cinder-scrollbar-thumb: light-dark(oklch(0% 0 0 / 0.45), oklch(100% 0 0 / 0.45));
+  --cinder-scrollbar-thumb-hover: light-dark(oklch(0% 0 0 / 0.65), oklch(100% 0 0 / 0.65));
+
+  /* ── Focus ring ──────────────────────────────────────────
+   * `ring-color` is relative to `--cinder-accent` so a consumer override
+   * re-derives the ring hue. The light arm clamps L to 0.55 (indigo has lower
+   * luminance-per-lightness than the old cyan, so 0.55 gives 4.48:1 vs near-white).
+   * `ring-on-accent` is a high-contrast ring for solid accent-fill surfaces. */
+  --cinder-ring-width: 3px;
+  --cinder-ring-offset: 1px;
+  --cinder-ring-offset-color: var(--cinder-bg);
+  --cinder-ring-color: light-dark(
+    oklch(from var(--cinder-accent) 0.55 0.16 h),
+    oklch(from var(--cinder-accent) 0.7 0.14 h)
+  );
+  --cinder-ring-on-accent: light-dark(oklch(20% 0.02 245), oklch(95% 0.01 245));
+
+  /* ── Overlay surfaces (Modal / Sheet / Popover) ──────────*/
+  --cinder-overlay-backdrop: light-dark(oklch(20% 0.03 245 / 0.5), oklch(8% 0.02 245 / 0.65));
+  --cinder-overlay-blur: 4px;
+
+  /* ── Chart series ────────────────────────────────────────
+   * 8 categorical colors retuned for the indigo brand: brand-safe (no hue in
+   * 248–292), mutually distinguishable, in sRGB gamut, ≥3:1 on the chart bg.
+   * Light and dark arms are tuned independently for in-theme contrast, so a
+   * series is not guaranteed the same hue across themes (a deliberate trade-off). */
+  --cinder-chart-series-1: light-dark(oklch(33% 0.121 8), oklch(58% 0.089 205));
+  --cinder-chart-series-2: light-dark(oklch(36% 0.069 80), oklch(67% 0.275 330));
+  --cinder-chart-series-3: light-dark(oklch(40% 0.082 160), oklch(69% 0.182 44));
+  --cinder-chart-series-4: light-dark(oklch(45% 0.087 235), oklch(70% 0.144 160));
+  --cinder-chart-series-5: light-dark(oklch(53% 0.218 330), oklch(78% 0.12 8));
+  --cinder-chart-series-6: light-dark(oklch(56% 0.148 44), oklch(81% 0.152 80));
+  --cinder-chart-series-7: light-dark(oklch(59% 0.126 120), oklch(85% 0.078 235));
+  --cinder-chart-series-8: light-dark(oklch(63% 0.098 205), oklch(89% 0.19 120));
+}
+
+/* Explicit theme overrides — set on :root or any ancestor. */
+:root[data-theme='dark'],
+[data-theme='dark'] {
+  color-scheme: dark;
+}
+:root[data-theme='light'],
+[data-theme='light'] {
+  color-scheme: light;
+}

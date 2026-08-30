@@ -1,0 +1,25 @@
+[install]
+linker = "isolated"
+globalStore = true
+
+[test]
+preload = ["./tests/setup.ts"]
+pathIgnorePatterns = ["tests/e2e/**"]
+
+# `bun run test` runs with `--conditions browser --conditions svelte`
+# (see package.json). Cinder ships `.svelte`/`.ts` SOURCE under its `browser`
+# and `svelte` package.json export conditions (not just `dist/`); without
+# these flags, imports like `import { Button } from '@lostgradient/cinder'`
+# resolve through the `node`/`default` condition instead and pull in
+# already-compiled dist output that our own Bun Svelte-compile plugin
+# (registered in tests/setup.ts) never touches — same pattern as
+# `cinder/packages/components/bunfig.toml` + its `test` script.
+#
+# `pathIgnorePatterns` excludes `tests/e2e/**` (plan §11.4's Playwright/axe
+# suite, `playwright.config.ts`) from `bun test` discovery. Bun's default
+# test-file matching includes `*.spec.ts`, not just `*.test.ts` — confirmed
+# the hard way: without this, `bun test` picked up every file under
+# `tests/e2e/` (which import `test`/`expect` from `@playwright/test`, only
+# valid under the Playwright runner) and crashed with "Playwright Test did
+# not expect test() to be called here" on each one. `bun run test:e2e`
+# (`playwright test`) is the only runner for that directory.
