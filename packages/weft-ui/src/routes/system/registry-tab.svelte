@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * Registry tab (plan §9.7 T7.2; design `Weft Console.dc.html` "System" §
+   * Registry tab (plan §9.7 T7.2; design `Weft UI.dc.html` "System" §
    * REGISTRY). List of registered workflow definitions + activity
    * definitions grid, with a click-through detail panel. Data comes from
    * `weft.system.registry` — reachable only via `client.operations[...]`

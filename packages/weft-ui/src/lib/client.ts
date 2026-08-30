@@ -9,9 +9,9 @@ import { getContext, setContext } from 'svelte';
 
 import { HttpClient } from '@lostgradient/weft/client';
 
-import type { WeftConsoleRuntimeConfig } from './config.ts';
+import type { WeftUiRuntimeConfig } from './config.ts';
 
-const CLIENT_CONTEXT_KEY = Symbol('weft-console-client');
+const CLIENT_CONTEXT_KEY = Symbol('weft-ui-client');
 
 function isAbsoluteUrl(value: string): boolean {
   return URL.canParse(value);
@@ -49,7 +49,7 @@ function resolveBaseUrl(baseUrl: string, sameOriginBaseUrl: string): string {
  * string `"null"`, not a usable URL).
  */
 export function createClient(
-  config: WeftConsoleRuntimeConfig,
+  config: WeftUiRuntimeConfig,
   sameOriginBaseUrl: string = window.location.origin,
 ): HttpClient {
   // `HttpClientOptions.token`/`.headers` are `string | undefined` /
@@ -71,7 +71,7 @@ export function createClient(
  * header; this function never writes it anywhere persistent (no
  * `localStorage`, no cookies).
  */
-export function setApiKey(config: WeftConsoleRuntimeConfig, apiKey: string): HttpClient {
+export function setApiKey(config: WeftUiRuntimeConfig, apiKey: string): HttpClient {
   return createClient({ ...config, token: apiKey });
 }
 
@@ -89,7 +89,7 @@ export function getClient(): HttpClient {
   const client = getContext<HttpClient | undefined>(CLIENT_CONTEXT_KEY);
   if (!client) {
     throw new Error(
-      'weft-console: getClient() called with no client in context — provideClient() must run in an ancestor component.',
+      'weft-ui: getClient() called with no client in context — provideClient() must run in an ancestor component.',
     );
   }
   return client;

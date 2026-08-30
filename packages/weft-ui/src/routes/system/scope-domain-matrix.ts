@@ -1,6 +1,6 @@
 /**
  * Scope ↔ domain affinity for the Operations tab's `PermissionMatrix`
- * toggle (plan §9.7 T7.4; design `Weft Console.dc.html` "System" §
+ * toggle (plan §9.7 T7.4; design `Weft UI.dc.html` "System" §
  * OPERATION CATALOG "Table / Scope matrix" toggle).
  *
  * ## What this matrix actually shows (and why it isn't per-operation scope)

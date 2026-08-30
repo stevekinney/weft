@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * KV browser tab (plan §9.6; design `Weft Console.dc.html` STORAGE
+   * KV browser tab (plan §9.6; design `Weft UI.dc.html` STORAGE
    * "stBrowser"): the get/scan/put/delete/batch operation picker plus the
    * active operation's panel. Layout is a CSS grid (`storage.css`) with
    * named areas (`picker`/`form`/`results`) rather than DOM-order flex, so

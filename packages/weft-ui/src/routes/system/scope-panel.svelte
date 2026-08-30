@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * Scopes tab (plan §9.7 T7.4; design `Weft Console.dc.html` "System" §
+   * Scopes tab (plan §9.7 T7.4; design `Weft UI.dc.html` "System" §
    * SCOPES). Granted/not-granted scopes for the current principal, each with
    * a one-line description and what it unlocks in the console UI.
    */

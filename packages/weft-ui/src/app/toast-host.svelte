@@ -41,7 +41,7 @@
    */
   export function showToast(message: string, options?: ToastOptions): string | undefined {
     if (!toastApi) {
-      console.error('weft-console: showToast() called before <ToastHost> mounted.');
+      console.error('weft-ui: showToast() called before <ToastHost> mounted.');
       return undefined;
     }
     return toastApi.show(message, options);

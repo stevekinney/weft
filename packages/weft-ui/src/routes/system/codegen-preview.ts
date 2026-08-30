@@ -1,7 +1,7 @@
 /**
  * Approximate client-side preview of `weft codegen`'s output (plan §9.7
  * T7.5: "codegen panel (renders `weft codegen`-equivalent output from
- * `/api/v1/registry` in CodeBlock)"; design `Weft Console.dc.html` "System"
+ * `/api/v1/registry` in CodeBlock)"; design `Weft UI.dc.html` "System"
  * § HEALTH & LEASE).
  *
  * ## Why this is a preview, not the real emitter

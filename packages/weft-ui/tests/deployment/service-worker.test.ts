@@ -49,7 +49,7 @@ const pingWorkflow = workflow({ name: 'deployment-sw-ping' }).execute(async func
 });
 
 function createIndexedDbStorage(): { storage: IndexedDBStorage; cleanup: () => void } {
-  const databaseName = `weft-console-sw-test-${crypto.randomUUID()}`;
+  const databaseName = `weft-ui-sw-test-${crypto.randomUUID()}`;
   const storage = new IndexedDBStorage(databaseName, { indexedDB, IDBKeyRange });
   return {
     storage,

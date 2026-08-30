@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * Delete panel (plan §9.6, §10.6; design `Weft Console.dc.html` STORAGE):
+   * Delete panel (plan §9.6, §10.6; design `Weft UI.dc.html` STORAGE):
    * exact-key delete, Tier-2 `ConfirmDialog` (plan: "Tier-2 ConfirmDialog on
    * writes/deletes"). Not shown in the design mock's illustrated forms
    * (`stOps` lists it as a selectable operation but the mock only wires up

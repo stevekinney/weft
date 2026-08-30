@@ -2,7 +2,7 @@
   /**
    * MCP session-protocol sequence diagram (plan §7.3 app-local net-new: "one
    * static themed SVG (initialize → token → continued requests → 403 on
-   * mismatch)"; design `Weft Console.dc.html` "System" § DISCOVERY). Static
+   * mismatch)"; design `Weft UI.dc.html` "System" § DISCOVERY). Static
    * and app-local by design — this documents the wire choreography every MCP
    * client goes through, not a data-driven render of anything the server
    * exposes.

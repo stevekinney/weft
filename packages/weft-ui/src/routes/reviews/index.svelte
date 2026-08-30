@@ -3,7 +3,7 @@
    * Reviews route root (plan §9.5). Owns the `reviews:read` scope gate (plan
    * §6: "lock-state section (EmptyState + lock icon + scope name) for
    * unviewable panels") and the top-level Inbox/Archive switch
-   * (`design/Weft Console.dc.html`'s `revViewBtns`). Builds the two review
+   * (`design/Weft UI.dc.html`'s `revViewBtns`). Builds the two review
    * list queries and the decision mutation once here and hands them down —
    * `ReviewsInbox`'s "Decided" state and `ReviewsArchive` both read the same
    * `completed` query, so TanStack Query dedupes the network request.

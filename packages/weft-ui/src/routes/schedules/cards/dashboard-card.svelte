@@ -1,7 +1,7 @@
 <script lang="ts">
   /**
    * "Schedule health" dashboard card (Track B, plan §9.1, §13 T4.1; design
-   * `Weft Console.dc.html` dashboard screen's "Schedule health" card:
+   * `Weft UI.dc.html` dashboard screen's "Schedule health" card:
    * active/paused counts, missed-fires warning). Self-contained — the
    * card-slot contract (`src/routes/dashboard/cards.ts`) renders it with no
    * props, matching every other domain's card.

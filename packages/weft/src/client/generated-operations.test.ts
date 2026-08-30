@@ -558,7 +558,7 @@ describe('HttpClient catalog operations', () => {
   });
 
   // #711: HttpClientError.data must round-trip the fault's typed wire payload
-  // over JSON-RPC-over-HTTP so weft-console can build field-level and
+  // over JSON-RPC-over-HTTP so weft-ui can build field-level and
   // resource-linked fault UI without hand-parsing.
   //
   // Production REST bindings use a separate additive flat

@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * App shell entry point (plan §13 T1.6, design `Weft Console.dc.html`).
+   * App shell entry point (plan §13 T1.6, design `Weft UI.dc.html`).
    * Owns the boot sequence — read runtime config, construct the initial
    * `HttpClient`, resolve the principal, and either mount `<ApiKeyEntry>`
    * (reject-mode, no/invalid credential) or the real `<Shell>` (sidebar,
@@ -16,7 +16,7 @@
   import { QueryClientProvider } from '@tanstack/svelte-query';
 
   import { createClient, setApiKey } from '../lib/client.ts';
-  import { readRuntimeConfig, type WeftConsoleRuntimeConfig } from '../lib/config.ts';
+  import { readRuntimeConfig, type WeftUiRuntimeConfig } from '../lib/config.ts';
   import { createQueryClient } from '../lib/query.ts';
   import { resolvePrincipal, type Principal } from '../lib/scopes.svelte.ts';
   import ApiKeyEntry from './auth/api-key-entry.svelte';
@@ -24,7 +24,7 @@
   import ToastHost from './toast-host.svelte';
 
   const queryClient = createQueryClient();
-  const config: WeftConsoleRuntimeConfig = readRuntimeConfig();
+  const config: WeftUiRuntimeConfig = readRuntimeConfig();
 
   type BootPhase =
     | { readonly status: 'resolving' }
@@ -85,7 +85,7 @@
       class="weft-shell-boot-skeleton"
       role="status"
       aria-busy="true"
-      aria-label="Loading Weft Console"
+      aria-label="Loading Weft UI"
     >
       <Skeleton height="100vh" radius="0" />
     </div>

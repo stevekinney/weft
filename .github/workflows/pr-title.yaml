@@ -51,7 +51,7 @@ jobs:
           }
 
           current_title=$(jq -r '.pull_request.title' "$GITHUB_EVENT_PATH")
-          bun run scripts/pr-title.ts normalize --title "$current_title" > pr-title-report.json
+          bun run packages/weft/scripts/pr-title.ts normalize --title "$current_title" > pr-title-report.json
           cat pr-title-report.json
 
           normalized_title=$(jq -r '.normalizedTitle // ""' pr-title-report.json)
@@ -128,4 +128,4 @@ jobs:
       - name: Validate final PR title
         env:
           TITLE: ${{ steps.final.outputs.title }}
-        run: bun run scripts/pr-title.ts validate --title "$TITLE"
+        run: bun run packages/weft/scripts/pr-title.ts validate --title "$TITLE"

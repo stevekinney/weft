@@ -1,4 +1,4 @@
-# Weft Console
+# Weft UI
 
 Operator console for the [Weft](https://github.com/stevekinney/weft) durable-workflow engine —
 Svelte 5 + [Cinder](https://github.com/stevekinney/cinder). See
@@ -27,9 +27,9 @@ bug made that impossible — `serve({ engine })` threw for any root-imported `En
 (https://github.com/stevekinney/weft/issues/710); fixed upstream in the historical `0.12.0` release
 (#716). This package now pins `0.18.0`; see `scripts/dev-server.ts`'s module doc if you need the full
 history.) The
-production mount path this package exists for — `serve({ dashboard: weftConsole() })` — is
-runtime-verified the same way: a real `serve({ engine, dashboard: weftConsole() })` instance returns
-the built shell (`index.html` with its `weft-console-config` block) at `200`.
+production mount path this package exists for — `serve({ dashboard: weftUi() })` — is
+runtime-verified the same way: a real `serve({ engine, dashboard: weftUi() })` instance returns
+the built shell (`index.html` with its `weft-ui-config` block) at `200`.
 
 **A real dev harness needs a real credential, not `unauthenticatedAccess`** — and now has one.
 `unauthenticatedAccess` only controls whether `serve()` refuses to _start_ with no `auth`
@@ -78,14 +78,14 @@ Service Worker mode (`setupServiceWorker`/`handleRequest`), and cross-origin (a 
 ```ts
 import { Engine } from '@lostgradient/weft';
 import { serve } from '@lostgradient/weft/server';
-import { weftConsole, weftConsoleAssets } from '@lostgradient/weft-console';
+import { weftUi, weftUiAssets } from '@lostgradient/weft-ui';
 import { workflows } from './workflows';
 
 const engine = await Engine.create({ workflows });
-await serve({ engine, dashboard: weftConsole(), dashboardAssets: weftConsoleAssets() });
+await serve({ engine, dashboard: weftUi(), dashboardAssets: weftUiAssets() });
 ```
 
-`weftConsole({ distDir? })` (`src/mount.ts`) returns a static `Response` streaming the built
+`weftUi({ distDir? })` (`src/mount.ts`) returns a static `Response` streaming the built
 `index.html` — `serve()` registers it at exactly the eight `DASHBOARD_PAGE_ROUTES`
 (`/`, `/workflows`, `/workflows/*`, `/reviews`, `/workers`, `/schedules`, `/storage`, `/system`
 as of `@lostgradient/weft@0.16.0`, which made the console's leaf routes real deep-linkable page
@@ -93,7 +93,7 @@ routes) and, by construction of Bun's static route table, it can never shadow `/
 root-stable discovery routes (`/v1/health`, `/openapi.json`, …). The injected config block
 defaults to `{ baseUrl: '' }` (same origin — the console and API share a port under this mode).
 
-`weftConsoleAssets({ distDir? })` returns the `ServeOptions.dashboardAssets` descriptor
+`weftUiAssets({ distDir? })` returns the `ServeOptions.dashboardAssets` descriptor
 (`{ prefix: '/assets', directory: <distDir>/assets }`) for the shell's content-hashed JS/CSS
 chunks — weft 0.16.0's `dashboardAssets` option serves them as verified static file routes, so
 the two options together are a complete deployment: no reverse proxy or separate static file
@@ -107,13 +107,13 @@ location than this package's own `dist/` (e.g. a CDN origin bucket) before servi
 there. The assets directory must exist before `serve()` is called — weft validates it at boot.
 
 **Zero-code CLI mount (weft 0.16.0, weft#842).** `weft serve --console` mounts this package
-without writing any server code: the CLI resolves `@lostgradient/weft-console` from the project
-it runs in, calls the exported `weftConsole()`, and serves the package's built `dist/assets`
+without writing any server code: the CLI resolves `@lostgradient/weft-ui` from the project
+it runs in, calls the exported `weftUi()`, and serves the package's built `dist/assets`
 as the asset routes — the CLI equivalent of the `serve({ dashboard, dashboardAssets })` call
 above. Install the console next to weft and start the server:
 
 ```sh
-bun add @lostgradient/weft-console
+bun add @lostgradient/weft-ui
 bunx weft serve --console --workflows ./workflows.ts
 ```
 
@@ -231,7 +231,7 @@ All three modes read one injected block, parsed once at boot by `readRuntimeConf
 (`src/lib/client.ts`):
 
 ```html
-<script type="application/json" id="weft-console-config">
+<script type="application/json" id="weft-ui-config">
   { "baseUrl": "/weft", "eventTransport": "sse" }
 </script>
 ```

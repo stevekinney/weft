@@ -1,6 +1,6 @@
 /**
  * Pure view-model mapping for the Registry tab (plan §9.7, T7.2; design
- * `Weft Console.dc.html` "System" § REGISTRY). Turns the wire
+ * `Weft UI.dc.html` "System" § REGISTRY). Turns the wire
  * `GET /v1/registry` snapshot (`weft.system.registry`,
  * `@lostgradient/weft`'s `RegistrySnapshot`) into sorted, render-ready rows —
  * kept framework-free so it is unit-testable without a DOM.

@@ -3,7 +3,7 @@
  * §11.5: "config-injection test that the same bundle boots in all three
  * modes"). Exercises `readRuntimeConfig()` (`src/lib/config.ts`) and
  * `createClient()` (`src/lib/client.ts`) TOGETHER, end to end from the raw
- * `<script id="weft-console-config">` JSON text a mount would inject, through
+ * `<script id="weft-ui-config">` JSON text a mount would inject, through
  * to the constructed `HttpClient` — the individual pieces already have
  * exhaustive unit coverage in `config.test.ts`/`client.test.ts`; this file's
  * job is proving the three documented mount shapes (§3.1 Bun mount, §3.3
@@ -24,8 +24,8 @@ import { describe, expect, test } from 'bun:test';
 import { createClient } from '../../src/lib/client.ts';
 import { readRuntimeConfig } from '../../src/lib/config.ts';
 
-const CONFIG_ELEMENT_ID = 'weft-console-config';
-const CONSOLE_ORIGIN = 'https://weft-console.example.com';
+const CONFIG_ELEMENT_ID = 'weft-ui-config';
+const CONSOLE_ORIGIN = 'https://weft-ui.example.com';
 
 function documentWithConfigBlock(json: unknown): Document {
   const text = JSON.stringify(json);

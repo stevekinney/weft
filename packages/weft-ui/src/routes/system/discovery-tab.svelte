@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * Discovery tab (plan §9.7 T7.3; design `Weft Console.dc.html` "System" §
+   * Discovery tab (plan §9.7 T7.3; design `Weft UI.dc.html` "System" §
    * DISCOVERY). Rendered OpenAPI / OpenRPC / AsyncAPI viewers (method/path,
    * summary, tags — see `operation-catalog.ts`'s module doc for why
    * "required scope" is honestly absent) + raw-JSON toggle, plus the MCP

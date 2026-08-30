@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * Operations tab (plan §9.7 T7.4; design `Weft Console.dc.html` "System" §
+   * Operations tab (plan §9.7 T7.4; design `Weft UI.dc.html` "System" §
    * OPERATION CATALOG). Searchable table sourced from the OpenAPI/OpenRPC
    * discovery documents + a `PermissionMatrix` scope/domain toggle — see
    * `scope-domain-matrix.ts`'s module doc for exactly what that matrix does

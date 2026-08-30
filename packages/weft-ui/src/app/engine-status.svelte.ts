@@ -74,7 +74,7 @@ const FLEET_STATUS_FALLBACK_AFTER_ATTEMPTS = 5;
 
 async function checkHealth(client: Pick<HttpClient, 'baseUrl' | 'headers'>): Promise<true> {
   const response = await fetch(`${client.baseUrl}/v1/health`, { headers: client.headers });
-  if (!response.ok) throw new Error(`weft-console: /v1/health responded ${response.status}`);
+  if (!response.ok) throw new Error(`weft-ui: /v1/health responded ${response.status}`);
   return true;
 }
 
@@ -175,7 +175,7 @@ export class EngineStatusController {
  * fix: two calls (provide here in `shell.svelte`, get in the consuming
  * route), no change to `EngineStatusController`'s own behavior or tests.
  */
-const FLEET_EVENT_SOURCE_CONTEXT_KEY = Symbol('weft-console-fleet-event-source');
+const FLEET_EVENT_SOURCE_CONTEXT_KEY = Symbol('weft-ui-fleet-event-source');
 
 export function provideFleetEventSource(source: FleetEventSource): void {
   setContext(FLEET_EVENT_SOURCE_CONTEXT_KEY, source);
@@ -190,7 +190,7 @@ export function getFleetEventSource(): FleetEventSource {
   const source = getContext<FleetEventSource | undefined>(FLEET_EVENT_SOURCE_CONTEXT_KEY);
   if (!source) {
     throw new Error(
-      'weft-console: getFleetEventSource() called with no source in context — provideFleetEventSource() must run in an ancestor component.',
+      'weft-ui: getFleetEventSource() called with no source in context — provideFleetEventSource() must run in an ancestor component.',
     );
   }
   return source;

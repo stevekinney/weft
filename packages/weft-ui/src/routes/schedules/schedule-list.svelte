@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * Schedule list (Track B, plan §9.3; design `Weft Console.dc.html`
+   * Schedule list (Track B, plan §9.3; design `Weft UI.dc.html`
    * "Schedule list"): status/cadence/next/last fire, missed-fire count (red
    * when >0), row actions gated on `schedules:write`.
    */

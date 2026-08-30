@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * Workflow list filter bar (plan §9.2 T2.1, design `Weft Console.dc.html`
+   * Workflow list filter bar (plan §9.2 T2.1, design `Weft UI.dc.html`
    * "Workflow list" filter row). `FilterBar` (Cinder) is the shell;
    * status is a multi-select toggle row above it (a `select` facet only
    * carries one value, but `ListFilter.status` accepts several — plan

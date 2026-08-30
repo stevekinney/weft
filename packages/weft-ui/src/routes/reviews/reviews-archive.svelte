@@ -5,7 +5,7 @@
    * from the Inbox's "Decided" state, which shows the same completed
    * entries inside the two-panel decision view — the archive is a dense,
    * scannable table with no detail panel, matching
-   * `design/Weft Console.dc.html`'s `archiveRows` grid.
+   * `design/Weft UI.dc.html`'s `archiveRows` grid.
    */
   import Badge from '@lostgradient/cinder/badge';
   import EmptyState from '@lostgradient/cinder/empty-state';

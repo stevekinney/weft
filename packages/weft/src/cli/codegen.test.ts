@@ -766,7 +766,11 @@ describe('executeCodegen HTTP fetch path', () => {
       expect(result.stderr).toContain(server.url.toString());
       expect(existsSync(out)).toBe(false);
     } finally {
-      await server.stop(true);
+      // Deliberately not awaited: the handler promise never settles, and
+      // Bun's stop() completion promise waits on it, so awaiting here hangs
+      // past the test timeout whenever the aborted connection has not fully
+      // torn down first. The force-stop itself closes the listener.
+      void server.stop(true);
     }
   });
 });

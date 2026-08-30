@@ -1,5 +1,5 @@
 /**
- * Component tests for `<KvBrowser>` (plan §9.6; design `Weft Console.dc.html`
+ * Component tests for `<KvBrowser>` (plan §9.6; design `Weft UI.dc.html`
  * STORAGE "stBrowser"): the get/scan/put/delete/batch operation picker.
  */
 import type { HttpClient } from '@lostgradient/weft/client';

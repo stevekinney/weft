@@ -59,7 +59,7 @@ describe('ThemeStore', () => {
 
   test('reads a previously stored mode and applies it immediately', () => {
     const storage = new FakeStorage();
-    storage.setItem('weft-console-theme', 'dark');
+    storage.setItem('weft-ui-theme', 'dark');
     const root = freshRoot();
 
     const store = new ThemeStore(root, storage);
@@ -70,7 +70,7 @@ describe('ThemeStore', () => {
 
   test('ignores an invalid stored value and falls back to system', () => {
     const storage = new FakeStorage();
-    storage.setItem('weft-console-theme', 'not-a-real-mode');
+    storage.setItem('weft-ui-theme', 'not-a-real-mode');
     const root = freshRoot();
 
     const store = new ThemeStore(root, storage);
@@ -87,11 +87,11 @@ describe('ThemeStore', () => {
     store.set('light');
     expect(store.mode).toBe('light');
     expect(root.getAttribute('data-theme')).toBe('light');
-    expect(storage.getItem('weft-console-theme')).toBe('light');
+    expect(storage.getItem('weft-ui-theme')).toBe('light');
 
     store.set('dark');
     expect(root.getAttribute('data-theme')).toBe('dark');
-    expect(storage.getItem('weft-console-theme')).toBe('dark');
+    expect(storage.getItem('weft-ui-theme')).toBe('dark');
   });
 
   test('set("system") removes the data-theme attribute', () => {
@@ -104,7 +104,7 @@ describe('ThemeStore', () => {
 
     store.set('system');
     expect(root.hasAttribute('data-theme')).toBe(false);
-    expect(storage.getItem('weft-console-theme')).toBe('system');
+    expect(storage.getItem('weft-ui-theme')).toBe('system');
   });
 
   test('cycle() advances through the same order as nextThemeMode', () => {

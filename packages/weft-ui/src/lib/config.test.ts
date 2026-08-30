@@ -6,12 +6,12 @@
  */
 import { describe, expect, test } from 'bun:test';
 
-import { readRuntimeConfig, type WeftConsoleRuntimeConfig } from './config.ts';
+import { readRuntimeConfig, type WeftUiRuntimeConfig } from './config.ts';
 
 function fakeDocument(text: string | null): Document {
   return {
     getElementById(id: string) {
-      if (id !== 'weft-console-config' || text === null) return null;
+      if (id !== 'weft-ui-config' || text === null) return null;
       return { textContent: text } as HTMLElement;
     },
   } as unknown as Document;
@@ -100,12 +100,12 @@ describe('readRuntimeConfig — shape validation', () => {
 
 describe('readRuntimeConfig — a valid config', () => {
   test('round-trips baseUrl, eventTransport, token, headers, and assetBase verbatim', () => {
-    const config: WeftConsoleRuntimeConfig = {
+    const config: WeftUiRuntimeConfig = {
       baseUrl: 'https://weft.example.com',
       eventTransport: 'sse',
       token: 'operator-key',
       headers: { 'X-Custom-Header': 'value' },
-      assetBase: 'https://cdn.example.com/weft-console/',
+      assetBase: 'https://cdn.example.com/weft-ui/',
     };
     expect(readRuntimeConfig(fakeDocument(JSON.stringify(config)))).toEqual(config);
   });

@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * Put panel (plan §9.6, §10.6; design `Weft Console.dc.html` STORAGE
+   * Put panel (plan §9.6, §10.6; design `Weft UI.dc.html` STORAGE
    * "stPut"): key + raw text value, Tier-2 `ConfirmDialog` before writing
    * (plan: "Tier-2 ConfirmDialog on writes/deletes").
    */

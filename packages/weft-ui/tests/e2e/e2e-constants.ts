@@ -37,7 +37,7 @@ export const E2E_BASE_URL = `http://localhost:${E2E_CONSOLE_PORT}`;
  * never persisted (matches `src/lib/config.ts`'s `token`: "held in memory
  * only").
  */
-export const E2E_API_KEY = 'weft-console-e2e-fixture-key';
+export const E2E_API_KEY = 'weft-ui-e2e-fixture-key';
 
 /** `deploymentName` the E2E `RemoteWorker` registers under (flow (e), drain-a-deployment). */
 export const E2E_DEPLOYMENT_NAME = 'checkout-worker-fleet';

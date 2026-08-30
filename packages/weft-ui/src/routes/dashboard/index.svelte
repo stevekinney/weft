@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * Dashboard (plan §9.1; design `Weft Console.dc.html` dashboard screen).
+   * Dashboard (plan §9.1; design `Weft UI.dc.html` dashboard screen).
    * Three bands — critical alerts, aggregate cards, recent-activity feed —
    * behind a page-level state machine matching the design's four states
    * (default/loading/empty/unreachable, Appendix B). Bands own their own

@@ -1,5 +1,5 @@
 /**
- * Builds the Operation catalog (plan §9.7 T7.4; design `Weft Console.dc.html`
+ * Builds the Operation catalog (plan §9.7 T7.4; design `Weft UI.dc.html`
  * "System" § OPERATION CATALOG) by combining weft's `openapi.json` and
  * `openrpc.json` discovery documents client-side — "sourced from the
  * discovery docs" per the plan, not a dedicated catalog endpoint (none

@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * Get panel (plan §9.6; design `Weft Console.dc.html` STORAGE "stGet"):
+   * Get panel (plan §9.6; design `Weft UI.dc.html` STORAGE "stGet"):
    * exact-key lookup. Modeled as a `createMutation` rather than
    * `createQuery` — `@tanstack/svelte-query`'s Svelte adapter wraps a plain
    * (non-store) options object in `readable(options)` exactly once

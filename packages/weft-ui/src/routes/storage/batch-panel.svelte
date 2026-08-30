@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * Batch panel (plan §9.6, §10.6; design `Weft Console.dc.html` STORAGE):
+   * Batch panel (plan §9.6, §10.6; design `Weft UI.dc.html` STORAGE):
    * a small set of put/delete operations applied atomically, plus
    * conditional batch (compare-and-swap) when `conditionalBatchSupported`
    * says the backend supports it — the plan's "conditional-batch shown only

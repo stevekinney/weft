@@ -12,7 +12,7 @@ import WorkersDashboardCard from '../workers/cards/dashboard-card.svelte';
  * entry to a one-line import + registration so concurrent tracks rarely
  * conflict on the same lines.
  *
- * No `workflows` entry: the design reference (`Weft Console.dc.html`
+ * No `workflows` entry: the design reference (`Weft UI.dc.html`
  * dashboard screen) shows exactly one "Workflows by status" treatment — the
  * dashboard track's own full-width `workflow-status-card.svelte`, which
  * also feeds the page-level empty-state gate (`index.svelte`). A second,

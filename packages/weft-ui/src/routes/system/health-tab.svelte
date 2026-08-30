@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * Health & lease tab (plan §9.7 T7.5; design `Weft Console.dc.html`
+   * Health & lease tab (plan §9.7 T7.5; design `Weft UI.dc.html`
    * "System" § HEALTH & LEASE). Lease status, retention overview,
    * recover-all (Tier-2 confirm), a codegen preview, and the CLI-only
    * conformance panel.

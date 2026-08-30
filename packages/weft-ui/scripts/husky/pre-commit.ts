@@ -3,7 +3,7 @@
  * Pre-commit gate: format + lint the staged files, typecheck the project, then
  * run the fast test path. Mirrors the weft repo's Bun-hook architecture (thin
  * `.husky/pre-commit` shell wrapper + this script) without cloning its full
- * pipeline — weft-console has no catalog/JSDoc/doctest surfaces to gate yet.
+ * pipeline — weft-ui has no catalog/JSDoc/doctest surfaces to gate yet.
  *
  * Every step runs even if an earlier one fails, so a contributor sees the
  * full picture in one pass instead of fixing issues one at a time.

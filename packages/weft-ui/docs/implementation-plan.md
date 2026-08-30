@@ -1,10 +1,10 @@
-## Weft Console — Implementation Plan
+## Weft UI — Implementation Plan
 
 > **This document supersedes and combines** `Weft UI.md` (architecture + UX/IA/flows) and `Weft UI - Wireframe Requirements.md` (visual spec + Cinder mapping) into a single plan **organized for Fable-driven execution**: locked decisions up front, ground truth verified against the current repositories, a Cinder-first component policy, and a phased task breakdown where every task is PR-sized with explicit acceptance criteria and verification commands.
 >
 > - Engine: `stevekinney/weft` → npm `@lostgradient/weft` (pre-release; breaking changes welcome, no compatibility layers)
 > - Components: `stevekinney/cinder` → npm `@lostgradient/cinder`; `package.json` is live version truth and currently pins **v0.24.0**. Use supported public entrypoints and the [README's current dependency and adoption record](../README.md#historical-cinder-first-evaluations-after-the-0190-bump).
-> - Visual direction: Claude Design project `78301189-3414-48f4-bf40-8d4bc28da7b7` (`Weft Console.dc.html`, `Weft Patterns.dc.html`, screenshots for workflow list/timeline/saga, schedules, reviews, diagnostics, discovery, confirmation tiers) — indigo-on-cool-blue-grey, OKLCH + `light-dark()`, 14px base, Lucide icons, "the brand is the restraint"
+> - Visual direction: Claude Design project `78301189-3414-48f4-bf40-8d4bc28da7b7` (`Weft UI.dc.html`, `Weft Patterns.dc.html`, screenshots for workflow list/timeline/saga, schedules, reviews, diagnostics, discovery, confirmation tiers) — indigo-on-cool-blue-grey, OKLCH + `light-dark()`, 14px base, Lucide icons, "the brand is the restraint"
 
 ---
 
@@ -31,8 +31,8 @@ Facts carried forward from the source documents (two have since moved — Append
 
 These are settled. Fable tasks execute against them without re-litigating.
 
-1. **Deliverable**: a new repository `weft-console` (sibling of `weft` and `cinder`), publishing `@lostgradient/weft-console`. Weft stays headless (the repo's `component-standards` skill forbids reintroducing `src/dashboard/**`). The package exports:
-   - `weftConsole(options?): DashboardRouteTarget` — the Bun mount for `serve({ dashboard: weftConsole() })`.
+1. **Deliverable**: a new repository `weft-ui` (sibling of `weft` and `cinder`), publishing `@lostgradient/weft-ui`. Weft stays headless (the repo's `component-standards` skill forbids reintroducing `src/dashboard/**`). The package exports:
+   - `weftUi(options?): DashboardRouteTarget` — the Bun mount for `serve({ dashboard: weftUi() })`.
    - Built static assets (`dist/`) importable/copyable for non-Bun hosts (reverse proxies, Service Worker host pages).
 2. **SPA, no SSR, no SvelteKit.** Svelte 5 components + a minimal client-side router under the five owned route prefixes. The console is always behind auth; SSR has no payoff and fights the static-`Response` mount.
 3. **Cinder-first, upstream-first.** Every UI need uses the `@lostgradient/cinder` component when one exists (§7.1). When one doesn't and the need is generic, **add it to Cinder upstream** (§7.2) — we own the library. Bespoke app-local components are limited to the short list in §7.3. Never fork or wrap a Cinder component to change its visuals; fix it upstream.
@@ -49,10 +49,10 @@ These are settled. Fable tasks execute against them without re-litigating.
 ### 2. Repository Layout and Build
 
 ```
-weft-console/
-├── package.json              # @lostgradient/weft-console; peers: svelte, lucide-svelte; deps: @lostgradient/{weft,cinder}, @tanstack/svelte-query
+weft-ui/
+├── package.json              # @lostgradient/weft-ui; peers: svelte, lucide-svelte; deps: @lostgradient/{weft,cinder}, @tanstack/svelte-query
 ├── src/
-│   ├── mount.ts              # weftConsole(): DashboardRouteTarget — Bun.file(dist/index.html) Response
+│   ├── mount.ts              # weftUi(): DashboardRouteTarget — Bun.file(dist/index.html) Response
 │   ├── main.ts               # SPA entry: router, QueryClient, shell mount
 │   ├── app/                  # shell: navigation, command palette, notification center, scope context
 │   ├── routes/               # one directory per domain: dashboard/, workflows/, schedules/, workers/, reviews/, storage/, system/
@@ -85,21 +85,21 @@ The console is one bundle with a tiny runtime configuration layer; the three mod
 
 ```ts
 import { serve, Engine } from '@lostgradient/weft';
-import { weftConsole } from '@lostgradient/weft-console';
+import { weftUi } from '@lostgradient/weft-ui';
 
 const engine = await Engine.create({ workflows });
-await serve({ engine, dashboard: weftConsole() });
+await serve({ engine, dashboard: weftUi() });
 ```
 
-**API shape (decided, with the alternative considered):** `serve({ dashboard: weftConsole() })` — an option on `serve()`, not a wrapper like `ui(server(engine))`. The wrapper composition was considered and rejected: (1) Bun's route table must be complete when `Bun.serve()` binds — the static `routes` map matched ahead of the `fetch` handler is exactly what makes it _impossible_ for a mounted shell to shadow `/api/*`; a `ui()` that decorates an already-running server would have to mutate routes post-bind (`server.reload()` machinery) or turn `server()` into a deferred builder, adding indirection to preserve a property the option already has for free. (2) Weft's stated design principle is options-first configuration; the console is a payload weft mounts under _its_ route contract, and `ui(server(…))` inverts that ownership — it reads as the UI owning the server. (3) The composable half of the instinct is already satisfied: `weftConsole()` is a pure, framework-free value (`DashboardRouteTarget`) usable anywhere a Bun route target fits, not something coupled to `serve()`. One optional cosmetic: since weft is pre-release, the `dashboard` option could be renamed `console` to match the product name — fine either way, but `dashboard` is generic on purpose (the option predates and doesn't presume this package).
+**API shape (decided, with the alternative considered):** `serve({ dashboard: weftUi() })` — an option on `serve()`, not a wrapper like `ui(server(engine))`. The wrapper composition was considered and rejected: (1) Bun's route table must be complete when `Bun.serve()` binds — the static `routes` map matched ahead of the `fetch` handler is exactly what makes it _impossible_ for a mounted shell to shadow `/api/*`; a `ui()` that decorates an already-running server would have to mutate routes post-bind (`server.reload()` machinery) or turn `server()` into a deferred builder, adding indirection to preserve a property the option already has for free. (2) Weft's stated design principle is options-first configuration; the console is a payload weft mounts under _its_ route contract, and `ui(server(…))` inverts that ownership — it reads as the UI owning the server. (3) The composable half of the instinct is already satisfied: `weftUi()` is a pure, framework-free value (`DashboardRouteTarget`) usable anywhere a Bun route target fits, not something coupled to `serve()`. One optional cosmetic: since weft is pre-release, the `dashboard` option could be renamed `console` to match the product name — fine either way, but `dashboard` is generic on purpose (the option predates and doesn't presume this package).
 
-- `weftConsole()` returns a static `Response` (streamed via `Bun.file`) registered by weft at exactly the five `DASHBOARD_PAGE_ROUTES`. Hashed asset files are served alongside (the mount option accepts an asset base URL for CDN deployments).
+- `weftUi()` returns a static `Response` (streamed via `Bun.file`) registered by weft at exactly the five `DASHBOARD_PAGE_ROUTES`. Hashed asset files are served alongside (the mount option accepts an asset base URL for CDN deployments).
 - **Client-side sub-routing** under the owned prefixes covers Schedules/Storage/System at v1 (deep-linkable via `/?view=schedules` style or history-API routes under `/`); a contract-extension issue is filed upstream to grow `DASHBOARD_PAGE_ROUTES` with `/schedules`, `/storage`, `/system` (§14.1) — when it lands, the router's route table gains the aliases and nothing else changes.
 - **Security note (must appear in the README)**: the shell HTML is served before weft's auth handler; `serve({ auth })` protects the API, not the page. Anyone who can reach the port gets the (empty, data-free) shell. Deployments that must hide the shell put it behind a proxy.
 
 #### 3.2 CLI Startup (upstream Weft work)
 
-For `weft serve` users (server-mode, no code), add an upstream weft CLI affordance: `weft serve --console` resolves `@lostgradient/weft-console` (optional peer, actionable error if not installed) and passes `weftConsole()` as `dashboard`. This is a small, explicit feature — filed as an upstream issue (§14.1), not blocking console v1 (library users mount manually).
+For `weft serve` users (server-mode, no code), add an upstream weft CLI affordance: `weft serve --console` resolves `@lostgradient/weft-ui` (optional peer, actionable error if not installed) and passes `weftUi()` as `dashboard`. This is a small, explicit feature — filed as an upstream issue (§14.1), not blocking console v1 (library users mount manually).
 
 #### 3.3 Service Worker Mode
 
@@ -108,7 +108,7 @@ When the engine runs inside a Service Worker (browser/WebExtension, `IndexedDBSt
 - The **host page** serves the console assets itself (import the built `dist/` from the package) and registers the SW via `setupServiceWorker({ pathPrefix: '/weft/' , …})`.
 - The console boots with runtime config `{ baseUrl: '/weft' }` so `HttpClient` requests hit the SW's `fetch` listener → `handleRequest(request, engine)`.
 - **Transport constraint**: WebSocket upgrades cannot be intercepted by a Service Worker. The console detects/receives `eventTransport: 'sse'` in this mode — `HttpClient.tail()` already supports SSE, and the fleet feed is SSE-native. A SW `fetch` handler can return a streaming `Response`, so SSE works end-to-end; verify this in an integration test in Phase 9 and file a weft issue if `handleRequest` buffers instead of streams.
-- Runtime config is injected as a JSON `<script type="application/json" id="weft-console-config">` block (baseUrl, eventTransport, asset base) read once at boot — the same bundle serves all three modes.
+- Runtime config is injected as a JSON `<script type="application/json" id="weft-ui-config">` block (baseUrl, eventTransport, asset base) read once at boot — the same bundle serves all three modes.
 
 #### 3.4 Standalone / Cross-origin
 
@@ -347,8 +347,8 @@ Layered, mirroring what already works in `cinder` and `weft`:
 2. **Component tests (bun test + happy-dom + `@testing-library/svelte`)** — run with `--conditions browser --conditions svelte` exactly as cinder does. Cover: payload editor mode-switch losslessness; query-builder row add/remove/serialize; confirmation-tier gating (type-to-confirm disabled-until-match); scope-disabled tooltips; timeline step expansion; live-indicator state rendering; empty/loading/fault states per surface.
 3. **Integration tests against a real server (bun test)** — weft is a dependency: boot `Engine.create()` + `serve({ engine, port: 0 })` with MemoryStorage and registered fixture workflows in-process, point a real `HttpClient` (and the SPA data layer) at it. Cover: list/filter/paginate against real data; start wizard → running workflow; signal/update round-trips; tail catch-up-then-live with forced reconnect (no dup/skip); fleet SSE delivery of review/schedule/worker events; bulk dry-run → confirm token flow; auth modes (`unauthenticatedAccess` warn/reject, scoped API keys); fault shapes (REST masked 500 vs JSON-RPC fault object). **No mock server, no fixture drift.**
 4. **E2E (Playwright, `@axe-core/playwright`)** — the critical persona flows only: debug-a-failed-workflow (list → detail → timeline → replay → fork), approve-a-review-with-partial-sections, bulk-retry-with-type-to-confirm, create-and-backfill-schedule, drain-a-deployment. Each flow also asserts zero serious/critical axe violations. Runs against a seeded real server. Follow the weft repo's `waitFor`-not-fixed-sleep convention; no timeout bumps to make things pass.
-5. **Mount/deployment tests** — `weftConsole()` returns a valid `DashboardRouteTarget`; a booted `serve({ dashboard })` serves the shell at all five routes and never shadows `/api/*` or root discovery routes; SW-mode integration test proving `handleRequest`-backed fetch + streaming SSE through a Service Worker context (fake-indexeddb + a SW test harness); config-injection test that the same bundle boots in all three modes.
-6. **Type-level tests** (`.test-d.ts`) — `weftConsole()` satisfies `DashboardRouteTarget` against the published `@lostgradient/weft/server` types; `client.operations` call-site inference for every operation the console uses.
+5. **Mount/deployment tests** — `weftUi()` returns a valid `DashboardRouteTarget`; a booted `serve({ dashboard })` serves the shell at all five routes and never shadows `/api/*` or root discovery routes; SW-mode integration test proving `handleRequest`-backed fetch + streaming SSE through a Service Worker context (fake-indexeddb + a SW test harness); config-injection test that the same bundle boots in all three modes.
+6. **Type-level tests** (`.test-d.ts`) — `weftUi()` satisfies `DashboardRouteTarget` against the published `@lostgradient/weft/server` types; `client.operations` call-site inference for every operation the console uses.
 7. **Budgets & gates in CI** — bundle-size budget script (entry <15 KB gz; per-route <60 KB; CodeMirror chunk lazy, <150 KB), coverage gate (100% adjusted with an explicit reviewed allowance file, weft-style), lint/typecheck/format, and the Cinder styles-guard active in dev builds.
 
 Fixtures: a `fixtures/workflows.ts` module defining deterministic demo workflows exercising every visual state — retries, race/all/speculate branches, saga compensation, finalizers, human reviews (partial + timeout), long histories (>500 steps), async activities, child trees, every failure category. Used by integration tests, Playwright seeds, and the dev server, so "does the timeline render a saga" is one command away everywhere.
@@ -368,7 +368,7 @@ Fixtures: a `fixtures/workflows.ts` module defining deterministic demo workflows
 
 ### 13. Execution Plan — Phases, Tracks, and Fan-Out
 
-Rules of engagement for every task: one task = one worktree = one PR into `weft-console` `main` (or the named upstream repo); TDD; full validation suite before PR; PR monitored to the three-condition close (CI green, review threads resolved, no conflicts). Each phase ends with its **gate** passing.
+Rules of engagement for every task: one task = one worktree = one PR into `weft-ui` `main` (or the named upstream repo); TDD; full validation suite before PR; PR monitored to the three-condition close (CI green, review threads resolved, no conflicts). Each phase ends with its **gate** passing.
 
 #### 13.0 Parallel Execution Map (read This before Dispatching agents)
 
@@ -376,14 +376,14 @@ The plan is structured so that after two serialization points — the **Phase 0 
 
 | Track | Phases/Tasks | Owned paths (exclusive) | Blocked by | Repo |
 |---|---|---|---|---|
-| **F** Foundation | Phase 1 (T1.1–T1.6) | `src/lib/**`, `src/app/**` | Phase 0 gate | weft-console |
-| **A** Workflows core | Phase 2 → Phase 3 (sequential within track) | `src/routes/workflows/**` | Phase 1 gate | weft-console |
-| **B** Schedules | Phase 4 | `src/routes/schedules/**` | Phase 1 gate | weft-console |
-| **C** Workers/queues/diagnostics | Phase 5 | `src/routes/workers/**`, `src/routes/dashboard/**` (alert chips + aggregate cards) | Phase 1 gate | weft-console |
-| **D** Reviews | Phase 6 | `src/routes/reviews/**` | Phase 1 gate | weft-console |
-| **E** Storage + System | Phase 7 | `src/routes/storage/**`, `src/routes/system/**` | Phase 1 gate | weft-console |
-| **G** Bulk/destructive hardening | Phase 8 | list bulk-bar + tier sweep (touches A/C surfaces — run after their gates) | A gate, C gate | weft-console |
-| **H** Deployment modes + hardening | Phase 9 | `tests/**` (SW/CORS harnesses), `scripts/**` (budgets) | A gate (needs one real surface to exercise) | weft-console |
+| **F** Foundation | Phase 1 (T1.1–T1.6) | `src/lib/**`, `src/app/**` | Phase 0 gate | weft-ui |
+| **A** Workflows core | Phase 2 → Phase 3 (sequential within track) | `src/routes/workflows/**` | Phase 1 gate | weft-ui |
+| **B** Schedules | Phase 4 | `src/routes/schedules/**` | Phase 1 gate | weft-ui |
+| **C** Workers/queues/diagnostics | Phase 5 | `src/routes/workers/**`, `src/routes/dashboard/**` (alert chips + aggregate cards) | Phase 1 gate | weft-ui |
+| **D** Reviews | Phase 6 | `src/routes/reviews/**` | Phase 1 gate | weft-ui |
+| **E** Storage + System | Phase 7 | `src/routes/storage/**`, `src/routes/system/**` | Phase 1 gate | weft-ui |
+| **G** Bulk/destructive hardening | Phase 8 | list bulk-bar + tier sweep (touches A/C surfaces — run after their gates) | A gate, C gate | weft-ui |
+| **H** Deployment modes + hardening | Phase 9 | `tests/**` (SW/CORS harnesses), `scripts/**` (budgets) | A gate (needs one real surface to exercise) | weft-ui |
 | **U1** Cinder upstream | C1 `RunStepTimeline` branches, C2 `ConnectionIndicator`, C3 `ScheduleBuilder`, C4 rule-builder conditions mode | per-component dirs in `cinder` | none — start at Phase 0 | cinder |
 | **U2** Weft upstream | route extension, `--console` CLI, alert list/ack ops, budget ops-or-drop, SW SSE verification, principal op | `weft` | none — start at Phase 0 | weft |
 
@@ -398,11 +398,11 @@ Coordination rules that make the fan-out safe:
 
 #### Phase 0 — Repositories, Scaffold, upstream Tickets
 
-- **T0.1** Create `weft-console` repo: Bun + Svelte 5 + Cinder wiring (base styles; component entrypoints load their own CSS), lint (oxlint)/format (prettier + organize-imports)/typecheck/bun-test CI, kebab-case + file-size conventions, pre-commit hooks mirroring weft's.
-- **T0.2** Build pipeline: Svelte compile + `bun build --splitting`, hashed assets, `weftConsole()` mount export + type test against `DashboardRouteTarget`, mount smoke test (serve at five routes, no API shadowing). Decide bun-plugin-svelte vs Vite here and record the decision in the README.
+- **T0.1** Create `weft-ui` repo: Bun + Svelte 5 + Cinder wiring (base styles; component entrypoints load their own CSS), lint (oxlint)/format (prettier + organize-imports)/typecheck/bun-test CI, kebab-case + file-size conventions, pre-commit hooks mirroring weft's.
+- **T0.2** Build pipeline: Svelte compile + `bun build --splitting`, hashed assets, `weftUi()` mount export + type test against `DashboardRouteTarget`, mount smoke test (serve at five routes, no API shadowing). Decide bun-plugin-svelte vs Vite here and record the decision in the README.
 - **T0.3** Dev harness: `bun run dev` boots a seeded local weft server (fixtures module) + the console dev server with proxy and **full HMR**; document `WEFT_API_BASE_URL`. HMR acceptance tests (manual checklist in the PR + a scripted smoke where feasible): (1) edit a `.svelte` component → updates in place, no full reload, sibling component state survives; (2) edit component CSS → styles hot-apply; (3) edit a `LiveSource` module while a tail is open → old connection closes, exactly one new connection opens (assert via the weft server's connection count); (4) syntax error → overlay, then recovers on fix without manual reload.
 - **T0.4** File upstream tickets: cinder C1–C4 (§7.2, with specs); weft — `DASHBOARD_PAGE_ROUTES` extension (`/schedules`, `/storage`, `/system`), `weft serve --console` CLI mount, SW streaming-SSE verification if needed (§14).
-- **Gate**: `serve({ engine, dashboard: weftConsole() })` renders a hello-shell at all five routes; `bun run dev` passes the T0.3 HMR acceptance checklist; CI green.
+- **Gate**: `serve({ engine, dashboard: weftUi() })` renders a hello-shell at all five routes; `bun run dev` passes the T0.3 HMR acceptance checklist; CI green.
 
 #### Phase 1 — Foundation Layer (the Load-bearing plain-TS modules)
 
@@ -481,8 +481,8 @@ Coordination rules that make the fan-out safe:
 #### Phase 10 — Release
 
 - **T10.1** README + deployment guide (three modes, auth caveat, scope requirements per surface).
-- **T10.2** Publish `@lostgradient/weft-console` 0.1.0 (changesets or weft-style release flow); upstream weft docs PR pointing `serve({ dashboard })` documentation at the package; close/land the `weft serve --console` issue when appropriate.
-- **Gate**: fresh-clone quickstart (`bun add … && serve({ dashboard: weftConsole() })`) works as documented.
+- **T10.2** Publish `@lostgradient/weft-ui` 0.1.0 (changesets or weft-style release flow); upstream weft docs PR pointing `serve({ dashboard })` documentation at the package; close/land the `weft serve --console` issue when appropriate.
+- **Gate**: fresh-clone quickstart (`bun add … && serve({ dashboard: weftUi() })`) works as documented.
 
 **Dependency notes**: see the §13.0 map — it is the authoritative fan-out contract. Phase 3 depends on Phase 2's detail scaffold (T2.4) and therefore lives inside track A rather than as a separate parallel track; Phase 8 (track G) waits on tracks A and C; upstream tracks U1/U2 start at Phase 0 and never block console tracks (fallback-first rule).
 
@@ -501,7 +501,7 @@ Coordination rules that make the fan-out safe:
 > #845). Item 4 (principal introspection) shipped in 0.18.0 and is adopted, closing the queue: `weft.system.principal` plus a public `AUTHORIZATION_SCOPES` export (weft#887). The only item still open upstream is an alert acknowledge/history operation, which weft documents as deliberately absent — its alert-manager model has no acknowledged state distinct from resolved.
 
 1. **Extend `DASHBOARD_PAGE_ROUTES`** with `/schedules`, `/storage`, `/system` (leaf prefixes; no `/api` shadow risk by construction). Includes tests + `component-standards` skill/doc updates. *Shipped in 0.16.0; adopted.*
-2. **`weft serve --console`**: optional-peer resolution of `@lostgradient/weft-console` with an actionable install error. *Shipped in 0.16.0; documented in the README.*
+2. **`weft serve --console`**: optional-peer resolution of `@lostgradient/weft-ui` with an actionable install error. *Shipped in 0.16.0; documented in the README.*
 3. **Verify `handleRequest` streams SSE responses** in a Service Worker context (needed for §3.3); file a bug with repro if it buffers. *Verified — it streams; the real gap (no `HandlerOptions` passthrough) shipped as `setupServiceWorker({ handlerOptions })` in 0.16.0 and is adopted.*
 4. Confirm/expose a **principal introspection operation** (scopes for the current credential) if the catalog doesn't already include one (T1.2 pins this). *Shipped in 0.18.0 as `weft.system.principal` (`GET /v1/principal`, `access: 'public'`) alongside a public `AUTHORIZATION_SCOPES` export; adopted — `resolvePrincipal()` now reports the server's real scope set instead of optimistically granting all 21, the T1.2 pin is inverted to assert the operation exists, and `scopes.svelte.integration.test.ts` proves the three-way boot contract against real `serve()` instances.*
 5. **Alert operations**: `alert:fired`/`alert:resolved` events reach the fleet feed, but the alert-manager has no list/acknowledge operations — a reload-safe "active alerts" console view needs `weft.alerts.list` (and optionally ack). *`weft.alerts.list` shipped in 0.16.0 (`GET /v1/alerts`, `system:read`); adopted — the Alerts tab's active list is authoritative, the session log remains for resolved/warning history. No acknowledge operation exists yet.*

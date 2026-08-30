@@ -32,7 +32,7 @@ test('canonical manifest remains usable across supported widths and themes', asy
     ]) {
       await page.setViewportSize(viewport);
       await page.addInitScript((selectedTheme) => {
-        localStorage.setItem('weft-console-theme', selectedTheme);
+        localStorage.setItem('weft-ui-theme', selectedTheme);
       }, theme);
       await page.goto('/workers?tab=list&worker=e2e-fleet-worker-1');
 

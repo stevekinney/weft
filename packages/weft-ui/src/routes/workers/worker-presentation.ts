@@ -81,7 +81,7 @@ export function heartbeatSeverityCssVariable(severity: HeartbeatSeverity): strin
 
 /**
  * Priority-ordered worker health presentation: draining > drained > stale
- * heartbeat > healthy. Matches `design/Weft Console.dc.html`'s workers
+ * heartbeat > healthy. Matches `design/Weft UI.dc.html`'s workers
  * screens, where a draining worker keeps its "Draining" badge regardless of
  * heartbeat age (draining stops new-task assignment; it does not itself
  * stop heartbeats) and only an `active` worker's heartbeat can promote it to

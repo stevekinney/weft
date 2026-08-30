@@ -23,7 +23,7 @@ import { Engine, MemoryStorage } from '@lostgradient/weft';
 import { serve, type CorsOptions, type WeftServer } from '@lostgradient/weft/server';
 import { afterEach, describe, expect, test } from 'bun:test';
 
-const ALLOWED_ORIGIN = 'https://weft-console.example.com';
+const ALLOWED_ORIGIN = 'https://weft-ui.example.com';
 const DISALLOWED_ORIGIN = 'https://untrusted.example.com';
 
 let activeServer: WeftServer | null = null;

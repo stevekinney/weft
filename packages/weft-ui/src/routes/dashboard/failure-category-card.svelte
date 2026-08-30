@@ -2,7 +2,7 @@
   /**
    * "Failures by category" aggregate card (plan §9.1: "your own stat cards
    * from GET /api/v1/workflows/aggregate?group_by=failureCategory"). Design
-   * `Weft Console.dc.html` dashboard screen renders this as clickable
+   * `Weft UI.dc.html` dashboard screen renders this as clickable
    * proportional bar rows (not literally the Cinder `BarChart` component,
    * which has no click/deep-link affordance per its props — `ChartSharedProps`
    * has no `onClick`/interactive-callback field, verified against

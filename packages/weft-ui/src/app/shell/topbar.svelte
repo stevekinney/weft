@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * Topbar (plan §13 T1.6; design `Weft Console.dc.html` "header"): ⌘K
+   * Topbar (plan §13 T1.6; design `Weft UI.dc.html` "header"): ⌘K
    * search trigger, scopes pill (links to the System → Scope panel, plan
    * §9.7), notification bell, theme toggle. `router.current.route` drives a
    * lightweight current-domain label — full breadcrumbs are a per-surface
@@ -54,9 +54,9 @@
 
   const domainLabel = $derived.by(() => {
     const pattern = router.current.route?.pattern;
-    if (pattern === undefined) return 'Weft Console';
+    if (pattern === undefined) return 'Weft UI';
     const domainPattern = `/${pattern.split('/').filter(Boolean)[0] ?? ''}`;
-    return DOMAIN_LABELS[pattern] ?? DOMAIN_LABELS[domainPattern] ?? 'Weft Console';
+    return DOMAIN_LABELS[pattern] ?? DOMAIN_LABELS[domainPattern] ?? 'Weft UI';
   });
 
   const grantedScopeCount = $derived(principal.principal?.scopes.length ?? 0);

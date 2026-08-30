@@ -20,12 +20,12 @@ import { describe, expect, test } from 'bun:test';
 import type { HttpClient } from '@lostgradient/weft/client';
 
 import { createClient, getClient, provideClient, setApiKey } from './client.ts';
-import type { WeftConsoleRuntimeConfig } from './config.ts';
+import type { WeftUiRuntimeConfig } from './config.ts';
 
 describe('createClient — baseUrl resolution', () => {
   test('an empty baseUrl (same-origin, plan §3.3) resolves to the injected origin', () => {
-    const client = createClient({ baseUrl: '' }, 'https://weft-console.example.com');
-    expect(client.baseUrl).toBe('https://weft-console.example.com');
+    const client = createClient({ baseUrl: '' }, 'https://weft-ui.example.com');
+    expect(client.baseUrl).toBe('https://weft-ui.example.com');
   });
 
   test('an explicit baseUrl is passed through unchanged', () => {
@@ -34,8 +34,8 @@ describe('createClient — baseUrl resolution', () => {
   });
 
   test('a Service Worker path-prefix baseUrl (plan §3.3) resolves against the injected origin', () => {
-    const client = createClient({ baseUrl: '/weft' }, 'https://weft-console.example.com');
-    expect(client.baseUrl).toBe('https://weft-console.example.com/weft');
+    const client = createClient({ baseUrl: '/weft' }, 'https://weft-ui.example.com');
+    expect(client.baseUrl).toBe('https://weft-ui.example.com/weft');
   });
 });
 
@@ -88,7 +88,7 @@ describe('createClient — headers', () => {
 });
 
 describe('setApiKey', () => {
-  const config: WeftConsoleRuntimeConfig = { baseUrl: 'https://weft.example.com' };
+  const config: WeftUiRuntimeConfig = { baseUrl: 'https://weft.example.com' };
 
   test('rebuilds the client with the entered key as a Bearer Authorization header', () => {
     const client = setApiKey(config, 'operator-entered-key');

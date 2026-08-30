@@ -4,10 +4,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import type { DashboardAssets, DashboardRouteTarget } from '../server/index.ts';
 
-const CONSOLE_PACKAGE_NAME = '@lostgradient/weft-console';
+const CONSOLE_PACKAGE_NAME = '@lostgradient/weft-ui';
 
 interface ConsoleModule {
-  weftConsole?: (options?: unknown) => unknown;
+  weftUi?: (options?: unknown) => unknown;
 }
 
 export interface ConsoleMount {
@@ -66,19 +66,19 @@ async function importConsoleModule(
 }
 
 function loadDashboard(module: ConsoleModule): DashboardRouteTarget {
-  if (typeof module.weftConsole !== 'function') {
+  if (typeof module.weftUi !== 'function') {
     throw consoleError(
-      `${CONSOLE_PACKAGE_NAME} must export a weftConsole() function; update the package or remove --console`,
+      `${CONSOLE_PACKAGE_NAME} must export a weftUi() function; update the package or remove --console`,
     );
   }
 
   try {
-    const dashboard = module.weftConsole();
+    const dashboard = module.weftUi();
     if (!isDashboardRouteTarget(dashboard)) throw new Error('invalid dashboard route target');
     return dashboard;
   } catch {
     throw consoleError(
-      `${CONSOLE_PACKAGE_NAME} weftConsole() failed; reinstall or update it, then retry, or remove --console`,
+      `${CONSOLE_PACKAGE_NAME} weftUi() failed; reinstall or update it, then retry, or remove --console`,
     );
   }
 }

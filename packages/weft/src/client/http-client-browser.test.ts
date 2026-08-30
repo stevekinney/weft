@@ -3,7 +3,7 @@
  * #713.
  *
  * `@lostgradient/weft/client` is documented and positioned as the browser
- * client for `weft-console`-style SPAs, but `new HttpClient({ baseUrl, token })`
+ * client for `weft-ui`-style SPAs, but `new HttpClient({ baseUrl, token })`
  * used to throw unconditionally in any real browser: the constructor
  * synchronously called through to `resolveConnection`, which read
  * `Bun.env['WEFT_PROFILE']` as a bare global reference (`ReferenceError: Bun is

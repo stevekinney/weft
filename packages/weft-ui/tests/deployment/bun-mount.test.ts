@@ -32,12 +32,12 @@ import { Engine } from '@lostgradient/weft';
 import { DASHBOARD_PAGE_ROUTES, serve } from '@lostgradient/weft/server';
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 
-import { weftConsole, weftConsoleAssets } from '../../src/mount.ts';
+import { weftUi, weftUiAssets } from '../../src/mount.ts';
 
 const SHELL_HTML =
   '<!doctype html><html><body><div id="app">weft console shell</div></body></html>';
 const ASSET_JS = 'console.log("weft console chunk");';
-const ASSET_CSS = ':root { --weft-console: 1; }';
+const ASSET_CSS = ':root { --weft-ui: 1; }';
 
 async function createMountTestEngine() {
   return Engine.create({ workflows: {} });
@@ -49,7 +49,7 @@ let engine: Awaited<ReturnType<typeof createMountTestEngine>>;
 let baseUrl: string;
 
 beforeAll(async () => {
-  distDir = mkdtempSync(join(tmpdir(), 'weft-console-mount-'));
+  distDir = mkdtempSync(join(tmpdir(), 'weft-ui-mount-'));
   mkdirSync(join(distDir, 'assets'));
   writeFileSync(join(distDir, 'index.html'), SHELL_HTML);
   writeFileSync(join(distDir, 'assets', 'index-abc123.js'), ASSET_JS);
@@ -60,8 +60,8 @@ beforeAll(async () => {
     engine,
     port: 0,
     unauthenticatedAccess: 'allow',
-    dashboard: weftConsole({ distDir }),
-    dashboardAssets: weftConsoleAssets({ distDir }),
+    dashboard: weftUi({ distDir }),
+    dashboardAssets: weftUiAssets({ distDir }),
   });
   baseUrl = server.url.replace(/\/+$/, '');
 });

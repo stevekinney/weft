@@ -44,7 +44,7 @@ function buildInitializeBody(): unknown {
     params: {
       protocolVersion: MCP_PROTOCOL_VERSION_FOR_TEST,
       capabilities: {},
-      clientInfo: { name: 'weft-console', version: '0.1.0' },
+      clientInfo: { name: 'weft-ui', version: '0.1.0' },
     },
   };
 }

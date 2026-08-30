@@ -3,7 +3,7 @@
    * "Workflows by status" aggregate card (plan §9.1: "your own stat cards
    * from GET /api/v1/workflows/aggregate?group_by=status" — this track's
    * own card, distinct from the workflows-domain card-slot registry entry).
-   * Design `Weft Console.dc.html` dashboard screen. Data is fetched once by
+   * Design `Weft UI.dc.html` dashboard screen. Data is fetched once by
    * the parent route (`./index.svelte`, which also needs the total for the
    * page-level empty-state gate) and passed in as a query result — this
    * component only presents it.

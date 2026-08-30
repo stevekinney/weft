@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * Scan panel (plan §9.6; design `Weft Console.dc.html` STORAGE "stScan"):
+   * Scan panel (plan §9.6; design `Weft UI.dc.html` STORAGE "stScan"):
    * prefix or start/end range scan, NDJSON under the hood (`storage-client.ts`),
    * paginated by cursor (`gt=<last key>`) — "Load more" re-scans rather than
    * offsetting, and results are a snapshot at page load (plan §4's list

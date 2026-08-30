@@ -1,7 +1,7 @@
 /**
  * Static operator guidance copy for the five `weft.tasks.diagnostics` kinds
  * (plan §9.4 T5.4: "with the static guidance copy from the plan retained
- * verbatim"). Copied exactly from `design/Weft Console.dc.html`'s
+ * verbatim"). Copied exactly from `design/Weft UI.dc.html`'s
  * `diagnostics` array (lines 2027-2031) — do not paraphrase; the design
  * README states copy is final.
  */

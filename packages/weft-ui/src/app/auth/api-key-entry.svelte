@@ -48,15 +48,15 @@
   }
 </script>
 
-<div class="weft-console-api-key-entry">
+<div class="weft-ui-api-key-entry">
   <Card
-    class="weft-console-api-key-entry__card"
+    class="weft-ui-api-key-entry__card"
     title="Authentication required"
     description="This server requires an API key. Enter one with access to the operations you need."
   >
     <form onsubmit={handleSubmit}>
       <Input
-        id="weft-console-api-key"
+        id="weft-ui-api-key"
         type="password"
         label="API key"
         bind:value={apiKey}

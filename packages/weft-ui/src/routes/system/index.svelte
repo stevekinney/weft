@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * System route (plan §9.7, T7.2–T7.6; design `Weft Console.dc.html`
+   * System route (plan §9.7, T7.2–T7.6; design `Weft UI.dc.html`
    * "System" tab bar). Seven tabs, URL-owned via `?tab=` (plan §4: "URL owns
    * filter/pagination/tab state") — matches `sysTabs`'s six-tab order from
    * the console shell mock plus Alerts (plan §9.7's eighth bullet /

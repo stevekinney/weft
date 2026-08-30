@@ -23,7 +23,7 @@ import type { HttpClient } from '@lostgradient/weft/client';
 export async function probeHealth(client: Pick<HttpClient, 'baseUrl' | 'headers'>): Promise<true> {
   const response = await fetch(`${client.baseUrl}/v1/health`, { headers: client.headers });
   if (!response.ok) {
-    throw new Error(`weft-console: /v1/health responded ${response.status}`);
+    throw new Error(`weft-ui: /v1/health responded ${response.status}`);
   }
   return true;
 }

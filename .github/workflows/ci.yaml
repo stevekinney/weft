@@ -9,30 +9,42 @@ on:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/weft
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile --linker=isolated
+        working-directory: .
       - run: bun run lint
   typecheck:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/weft
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile --linker=isolated
+        working-directory: .
       - run: bun run typecheck
   test:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/weft
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile --linker=isolated
+        working-directory: .
       - run: |
           bun test --bail --timeout 15000 \
             --path-ignore-patterns '**/benchmarks/**' \
@@ -46,12 +58,16 @@ jobs:
   # while this job enforces the LCOV-backed 100 percent adjusted threshold.
   coverage:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/weft
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile --linker=isolated
+        working-directory: .
       - run: bun run test:coverage
   # Exercises PostgresStorage against a REAL Postgres over the pg wire protocol
   # (TCP, BYTEA marshalling, command-tag rowCounts, SERIALIZABLE conflict retries).
@@ -60,6 +76,9 @@ jobs:
   # covered on every PR without external infra.
   postgres-test:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/weft
     services:
       postgres:
         image: postgres:16
@@ -78,6 +97,7 @@ jobs:
         with:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile --linker=isolated
+        working-directory: .
       - run: bun test src/storage/postgres.test.ts --timeout 15000
         env:
           WEFT_TEST_POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/postgres
@@ -87,16 +107,20 @@ jobs:
   # starts the real-CI bake. The browser surfaces stay EXPERIMENTAL and only
   # graduate to the stable tier once this gate has been reliably green across
   # real CI runs — see the "browser-surface promotion gate" in
-  # documentation/roadmap-to-1.0.md.
+  # packages/weft/documentation/roadmap-to-1.0.md.
   browser-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: packages/weft
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile --linker=isolated
+        working-directory: .
       # Cache Playwright's pinned browser binary (keyed on the lockfile, which
       # pins the playwright version). The Linux system libraries are NOT stored
       # under ~/.cache/ms-playwright, so they are (re)installed on every run via
@@ -115,51 +139,201 @@ jobs:
       - run: bun run test:browser-smoke
   build:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/weft
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile --linker=isolated
+        working-directory: .
       - run: bun run build
   order-processing-example:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/weft
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile --linker=isolated
+        working-directory: .
       - run: bun run build
       - run: bun install --frozen-lockfile --linker=isolated
-        working-directory: examples/order-processing
+        working-directory: packages/weft/examples/order-processing
       - run: bun run verify
-        working-directory: examples/order-processing
+        working-directory: packages/weft/examples/order-processing
       - run: bun run smoke:server
-        working-directory: examples/order-processing
+        working-directory: packages/weft/examples/order-processing
   checkout-example:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/weft
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile --linker=isolated
+        working-directory: .
       - run: bun run build
       - run: bun install --frozen-lockfile --linker=isolated
-        working-directory: examples/checkout
+        working-directory: packages/weft/examples/checkout
       - run: bun run verify
-        working-directory: examples/checkout
+        working-directory: packages/weft/examples/checkout
   hello-world-example:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/weft
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile --linker=isolated
+        working-directory: .
       - run: bun run build
       - run: bun install --frozen-lockfile --linker=isolated
-        working-directory: examples/hello-world
+        working-directory: packages/weft/examples/hello-world
       - run: bun run verify
-        working-directory: examples/hello-world
+        working-directory: packages/weft/examples/hello-world
+
+  # --- @lostgradient/weft-ui (packages/weft-ui) ---
+
+  ui-lint:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/weft-ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile --linker=isolated
+        working-directory: .
+      - run: bun run lint
+  ui-typecheck:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/weft-ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile --linker=isolated
+        working-directory: .
+      - run: bun run typecheck
+  ui-format-check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/weft-ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile --linker=isolated
+        working-directory: .
+      - run: bun run format:check
+  ui-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/weft-ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile --linker=isolated
+        working-directory: .
+      - run: bun run test
+  # `bun run build` chains `vite build` with the bundle-size budget gate
+  # (`bun run check:bundle`, scripts/check-bundle-size.ts) — one command, so
+  # CI doesn't duplicate the budget check the package.json script already
+  # composes.
+  ui-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/weft-ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile --linker=isolated
+        working-directory: .
+      - run: bun run build
+  # Deterministic adjusted-coverage gate (packages/weft-ui/docs/implementation-plan.md
+  # §11, scripts/check-coverage.ts): runs its own `bun run test:coverage` pass and
+  # fails if that run fails/crashes or if any area's line/function coverage
+  # drops below the floor recorded in scripts/coverage-baseline.ts. This is a
+  # ratchet against the recorded baseline, not a 100%-coverage requirement —
+  # see that file's doc comment for the target and the known provisional gap.
+  ui-coverage:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/weft-ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile --linker=isolated
+        working-directory: .
+      - run: bun run check:coverage
+      # Uploaded unconditionally so a baseline re-measurement (raising the
+      # Linux floor in scripts/coverage-baseline.ts) always has exact
+      # hit/found integers to read, rather than reconstructing them from the
+      # step log's printed percentages.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-lcov-linux
+          path: packages/weft-ui/coverage/lcov.info
+          retention-days: 14
+  ui-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: packages/weft-ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile --linker=isolated
+        working-directory: .
+      # Cache Playwright's pinned Chromium binary (keyed on the lockfile,
+      # which pins the playwright version), mirroring the weft browser-smoke
+      # job. Linux system libraries aren't stored under ~/.cache/ms-playwright,
+      # so they're (re)installed every run via `install-deps`; only the
+      # multi-hundred-MB browser download is cached.
+      - uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            playwright-chromium-${{ runner.os }}-
+      - name: Install Playwright Chromium (+ system deps)
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: bunx playwright install --with-deps chromium
+      - name: Install Playwright system deps only (browser cached)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: bunx playwright install-deps chromium
+      - name: Run E2E flows
+        run: bun run test:e2e

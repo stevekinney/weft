@@ -1,7 +1,7 @@
 /**
  * Critical-alerts band data (plan §9.1, this track's brief): pure builders
  * turning `weft.tasks.diagnostics`'s summary and the reviews-near-timeout
- * list into deep-linking chips (design `Weft Console.dc.html` dashboard
+ * list into deep-linking chips (design `Weft UI.dc.html` dashboard
  * screen's "critical alerts band"). Kept framework-free so the chip logic
  * is unit-testable without a DOM (PROJECT-BRIEF "pure logic ... gets
  * colocated bun test unit tests").

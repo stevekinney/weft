@@ -9,7 +9,7 @@
    * owns filter/pagination/tab state":
    *
    *   - `/schedules`                    → list
-   *   - `/schedules?id=<id>`            → detail (full page, not a split panel — matches `Weft Console.dc.html`'s `schList`/`schDetail` mutually-exclusive screens)
+   *   - `/schedules?id=<id>`            → detail (full page, not a split panel — matches `Weft UI.dc.html`'s `schList`/`schDetail` mutually-exclusive screens)
    *   - `/schedules?create=1`           → list + create drawer over it
    *   - `/schedules?id=<id>&edit=1`     → detail + edit drawer over it
    */

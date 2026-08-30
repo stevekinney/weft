@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * Metrics tab (plan §9.7 T7.2; design `Weft Console.dc.html` "System" §
+   * Metrics tab (plan §9.7 T7.2; design `Weft UI.dc.html` "System" §
    * METRICS). Dashboard view (`StatGroup` + `LineChart` sparklines, ~15s
    * `PollingSource`) / Raw view (`GET /v1/metrics` Prometheus text in
    * `CodeBlock` + copy/download).

@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * Schedule detail (Track B, plan §9.3; design `Weft Console.dc.html`
+   * Schedule detail (Track B, plan §9.3; design `Weft UI.dc.html`
    * "Schedule detail"): spec + next-5-fires preview, overlap policy with
    * consequence text, current/queued runs, recent runs, live update on
    * `schedule:fired`/`schedule:missed-fire` via the shared

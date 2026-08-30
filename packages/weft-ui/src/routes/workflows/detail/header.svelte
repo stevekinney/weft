@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * Workflow detail header (plan T2.4, design `Weft Console.dc.html`
+   * Workflow detail header (plan T2.4, design `Weft UI.dc.html`
    * "Workflow detail" screen header): copyable truncated id, status badge,
    * tags, deadline countdown, contextual actions
    * (cancel/suspend/resume/force-timeout) with Tier-2 `ConfirmDialog` for the

@@ -1,6 +1,6 @@
-# Weft Console — Agent Brief
+# Weft UI — Agent Brief
 
-You are implementing one slice of the Weft Console: the operator UI for the Weft durable-workflow
+You are implementing one slice of the Weft UI: the operator UI for the Weft durable-workflow
 engine. Read this file completely before touching code. Then read:
 
 1. `docs/implementation-plan.md` — the authoritative plan (locked decisions §1, component policy §7,
@@ -12,8 +12,8 @@ engine. Read this file completely before touching code. Then read:
 
 ## Hard rules (non-negotiable)
 
-- **Repo root is `/Users/stevekinney/Developer/weft-console`.** Your shell cwd resets between Bash
-  calls — always use absolute paths or `cd /Users/stevekinney/Developer/weft-console && …`.
+- **Repo root is `/Users/stevekinney/Developer/weft-ui`.** Your shell cwd resets between Bash
+  calls — always use absolute paths or `cd /Users/stevekinney/Developer/weft-ui && …`.
 - **Own your paths only.** Your task prompt names the directories you own. Never edit files outside
   them (shared files listed in your prompt are the only exception). Other agents work in parallel.
 - **Do not run `git` at all.** The orchestrator commits at phase boundaries.
@@ -49,7 +49,7 @@ engine. Read this file completely before touching code. Then read:
   Components get tests with `bun test` + happy-dom + `@testing-library/svelte` where the harness
   supports it (see `tests/setup` wiring from the scaffold). Every state named for your surface in
   plan Appendix B should exist in code (empty/loading/denied/fault states included).
-- **Before you finish**: run `cd /Users/stevekinney/Developer/weft-console && bun run typecheck && bun run lint && bun test`
+- **Before you finish**: run `cd /Users/stevekinney/Developer/weft-ui && bun run typecheck && bun run lint && bun test`
   and fix everything yours. Do not skip/disable tests; do not bump timeouts; fix root causes.
 - **Responsive is not optional.** The `.dc.html` references are desktop mocks; every surface you
   ship must also be correct at 375px (mobile) and 768px (tablet), verified by actually resizing.
@@ -74,7 +74,7 @@ engine. Read this file completely before touching code. Then read:
 ## Shared contracts (frozen after the Foundation phase)
 
 - `src/lib/client.ts` — `getClient()` from Svelte context; runtime config from
-  `<script type="application/json" id="weft-console-config">`.
+  `<script type="application/json" id="weft-ui-config">`.
 - `src/lib/scopes.svelte.ts` — principal store, `hasScope(...scopes)`; disable-with-tooltip helpers.
 - `src/lib/router.svelte.ts` — history-API router; `href()`/`navigate()`/`route` rune; routes under
   `/`, `/workflows`, `/workflows/*`, `/reviews`, `/workers` (+ client-side `/schedules`, `/storage`,

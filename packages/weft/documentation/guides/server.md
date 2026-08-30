@@ -45,16 +45,16 @@ interface ServeOptions {
 
 ### Mounting the console
 
-CLI users can mount the optional Weft Console package without writing a server
+CLI users can mount the optional Weft UI package without writing a server
 entrypoint:
 
 ```bash
-bun add @lostgradient/weft-console
+bun add @lostgradient/weft-ui
 weft serve --console --workflows ./src/workflows.ts
 ```
 
-`--console` resolves `@lostgradient/weft-console` from the directory where the
-CLI runs, calls its exported `weftConsole()` function, and mounts the package's
+`--console` resolves `@lostgradient/weft-ui` from the directory where the
+CLI runs, calls its exported `weftUi()` function, and mounts the package's
 `assets/` directory at `/assets`. If the optional package is missing or does not
 export the expected function, the command reports an actionable error and exits
 before starting the server.

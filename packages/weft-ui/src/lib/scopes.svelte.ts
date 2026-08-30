@@ -98,7 +98,7 @@ export interface Principal {
 export type BannerMode =
   'auth-required' | 'unauthenticated-warn' | 'unauthenticated-allow' | 'none';
 
-const PRINCIPAL_CONTEXT_KEY = Symbol('weft-console-principal');
+const PRINCIPAL_CONTEXT_KEY = Symbol('weft-ui-principal');
 
 export class PrincipalStore {
   principal = $state<Principal | null>(null);
@@ -163,7 +163,7 @@ export function getPrincipalStore(): PrincipalStore {
   const store = getContext<PrincipalStore | undefined>(PRINCIPAL_CONTEXT_KEY);
   if (!store) {
     throw new Error(
-      'weft-console: getPrincipalStore() called with no store in context — providePrincipalStore() must run in an ancestor component.',
+      'weft-ui: getPrincipalStore() called with no store in context — providePrincipalStore() must run in an ancestor component.',
     );
   }
   return store;

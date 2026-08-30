@@ -4,10 +4,10 @@ import { fileURLToPath } from 'node:url';
 import { loadConsoleMount } from './console.ts';
 
 const fixtureEntry = fileURLToPath(
-  new URL('./__fixtures__/weft-console/dist/mount.js', import.meta.url),
+  new URL('./__fixtures__/weft-ui/dist/mount.js', import.meta.url),
 );
 
-describe('optional Weft Console mount', () => {
+describe('optional Weft UI mount', () => {
   it('loads the named export and derives the adjacent assets directory', async () => {
     const mount = await loadConsoleMount({
       resolveModule: () => fixtureEntry,
@@ -16,7 +16,7 @@ describe('optional Weft Console mount', () => {
     expect(mount.dashboard).toBeInstanceOf(Response);
     expect(mount.dashboardAssets).toEqual({
       prefix: '/assets',
-      directory: fileURLToPath(new URL('./__fixtures__/weft-console/dist/assets', import.meta.url)),
+      directory: fileURLToPath(new URL('./__fixtures__/weft-ui/dist/assets', import.meta.url)),
     });
   });
 
@@ -28,7 +28,7 @@ describe('optional Weft Console mount', () => {
         },
       }),
     ).rejects.toThrow(
-      '--console requires @lostgradient/weft-console. Install it in the CLI project: bun add @lostgradient/weft-console',
+      '--console requires @lostgradient/weft-ui. Install it in the CLI project: bun add @lostgradient/weft-ui',
     );
   });
 
@@ -38,21 +38,21 @@ describe('optional Weft Console mount', () => {
         resolveModule: () => fixtureEntry,
         importModule: async () => ({ default: () => new Response('wrong export') }),
       }),
-    ).rejects.toThrow('@lostgradient/weft-console must export a weftConsole() function');
+    ).rejects.toThrow('@lostgradient/weft-ui must export a weftUi() function');
   });
 
-  it('masks a throwing weftConsole factory with an actionable diagnostic', async () => {
+  it('masks a throwing weftUi factory with an actionable diagnostic', async () => {
     await expect(
       loadConsoleMount({
         resolveModule: () => fixtureEntry,
         importModule: async () => ({
-          weftConsole: () => {
+          weftUi: () => {
             throw new Error('console factory failed');
           },
         }),
       }),
     ).rejects.toThrow(
-      '--console @lostgradient/weft-console weftConsole() failed; reinstall or update it, then retry, or remove --console',
+      '--console @lostgradient/weft-ui weftUi() failed; reinstall or update it, then retry, or remove --console',
     );
   });
 
@@ -60,15 +60,15 @@ describe('optional Weft Console mount', () => {
     await expect(
       loadConsoleMount({
         resolveModule: () => fixtureEntry,
-        importModule: async () => ({ weftConsole: () => ({}) }),
+        importModule: async () => ({ weftUi: () => ({}) }),
       }),
     ).rejects.toThrow(
-      '--console @lostgradient/weft-console weftConsole() failed; reinstall or update it, then retry, or remove --console',
+      '--console @lostgradient/weft-ui weftUi() failed; reinstall or update it, then retry, or remove --console',
     );
   });
 
   it('does not expose dynamic import errors', async () => {
-    const secretPath = '/Users/example/.secrets/weft-console-token.txt';
+    const secretPath = '/Users/example/.secrets/weft-ui-token.txt';
     await expect(
       loadConsoleMount({
         resolveModule: () => fixtureEntry,
@@ -77,7 +77,7 @@ describe('optional Weft Console mount', () => {
         },
       }),
     ).rejects.toThrow(
-      '--console could not load @lostgradient/weft-console; reinstall or update it, then retry, or remove --console',
+      '--console could not load @lostgradient/weft-ui; reinstall or update it, then retry, or remove --console',
     );
     await expect(
       loadConsoleMount({
@@ -90,19 +90,19 @@ describe('optional Weft Console mount', () => {
   });
 
   it('does not expose the absolute missing-assets directory', async () => {
-    const secretAssetsDirectory = '/Users/example/.secrets/weft-console/assets';
+    const secretAssetsDirectory = '/Users/example/.secrets/weft-ui/assets';
     await expect(
       loadConsoleMount({
         resolveModule: () => `${secretAssetsDirectory}/mount.js`,
-        importModule: async () => ({ weftConsole: () => new Response('console') }),
+        importModule: async () => ({ weftUi: () => new Response('console') }),
       }),
     ).rejects.toThrow(
-      '--console @lostgradient/weft-console is missing its built assets; reinstall or update it, then retry, or remove --console',
+      '--console @lostgradient/weft-ui is missing its built assets; reinstall or update it, then retry, or remove --console',
     );
     await expect(
       loadConsoleMount({
         resolveModule: () => `${secretAssetsDirectory}/mount.js`,
-        importModule: async () => ({ weftConsole: () => new Response('console') }),
+        importModule: async () => ({ weftUi: () => new Response('console') }),
       }),
     ).rejects.not.toThrow(secretAssetsDirectory);
   });

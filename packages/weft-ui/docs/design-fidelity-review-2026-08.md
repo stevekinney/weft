@@ -1,11 +1,11 @@
 # Design-Fidelity Review — 2026-08
 
-WFC-11. Compared against `design/Weft Console.dc.html` (primary screen inventory), `design/Weft New Surfaces.dc.html` (shipped sections §0/§A/§A2/§B/§C/§D/§E/§F/§G/§H, checked inline within their owning domain below), and `design/Weft Patterns.dc.html` (cross-cutting pattern baseline). Widths: 375 / 768 / 1280px. Themes: light / dark.
+WFC-11. Compared against `design/Weft UI.dc.html` (primary screen inventory), `design/Weft New Surfaces.dc.html` (shipped sections §0/§A/§A2/§B/§C/§D/§E/§F/§G/§H, checked inline within their owning domain below), and `design/Weft Patterns.dc.html` (cross-cutting pattern baseline). Widths: 375 / 768 / 1280px. Themes: light / dark.
 
 **Methodology note.** `resize_window` (claude-in-chrome) is a no-op in this session — the browser window is locked maximized at 1280px wide, confirmed via ~10 attempts across 3 separate windows/tabs (including a script-opened popup, which also failed to join the controllable tab group). Root cause is almost certainly Chrome's `windows.update({width,height})` silently no-op'ing on a maximized window. Per user decision, the walk splits:
 
 - **1280px, both themes:** interactive walk in claude-in-chrome against `bun run dev` + `bun run dev:server` (seeded weft engine) at `http://localhost:5173` — dialogs, dropdowns, keyboard navigation, focus, the notification bell, connection indicators.
-- **375px / 768px, both themes:** a throwaway Playwright script (not committed — see PR description) against the same seeded server, `page.screenshot({fullPage: true})` per route/theme, reviewed by this session via the `Read` tool. Theme set via `localStorage.setItem('weft-console-theme', mode)` in `addInitScript` (see `src/app/theme.svelte.ts`), matching the app's real persistence mechanism — not simulated via `prefers-color-scheme` alone.
+- **375px / 768px, both themes:** a throwaway Playwright script (not committed — see PR description) against the same seeded server, `page.screenshot({fullPage: true})` per route/theme, reviewed by this session via the `Read` tool. Theme set via `localStorage.setItem('weft-ui-theme', mode)` in `addInitScript` (see `src/app/theme.svelte.ts`), matching the app's real persistence mechanism — not simulated via `prefers-color-scheme` alone.
 
 Severity: **blocker** (breaks the surface), **major** (visibly wrong, not blocking), **minor** (polish). Disposition: fixed / won't-fix (reason) / follow-up (ticket link).
 

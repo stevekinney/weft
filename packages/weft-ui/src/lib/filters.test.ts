@@ -196,7 +196,7 @@ function randomInt(rand: () => number, min: number, max: number): number {
 
 function pick<T>(rand: () => number, values: readonly T[]): T {
   const value = values[randomInt(rand, 0, values.length - 1)];
-  if (value === undefined) throw new Error('weft-console: pick() called with an empty array');
+  if (value === undefined) throw new Error('weft-ui: pick() called with an empty array');
   return value;
 }
 

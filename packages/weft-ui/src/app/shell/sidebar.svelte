@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * Left sidebar (plan §13 T1.6; design `Weft Console.dc.html` "SIDEBAR"):
+   * Left sidebar (plan §13 T1.6; design `Weft UI.dc.html` "SIDEBAR"):
    * product mark, the 7 domains with Lucide icons + badge counts, active
    * state from the router. Badge counts (reviews pending, workers
    * unhealthy) are TanStack queries — a fetch failure (e.g. a 403 from a
@@ -173,7 +173,7 @@
   };
 </script>
 
-<Sidebar label="Weft Console" bind:collapsed class={sidebarStateClass}>
+<Sidebar label="Weft UI" bind:collapsed class={sidebarStateClass}>
   {#snippet navigation()}
     <SideNavigation ariaLabel="Domains">
       {#each navEntries as entry (entry.path)}

@@ -24,7 +24,7 @@ test('task ledger remains usable at supported widths in both themes', async ({ p
     ]) {
       await page.setViewportSize(viewport);
       await page.addInitScript((selectedTheme) => {
-        localStorage.setItem('weft-console-theme', selectedTheme);
+        localStorage.setItem('weft-ui-theme', selectedTheme);
       }, theme);
       await page.goto(`/workers?tab=diagnostics&task=${E2E_TASK_OPERATION_ID}`);
 

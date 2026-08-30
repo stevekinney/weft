@@ -38,4 +38,4 @@
  */
 
 /** Bearer token the dev proxy attaches and the dev server accepts. */
-export const DEV_API_KEY = 'weft-console-dev-key';
+export const DEV_API_KEY = 'weft-ui-dev-key';

@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * Capabilities panel (plan §9.6; design `Weft Console.dc.html` STORAGE
+   * Capabilities panel (plan §9.6; design `Weft UI.dc.html` STORAGE
    * "stCaps"): `DescriptionList` with persistence badge + durable-recovery
    * checklist.
    *

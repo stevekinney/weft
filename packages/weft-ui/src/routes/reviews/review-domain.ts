@@ -16,7 +16,7 @@
  * fails the workflow with a `ReviewTimeoutError`. Until that timer actually
  * fires, a review whose deadline has already passed by wall-clock time is
  * still sitting in storage with `status: 'pending'`. The design reference's
- * "Timed out" tab (`design/Weft Console.dc.html` `revStateBtns`) is exactly
+ * "Timed out" tab (`design/Weft UI.dc.html` `revStateBtns`) is exactly
  * that window: `isReviewTimedOut()` below reclassifies a `pending` entry
  * whose `createdAt + timeout` has already elapsed, entirely client-side —
  * it never claims the review has actually resolved, only that a decision

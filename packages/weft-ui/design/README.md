@@ -1,10 +1,10 @@
-# Handoff: Weft Console — workflow console UI (Cinder design system)
+# Handoff: Weft UI — workflow console UI (Cinder design system)
 
 ## Overview
 Weft is a Temporal-style durable-workflow engine; this package covers the design for its operator console: the full console shell (dashboard, workflow list, run detail, schedules, workers, reviews, system health) plus eight new/changed surfaces (live-connection indicator, schedule builder, workflow lineage, notification center, alerts view, linked selection across Timeline/Events/Logs, coordination & saga branch cards, export + conformance) and a shared pattern library.
 
 ## About the design files
-The `.dc.html` files in this bundle are **design references created in HTML**—prototypes showing intended look and behavior, not production code to copy directly. Recreate these designs in the target codebase's existing environment using its established patterns and libraries. In Weft Console, `package.json` is live Cinder version truth and currently pins `@lostgradient/cinder` v0.24.0. Verify APIs against the installed package's supported public entrypoints and package documentation. The version-specific component inventory below is a historical authoring snapshot, not a current implementation contract. The token CSS in `tokens/` remains framework-agnostic.
+The `.dc.html` files in this bundle are **design references created in HTML**—prototypes showing intended look and behavior, not production code to copy directly. Recreate these designs in the target codebase's existing environment using its established patterns and libraries. In Weft UI, `package.json` is live Cinder version truth and currently pins `@lostgradient/cinder` v0.24.0. Verify APIs against the installed package's supported public entrypoints and package documentation. The version-specific component inventory below is a historical authoring snapshot, not a current implementation contract. The token CSS in `tokens/` remains framework-agnostic.
 
 Note: the `.dc.html` files reference a runtime (`support.js`) and a bundled component recreation (`_ds/...`) that are not included — open them in the original design project to see them live. Use the files here as **source-of-truth markup and styling reference** (all styles are inline; every value is literal or a `var(--cinder-*)` token defined in `tokens/`).
 
@@ -29,7 +29,7 @@ Use the library rather than hand-rolling these surfaces, but verify current prop
 
 ## Screens (file → surfaces)
 
-### `Weft Console.dc.html` — full console shell
+### `Weft UI.dc.html` — full console shell
 Left nav (240px, `surface` bg, badge counts) + topbar (⌘K search, scopes pill, env switcher) + content. Screens are switched by nav state:
 - **Dashboard** — stat cards, schedule health card, recent-activity feed (live via ConnectionIndicator).
 - **Workflow list** — faceted filter bar, dense table (grid `110px 1fr 150px 170px 90px 90px 70px 60px`), status badges, bulk-select, live toolbar pill.
@@ -67,7 +67,7 @@ Status badge system, payload editor, search-attribute query builder, confirmatio
 None. Icons are Lucide (via library package, not CDN, in production). No images or webfonts.
 
 ## Files
-- `Weft Console.dc.html` — full console shell (all screens)
+- `Weft UI.dc.html` — full console shell (all screens)
 - `Weft New Surfaces.dc.html` — the eight new/changed surfaces, light + dark
 - `Weft Patterns.dc.html` — shared pattern library
 - `tokens/*.css` — Cinder design tokens (colors, typography, spacing/radii/shadows, motion)

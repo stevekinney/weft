@@ -3,24 +3,23 @@ name: verify-jsdoc
 on:
   pull_request:
     paths:
-      - 'src/**'
-      - 'README.md'
-      - 'BREAKING-CHANGES.md'
-      - 'AGENTS.md'
-      - 'CLAUDE.md'
-      - 'documentation/**'
-      - 'reference/**'
-      - 'src/server/__fixtures__/subscription-wire/README.md'
-      - 'package.json'
-      - 'scripts/lib/jsdoc-manifest.ts'
-      - 'scripts/audit-jsdoc-manifest.ts'
-      - 'scripts/build-jsdoc-manifest.ts'
-      - 'scripts/check-declaration-jsdoc.ts'
-      - 'scripts/verify-documentation.ts'
-      - 'scripts/extract-doctests.ts'
-      - 'scripts/extract-markdown-doctests.ts'
-      - 'scripts/markdown-doctest-skip-counts.json'
-      - 'scripts/markdown-doctest-skip-reasons.txt'
+      - 'packages/weft/src/**'
+      - 'packages/weft/README.md'
+      - 'packages/weft/BREAKING-CHANGES.md'
+      - 'packages/weft/AGENTS.md'
+      - 'packages/weft/CLAUDE.md'
+      - 'packages/weft/documentation/**'
+      - 'packages/weft/reference/**'
+      - 'packages/weft/package.json'
+      - 'packages/weft/scripts/lib/jsdoc-manifest.ts'
+      - 'packages/weft/scripts/audit-jsdoc-manifest.ts'
+      - 'packages/weft/scripts/build-jsdoc-manifest.ts'
+      - 'packages/weft/scripts/check-declaration-jsdoc.ts'
+      - 'packages/weft/scripts/verify-documentation.ts'
+      - 'packages/weft/scripts/extract-doctests.ts'
+      - 'packages/weft/scripts/extract-markdown-doctests.ts'
+      - 'packages/weft/scripts/markdown-doctest-skip-counts.json'
+      - 'packages/weft/scripts/markdown-doctest-skip-reasons.txt'
       - '.github/workflows/*.yaml'
   push:
     branches: [main]
@@ -31,6 +30,9 @@ permissions:
 jobs:
   audit:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/weft
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -41,7 +43,8 @@ jobs:
           bun-version: 1.4.0
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: bun install --frozen-lockfile --linker=isolated
+        working-directory: .
 
       - name: Verify documentation links and metadata
         run: bun run verify:documentation

@@ -11,10 +11,10 @@
    * `Table.Row`/`Table.Cell` directly, per that guidance.
    *
    * Column widths mirror the actual "Workflow list" screen markup in
-   * `design/Weft Console.dc.html` (`grid-template-columns:36px 116px 220px
+   * `design/Weft UI.dc.html` (`grid-template-columns:36px 116px 220px
    * 150px 1fr 92px 92px 70px`) — NOT the `110px 1fr 150px…` string in
    * `design/README.md`, which is that file's own paraphrase but is actually
-   * the *Schedule* list's grid (`Weft Console.dc.html` line ~931); the
+   * the *Schedule* list's grid (`Weft UI.dc.html` line ~931); the
    * `.dc.html` markup is PROJECT-BRIEF's pixel-fidelity source of truth.
    * `<colgroup>` + `table-layout:fixed` reproduces the same fixed/flexible
    * column split for a real `<table>` (Tags is the flexible column).

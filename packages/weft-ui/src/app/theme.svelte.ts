@@ -8,7 +8,7 @@
  * `index.css`) takes over — there is no explicit "system" value on the
  * element itself, only the absence of an override.
  */
-const STORAGE_KEY = 'weft-console-theme';
+const STORAGE_KEY = 'weft-ui-theme';
 
 export type ThemeMode = 'light' | 'dark' | 'system';
 

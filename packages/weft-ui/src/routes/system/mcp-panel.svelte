@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * Discovery → MCP sub-view (plan §9.7 T7.3; design `Weft Console.dc.html`
+   * Discovery → MCP sub-view (plan §9.7 T7.3; design `Weft UI.dc.html`
    * "System" § DISCOVERY, MCP session protocol card). Renders
    * `/.well-known/mcp.json`, the static session-protocol sequence diagram,
    * and the interactive "Test MCP session" panel — including the honest

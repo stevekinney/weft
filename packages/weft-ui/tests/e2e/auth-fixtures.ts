@@ -14,7 +14,7 @@
  * links from `/`.
  *
  * Instead, `withApiKeyInjected` rewrites the `<script type="application/json"
- * id="weft-console-config">` block on every DOCUMENT response (not
+ * id="weft-ui-config">` block on every DOCUMENT response (not
  * asset/XHR requests) to add `token`, matching the shape
  * `src/lib/config.ts`'s `readRuntimeConfig()` already validates. Every full
  * navigation — the first `page.goto()` and any later one — boots the app
@@ -29,7 +29,7 @@ import { test as base, expect, type Page } from '@playwright/test';
 import { E2E_API_KEY } from './e2e-constants.ts';
 
 const CONFIG_SCRIPT_PATTERN =
-  /(<script type="application\/json" id="weft-console-config">)([\s\S]*?)(<\/script>)/;
+  /(<script type="application\/json" id="weft-ui-config">)([\s\S]*?)(<\/script>)/;
 
 /**
  * Parses the injected runtime-config JSON out of `html`, adds `token`, and
@@ -44,7 +44,7 @@ export function injectApiKeyIntoHtml(html: string, token: string): string {
   const match = CONFIG_SCRIPT_PATTERN.exec(html);
   if (!match) {
     throw new Error(
-      'injectApiKeyIntoHtml: no #weft-console-config script tag found in the served HTML — ' +
+      'injectApiKeyIntoHtml: no #weft-ui-config script tag found in the served HTML — ' +
         "src/lib/config.ts's injected-config contract may have changed.",
     );
   }

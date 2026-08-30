@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * Unauthenticated-mode banner (plan §6, §10; design `Weft Console.dc.html`
+   * Unauthenticated-mode banner (plan §6, §10; design `Weft UI.dc.html`
    * "auth-mode banner"): `warn`/`allow` variants from the scopes module's
    * `PrincipalStore.bannerMode`. `auth-required`/`none` render nothing here
    * — `auth-required` is handled by mounting `<ApiKeyEntry>` in place of the

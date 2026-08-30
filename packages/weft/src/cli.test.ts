@@ -1117,10 +1117,15 @@ describe('CLI direct execution', () => {
 
   it('fails before binding when --console cannot resolve the optional peer', async () => {
     const port = 17233 + Math.floor(Math.random() * 1000);
+    // The console package resolves from the CLI user's working directory. In
+    // the monorepo, this package's own directory can always resolve the
+    // @lostgradient/weft-ui workspace sibling, so run the CLI from an empty
+    // temporary directory to exercise the resolution-failure path.
+    const emptyProjectDirectory = mkdtempSync(join(tmpdir(), 'weft-no-console-'));
     const process = Bun.spawn(
       [
         'bun',
-        './src/cli-main.ts',
+        join(import.meta.dir, 'cli-main.ts'),
         'serve',
         '--console',
         '--port',
@@ -1128,7 +1133,7 @@ describe('CLI direct execution', () => {
         '--database',
         ':memory:',
       ],
-      { stdout: 'pipe', stderr: 'pipe' },
+      { cwd: emptyProjectDirectory, stdout: 'pipe', stderr: 'pipe' },
     );
 
     const exitCode = await process.exited;
@@ -1137,7 +1142,7 @@ describe('CLI direct execution', () => {
 
     expect(exitCode).toBe(1);
     expect(stdout).not.toContain('Weft API running');
-    expect(stderr).toContain('--console requires @lostgradient/weft-console');
+    expect(stderr).toContain('--console requires @lostgradient/weft-ui');
     await expect(fetch(`http://127.0.0.1:${port}/v1/health`)).rejects.toThrow();
   });
 
