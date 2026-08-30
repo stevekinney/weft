@@ -27,7 +27,9 @@ describe('coverage workflow gates', () => {
 
     expect(workflow).toContain('pull_request:');
     expect(workflow).toContain('merge_group:');
-    expect(workflow).toMatch(/\n  coverage:\n[\s\S]*?bun run test:coverage/);
+    expect(workflow).toMatch(
+      /\n  coverage:\n(?:(?!\n {2}\S).)*?bunx turbo run test:coverage --filter=@lostgradient\/weft\n/s,
+    );
     expect(workflow).toMatch(/\n  test:\n[\s\S]*?bun test --bail/);
   });
 
