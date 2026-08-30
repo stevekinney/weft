@@ -6,6 +6,8 @@ description: >-
   fixtures, or tests for hard-to-reach protocol, schema, lifecycle, and CLI paths.
 ---
 
+> Monorepo note: all repository paths and commands in this skill are relative to `packages/weft/` unless a path explicitly starts with `packages/`.
+
 # Coverage Harness Design
 
 ## When to use

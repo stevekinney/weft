@@ -25,8 +25,8 @@ reimplemented event feed. WebSocket upgrades, the per-workflow SSE/WS tail, and 
 (`/jsonrpc`) all work against `bun run dev:server` as a result. (An earlier `@lostgradient/weft@0.11.0`
 bug made that impossible — `serve({ engine })` threw for any root-imported `Engine`
 (https://github.com/stevekinney/weft/issues/710); fixed upstream in the historical `0.12.0` release
-(#716). This package now pins `0.18.0`; see `scripts/dev-server.ts`'s module doc if you need the full
-history.) The
+(#716). This package now consumes the workspace-local `@lostgradient/weft` (`workspace:*`); see
+`scripts/dev-server.ts`'s module doc if you need the full history.) The
 production mount path this package exists for — `serve({ dashboard: weftUi() })` — is
 runtime-verified the same way: a real `serve({ engine, dashboard: weftUi() })` instance returns
 the built shell (`index.html` with its `weft-ui-config` block) at `200`.
@@ -334,8 +334,8 @@ available on the server` for every component test — not a real regression, jus
   env-var equivalent for `--conditions` (checked: a top-level `conditions` key and `BUN_CONDITIONS`
   are both silently no-ops for `bun test`/`bun run`); the CLI flags are a hard requirement, per the
   comment at the top of `scripts/svelte-test-plugin.ts`.
-- **Current package baseline: Cinder v0.24.0 and `@lostgradient/weft` v0.18.0.** These are the exact
-  versions pinned in `package.json`; the lockfile resolves the same versions. The historical
+- **Current package baseline: Cinder v0.24.0 and the workspace-local `@lostgradient/weft`.** Cinder
+  is pinned exactly in `package.json`; weft resolves to `packages/weft` via `workspace:*`. The historical
   adoption baseline was Cinder v0.19.0 and Weft v0.15.0, following the scaffolding task's historical
   v0.16.1/v0.12.0 pair and the implementation plan's v0.9.0/v0.11.0 authoring snapshot.
   `lucide-svelte` is pinned inside Cinder's declared peer

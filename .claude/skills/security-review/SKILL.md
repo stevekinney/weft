@@ -10,6 +10,8 @@ description: >-
   when implementing features that cross trust boundaries.
 ---
 
+> Monorepo note: all repository paths and commands in this skill are relative to `packages/weft/` unless a path explicitly starts with `packages/`.
+
 # Security Review
 
 Checklist for reviewing security-sensitive changes in the weft durable execution engine. Focus on trust boundaries — where user input, external data, or untrusted workflow code meets the engine.

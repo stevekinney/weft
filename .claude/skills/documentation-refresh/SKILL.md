@@ -5,6 +5,8 @@ description: >-
   CLAUDE.md, or mirrored skills from recent pull requests.
 ---
 
+> Monorepo note: all repository paths and commands in this skill are relative to `packages/weft/` unless a path explicitly starts with `packages/`.
+
 # Documentation Refresh
 
 ## When to use

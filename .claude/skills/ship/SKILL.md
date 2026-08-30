@@ -9,6 +9,8 @@ description: >-
 disable-model-invocation: true
 ---
 
+> Monorepo note: all repository paths and commands in this skill are relative to `packages/weft/` unless a path explicitly starts with `packages/`.
+
 Autonomous development loop: analyze the architecture, pick the next work, implement it, ship it, repeat.
 
 ## Phase 1: Analyze — What's Next?

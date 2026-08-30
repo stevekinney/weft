@@ -6,6 +6,8 @@ description: >-
   responses, server diagnostics, masked errors, public APIs, or runtime recovery.
 ---
 
+> Monorepo note: all repository paths and commands in this skill are relative to `packages/weft/` unless a path explicitly starts with `packages/`.
+
 # Contract Truth Writing
 
 ## When to use
