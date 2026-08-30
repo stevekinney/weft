@@ -1,5 +1,23 @@
 #!/usr/bin/env sh
 
-# Lightweight wrapper to call Bun-based hook
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-bun "$SCRIPT_DIR/../scripts/husky/pre-commit.ts"
+# Run each workspace package's Bun-based pre-commit hook, with the package
+# directory as the working directory and that package's node_modules/.bin on
+# PATH (the workspace uses Bun's isolated linker, so binaries live per
+# package). A package's hook runs only when the commit stages files under
+# that package.
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+STATUS=0
+
+run_package_hook() {
+  package_directory="$1"
+  cd "$REPO_ROOT/$package_directory" || return 1
+  if [ -z "$(git diff --cached --name-only --relative -- .)" ]; then
+    return 0
+  fi
+  PATH="$PWD/node_modules/.bin:$PATH" bun scripts/husky/pre-commit.ts || STATUS=1
+}
+
+run_package_hook packages/weft
+run_package_hook packages/weft-ui
+
+exit $STATUS

@@ -1,0 +1,44 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "promise", "unicorn", "import"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn"
+  },
+  "rules": {
+    "no-console": "off",
+    "no-unused-vars": [
+      "warn",
+      {
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_",
+        "ignoreRestSiblings": true
+      }
+    ],
+
+    "promise/no-return-wrap": "error",
+    "promise/param-names": "error",
+    "promise/catch-or-return": "error",
+    "promise/no-nesting": "warn",
+    "promise/no-promise-in-callback": "warn",
+    "promise/no-callback-in-promise": "warn",
+    "promise/no-new-statics": "error",
+    "promise/no-return-in-finally": "warn",
+    "promise/valid-params": "warn",
+
+    "unicorn/no-null": "off",
+    "unicorn/no-await-expression-member": "error",
+
+    "import/first": "error",
+    "import/no-duplicates": "error",
+    "import/no-cycle": "warn",
+    "import/no-unassigned-import": "off",
+
+    "typescript/no-floating-promises": "error",
+    "typescript/await-thenable": "error",
+
+    "complexity": ["error", { "max": 10 }],
+    "max-lines": ["error", { "max": 500, "skipBlankLines": false, "skipComments": false }]
+  },
+  "ignorePatterns": ["dist/**", "coverage/**", "node_modules/**", "*.svelte"]
+}

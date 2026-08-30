@@ -1,8 +1,0 @@
-{
-  "name": "@lostgradient/weft-console",
-  "type": "module",
-  "exports": {
-    ".": "./dist/mount.js",
-    "./dist/*": "./dist/*"
-  }
-}

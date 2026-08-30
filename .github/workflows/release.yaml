@@ -1,5 +1,14 @@
 name: release
 
+# `v*.*.*` tags publish @lostgradient/weft from packages/weft. The npm
+# trusted publisher for @lostgradient/weft is configured against this
+# repository and this workflow file (release.yaml) — keep both stable.
+#
+# @lostgradient/weft-ui is not published yet. When it ships, give it its own
+# tag scheme (for example weft-ui@v*.*.*) and publish job; its first publish
+# must happen manually (npm requires an existing package before a trusted
+# publisher can be configured), after which a trusted publisher can be added
+# for this workflow.
 on:
   push:
     tags:
@@ -11,6 +20,9 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/weft
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,6 +40,9 @@ jobs:
   # Run the full validate suite here as a hard gate that publish-npm depends on.
   validate:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/weft
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -39,6 +54,7 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile --linker=isolated
+        working-directory: .
 
       - name: Run lint, typecheck, and tests
         run: bun run validate
@@ -50,6 +66,9 @@ jobs:
   # themselves only under coverage instrumentation.
   coverage:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/weft
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -61,6 +80,7 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile --linker=isolated
+        working-directory: .
 
       - name: Run adjusted coverage gate
         run: bun run test:coverage
@@ -71,6 +91,9 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    defaults:
+      run:
+        working-directory: packages/weft
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -100,6 +123,7 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile --linker=isolated
+        working-directory: .
 
       - name: Verify tag, package.json, and VERSION agree
         run: bun run scripts/verify-release-version.ts

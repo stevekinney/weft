@@ -9,6 +9,8 @@ description: >-
   both tests and implementation code.
 ---
 
+> Monorepo note: all repository paths and commands in this skill are relative to `packages/weft/` unless a path explicitly starts with `packages/`.
+
 # TDD Workflow
 
 Write the test first, watch it fail, make it pass, then clean up. This is the red-green-refactor cycle applied to weft's durable execution engine.

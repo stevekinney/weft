@@ -1,0 +1,90 @@
+/* ============================================================
+ * CINDER — SPACING, RADII, SHADOWS, SIZING, LAYOUT, Z-INDEX
+ * ------------------------------------------------------------
+ * Rem-based spacing scale. Shadows wrap each color argument in `light-dark()`
+ * so dark mode paints a light-neutral elevation instead of invisible
+ * black-on-dark; offsets/blur/spread are identical across themes.
+ * ============================================================ */
+
+:root {
+  /* ── Spacing scale ───────────────────────────────────────*/
+  --cinder-space-0: 0;
+  --cinder-space-0-5: 0.125rem;
+  --cinder-space-1: 0.25rem;
+  --cinder-space-1-5: 0.375rem;
+  --cinder-space-2: 0.5rem;
+  --cinder-space-2-5: 0.625rem;
+  --cinder-space-3: 0.75rem;
+  --cinder-space-3-5: 0.875rem;
+  --cinder-space-4: 1rem;
+  --cinder-space-5: 1.25rem;
+  --cinder-space-6: 1.5rem;
+  --cinder-space-7: 1.75rem;
+  --cinder-space-8: 2rem;
+  --cinder-space-10: 2.5rem;
+  --cinder-space-12: 3rem;
+  --cinder-space-16: 4rem;
+  --cinder-space-20: 5rem;
+  --cinder-space-24: 6rem;
+  --cinder-space-32: 8rem;
+
+  /* ── Radii ───────────────────────────────────────────────
+   * `radius-full` produces a pill or circle depending on aspect ratio. */
+  --cinder-radius-sm: 0.375rem;
+  --cinder-radius-md: 0.5rem;
+  --cinder-radius-lg: 0.75rem;
+  --cinder-radius-full: 9999px;
+
+  /* ── Shadows ─────────────────────────────────────────────
+   * Light arms: `shadow-sm` carries a second hairline layer + higher alpha so
+   * resting cards read as raised against the pale border.
+   * Dark arms (the `oklch(100% …)` light-neutral elevation): alphas bumped
+   * because dark-mode depth is carried mostly by these faint top-lights and
+   * the widened surface-lightness steps — black-on-dark shadow is invisible. */
+  --cinder-shadow-sm:
+    0 1px 2px light-dark(oklch(0% 0 0 / 0.1), oklch(100% 0 0 / 0.09)),
+    0 1px 1px light-dark(oklch(0% 0 0 / 0.06), oklch(100% 0 0 / 0.05));
+  --cinder-shadow-md:
+    0 4px 6px -1px light-dark(oklch(0% 0 0 / 0.12), oklch(100% 0 0 / 0.09)),
+    0 2px 4px -2px light-dark(oklch(0% 0 0 / 0.1), oklch(100% 0 0 / 0.06));
+  --cinder-shadow-lg:
+    0 10px 15px -3px light-dark(oklch(0% 0 0 / 0.14), oklch(100% 0 0 / 0.11)),
+    0 4px 6px -4px light-dark(oklch(0% 0 0 / 0.12), oklch(100% 0 0 / 0.07));
+
+  /* ── Control heights ─────────────────────────────────────
+   * Shared height tier for interactive controls that align in toolbars/rows. */
+  --cinder-control-height-xs: 1.5rem; /* 24px */
+  --cinder-control-height-sm: 2rem; /* 32px — toolbar default */
+  --cinder-control-height-lg: 2.75rem; /* 44px — WCAG AAA touch target */
+
+  /* ── Semantic aliases ────────────────────────────────────
+   * Intent layer over the raw scale so refactors are global. Reference these
+   * (not the raw --cinder-space-N) when the meaning is "control padding",
+   * "card padding", "stack gap", etc. */
+  --cinder-pad-control: var(--cinder-space-2-5); /* control inline padding */
+  --cinder-pad-card: var(--cinder-space-4); /* card body padding */
+  --cinder-gap-stack: var(--cinder-space-3); /* vertical gap in a field stack */
+  --cinder-gap-inline: var(--cinder-space-2); /* gap between inline siblings */
+  --cinder-radius-control: var(--cinder-radius-md); /* buttons, inputs, selects */
+  --cinder-radius-surface: var(--cinder-radius-lg); /* cards, sheets, popovers */
+
+  /* ── Layout widths ───────────────────────────────────────*/
+  --cinder-content-width: 72rem;
+  --cinder-content-width-prose: 65ch;
+  --cinder-content-width-narrow: 40rem;
+  --cinder-content-width-wide: 90rem;
+
+  /* ── Overlay padding / radius ────────────────────────────*/
+  --cinder-overlay-padding: var(--cinder-space-6);
+  --cinder-overlay-radius: var(--cinder-radius-lg);
+
+  /* ── Z-index layers ──────────────────────────────────────
+   * tooltip < dropdown ≈ popover < backdrop < modal ≈ sheet < toast. */
+  --cinder-z-tooltip: 1000; /* @kind other */
+  --cinder-z-dropdown: 1100; /* @kind other */
+  --cinder-z-popover: 1100; /* @kind other */
+  --cinder-z-backdrop: 1150; /* @kind other */
+  --cinder-z-modal: 1200; /* @kind other */
+  --cinder-z-sheet: 1200; /* @kind other */
+  --cinder-z-toast: 1300; /* @kind other */
+}

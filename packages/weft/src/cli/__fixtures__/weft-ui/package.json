@@ -1,0 +1,8 @@
+{
+  "name": "@lostgradient/weft-ui",
+  "type": "module",
+  "exports": {
+    ".": "./dist/mount.js",
+    "./dist/*": "./dist/*"
+  }
+}

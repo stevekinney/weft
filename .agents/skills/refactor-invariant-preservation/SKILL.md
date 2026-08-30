@@ -6,6 +6,8 @@ description: >-
   shapes, type-level behavior, or public examples must remain unchanged.
 ---
 
+> Monorepo note: all repository paths and commands in this skill are relative to `packages/weft/` unless a path explicitly starts with `packages/`.
+
 # Refactor Invariant Preservation
 
 ## When to use

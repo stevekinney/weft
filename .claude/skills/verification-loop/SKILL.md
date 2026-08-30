@@ -9,6 +9,8 @@ description: >-
   non-trivial implementation work.
 ---
 
+> Monorepo note: all repository paths and commands in this skill are relative to `packages/weft/` unless a path explicitly starts with `packages/`.
+
 # Verification Loop
 
 Run the full verification cycle before considering any feature, fix, or refactor complete. Each phase catches a different class of problem.

@@ -5,6 +5,8 @@ description: >-
   troubleshooting a Weft npm release for @lostgradient/weft.
 ---
 
+> Monorepo note: all repository paths and commands in this skill are relative to `packages/weft/` unless a path explicitly starts with `packages/`.
+
 # Release Publish
 
 ## Release contract

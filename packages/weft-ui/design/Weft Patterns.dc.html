@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="_ds/cinder-design-system-3e8bc53b-41d7-4dc8-99c0-6181feb05c38/styles.css">
+  <script src="_ds/cinder-design-system-3e8bc53b-41d7-4dc8-99c0-6181feb05c38/_ds_bundle.js"></script>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    [data-lucide] { width: 1em; height: 1em; stroke-width: 1.6; }
+    @keyframes wf-pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+    @keyframes wf-spin { to { transform: rotate(360deg); } }
+  </style>
+</helmet>
+<div data-theme="dark" style="width:max-content; min-width:100%; min-height:100vh; box-sizing:border-box; padding:44px; background:var(--cinder-bg); color:var(--cinder-text); font-family:var(--cinder-font-sans); font-size:var(--cinder-text-base);">
+
+  <div style="margin-bottom:34px;">
+    <div style="font-size:11px; font-weight:700; letter-spacing:.18em; color:var(--cinder-accent-text); margin-bottom:6px;">WEFT · CINDER</div>
+    <h1 style="margin:0 0 4px; font-size:26px; font-weight:600; letter-spacing:-0.01em;">Reusable patterns & states</h1>
+    <p style="margin:0; font-size:var(--cinder-text-sm); color:var(--cinder-text-subtle);">Every reusable component wireframed once. Status system · payload editor · query builder · confirmation tiers · fault codes · empty states · live indicator · workflow flows.</p>
+  </div>
+
+  <!-- ░ SECTION: STATUS ░ -->
+  <div style="font-size:var(--cinder-text-xs); font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--cinder-text-subtle); margin:0 0 14px;">Status badge system</div>
+  <div style="display:flex; gap:32px; align-items:flex-start; margin-bottom:40px;">
+    <div style="flex:none; width:560px;">
+      <div style="font-size:var(--cinder-text-xs); color:var(--cinder-text-disabled); margin-bottom:8px;">All states + special sub-states</div>
+      <div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); padding:18px; display:flex; flex-wrap:wrap; gap:9px;">
+        <span class="cinder-badge" data-cinder-variant="success"><i data-lucide="play" style="width:11px;height:11px;"></i> Running</span>
+        <span class="cinder-badge" data-cinder-variant="info"><i data-lucide="clock" style="width:11px;height:11px;"></i> Pending</span>
+        <span class="cinder-badge" data-cinder-variant="warning"><i data-lucide="pause" style="width:11px;height:11px;"></i> Suspended</span>
+        <span class="cinder-badge" data-cinder-variant="danger"><i data-lucide="circle-x" style="width:11px;height:11px;"></i> Failed</span>
+        <span class="cinder-badge" data-cinder-variant="danger"><i data-lucide="timer-off" style="width:11px;height:11px;"></i> Timed out</span>
+        <span class="cinder-badge" data-cinder-variant="neutral"><i data-lucide="circle-check" style="width:11px;height:11px;"></i> Completed</span>
+        <span class="cinder-badge" data-cinder-variant="neutral"><i data-lucide="ban" style="width:11px;height:11px;"></i> Cancelled</span>
+        <span class="cinder-badge" data-cinder-variant="warning" title="Cancelled and running its cleanup finalizer; completes when the finalizer finishes."><i data-lucide="loader" style="width:11px;height:11px;"></i> Finalizing</span>
+        <span class="cinder-badge" data-cinder-variant="danger" title="Cleanup finalizer failed after cancellation."><i data-lucide="triangle-alert" style="width:11px;height:11px;"></i> Cancelled — cleanup failed</span>
+      </div>
+      <div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled); margin-top:8px;">Color always paired with icon + text. Finalizing & finalizer-failed carry explanatory tooltips.</div>
+    </div>
+    <div style="flex:none; width:320px;">
+      <div style="font-size:var(--cinder-text-xs); color:var(--cinder-text-disabled); margin-bottom:8px;">ID truncation · hover + copy</div>
+      <div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); padding:18px;">
+        <div style="display:flex; align-items:center; gap:8px; padding:9px 11px; background:var(--cinder-surface-inset); border-radius:var(--cinder-radius-md); margin-bottom:8px;"><span style="font-family:var(--cinder-font-mono); font-size:var(--cinder-text-xs);">wf_4a9f…2c10</span><i data-lucide="copy" style="width:13px;height:13px;color:var(--cinder-text-disabled);margin-left:auto;cursor:pointer;"></i></div>
+        <div style="display:inline-flex; align-items:center; gap:6px; padding:4px 9px; background:var(--cinder-color-success-bg); color:var(--cinder-color-success-fg); border-radius:var(--cinder-radius-sm); font-size:var(--cinder-text-2xs); font-weight:600;"><i data-lucide="check" style="width:11px;height:11px;"></i> Copied</div>
+        <div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled); margin-top:10px;">first 8…last 4, monospace. Full value on hover.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ░ SECTION: PAYLOAD EDITOR ░ -->
+  <div style="font-size:var(--cinder-text-xs); font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--cinder-text-subtle); margin:0 0 14px;">Payload editor</div>
+  <div style="display:flex; gap:32px; align-items:flex-start; margin-bottom:40px;">
+    <div style="flex:none; width:420px;">
+      <div style="font-size:var(--cinder-text-xs); color:var(--cinder-text-disabled); margin-bottom:8px;">Form mode</div>
+      <div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); overflow:hidden;">
+        <div style="display:flex; gap:3px; padding:10px 14px; border-bottom:1px solid var(--cinder-border-muted);"><div style="display:flex; gap:3px; padding:3px; border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-md); background:var(--cinder-surface-inset);"><span style="padding:4px 11px; border-radius:5px; background:var(--cinder-accent); color:var(--cinder-accent-contrast); font-size:var(--cinder-text-2xs); font-weight:600;">Form</span><span style="padding:4px 11px; font-size:var(--cinder-text-2xs); color:var(--cinder-text-subtle);">JSON</span></div></div>
+        <div style="padding:16px;">
+          <label style="display:block; font-size:var(--cinder-text-xs); font-weight:600; margin-bottom:5px;">orderId <span style="color:var(--cinder-danger);">*</span></label>
+          <input class="cinder-input" value="ord-2026-0042" style="margin-bottom:12px; font-family:var(--cinder-font-mono);" />
+          <label style="display:block; font-size:var(--cinder-text-xs); font-weight:600; margin-bottom:5px;">customerTier <span style="color:var(--cinder-danger);">*</span></label>
+          <select class="cinder-select" style="margin-bottom:12px;"><option>gold</option><option>silver</option><option>bronze</option></select>
+          <label style="display:block; font-size:var(--cinder-text-xs); font-weight:600; margin-bottom:5px;">items</label>
+          <input class="cinder-input" value="-1" aria-invalid="true" style="margin-bottom:4px; font-family:var(--cinder-font-mono);" />
+          <div style="font-size:var(--cinder-text-xs); color:var(--cinder-danger); margin-bottom:12px;">Must be a positive integer.</div>
+          <label style="display:flex; align-items:center; gap:8px; font-size:var(--cinder-text-sm); margin-bottom:14px; cursor:pointer;"><input type="checkbox" class="cinder-checkbox" checked /> expedited</label>
+          <div style="background:var(--cinder-color-danger-bg); border:1px solid var(--cinder-color-danger-border); border-radius:var(--cinder-radius-md); padding:9px 12px; font-size:var(--cinder-text-xs); color:var(--cinder-color-danger-fg); display:flex; gap:8px; align-items:center;"><i data-lucide="circle-x" style="width:14px;height:14px;flex:none;"></i> 1 field needs attention before submitting.</div>
+        </div>
+      </div>
+    </div>
+    <div style="flex:none; width:420px;">
+      <div style="font-size:var(--cinder-text-xs); color:var(--cinder-text-disabled); margin-bottom:8px;">JSON mode · lossless toggle</div>
+      <div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); overflow:hidden;">
+        <div style="display:flex; align-items:center; gap:3px; padding:10px 14px; border-bottom:1px solid var(--cinder-border-muted);"><div style="display:flex; gap:3px; padding:3px; border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-md); background:var(--cinder-surface-inset);"><span style="padding:4px 11px; font-size:var(--cinder-text-2xs); color:var(--cinder-text-subtle);">Form</span><span style="padding:4px 11px; border-radius:5px; background:var(--cinder-accent); color:var(--cinder-accent-contrast); font-size:var(--cinder-text-2xs); font-weight:600;">JSON</span></div><span style="margin-left:auto; font-size:var(--cinder-text-2xs); color:var(--cinder-color-warning-fg);">112 KB · large payload</span></div>
+        <pre style="margin:0; padding:16px; font-family:var(--cinder-font-mono); font-size:var(--cinder-text-xs); line-height:1.7; background:var(--cinder-surface-inset); color:var(--cinder-text-muted); overflow-x:auto;"><span style="color:var(--cinder-text-disabled);">{</span>
+  <span style="color:var(--cinder-info);">"orderId"</span>: <span style="color:var(--cinder-success);">"ord-2026-0042"</span>,
+  <span style="color:var(--cinder-info);">"customerTier"</span>: <span style="color:var(--cinder-success);">"gold"</span>,
+  <span style="color:var(--cinder-info);">"items"</span>: <span style="text-decoration:wavy underline var(--cinder-danger);">-1</span>,
+  <span style="color:var(--cinder-info);">"expedited"</span>: <span style="color:var(--cinder-warning);">true</span>
+<span style="color:var(--cinder-text-disabled);">}</span></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ░ SECTION: QUERY BUILDER ░ -->
+  <div style="font-size:var(--cinder-text-xs); font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--cinder-text-subtle); margin:0 0 14px;">Search-attribute query builder</div>
+  <div style="display:flex; gap:32px; align-items:flex-start; margin-bottom:40px;">
+    <div style="flex:none; width:480px;">
+      <div style="font-size:var(--cinder-text-xs); color:var(--cinder-text-disabled); margin-bottom:8px;">Visual · conditions AND-ed</div>
+      <div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); padding:16px;">
+        <div style="display:flex; gap:6px; margin-bottom:8px;">
+          <select class="cinder-select" style="flex:1; font-size:var(--cinder-text-sm);"><option>customerTier</option></select>
+          <select class="cinder-select" style="width:70px; font-size:var(--cinder-text-sm);"><option>eq</option></select>
+          <input class="cinder-input" value="gold" style="flex:1;" />
+          <button style="width:34px; flex:none; border:1px solid var(--cinder-border); border-radius:6px; background:transparent; color:var(--cinder-text-subtle); cursor:pointer;"><i data-lucide="x" style="width:14px;height:14px;"></i></button>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px; margin:8px 0;"><span style="font-size:var(--cinder-text-2xs); font-weight:600; color:var(--cinder-text-disabled); padding:1px 7px; background:var(--cinder-surface-inset); border-radius:9999px;">AND</span><span style="flex:1; height:1px; background:var(--cinder-border-muted);"></span></div>
+        <div style="display:flex; gap:6px; margin-bottom:12px;">
+          <select class="cinder-select" style="flex:1; font-size:var(--cinder-text-sm);"><option>amount</option></select>
+          <select class="cinder-select" style="width:70px; font-size:var(--cinder-text-sm);"><option>gte</option></select>
+          <input class="cinder-input" value="500" style="flex:1; font-family:var(--cinder-font-mono);" />
+          <button style="width:34px; flex:none; border:1px solid var(--cinder-border); border-radius:6px; background:transparent; color:var(--cinder-text-subtle); cursor:pointer;"><i data-lucide="x" style="width:14px;height:14px;"></i></button>
+        </div>
+        <button style="display:flex; align-items:center; gap:6px; border:1px dashed var(--cinder-border); border-radius:var(--cinder-radius-md); background:transparent; color:var(--cinder-text-subtle); font:inherit; font-size:var(--cinder-text-xs); padding:7px 10px; width:100%; cursor:pointer;"><i data-lucide="plus" style="width:13px;height:13px;"></i> Add condition</button>
+        <div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled); margin-top:8px;">Operators: eq · gt · lt · gte · lte only. No OR/LIKE.</div>
+      </div>
+    </div>
+    <div style="flex:none; width:360px;">
+      <div style="font-size:var(--cinder-text-xs); color:var(--cinder-text-disabled); margin-bottom:8px;">Raw toggle</div>
+      <div style="background:var(--cinder-surface-inset); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); padding:16px; font-family:var(--cinder-font-mono); font-size:var(--cinder-text-xs); line-height:1.7; color:var(--cinder-text-muted);"><span style="color:var(--cinder-text-disabled);">{</span> <span style="color:var(--cinder-info);">"and"</span>: [
+  { <span style="color:var(--cinder-info);">"customerTier"</span>: { <span style="color:var(--cinder-info);">"eq"</span>: <span style="color:var(--cinder-success);">"gold"</span> } },
+  { <span style="color:var(--cinder-info);">"amount"</span>: { <span style="color:var(--cinder-info);">"gte"</span>: <span style="color:var(--cinder-warning);">500</span> } }
+] <span style="color:var(--cinder-text-disabled);">}</span></div>
+    </div>
+  </div>
+
+  <!-- ░ SECTION: CONFIRMATION TIERS ░ -->
+  <div style="font-size:var(--cinder-text-xs); font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--cinder-text-subtle); margin:0 0 14px;">Confirmation tiers</div>
+  <div style="display:flex; gap:28px; align-items:flex-start; margin-bottom:40px;">
+    <!-- tier 1 -->
+    <div style="flex:none; width:300px;">
+      <div style="font-size:var(--cinder-text-xs); color:var(--cinder-text-disabled); margin-bottom:8px;">Tier 1 · reversible · inline</div>
+      <div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-color-warning-border); border-radius:var(--cinder-radius-lg); overflow:hidden;">
+        <div style="height:4px; background:var(--cinder-warning);"></div>
+        <div style="padding:16px;"><div style="font-size:var(--cinder-text-sm); font-weight:600; margin-bottom:6px;">Pause this schedule?</div><p style="margin:0 0 14px; font-size:var(--cinder-text-xs); color:var(--cinder-text-subtle);">Fires will be skipped until you resume. You can resume anytime.</p><div style="display:flex; gap:8px; justify-content:flex-end;"><button class="cinder-button" data-cinder-variant="ghost" data-cinder-size="sm">Cancel</button><button class="cinder-button" data-cinder-variant="secondary" data-cinder-size="sm">Pause</button></div></div>
+      </div>
+    </div>
+    <!-- tier 2 -->
+    <div style="flex:none; width:300px;">
+      <div style="font-size:var(--cinder-text-xs); color:var(--cinder-text-disabled); margin-bottom:8px;">Tier 2 · irreversible · modal</div>
+      <div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-color-warning-border); border-radius:var(--cinder-radius-lg); overflow:hidden;">
+        <div style="display:flex; align-items:center; gap:8px; padding:11px 16px; background:color-mix(in oklch, var(--cinder-warning), transparent 88%); color:var(--cinder-color-warning-fg); border-bottom:1px solid var(--cinder-color-warning-border);"><i data-lucide="alert-triangle" style="width:16px;height:16px;"></i><span style="font-size:var(--cinder-text-sm); font-weight:600;">Cancel this run?</span></div>
+        <div style="padding:16px;"><p style="margin:0 0 14px; font-size:var(--cinder-text-xs); color:var(--cinder-text-subtle);">This stops the workflow permanently and runs its finalizer. In-progress activities are abandoned. This cannot be undone.</p><div style="display:flex; gap:8px; justify-content:flex-end;"><button class="cinder-button" data-cinder-variant="ghost" data-cinder-size="sm">Keep running</button><button class="cinder-button" data-cinder-variant="primary" data-cinder-size="sm" style="background:var(--cinder-danger);">Cancel run</button></div></div>
+      </div>
+    </div>
+    <!-- tier 3 -->
+    <div style="flex:none; width:340px;">
+      <div style="font-size:var(--cinder-text-xs); color:var(--cinder-text-disabled); margin-bottom:8px;">Tier 3 · bulk · type-to-confirm</div>
+      <div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-color-danger-border); border-radius:var(--cinder-radius-lg); overflow:hidden;">
+        <div style="display:flex; align-items:center; gap:8px; padding:11px 16px; background:var(--cinder-color-danger-bg); color:var(--cinder-color-danger-fg); border-bottom:1px solid var(--cinder-color-danger-border);"><i data-lucide="octagon-alert" style="width:16px;height:16px;"></i><span style="font-size:var(--cinder-text-sm); font-weight:600;">Bulk cancel 47 workflows</span></div>
+        <div style="padding:16px;">
+          <p style="margin:0 0 10px; font-size:var(--cinder-text-xs); color:var(--cinder-text-subtle);">Operates on <strong style="color:var(--cinder-text);">all 47 workflows</strong> matching the filter — not just the visible page.</p>
+          <div style="font-family:var(--cinder-font-mono); font-size:var(--cinder-text-2xs); color:var(--cinder-text-muted); background:var(--cinder-surface-inset); border-radius:var(--cinder-radius-sm); padding:8px 10px; margin-bottom:12px;">status:failed · type:payment-capture</div>
+          <label style="display:block; font-size:var(--cinder-text-xs); margin-bottom:5px;">Type <code style="font-family:var(--cinder-font-mono); color:var(--cinder-text);">cancel 47 workflows</code> to confirm</label>
+          <input class="cinder-input" placeholder="cancel 47 workflows" style="margin-bottom:12px; font-family:var(--cinder-font-mono);" />
+          <button class="cinder-button" data-cinder-variant="primary" data-cinder-size="sm" disabled style="width:100%; background:var(--cinder-danger);">Cancel 47 workflows</button>
+        </div>
+      </div>
+    </div>
+    <!-- bulk progress -->
+    <div style="flex:none; width:300px;">
+      <div style="font-size:var(--cinder-text-xs); color:var(--cinder-text-disabled); margin-bottom:8px;">Bulk progress · non-dismissible</div>
+      <div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); padding:18px;">
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:14px;"><span style="width:16px; height:16px; border:2px solid var(--cinder-border-strong); border-top-color:var(--cinder-accent); border-radius:50%; animation:wf-spin .7s linear infinite;"></span><span style="font-size:var(--cinder-text-sm); font-weight:600;">Retrying… 12 of 47</span></div>
+        <div style="height:8px; background:var(--cinder-surface-inset); border-radius:9999px; overflow:hidden; margin-bottom:8px;"><div style="height:100%; width:26%; background:var(--cinder-accent); border-radius:9999px;"></div></div>
+        <div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled);">Please keep this open until all items finish.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ░ SECTION: FAULT BANNER ░ -->
+  <div style="font-size:var(--cinder-text-xs); font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--cinder-text-subtle); margin:0 0 14px;">Fault / error banner · six fault codes</div>
+  <div style="display:flex; gap:32px; align-items:flex-start; margin-bottom:40px;">
+    <div style="flex:none; width:560px; display:flex; flex-direction:column; gap:10px;">
+      <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-md);"><i data-lucide="search-x" style="width:16px;height:16px;color:var(--cinder-text-subtle);flex:none;"></i><span class="cinder-badge" data-cinder-variant="neutral">404 NotFound</span><span style="font-size:var(--cinder-text-sm); color:var(--cinder-text-muted);">Not found within this surface — inline, not full-page.</span></div>
+      <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; background:var(--cinder-color-warning-bg); border:1px solid var(--cinder-color-warning-border); border-radius:var(--cinder-radius-md);"><i data-lucide="git-pull-request-closed" style="width:16px;height:16px;color:var(--cinder-color-warning-fg);flex:none;"></i><span class="cinder-badge" data-cinder-variant="warning">409 Conflict</span><span style="font-size:var(--cinder-text-sm);">A workflow with this key exists — <a style="color:var(--cinder-accent-text);cursor:pointer;">view wf_91ab…77c2</a>.</span></div>
+      <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; background:var(--cinder-color-danger-bg); border:1px solid var(--cinder-color-danger-border); border-radius:var(--cinder-radius-md);"><i data-lucide="circle-x" style="width:16px;height:16px;color:var(--cinder-color-danger-fg);flex:none;"></i><span class="cinder-badge" data-cinder-variant="danger">400 Invalid</span><span style="font-size:var(--cinder-text-sm);">Field-level errors shown inline on the form.</span></div>
+      <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; background:var(--cinder-color-danger-bg); border:1px solid var(--cinder-color-danger-border); border-radius:var(--cinder-radius-md);"><i data-lucide="lock" style="width:16px;height:16px;color:var(--cinder-color-danger-fg);flex:none;"></i><span class="cinder-badge" data-cinder-variant="danger">401/403 Unauthorized</span><span style="font-size:var(--cinder-text-sm);">Full-page auth required, or inline scope error.</span></div>
+      <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-md);"><i data-lucide="circle-slash" style="width:16px;height:16px;color:var(--cinder-text-subtle);flex:none;"></i><span class="cinder-badge" data-cinder-variant="neutral">501 NotSupported</span><span style="font-size:var(--cinder-text-sm); color:var(--cinder-text-muted);">Not supported in current configuration.</span></div>
+      <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; background:var(--cinder-color-danger-bg); border:1px solid var(--cinder-color-danger-border); border-radius:var(--cinder-radius-md);"><i data-lucide="server-crash" style="width:16px;height:16px;color:var(--cinder-color-danger-fg);flex:none;"></i><span class="cinder-badge" data-cinder-variant="danger">500 Internal</span><span style="font-size:var(--cinder-text-sm);">Toast + request ID <code style="font-family:var(--cinder-font-mono);">req_8f2a91</code>.</span></div>
+    </div>
+    <div style="flex:none; width:340px;">
+      <div style="font-size:var(--cinder-text-xs); color:var(--cinder-text-disabled); margin-bottom:8px;">Collapsible stack trace</div>
+      <div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-color-danger-border); border-radius:var(--cinder-radius-lg); overflow:hidden;">
+        <div style="display:flex; align-items:center; gap:8px; padding:11px 14px; color:var(--cinder-color-danger-fg);"><i data-lucide="chevron-down" style="width:14px;height:14px;"></i><span style="font-size:var(--cinder-text-sm); font-weight:600;">PaymentDeclinedError</span></div>
+        <pre style="margin:0; padding:0 14px 14px; font-family:var(--cinder-font-mono); font-size:var(--cinder-text-2xs); color:var(--cinder-text-muted); overflow-x:auto;">at capturePayment (payment.ts:88)
+at OrderWorkflow.step7 (order.ts:142)
+at Engine.execute (engine.ts:903)</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ░ SECTION: EMPTY STATES ░ -->
+  <div style="font-size:var(--cinder-text-xs); font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--cinder-text-subtle); margin:0 0 14px;">Empty / onboarding states · every one names a next step</div>
+  <div style="display:flex; gap:24px; align-items:flex-start; margin-bottom:40px;">
+    <div style="flex:none; width:270px;"><div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); padding:24px 20px; text-align:center; height:200px; display:flex; flex-direction:column; align-items:center; justify-content:center;"><i data-lucide="git-branch" style="width:26px;height:26px;color:var(--cinder-text-subtle);margin-bottom:10px;"></i><div style="font-size:var(--cinder-text-sm); font-weight:600; margin-bottom:4px;">No workflows yet</div><p style="margin:0 0 12px; font-size:var(--cinder-text-xs); color:var(--cinder-text-subtle);">Start from a registered type or SDK.</p><button class="cinder-button" data-cinder-variant="secondary" data-cinder-size="sm" style="margin:0 auto;">View SDK snippet</button></div></div>
+    <div style="flex:none; width:270px;"><div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); padding:24px 20px; text-align:center; height:200px; display:flex; flex-direction:column; align-items:center; justify-content:center;"><i data-lucide="calendar-clock" style="width:26px;height:26px;color:var(--cinder-text-subtle);margin-bottom:10px;"></i><div style="font-size:var(--cinder-text-sm); font-weight:600; margin-bottom:4px;">No schedules</div><p style="margin:0 0 12px; font-size:var(--cinder-text-xs); color:var(--cinder-text-subtle);">Create one to run workflows on a cadence.</p><button class="cinder-button" data-cinder-variant="primary" data-cinder-size="sm" style="margin:0 auto;">Create schedule</button></div></div>
+    <div style="flex:none; width:270px;"><div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); padding:24px 20px; text-align:center; height:200px; display:flex; flex-direction:column; align-items:center; justify-content:center;"><i data-lucide="server" style="width:26px;height:26px;color:var(--cinder-text-subtle);margin-bottom:10px;"></i><div style="font-size:var(--cinder-text-sm); font-weight:600; margin-bottom:4px;">No workers connected</div><p style="margin:0 0 12px; font-size:var(--cinder-text-xs); color:var(--cinder-text-subtle);">Run a worker to start executing tasks.</p><button class="cinder-button" data-cinder-variant="secondary" data-cinder-size="sm" style="margin:0 auto;">Worker setup</button></div></div>
+    <div style="flex:none; width:270px;"><div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-color-success-border); border-radius:var(--cinder-radius-lg); padding:24px 20px; text-align:center; height:200px; display:flex; flex-direction:column; align-items:center; justify-content:center;"><i data-lucide="check-check" style="width:26px;height:26px;color:var(--cinder-color-success-fg);margin-bottom:10px;"></i><div style="font-size:var(--cinder-text-sm); font-weight:600; margin-bottom:4px;">You're all caught up</div><p style="margin:0; font-size:var(--cinder-text-xs); color:var(--cinder-text-subtle);">No pending reviews. Nice work.</p></div></div>
+    <div style="flex:none; width:270px;"><div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); padding:24px 20px; text-align:center; height:200px; display:flex; flex-direction:column; align-items:center; justify-content:center;"><i data-lucide="database" style="width:26px;height:26px;color:var(--cinder-text-subtle);margin-bottom:10px;"></i><div style="font-size:var(--cinder-text-sm); font-weight:600; margin-bottom:4px;">Browse storage</div><p style="margin:0; font-size:var(--cinder-text-xs); color:var(--cinder-text-subtle);">Enter a key or range to scan.</p></div></div>
+    <div style="flex:none; width:300px;"><div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); padding:20px; height:200px;"><div style="font-size:var(--cinder-text-sm); font-weight:600; margin-bottom:12px;">Registry · 3-step onboarding</div><div style="display:flex; flex-direction:column; gap:10px;"><div style="display:flex; gap:9px; align-items:center;"><span style="width:20px;height:20px;border-radius:50%;background:var(--cinder-accent);color:var(--cinder-accent-contrast);display:grid;place-items:center;font-size:10px;font-weight:700;flex:none;">1</span><span style="font-size:var(--cinder-text-xs);">Install the SDK</span></div><div style="display:flex; gap:9px; align-items:center;"><span style="width:20px;height:20px;border-radius:50%;background:var(--cinder-surface-inset);color:var(--cinder-text-subtle);display:grid;place-items:center;font-size:10px;font-weight:700;flex:none;">2</span><span style="font-size:var(--cinder-text-xs); color:var(--cinder-text-subtle);">Define a workflow</span></div><div style="display:flex; gap:9px; align-items:center;"><span style="width:20px;height:20px;border-radius:50%;background:var(--cinder-surface-inset);color:var(--cinder-text-subtle);display:grid;place-items:center;font-size:10px;font-weight:700;flex:none;">3</span><span style="font-size:var(--cinder-text-xs); color:var(--cinder-text-subtle);">Connect a worker</span></div></div></div></div>
+  </div>
+
+  <!-- ░ SECTION: LIVE INDICATOR ░ -->
+  <div style="font-size:var(--cinder-text-xs); font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--cinder-text-subtle); margin:0 0 14px;">Live / streaming indicator · ConnectionIndicator (0.10.0)</div>
+  <div style="display:flex; gap:24px; align-items:flex-start; margin-bottom:40px;">
+    <div style="flex:none; width:240px;"><div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); padding:18px;"><x-import component-from-global-scope="CinderDesignSystem_3e8bc5.ConnectionIndicator" status="live" hint-size="70px,22px"></x-import><div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled); margin-top:10px;">Connected · new rows highlight briefly.</div></div></div>
+    <div style="flex:none; width:260px;"><div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); padding:18px;"><x-import component-from-global-scope="CinderDesignSystem_3e8bc5.ConnectionIndicator" status="reconnecting" attempt="attempt 3" hint-size="160px,22px"></x-import><div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled); margin-top:10px;">+5 events buffered · paused.</div></div></div>
+    <div style="flex:none; width:260px;"><div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); padding:18px;"><x-import component-from-global-scope="CinderDesignSystem_3e8bc5.ConnectionIndicator" status="stale" label="Data may be stale" hint-size="140px,22px"></x-import><div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled); margin-top:10px;">Push dropped · <a style="color:var(--cinder-accent-text);cursor:pointer;">Refresh</a></div></div></div>
+    <div style="flex:none; width:240px;"><div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); padding:18px;"><x-import component-from-global-scope="CinderDesignSystem_3e8bc5.ConnectionIndicator" status="polling" label="Updated every 30s" hint-size="140px,22px"></x-import><div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled); margin-top:10px;">Polling — deliberately quieter than push.</div></div></div>
+  </div>
+
+  <!-- ░ SECTION: WORKFLOW FLOWS ░ -->
+  <div style="font-size:var(--cinder-text-xs); font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--cinder-text-subtle); margin:0 0 14px;">Workflow flows · start wizard · replay · fork · async completion</div>
+  <div style="display:flex; gap:28px; align-items:flex-start; margin-bottom:40px;">
+    <!-- start wizard -->
+    <div style="flex:none; width:420px;">
+      <div style="font-size:var(--cinder-text-xs); color:var(--cinder-text-disabled); margin-bottom:8px;">Start workflow wizard</div>
+      <div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); overflow:hidden;">
+        <div style="display:flex; align-items:center; gap:0; padding:14px 16px; border-bottom:1px solid var(--cinder-border-muted);">
+          <div style="display:flex; align-items:center; gap:7px;"><span style="width:22px;height:22px;border-radius:50%;background:var(--cinder-accent);color:var(--cinder-accent-contrast);display:grid;place-items:center;font-size:11px;font-weight:700;">1</span><span style="font-size:var(--cinder-text-xs); font-weight:600;">Type</span></div>
+          <span style="flex:1; height:1px; background:var(--cinder-border); margin:0 8px;"></span>
+          <div style="display:flex; align-items:center; gap:7px; opacity:.5;"><span style="width:22px;height:22px;border-radius:50%;background:var(--cinder-surface-inset);display:grid;place-items:center;font-size:11px;font-weight:700;">2</span><span style="font-size:var(--cinder-text-xs); font-weight:600;">Configure</span></div>
+          <span style="flex:1; height:1px; background:var(--cinder-border); margin:0 8px;"></span>
+          <div style="display:flex; align-items:center; gap:7px; opacity:.5;"><span style="width:22px;height:22px;border-radius:50%;background:var(--cinder-surface-inset);display:grid;place-items:center;font-size:11px;font-weight:700;">3</span><span style="font-size:var(--cinder-text-xs); font-weight:600;">Review</span></div>
+        </div>
+        <div style="padding:16px;">
+          <label style="display:block; font-size:var(--cinder-text-xs); font-weight:600; margin-bottom:5px;">Workflow type</label>
+          <div style="position:relative; margin-bottom:12px;"><input class="cinder-input" value="order-fulfillment" style="padding-left:30px;" /><i data-lucide="search" style="position:absolute; left:9px; top:50%; transform:translateY(-50%); width:14px; height:14px; color:var(--cinder-text-subtle);"></i></div>
+          <div style="background:var(--cinder-surface-inset); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-md); padding:11px 13px;"><div style="font-size:var(--cinder-text-2xs); text-transform:uppercase; letter-spacing:.05em; color:var(--cinder-text-disabled); margin-bottom:8px;">Input schema</div><div style="font-family:var(--cinder-font-mono); font-size:var(--cinder-text-xs); line-height:1.8; color:var(--cinder-text-muted);">orderId <span style="color:var(--cinder-text-disabled);">string · required</span><br>customerTier <span style="color:var(--cinder-text-disabled);">enum</span><br>items <span style="color:var(--cinder-text-disabled);">number</span></div></div>
+        </div>
+        <div style="display:flex; justify-content:flex-end; gap:8px; padding:12px 16px; border-top:1px solid var(--cinder-border-muted);"><button class="cinder-button" data-cinder-variant="ghost" data-cinder-size="sm">Back</button><button class="cinder-button" data-cinder-variant="primary" data-cinder-size="sm">Next: configure</button></div>
+      </div>
+      <!-- result + 409 -->
+      <div style="margin-top:12px; display:flex; flex-direction:column; gap:8px;">
+        <div style="display:flex; align-items:center; gap:9px; padding:11px 14px; background:var(--cinder-color-success-bg); border:1px solid var(--cinder-color-success-border); border-radius:var(--cinder-radius-md);"><i data-lucide="circle-check" style="width:16px;height:16px;color:var(--cinder-color-success-fg);"></i><span style="font-size:var(--cinder-text-sm);">Started <span style="font-family:var(--cinder-font-mono);">wf_d2f1…0a3c</span></span><button class="cinder-button" data-cinder-variant="ghost" data-cinder-size="sm" style="margin-left:auto;">View →</button></div>
+        <div style="display:flex; align-items:center; gap:9px; padding:11px 14px; background:var(--cinder-color-warning-bg); border:1px solid var(--cinder-color-warning-border); border-radius:var(--cinder-radius-md);"><i data-lucide="git-pull-request-closed" style="width:16px;height:16px;color:var(--cinder-color-warning-fg);"></i><span style="font-size:var(--cinder-text-sm); color:var(--cinder-color-warning-fg);">A workflow with this key exists — <a style="color:var(--cinder-accent-text);cursor:pointer;">open it</a>.</span></div>
+      </div>
+    </div>
+
+    <!-- replay + fork -->
+    <div style="flex:none; width:360px; display:flex; flex-direction:column; gap:14px;">
+      <div>
+        <div style="font-size:var(--cinder-text-xs); color:var(--cinder-text-disabled); margin-bottom:8px;">Replay · read-only</div>
+        <div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-left:3px solid var(--cinder-info); border-radius:var(--cinder-radius-lg); overflow:hidden;">
+          <div style="display:flex; align-items:center; gap:8px; padding:9px 14px; background:var(--cinder-color-warning-bg); color:var(--cinder-color-warning-fg); border-bottom:1px solid var(--cinder-color-warning-border);"><i data-lucide="rewind" style="width:14px;height:14px;"></i><span style="font-size:var(--cinder-text-xs); font-weight:600;">This is a replay. No actions available.</span></div>
+          <div style="padding:14px;"><p style="margin:0; font-size:var(--cinder-text-xs); color:var(--cinder-text-subtle);">Re-executes from stored state at step 6. Read-only; does not affect the live workflow. Shown side-by-side to surface divergence.</p></div>
+        </div>
+      </div>
+      <div>
+        <div style="font-size:var(--cinder-text-xs); color:var(--cinder-text-disabled); margin-bottom:8px;">Fork from checkpoint</div>
+        <div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); padding:14px;">
+          <label style="display:block; font-size:var(--cinder-text-xs); font-weight:600; margin-bottom:5px;">Target step</label>
+          <input class="cinder-input" value="6" style="margin-bottom:10px; font-family:var(--cinder-font-mono);" />
+          <div style="font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled); margin-bottom:12px;">A new workflow is created, linked via <code style="font-family:var(--cinder-font-mono);">forkedFrom</code>.</div>
+          <button class="cinder-button" data-cinder-variant="primary" data-cinder-size="sm" style="width:100%;"><i data-lucide="git-fork" style="width:13px;height:13px;"></i> Create fork</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- async completion -->
+    <div style="flex:none; width:340px;">
+      <div style="font-size:var(--cinder-text-xs); color:var(--cinder-text-disabled); margin-bottom:8px;">Async activity completion</div>
+      <div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); overflow:hidden;">
+        <div style="padding:12px 15px; border-bottom:1px solid var(--cinder-border-muted);"><span class="cinder-badge" data-cinder-variant="warning"><i data-lucide="clock" style="width:11px;height:11px;"></i> Awaiting external completion</span></div>
+        <div style="padding:15px;">
+          <label style="display:block; font-size:var(--cinder-text-xs); font-weight:600; margin-bottom:5px;">Completion token <span style="color:var(--cinder-text-disabled); font-weight:400;">· deterministic id, not a secret</span></label>
+          <div style="display:flex; align-items:center; gap:8px; padding:8px 10px; background:var(--cinder-surface-inset); border-radius:var(--cinder-radius-md); margin-bottom:14px;"><span style="font-family:var(--cinder-font-mono); font-size:var(--cinder-text-2xs); color:var(--cinder-text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">tok_act_8f2a91c0e4d7b3a6</span><i data-lucide="copy" style="width:13px;height:13px;color:var(--cinder-text-disabled);margin-left:auto;flex:none;cursor:pointer;"></i></div>
+          <div style="display:flex; gap:3px; padding:3px; border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-md); background:var(--cinder-surface-inset); margin-bottom:12px;"><span style="flex:1; text-align:center; padding:5px; border-radius:5px; background:var(--cinder-surface-raised); font-size:var(--cinder-text-2xs); font-weight:600;">Complete</span><span style="flex:1; text-align:center; padding:5px; font-size:var(--cinder-text-2xs); color:var(--cinder-text-subtle);">Fail</span></div>
+          <textarea class="cinder-input" style="font-family:var(--cinder-font-mono); min-height:60px; margin-bottom:12px;">{ "verified": true }</textarea>
+          <button class="cinder-button" data-cinder-variant="primary" data-cinder-size="sm" style="width:100%;"><i data-lucide="check" style="width:13px;height:13px;"></i> Complete activity</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ░ SECTION: AGGREGATE ░ -->
+  <div style="font-size:var(--cinder-text-xs); font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--cinder-text-subtle); margin:0 0 14px;">Workflow aggregate · triage where failures cluster</div>
+  <div style="display:flex; gap:32px; align-items:flex-start; margin-bottom:20px;">
+    <div style="flex:none; width:600px;">
+      <div style="background:var(--cinder-surface-raised); border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-lg); overflow:hidden;">
+        <div style="display:flex; align-items:center; gap:10px; padding:12px 16px; border-bottom:1px solid var(--cinder-border-muted);"><span style="font-size:var(--cinder-text-sm); font-weight:600;">Group by</span><div style="display:flex; gap:3px; padding:3px; border:1px solid var(--cinder-border); border-radius:var(--cinder-radius-md); background:var(--cinder-surface-inset);"><span style="padding:4px 10px; border-radius:5px; background:var(--cinder-surface-raised); font-size:var(--cinder-text-2xs); font-weight:600;">failureCategory</span><span style="padding:4px 10px; font-size:var(--cinder-text-2xs); color:var(--cinder-text-subtle);">type</span><span style="padding:4px 10px; font-size:var(--cinder-text-2xs); color:var(--cinder-text-subtle);">status</span></div><span style="margin-left:auto; font-size:var(--cinder-text-xs); color:var(--cinder-text-subtle);">Last 24h · 23 total</span></div>
+        <div style="padding:16px; display:flex; flex-direction:column; gap:11px;">
+          <div style="display:flex; align-items:center; gap:12px; cursor:pointer;"><span style="width:120px; font-size:var(--cinder-text-xs); color:var(--cinder-text-muted);">Application</span><div style="flex:1; height:18px; border-radius:4px; background:var(--cinder-surface-inset); overflow:hidden;"><div style="height:100%; width:100%; background:var(--cinder-danger);"></div></div><span style="width:64px; text-align:right; font-size:var(--cinder-text-xs); font-family:var(--cinder-font-mono);">14 · 61%</span></div>
+          <div style="display:flex; align-items:center; gap:12px; cursor:pointer;"><span style="width:120px; font-size:var(--cinder-text-xs); color:var(--cinder-text-muted);">Timeout</span><div style="flex:1; height:18px; border-radius:4px; background:var(--cinder-surface-inset); overflow:hidden;"><div style="height:100%; width:36%; background:var(--cinder-warning);"></div></div><span style="width:64px; text-align:right; font-size:var(--cinder-text-xs); font-family:var(--cinder-font-mono);">5 · 22%</span></div>
+          <div style="display:flex; align-items:center; gap:12px; cursor:pointer;"><span style="width:120px; font-size:var(--cinder-text-xs); color:var(--cinder-text-muted);">Cancellation</span><div style="flex:1; height:18px; border-radius:4px; background:var(--cinder-surface-inset); overflow:hidden;"><div style="height:100%; width:15%; background:var(--cinder-text-disabled);"></div></div><span style="width:64px; text-align:right; font-size:var(--cinder-text-xs); font-family:var(--cinder-font-mono);">2 · 9%</span></div>
+          <div style="display:flex; align-items:center; gap:12px; cursor:pointer;"><span style="width:120px; font-size:var(--cinder-text-xs); color:var(--cinder-text-muted);">Resource</span><div style="flex:1; height:18px; border-radius:4px; background:var(--cinder-surface-inset); overflow:hidden;"><div style="height:100%; width:8%; background:var(--cinder-info);"></div></div><span style="width:64px; text-align:right; font-size:var(--cinder-text-xs); font-family:var(--cinder-font-mono);">1 · 4%</span></div>
+          <div style="display:flex; align-items:center; gap:12px; cursor:pointer;"><span style="width:120px; font-size:var(--cinder-text-xs); color:var(--cinder-text-muted);">System</span><div style="flex:1; height:18px; border-radius:4px; background:var(--cinder-surface-inset); overflow:hidden;"><div style="height:100%; width:8%; background:var(--cinder-chart-series-5);"></div></div><span style="width:64px; text-align:right; font-size:var(--cinder-text-xs); font-family:var(--cinder-font-mono);">1 · 4%</span></div>
+        </div>
+        <div style="padding:10px 16px; border-top:1px solid var(--cinder-border-muted); font-size:var(--cinder-text-2xs); color:var(--cinder-text-disabled);">Each row links to a pre-filtered workflow list.</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  componentDidMount() { this._icons(); }
+  componentDidUpdate() { this._icons(); }
+  _icons() { requestAnimationFrame(() => { try { window.lucide && window.lucide.createIcons(); } catch (e) {} }); }
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

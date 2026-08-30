@@ -1,0 +1,48 @@
+/* ============================================================
+ * CINDER — MOTION TOKENS
+ * ------------------------------------------------------------
+ * Durations and easing curves. Transition durations stay separate from
+ * repeating animation durations so spinners and indeterminate progress can
+ * move at slower, readable cadences without making hover/value transitions
+ * feel sluggish. `prefers-reduced-motion: reduce` collapses every duration
+ * token to 0ms automatically — you do not need to handle that case yourself.
+ * ============================================================ */
+
+:root {
+  /* ── Transition durations ────────────────────────────────*/
+  --cinder-duration-instant: 0ms; /* @kind other */
+  --cinder-duration-fast: 120ms; /* @kind other */
+  --cinder-duration: 200ms; /* @kind other */
+  --cinder-duration-normal: var(--cinder-duration); /* @kind other */
+  --cinder-duration-moderate: 280ms; /* @kind other */
+  --cinder-duration-slow: 400ms; /* @kind other */
+
+  /* ── Repeating animation durations ───────────────────────*/
+  --cinder-duration-spin: 750ms; /* @kind other */
+  --cinder-duration-progress-bar-indeterminate: 1.6s; /* @kind other */
+  --cinder-duration-progress-ring-spin: 1.4s; /* @kind other */
+
+  /* ── Easing curves ───────────────────────────────────────*/
+  --cinder-ease-standard: cubic-bezier(0.2, 0, 0, 1); /* @kind other */
+  --cinder-ease-decelerate: cubic-bezier(0, 0, 0, 1); /* @kind other */
+  --cinder-ease-accelerate: cubic-bezier(0.3, 0, 1, 1); /* @kind other */
+  --cinder-ease-in-out: cubic-bezier(0.4, 0, 0.2, 1); /* @kind other */
+  /* A fast, settled ease-out (no overshoot). Previously a back-ease whose
+     y1=1.56 overshot to 156% of travel — on a sheet/drawer that flung the
+     panel past the viewport edge before settling. */
+  --cinder-ease-spring: cubic-bezier(0.22, 1, 0.36, 1); /* @kind other */
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --cinder-duration-instant: 0ms; /* @kind other */
+    --cinder-duration-fast: 0ms; /* @kind other */
+    --cinder-duration: 0ms; /* @kind other */
+    --cinder-duration-normal: 0ms; /* @kind other */
+    --cinder-duration-moderate: 0ms; /* @kind other */
+    --cinder-duration-slow: 0ms; /* @kind other */
+    --cinder-duration-spin: 0ms; /* @kind other */
+    --cinder-duration-progress-bar-indeterminate: 0ms; /* @kind other */
+    --cinder-duration-progress-ring-spin: 0ms; /* @kind other */
+  }
+}
