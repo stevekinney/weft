@@ -60,8 +60,10 @@
     ),
   );
 
-  function navigateToFilter(next: WorkflowListQuery): void {
-    const params = serializeWorkflowListFilter(next);
+  function navigateToFilter(next: WorkflowListQuery, resetOffset = false): void {
+    const nextFilter = { ...next };
+    if (resetOffset) delete nextFilter.offset;
+    const params = serializeWorkflowListFilter(nextFilter);
     const query = params.toString();
     router.navigate(`/workflows${query ? `?${query}` : ''}`, { replace: true });
   }
@@ -124,7 +126,7 @@
     const next: WorkflowListQuery = { ...filter };
     if (nextAttributes.length > 0) next.attributes = nextAttributes;
     else delete next.attributes;
-    navigateToFilter(next);
+    navigateToFilter(next, true);
   }
 
   // --- Bulk selection scaffold (plan §9.2: SCAFFOLD only) ------------------
@@ -203,7 +205,7 @@
   {:else}
     <WorkflowListFilters
       {filter}
-      onFilterChange={navigateToFilter}
+      onFilterChange={(next) => navigateToFilter(next, true)}
       {queryBuilderOpen}
       onQueryBuilderOpenChange={(open) => (queryBuilderOpen = open)}
       activeConditionCount={filter.attributes?.length ?? 0}
