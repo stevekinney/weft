@@ -103,6 +103,11 @@
   const filteredEntries = $derived(filterTimelineEntries(entries, quickFilter));
 
   let pageIndex = $state(0);
+
+  function changeQuickFilter(next: TimelineQuickFilter): void {
+    quickFilter = next;
+    pageIndex = 0;
+  }
   const paginated = $derived(needsTimelinePagination(filteredEntries.length));
   const pageCount = $derived(timelinePageCount(filteredEntries.length));
   const pageEntries = $derived(
@@ -199,7 +204,7 @@
         labelVisible={false}
         density="toolbar"
         value={quickFilter}
-        onValueChange={(next) => (quickFilter = next)}
+        onValueChange={changeQuickFilter}
       >
         {#each TIMELINE_QUICK_FILTERS as filter (filter)}
           <Segment value={filter}>{timelineQuickFilterLabel(filter)}</Segment>
