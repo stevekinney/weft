@@ -17,7 +17,7 @@ jobs:
       - run: bun install --frozen-lockfile --linker=isolated
       - run: bunx turbo run lint --filter=@lostgradient/weft
         env:
-          TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+          TURBO_TOKEN: ""
           TURBO_TEAM: kinney
   typecheck:
     runs-on: ubuntu-latest
@@ -29,7 +29,7 @@ jobs:
       - run: bun install --frozen-lockfile --linker=isolated
       - run: bunx turbo run typecheck --filter=@lostgradient/weft
         env:
-          TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+          TURBO_TOKEN: ""
           TURBO_TEAM: kinney
   test:
     runs-on: ubuntu-latest
@@ -145,7 +145,7 @@ jobs:
       - run: bun install --frozen-lockfile --linker=isolated
       - run: bunx turbo run build --filter=@lostgradient/weft
         env:
-          TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+          TURBO_TOKEN: ""
           TURBO_TEAM: kinney
   order-processing-example:
     runs-on: ubuntu-latest
@@ -213,7 +213,7 @@ jobs:
       - run: bun install --frozen-lockfile --linker=isolated
       - run: bunx turbo run lint --filter=@lostgradient/weft-ui
         env:
-          TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+          TURBO_TOKEN: ""
           TURBO_TEAM: kinney
   ui-typecheck:
     runs-on: ubuntu-latest
@@ -225,7 +225,7 @@ jobs:
       - run: bun install --frozen-lockfile --linker=isolated
       - run: bunx turbo run typecheck --filter=@lostgradient/weft-ui
         env:
-          TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+          TURBO_TOKEN: ""
           TURBO_TEAM: kinney
   ui-format-check:
     runs-on: ubuntu-latest
@@ -237,7 +237,7 @@ jobs:
       - run: bun install --frozen-lockfile --linker=isolated
       - run: bunx turbo run format:check --filter=@lostgradient/weft-ui
         env:
-          TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+          TURBO_TOKEN: ""
           TURBO_TEAM: kinney
   ui-test:
     runs-on: ubuntu-latest
@@ -269,7 +269,7 @@ jobs:
       - run: bun install --frozen-lockfile --linker=isolated
       - run: bunx turbo run build --filter=@lostgradient/weft-ui
         env:
-          TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+          TURBO_TOKEN: ""
           TURBO_TEAM: kinney
   # Deterministic adjusted-coverage gate (packages/weft-ui/docs/implementation-plan.md
   # §11, scripts/check-coverage.ts): runs its own `bun run test:coverage` pass and

@@ -33,7 +33,8 @@ describe('coverage workflow gates', () => {
 
   it('uses remote caching for deterministic jobs only', async () => {
     const workflow = await readWorkflow('ci.yaml');
-    const cacheTokens = workflow.match(/TURBO_TOKEN: \$\{\{ secrets\.TURBO_TOKEN \}\}/g) ?? [];
+    const cacheTokens =
+      workflow.match(/TURBO_TOKEN: (?:\$\{\{ secrets\.TURBO_TOKEN \}\}|"")/g) ?? [];
     const cacheTeams = workflow.match(/TURBO_TEAM: kinney/g) ?? [];
 
     expect(cacheTokens).toHaveLength(7);
