@@ -181,7 +181,7 @@
     const search = new URLSearchParams(router.search);
     if (search.get('tab') === next) return;
     search.set('tab', next);
-    router.navigate(`${workflowDetailPath(id)}?${search.toString()}`, {
+    router.navigate(workflowDetailPath(id, search), {
       replace: true,
     });
   });

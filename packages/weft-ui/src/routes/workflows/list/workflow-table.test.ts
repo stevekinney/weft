@@ -48,7 +48,7 @@ describe('WorkflowTable', () => {
     });
 
     const link = getByRole('link');
-    expect(link.getAttribute('href')).toBe('/workflows/~wf%2Forders%3Fregion%3Dwest%23retry');
+    expect(link.getAttribute('href')).toBe('/workflows/wf%2Forders%3Fregion%3Dwest%23retry');
     await fireEvent.click(link);
     expect(router.current.params['id']).toBe(workflowId);
   });
@@ -61,7 +61,7 @@ describe('WorkflowTable', () => {
     });
 
     const link = getByRole('link');
-    expect(link.getAttribute('href')).toBe('/workflows/~..');
+    expect(link.getAttribute('href')).toBe('/workflows/_?__weft_workflow_id=..');
     await fireEvent.click(link);
     expect(router.current.params['id']).toBe('..');
   });

@@ -39,12 +39,7 @@ function matchPattern(pattern: string, pathname: string): Record<string, string>
     if (pathSegment === undefined) return null;
 
     if (patternSegment.startsWith(':')) {
-      const parameterName = patternSegment.slice(1);
-      const decoded = decodeURIComponent(pathSegment);
-      params[parameterName] =
-        pattern === '/workflows/:id' && parameterName === 'id' && decoded.startsWith('~')
-          ? decoded.slice(1)
-          : decoded;
+      params[patternSegment.slice(1)] = decodeURIComponent(pathSegment);
       continue;
     }
 
@@ -55,12 +50,19 @@ function matchPattern(pattern: string, pathname: string): Record<string, string>
 }
 
 /**
- * Builds a workflow detail path with an explicit segment marker. The marker
- * keeps dot-only identifiers from being normalized away by the URL parser
- * and remains collision-free because every encoded identifier receives it.
+ * Builds a workflow detail path. Dot-only identifiers use a query-carried
+ * escape because browsers normalize those exact path segments before the
+ * client router can read them; every other identifier retains its legacy URL.
  */
-export function workflowDetailPath(workflowId: string): string {
-  return `/workflows/~${encodeURIComponent(workflowId)}`;
+export function workflowDetailPath(
+  workflowId: string,
+  search: URLSearchParams = new URLSearchParams(),
+): string {
+  const nextSearch = new URLSearchParams(search);
+  const dotOnly = workflowId === '.' || workflowId === '..';
+  if (dotOnly) nextSearch.set('__weft_workflow_id', workflowId);
+  const query = nextSearch.toString();
+  return `/workflows/${dotOnly ? '_' : encodeURIComponent(workflowId)}${query ? `?${query}` : ''}`;
 }
 
 interface RouteDefinitionMatch {
@@ -114,10 +116,17 @@ class ConsoleRouter {
   /** The fully parsed `{ route, params, search }` view of the current location. */
   get current(): RouteState {
     const found = findRouteDefinition(this.pathname, routes);
+    const search = this.search;
+    const escapedWorkflowId =
+      found?.definition.pattern === '/workflows/:id' ? search.get('__weft_workflow_id') : null;
+    const params =
+      (escapedWorkflowId === '.' || escapedWorkflowId === '..') && found
+        ? { ...found.params, id: escapedWorkflowId }
+        : (found?.params ?? {});
     return {
       route: found?.definition ?? null,
-      params: found?.params ?? {},
-      search: this.search,
+      params,
+      search,
     };
   }
 

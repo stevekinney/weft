@@ -89,6 +89,6 @@ describe('StartWizard', () => {
     await fireEvent.click(startButton);
 
     const link = await findByRole('link', { name: 'View →' });
-    expect(link.getAttribute('href')).toBe('/workflows/~wf_started_1234567890');
+    expect(link.getAttribute('href')).toBe('/workflows/wf_started_1234567890');
   });
 });

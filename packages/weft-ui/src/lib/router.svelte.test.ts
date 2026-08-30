@@ -99,11 +99,16 @@ describe('router singleton', () => {
     expect(router.match).toEqual({ pattern: '/workflows/:id', params: { id: 'wf_123' } });
   });
 
-  test('workflow detail paths preserve dot-only and marker-prefixed identifiers', () => {
-    for (const workflowId of ['.', '..', '~already-marked']) {
+  test('workflow detail paths preserve dot-only identifiers without changing legacy tilde links', () => {
+    for (const workflowId of ['.', '..']) {
       router.navigate(workflowDetailPath(workflowId));
       expect(router.current.params['id']).toBe(workflowId);
     }
+
+    router.navigate('/workflows/~legacy-link');
+    expect(router.current.params['id']).toBe('~legacy-link');
+    router.navigate(workflowDetailPath('~new-link'));
+    expect(router.current.params['id']).toBe('~new-link');
   });
 
   test('navigate() to an unowned path yields no match', () => {

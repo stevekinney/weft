@@ -41,7 +41,7 @@ describe('ReviewStep', () => {
     });
 
     const link = getByRole('link', { name: 'View →' });
-    expect(link.getAttribute('href')).toBe('/workflows/~wf_4a9f1234567890abcdef2c10');
+    expect(link.getAttribute('href')).toBe('/workflows/wf_4a9f1234567890abcdef2c10');
     expect(queryByRole('button', { name: 'Start workflow' })).toBeNull();
   });
 

@@ -62,8 +62,7 @@ describe('EngineStatusController (integration, real server)', () => {
       await waitFor(() => {
         expect(
           notifications.items.some(
-            (item) =>
-              item.href === `/workflows/~${workflowId}` && item.title === 'Workflow started',
+            (item) => item.href === `/workflows/${workflowId}` && item.title === 'Workflow started',
           ),
         ).toBe(true);
       });
