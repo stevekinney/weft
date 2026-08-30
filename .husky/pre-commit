@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+
+# Lightweight wrapper to call the Bun-based hook (mirrors weft's .husky/pre-commit).
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+bun "$SCRIPT_DIR/../scripts/husky/pre-commit.ts"

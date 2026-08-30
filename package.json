@@ -1,0 +1,108 @@
+{
+  "name": "@lostgradient/weft-console",
+  "version": "0.1.0",
+  "description": "Operator console for the Weft durable-workflow engine.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Steve Kinney <hello@stevekinney.net>",
+  "homepage": "https://github.com/stevekinney/weft-console#readme",
+  "bugs": {
+    "url": "https://github.com/stevekinney/weft-console/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stevekinney/weft-console.git"
+  },
+  "keywords": [
+    "weft",
+    "durable-execution",
+    "workflow",
+    "dashboard",
+    "operator-console"
+  ],
+  "engines": {
+    "bun": ">=1.4.0"
+  },
+  "packageManager": "bun@1.4.0",
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/mount.d.ts",
+      "default": "./dist/mount.js"
+    },
+    "./dist/*": "./dist/*"
+  },
+  "scripts": {
+    "dev": "vite",
+    "dev:server": "bun scripts/dev-server.ts",
+    "build": "vite build && bun run check:styles && bun scripts/build-mount.ts && bun run check:bundle",
+    "check:bundle": "bun scripts/check-bundle-size.ts",
+    "check:styles": "bun scripts/check-cinder-styles.ts",
+    "check:coverage": "bun run scripts/check-coverage.ts",
+    "typecheck": "svelte-check --tsconfig ./tsconfig.json",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "format": "prettier --write \"**/*.{ts,svelte,js,json,md,css,html}\"",
+    "format:check": "prettier --check \"**/*.{ts,svelte,js,json,md,css,html}\"",
+    "prepare": "husky",
+    "test": "TZ=UTC bun test --conditions browser --conditions svelte",
+    "test:coverage": "bun run scripts/run-coverage.ts",
+    "test:e2e": "playwright test"
+  },
+  "peerDependencies": {
+    "@lostgradient/weft": "^0.22.0"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.12.1",
+    "@lostgradient/cinder": "0.24.0",
+    "@lostgradient/markdown": "0.2.0",
+    "@lostgradient/weft": "0.22.0",
+    "@playwright/test": "^1.61.1",
+    "@shikijs/langs": "^3.21.0",
+    "@shikijs/themes": "^3.21.0",
+    "@sveltejs/vite-plugin-svelte": "^7.2.0",
+    "@tanstack/svelte-query": "^5.90.2",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^7.0.0",
+    "@testing-library/svelte": "^5.4.2",
+    "@types/bun": "^1.4.0",
+    "cron-parser": "^5.6.2",
+    "fake-indexeddb": "^6.2.5",
+    "happy-dom": "^20.11.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.4.0",
+    "lucide-svelte": "^0.577.0",
+    "oxlint": "^1.74.0",
+    "prettier": "^3.9.5",
+    "prettier-plugin-organize-imports": "^4.3.0",
+    "prettier-plugin-svelte": "^3.4.1",
+    "svelte": "^5.56.7",
+    "svelte-check": "^4.7.3",
+    "typescript": "5.9.3",
+    "vite": "^8.1.5"
+  },
+  "lint-staged": {
+    "src/**/*.ts": [
+      "oxlint --fix",
+      "prettier --write"
+    ],
+    "scripts/**/*.ts": [
+      "oxlint --fix",
+      "prettier --write"
+    ],
+    "tests/**/*.ts": [
+      "oxlint --fix",
+      "prettier --write"
+    ],
+    "*.svelte": [
+      "prettier --write"
+    ],
+    "*.{json,md,css,html}": [
+      "prettier --write"
+    ]
+  }
+}
