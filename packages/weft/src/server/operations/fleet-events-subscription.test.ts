@@ -229,8 +229,8 @@ describe('weft.events.subscribe operation', () => {
     await subscription.close();
   });
 
-  it('filters live events before they consume the subscription live buffer', async () => {
-    const fleetFeed = createFleetEventFeed(new MemoryStorage(), { liveBufferSize: 1 });
+  it('filters live events read from durable storage', async () => {
+    const fleetFeed = createFleetEventFeed(new MemoryStorage());
     const subscription = await fleetEventsSubscriptionOperation.invoke({
       input: { workflowId: 'wf-match' },
       principal: anonymousPrincipal(),
