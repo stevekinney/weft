@@ -256,6 +256,14 @@ export type FleetEventGapEnvelope = {
   readonly payload: { readonly requestedCursor: Cursor; readonly firstRetainedSequence: number };
 };
 
+/**
+ * Durable fleet-feed polling and replay handoff options.
+ * @example
+ * ```ts
+ * import type { FleetEventFeedOptions } from '@lostgradient/weft/server/handler';
+ * const options: FleetEventFeedOptions = { livePollIntervalMs: 100 };
+ * ```
+ */
 export type FleetEventFeedOptions = WorkflowEventFeedOptions & {
   /** How often a subscriber checks durable storage for commits from another process. */
   readonly livePollIntervalMs?: number;

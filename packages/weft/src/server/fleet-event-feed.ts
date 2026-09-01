@@ -70,10 +70,12 @@ const REPLAY_PAGE_SIZE = 128;
  * drive `/v1/events/sse` through `handleRequest()` directly, without
  * `serve()`. Call once per storage instance and share the returned feed
  * across every transport that needs it.
- *
- * This feed does not subscribe to `Engine` events on its own. `serve()` bridges
- * engine lifecycle events into it; a direct `handleRequest()` host must append
- * the events it wants `/v1/events/sse` to carry.
+ * @example
+ * ```ts
+ * import { MemoryStorage } from '@lostgradient/weft';
+ * import { createFleetEventFeed } from '@lostgradient/weft/server/handler';
+ * const feed = createFleetEventFeed(new MemoryStorage());
+ * ```
  */
 export function createFleetEventFeed(
   storage: Storage,
