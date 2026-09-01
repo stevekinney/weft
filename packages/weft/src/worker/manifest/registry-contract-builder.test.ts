@@ -1,8 +1,14 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
+import {
+  activityContractHash,
+  contractHash,
+  deriveWorkflowRevision,
+} from '../../core/contract/index.ts';
 import { Engine } from '../../core/engine.ts';
-import { activity, workflow } from '../../core/types.ts';
+import { activity, query, signal, update, workflow } from '../../core/types.ts';
+import { definitionSchemaToJsonSchema } from '../../core/types/definition-schema-to-json.ts';
 import { REMOTE_WORKER_PROTOCOL_VERSION } from '../protocol.ts';
 import {
   buildWorkerManifestFromRegistry,
@@ -224,6 +230,89 @@ describe('buildWorkerManifestFromRegistry', () => {
     });
 
     expect(Object.keys(manifest.workflows['checkout']?.activities ?? {})).toEqual(['charge']);
+  });
+
+  it('folds registered signals, updates, and queries into contractHash (WFT-5)', async () => {
+    async function contractHashFor(withMessages: boolean): Promise<string> {
+      const localEngine = createEngine();
+      try {
+        const definition = withMessages
+          ? workflow({ name: 'checkout' })
+              .signals({ cancel: signal('cancel') })
+              .updates({
+                rename: update('rename', { inputSchema: z.object({ name: z.string() }) }),
+              })
+              .queries({
+                status: query('status', { outputSchema: z.object({ state: z.string() }) }),
+              })
+              .execute(async function* () {})
+          : workflow({ name: 'checkout' }).execute(async function* () {});
+        localEngine.register(definition);
+        const manifest = await buildWorkerManifestFromRegistry(localEngine, {
+          workflows: { checkout: [] },
+          deployment: DEPLOYMENT,
+          runtime: RUNTIME,
+        });
+        return manifest.workflows['checkout']?.contractHash ?? '';
+      } finally {
+        localEngine[Symbol.dispose]();
+      }
+    }
+
+    expect(await contractHashFor(true)).not.toBe(await contractHashFor(false));
+  });
+
+  it('routes contractHash/workflowRevision/activity contractHash through the core/contract functions directly (unification)', async () => {
+    const chargeInputSchema = z.object({ amount: z.number() });
+    const chargeOutputSchema = z.object({ charged: z.boolean() });
+
+    engine = createEngine();
+    engine.register(
+      workflow({ name: 'checkout', version: '2.1.0' })
+        .signals({ cancel: signal('cancel') })
+        .execute(async function* () {}),
+    );
+    engine.register(
+      activity({
+        name: 'charge',
+        execute: async () => ({ charged: true }),
+        inputSchema: chargeInputSchema,
+        outputSchema: chargeOutputSchema,
+      }),
+    );
+
+    const manifest = await buildWorkerManifestFromRegistry(engine, {
+      workflows: { checkout: ['charge'] },
+      deployment: DEPLOYMENT,
+      runtime: RUNTIME,
+    });
+
+    const workflowContract = manifest.workflows['checkout'];
+    const activityContract = workflowContract?.activities['charge'];
+
+    // Built independently from the same schemas, via the same JSON Schema
+    // converter the registry uses — not by reading back the manifest's own
+    // output — so this proves the manifest's digests equal an equivalent
+    // hand-built WorkflowContract's, not merely that some hash came out.
+    const equivalentContract = {
+      name: 'checkout',
+      workflowVersion: '2.1.0',
+      signals: { cancel: {} },
+      activities: {
+        charge: {
+          inputSchema: definitionSchemaToJsonSchema(chargeInputSchema, 'input'),
+          outputSchema: definitionSchemaToJsonSchema(chargeOutputSchema, 'output'),
+        },
+      },
+    };
+
+    expect(workflowContract?.contractHash).toBe(await contractHash(equivalentContract));
+    expect(workflowContract?.workflowRevision).toBe(
+      await deriveWorkflowRevision(equivalentContract),
+    );
+    expect(activityContract?.contractHash).toBe(
+      await activityContractHash(equivalentContract.activities.charge),
+    );
   });
 
   it('defaults sdkVersion and protocolVersion, and accepts explicit overrides', async () => {

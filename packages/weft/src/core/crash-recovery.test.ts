@@ -21,6 +21,7 @@ import {
 import type { WorkflowState, WorkflowStatus } from './types.ts';
 import { activity } from './types.ts';
 import { workflow } from './types/workflow-function.ts';
+import { DEFAULT_WORKFLOW_VERSION } from './versioning.ts';
 
 /** Drain microtasks so fire-and-forget work completes. */
 async function flush(): Promise<void> {
@@ -37,7 +38,12 @@ function createStoredWorkflowState(
     type: workflowType,
     status,
     input: null,
-    versionTuple: { workflowVersion: '1' },
+    // Matches the default an unversioned `workflow({ name })` registration now
+    // records (WFT-5 fixed `registration.ts` to use `DEFAULT_WORKFLOW_VERSION`
+    // instead of the literal `'1'` it previously defaulted to), so a seeded
+    // fixture recovers against an unversioned re-registration without a
+    // spurious version mismatch.
+    versionTuple: { workflowVersion: DEFAULT_WORKFLOW_VERSION },
     createdAt: 1,
     updatedAt: 1,
   };
@@ -1175,7 +1181,7 @@ describe('crash recovery', () => {
     await storage.put(
       KEYS.checkpoint('wf-old-accum'),
       serializeCheckpoint({
-        ...createCheckpoint('wf-old-accum', '1'),
+        ...createCheckpoint('wf-old-accum', DEFAULT_WORKFLOW_VERSION),
         step: 2,
         accumulatedResults: [[0, 'old-result']],
       }),

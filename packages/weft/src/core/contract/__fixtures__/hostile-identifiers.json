@@ -1,0 +1,18 @@
+{
+  "name": "checkout",
+  "workflowVersion": "1.0.0",
+  "description": "Ends the block comment */ then opens a script tag </script> and a template literal ${process.env.SECRET}.",
+  "signals": {
+    "has\"quote": { "inputSchema": { "type": "string" } },
+    "has\nnewline": { "inputSchema": { "type": "string" } },
+    "closes*/comment": { "inputSchema": { "type": "string" } },
+    "opens${template}": { "inputSchema": { "type": "string" } },
+    "__proto__": { "inputSchema": { "type": "string" } }
+  },
+  "updates": {
+    "has\"quote": { "inputSchema": { "type": "string" }, "outputSchema": { "type": "string" } }
+  },
+  "queries": {
+    "__proto__": { "outputSchema": { "type": "string" } }
+  }
+}

@@ -142,3 +142,53 @@ branching inside one registered workflow version. When you intentionally change
 the registered workflow version, the drain-first guidance above still applies:
 resolve active runs or keep compatible code registered until recovery no longer
 needs the old version.
+
+## Revision Identity
+
+`revision` is a different axis from `workflowVersion`. `workflowVersion` is the
+author-declared replay-compatibility boundary this guide is about — the
+version `ctx.getVersion` branches on, and what `weft version:check` compares
+against stored state. `revision` answers a narrower, orthogonal question: "is
+this the exact same workflow definition, byte for byte" — content-derived by
+default, or an explicitly supplied opaque string when a build pipeline already
+has a better identity (a Git SHA, a release tag).
+
+`buildWorkflowContract()` converts an authoring-time workflow definition (name,
+version, schemas, signals, updates, queries, activities, finalizer) into a
+normalized `WorkflowContract` — the same representation `weft codegen` and
+`contractHash()` both consume, so code generation and the hash it emits can
+never silently diverge. `buildWorkflowRevisionManifest()` pairs that contract
+with two computed identities:
+
+- **`contractHash`** — a payload-only identity. It excludes `name`,
+  `workflowVersion`, `description`, and `tags`, and hashes everything a caller
+  may send and expect back: input/output schemas, every signal/update/query,
+  every activity, and the finalizer. Two workflows named differently but with
+  an identical payload contract hash identically; renaming a workflow or
+  editing its description never changes `contractHash`.
+- **`revision`** — the broader identity: `deriveWorkflowRevision()` hashes the
+  _entire_ normalized contract, `name`/`workflowVersion`/`description`/`tags`
+  included, so it changes on a documentation edit even when `contractHash`
+  does not. `buildWorkflowRevisionManifest()` derives `revision` by default;
+  pass `{ revision: 'my-opaque-id' }` to supply one explicitly instead (an
+  empty or oversized supplied revision is rejected).
+
+```ts
+import { buildWorkflowContract, buildWorkflowRevisionManifest } from '@lostgradient/weft';
+
+const contract = buildWorkflowContract({ name: 'checkout', version: '2.1.0' });
+const manifest = await buildWorkflowRevisionManifest(contract);
+
+console.log(manifest.contractHash); // sha256:… — payload-only
+console.log(manifest.revision); // sha256:… — full identity, derived by default
+```
+
+`parseWorkflowRevisionManifest()` validates an untrusted `WorkflowRevisionManifest`
+from `unknown` — persisted storage, a wire payload, an operator-supplied
+fixture. It always recomputes `contractHash` from the (normalized) contract and
+rejects with `'contract-hash-mismatch'` on any disagreement with the supplied
+value; `revision` is validated (bounded, non-empty) but never recomputed — it
+is an opaque label the parser trusts once it is well-formed, not a value it
+can independently verify. See the [`WorkflowContract` and
+`WorkflowRevisionManifest` reference](../reference/types.md#workflowcontract)
+for the full type shapes.

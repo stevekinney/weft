@@ -1,0 +1,77 @@
+[
+  {
+    "description": "workflow input schema differs by property type",
+    "field": "inputSchema",
+    "a": {
+      "name": "checkout",
+      "workflowVersion": "1.0.0",
+      "inputSchema": { "type": "object", "properties": { "amount": { "type": "number" } } }
+    },
+    "b": {
+      "name": "checkout",
+      "workflowVersion": "1.0.0",
+      "inputSchema": { "type": "object", "properties": { "amount": { "type": "string" } } }
+    }
+  },
+  {
+    "description": "workflow output schema differs by required field",
+    "field": "outputSchema",
+    "a": {
+      "name": "checkout",
+      "workflowVersion": "1.0.0",
+      "outputSchema": {
+        "type": "object",
+        "properties": { "id": { "type": "string" }, "total": { "type": "number" } },
+        "required": ["id"]
+      }
+    },
+    "b": {
+      "name": "checkout",
+      "workflowVersion": "1.0.0",
+      "outputSchema": {
+        "type": "object",
+        "properties": { "id": { "type": "string" }, "total": { "type": "number" } },
+        "required": ["id", "total"]
+      }
+    }
+  },
+  {
+    "description": "an activity is present only on one side",
+    "a": {
+      "name": "checkout",
+      "workflowVersion": "1.0.0",
+      "activities": {
+        "charge": {
+          "inputSchema": { "type": "object", "properties": { "amount": { "type": "number" } } }
+        }
+      }
+    },
+    "b": {
+      "name": "checkout",
+      "workflowVersion": "1.0.0",
+      "activities": {}
+    }
+  },
+  {
+    "description": "a signal's input schema differs",
+    "signalField": "cancel",
+    "a": {
+      "name": "checkout",
+      "workflowVersion": "1.0.0",
+      "signals": {
+        "cancel": {
+          "inputSchema": { "type": "object", "properties": { "reason": { "type": "string" } } }
+        }
+      }
+    },
+    "b": {
+      "name": "checkout",
+      "workflowVersion": "1.0.0",
+      "signals": {
+        "cancel": {
+          "inputSchema": { "type": "object", "properties": { "reason": { "type": "number" } } }
+        }
+      }
+    }
+  }
+]

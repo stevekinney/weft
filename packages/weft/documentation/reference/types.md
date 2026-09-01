@@ -16,13 +16,7 @@ type WorkflowId = string;
 
 ```ts partial
 type WorkflowStatus =
-  | 'pending'
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'cancelled'
-  | 'timed-out'
-  | 'suspended';
+  'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'suspended';
 ```
 
 ### `WorkflowState`
@@ -180,9 +174,7 @@ type WorkflowOperation<TResult> = Generator<unknown, TResult, unknown>;
 
 /** Accepted forms for specifying a child workflow in composition operators. */
 type ChildWorkflowTarget<TInput = unknown, TOutput = unknown> =
-  | string
-  | WorkflowFunction<TInput, TOutput>
-  | StepWorkflowFunction<TInput, TOutput>;
+  string | WorkflowFunction<TInput, TOutput> | StepWorkflowFunction<TInput, TOutput>;
 
 interface WorkflowMapOptions {
   concurrency?: number;
@@ -216,8 +208,7 @@ interface WorkflowPipeStage<TInput = unknown, TOutput = unknown> {
 }
 
 type WorkflowPipeStageDefinition<TInput = unknown, TOutput = unknown> =
-  | WorkflowPipeStage<TInput, TOutput>
-  | ChildWorkflowTarget<TInput, TOutput>;
+  WorkflowPipeStage<TInput, TOutput> | ChildWorkflowTarget<TInput, TOutput>;
 ```
 
 Direct `ctx.startChild()` calls can use all three parent-close policies. `ctx.pipe()`,
@@ -282,8 +273,7 @@ interface WorkflowSessionState<T> {
 
 ```ts partial
 type DefinitionSchema<Input = unknown, Output = Input> =
-  | StandardSchemaV1<Input, Output>
-  | StandardJSONSchemaV1<Input, Output>;
+  StandardSchemaV1<Input, Output> | StandardJSONSchemaV1<Input, Output>;
 ```
 
 Schema metadata accepted by workflow and activity definitions. [Standard Schema](https://standardschema.dev/) validation and [Standard JSON Schema](https://standardschema.dev/json-schema) conversion are separate capabilities; a definition can provide either one or both.
@@ -374,6 +364,82 @@ const welcome = workflow({ name: 'typedWelcome' })
     return { greeting: yield* ctx.run('typedFormatGreeting', input) };
   });
 void welcome;
+```
+
+### `WorkflowContract`
+
+Canonical, normalized representation of one workflow's public contract — everything callers may send it and expect back, plus enough identity metadata to say which workflow this is. `buildWorkflowContract()` produces it from an authoring-time workflow definition; `normalizeWorkflowContract()` and `canonicalWorkflowContractJson()` make it deterministic regardless of source key order. It is the single input to both TypeScript code generation and `contractHash()`. See [Revision Identity](../guides/workflow-versioning.md#revision-identity) for how `contractHash` and `revision` differ.
+
+```ts partial
+interface WorkflowContract {
+  name: string;
+  workflowVersion: string;
+  description?: string;
+  tags?: ReadonlyArray<string>;
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  signals?: Readonly<Record<string, WorkflowMessageContract>>;
+  updates?: Readonly<Record<string, WorkflowMessageContract>>;
+  queries?: Readonly<Record<string, WorkflowMessageContract>>;
+  activities?: Readonly<Record<string, WorkflowActivityContract>>;
+  finalizer?: WorkflowActivityContract;
+}
+```
+
+```ts
+import { buildWorkflowContract } from '@lostgradient/weft';
+
+const contract = buildWorkflowContract({ name: 'checkout', version: '2.1.0' });
+console.log(contract.name, contract.workflowVersion);
+```
+
+### `WorkflowMessageContract` and `WorkflowActivityContract`
+
+Normalized JSON Schema pair carried by one signal, update, query, or activity. Absent fields are omitted, never `null` or `{}`.
+
+```ts partial
+interface WorkflowMessageContract {
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+}
+
+interface WorkflowActivityContract {
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+}
+```
+
+### `WorkflowRevisionManifest`
+
+A workflow contract paired with its two identity answers: the payload-only `contractHash` and the broader `revision`. `buildWorkflowRevisionManifest()` builds one from a `WorkflowContract`; `parseWorkflowRevisionManifest()` validates one from untrusted `unknown` input, recomputing and rejecting on a mismatched `contractHash`.
+
+```ts partial
+interface WorkflowRevisionManifest {
+  manifestVersion: 1;
+  name: string;
+  workflowVersion: string;
+  revision: string;
+  contractHash: string;
+  contract: WorkflowContract;
+}
+```
+
+```ts
+import { buildWorkflowContract, buildWorkflowRevisionManifest } from '@lostgradient/weft';
+
+const contract = buildWorkflowContract({ name: 'checkout', version: '2.1.0' });
+const manifest = await buildWorkflowRevisionManifest(contract);
+console.log(manifest.contractHash.startsWith('sha256:'));
+```
+
+### `WORKFLOW_CONTRACT_VERSION` and `WORKFLOW_REVISION_MANIFEST_VERSION`
+
+Domain-separator constants folded into every `contractHash()`/`deriveWorkflowRevision()` digest and checked by `parseWorkflowRevisionManifest()` respectively. Bumping either is how a future normalization or manifest-shape change is guaranteed to produce a different digest, or be rejected outright, rather than silently colliding with or misreading data produced under the old rules.
+
+```ts
+import { WORKFLOW_CONTRACT_VERSION, WORKFLOW_REVISION_MANIFEST_VERSION } from '@lostgradient/weft';
+
+console.log(WORKFLOW_CONTRACT_VERSION, WORKFLOW_REVISION_MANIFEST_VERSION);
 ```
 
 ### `ReviewStatus`
@@ -754,8 +820,7 @@ type WorkflowServicesResolver = (
 
 ```ts partial
 type WorkflowServicesResolution =
-  | { status: 'available'; services: unknown }
-  | { status: 'unavailable'; reason: string };
+  { status: 'available'; services: unknown } | { status: 'unavailable'; reason: string };
 ```
 
 `EngineOptions.resolveWorkflowServices` returns this explicit union when rebuilding `ctx.services` during recovery. `unavailable` fails only the recovered workflow that needed services; it does not abort recovery for sibling workflows.
@@ -1193,8 +1258,7 @@ interface Storage extends Disposable {
 
 ```ts partial
 type BatchOperation =
-  | { type: 'put'; key: string; value: Uint8Array }
-  | { type: 'delete'; key: string };
+  { type: 'put'; key: string; value: Uint8Array } | { type: 'delete'; key: string };
 ```
 
 ### `ScanOptions`

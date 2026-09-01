@@ -573,6 +573,40 @@ export type { ActivityHandlerLookup } from './workers/activity-worker-entry';
 export { WorkerPool } from './workers/pool';
 export type { WorkerPoolOptions } from './workers/pool';
 
+export {
+  MAX_CONTRACT_IDENTIFIER_BYTES,
+  MAX_CONTRACT_MESSAGE_COUNT,
+  MAX_CONTRACT_SCHEMA_DEPTH,
+  MAX_NORMALIZED_CONTRACT_BYTES,
+  WORKFLOW_CONTRACT_DIGEST_ALGORITHM,
+  WORKFLOW_CONTRACT_VERSION,
+  WORKFLOW_REVISION_MANIFEST_VERSION,
+  WorkflowContractConversionError,
+  activityContractHash,
+  buildWorkflowContract,
+  buildWorkflowRevisionManifest,
+  canonicalWorkflowContractJson,
+  contractHash,
+  deriveWorkflowRevision,
+  digestCanonicalWorkflowContract,
+  normalizeWorkflowContract,
+  parseWorkflowRevisionManifest,
+} from './core/contract/index.ts';
+export type {
+  BuildWorkflowRevisionManifestOptions,
+  WorkflowActivityContract,
+  WorkflowContract,
+  WorkflowContractActivitySource,
+  WorkflowContractMessageSource,
+  WorkflowContractSource,
+  WorkflowMessageContract,
+  WorkflowRevisionManifest,
+  WorkflowRevisionManifestParseResult,
+  WorkflowRevisionManifestParseSuccess,
+  WorkflowRevisionManifestRejectionReason,
+  WorkflowRevisionManifestValidationFailure,
+} from './core/contract/index.ts';
+
 export { HeartbeatManager } from './worker/heartbeat';
 export { RemoteWorker } from './worker/index';
 export { LongPollWorker } from './worker/long-poll';

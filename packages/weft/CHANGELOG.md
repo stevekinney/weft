@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `WorkflowContract`, `contractHash()`, and `WorkflowRevisionManifest` as the canonical normalized-contract vocabulary (WFT-5): `buildWorkflowContract()` converts an authoring-time workflow definition to the same normalized representation `weft codegen` emits types from; `normalizeWorkflowContract()`/`canonicalWorkflowContractJson()` make that representation deterministic regardless of source key order; `contractHash()`/`activityContractHash()` compute a payload-only content identity (excludes `name`/`workflowVersion`/`description`/`tags`); `deriveWorkflowRevision()` computes the broader full-identity `revision`; `buildWorkflowRevisionManifest()`/`parseWorkflowRevisionManifest()` build and validate the typed `WorkflowRevisionManifest` from trusted or untrusted (`unknown`) input, respectively — the parser always recomputes and compares `contractHash`, rejecting a mismatch. See the [Revision Identity](documentation/guides/workflow-versioning.md#revision-identity) guide.
+
+### Changed
+
+- `buildWorkerManifestFromRegistry()`'s `contractHash`/`workflowRevision` (per workflow) and `contractHash` (per activity) now route through the same canonical `contractHash()`/`deriveWorkflowRevision()`/`activityContractHash()` functions above, instead of the ad hoc hashing `registry-contract-builder.ts` previously rolled itself. Digest **strings** for an otherwise-unchanged registration differ from prior 0.23.x output because the new formula folds in a `contractVersion` domain separator the old one never had — this is a value change, not a shape change (`WorkerManifest`/`WorkerWorkflowContract`/`WorkerActivityContract`'s TypeScript types and wire format are untouched). `contractHash` also now depends on which activities the caller's `options.workflows[type]` names (previously independent of that list), which is the intended effect of a payload identity that answers "what can a caller do with this workflow" rather than only "what does the workflow's own input/output look like." See [the migration guide](documentation/guides/migration.md#unreleased) if you pin literal digest strings in your own tests or fixtures.
+
+### Fixed
+
+- `engine.register()` now defaults an unversioned workflow's stored `version` to `DEFAULT_WORKFLOW_VERSION` (`'0.0.0'`) instead of the literal string `'1'`. This aligns registration with what `diagnostics/version-check.ts`, `worker/manifest/internal-realm.ts`, and `worker/options.ts` already assumed the unversioned default was — those three already fell back to `DEFAULT_WORKFLOW_VERSION` themselves, so this was a real, pre-existing inconsistency (registration alone used the stale literal). Recovering a workflow that was started while unversioned under an older release (which persisted `version: '1'`) against a still-unversioned re-registration now compares stored `'1'` against registered `'0.0.0'` and is rejected as a version mismatch; see [the migration guide](documentation/guides/migration.md#unreleased).
+
 ## [0.23.1] - 2026-09-01
 
 ### Fixed
