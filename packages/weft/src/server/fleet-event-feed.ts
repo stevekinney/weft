@@ -8,7 +8,10 @@ import {
   type ConditionalBatchCondition,
   type Storage,
 } from '../storage/interface.ts';
-import { createDurableSubscription } from './replay-live-feed-internals.ts';
+import {
+  createDurableSubscription,
+  createSerialOperationQueue,
+} from './replay-live-feed-internals.ts';
 import {
   createReplayLiveFeed,
   decodeCursor,
@@ -66,10 +69,7 @@ const REPLAY_PAGE_SIZE = 128;
 
 /**
  * Build a `FleetEventFeed` backed by the given `Storage` — typically
- * `engine.storage`. Pass the result as `HandlerOptions.fleetEventFeed` to
- * drive `/v1/events/sse` through `handleRequest()` directly, without
- * `serve()`. Call once per storage instance and share the returned feed
- * across every transport that needs it.
+ * `engine.storage` and share it across every fleet transport.
  * @example
  * ```ts
  * import { MemoryStorage } from '@lostgradient/weft';
@@ -84,35 +84,27 @@ export function createFleetEventFeed(
   if (!storage.capabilities().conditionalBatch) {
     throw new Error('Fleet event feeds require storage with conditional batch support.');
   }
-  const liveBufferSize = feedOptions?.liveBufferSize ?? 1000;
   const livePollIntervalMs = feedOptions?.livePollIntervalMs ?? 100;
-  if (!Number.isSafeInteger(liveBufferSize) || liveBufferSize < 1) {
-    throw new RangeError('Fleet event live buffer size must be positive.');
-  }
   if (!Number.isSafeInteger(livePollIntervalMs) || livePollIntervalMs < 1) {
     throw new RangeError('Fleet event live poll interval must be positive.');
   }
   const listeners = new Set<(envelope: FleetEventEnvelope) => void>();
   const disposalController = new AbortController();
+  const enqueueAppend = createSerialOperationQueue();
 
   const backend: ReplayLiveFeedBackend<FleetEventEnvelope> = {
     replay: replayPersistedFleetEvents,
     snapshotTailSequence,
     subscribeLive,
   };
-  const replayLiveFeed: ReplayLiveFeed<FleetEventEnvelope> = createReplayLiveFeed(
-    backend,
-    feedOptions,
-  );
+  const replayLiveFeed: ReplayLiveFeed<FleetEventEnvelope> = createReplayLiveFeed(backend);
 
   async function append(
     event: FleetEventInput,
     options?: FleetEventAppendOptions,
   ): Promise<FleetEventEnvelope> {
-    const appended = await appendInternal(
-      event,
-      async () => options?.conditions ?? [],
-      options?.operations ?? [],
+    const appended = await enqueueAppend(() =>
+      appendInternal(event, async () => options?.conditions ?? [], options?.operations ?? []),
     );
     if (appended === null)
       throw new Error('Fleet event append conditions unexpectedly disappeared.');
@@ -122,19 +114,15 @@ export function createFleetEventFeed(
   async function appendWorkflowEventIfPresent(
     event: FleetWorkflowEventInput,
   ): Promise<FleetEventEnvelope | null> {
-    return appendInternal(
-      event,
-      async () => {
+    return enqueueAppend(() =>
+      appendInternal(event, async () => {
         const workflowValue = await storage.get(KEYS.workflow(event.workflowId));
         if (workflowValue === null) return null;
         return [{ key: KEYS.workflow(event.workflowId), expectedValue: workflowValue }];
-      },
-      [],
-      25,
+      }, []),
     );
   }
 
-  function appendInternal(event: FleetEventInput): Promise<FleetEventEnvelope>;
   function appendInternal(
     event: FleetEventInput,
     loadConditions: () => Promise<readonly ConditionalBatchCondition[] | null>,

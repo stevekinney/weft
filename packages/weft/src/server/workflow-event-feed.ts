@@ -264,7 +264,7 @@ export type FleetEventGapEnvelope = {
  * const options: FleetEventFeedOptions = { livePollIntervalMs: 100 };
  * ```
  */
-export type FleetEventFeedOptions = WorkflowEventFeedOptions & {
+export type FleetEventFeedOptions = {
   /** How often a subscriber checks durable storage for commits from another process. */
   readonly livePollIntervalMs?: number;
 };

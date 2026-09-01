@@ -269,6 +269,20 @@ describe('createFleetEventFeed', () => {
     second.dispose();
   });
 
+  it('serializes large same-process append bursts before durable allocation', async () => {
+    const feed = createFleetEventFeed(new MemoryStorage());
+    const events = await Promise.all(
+      Array.from({ length: 100 }, (_, index) =>
+        feed.append({ kind: 'worker:connected', emittedAtMs: index, payload: { index } }),
+      ),
+    );
+
+    expect(events.map((event) => event.sequence)).toEqual(
+      Array.from({ length: 100 }, (_, index) => index),
+    );
+    feed.dispose();
+  });
+
   it('retries when another process advances the tail during authority validation', async () => {
     const storage = new AdvancingTailDuringScanStorage();
     await storage.put(
@@ -474,7 +488,7 @@ describe('createFleetEventFeed', () => {
   });
 
   it('recovers appends during replay from durable storage without live-buffer overflow', async () => {
-    const feed = createFleetEventFeed(new MemoryStorage(), { liveBufferSize: 1 });
+    const feed = createFleetEventFeed(new MemoryStorage());
     for (let index = 0; index < 129; index += 1) {
       await feed.append({ kind: 'worker:connected', emittedAtMs: index, payload: { index } });
     }
@@ -665,9 +679,6 @@ describe('createFleetEventFeed', () => {
   });
 
   it('validates feed and retention bounds', async () => {
-    expect(() => createFleetEventFeed(new MemoryStorage(), { liveBufferSize: 0 })).toThrow(
-      'live buffer size must be positive',
-    );
     expect(() => createFleetEventFeed(new MemoryStorage(), { livePollIntervalMs: 0 })).toThrow(
       'live poll interval must be positive',
     );

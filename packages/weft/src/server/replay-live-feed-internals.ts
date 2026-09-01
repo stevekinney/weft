@@ -14,6 +14,18 @@ import type {
   SequencedEventEnvelope,
 } from './workflow-event-feed.ts';
 
+export function createSerialOperationQueue(): <T>(operation: () => Promise<T>) => Promise<T> {
+  let queue = Promise.resolve();
+  return <T>(operation: () => Promise<T>): Promise<T> => {
+    const result = queue.then(operation, operation);
+    queue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
+}
+
 type DurableSubscriptionOptions = {
   readonly pollIntervalMs: number;
   readonly lifecycleSignal?: AbortSignal;
