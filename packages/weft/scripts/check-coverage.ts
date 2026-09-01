@@ -672,9 +672,8 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/server/workflow-event-feed.ts',
       {
         reason:
-          'Bun maps the live-drain generator loop closing lines as uncovered because every tested exit returns from inside the intentional loop.',
+          'Bun maps the returned subscribe reference and no-op dispose body inconsistently across platforms even though both are exercised by the feed tests.',
         lines: new Set([384, 387]),
-        requireUncoveredLines: true,
       },
     ],
     [
