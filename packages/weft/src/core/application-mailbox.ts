@@ -162,9 +162,16 @@ export class ApplicationMailbox {
       input.payloadDigest,
     ]);
     for (let attempt = 1; attempt <= MAX_MAILBOX_TRANSITION_ATTEMPTS; attempt += 1) {
+      // The bytes this admission expects to find under the idempotency key:
+      // `null` when the key is unused, or the stale binding's exact bytes when
+      // retention retired the command it named. Requiring absence in the latter
+      // case would make the key permanently unusable — the compare-and-swap
+      // could never succeed against a binding nothing will ever delete.
+      let expectedBinding: Uint8Array | null = null;
       if (input.idempotencyKey !== undefined) {
-        const existing = await this.#resolveIdempotency(input.idempotencyKey, identityDigest);
-        if (existing !== null) return existing;
+        const resolved = await this.#resolveIdempotency(input.idempotencyKey, identityDigest);
+        if (resolved.admission !== null) return resolved.admission;
+        expectedBinding = resolved.staleBindingBytes;
       }
       const header = await loadMailboxHeader(
         runtime.storage,
@@ -200,7 +207,12 @@ export class ApplicationMailbox {
             { key: runtime.keys.header, expectedValue: header.bytes },
             ...(input.idempotencyKey === undefined
               ? []
-              : [{ key: runtime.keys.idempotency(input.idempotencyKey), expectedValue: null }]),
+              : [
+                  {
+                    key: runtime.keys.idempotency(input.idempotencyKey),
+                    expectedValue: expectedBinding,
+                  },
+                ]),
           ],
           extraOperations: [
             headerOperation(runtime.keys, {
@@ -231,30 +243,44 @@ export class ApplicationMailbox {
     throw new ApplicationMailboxContentionError('admit', null);
   }
 
+  /**
+   * Resolve an idempotency key against durable state.
+   *
+   * Returns the admission to hand straight back when the key already names a
+   * live command, or the exact bytes a stale binding holds so the caller can
+   * overwrite it under a compare-and-swap.
+   */
   async #resolveIdempotency(
     idempotencyKey: string,
     identityDigest: string,
-  ): Promise<ApplicationCommandAdmission | null> {
+  ): Promise<{
+    admission: ApplicationCommandAdmission | null;
+    staleBindingBytes: Uint8Array | null;
+  }> {
     const binding = await loadIdempotencyBinding(
       this.#runtime.storage,
       this.#runtime.keys,
       idempotencyKey,
     );
-    if (binding === null) return null;
+    if (binding === null) return { admission: null, staleBindingBytes: null };
     const loaded = await loadCommand(
       this.#runtime.storage,
       this.#runtime.keys,
       binding.record.commandId,
     );
-    // A binding whose command was retired by retention is stale, not a
+    // A binding whose command was retired by retention is spent, not a
     // conflict: the receipt it points at no longer exists, so a retry is
-    // admitted afresh rather than answered with a receipt we cannot produce.
-    if (loaded === null) return null;
+    // admitted afresh over the stale binding rather than answered with a
+    // receipt this mailbox cannot produce.
+    if (loaded === null) return { admission: null, staleBindingBytes: binding.bytes };
     const receipt = toApplicationCommandReceipt(loaded.record);
     if (binding.record.identityDigest !== identityDigest) {
-      return { status: 'conflict', receipt, reason: 'idempotency-identity-mismatch' };
+      return {
+        admission: { status: 'conflict', receipt, reason: 'idempotency-identity-mismatch' },
+        staleBindingBytes: null,
+      };
     }
-    return { status: 'duplicate', receipt };
+    return { admission: { status: 'duplicate', receipt }, staleBindingBytes: null };
   }
 
   /** Read one command's immutable receipt, or `null` when it is unknown or retired. */

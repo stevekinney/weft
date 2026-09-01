@@ -37,13 +37,21 @@ export class PayloadDigestError extends WeftError<'PayloadDigestError'> {
   }
 }
 
+/**
+ * Total order over two encodings: shorter first, then byte by byte.
+ *
+ * Ordering by length first is not arbitrary. MessagePack is self-delimiting, so
+ * one encoding is never a strict prefix of another and a plain lexicographic
+ * walk would leave its length tie-break permanently unreachable. Comparing
+ * lengths up front keeps the order total and every branch real.
+ */
 function compareBytes(left: Uint8Array, right: Uint8Array): number {
-  const shared = Math.min(left.length, right.length);
-  for (let index = 0; index < shared; index += 1) {
+  if (left.length !== right.length) return left.length - right.length;
+  for (let index = 0; index < left.length; index += 1) {
     const difference = (left[index] ?? 0) - (right[index] ?? 0);
     if (difference !== 0) return difference;
   }
-  return left.length - right.length;
+  return 0;
 }
 
 function isPlainObject(value: object): boolean {

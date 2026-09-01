@@ -214,25 +214,24 @@ export async function requestCancellation(
   for (let attempt = 1; attempt <= MAX_MAILBOX_TRANSITION_ATTEMPTS; attempt += 1) {
     const loaded = await loadCommand(runtime.storage, runtime.keys, options.commandId);
     if (loaded === null) return { status: 'unknown' };
-    if (isTerminalRecord(loaded.record)) {
-      return { status: 'already-terminal', receipt: toApplicationCommandReceipt(loaded.record) };
-    }
-    if (loaded.record.state === 'cancellation-requested') {
-      // Idempotent: the request already stands and the same attempt still owns
-      // cleanup, so abort again (a no-op when already aborted) and report the
-      // same outcome the first call did.
-      abortLocalClaimant(runtime, loaded.record.attemptToken);
-      return {
-        status: 'requested',
-        receipt: toApplicationCommandReceipt(loaded.record),
-        cleanupPending: true,
-      };
-    }
     const transition = requestCommandCancellation(loaded.record, {
       now: options.now,
       reason: options.reason,
     });
     if (!transition.ok) {
+      // The transition is the single decision point, so both illegal edges are
+      // classified here rather than pre-checked twice. `not-leased` against a
+      // record already in `cancellation-requested` is the idempotent repeat: the
+      // request stands and the same attempt still owns cleanup, so re-abort (a
+      // no-op when already aborted) and report what the first call reported.
+      if (transition.reason === 'not-leased' && isApplicationCommandLeased(loaded.record)) {
+        abortLocalClaimant(runtime, loaded.record.attemptToken);
+        return {
+          status: 'requested',
+          receipt: toApplicationCommandReceipt(loaded.record),
+          cleanupPending: true,
+        };
+      }
       return { status: 'already-terminal', receipt: toApplicationCommandReceipt(loaded.record) };
     }
     const committed = await commitCommandTransition(runtime, {
