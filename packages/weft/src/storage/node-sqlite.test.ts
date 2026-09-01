@@ -185,6 +185,16 @@ describe('NodeSQLiteStorage', () => {
     ).toThrow(MISSING_BETTER_SQLITE_ERROR);
   });
 
+  it('throws a clear runtime error when the better-sqlite3 native binding is absent', () => {
+    expect(() =>
+      loadBetterSqlite3ForTest(() => {
+        throw new Error(
+          'Could not locate the bindings file. Tried: /node_modules/better-sqlite3/build/better_sqlite3.node',
+        );
+      }),
+    ).toThrow(MISSING_BETTER_SQLITE_ERROR);
+  });
+
   if (IS_BUN) {
     it('throws a clear runtime error when better-sqlite3 is unavailable', () => {
       expect(() => new NodeSQLiteStorage(':memory:')).toThrow(MISSING_BETTER_SQLITE_ERROR);

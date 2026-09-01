@@ -2521,8 +2521,14 @@ describe('WorkerExecutionStrategy', () => {
       const worker = firstWorker();
       expect(worker.postMessage).not.toHaveBeenCalled();
 
+      let resolveRunSent!: () => void;
+      const runSent = new Promise<void>((resolve) => {
+        resolveRunSent = resolve;
+      });
+      worker.postMessage.mockImplementation(() => resolveRunSent());
+
       dispatchReady(worker);
-      await sleepForTesting(10);
+      await runSent;
 
       expect(worker.postMessage).toHaveBeenCalledTimes(1);
       expect(worker.postMessage.mock.calls[0]![0]).toMatchObject({

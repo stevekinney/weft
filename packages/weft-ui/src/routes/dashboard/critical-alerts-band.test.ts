@@ -74,10 +74,7 @@ describe('CriticalAlertsBand', () => {
 
     const { queryByLabelText } = render(CriticalAlertsBandHarness, { props: { client } });
 
-    await waitFor(
-      () => expect(queryByLabelText('Loading alerts')).not.toBeNull(),
-      WAIT_FOR_TWO_QUERIES,
-    );
+    expect(queryByLabelText('Loading alerts')).not.toBeNull();
 
     resolveReviews([]);
 
