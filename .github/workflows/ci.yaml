@@ -18,7 +18,7 @@ jobs:
       - run: bunx turbo run lint --filter=@lostgradient/weft
         env:
           TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
-          TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
+          TURBO_TEAM: kinney
   typecheck:
     runs-on: ubuntu-latest
     steps:
@@ -30,7 +30,7 @@ jobs:
       - run: bunx turbo run typecheck --filter=@lostgradient/weft
         env:
           TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
-          TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
+          TURBO_TEAM: kinney
   test:
     runs-on: ubuntu-latest
     defaults:
@@ -56,16 +56,17 @@ jobs:
   # while this job enforces the LCOV-backed 100 percent adjusted threshold.
   coverage:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/weft
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile --linker=isolated
-      - run: bunx turbo run test:coverage --filter=@lostgradient/weft
-        env:
-          TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
-          TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
+        working-directory: .
+      - run: bun run test:coverage
   # Exercises PostgresStorage against a REAL Postgres over the pg wire protocol
   # (TCP, BYTEA marshalling, command-tag rowCounts, SERIALIZABLE conflict retries).
   # The main `test` job runs the hermetic PGlite-backed conformance; this job lights
@@ -145,7 +146,7 @@ jobs:
       - run: bunx turbo run build --filter=@lostgradient/weft
         env:
           TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
-          TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
+          TURBO_TEAM: kinney
   order-processing-example:
     runs-on: ubuntu-latest
     defaults:
@@ -213,7 +214,7 @@ jobs:
       - run: bunx turbo run lint --filter=@lostgradient/weft-ui
         env:
           TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
-          TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
+          TURBO_TEAM: kinney
   ui-typecheck:
     runs-on: ubuntu-latest
     steps:
@@ -225,7 +226,7 @@ jobs:
       - run: bunx turbo run typecheck --filter=@lostgradient/weft-ui
         env:
           TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
-          TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
+          TURBO_TEAM: kinney
   ui-format-check:
     runs-on: ubuntu-latest
     steps:
@@ -237,7 +238,7 @@ jobs:
       - run: bunx turbo run format:check --filter=@lostgradient/weft-ui
         env:
           TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
-          TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
+          TURBO_TEAM: kinney
   ui-test:
     runs-on: ubuntu-latest
     defaults:
@@ -269,7 +270,7 @@ jobs:
       - run: bunx turbo run build --filter=@lostgradient/weft-ui
         env:
           TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
-          TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
+          TURBO_TEAM: kinney
   # Deterministic adjusted-coverage gate (packages/weft-ui/docs/implementation-plan.md
   # §11, scripts/check-coverage.ts): runs its own `bun run test:coverage` pass and
   # fails if that run fails/crashes or if any area's line/function coverage
