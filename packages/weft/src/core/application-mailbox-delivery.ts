@@ -136,15 +136,17 @@ async function resolveDeliverableHead(
     await discardOrphanedEntry(runtime, head);
     return { status: 'retry' };
   }
-  if (now < loaded.record.availableAt) {
-    return { status: 'held', availableAt: loaded.record.availableAt };
-  }
+  // The deadline outranks availability, and the order matters. A head in retry
+  // backoff whose deadline already passed can never come due, so checking
+  // availability first would report `held` forever and — under
+  // `backgroundTasks: 'manual'`, where nothing else runs — block the mailbox on
+  // a command no maintenance pass was scheduled to clear.
   if (now >= loaded.record.absoluteDeadlineAt) {
-    // Past its deadline and so no longer deliverable. Terminalize it here rather
-    // than waiting for maintenance, or a consumer polling `claim()` would spin
-    // on a head that can never be handed out.
     await terminalizeExpiredHead(runtime, loaded, now);
     return { status: 'retry' };
+  }
+  if (now < loaded.record.availableAt) {
+    return { status: 'held', availableAt: loaded.record.availableAt };
   }
   return { status: 'claimable', loaded };
 }

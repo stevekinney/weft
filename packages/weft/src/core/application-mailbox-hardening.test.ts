@@ -47,6 +47,36 @@ describe('claiming past the absolute deadline', () => {
     mailbox.dispose();
   });
 
+  it('dead-letters a backing-off head past its deadline instead of holding forever', async () => {
+    const { mailbox, clock } = createMailboxFixture({
+      commandTimeoutMs: 5_000,
+      retryBackoffMs: 100_000,
+      maxAttempts: 5,
+    });
+    const commandId = await admitOne(mailbox);
+    const claim = await claimOne(mailbox);
+    // Schedule a retry whose backoff lands past the absolute deadline.
+    await mailbox.reject({
+      commandId,
+      attemptToken: claim.attemptToken,
+      failure: { reason: 'application' },
+      retry: true,
+    });
+    const scheduled = await mailbox.receipt(commandId);
+    expect(scheduled?.state).toBe('accepted');
+
+    clock.advance(5_000);
+    // Checking availability before the deadline would report `held` forever: the
+    // head can never come due, and `claim()` would never terminalize it either,
+    // so a manual-maintenance host would block on it permanently.
+    const result = await mailbox.claim();
+    expect(result.status).toBe('empty');
+    const receipt = await mailbox.receipt(commandId);
+    expect(receipt?.state).toBe('dead-lettered');
+    expect(receipt?.failure?.reason).toBe('deadline-exceeded');
+    mailbox.dispose();
+  });
+
   it('still leases a command that is inside its deadline', async () => {
     const { mailbox, clock } = createMailboxFixture({ commandTimeoutMs: 1_000 });
     await admitOne(mailbox);
