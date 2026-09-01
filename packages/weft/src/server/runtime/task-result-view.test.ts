@@ -229,7 +229,9 @@ describe('getTaskResultViewImpl', () => {
       await options.engine.storage.put(taskLedgerKey('op-1'), encodeRemoteTaskRecord(record));
 
       const view = await getTaskResultViewImpl(options.engine.storage, 'op-1');
-      const adoptionToken = await sha256Hex(record.resultDigest);
+      const adoptionToken = await sha256Hex(
+        JSON.stringify({ createdAt: record.createdAt, resultDigest: record.resultDigest }),
+      );
 
       expect(view).toEqual({
         status: 'terminal',
@@ -318,19 +320,30 @@ describe('adoptTaskResultImpl', () => {
     },
   );
 
-  it('rejects a stale adoption token after an operation ID is reused', async () => {
+  it('rejects a stale queued-cancellation adoption token after an operation ID is reused', async () => {
     const options = minimalServeOptions();
-    const first = cancelledFixture({ resultDigest: 'cancelled:op-1:first-attempt-token' });
+    const first = cancelledFixture({
+      createdAt: 1_000,
+      resultDigest: 'cancelled:op-1:cancellation-1',
+    });
     await options.engine.storage.put(taskLedgerKey('op-1'), encodeRemoteTaskRecord(first));
-    const staleToken = await sha256Hex(first.resultDigest);
+    const firstView = await getTaskResultViewImpl(options.engine.storage, 'op-1');
+    if (firstView?.status !== 'terminal' || firstView.disposition === 'resolved') {
+      throw new Error('expected a non-resolved terminal view');
+    }
     await options.engine.storage.put(
       taskLedgerKey('op-1'),
       encodeRemoteTaskRecord(
-        cancelledFixture({ resultDigest: 'cancelled:op-1:replacement-attempt-token' }),
+        cancelledFixture({
+          createdAt: 1_000,
+          resultDigest: 'cancelled:op-1:cancellation-2',
+        }),
       ),
     );
 
-    expect(await adoptTaskResultImpl(options.engine.storage, 'op-1', staleToken)).toBe(false);
+    expect(await adoptTaskResultImpl(options.engine.storage, 'op-1', firstView.adoptionToken)).toBe(
+      false,
+    );
     expect(await getTaskResultViewImpl(options.engine.storage, 'op-1')).toMatchObject({
       adopted: false,
     });

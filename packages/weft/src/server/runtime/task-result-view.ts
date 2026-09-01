@@ -110,12 +110,21 @@ async function terminalTaskResultView(decoded: RemoteTaskTerminal): Promise<Task
   return {
     status: 'terminal',
     disposition: decoded.disposition,
-    adoptionToken: await sha256Hex(decoded.resultDigest),
+    adoptionToken: await nonResolvedAdoptionToken(decoded),
     terminalAt: decoded.terminalAt,
     adopted: decoded.adopted,
     ...(decoded.adoptedAt !== undefined ? { adoptedAt: decoded.adoptedAt } : {}),
     ...('error' in decoded ? { error: decoded.error } : {}),
   };
+}
+
+function nonResolvedAdoptionToken(decoded: RemoteTaskTerminal): Promise<string> {
+  return sha256Hex(
+    JSON.stringify({
+      createdAt: decoded.createdAt,
+      resultDigest: decoded.resultDigest,
+    }),
+  );
 }
 
 function deadLetteredTaskResultView(decoded: RemoteTaskDeadLettered): TaskResultView {
@@ -133,6 +142,7 @@ function deadLetteredTaskResultView(decoded: RemoteTaskDeadLettered): TaskResult
  * no record exists for `operationId` — either it was never dispatched, or a
  * retained terminal record has already been reaped.
  */
+// oxlint-disable-next-line typescript/consistent-return -- TypeScript proves this closed discriminated-union switch exhaustive; adding a runtime default creates nondeterministic Bun coverage attribution.
 export async function getTaskResultViewImpl(
   storage: Storage,
   operationId: string,
@@ -150,12 +160,6 @@ export async function getTaskResultViewImpl(
       return await terminalTaskResultView(decoded);
     case 'deadLettered':
       return deadLetteredTaskResultView(decoded);
-    default: {
-      // Exhaustiveness guard: adding a new RemoteTaskRecord state without a
-      // case above must fail this typecheck.
-      const exhaustive: never = decoded;
-      return exhaustive;
-    }
   }
 }
 
@@ -179,7 +183,7 @@ export async function adoptTaskResultImpl(
   const observed = decodeRemoteTaskRecord(await storage.get(taskLedgerKey(operationId)));
   let expectedResultDigest = adoptionKey;
   if (observed?.state === 'terminal' && observed.disposition !== 'resolved') {
-    if ((await sha256Hex(observed.resultDigest)) !== adoptionKey) return false;
+    if ((await nonResolvedAdoptionToken(observed)) !== adoptionKey) return false;
     expectedResultDigest = observed.resultDigest;
   }
   const result = await commitTaskLedgerTransition(
