@@ -21,7 +21,7 @@ function workflowJob(workflow: string, name: string): string {
 
 function workflowJobNames(workflow: string): string[] {
   const jobs = workflow.slice(workflow.indexOf('\njobs:\n'));
-  return [...jobs.matchAll(/^  ([a-z][a-z0-9-]*):$/gm)].map((match) => match[1] as string);
+  return [...jobs.matchAll(/^  ([a-z][a-z0-9-]*):$/gm)].map((match) => match[1]);
 }
 
 describe('coverage workflow gates', () => {
@@ -45,6 +45,20 @@ describe('coverage workflow gates', () => {
     expect(workflow).toContain('merge_group:');
     expect(workflowJob(workflow, 'coverage')).toContain('bun run test:coverage');
     expect(workflowJob(workflow, 'test')).toContain('bun test --bail');
+  });
+
+  it('serializes JavaScriptCore marking for every full-suite CI and release gate', async () => {
+    const ciWorkflow = await readWorkflow('ci.yaml');
+    const releaseWorkflow = await readWorkflow('release.yaml');
+
+    for (const job of [
+      workflowJob(ciWorkflow, 'test'),
+      workflowJob(ciWorkflow, 'coverage'),
+      workflowJob(releaseWorkflow, 'validate'),
+      workflowJob(releaseWorkflow, 'coverage'),
+    ]) {
+      expect(job).toContain("BUN_JSC_numberOfGCMarkers: '1'");
+    }
   });
 
   it('uses remote caching for deterministic jobs only', async () => {
