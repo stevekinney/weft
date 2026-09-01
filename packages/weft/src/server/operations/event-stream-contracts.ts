@@ -2,11 +2,10 @@ import { z } from 'zod';
 
 import type { FleetEventEnvelope, FleetEventGapEnvelope } from '../fleet-event-feed.ts';
 import type { ParameterizedAccessHint } from '../operation-catalog/types.ts';
-import { EVENTS_READ_EVENT_TYPES } from '../runtime/client-visible-events.ts';
 import type { EventEnvelope } from '../workflow-event-feed.ts';
 
 const committedFleetEventEnvelopeSchema = z.object({
-  kind: z.enum(EVENTS_READ_EVENT_TYPES),
+  kind: z.string(),
   workflowId: z.string().optional(),
   sequence: z.number(),
   cursor: z.string(),

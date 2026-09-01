@@ -150,6 +150,30 @@ describe('weft.events.sse', () => {
     );
   });
 
+  it('delivers retention gaps before applying workflow and kind filters', async () => {
+    const feed = new RecordingFleetEventFeed([
+      envelope(4, {
+        kind: 'fleet:gap',
+        workflowId: undefined,
+        payload: { requestedCursor: '0', firstRetainedSequence: 5 },
+      }),
+      envelope(5, { workflowId: 'wf-a', kind: 'workflow:completed' }),
+    ]);
+    const engine = new Engine({ storage: new MemoryStorage() });
+
+    const response = await handleRequest(
+      request('/v1/events/sse?workflowId=wf-a&kind=workflow:completed'),
+      engine,
+      handlerOptions(feed),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain('event: fleet:gap');
+    expect(body).toContain('event: workflow:completed');
+    expect(feed.subscribeCalls[0]?.delivered).toEqual([4, 5]);
+  });
+
   it('streams non-closable fleet iterables through the REST binding shaper', async () => {
     const response = fleetEventsSseRestBinding.shapeSuccess?.(
       (async function* replay() {

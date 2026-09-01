@@ -75,6 +75,7 @@ export const fleetEventsSubscriptionOperation = defineOperation<
           signal: controller.signal,
           replayLimit: MAX_FLEET_SUBSCRIPTION_REPLAY_EVENTS,
           filterEnvelope: (envelope) => matchesFleetEventFilter(envelope, input),
+          countReplayEnvelope: (envelope) => envelope.kind !== 'fleet:gap',
           onReplayComplete,
           createReplayLimitError: (count, limit) => fleetReplayLimitFault(count, limit),
         }),
@@ -102,6 +103,7 @@ function matchesFleetEventFilter(
   envelope: FleetEventEnvelope,
   input: FleetEventsSubscriptionInput,
 ): boolean {
+  if (envelope.kind === 'fleet:gap') return true;
   if (!matchesWorkflowIdFilter(envelope, input.workflowId)) return false;
   if (!matchesKindFilter(envelope, input.kind)) return false;
   return true;

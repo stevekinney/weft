@@ -65,7 +65,7 @@ export class PersistedDataCorruptError extends WeftError<'PersistedDataCorruptEr
 }
 
 /**
- * Bumped to `1` by the workflow-builder refactor (Phase 3). Pre-MVP databases
+ * Bumped to `2` by the durable fleet-event feed hardening. Pre-MVP databases
  * have no version key recorded — `assertCompatiblePersistedDataVersion` treats
  * the absence of the key on an otherwise non-empty database as
  * `pre-versioned`, which is incompatible. Fresh databases get the current

@@ -100,6 +100,53 @@ class ContendedConditionalBatchStorage extends MemoryStorage {
   }
 }
 
+class AdvancingTailDuringScanStorage extends MemoryStorage {
+  advanceOnNextReverseScan = false;
+
+  override async *scan(prefix: string, options?: ScanOptions): AsyncIterable<[string, Uint8Array]> {
+    if (prefix === KEYS.fleetEventPrefix() && options?.reverse && this.advanceOnNextReverseScan) {
+      this.advanceOnNextReverseScan = false;
+      const envelope = {
+        kind: 'worker:connected',
+        sequence: 1,
+        cursor: '1',
+        emittedAtMs: 1,
+        payload: { workerId: 'racing-worker' },
+      };
+      await super.conditionalBatch(
+        [{ key: KEYS.fleetEventTail(), expectedValue: encode({ sequence: 0 }) }],
+        [
+          { type: 'put', key: KEYS.fleetEvent(1), value: encode(envelope) },
+          { type: 'put', key: KEYS.fleetEventTail(), value: encode({ sequence: 1 }) },
+        ],
+      );
+    }
+    yield* super.scan(prefix, options);
+  }
+}
+
+class RetainingDuringReplayStorage extends MemoryStorage {
+  retainOnNextForwardScan = false;
+
+  override async *scan(prefix: string, options?: ScanOptions): AsyncIterable<[string, Uint8Array]> {
+    if (prefix === KEYS.fleetEventPrefix() && !options?.reverse && this.retainOnNextForwardScan) {
+      this.retainOnNextForwardScan = false;
+      await super.conditionalBatch(
+        [{ key: KEYS.fleetEventWatermark(), expectedValue: null }],
+        [
+          { type: 'delete', key: KEYS.fleetEvent(0) },
+          {
+            type: 'put',
+            key: KEYS.fleetEventWatermark(),
+            value: encode({ firstRetainedSequence: 1 }),
+          },
+        ],
+      );
+    }
+    yield* super.scan(prefix, options);
+  }
+}
+
 async function collect(
   iterable: AsyncIterable<FleetEventEnvelope>,
   limit: number,
@@ -133,6 +180,58 @@ describe('createFleetEventFeed', () => {
     expect(await first.snapshotTailSequence()).toBe(19);
     first.dispose();
     second.dispose();
+  });
+
+  it('retries when another process advances the tail during authority validation', async () => {
+    const storage = new AdvancingTailDuringScanStorage();
+    await storage.put(
+      KEYS.fleetEvent(0),
+      encode({
+        kind: 'worker:connected',
+        sequence: 0,
+        cursor: '0',
+        emittedAtMs: 0,
+        payload: { workerId: 'first-worker' },
+      }),
+    );
+    await storage.put(KEYS.fleetEventTail(), encode({ sequence: 0 }));
+    storage.advanceOnNextReverseScan = true;
+    const feed = createFleetEventFeed(storage);
+
+    const appended = await feed.append({
+      kind: 'worker:connected',
+      emittedAtMs: 2,
+      payload: { workerId: 'third-worker' },
+    });
+
+    expect(appended.sequence).toBe(2);
+    expect((await collect(feed.replay(), 10)).map((event) => event.sequence)).toEqual([0, 1, 2]);
+    feed.dispose();
+  });
+
+  it('restarts replay when retention advances after the initial floor read', async () => {
+    const storage = new RetainingDuringReplayStorage();
+    const feed = createFleetEventFeed(storage);
+    await feed.append({ kind: 'worker:connected', emittedAtMs: 0, payload: { index: 0 } });
+    await feed.append({ kind: 'worker:connected', emittedAtMs: 1, payload: { index: 1 } });
+    storage.retainOnNextForwardScan = true;
+
+    const replayed = await collect(feed.replay({ fromCursor: '-1' }), 10);
+
+    expect(replayed.map((event) => event.kind)).toEqual(['fleet:gap', 'worker:connected']);
+    expect(replayed.map((event) => event.sequence)).toEqual([0, 1]);
+    feed.dispose();
+  });
+
+  it('settles an idle durable subscription when the feed is disposed', async () => {
+    const feed = createFleetEventFeed(new MemoryStorage(), { livePollIntervalMs: 60_000 });
+    const iterator = feed.subscribe()[Symbol.asyncIterator]();
+    const pending = iterator.next();
+
+    await Promise.resolve();
+    feed.dispose();
+
+    await expect(pending).resolves.toEqual({ done: true, value: undefined });
   });
 
   it('commits caller-owned operations with the matching event', async () => {
@@ -297,9 +396,9 @@ describe('createFleetEventFeed', () => {
           emittedAtMs: 1,
           payload: { workflowId: 'wf-contended' },
         }),
-      ).rejects.toThrow('lost its storage precondition after 5 attempts');
+      ).rejects.toThrow('lost its storage precondition after 25 attempts');
 
-      expect(storage.conditionalBatchCalls).toBe(5);
+      expect(storage.conditionalBatchCalls).toBe(25);
       expect(await storage.get(KEYS.workflow('wf-contended'))).not.toBeNull();
       expect(await storage.get(KEYS.fleetEvent(0))).toBeNull();
 

@@ -17,6 +17,7 @@ import type {
 type DurableSubscriptionOptions = {
   readonly liveBufferSize: number;
   readonly pollIntervalMs: number;
+  readonly lifecycleSignal?: AbortSignal;
 };
 
 export function createDurableSubscription<TEnvelope extends SequencedEventEnvelope>(
@@ -25,9 +26,15 @@ export function createDurableSubscription<TEnvelope extends SequencedEventEnvelo
   args?: ReplayLiveSubscribeOptions<TEnvelope>,
 ): AsyncIterable<TEnvelope> {
   const requestedAfter = decodeRequestedCursor(args?.fromCursor);
-  const signal = args?.signal;
+  const signal =
+    args?.signal === undefined
+      ? options.lifecycleSignal
+      : options.lifecycleSignal === undefined
+        ? args.signal
+        : AbortSignal.any([args.signal, options.lifecycleSignal]);
   const buffer: TEnvelope[] = [];
   let bufferOverflowed = false;
+  let replayComplete = false;
   let waker: (() => void) | null = null;
   let cleanedUp = false;
   const wake = () => {
@@ -37,6 +44,10 @@ export function createDurableSubscription<TEnvelope extends SequencedEventEnvelo
   };
   const unsubscribe = backend.subscribeLive((envelope) => {
     if (!shouldDeliverEnvelope(envelope, args)) return;
+    if (replayComplete) {
+      wake();
+      return;
+    }
     if (buffer.length >= options.liveBufferSize) bufferOverflowed = true;
     else buffer.push(envelope);
     wake();
@@ -58,6 +69,7 @@ export function createDurableSubscription<TEnvelope extends SequencedEventEnvelo
       if (signal?.aborted || bufferOverflowed) return;
       args?.onReplayComplete?.();
       buffer.length = 0;
+      replayComplete = true;
       yield* tailDurableEvents(backend, snapshot, signal, args, options.pollIntervalMs, (next) => {
         waker = next;
       });

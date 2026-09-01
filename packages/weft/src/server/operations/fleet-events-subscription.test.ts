@@ -150,6 +150,27 @@ describe('weft.events.subscribe operation', () => {
     await subscription.close();
   });
 
+  it('delivers retention gaps before applying workflow and kind filters', async () => {
+    const gap = fleetEvent(4, {
+      kind: 'fleet:gap',
+      workflowId: undefined,
+      payload: { requestedCursor: '0', firstRetainedSequence: 5 },
+    });
+    const matching = fleetEvent(5, {
+      workflowId: 'wf-match',
+      kind: 'workflow:completed',
+    });
+    const subscription = await invokeFleetSubscription(
+      { workflowId: 'wf-match', kind: 'workflow:completed' },
+      [gap, matching],
+    );
+
+    expect(hasFleetEventIterable(subscription)).toBe(true);
+    if (!hasFleetEventIterable(subscription)) throw new Error('expected subscription result');
+    await expect(collectSequences(subscription.iterable)).resolves.toEqual([4, 5]);
+    await subscription.close();
+  });
+
   it('describes the fleet event envelope for generated discovery clients', () => {
     const schema = eventSchemaJson();
     expect(schema['anyOf']).toEqual(
