@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
+import { sha256Hex } from '../../worker/manifest/content-digest.ts';
 import {
   encodeRemoteTaskRecord,
   taskLedgerKey,
@@ -228,10 +229,12 @@ describe('getTaskResultViewImpl', () => {
       await options.engine.storage.put(taskLedgerKey('op-1'), encodeRemoteTaskRecord(record));
 
       const view = await getTaskResultViewImpl(options.engine.storage, 'op-1');
+      const adoptionToken = await sha256Hex(record.resultDigest);
 
       expect(view).toEqual({
         status: 'terminal',
         disposition,
+        adoptionToken,
         terminalAt: 4_000,
         adopted: false,
         ...('error' in record ? { error: record.error } : {}),
@@ -302,23 +305,32 @@ describe('adoptTaskResultImpl', () => {
       const options = minimalServeOptions();
       await options.engine.storage.put(taskLedgerKey('op-1'), encodeRemoteTaskRecord(record));
 
-      const adopted = await adoptTaskResultImpl(options.engine.storage, 'op-1');
+      const view = await getTaskResultViewImpl(options.engine.storage, 'op-1');
+      if (view?.status !== 'terminal' || view.disposition === 'resolved') {
+        throw new Error('expected a non-resolved terminal view');
+      }
+      const adopted = await adoptTaskResultImpl(options.engine.storage, 'op-1', view.adoptionToken);
 
       expect(adopted).toBe(true);
-      const view = await getTaskResultViewImpl(options.engine.storage, 'op-1');
-      expect(view).toMatchObject({ adopted: true });
-      expect(view).not.toHaveProperty('resultDigest');
+      const adoptedView = await getTaskResultViewImpl(options.engine.storage, 'op-1');
+      expect(adoptedView).toMatchObject({ adopted: true });
+      expect(adoptedView).not.toHaveProperty('resultDigest');
     },
   );
 
-  it('requires the public resultDigest to adopt a resolved terminal record', async () => {
+  it('rejects a stale adoption token after an operation ID is reused', async () => {
     const options = minimalServeOptions();
+    const first = cancelledFixture({ resultDigest: 'cancelled:op-1:first-attempt-token' });
+    await options.engine.storage.put(taskLedgerKey('op-1'), encodeRemoteTaskRecord(first));
+    const staleToken = await sha256Hex(first.resultDigest);
     await options.engine.storage.put(
       taskLedgerKey('op-1'),
-      encodeRemoteTaskRecord(resolvedFixture()),
+      encodeRemoteTaskRecord(
+        cancelledFixture({ resultDigest: 'cancelled:op-1:replacement-attempt-token' }),
+      ),
     );
 
-    expect(await adoptTaskResultImpl(options.engine.storage, 'op-1')).toBe(false);
+    expect(await adoptTaskResultImpl(options.engine.storage, 'op-1', staleToken)).toBe(false);
     expect(await getTaskResultViewImpl(options.engine.storage, 'op-1')).toMatchObject({
       adopted: false,
     });
@@ -330,7 +342,6 @@ describe('adoptTaskResultImpl', () => {
     await options.engine.storage.put(taskLedgerKey('op-1'), encodeRemoteTaskRecord(record));
 
     expect(await adoptTaskResultImpl(options.engine.storage, 'op-1', 'digest-1')).toBe(false);
-    expect(await adoptTaskResultImpl(options.engine.storage, 'op-1')).toBe(false);
   });
 
   it('rejects adopting a nonexistent record', async () => {

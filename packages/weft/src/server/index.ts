@@ -496,13 +496,13 @@ export interface WeftServer extends AsyncDisposable {
    * whatever consumed the result (a workflow's own checkpoint, or other
    * application logic) has durably incorporated it. Resolved records require
    * the `resultDigest` returned by {@link getTaskResult}; cancelled and
-   * retry-exhausted records omit their private synthetic digest and are
-   * adopted by operation ID alone. Returns `true` once adopted; `false` if
+   * retry-exhausted records omit their private synthetic digest and expose a
+   * token-safe `adoptionToken` instead. Returns `true` once adopted; `false` if
    * the record is not currently terminal or the required digest does not
    * match. Only adopted terminal records become eligible for
    * {@link ServeOptions.taskRetentionWindowMs} reaping.
    */
-  adoptTaskResult(operationId: string, resultDigest?: string): Promise<boolean>;
+  adoptTaskResult(operationId: string, adoptionKey: string): Promise<boolean>;
   /** Send a shutdown message to a specific worker and wait for it to disconnect. Returns true if the worker was found. */
   shutdownWorker(workerId: string, options?: { timeoutMs?: number }): Promise<boolean>;
   /** Send a shutdown message to all connected workers and wait for them to disconnect. */

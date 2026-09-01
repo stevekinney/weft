@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `WeftServer.getTaskResult()` no longer exposes internal synthetic `resultDigest` values for cancelled or retry-exhausted tasks, preventing those values from revealing the task's attempt token. Resolved task views continue to expose their content digest for adoption checks, while non-resolved terminal tasks can be adopted by operation ID alone for retention cleanup.
+- `WeftServer.getTaskResult()` no longer exposes internal synthetic `resultDigest` values for cancelled or retry-exhausted tasks, preventing those values from revealing the task's attempt token. Resolved task views continue to expose their content digest for adoption checks, while non-resolved terminal tasks expose a one-way, incarnation-fenced adoption token for retention cleanup.
 
 ## [0.22.0] - 2026-08-26
 

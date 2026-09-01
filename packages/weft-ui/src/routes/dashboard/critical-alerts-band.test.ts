@@ -7,7 +7,6 @@
  */
 import { render, waitFor } from '@testing-library/svelte';
 import { describe, expect, test } from 'bun:test';
-import { tick } from 'svelte';
 
 import { HttpClientError, type HttpClient } from '@lostgradient/weft/client';
 
@@ -17,16 +16,6 @@ import CriticalAlertsBandHarness from './critical-alerts-band-test-harness.test-
 // observers. Keep the established full-suite window rather than depending on
 // Testing Library's 1-second default while Bun is executing other files.
 const WAIT_FOR_TWO_QUERIES = { timeout: 3_000 };
-
-async function settleImmediateQueryNotifications(): Promise<void> {
-  // Query resolution, TanStack's notifyManager, and Svelte each enqueue one
-  // turn. Drain those queues by ordering, independent of runner load.
-  for (let turn = 0; turn < 3; turn++) {
-    await Promise.resolve();
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    await tick();
-  }
-}
 
 const EMPTY_DIAGNOSTICS_SUMMARY = {
   stuckQueued: 0,
@@ -66,8 +55,10 @@ describe('CriticalAlertsBand', () => {
       props: { client },
     });
 
-    await settleImmediateQueryNotifications();
-    expect(queryByLabelText('Loading alerts')).toBeNull();
+    await waitFor(
+      () => expect(queryByLabelText('Loading alerts')).toBeNull(),
+      WAIT_FOR_TWO_QUERIES,
+    );
     expect(container.textContent).toBe('');
   });
 
@@ -87,8 +78,10 @@ describe('CriticalAlertsBand', () => {
 
     resolveReviews([]);
 
-    await settleImmediateQueryNotifications();
-    expect(queryByLabelText('Loading alerts')).toBeNull();
+    await waitFor(
+      () => expect(queryByLabelText('Loading alerts')).toBeNull(),
+      WAIT_FOR_TWO_QUERIES,
+    );
   });
 
   test('renders a diagnostic chip that deep-links to the workers queue view', async () => {

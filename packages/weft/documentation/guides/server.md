@@ -210,7 +210,7 @@ interface WeftServer extends AsyncDisposable {
   stop(): Promise<void>;
   dispatchTask(task: TaskDispatch): Promise<boolean>;
   getTaskResult(operationId: string): Promise<TaskResultView | null>;
-  adoptTaskResult(operationId: string, resultDigest: string): Promise<boolean>;
+  adoptTaskResult(operationId: string, adoptionKey: string): Promise<boolean>;
   shutdownWorker(workerId: string, options?: { timeoutMs?: number }): Promise<boolean>;
   shutdownAllWorkers(options?: { timeoutMs?: number }): Promise<void>;
   cancelTask(operationId: string): boolean;
@@ -239,6 +239,7 @@ type TaskResultView =
   | {
       status: 'terminal';
       disposition: 'cancelled' | 'retryExhausted';
+      adoptionToken: string;
       terminalAt: number;
       adopted: boolean;
       adoptedAt?: number;
@@ -253,7 +254,7 @@ type TaskResultView =
     };
 ```
 
-`adoptTaskResult(operationId, resultDigest)` marks a terminal task's result as adopted — the durable assertion that whatever consumed the result (application logic, or a workflow's own checkpoint once a future project closes that loop) has incorporated it. For a resolved task, `resultDigest` is required and must match the digest from `getTaskResult`. For a cancelled or retry-exhausted task, omit `resultDigest` and adopt by operation ID; their synthetic internal digest is intentionally never public. A mismatch, a missing digest for a resolved task, or a record that is not currently terminal returns `false` without changing anything. Adoption is required before `taskRetentionWindowMs` will ever reap a terminal record — until a caller adopts a result, it is retained forever, by design. Adoption is also idempotent: adopting an already-adopted record succeeds again and refreshes `adoptedAt`.
+`adoptTaskResult(operationId, adoptionKey)` marks a terminal task's result as adopted — the durable assertion that whatever consumed the result (application logic, or a workflow's own checkpoint once a future project closes that loop) has incorporated it. For a resolved task, pass the `resultDigest` from `getTaskResult`. For a cancelled or retry-exhausted task, pass its `adoptionToken`, a one-way digest that fences adoption to that exact terminal incarnation without exposing the synthetic internal digest or attempt token. A mismatch or a record that is not currently terminal returns `false` without changing anything. Adoption is required before `taskRetentionWindowMs` will ever reap a terminal record — until a caller adopts a result, it is retained forever, by design. Adoption is also idempotent: adopting an already-adopted record succeeds again and refreshes `adoptedAt`.
 
 ```typescript partial
 {
