@@ -40,6 +40,10 @@ jobs:
   # Run the full validate suite here as a hard gate that publish-npm depends on.
   validate:
     runs-on: ubuntu-latest
+    # WFT-82: serialize JSC marking for the full-suite test process so a
+    # runtime teardown crash cannot strand an already-pushed release tag.
+    env:
+      BUN_JSC_numberOfGCMarkers: '1'
     defaults:
       run:
         working-directory: packages/weft
@@ -66,6 +70,9 @@ jobs:
   # themselves only under coverage instrumentation.
   coverage:
     runs-on: ubuntu-latest
+    # Apply the same JSC teardown mitigation as pull request coverage (WFT-82).
+    env:
+      BUN_JSC_numberOfGCMarkers: '1'
     defaults:
       run:
         working-directory: packages/weft
