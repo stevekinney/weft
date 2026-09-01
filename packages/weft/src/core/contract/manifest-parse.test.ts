@@ -280,6 +280,45 @@ describe('parseWorkflowRevisionManifest', () => {
     expect(result.reason).toBe('invalid-field');
   });
 
+  it('accepts an empty description (a producer/parser round trip, not an identifier)', async () => {
+    const contract = buildWorkflowContract({ name: 'checkout', version: '2.1.0', description: '' });
+    const manifest = await buildWorkflowRevisionManifest(contract);
+    const result = await parseWorkflowRevisionManifest(manifest);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected ok');
+    expect(result.manifest.contract.description).toBe('');
+  });
+
+  it('accepts a description longer than MAX_CONTRACT_IDENTIFIER_BYTES (free-form prose, not an identifier)', async () => {
+    const longDescription = 'x'.repeat(MAX_CONTRACT_IDENTIFIER_BYTES + 100);
+    const contract = buildWorkflowContract({
+      name: 'checkout',
+      version: '2.1.0',
+      description: longDescription,
+    });
+    const manifest = await buildWorkflowRevisionManifest(contract);
+    const result = await parseWorkflowRevisionManifest(manifest);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected ok');
+    expect(result.manifest.contract.description).toBe(longDescription);
+  });
+
+  it('accepts an empty signal name (engine-supported: signal()/update()/query() impose no length constraint)', async () => {
+    const contract = buildWorkflowContract({
+      name: 'checkout',
+      version: '2.1.0',
+      signals: { '': {} },
+    });
+    const manifest = await buildWorkflowRevisionManifest(contract);
+    const result = await parseWorkflowRevisionManifest(manifest);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected ok');
+    expect(Object.keys(result.manifest.contract.signals ?? {})).toEqual(['']);
+  });
+
   it('rejects a non-object finalizer', async () => {
     const manifest = await validManifest();
     const result = await parseWorkflowRevisionManifest({

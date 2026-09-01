@@ -232,6 +232,46 @@ describe('buildWorkerManifestFromRegistry', () => {
     expect(Object.keys(manifest.workflows['checkout']?.activities ?? {})).toEqual(['charge']);
   });
 
+  it('preserves an activity literally named __proto__ as an own property, not a prototype mutation (WFT-5)', async () => {
+    engine = createEngine();
+    engine.register(workflow({ name: 'checkout' }).execute(async function* () {}));
+    engine.register(activity({ name: '__proto__', execute: async () => true }));
+
+    // Computed-key syntax, not `{ checkout: ['__proto__'] }` object-literal
+    // syntax for the OUTER key below — that part is a plain "checkout" key,
+    // so literal syntax is fine there. The activity NAME is just a string
+    // list entry, not a property key, so no special-casing applies to it.
+    const manifest = await buildWorkerManifestFromRegistry(engine, {
+      workflows: { checkout: ['__proto__'] },
+      deployment: DEPLOYMENT,
+      runtime: RUNTIME,
+    });
+
+    const activities = manifest.workflows['checkout']?.activities;
+    expect(Object.prototype.hasOwnProperty.call(activities, '__proto__')).toBe(true);
+    expect(Object.keys(activities ?? {})).toEqual(['__proto__']);
+    expect(activities?.['__proto__']?.contractHash).toMatch(/^sha256:[0-9a-f]{64}$/);
+  });
+
+  it('preserves a workflow literally named __proto__ as an own property in the manifest.workflows map (WFT-5)', async () => {
+    engine = createEngine();
+    engine.register(workflow({ name: '__proto__' }).execute(async function* () {}));
+
+    // `{ __proto__: [] }` object-literal syntax would set the PROTOTYPE of
+    // this options object rather than create an own property — computed-key
+    // syntax is required to actually exercise a workflow type named
+    // `__proto__` here.
+    const workflows: Record<string, readonly string[]> = { ['__proto__']: [] };
+    const manifest = await buildWorkerManifestFromRegistry(engine, {
+      workflows,
+      deployment: DEPLOYMENT,
+      runtime: RUNTIME,
+    });
+
+    expect(Object.prototype.hasOwnProperty.call(manifest.workflows, '__proto__')).toBe(true);
+    expect(Object.keys(manifest.workflows)).toEqual(['__proto__']);
+  });
+
   it('folds registered signals, updates, and queries into contractHash (WFT-5)', async () => {
     async function contractHashFor(withMessages: boolean): Promise<string> {
       const localEngine = createEngine();

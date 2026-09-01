@@ -126,7 +126,15 @@ export function checkContractKey(
   kind: NameKind | undefined,
   path: string,
 ): WorkflowRevisionManifestValidationFailure | undefined {
-  if (key.length === 0) {
+  // An empty string is a wire-safe, engine-supported signal/update/query
+  // name (see message-handles.ts's signal()/update()/query() — they impose
+  // no length constraint on `name` at all), so the empty-string rejection
+  // applies only to workflow/activity names (`kind !== undefined`); for
+  // those, `validateWorkflowOrActivityName` below rejects it too (its
+  // grammar requires at least one character), but checking here first keeps
+  // the error message specific ("must not be an empty string" rather than
+  // the grammar's generic pattern-mismatch message).
+  if (kind !== undefined && key.length === 0) {
     return workflowRevisionManifestFailure('invalid-field', 'must not be an empty string', path);
   }
   const bytes = utf8ByteLength(key);

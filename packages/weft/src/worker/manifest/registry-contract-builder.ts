@@ -237,7 +237,14 @@ async function buildWorkflowContract(
   const workflowVersion = workflowVersionsByType.get(workflowType) as string;
 
   const sortedActivityNames = [...activityNames].toSorted();
-  const activities: Record<string, WorkflowActivityContract> = {};
+  // Null-prototype: an activity literally named `__proto__` is a
+  // grammar-valid name (see name-grammar.ts) that a plain `{}` object would
+  // silently swallow into the prototype chain instead of storing as an own
+  // property, dropping it from the hashed contract entirely.
+  const activities: Record<string, WorkflowActivityContract> = Object.create(null) as Record<
+    string,
+    WorkflowActivityContract
+  >;
   for (const activityName of sortedActivityNames) {
     activities[activityName] = toActivityContract(
       findActivityEntry(snapshot, workflowType, activityName),
@@ -258,7 +265,11 @@ async function buildWorkflowContract(
       buildActivityContract(snapshot, workflowType, activityName, implementationRevision),
     ),
   );
-  const workerActivities: Record<string, WorkerActivityContract> = {};
+  // Same null-prototype rationale as `activities` above.
+  const workerActivities: Record<string, WorkerActivityContract> = Object.create(null) as Record<
+    string,
+    WorkerActivityContract
+  >;
   sortedActivityNames.forEach((activityName, index) => {
     workerActivities[activityName] = activityContracts[index] as WorkerActivityContract;
   });
@@ -326,7 +337,12 @@ export async function buildWorkerManifestFromRegistry(
       ),
     ),
   );
-  const workflows: Record<string, WorkerWorkflowContract> = {};
+  // A workflow literally named `__proto__` is grammar-valid too; same
+  // null-prototype rationale as `activities` above.
+  const workflows: Record<string, WorkerWorkflowContract> = Object.create(null) as Record<
+    string,
+    WorkerWorkflowContract
+  >;
   sortedWorkflowTypes.forEach((workflowType, index) => {
     workflows[workflowType] = workflowContracts[index] as WorkerWorkflowContract;
   });

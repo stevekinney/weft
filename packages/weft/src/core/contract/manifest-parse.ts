@@ -89,6 +89,21 @@ function parseIdentifier(value: unknown, path: string): Outcome<string> {
   return { ok: true, value };
 }
 
+/**
+ * Validate `description`: any string, including empty or longer than
+ * `MAX_CONTRACT_IDENTIFIER_BYTES` — unlike `name`/`workflowVersion`/`revision`/
+ * `contractHash`, `description` is free-form prose, not an identifier, and
+ * `buildWorkflowContract()` imposes no length or non-emptiness constraint on
+ * it. Bounded only by the overall `MAX_NORMALIZED_CONTRACT_BYTES` contract
+ * size backstop, applied later in `finalizeManifest`.
+ */
+function parseDescription(value: unknown, path: string): Outcome<string> {
+  if (typeof value !== 'string') {
+    return workflowRevisionManifestFailure('invalid-field', 'must be a string', path);
+  }
+  return { ok: true, value };
+}
+
 function parseTags(value: unknown, path: string): Outcome<ReadonlyArray<string> | undefined> {
   if (value === undefined) return { ok: true, value: undefined };
   if (!Array.isArray(value)) {
@@ -128,7 +143,7 @@ function parseContractIdentity(
   };
 
   if (value['description'] !== undefined) {
-    const description = parseIdentifier(value['description'], `${path}.description`);
+    const description = parseDescription(value['description'], `${path}.description`);
     if (!description.ok) return description;
     identity.description = description.value;
   }

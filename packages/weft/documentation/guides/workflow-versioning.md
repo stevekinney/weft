@@ -148,10 +148,17 @@ needs the old version.
 `revision` is a different axis from `workflowVersion`. `workflowVersion` is the
 author-declared replay-compatibility boundary this guide is about — the
 version `ctx.getVersion` branches on, and what `weft version:check` compares
-against stored state. `revision` answers a narrower, orthogonal question: "is
-this the exact same workflow definition, byte for byte" — content-derived by
-default, or an explicitly supplied opaque string when a build pipeline already
-has a better identity (a Git SHA, a release tag).
+against stored state. `revision` answers a narrower, orthogonal question:
+"does this contract's declared metadata — name, version, description, tags,
+and every schema — match what was previously deployed." By default it is
+derived purely from that declared metadata, so it detects a schema, name, or
+documentation change, but **not** a handler-implementation change that leaves
+every declared field the same (renaming an internal variable, fixing a bug in
+the generator body). When byte-level executable identity matters — rollout
+verification, drift detection tied to what code actually runs — supply an
+explicit opaque revision from your build pipeline instead (a Git SHA, a
+content-addressed artifact digest, a release tag) via
+`buildWorkflowRevisionManifest(contract, { revision })`.
 
 `buildWorkflowContract()` converts an authoring-time workflow definition (name,
 version, schemas, signals, updates, queries, activities, finalizer) into a
