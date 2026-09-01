@@ -491,7 +491,12 @@ describe('recordCancellationIntent', () => {
   it('cancels a queued task directly to terminal, bypassing cancelling', () => {
     const result = recordCancellationIntent(
       queuedFixture(),
-      { expectedGeneration: 0, expectedAttempt: 1, cancellationReason: 'user requested' },
+      {
+        expectedGeneration: 0,
+        expectedAttempt: 1,
+        cancellationReason: 'user requested',
+        cancellationToken: 'cancellation-1',
+      },
       2_000,
     );
     expect(result.ok).toBe(true);
@@ -502,10 +507,51 @@ describe('recordCancellationIntent', () => {
     }
   });
 
+  it('fences queued cancellations across operation ID reuse', () => {
+    const queued = queuedFixture();
+    const first = recordCancellationIntent(
+      queued,
+      {
+        expectedGeneration: 0,
+        expectedAttempt: 1,
+        cancellationReason: 'user requested',
+        cancellationToken: 'cancellation-1',
+      },
+      2_000,
+    );
+    const replacement = recordCancellationIntent(
+      queued,
+      {
+        expectedGeneration: 0,
+        expectedAttempt: 1,
+        cancellationReason: 'user requested',
+        cancellationToken: 'cancellation-2',
+      },
+      2_000,
+    );
+
+    expect(first.ok).toBe(true);
+    expect(replacement.ok).toBe(true);
+    if (
+      !first.ok ||
+      !replacement.ok ||
+      first.nextRecord.state !== 'terminal' ||
+      replacement.nextRecord.state !== 'terminal'
+    ) {
+      throw new Error('expected queued cancellations to transition directly to terminal');
+    }
+    expect(first.nextRecord.resultDigest).not.toBe(replacement.nextRecord.resultDigest);
+  });
+
   it('moves a leased task to cancelling, carrying the attempt token forward', () => {
     const result = recordCancellationIntent(
       leasedFixture(),
-      { expectedGeneration: 1, expectedAttempt: 1, cancellationReason: 'user requested' },
+      {
+        expectedGeneration: 1,
+        expectedAttempt: 1,
+        cancellationReason: 'user requested',
+        cancellationToken: 'cancellation-1',
+      },
       2_000,
     );
     expect(result.ok).toBe(true);
@@ -519,7 +565,12 @@ describe('recordCancellationIntent', () => {
   it('rejects a generation mismatch', () => {
     const result = recordCancellationIntent(
       queuedFixture(),
-      { expectedGeneration: 99, expectedAttempt: 1, cancellationReason: 'x' },
+      {
+        expectedGeneration: 99,
+        expectedAttempt: 1,
+        cancellationReason: 'x',
+        cancellationToken: 'cancellation-1',
+      },
       2_000,
     );
     expect(result.ok).toBe(false);
@@ -528,7 +579,12 @@ describe('recordCancellationIntent', () => {
   it('rejects an attempt mismatch', () => {
     const result = recordCancellationIntent(
       queuedFixture(),
-      { expectedGeneration: 0, expectedAttempt: 99, cancellationReason: 'x' },
+      {
+        expectedGeneration: 0,
+        expectedAttempt: 99,
+        cancellationReason: 'x',
+        cancellationToken: 'cancellation-1',
+      },
       2_000,
     );
     expect(result.ok).toBe(false);
@@ -537,7 +593,12 @@ describe('recordCancellationIntent', () => {
   it('rejects a task that is already terminal', () => {
     const result = recordCancellationIntent(
       terminalFixture(),
-      { expectedGeneration: 3, expectedAttempt: 1, cancellationReason: 'x' },
+      {
+        expectedGeneration: 3,
+        expectedAttempt: 1,
+        cancellationReason: 'x',
+        cancellationToken: 'cancellation-1',
+      },
       2_000,
     );
     expect(result.ok).toBe(false);
@@ -740,7 +801,7 @@ describe('canClearDeadLetteredTask', () => {
 describe('synthesized resultDigest round-trips through the codec', () => {
   // commitCancellation, requeueExpiredAttempt's exhaustion branch, and
   // recordCancellationIntent's queued-origin branch each synthesize
-  // resultDigest by concatenating operationId and attemptToken — every
+  // resultDigest by concatenating operationId and a unique attempt/cancellation token — every
   // record produced from otherwise-valid, max-length inputs must still pass
   // decodeRemoteTaskRecord(encodeRemoteTaskRecord(...)).
   const maxLengthId = 'x'.repeat(512);
@@ -763,7 +824,12 @@ describe('synthesized resultDigest round-trips through the codec', () => {
     const queued = queuedFixture({ operationId: maxLengthId });
     const result = recordCancellationIntent(
       queued,
-      { expectedGeneration: 0, expectedAttempt: 1, cancellationReason: 'user requested' },
+      {
+        expectedGeneration: 0,
+        expectedAttempt: 1,
+        cancellationReason: 'user requested',
+        cancellationToken: 'cancellation-1',
+      },
       2_000,
     );
     expect(result.ok).toBe(true);
