@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
+import { sleepForTesting, waitForCondition } from '../testing/fake-timers.test-support.ts';
 
 import { KEYS } from '../storage/interface.ts';
 import {
@@ -93,10 +93,12 @@ for (const backend of storageBackends) {
       engine.register(setAttrsRunningWorkflow);
 
       await engine.start('set-attrs-running', null, { id: 'wf-3' });
-      await flush();
 
       // Verify idx: key for 'region' was written
       const regionIndexKey = KEYS.attributeIndex('region', 's:us-east', 'wf-3');
+      await waitForCondition(() => storageHas(result.storage, regionIndexKey), {
+        label: 'search attribute index to be committed',
+      });
       expect(await storageHas(result.storage, regionIndexKey)).toBe(true);
 
       // Verify attr: record was written
@@ -624,7 +626,9 @@ for (const backend of storageBackends) {
       engine.register(noSchemaWorkflow);
 
       await engine.start('no-schema', null, { id: 'wf-no-schema' });
-      await flush();
+      await waitForCondition(async () => (await engine.getAttributes('wf-no-schema')) !== null, {
+        label: 'search attributes to be committed',
+      });
 
       const attributes = await engine.getAttributes('wf-no-schema');
       expect(attributes).not.toBeNull();
