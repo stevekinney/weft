@@ -91,6 +91,7 @@ export type {
   LeaseLostReason,
   RecoverAllOptions,
   RecoveredWorkflowInfo,
+  RegistryAgnosticEngine,
   WorkflowWakeKind,
 } from './core/engine';
 export {

@@ -2531,10 +2531,13 @@ describe('WorkerExecutionStrategy', () => {
       );
       expect(worker.postMessage).not.toHaveBeenCalled();
 
-      const firstRunSent = Promise.withResolvers<void>();
-      worker.postMessage.mockImplementation(() => firstRunSent.resolve());
+      let resolveRunSent!: () => void;
+      const runSent = new Promise<void>((resolve) => {
+        resolveRunSent = resolve;
+      });
+      worker.postMessage.mockImplementation(() => resolveRunSent());
       dispatchReady(worker);
-      await firstRunSent.promise;
+      await runSent;
 
       expect(worker.postMessage).toHaveBeenCalledTimes(1);
       expect(worker.postMessage.mock.calls[0]![0]).toMatchObject({
