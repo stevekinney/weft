@@ -57,6 +57,7 @@ export {
   EngineLeaseCorruptedError,
   EngineLeaseNotHeldError,
   IdempotencyKeyPurgedError,
+  PersistedDataCorruptError,
   PersistedDataIncompatibleError,
   ScheduleHandle,
   StartOrSignalConflictError,

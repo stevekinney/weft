@@ -1,17 +1,34 @@
 import { z } from 'zod';
 
-import type { FleetEventEnvelope } from '../fleet-event-feed.ts';
+import type { FleetEventEnvelope, FleetEventGapEnvelope } from '../fleet-event-feed.ts';
 import type { ParameterizedAccessHint } from '../operation-catalog/types.ts';
+import { EVENTS_READ_EVENT_TYPES } from '../runtime/client-visible-events.ts';
 import type { EventEnvelope } from '../workflow-event-feed.ts';
 
-export const fleetEventEnvelopeSchema: z.ZodType<FleetEventEnvelope> = z.object({
-  kind: z.string(),
+const committedFleetEventEnvelopeSchema = z.object({
+  kind: z.enum(EVENTS_READ_EVENT_TYPES),
   workflowId: z.string().optional(),
   sequence: z.number(),
   cursor: z.string(),
   emittedAtMs: z.number(),
   payload: z.unknown(),
 });
+
+const fleetEventGapEnvelopeSchema: z.ZodType<FleetEventGapEnvelope> = z.object({
+  kind: z.literal('fleet:gap'),
+  sequence: z.number(),
+  cursor: z.string(),
+  emittedAtMs: z.number(),
+  payload: z.object({
+    requestedCursor: z.string(),
+    firstRetainedSequence: z.number(),
+  }),
+});
+
+export const fleetEventEnvelopeSchema: z.ZodType<FleetEventEnvelope> = z.union([
+  committedFleetEventEnvelopeSchema,
+  fleetEventGapEnvelopeSchema,
+]);
 
 export const workflowEventEnvelopeSchema: z.ZodType<EventEnvelope> = z.object({
   kind: z.string(),

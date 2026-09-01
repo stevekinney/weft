@@ -25,7 +25,10 @@ class FailingTailReadStorage extends MemoryStorage {
 class FailingFleetBatchStorage extends MemoryStorage {
   failNextFleetBatch = true;
 
-  override async batch(operations: BatchOperation[]): Promise<void> {
+  override async conditionalBatch(
+    conditions: ConditionalBatchCondition[],
+    operations: BatchOperation[],
+  ): Promise<boolean> {
     if (
       this.failNextFleetBatch &&
       operations.some((operation) => operation.key.startsWith(KEYS.fleetEventPrefix()))
@@ -33,7 +36,7 @@ class FailingFleetBatchStorage extends MemoryStorage {
       this.failNextFleetBatch = false;
       throw new Error('fleet batch failed');
     }
-    await super.batch(operations);
+    return super.conditionalBatch(conditions, operations);
   }
 }
 
@@ -110,6 +113,72 @@ async function collect(
 }
 
 describe('createFleetEventFeed', () => {
+  it('allocates one ordered sequence across concurrent feed instances', async () => {
+    const storage = new MemoryStorage();
+    const first = createFleetEventFeed(storage);
+    const second = createFleetEventFeed(storage);
+    const events = await Promise.all(
+      Array.from({ length: 20 }, (_, index) =>
+        (index % 2 === 0 ? first : second).append({
+          kind: 'worker:connected',
+          emittedAtMs: index,
+          payload: { index },
+        }),
+      ),
+    );
+
+    expect(events.map((event) => event.sequence).toSorted((left, right) => left - right)).toEqual(
+      Array.from({ length: 20 }, (_, index) => index),
+    );
+    expect(await first.snapshotTailSequence()).toBe(19);
+    first.dispose();
+    second.dispose();
+  });
+
+  it('commits caller-owned operations with the matching event', async () => {
+    const storage = new MemoryStorage();
+    const feed = createFleetEventFeed(storage);
+    const stateKey = 'app:state';
+    const state = new TextEncoder().encode('next');
+    const event = await feed.append(
+      { kind: 'worker:connected', emittedAtMs: 1, payload: { state: 'next' } },
+      {
+        conditions: [{ key: stateKey, expectedValue: null }],
+        operations: [{ type: 'put', key: stateKey, value: state }],
+      },
+    );
+
+    expect(await storage.get(stateKey)).toEqual(state);
+    const replayed = await collect(feed.replay(), 1);
+    expect(replayed[0]).toEqual(event);
+    feed.dispose();
+  });
+
+  it('advances a bounded retention floor and reports stale cursors explicitly', async () => {
+    const storage = new MemoryStorage();
+    const feed = createFleetEventFeed(storage);
+    for (let index = 0; index < 4; index += 1) {
+      await feed.append({
+        kind: 'workflow:completed',
+        workflowId: `wf-${index}`,
+        emittedAtMs: index,
+        payload: { index },
+      });
+    }
+    expect(await feed.retain({ beforeSequence: 2, limit: 10 })).toBe(2);
+    expect(await storage.get(KEYS.fleetEventByWorkflow('wf-0', 0))).toBeNull();
+    expect(await storage.get(KEYS.fleetEventByWorkflow('wf-1', 1))).toBeNull();
+    expect(await storage.get(KEYS.fleetEventByWorkflow('wf-2', 2))).not.toBeNull();
+    const replayed = await collect(feed.replay({ fromCursor: '-1' }), 10);
+    expect(replayed[0]?.kind).toBe('fleet:gap');
+    expect(replayed[0]?.sequence).toBe(1);
+    expect(replayed[0]?.cursor).toBe('1');
+    expect(replayed[0]?.payload).toEqual({ requestedCursor: '-1', firstRetainedSequence: 2 });
+    expect(replayed.slice(1).map((event) => event.sequence)).toEqual([2, 3]);
+    expect(await feed.retain({ beforeSequence: 3, limit: 10 })).toBe(1);
+    feed.dispose();
+  });
+
   it('replays persisted fleet events after the supplied cursor', async () => {
     const feed = createFleetEventFeed(new MemoryStorage());
     await feed.append({
@@ -270,7 +339,103 @@ describe('createFleetEventFeed', () => {
     expect(envelopes.map((envelope) => envelope.sequence)).toEqual([0, 1]);
   });
 
-  it('recovers the next sequence from event keys when the tail marker is malformed', async () => {
+  it('discovers a committed live event appended by another feed instance', async () => {
+    const storage = new MemoryStorage();
+    const subscriberFeed = createFleetEventFeed(storage, { livePollIntervalMs: 1 });
+    const appenderFeed = createFleetEventFeed(storage);
+    const controller = new AbortController();
+    const subscription = collect(subscriberFeed.subscribe({ signal: controller.signal }), 1);
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await appenderFeed.append({
+      kind: 'worker:connected',
+      emittedAtMs: 1,
+      payload: { workerId: 'worker-remote' },
+    });
+
+    const [envelope] = await subscription;
+    controller.abort();
+    expect(envelope).toMatchObject({ sequence: 0, payload: { workerId: 'worker-remote' } });
+    subscriberFeed.dispose();
+    appenderFeed.dispose();
+  });
+
+  it('cancels an idle durable poll without waiting for another append', async () => {
+    const feed = createFleetEventFeed(new MemoryStorage(), { livePollIntervalMs: 1 });
+    const controller = new AbortController();
+    const iterator = feed.subscribe({ signal: controller.signal })[Symbol.asyncIterator]();
+    const pending = iterator.next();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    controller.abort();
+    expect(await pending).toEqual({ done: true, value: undefined });
+    feed.dispose();
+  });
+
+  it('validates feed and retention bounds', async () => {
+    expect(() => createFleetEventFeed(new MemoryStorage(), { liveBufferSize: 0 })).toThrow(
+      'live buffer size must be positive',
+    );
+    expect(() => createFleetEventFeed(new MemoryStorage(), { livePollIntervalMs: 0 })).toThrow(
+      'live poll interval must be positive',
+    );
+    const feed = createFleetEventFeed(new MemoryStorage());
+    await expect(feed.retain({ beforeSequence: -1 })).rejects.toThrow(
+      'retention sequence must be a non-negative',
+    );
+    await expect(feed.retain({ beforeSequence: 1, limit: 0 })).rejects.toThrow(
+      'retention limit must be positive',
+    );
+    feed.dispose();
+  });
+
+  it('reads a valid event tail when the allocator record is absent', async () => {
+    const storage = new MemoryStorage();
+    await storage.put(
+      KEYS.fleetEvent(4),
+      encode({
+        kind: 'worker:connected',
+        sequence: 4,
+        cursor: '4',
+        emittedAtMs: 1,
+        payload: {},
+      }),
+    );
+    const feed = createFleetEventFeed(storage);
+    expect(await feed.snapshotTailSequence()).toBe(4);
+    await expect(
+      feed.append({ kind: 'worker:connected', emittedAtMs: 2, payload: {} }),
+    ).rejects.toThrow(KEYS.fleetEventTail());
+    feed.dispose();
+  });
+
+  it('rejects malformed event keys, retained records, and watermarks', async () => {
+    const malformedKeyStorage = new MemoryStorage();
+    await malformedKeyStorage.put(`${KEYS.fleetEventPrefix()}bad`, encode({}));
+    const malformedKeyFeed = createFleetEventFeed(malformedKeyStorage);
+    await expect(malformedKeyFeed.snapshotTailSequence()).rejects.toThrow(
+      `${KEYS.fleetEventPrefix()}bad`,
+    );
+
+    const malformedEventStorage = new MemoryStorage();
+    await malformedEventStorage.put(KEYS.fleetEvent(0), encode({ sequence: 1 }));
+    await malformedEventStorage.put(KEYS.fleetEventTail(), encode({ sequence: 0 }));
+    const malformedEventFeed = createFleetEventFeed(malformedEventStorage);
+    await expect(malformedEventFeed.retain({ beforeSequence: 1 })).rejects.toThrow(
+      KEYS.fleetEvent(0),
+    );
+
+    const malformedWatermarkStorage = new MemoryStorage();
+    await malformedWatermarkStorage.put(KEYS.fleetEventWatermark(), encode({ floor: 1 }));
+    const malformedWatermarkFeed = createFleetEventFeed(malformedWatermarkStorage);
+    await expect(malformedWatermarkFeed.retain({ beforeSequence: 1 })).rejects.toThrow(
+      KEYS.fleetEventWatermark(),
+    );
+    malformedKeyFeed.dispose();
+    malformedEventFeed.dispose();
+    malformedWatermarkFeed.dispose();
+  });
+
+  it('rejects a malformed tail instead of reusing an existing sequence', async () => {
     const storage = new MemoryStorage();
     await storage.put(
       KEYS.fleetEvent(4),
@@ -286,15 +451,15 @@ describe('createFleetEventFeed', () => {
     await storage.put(KEYS.fleetEventTail(), encode({ sequence: 'not-a-number' }));
 
     const feed = createFleetEventFeed(storage);
-    const appended = await feed.append({
-      kind: 'workflow:completed',
-      workflowId: 'wf-new',
-      emittedAtMs: 2,
-      payload: { workflowId: 'wf-new' },
-    });
-
-    expect(appended.sequence).toBe(5);
-    expect(appended.cursor).toBe('5');
+    await expect(
+      feed.append({
+        kind: 'workflow:completed',
+        workflowId: 'wf-new',
+        emittedAtMs: 2,
+        payload: { workflowId: 'wf-new' },
+      }),
+    ).rejects.toThrow('fleet-event-tail');
+    expect(await storage.get(KEYS.fleetEvent(5))).toBeNull();
     feed.dispose();
   });
 
@@ -372,7 +537,7 @@ describe('createFleetEventFeed', () => {
     feed.dispose();
   });
 
-  it('falls back to fleet event keys when the tail marker cannot be decoded', async () => {
+  it('rejects an undecodable tail instead of overwriting retained history', async () => {
     const storage = new MemoryStorage();
     await storage.put(
       KEYS.fleetEvent(2),
@@ -388,19 +553,19 @@ describe('createFleetEventFeed', () => {
     await storage.put(KEYS.fleetEventTail(), new Uint8Array([0xc1]));
 
     const feed = createFleetEventFeed(storage);
-    const appended = await feed.append({
-      kind: 'workflow:completed',
-      workflowId: 'wf-new',
-      emittedAtMs: 2,
-      payload: { workflowId: 'wf-new' },
-    });
-
-    expect(appended.sequence).toBe(3);
-    expect(appended.cursor).toBe('3');
+    await expect(
+      feed.append({
+        kind: 'workflow:completed',
+        workflowId: 'wf-new',
+        emittedAtMs: 2,
+        payload: { workflowId: 'wf-new' },
+      }),
+    ).rejects.toThrow('fleet-event-tail');
+    expect(await storage.get(KEYS.fleetEvent(3))).toBeNull();
     feed.dispose();
   });
 
-  it('scans past malformed high keys when recovering the tail sequence', async () => {
+  it('rejects malformed tail authority even when event keys are present', async () => {
     const storage = new MemoryStorage();
     await storage.put(
       KEYS.fleetEvent(7),
@@ -417,15 +582,15 @@ describe('createFleetEventFeed', () => {
     await storage.put(KEYS.fleetEventTail(), new Uint8Array([0xc1]));
 
     const feed = createFleetEventFeed(storage);
-    const appended = await feed.append({
-      kind: 'workflow:completed',
-      workflowId: 'wf-new',
-      emittedAtMs: 2,
-      payload: { workflowId: 'wf-new' },
-    });
-
-    expect(appended.sequence).toBe(8);
-    expect(appended.cursor).toBe('8');
+    await expect(
+      feed.append({
+        kind: 'workflow:completed',
+        workflowId: 'wf-new',
+        emittedAtMs: 2,
+        payload: { workflowId: 'wf-new' },
+      }),
+    ).rejects.toThrow('fleet-event-tail');
+    expect(await storage.get(KEYS.fleetEvent(8))).toBeNull();
     feed.dispose();
   });
 });

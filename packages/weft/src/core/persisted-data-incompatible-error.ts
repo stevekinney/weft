@@ -46,13 +46,32 @@ export class PersistedDataIncompatibleError extends WeftError<'PersistedDataInco
 }
 
 /**
+ * A durable record could not be decoded without risking data loss.
+ *
+ * @example
+ * ```ts
+ * import { PersistedDataCorruptError } from '@lostgradient/weft';
+ * declare const error: unknown;
+ * if (error instanceof PersistedDataCorruptError) console.error(error.key);
+ * ```
+ */
+export class PersistedDataCorruptError extends WeftError<'PersistedDataCorruptError'> {
+  readonly key: string;
+
+  constructor(key: string) {
+    super('PersistedDataCorruptError', `Persisted Weft record is corrupt at key "${key}".`);
+    this.key = key;
+  }
+}
+
+/**
  * Bumped to `1` by the workflow-builder refactor (Phase 3). Pre-MVP databases
  * have no version key recorded — `assertCompatiblePersistedDataVersion` treats
  * the absence of the key on an otherwise non-empty database as
  * `pre-versioned`, which is incompatible. Fresh databases get the current
  * version written on first open.
  */
-export const CURRENT_PERSISTED_DATA_SCHEMA_VERSION = 1;
+export const CURRENT_PERSISTED_DATA_SCHEMA_VERSION = 2;
 
 /**
  * Storage key holding the persisted-data schema version (encoded as the UTF-8

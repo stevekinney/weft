@@ -327,6 +327,7 @@ export {
   EngineDisposalError,
   EngineDisposedError,
   IdempotencyKeyPurgedError,
+  PersistedDataCorruptError,
   PersistedDataIncompatibleError,
   StartOrSignalConflictError,
   WorkflowAlreadyExistsError,

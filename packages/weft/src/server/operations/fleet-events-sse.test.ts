@@ -2,7 +2,11 @@ import { describe, expect, it } from 'bun:test';
 
 import { Engine } from '../../core/engine.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
-import type { FleetEventEnvelope, FleetEventFeed } from '../fleet-event-feed.ts';
+import {
+  createFleetEventFeed,
+  type FleetEventEnvelope,
+  type FleetEventFeed,
+} from '../fleet-event-feed.ts';
 import { handleRequest, type HandlerOptions } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import { principalFromApiKey } from '../principal.ts';
@@ -194,6 +198,47 @@ describe('weft.events.sse', () => {
     expect(body).toContain('"replayComplete":true');
     expect(body).not.toContain('id:');
     expect(liveListeners()).toBe(0);
+  });
+
+  it('streams an explicit retention gap with its requested and first-retained cursors', async () => {
+    const fleetFeed = createFleetEventFeed(new MemoryStorage());
+    await fleetFeed.append({
+      kind: 'workflow:started',
+      workflowId: 'wf-gap',
+      emittedAtMs: 0,
+      payload: {},
+    });
+    await fleetFeed.append({
+      kind: 'workflow:completed',
+      workflowId: 'wf-gap',
+      emittedAtMs: 1,
+      payload: {},
+    });
+    await fleetFeed.retain({ beforeSequence: 1 });
+
+    const engine = new Engine({ storage: new MemoryStorage() });
+    const response = await handleRequest(
+      request('/v1/events/sse?fromCursor=-1'),
+      engine,
+      handlerOptions(fleetFeed),
+    );
+
+    expect(response.status).toBe(200);
+    const reader = response.body?.getReader();
+    if (reader === undefined) throw new Error('Expected SSE response body');
+    const decoder = new TextDecoder();
+    let body = '';
+    for (let reads = 0; reads < 5 && !body.includes('event: workflow:completed'); reads += 1) {
+      const frame = await reader.read();
+      if (frame.done) break;
+      body += decoder.decode(frame.value, { stream: true });
+    }
+    await reader.cancel();
+    expect(body).toContain('event: fleet:gap');
+    expect(body).toContain('"requestedCursor":"-1"');
+    expect(body).toContain('"firstRetainedSequence":1');
+    expect(body).toContain('event: workflow:completed');
+    expect(body).toContain('id: 1');
   });
 
   it('uses Last-Event-ID before fromCursor', async () => {

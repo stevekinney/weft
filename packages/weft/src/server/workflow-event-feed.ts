@@ -1,4 +1,5 @@
 import type { WeftEventMap } from '../core/events.ts';
+import type { BatchOperation, ConditionalBatchCondition } from '../storage/interface.ts';
 import { drainLive, replayUpTo, shouldDeliverEnvelope } from './replay-live-feed-internals.ts';
 
 /** Discriminator string carried on every feed envelope. */
@@ -179,6 +180,85 @@ export type WorkflowEventFeed = {
 export type WorkflowEventFeedOptions = {
   /** Max envelopes the live buffer holds before overflow terminates the subscription. */
   liveBufferSize?: number;
+};
+
+/**
+ * A committed fleet-wide event, optionally scoped to one workflow.
+ * @example
+ * ```ts
+ * import type { FleetEventEnvelope } from '@lostgradient/weft/server/handler';
+ * declare const event: FleetEventEnvelope;
+ * console.log(event.cursor);
+ * ```
+ */
+export type FleetEventEnvelope = {
+  readonly kind: FeedEventKind;
+  readonly workflowId?: string | undefined;
+  readonly sequence: number;
+  readonly cursor: Cursor;
+  readonly emittedAtMs: number;
+  readonly payload: unknown;
+};
+
+/**
+ * The caller-supplied fields for a new fleet event.
+ * @example
+ * ```ts
+ * import type { FleetEventInput } from '@lostgradient/weft/server/handler';
+ * const event: FleetEventInput = { kind: 'worker:connected', emittedAtMs: 1, payload: {} };
+ * ```
+ */
+export type FleetEventInput = {
+  readonly kind: FeedEventKind;
+  readonly workflowId?: string | undefined;
+  readonly emittedAtMs: number;
+  readonly payload: unknown;
+};
+
+/**
+ * A fleet event input guaranteed to identify its workflow.
+ * @example
+ * ```ts
+ * import type { FleetWorkflowEventInput } from '@lostgradient/weft/server/handler';
+ * declare const event: FleetWorkflowEventInput;
+ * console.log(event.workflowId);
+ * ```
+ */
+export type FleetWorkflowEventInput = FleetEventInput & { readonly workflowId: string };
+
+/**
+ * Caller-owned state operations committed atomically with an event.
+ * @example
+ * ```ts
+ * import type { FleetEventAppendOptions } from '@lostgradient/weft/server/handler';
+ * const options: FleetEventAppendOptions = { operations: [{ type: 'delete', key: 'app:pending' }] };
+ * ```
+ */
+export type FleetEventAppendOptions = {
+  readonly conditions?: readonly ConditionalBatchCondition[];
+  readonly operations?: readonly BatchOperation[];
+};
+
+/**
+ * The compaction boundary returned when a cursor predates retained history.
+ * @example
+ * ```ts
+ * import type { FleetEventGapEnvelope } from '@lostgradient/weft/server/handler';
+ * declare const gap: FleetEventGapEnvelope;
+ * console.log(gap.payload.firstRetainedSequence);
+ * ```
+ */
+export type FleetEventGapEnvelope = {
+  readonly kind: 'fleet:gap';
+  readonly sequence: number;
+  readonly cursor: Cursor;
+  readonly emittedAtMs: number;
+  readonly payload: { readonly requestedCursor: Cursor; readonly firstRetainedSequence: number };
+};
+
+export type FleetEventFeedOptions = WorkflowEventFeedOptions & {
+  /** How often a subscriber checks durable storage for commits from another process. */
+  readonly livePollIntervalMs?: number;
 };
 
 export type SequencedEventEnvelope = {

@@ -31,6 +31,15 @@ describe('event-stream contracts', () => {
       }).success,
     ).toBe(true);
     expect(
+      fleetEventEnvelopeSchema.safeParse({
+        kind: 'fleet:gap',
+        sequence: 4,
+        cursor: '4',
+        emittedAtMs: 0,
+        payload: { requestedCursor: '0', firstRetainedSequence: 4 },
+      }).success,
+    ).toBe(true);
+    expect(
       workflowEventEnvelopeSchema.safeParse({
         kind: 'workflow:started',
         workflowId: 'wf-1',

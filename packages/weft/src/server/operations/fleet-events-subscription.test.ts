@@ -152,17 +152,32 @@ describe('weft.events.subscribe operation', () => {
 
   it('describes the fleet event envelope for generated discovery clients', () => {
     const schema = eventSchemaJson();
-    const properties = schema['properties'];
-
-    expect(schema['type']).toBe('object');
-    expect(properties).toMatchObject({
-      kind: expect.objectContaining({ type: 'string' }),
-      sequence: expect.objectContaining({ type: 'number' }),
-      cursor: expect.objectContaining({ type: 'string' }),
-      emittedAtMs: expect.objectContaining({ type: 'number' }),
-      payload: {},
-      workflowId: expect.objectContaining({ type: 'string' }),
-    });
+    expect(schema['anyOf']).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'object',
+          properties: expect.objectContaining({
+            kind: expect.objectContaining({ type: 'string' }),
+            sequence: expect.objectContaining({ type: 'number' }),
+            cursor: expect.objectContaining({ type: 'string' }),
+            emittedAtMs: expect.objectContaining({ type: 'number' }),
+            payload: {},
+            workflowId: expect.objectContaining({ type: 'string' }),
+          }),
+        }),
+        expect.objectContaining({
+          properties: expect.objectContaining({
+            kind: expect.objectContaining({ const: 'fleet:gap' }),
+            payload: expect.objectContaining({
+              properties: expect.objectContaining({
+                requestedCursor: expect.objectContaining({ type: 'string' }),
+                firstRetainedSequence: expect.objectContaining({ type: 'number' }),
+              }),
+            }),
+          }),
+        }),
+      ]),
+    );
   });
 
   it('enforces the replay cap from the actual subscription iterable', async () => {

@@ -217,6 +217,14 @@ describe('WorkerExecutionStrategy', () => {
     return message!;
   }
 
+  async function waitForCondition(condition: () => boolean, description: string): Promise<void> {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      if (condition()) return;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    throw new Error(`Timed out waiting for ${description}.`);
+  }
+
   // -------------------------------------------------------------------------
   // startWorkflow
   // -------------------------------------------------------------------------
@@ -2516,13 +2524,17 @@ describe('WorkerExecutionStrategy', () => {
         input: null,
         checkpoint: new ArrayBuffer(0),
       });
-      await sleepForTesting(10);
-
       const worker = firstWorker();
+      await waitForCondition(
+        () => (worker._listeners.get('message')?.size ?? 0) > 0,
+        'the worker message listener',
+      );
       expect(worker.postMessage).not.toHaveBeenCalled();
 
+      const firstRunSent = Promise.withResolvers<void>();
+      worker.postMessage.mockImplementation(() => firstRunSent.resolve());
       dispatchReady(worker);
-      await sleepForTesting(10);
+      await firstRunSent.promise;
 
       expect(worker.postMessage).toHaveBeenCalledTimes(1);
       expect(worker.postMessage.mock.calls[0]![0]).toMatchObject({
@@ -2540,10 +2552,15 @@ describe('WorkerExecutionStrategy', () => {
         input: null,
         checkpoint: new ArrayBuffer(0),
       });
-      await sleepForTesting(10);
       const worker = firstWorker();
+      await waitForCondition(
+        () => (worker._listeners.get('message')?.size ?? 0) > 0,
+        'the worker message listener',
+      );
+      const firstRunSent = Promise.withResolvers<void>();
+      worker.postMessage.mockImplementation(() => firstRunSent.resolve());
       dispatchReady(worker);
-      await sleepForTesting(10);
+      await firstRunSent.promise;
       expect(worker.postMessage).toHaveBeenCalledTimes(1);
 
       const runTurnId = (worker.postMessage.mock.calls[0]![0] as { turnId?: number }).turnId ?? 0;
@@ -2554,15 +2571,17 @@ describe('WorkerExecutionStrategy', () => {
           data: { type: 'completed', turnId: runTurnId, workflowId: 'wf-first', result: 'done' },
         }),
       );
-      await sleepForTesting(10);
+      await waitForCondition(() => mockPool.availableCount === 1, 'the worker release');
 
+      const secondRunSent = Promise.withResolvers<void>();
+      worker.postMessage.mockImplementation(() => secondRunSent.resolve());
       strategy.startWorkflow({
         workflowId: 'wf-second',
         workflowType: 'test',
         input: null,
         checkpoint: new ArrayBuffer(0),
       });
-      await sleepForTesting(10);
+      await secondRunSent.promise;
 
       // Recycled worker: the second run is sent without waiting for another ready.
       expect(worker.postMessage).toHaveBeenCalledTimes(2);

@@ -475,6 +475,56 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     await session.close();
   });
 
+  it('weft.events.subscribe delivers a retention gap before retained events', async () => {
+    const emitter = makeEmitter();
+    const feed = createWorkflowEventFeed(createInMemoryEventBackend());
+    const fleetFeed = createFleetEventFeed(new MemoryStorage());
+    await fleetFeed.append({
+      kind: 'workflow:started',
+      workflowId: 'wf-gap',
+      emittedAtMs: 0,
+      payload: {},
+    });
+    await fleetFeed.append({
+      kind: 'workflow:completed',
+      workflowId: 'wf-gap',
+      emittedAtMs: 1,
+      payload: {},
+    });
+    await fleetFeed.retain({ beforeSequence: 1 });
+    const session = createJsonRpcWebSocketSession({
+      registry: createWebSocketOperationRegistry(),
+      engine: fakeEngine,
+      principal: subscribePrincipal(),
+      emitter,
+      feed,
+      fleetFeed,
+    });
+
+    await session.handleMessage(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.events.subscribe',
+        params: { fromCursor: '-1' },
+        id: 'fleet-gap-sub',
+      }),
+    );
+
+    await emitter.waitForParsedMessage('fleet retention gap', (message) => {
+      const params = message['params'] as {
+        envelope?: { kind?: string; payload?: { requestedCursor?: string } };
+      };
+      return (
+        params?.envelope?.kind === 'fleet:gap' && params.envelope.payload?.requestedCursor === '-1'
+      );
+    });
+    await emitter.waitForParsedMessage('retained fleet event', (message) => {
+      const params = message['params'] as { envelope?: { sequence?: number } } | undefined;
+      return params?.envelope?.sequence === 1;
+    });
+    await session.close();
+  });
+
   it('weft.events.subscribe rejects unauthenticated and wrong-scope principals', async () => {
     const cases = [
       {
@@ -749,8 +799,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     expect(response.result.subscriptionId).toMatch(/^sub_/);
     await emitter.waitForParsedMessage('fleet replay limit termination', (message) => {
       const params = message['params'] as
-        | { fault?: { code?: string; message?: string } }
-        | undefined;
+        { fault?: { code?: string; message?: string } } | undefined;
       return (
         message['method'] === 'weft.events.terminated' &&
         params?.fault?.code === 'InvalidParams' &&
@@ -788,8 +837,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     expect(response.result.subscriptionId).toMatch(/^sub_/);
     await emitter.waitForParsedMessage('workflow replay limit termination', (message) => {
       const params = message['params'] as
-        | { fault?: { code?: string; message?: string } }
-        | undefined;
+        { fault?: { code?: string; message?: string } } | undefined;
       return (
         message['method'] === 'weft.events.terminated' &&
         params?.fault?.code === 'InvalidParams' &&

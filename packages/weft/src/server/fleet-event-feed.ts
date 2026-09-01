@@ -1,4 +1,5 @@
 import { decode, encode } from '../core/codec.ts';
+import { PersistedDataCorruptError } from '../core/persisted-data-incompatible-error.ts';
 import {
   KEYS,
   storageConditionalBatch,
@@ -6,56 +7,32 @@ import {
   type ConditionalBatchCondition,
   type Storage,
 } from '../storage/interface.ts';
+import { createDurableSubscription } from './replay-live-feed-internals.ts';
 import {
   createReplayLiveFeed,
   decodeCursor,
   encodeCursor,
   type Cursor,
-  type FeedEventKind,
+  type FleetEventAppendOptions,
+  type FleetEventEnvelope,
+  type FleetEventFeedOptions,
+  type FleetEventInput,
+  type FleetWorkflowEventInput,
   type ReplayLiveFeed,
   type ReplayLiveFeedBackend,
   type ReplayLiveSubscribeOptions,
-  type WorkflowEventFeedOptions,
+} from './workflow-event-feed.ts';
+export type {
+  FleetEventAppendOptions,
+  FleetEventEnvelope,
+  FleetEventFeedOptions,
+  FleetEventGapEnvelope,
+  FleetEventInput,
+  FleetWorkflowEventInput,
 } from './workflow-event-feed.ts';
 
 /**
- * A single committed record from the fleet-wide event feed — cross-workflow
- * lifecycle and system events, optionally scoped to one `workflowId`.
- * Returned by `FleetEventFeed.replay()` / `FleetEventFeed.subscribe()`, and
- * consumed directly by the `/v1/events/sse` REST route.
- *
- * @example
- * ```ts
- * import type { FleetEventEnvelope } from '@lostgradient/weft/server/handler';
- *
- * declare const envelope: FleetEventEnvelope;
- * console.log(envelope.kind); // e.g. 'workflow:completed'
- * console.log(envelope.workflowId); // string | undefined
- * ```
- */
-export type FleetEventEnvelope = {
-  readonly kind: FeedEventKind;
-  readonly workflowId?: string | undefined;
-  readonly sequence: number;
-  readonly cursor: Cursor;
-  readonly emittedAtMs: number;
-  readonly payload: unknown;
-};
-
-export type FleetEventInput = {
-  readonly kind: FeedEventKind;
-  readonly workflowId?: string | undefined;
-  readonly emittedAtMs: number;
-  readonly payload: unknown;
-};
-
-export type FleetWorkflowEventInput = FleetEventInput & {
-  readonly workflowId: string;
-};
-
-/**
- * The fleet-wide event feed: append cross-workflow events, replay committed
- * history from a cursor, then subscribe for live delivery. This is the shape
+ * Append cross-workflow events, replay history, then subscribe for live delivery. This is the shape
  * of `HandlerOptions.fleetEventFeed` — build a real one with
  * `createFleetEventFeed()` to drive `/v1/events/sse` through `handleRequest()`
  * without `serve()`.
@@ -71,17 +48,19 @@ export type FleetWorkflowEventInput = FleetEventInput & {
  * ```
  */
 export type FleetEventFeed = {
-  append(event: FleetEventInput): Promise<FleetEventEnvelope>;
+  append(event: FleetEventInput, options?: FleetEventAppendOptions): Promise<FleetEventEnvelope>;
   appendWorkflowEventIfPresent(event: FleetWorkflowEventInput): Promise<FleetEventEnvelope | null>;
   replay(options?: { fromCursor?: Cursor; limit?: number }): AsyncIterable<FleetEventEnvelope>;
   subscribe(
     options?: ReplayLiveSubscribeOptions<FleetEventEnvelope>,
   ): AsyncIterable<FleetEventEnvelope>;
   snapshotTailSequence(): Promise<number>;
+  snapshotRetentionFloor(): Promise<number>;
+  retain(options: { beforeSequence: number; limit?: number }): Promise<number>;
   dispose(): void;
 };
 
-const MAX_WORKFLOW_OWNED_APPEND_ATTEMPTS = 5;
+const DEFAULT_RETENTION_BATCH_SIZE = 100;
 
 /**
  * Build a `FleetEventFeed` backed by the given `Storage` — typically
@@ -90,12 +69,9 @@ const MAX_WORKFLOW_OWNED_APPEND_ATTEMPTS = 5;
  * `serve()`. Call once per storage instance and share the returned feed
  * across every transport that needs it.
  *
- * **This feed does not subscribe to `Engine` events on its own.** `serve()`
- * bridges engine lifecycle events into it via `wireEventBroadcasting()`; a
- * direct `handleRequest()` host that skips `serve()` is responsible for
- * calling `fleetEventFeed.append()` (or `appendWorkflowEventIfPresent()`)
- * itself for whatever events it wants `/v1/events/sse` to carry — e.g. from
- * `engine.addEventListener(...)` handlers wired up separately.
+ * This feed does not subscribe to `Engine` events on its own. `serve()` bridges
+ * engine lifecycle events into it; a direct `handleRequest()` host must append
+ * the events it wants `/v1/events/sse` to carry.
  *
  * @example
  * ```ts
@@ -118,14 +94,17 @@ const MAX_WORKFLOW_OWNED_APPEND_ATTEMPTS = 5;
  */
 export function createFleetEventFeed(
   storage: Storage,
-  feedOptions?: WorkflowEventFeedOptions,
+  feedOptions?: FleetEventFeedOptions,
 ): FleetEventFeed {
+  const liveBufferSize = feedOptions?.liveBufferSize ?? 1000;
+  const livePollIntervalMs = feedOptions?.livePollIntervalMs ?? 100;
+  if (!Number.isSafeInteger(liveBufferSize) || liveBufferSize < 1) {
+    throw new RangeError('Fleet event live buffer size must be positive.');
+  }
+  if (!Number.isSafeInteger(livePollIntervalMs) || livePollIntervalMs < 1) {
+    throw new RangeError('Fleet event live poll interval must be positive.');
+  }
   const listeners = new Set<(envelope: FleetEventEnvelope) => void>();
-  let sequenceInitPromise: Promise<number> | null = null;
-  let nextSequence: number | null = null;
-  // Current durable recovery supports one server process per durable store.
-  // Multi-process fleet feeds need a conditional storage allocator here.
-  let appendChain = Promise.resolve();
 
   const backend: ReplayLiveFeedBackend<FleetEventEnvelope> = {
     replay: replayPersistedFleetEvents,
@@ -137,120 +116,154 @@ export function createFleetEventFeed(
     feedOptions,
   );
 
-  async function initializeNextSequence(): Promise<number> {
-    if (nextSequence !== null) return nextSequence;
-    if (sequenceInitPromise) return sequenceInitPromise;
-
-    sequenceInitPromise = snapshotTailSequence()
-      .then((tailSequence) => {
-        nextSequence = tailSequence + 1;
-        return nextSequence;
-      })
-      .catch((error) => {
-        sequenceInitPromise = null;
-        throw error;
-      });
-
-    return sequenceInitPromise;
-  }
-
-  async function append(event: FleetEventInput): Promise<FleetEventEnvelope> {
-    return appendInternal(event);
+  async function append(
+    event: FleetEventInput,
+    options?: FleetEventAppendOptions,
+  ): Promise<FleetEventEnvelope> {
+    const appended = await appendInternal(
+      event,
+      async () => options?.conditions ?? [],
+      options?.operations ?? [],
+    );
+    if (appended === null)
+      throw new Error('Fleet event append conditions unexpectedly disappeared.');
+    return appended;
   }
 
   async function appendWorkflowEventIfPresent(
     event: FleetWorkflowEventInput,
   ): Promise<FleetEventEnvelope | null> {
-    return appendInternal(event, async () => {
-      const workflowValue = await storage.get(KEYS.workflow(event.workflowId));
-      if (workflowValue === null) return null;
-      return [{ key: KEYS.workflow(event.workflowId), expectedValue: workflowValue }];
-    });
+    return appendInternal(
+      event,
+      async () => {
+        const workflowValue = await storage.get(KEYS.workflow(event.workflowId));
+        if (workflowValue === null) return null;
+        return [{ key: KEYS.workflow(event.workflowId), expectedValue: workflowValue }];
+      },
+      [],
+      5,
+    );
   }
 
   function appendInternal(event: FleetEventInput): Promise<FleetEventEnvelope>;
   function appendInternal(
     event: FleetEventInput,
     loadConditions: () => Promise<readonly ConditionalBatchCondition[] | null>,
+    callerOperations?: readonly BatchOperation[],
+    maxAttempts?: number,
   ): Promise<FleetEventEnvelope | null>;
   async function appendInternal(
     event: FleetEventInput,
     loadConditions?: () => Promise<readonly ConditionalBatchCondition[] | null>,
+    callerOperations: readonly BatchOperation[] = [],
+    maxAttempts = 25,
   ): Promise<FleetEventEnvelope | null> {
-    const appended = appendChain.then(async () => {
-      for (let attempt = 1; attempt <= MAX_WORKFLOW_OWNED_APPEND_ATTEMPTS; attempt += 1) {
-        const conditions = loadConditions === undefined ? undefined : await loadConditions();
-        if (conditions === null) return null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const conditions = loadConditions === undefined ? [] : await loadConditions();
+      if (conditions === null) return null;
+      const { tail, tailValue } = await loadTailAuthority(storage);
+      const sequence = tail + 1;
+      const envelope = createFleetEventEnvelope(event, sequence);
+      const operations = createFleetEventOperations(envelope, callerOperations);
 
-        const sequence = await initializeNextSequence();
-        const envelope: FleetEventEnvelope = {
-          kind: event.kind,
-          sequence,
-          cursor: encodeCursor(sequence),
-          emittedAtMs: event.emittedAtMs,
-          ...(event.workflowId !== undefined ? { workflowId: event.workflowId } : {}),
-          payload: event.payload,
-        };
-
-        const operations: BatchOperation[] = [
-          { type: 'put', key: KEYS.fleetEvent(sequence), value: encode(envelope) },
-          { type: 'put', key: KEYS.fleetEventTail(), value: encode({ sequence }) },
-        ];
-        if (event.workflowId !== undefined) {
-          operations.push({
-            type: 'put',
-            key: KEYS.fleetEventByWorkflow(event.workflowId, sequence),
-            value: new Uint8Array(),
-          });
-        }
-
-        if (conditions === undefined) {
-          await storage.batch(operations);
-        } else {
-          const committed = await storageConditionalBatch(storage, [...conditions], operations);
-          if (!committed) continue;
-        }
-        nextSequence = sequence + 1;
-        fireLive(envelope);
-        return envelope;
-      }
-
-      throw new Error(
-        `Fleet event append for workflow "${event.workflowId ?? '<none>'}" lost its storage precondition after ${MAX_WORKFLOW_OWNED_APPEND_ATTEMPTS} attempts.`,
+      const committed = await storageConditionalBatch(
+        storage,
+        [{ key: KEYS.fleetEventTail(), expectedValue: tailValue }, ...conditions],
+        operations,
       );
-    });
-
-    appendChain = appended.then(
-      () => undefined,
-      () => undefined,
+      if (!committed) continue;
+      fireLive(envelope);
+      return envelope;
+    }
+    throw new Error(
+      `Fleet event append for workflow "${event.workflowId ?? '<none>'}" lost its storage precondition after ${maxAttempts} attempts.`,
     );
-    return appended;
   }
 
   async function* replayPersistedFleetEvents(options: {
     afterSequence: number;
   }): AsyncIterable<FleetEventEnvelope> {
+    const floor = await snapshotRetentionFloor();
+    if (options.afterSequence < floor - 1) {
+      yield {
+        kind: 'fleet:gap',
+        sequence: floor - 1,
+        cursor: encodeCursor(floor - 1),
+        emittedAtMs: 0,
+        payload: {
+          requestedCursor: options.afterSequence < 0 ? '-1' : encodeCursor(options.afterSequence),
+          firstRetainedSequence: floor,
+        },
+      };
+    }
     const scanOptions =
       options.afterSequence >= 0 ? { gt: KEYS.fleetEvent(options.afterSequence) } : undefined;
     for await (const [key, value] of storage.scan(KEYS.fleetEventPrefix(), scanOptions)) {
       const sequence = parseFleetEventSequenceFromKey(key);
-      if (sequence === null || sequence <= options.afterSequence) continue;
-      const decoded = decodeStorageValue(value);
-      if (!isFleetEventEnvelope(decoded)) continue;
+      if (sequence === null) throw new PersistedDataCorruptError(key);
+      if (sequence <= options.afterSequence) continue;
+      const decoded = decodeStorageValue(value, key);
+      if (!isFleetEventEnvelope(decoded)) throw new PersistedDataCorruptError(key);
       yield decoded;
     }
   }
 
   async function snapshotTailSequence(): Promise<number> {
     const storedTail = await storage.get(KEYS.fleetEventTail());
-    const decodedTail = storedTail === null ? null : decodeStorageValue(storedTail);
+    const decodedTail =
+      storedTail === null ? null : decodeStorageValue(storedTail, KEYS.fleetEventTail());
+    if (storedTail !== null && !isTailRecord(decodedTail))
+      throw new PersistedDataCorruptError(KEYS.fleetEventTail());
     if (isTailRecord(decodedTail)) return decodedTail.sequence;
 
     for await (const [key] of storage.scan(KEYS.fleetEventPrefix(), { reverse: true })) {
       const sequence = parseFleetEventSequenceFromKey(key);
       if (sequence !== null) return sequence;
+      throw new PersistedDataCorruptError(key);
     }
     return -1;
+  }
+
+  async function snapshotRetentionFloor(): Promise<number> {
+    const value = await storage.get(KEYS.fleetEventWatermark());
+    if (value === null) return 0;
+    const decoded = decodeStorageValue(value, KEYS.fleetEventWatermark());
+    if (!isFloorRecord(decoded)) throw new PersistedDataCorruptError(KEYS.fleetEventWatermark());
+    return decoded.firstRetainedSequence;
+  }
+
+  async function retain(options: { beforeSequence: number; limit?: number }): Promise<number> {
+    validateRetentionOptions(options);
+    const limit = options.limit ?? DEFAULT_RETENTION_BATCH_SIZE;
+    const watermarkValue = await storage.get(KEYS.fleetEventWatermark());
+    const floor = decodeRetentionFloorOrThrow(watermarkValue);
+    const tail = await snapshotTailSequence();
+    const target = Math.min(options.beforeSequence, tail + 1);
+    if (target <= floor) return 0;
+    const recordsToDelete = await collectRetentionRecords(storage, target, limit);
+    const deletedThrough = recordsToDelete.at(-1)?.key;
+    const deletedThroughSequence =
+      deletedThrough === undefined ? floor : parseFleetEventSequenceFromKey(deletedThrough)! + 1;
+    const newFloor = recordsToDelete.length < limit ? target : deletedThroughSequence;
+    const operations: BatchOperation[] = [
+      ...recordsToDelete.flatMap(({ key, workflowId, sequence }) => [
+        { type: 'delete' as const, key },
+        ...(workflowId === undefined
+          ? []
+          : [{ type: 'delete' as const, key: KEYS.fleetEventByWorkflow(workflowId, sequence) }]),
+      ]),
+      {
+        type: 'put',
+        key: KEYS.fleetEventWatermark(),
+        value: encode({ firstRetainedSequence: newFloor }),
+      },
+    ];
+    const committed = await storageConditionalBatch(
+      storage,
+      [{ key: KEYS.fleetEventWatermark(), expectedValue: watermarkValue }],
+      operations,
+    );
+    return committed ? recordsToDelete.length : 0;
   }
 
   function subscribeLive(listener: (envelope: FleetEventEnvelope) => void): () => void {
@@ -275,8 +288,15 @@ export function createFleetEventFeed(
     append,
     appendWorkflowEventIfPresent,
     replay: (options) => replayLiveFeed.replay(options),
-    subscribe: (options) => replayLiveFeed.subscribe(options),
+    subscribe: (options) =>
+      createDurableSubscription(
+        backend,
+        { liveBufferSize, pollIntervalMs: livePollIntervalMs },
+        options,
+      ),
     snapshotTailSequence,
+    snapshotRetentionFloor,
+    retain,
     dispose() {
       listeners.clear();
       replayLiveFeed.dispose();
@@ -284,12 +304,121 @@ export function createFleetEventFeed(
   };
 }
 
-function decodeStorageValue(value: Uint8Array): unknown {
+async function loadTailAuthority(
+  storage: Storage,
+): Promise<{ tail: number; tailValue: Uint8Array | null }> {
+  const tailValue = await storage.get(KEYS.fleetEventTail());
+  const tail =
+    tailValue === null ? await requireEmptyFleetHistory(storage) : decodeTailOrThrow(tailValue);
+  const highest = await highestFleetEventSequence(storage);
+  if (highest > tail) throw new PersistedDataCorruptError(KEYS.fleetEventTail());
+  return { tail, tailValue };
+}
+
+function createFleetEventEnvelope(event: FleetEventInput, sequence: number): FleetEventEnvelope {
+  return {
+    kind: event.kind,
+    sequence,
+    cursor: encodeCursor(sequence),
+    emittedAtMs: event.emittedAtMs,
+    ...(event.workflowId === undefined ? {} : { workflowId: event.workflowId }),
+    payload: event.payload,
+  };
+}
+
+function createFleetEventOperations(
+  envelope: FleetEventEnvelope,
+  callerOperations: readonly BatchOperation[],
+): BatchOperation[] {
+  return [
+    ...callerOperations,
+    { type: 'put', key: KEYS.fleetEvent(envelope.sequence), value: encode(envelope) },
+    { type: 'put', key: KEYS.fleetEventTail(), value: encode({ sequence: envelope.sequence }) },
+    ...(envelope.workflowId === undefined
+      ? []
+      : [
+          {
+            type: 'put' as const,
+            key: KEYS.fleetEventByWorkflow(envelope.workflowId, envelope.sequence),
+            value: new Uint8Array(),
+          },
+        ]),
+  ];
+}
+
+function validateRetentionOptions(options: { beforeSequence: number; limit?: number }): void {
+  if (!Number.isSafeInteger(options.beforeSequence) || options.beforeSequence < 0) {
+    throw new RangeError('Fleet event retention sequence must be a non-negative safe integer.');
+  }
+  const limit = options.limit ?? DEFAULT_RETENTION_BATCH_SIZE;
+  if (!Number.isSafeInteger(limit) || limit < 1) {
+    throw new RangeError('Fleet event retention limit must be positive.');
+  }
+}
+
+async function collectRetentionRecords(
+  storage: Storage,
+  target: number,
+  limit: number,
+): Promise<Array<{ key: string; sequence: number; workflowId?: string }>> {
+  const records: Array<{ key: string; sequence: number; workflowId?: string }> = [];
+  for await (const [key, value] of storage.scan(KEYS.fleetEventPrefix(), {
+    lt: KEYS.fleetEvent(target),
+    limit,
+  })) {
+    const sequence = parseFleetEventSequenceFromKey(key);
+    if (sequence === null) throw new PersistedDataCorruptError(key);
+    if (sequence < target) {
+      const envelope = decodeStorageValue(value, key);
+      if (!isFleetEventEnvelope(envelope) || envelope.sequence !== sequence) {
+        throw new PersistedDataCorruptError(key);
+      }
+      records.push({
+        key,
+        sequence,
+        ...(envelope.workflowId === undefined ? {} : { workflowId: envelope.workflowId }),
+      });
+    }
+  }
+  return records;
+}
+
+function decodeRetentionFloorOrThrow(value: Uint8Array | null): number {
+  if (value === null) return 0;
+  const decoded = decodeStorageValue(value, KEYS.fleetEventWatermark());
+  if (!isFloorRecord(decoded)) throw new PersistedDataCorruptError(KEYS.fleetEventWatermark());
+  return decoded.firstRetainedSequence;
+}
+
+function decodeStorageValue(value: Uint8Array, key: string): unknown {
   try {
     return decode(value);
   } catch {
-    return null;
+    throw new PersistedDataCorruptError(key);
   }
+}
+
+function decodeTailOrThrow(value: Uint8Array): number {
+  const decoded = decodeStorageValue(value, KEYS.fleetEventTail());
+  if (!isTailRecord(decoded)) throw new PersistedDataCorruptError(KEYS.fleetEventTail());
+  return decoded.sequence;
+}
+
+async function requireEmptyFleetHistory(storage: Storage): Promise<number> {
+  for await (const [key] of storage.scan(KEYS.fleetEventPrefix(), { reverse: true, limit: 1 })) {
+    if (parseFleetEventSequenceFromKey(key) === null) throw new PersistedDataCorruptError(key);
+    throw new PersistedDataCorruptError(KEYS.fleetEventTail());
+  }
+  return -1;
+}
+
+async function highestFleetEventSequence(storage: Storage): Promise<number> {
+  for await (const [key] of storage.scan(KEYS.fleetEventPrefix(), { reverse: true, limit: 1 })) {
+    const sequence = parseFleetEventSequenceFromKey(key);
+    if (sequence === null) throw new PersistedDataCorruptError(key);
+    return sequence;
+  }
+  return -1;
 }
 
 function parseFleetEventSequenceFromKey(key: string): number | null {
@@ -307,6 +436,12 @@ function isTailRecord(value: unknown): value is { sequence: number } {
     'sequence' in value &&
     Number.isSafeInteger(value.sequence)
   );
+}
+
+function isFloorRecord(value: unknown): value is { firstRetainedSequence: number } {
+  if (typeof value !== 'object' || value === null) return false;
+  const firstRetainedSequence = (value as Record<string, unknown>)['firstRetainedSequence'];
+  return Number.isSafeInteger(firstRetainedSequence) && (firstRetainedSequence as number) >= 0;
 }
 
 function isFleetEventEnvelope(value: unknown): value is FleetEventEnvelope {

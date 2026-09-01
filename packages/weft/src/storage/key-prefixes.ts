@@ -30,6 +30,7 @@ export const WEFT_RESERVED_KEY_PREFIXES = [
   'fleet-event-by-workflow:',
   'fleet-event:',
   'fleet-event-tail',
+  'fleet-event-watermark',
   'idx:',
   'lease:',
   'liveness:',
