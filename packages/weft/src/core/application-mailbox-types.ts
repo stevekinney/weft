@@ -240,7 +240,16 @@ export type ApplicationCommandAttemptFields = Readonly<{
   firstClaimedAt?: number | undefined;
 }>;
 
-/** A command admitted but not yet released for delivery (initial delay or retry backoff). */
+/** A command admitted but not yet released for delivery (initial delay or retry backoff).
+ *
+ * @example
+ * ```ts
+ * import type { ApplicationCommandAccepted } from '@lostgradient/weft';
+ *
+ * declare const record: ApplicationCommandAccepted;
+ * console.log(record.state, record.availableAt); // 'accepted', when it is released
+ * ```
+ */
 export type ApplicationCommandAccepted = ApplicationCommandBase &
   ApplicationCommandAttemptFields &
   Readonly<{
@@ -248,7 +257,16 @@ export type ApplicationCommandAccepted = ApplicationCommandBase &
     availableAt: number;
   }>;
 
-/** A command released for delivery and waiting at its FIFO position. */
+/** A command released for delivery and waiting at its FIFO position.
+ *
+ * @example
+ * ```ts
+ * import type { ApplicationCommandAvailable } from '@lostgradient/weft';
+ *
+ * declare const record: ApplicationCommandAvailable;
+ * console.log(record.state); // 'available'
+ * ```
+ */
 export type ApplicationCommandAvailable = ApplicationCommandBase &
   ApplicationCommandAttemptFields &
   Readonly<{
@@ -269,7 +287,16 @@ export type ApplicationCommandLeaseFields = Readonly<{
   progress?: JSONValue | undefined;
 }>;
 
-/** A command leased by a live attempt. */
+/** A command leased by a live attempt.
+ *
+ * @example
+ * ```ts
+ * import type { ApplicationCommandClaimed } from '@lostgradient/weft';
+ *
+ * declare const record: ApplicationCommandClaimed;
+ * console.log(record.attemptToken, record.visibilityExpiresAt);
+ * ```
+ */
 export type ApplicationCommandClaimed = ApplicationCommandBase &
   ApplicationCommandAttemptFields &
   ApplicationCommandLeaseFields &
@@ -282,6 +309,14 @@ export type ApplicationCommandClaimed = ApplicationCommandBase &
  * A claimed command whose cancellation is durably requested and whose claimant
  * has not yet settled. The lease stays intact so the current attempt — and only
  * the current attempt — can finish cleanup.
+ *
+ * @example
+ * ```ts
+ * import type { ApplicationCommandCancelling } from '@lostgradient/weft';
+ *
+ * declare const record: ApplicationCommandCancelling;
+ * console.log(record.cancellationRequestedAt);
+ * ```
  */
 export type ApplicationCommandCancelling = ApplicationCommandBase &
   ApplicationCommandAttemptFields &
@@ -299,6 +334,14 @@ export type ApplicationCommandCancelling = ApplicationCommandBase &
  * `cleanupPending` is `true` only when the command was cancelled while an
  * attempt still held it and that attempt never settled — the mailbox records
  * that it stopped waiting, never that the handler stopped.
+ *
+ * @example
+ * ```ts
+ * import type { ApplicationCommandTerminalRecord } from '@lostgradient/weft';
+ *
+ * declare const record: ApplicationCommandTerminalRecord;
+ * console.log(record.state, record.terminalAt);
+ * ```
  */
 export type ApplicationCommandTerminalRecord = ApplicationCommandBase &
   ApplicationCommandAttemptFields &
@@ -318,6 +361,14 @@ export type ApplicationCommandTerminalRecord = ApplicationCommandBase &
 /**
  * The canonical durable record for one command, in whichever state it currently
  * occupies.
+ *
+ * @example
+ * ```ts
+ * import type { ApplicationCommandRecord } from '@lostgradient/weft';
+ *
+ * declare const record: ApplicationCommandRecord;
+ * console.log(record.commandId, record.state);
+ * ```
  */
 export type ApplicationCommandRecord =
   | ApplicationCommandAccepted
@@ -326,17 +377,43 @@ export type ApplicationCommandRecord =
   | ApplicationCommandCancelling
   | ApplicationCommandTerminalRecord;
 
-/** Any record still holding a lease. */
+/** Any record still holding a lease.
+ *
+ * @example
+ * ```ts
+ * import type { ApplicationCommandLeasedRecord } from '@lostgradient/weft';
+ *
+ * declare const record: ApplicationCommandLeasedRecord;
+ * console.log(record.attemptToken);
+ * ```
+ */
 export type ApplicationCommandLeasedRecord =
   ApplicationCommandClaimed | ApplicationCommandCancelling;
 
-/** Any record waiting in the delivery index. */
+/** Any record waiting in the delivery index.
+ *
+ * @example
+ * ```ts
+ * import type { ApplicationCommandWaitingRecord } from '@lostgradient/weft';
+ *
+ * declare const record: ApplicationCommandWaitingRecord;
+ * console.log(record.availableAt);
+ * ```
+ */
 export type ApplicationCommandWaitingRecord =
   ApplicationCommandAccepted | ApplicationCommandAvailable;
 
 /**
  * The per-mailbox header holding the FIFO sequence allocator and the
  * open-backlog counter admission backpressure reads.
+ *
+ * @example
+ * ```ts
+ * import type { ApplicationMailboxRecord } from '@lostgradient/weft';
+ *
+ * declare const header: ApplicationMailboxRecord;
+ * console.log(header.nextSequence, header.openCount);
+ * ```
  */
 export type ApplicationMailboxRecord = Readonly<{
   recordVersion: typeof APPLICATION_MAILBOX_RECORD_VERSION;

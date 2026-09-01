@@ -251,7 +251,16 @@ export type ApplicationCommandReceipt = Readonly<{
   cleanupPending?: boolean | undefined;
 }>;
 
-/** Bounded backlog accounting. Deliberately low-cardinality: no per-command detail. */
+/** Bounded backlog accounting. Deliberately low-cardinality: no per-command detail.
+ *
+ * @example
+ * ```ts
+ * import type { ApplicationMailboxCapacity } from '@lostgradient/weft';
+ *
+ * declare const capacity: ApplicationMailboxCapacity;
+ * console.log(capacity.open, capacity.remaining, capacity.limit);
+ * ```
+ */
 export type ApplicationMailboxCapacity = Readonly<{
   /** Commands admitted and not yet terminal. */
   open: number;
@@ -263,7 +272,16 @@ export type ApplicationMailboxCapacity = Readonly<{
   admitted: number;
 }>;
 
-/** Bounded listing options. `limit` is clamped to 1000. */
+/** Bounded listing options. `limit` is clamped to 1000.
+ *
+ * @example
+ * ```ts
+ * import type { ApplicationMailboxListOptions } from '@lostgradient/weft';
+ *
+ * const options: ApplicationMailboxListOptions = { limit: 50, states: ['available'] };
+ * console.log(options.limit); // 50
+ * ```
+ */
 export type ApplicationMailboxListOptions = {
   readonly limit?: number | undefined;
   readonly states?: readonly ApplicationCommandState[] | undefined;
@@ -281,6 +299,14 @@ export type ApplicationMailboxListOptions = {
  * Weft holds only the locator and the caller-supplied digest and never
  * dereferences either, so `verified` is `false` and verification is the
  * consumer's job.
+ *
+ * @example
+ * ```ts
+ * import type { ApplicationCommandClaimedPayload } from '@lostgradient/weft';
+ *
+ * declare const payload: ApplicationCommandClaimedPayload;
+ * if (payload.form === 'inline') console.log(payload.verified); // true
+ * ```
  */
 export type ApplicationCommandClaimedPayload =
   | {
@@ -344,7 +370,16 @@ export type ApplicationMailboxClaimResult =
   | { readonly status: 'empty' }
   | { readonly status: 'held'; readonly availableAt: number };
 
-/** Result of renewing a lease and reporting liveness. */
+/** Result of renewing a lease and reporting liveness.
+ *
+ * @example
+ * ```ts
+ * import type { ApplicationCommandRenewalResult } from '@lostgradient/weft';
+ *
+ * declare const result: ApplicationCommandRenewalResult;
+ * if (result.status === 'renewed' && result.cancellationRequested) console.log('wind down');
+ * ```
+ */
 export type ApplicationCommandRenewalResult =
   | {
       readonly status: 'renewed';
@@ -368,6 +403,14 @@ export type ApplicationCommandRenewalResult =
  * means another attempt owns the command and this one should stop, while
  * `deadline-exceeded` means the command itself is over and no attempt will
  * settle it. Maintenance dead-letters the record.
+ *
+ * @example
+ * ```ts
+ * import type { ApplicationCommandSettleResult } from '@lostgradient/weft';
+ *
+ * declare const result: ApplicationCommandSettleResult;
+ * if (result.status === 'settled') console.log(result.receipt.state);
+ * ```
  */
 export type ApplicationCommandSettleResult =
   | { readonly status: 'settled'; readonly receipt: ApplicationCommandReceipt }
@@ -413,6 +456,14 @@ export type ApplicationCommandCancellationResult =
  *
  * `settled: false` means the mailbox stopped waiting — never that the handler
  * stopped.
+ *
+ * @example
+ * ```ts
+ * import type { ApplicationCommandCleanupResult } from '@lostgradient/weft';
+ *
+ * declare const cleanup: ApplicationCommandCleanupResult;
+ * console.log(cleanup.status === 'pending'); // the mailbox stopped waiting
+ * ```
  */
 export type ApplicationCommandCleanupResult =
   | { readonly status: 'settled'; readonly receipt: ApplicationCommandReceipt }
@@ -447,7 +498,16 @@ export type ApplicationMailboxMaintenanceReport = Readonly<{
   retired: number;
 }>;
 
-/** Options for the abortable wait for new available work. */
+/** Options for the abortable wait for new available work.
+ *
+ * @example
+ * ```ts
+ * import type { ApplicationMailboxWaitOptions } from '@lostgradient/weft';
+ *
+ * const options: ApplicationMailboxWaitOptions = { timeoutMs: 5_000, pollIntervalMs: 50 };
+ * console.log(options.timeoutMs); // 5000
+ * ```
+ */
 export type ApplicationMailboxWaitOptions = {
   readonly signal?: AbortSignal | undefined;
   readonly timeoutMs?: number | undefined;
