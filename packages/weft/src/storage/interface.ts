@@ -1,3 +1,4 @@
+import { APPLICATION_MAILBOX_KEYS } from './application-mailbox-keys.ts';
 import { requireStorageCapability, type StorageCapabilities } from './capabilities.ts';
 import { DEFAULT_SCOPE } from './default-scope.ts';
 import type { DeleteRangeOptions } from './delete-range.ts';
@@ -7,7 +8,7 @@ import {
   storageHasCore,
   storageKeysCore,
 } from './derived-operations.ts';
-import { encodeStorageKeyComponent } from './key-encoding.ts';
+import { encodeStorageKeyComponent, formatSortableStorageTimestamp } from './key-encoding.ts';
 import { OWNERSHIP_CLAIM_KEYS } from './ownership-keys.ts';
 
 export { assertDurableStorageForRecovery, requireStorageCapability } from './capabilities.ts';
@@ -433,7 +434,7 @@ export {
   tryDecodeStorageKeyComponent,
 } from './key-encoding.ts';
 
-const formatSortableTimestamp = (timestamp: number): string => String(timestamp).padStart(16, '0');
+const formatSortableTimestamp = formatSortableStorageTimestamp;
 
 // Leading sort-class digit for a buffered-signal key. `consumeSignal` scans the
 // `sig:<workflowId>:<name>:` prefix with `limit: 1` and takes the lexically-first
@@ -624,6 +625,7 @@ export const KEYS = {
    * {@link KEYS.leaseEpoch}.
    */
   leaseHolder: () => 'lease:holder',
+  ...APPLICATION_MAILBOX_KEYS,
   ...OWNERSHIP_CLAIM_KEYS,
   budget: (namespace: string, period: string, date: string) =>
     `budget:${namespace}:${period}:${date}`,

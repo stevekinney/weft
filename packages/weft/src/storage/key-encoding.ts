@@ -62,3 +62,21 @@ export function tryDecodeStorageKeyComponent(value: string): string | null {
     return null;
   }
 }
+
+/**
+ * Format a millisecond timestamp as a fixed-width, zero-padded string so
+ * lexicographic key order matches chronological order.
+ *
+ * Sixteen digits covers every millisecond timestamp JavaScript can represent as
+ * a safe integer, so a shorter value can never sort after a longer one.
+ *
+ * @example
+ * ```ts
+ * import { formatSortableStorageTimestamp } from '@lostgradient/weft/storage';
+ *
+ * console.log(formatSortableStorageTimestamp(1700000000000)); // '0001700000000000'
+ * ```
+ */
+export function formatSortableStorageTimestamp(timestamp: number): string {
+  return String(timestamp).padStart(16, '0');
+}

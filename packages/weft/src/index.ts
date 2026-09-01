@@ -494,6 +494,53 @@ export type {
   AtomicStateSubscription,
   SleepFunction,
 } from './core/atomic-state';
+// Durable application command mailbox — storage-backed FIFO commands with
+// receipts, attempt-fenced claims, and durable cancellation (WFT-84).
+export { ApplicationMailbox } from './core/application-mailbox';
+export type {
+  ApplicationCommandAdmission,
+  ApplicationCommandCancellationResult,
+  ApplicationCommandClaim,
+  ApplicationCommandClaimedPayload,
+  ApplicationCommandCleanupResult,
+  ApplicationCommandInput,
+  ApplicationCommandReceipt,
+  ApplicationCommandRenewalResult,
+  ApplicationCommandSettleResult,
+  ApplicationMailboxCapacity,
+  ApplicationMailboxClaimResult,
+  ApplicationMailboxEventSink,
+  ApplicationMailboxListOptions,
+  ApplicationMailboxMaintenanceReport,
+  ApplicationMailboxOptions,
+  ApplicationMailboxWaitOptions,
+} from './core/application-mailbox-contract';
+export { ApplicationMailboxContentionError } from './core/application-mailbox-internals';
+export {
+  isApplicationCommandLeased,
+  isApplicationCommandTerminalState,
+  isApplicationCommandWaiting,
+} from './core/application-mailbox-types';
+export type {
+  ApplicationCommandAccepted,
+  ApplicationCommandAvailable,
+  ApplicationCommandCancelling,
+  ApplicationCommandCausation,
+  ApplicationCommandClaimed,
+  ApplicationCommandFailure,
+  ApplicationCommandFailureReason,
+  ApplicationCommandInlinePayload,
+  ApplicationCommandLeasedRecord,
+  ApplicationCommandPayload,
+  ApplicationCommandRecord,
+  ApplicationCommandReferencePayload,
+  ApplicationCommandState,
+  ApplicationCommandTerminalRecord,
+  ApplicationCommandTerminalState,
+  ApplicationCommandWaitingRecord,
+  ApplicationMailboxRecord,
+} from './core/application-mailbox-types';
+export { ApplicationCommandValidationError } from './core/application-mailbox-validation';
 // Durable concurrency primitives — mutex/semaphore built on AtomicState CAS.
 export { DurableMutex, DurableSemaphore, initialLockRecord } from './core/concurrency';
 export type {

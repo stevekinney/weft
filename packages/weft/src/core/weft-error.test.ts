@@ -7,6 +7,8 @@ import {
   ActivityReconciliationIndeterminateError,
   ActivityResolutionError,
   ActivityScheduleToCloseTimeoutError,
+  ApplicationCommandValidationError,
+  ApplicationMailboxContentionError,
   AsyncActivityTokenNotFoundError,
   AtomicStateConflictError,
   BranchTopologyChangedError,
@@ -138,6 +140,9 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
     new WorkerManifestBuildError('workflow "checkout" not registered'),
   OwnershipModeMismatchError: () =>
     new OwnershipModeMismatchError('workflow-lease', 'lease', 1_700_000_000_000),
+  ApplicationCommandValidationError: () =>
+    new ApplicationCommandValidationError('caller must be a non-empty string.'),
+  ApplicationMailboxContentionError: () => new ApplicationMailboxContentionError('admit', null),
 };
 
 describe('WeftError', () => {
