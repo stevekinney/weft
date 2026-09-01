@@ -81,9 +81,17 @@ export async function waitForAvailableWork(
   const interval = options?.pollIntervalMs ?? DEFAULT_MAILBOX_POLL_INTERVAL_MS;
   const deadline = runtime.now() + (options?.timeoutMs ?? 0);
   while (true) {
+    // Observe first, so the documented `timeoutMs: 0` default still performs one
+    // check rather than returning before looking at anything.
     if (await hasDueWork(runtime)) return true;
-    if (runtime.now() >= deadline) return false;
-    if (!(await delayUnlessAborted(interval, disposal, options?.signal))) return false;
+    // Clamp each sleep to what is left of the budget. An interval longer than the
+    // remaining time would otherwise put the next observation past the bound the
+    // caller asked for, turning a timeout into a late success.
+    const remaining = deadline - runtime.now();
+    if (remaining <= 0) return false;
+    if (!(await delayUnlessAborted(Math.min(interval, remaining), disposal, options?.signal))) {
+      return false;
+    }
   }
 }
 

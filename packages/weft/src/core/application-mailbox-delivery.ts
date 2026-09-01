@@ -25,8 +25,10 @@ import {
   type MailboxRuntime,
 } from './application-mailbox-internals.ts';
 import { loadCommand, loadDeliveryHead } from './application-mailbox-storage.ts';
+import { recoverExpiredCommand } from './application-mailbox-transitions-recovery.ts';
 import { claimWaitingCommand } from './application-mailbox-transitions.ts';
 import type { ApplicationCommandRecord } from './application-mailbox-types.ts';
+import { requireGeneratedIdentifier } from './application-mailbox-validation.ts';
 import { computePayloadDigest } from './application-payload-digest.ts';
 import { PersistedDataCorruptError } from './persisted-data-incompatible-error.ts';
 
@@ -85,6 +87,69 @@ async function discardOrphanedEntry(
 }
 
 /**
+ * Dead-letter a delivery-index head that outlived its absolute command deadline.
+ *
+ * A lost compare-and-swap is not an error here: another actor terminalized the
+ * same record, which is the outcome this wanted anyway.
+ */
+async function terminalizeExpiredHead(
+  runtime: MailboxRuntime,
+  loaded: LoadedCommandRecord,
+  now: number,
+): Promise<void> {
+  const transition = recoverExpiredCommand(loaded.record, {
+    now,
+    retryBackoffMs: runtime.policy.retryBackoffMs,
+    maxRetryBackoffMs: runtime.policy.maxRetryBackoffMs,
+  });
+  if (!transition.ok) return;
+  await commitCommandTransition(runtime, {
+    previous: loaded.record,
+    expectedBytes: loaded.bytes,
+    next: transition.next,
+    now,
+  });
+}
+
+/**
+ * What the delivery index's head currently offers.
+ *
+ * Resolving this separately from the claim keeps every reason a head is not
+ * claimable — gone, not yet due, past its deadline — in one place rather than
+ * interleaved with the compare-and-swap loop.
+ */
+type DeliverableHead =
+  | { readonly status: 'claimable'; readonly loaded: LoadedCommandRecord }
+  | { readonly status: 'empty' }
+  | { readonly status: 'held'; readonly availableAt: number }
+  /** The head could not be used and the caller should look again. */
+  | { readonly status: 'retry' };
+
+async function resolveDeliverableHead(
+  runtime: MailboxRuntime,
+  now: number,
+): Promise<DeliverableHead> {
+  const head = await loadDeliveryHead(runtime.storage, runtime.keys);
+  if (head === null) return { status: 'empty' };
+  const loaded = await loadCommand(runtime.storage, runtime.keys, head.commandId);
+  if (loaded === null || isUndeliverable(loaded)) {
+    await discardOrphanedEntry(runtime, head);
+    return { status: 'retry' };
+  }
+  if (now < loaded.record.availableAt) {
+    return { status: 'held', availableAt: loaded.record.availableAt };
+  }
+  if (now >= loaded.record.absoluteDeadlineAt) {
+    // Past its deadline and so no longer deliverable. Terminalize it here rather
+    // than waiting for maintenance, or a consumer polling `claim()` would spin
+    // on a head that can never be handed out.
+    await terminalizeExpiredHead(runtime, loaded, now);
+    return { status: 'retry' };
+  }
+  return { status: 'claimable', loaded };
+}
+
+/**
  * Lease the FIFO head of a mailbox to one attempt.
  *
  * The returned claim carries an attempt-scoped `AbortSignal` registered in this
@@ -98,19 +163,14 @@ export async function claimNextCommand(
 ): Promise<ApplicationMailboxClaimResult> {
   for (let attempt = 1; attempt <= MAX_MAILBOX_TRANSITION_ATTEMPTS; attempt += 1) {
     options?.signal?.throwIfAborted();
-    const head = await loadDeliveryHead(runtime.storage, runtime.keys);
-    if (head === null) return { status: 'empty' };
-    const loaded = await loadCommand(runtime.storage, runtime.keys, head.commandId);
-    if (isUndeliverable(loaded) || loaded === null) {
-      await discardOrphanedEntry(runtime, head);
-      continue;
-    }
     const now = runtime.now();
-    if (now < loaded.record.availableAt) {
-      return { status: 'held', availableAt: loaded.record.availableAt };
-    }
+    const head = await resolveDeliverableHead(runtime, now);
+    if (head.status === 'empty') return { status: 'empty' };
+    if (head.status === 'held') return { status: 'held', availableAt: head.availableAt };
+    if (head.status === 'retry') continue;
+    const loaded = head.loaded;
     const payload = await verifyClaimedPayload(runtime, loaded.record);
-    const attemptToken = runtime.generateId();
+    const attemptToken = requireGeneratedIdentifier(runtime.generateId(), 'attemptToken');
     const transition = claimWaitingCommand(loaded.record, { now, attemptToken });
     if (!transition.ok) continue;
     const committed = await commitCommandTransition(runtime, {
@@ -121,7 +181,16 @@ export async function claimNextCommand(
     });
     if (!committed) continue;
     const controller = new AbortController();
-    runtime.attemptControllers.set(attemptToken, controller);
+    // Disposal may have run while the commit was in flight. Registering an
+    // un-aborted controller now would hand back a live claim from a disposed
+    // mailbox that no later `dispose()` could ever reach.
+    if (runtime.isDisposed()) {
+      controller.abort(
+        new Error('The application mailbox was disposed while this claim committed.'),
+      );
+    } else {
+      runtime.attemptControllers.set(attemptToken, controller);
+    }
     return {
       status: 'claimed',
       claim: {

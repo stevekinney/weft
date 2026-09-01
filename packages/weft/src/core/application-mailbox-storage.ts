@@ -47,6 +47,8 @@ export type MailboxKeys = Readonly<{
   command: (commandId: string) => string;
   readyPrefix: string;
   ready: (sequence: number) => string;
+  bySequencePrefix: string;
+  bySequence: (sequence: number) => string;
   idempotency: (key: string) => string;
   terminalPrefix: string;
   terminal: (terminalAt: number, commandId: string) => string;
@@ -62,6 +64,8 @@ export function createMailboxKeys(namespace: string, resourceId: string): Mailbo
     command: (commandId) => KEYS.applicationCommand(namespace, resourceId, commandId),
     readyPrefix: KEYS.applicationCommandReadyPrefix(namespace, resourceId),
     ready: (sequence) => KEYS.applicationCommandReady(namespace, resourceId, sequence),
+    bySequencePrefix: KEYS.applicationCommandBySequencePrefix(namespace, resourceId),
+    bySequence: (sequence) => KEYS.applicationCommandBySequence(namespace, resourceId, sequence),
     idempotency: (key) => KEYS.applicationCommandIdempotency(namespace, resourceId, key),
     terminalPrefix: KEYS.applicationCommandTerminalPrefix(namespace, resourceId),
     terminal: (terminalAt, commandId) =>
@@ -251,6 +255,8 @@ export type MailboxCommitPlan = {
   readonly operations: readonly BatchOperation[];
   readonly event: { readonly kind: string; readonly payload: unknown } | null;
   readonly now: number;
+  /** The key an event sink's commit must be observable at in the mailbox's own storage. */
+  readonly verifyKey: string;
 };
 
 /**
@@ -274,6 +280,12 @@ export async function commitMailboxTransition(
       { kind: plan.event.kind, emittedAtMs: plan.now, payload: plan.event.payload },
       { conditions: plan.conditions, operations: plan.operations },
     );
+    // A sink is only allowed to commit against THIS mailbox's storage. A feed
+    // built over a different backend would apply these operations there and
+    // report success, so `admit()` would hand back a durable-looking receipt
+    // that never existed here. Verify the first commit landed where it belongs;
+    // one read per mailbox catches the misconfiguration at its first use.
+    await assertSinkCommittedLocally(storage, plan);
     return true;
   } catch (error) {
     // The feed retries its own sequence allocation internally and only throws
@@ -283,6 +295,28 @@ export async function commitMailboxTransition(
     if (await conditionsStillHold(storage, plan.conditions)) throw error;
     return false;
   }
+}
+
+/**
+ * Storage backends already proven to receive an event sink's committed writes.
+ *
+ * The check runs once per backend rather than per transition: a sink that
+ * commits to the right place once will keep doing so, and a misconfiguration is
+ * a construction-time mistake that shows up on the very first commit.
+ */
+const VERIFIED_SINK_BACKENDS = new WeakSet<Storage>();
+
+async function assertSinkCommittedLocally(
+  storage: Storage,
+  plan: MailboxCommitPlan,
+): Promise<void> {
+  if (VERIFIED_SINK_BACKENDS.has(storage)) return;
+  if ((await storage.get(plan.verifyKey)) === null) {
+    throw new Error(
+      'The configured application mailbox event sink committed to a different storage backend than the mailbox. Build the fleet event feed over the same Storage instance the mailbox uses.',
+    );
+  }
+  VERIFIED_SINK_BACKENDS.add(storage);
 }
 
 /**
@@ -305,6 +339,7 @@ export function planCommandTransition(
   },
 ): MailboxCommitPlan {
   return {
+    verifyKey: keys.command(options.next.commandId),
     conditions: [
       { key: keys.command(options.next.commandId), expectedValue: options.expectedBytes },
       ...(options.extraConditions ?? []),

@@ -132,6 +132,20 @@ describe('computePayloadDigest ordering', () => {
 });
 
 describe('computePayloadDigest fail-closed behavior', () => {
+  it('treats an own `__proto__` key as payload data, not as a prototype', async () => {
+    // `JSON.parse` produces own `__proto__` properties. Assigning one onto `{}`
+    // would reassign the prototype and drop it from the digest, letting two
+    // different payloads collide.
+    const left = JSON.parse('{"__proto__": {"role": "admin"}}') as unknown;
+    const right = JSON.parse('{"__proto__": {"role": "reader"}}') as unknown;
+    const absent = JSON.parse('{}') as unknown;
+    expect(await computePayloadDigest(left)).not.toBe(await computePayloadDigest(right));
+    expect(await computePayloadDigest(left)).not.toBe(await computePayloadDigest(absent));
+    expect(await computePayloadDigest(left)).toBe(
+      await computePayloadDigest(JSON.parse('{"__proto__": {"role": "admin"}}')),
+    );
+  });
+
   it('rejects a cycle rather than looping', async () => {
     const cyclic: Record<string, unknown> = {};
     cyclic['self'] = cyclic;

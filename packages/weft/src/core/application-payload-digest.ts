@@ -111,9 +111,19 @@ function canonicalizeObject(value: object, seen: Set<object>, depth: number): un
       'Payload contains a class instance the canonical digest cannot order.',
     );
   }
-  const canonical: Record<string, unknown> = {};
+  // A null prototype, not `{}`: an own `__proto__` key (which `JSON.parse` can
+  // produce) would otherwise reassign the prototype instead of becoming a data
+  // property, silently dropping it from the digest. Two payloads differing only
+  // in `__proto__` would then collide and an idempotent retry would resolve to
+  // the wrong command.
+  const canonical: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   for (const key of Object.keys(value).toSorted()) {
-    canonical[key] = canonicalize(Reflect.get(value, key), seen, depth + 1);
+    Object.defineProperty(canonical, key, {
+      value: canonicalize(Reflect.get(value, key), seen, depth + 1),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
   }
   return canonical;
 }

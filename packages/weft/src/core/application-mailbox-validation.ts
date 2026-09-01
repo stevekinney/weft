@@ -14,9 +14,13 @@ import type {
   ApplicationCommandInput,
   ApplicationMailboxOptions,
 } from './application-mailbox-contract.ts';
-import type { ApplicationCommandPayload } from './application-mailbox-types.ts';
+import type {
+  ApplicationCommandFailure,
+  ApplicationCommandPayload,
+} from './application-mailbox-types.ts';
 import { computePayloadDigest, PayloadDigestError } from './application-payload-digest.ts';
-import { encode } from './codec.ts';
+import { decode, encode } from './codec.ts';
+import { isJSONValue, type JSONValue } from './json.ts';
 import { WeftError } from './weft-error.ts';
 
 /** Maximum bytes in any opaque identity component (namespace, resource, caller, target, kind). */
@@ -33,6 +37,16 @@ export const MAX_APPLICATION_MAILBOX_BACKLOG = 1_000_000;
 export const MAX_APPLICATION_MAILBOX_LIST_LIMIT = 1000;
 
 const HEX_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
+
+/** Maximum bytes in a caller-supplied failure message. */
+export const MAX_FAILURE_MESSAGE_BYTES = 2048;
+
+const FAILURE_REASONS: ReadonlySet<ApplicationCommandFailure['reason']> = new Set([
+  'application',
+  'attempts-exhausted',
+  'deadline-exceeded',
+  'cancelled',
+]);
 
 /**
  * Thrown when a caller hands the mailbox something it cannot admit: a missing
@@ -203,7 +217,13 @@ async function validateInlinePayload(
     );
   }
   try {
-    return { payload: { form: 'inline', value }, digest: await computePayloadDigest(value) };
+    const digest = await computePayloadDigest(value);
+    // Snapshot rather than retaining the caller's reference. Digesting awaits
+    // Web Crypto and admission then awaits storage, so a caller could mutate the
+    // object in between and have the mutated bytes persisted under the earlier
+    // digest — which would fail digest verification at the FIFO head and block
+    // the whole mailbox behind a command nobody can claim.
+    return { payload: { form: 'inline', value: decode(encode(value)) }, digest };
   } catch (cause) {
     if (cause instanceof PayloadDigestError) {
       throw new ApplicationCommandValidationError(
@@ -347,6 +367,109 @@ export async function validateCommandInput(
       MAX_DURATION_MS,
     ),
   };
+}
+
+/**
+ * Validate and snapshot a caller-supplied JSON value bound for a durable record.
+ *
+ * The record decoder requires `isJSONValue`, so a structured-clone value such as
+ * a `Map` or a `Date` would encode cleanly here and then make every later
+ * `receipt()`, `list()`, and maintenance read fail as corrupt persisted data.
+ * Rejecting it at the boundary that owns the contract keeps that failure where
+ * the caller can act on it.
+ *
+ * @throws {ApplicationCommandValidationError} When the value is not JSON-safe.
+ */
+export function validateDurableJSONValue<TField extends string>(
+  value: unknown,
+  field: TField,
+): JSONValue | undefined {
+  if (value === undefined) return undefined;
+  // Round-trip first, then check. Snapshotting defends against a caller mutating
+  // the object after this returns, and checking the snapshot rather than the
+  // input is what the decoder will actually see: a `Map` or `Date` encodes and
+  // decodes cleanly as itself and only then fails the JSON contract.
+  let snapshot: unknown;
+  try {
+    snapshot = decode(encode(value));
+  } catch (cause) {
+    throw new ApplicationCommandValidationError(
+      `${field} is not encodable by the structured-clone codec.`,
+      { cause },
+    );
+  }
+  if (!isJSONValue(snapshot)) {
+    throw new ApplicationCommandValidationError(
+      `${field} must be a JSON-safe value: durable records reject anything the record decoder cannot read back.`,
+    );
+  }
+  return snapshot;
+}
+
+/**
+ * Validate a caller-supplied failure record before it becomes terminal evidence.
+ *
+ * @throws {ApplicationCommandValidationError} When `details` is not JSON-safe.
+ */
+export function validateFailure(failure: ApplicationCommandFailure): ApplicationCommandFailure {
+  if (typeof failure !== 'object' || failure === null) {
+    throw new ApplicationCommandValidationError('failure must be an object.');
+  }
+  if (!FAILURE_REASONS.has(failure.reason)) {
+    throw new ApplicationCommandValidationError(
+      `failure.reason must be one of ${[...FAILURE_REASONS].join(', ')}.`,
+    );
+  }
+  const details = validateDurableJSONValue(failure.details, 'failure.details');
+  return {
+    reason: failure.reason,
+    message: optionalIdentity(failure.message, 'failure.message', MAX_FAILURE_MESSAGE_BYTES),
+    details,
+  };
+}
+
+/**
+ * Validate an injected identifier source's output before it reaches a durable key.
+ *
+ * `generateId` is caller-supplied. An empty result would write a delivery-index
+ * entry the decoder later rejects as corrupt, and an unbounded one would build an
+ * unbounded storage key.
+ *
+ * @throws {ApplicationCommandValidationError} When the generator returns an
+ * empty or oversized identifier.
+ */
+export function requireGeneratedIdentifier(value: string, field: string): string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new ApplicationCommandValidationError(
+      `The configured generateId() returned an empty ${field}; durable keys require a non-empty identifier.`,
+    );
+  }
+  if (byteLength(value) > MAX_APPLICATION_IDENTITY_BYTES) {
+    throw new ApplicationCommandValidationError(
+      `The configured generateId() returned a ${field} over ${MAX_APPLICATION_IDENTITY_BYTES} bytes.`,
+    );
+  }
+  return value;
+}
+
+/**
+ * Validate an explicit maintenance instant.
+ *
+ * A malformed scheduler value is destructive rather than merely wrong: `NaN`
+ * makes every comparison false so the retention sweep treats every receipt as
+ * expired, and `Infinity` terminalizes open commands with an undecodable
+ * `terminalAt`. Reject it before maintenance reads or writes anything.
+ *
+ * @throws {ApplicationCommandValidationError} When the instant is not a
+ * non-negative safe integer.
+ */
+export function requireMaintenanceInstant(now: number): number {
+  if (typeof now !== 'number' || !Number.isSafeInteger(now) || now < 0) {
+    throw new ApplicationCommandValidationError(
+      'runMaintenance() requires a non-negative safe-integer timestamp in milliseconds.',
+    );
+  }
+  return now;
 }
 
 /**

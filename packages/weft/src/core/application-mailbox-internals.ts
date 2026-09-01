@@ -42,8 +42,17 @@ import { WeftError } from './weft-error.ts';
  */
 export const MAX_MAILBOX_TRANSITION_ATTEMPTS = 25;
 
-/** How many command records one maintenance pass may examine. */
+/** How many command records one maintenance scan page reads at a time. */
 export const MAILBOX_MAINTENANCE_SCAN_LIMIT = 500;
+
+/**
+ * How many scan pages one maintenance pass may walk.
+ *
+ * The pass reaches the whole keyspace by paging, but stops after this many pages
+ * so a very large mailbox cannot make one call run unboundedly. The next pass
+ * starts again from the beginning and picks up whatever is still due.
+ */
+export const MAILBOX_MAINTENANCE_MAX_PAGES = 200;
 
 /** Everything a mailbox operation needs that is fixed at construction. */
 export type MailboxRuntime = {
@@ -53,9 +62,52 @@ export type MailboxRuntime = {
   readonly keys: MailboxKeys;
   readonly now: () => number;
   readonly generateId: () => string;
-  /** Abort controllers for attempts claimed by this process, keyed by attempt token. */
+  /**
+   * Abort controllers for attempts claimed in this process, keyed by attempt
+   * token — shared across every handle onto the same mailbox, so a cancellation
+   * raised through one handle reaches a claimant holding another.
+   */
   readonly attemptControllers: Map<string, AbortController>;
+  /** Whether the handle that owns this runtime has been disposed. */
+  readonly isDisposed: () => boolean;
 };
+
+/**
+ * Attempt controllers, shared per `(storage, namespace, resourceId)` within one
+ * process.
+ *
+ * Two `ApplicationMailbox` handles onto the same durable mailbox are the same
+ * mailbox. Giving each its own registry would make the documented in-process
+ * cancellation channel silently fail whenever the claimant and the canceller
+ * held different handles — the claimant's signal would never fire and it would
+ * learn about cancellation only through renewal, which is supposed to be the
+ * *cross-process* fallback. Keyed by `Storage` identity in a `WeakMap` so a
+ * discarded backend takes its registries with it.
+ */
+const ATTEMPT_CONTROLLERS_BY_STORAGE = new WeakMap<
+  Storage,
+  Map<string, Map<string, AbortController>>
+>();
+
+/** The shared attempt-controller registry for one mailbox scope in this process. */
+export function attemptControllerRegistry(
+  storage: Storage,
+  namespace: string,
+  resourceId: string,
+): Map<string, AbortController> {
+  let byScope = ATTEMPT_CONTROLLERS_BY_STORAGE.get(storage);
+  if (byScope === undefined) {
+    byScope = new Map();
+    ATTEMPT_CONTROLLERS_BY_STORAGE.set(storage, byScope);
+  }
+  const scope = `${encodeURIComponent(namespace)}:${encodeURIComponent(resourceId)}`;
+  let controllers = byScope.get(scope);
+  if (controllers === undefined) {
+    controllers = new Map();
+    byScope.set(scope, controllers);
+  }
+  return controllers;
+}
 
 /**
  * Thrown when a transition keeps losing its compare-and-swap.

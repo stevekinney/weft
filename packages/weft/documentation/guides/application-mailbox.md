@@ -80,7 +80,7 @@ console.log(retry.status); // 'duplicate'
 
 A payload is either carried inline or referenced.
 
-An **inline** payload is stored in the durable record and encoded with Weft's structured-clone codec, so `Uint8Array`, `Map`, `Set`, and `Date` round-trip verbatim. An opaque multimodal or managed-asset value survives as whatever you put in — nothing is coerced to text. Its digest is recomputed at claim time and a mismatch fails closed.
+An **inline** payload is snapshotted at admission, so mutating the object you passed in afterwards cannot change what was persisted. It is stored in the durable record and encoded with Weft's structured-clone codec, so `Uint8Array`, `Map`, `Set`, and `Date` round-trip verbatim. An opaque multimodal or managed-asset value survives as whatever you put in — nothing is coerced to text. Its digest is recomputed at claim time and a mismatch fails closed.
 
 A **reference** payload stores an opaque locator plus a caller-supplied SHA-256 digest. Weft never dereferences the locator, so it cannot verify that the remote content still matches; the claimant receives `verified: false` and the stored digest, and verification is the consumer's job. The digest is required for this form precisely because there is no other way to bind idempotency to payload identity.
 
@@ -122,6 +122,8 @@ if (result.status === 'held') {
 ```
 
 ## Claims Are Attempt-Fenced
+
+A claim is only ever issued inside the command's absolute deadline. Past it the head is dead-lettered rather than handed out, so a consumer is never given work it is no longer allowed to apply.
 
 A claim leases one command to one attempt and hands back an **attempt token**. Every later mutation from that claimant must present it. Two consumers sharing one durable store can never both hold a valid claim, and a superseded attempt cannot acknowledge, reject, cancel, extend, or heartbeat a newer one — it gets `stale` back, carrying the authoritative receipt.
 
@@ -173,7 +175,7 @@ The four outcomes are distinct because they mean different things:
 - `already-terminal`: it had already settled. Nothing is rewritten.
 - `unknown`: no such command.
 
-An **in-process** claimant learns about cancellation through the attempt-scoped `AbortSignal` on its claim. A claimant in **another process** never sees that signal — it learns from `renew()`'s `cancellationRequested` flag, which is the cross-process channel.
+An **in-process** claimant learns about cancellation through the attempt-scoped `AbortSignal` on its claim — including one holding a different `ApplicationMailbox` handle onto the same durable mailbox, since two handles onto the same mailbox are the same mailbox. A claimant in **another process** never sees that signal — it learns from `renew()`'s `cancellationRequested` flag, which is the cross-process channel.
 
 ```ts
 import { ApplicationMailbox, MemoryStorage } from '@lostgradient/weft';
@@ -208,17 +210,21 @@ const capacity = await mailbox.capacity();
 console.log(capacity.open, capacity.remaining, capacity.limit);
 ```
 
+Reading is bounded too. `list()` walks a sequence-ordered index rather than the command records themselves — records are keyed by minted id, so scanning them would mean reading and sorting the whole mailbox to answer even `limit: 1`. The limit bounds the storage reads, not just the returned slice.
+
 ## Maintenance Is Explicit
 
 Nothing in a mailbox runs on a hidden timer. `runMaintenance()` drives every time-based transition in one bounded pass: releasing delayed commands, reclaiming expired leases at their original FIFO position, dead-lettering commands past their absolute deadline, and retiring terminal receipts past `terminalRetentionMs`.
 
 That makes a mailbox compatible with `backgroundTasks: 'manual'` by construction — a host that owns its own scheduling calls `runMaintenance()` and gets exactly one deterministic pass, with a report of what it did.
 
-Retention deletes the command record, its terminal index entry, and its idempotency binding together. That last part is a real policy decision: **after retention, a retry of that idempotency key admits a new command** rather than resolving the original receipt. Retaining bindings forever is the only alternative, and it grows without bound.
+Each pass pages through the whole keyspace rather than re-reading one arbitrary page, so a mailbox larger than a single scan page still drains. A pass stops after a bounded number of pages; the next one picks up whatever is still due.
+
+Retention deletes the command record, its indexes, and its idempotency binding together. That last part is a real policy decision: **after retention, a retry of that idempotency key admits a new command** rather than resolving the original receipt. Retaining bindings forever is the only alternative, and it grows without bound.
 
 ## Events
 
-Pass a `FleetEventFeed` as `events` and every state transition commits atomically with its fleet event in one conditional batch. No restart can expose the state transition without its event, or the other way round.
+Pass a `FleetEventFeed` as `events` and every state transition commits atomically with its fleet event in one conditional batch. The feed must be built over the _same_ `Storage` the mailbox uses — a feed over a different backend would apply the mailbox's own operations there and report success, so the mailbox verifies its first commit landed locally and fails loudly if it did not. No restart can expose the state transition without its event, or the other way round.
 
 ```ts
 import { ApplicationMailbox, MemoryStorage } from '@lostgradient/weft';
@@ -234,6 +240,8 @@ events.dispose();
 The event kinds are `mailbox:command-accepted`, `-available`, `-claimed`, `-retry-scheduled`, `-cancellation-requested`, `-applied`, `-rejected`, `-cancelled`, and `-dead-lettered`. Payloads are bounded: identity, state, attempt counters, and nothing else. No command payload, no failure details.
 
 Observing the feed is non-consuming, and so is every read on the mailbox itself. `receipt()`, `list()`, and `capacity()` never claim, start, or advance work, so any number of observers can watch one mailbox without interfering with delivery or with each other.
+
+`outcome`, `progress`, and `failure.details` must be JSON-safe. A structured-clone value such as a `Map` or a `Date` would encode cleanly and then make every later read of that record fail as corrupt, so it is rejected at the boundary that owns the contract instead.
 
 ## Contention
 

@@ -225,6 +225,12 @@ describe('WEFT_RESERVED_KEY_PREFIXES', () => {
       KEYS.workflowOwnerEpoch('workflow-id'),
       KEYS.workflowOwnerHolder('workflow-id'),
       KEYS.ownershipModeMarker(),
+      KEYS.applicationMailbox('bureau', 'agent-7'),
+      KEYS.applicationCommand('bureau', 'agent-7', 'command-id'),
+      KEYS.applicationCommandReady('bureau', 'agent-7', 1),
+      KEYS.applicationCommandBySequence('bureau', 'agent-7', 1),
+      KEYS.applicationCommandIdempotency('bureau', 'agent-7', 'key'),
+      KEYS.applicationCommandTerminal('bureau', 'agent-7', 1, 'command-id'),
     ];
 
     for (const key of representativeKeys) {

@@ -149,6 +149,10 @@ export function claimWaitingCommand(
   if (live.state !== 'accepted' && live.state !== 'available')
     return rejectedTransition('not-waiting');
   if (options.now < live.availableAt) return rejectedTransition('not-due');
+  // The absolute deadline outranks availability. Leasing a command past it would
+  // hand a consumer work it is no longer allowed to apply, and the consumer
+  // would only discover that when it tried to settle — after the side effect.
+  if (options.now >= live.absoluteDeadlineAt) return rejectedTransition('deadline-exceeded');
   return succeededTransition({
     ...applicationCommandIdentityFields(live),
     state: 'claimed',

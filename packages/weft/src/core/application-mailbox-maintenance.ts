@@ -24,6 +24,7 @@ import {
   ApplicationMailboxContentionError,
   commitCommandTransition,
   isTerminalRecord,
+  MAILBOX_MAINTENANCE_MAX_PAGES,
   MAILBOX_MAINTENANCE_SCAN_LIMIT,
   MAX_MAILBOX_TRANSITION_ATTEMPTS,
   releaseAttemptController,
@@ -135,6 +136,7 @@ async function retireOneReceipt(runtime: MailboxRuntime, indexKey: string): Prom
     );
   }
   operations.push({ type: 'delete', key: runtime.keys.command(commandId) });
+  operations.push({ type: 'delete', key: runtime.keys.bySequence(loaded.record.sequence) });
   if (loaded.record.idempotencyKey !== undefined) {
     operations.push({
       type: 'delete',
@@ -188,6 +190,37 @@ function commandIdFromTerminalKey(key: string): string | null {
 }
 
 /**
+ * Collect every command due for a time-driven transition, paging through the
+ * whole keyspace rather than only its lexicographically first page.
+ *
+ * Command records are keyed by minted id, so a single bounded scan would keep
+ * re-reading the same arbitrary page: a due command outside it would never be
+ * released, reclaimed, or dead-lettered no matter how often maintenance ran.
+ * Paging with a cursor keeps each read bounded while still reaching everything,
+ * and {@link MAILBOX_MAINTENANCE_MAX_PAGES} keeps one pass from running away on
+ * a very large mailbox — the next pass resumes the work.
+ */
+async function collectDueCommands(runtime: MailboxRuntime, now: number): Promise<string[]> {
+  const due: string[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < MAILBOX_MAINTENANCE_MAX_PAGES; page += 1) {
+    let seen = 0;
+    const options =
+      cursor === undefined
+        ? { limit: MAILBOX_MAINTENANCE_SCAN_LIMIT }
+        : { limit: MAILBOX_MAINTENANCE_SCAN_LIMIT, gt: cursor };
+    for await (const [key, value] of runtime.storage.scan(runtime.keys.commandPrefix, options)) {
+      seen += 1;
+      cursor = key;
+      const record = decodeApplicationCommandRecord(value, key);
+      if (classify(record, now) !== null) due.push(record.commandId);
+    }
+    if (seen < MAILBOX_MAINTENANCE_SCAN_LIMIT) break;
+  }
+  return due;
+}
+
+/**
  * Run one bounded maintenance pass.
  *
  * The scan decodes every command record it visits, so a single corrupt record
@@ -206,13 +239,7 @@ export async function runMailboxMaintenance(
     cancelled: 0,
     retired: 0,
   };
-  const due: string[] = [];
-  for await (const [key, value] of runtime.storage.scan(runtime.keys.commandPrefix, {
-    limit: MAILBOX_MAINTENANCE_SCAN_LIMIT,
-  })) {
-    const record = decodeApplicationCommandRecord(value, key);
-    if (classify(record, now) !== null) due.push(record.commandId);
-  }
+  const due = await collectDueCommands(runtime, now);
   for (const commandId of due) {
     await advanceCommand(runtime, commandId, now, counters);
   }

@@ -59,6 +59,20 @@ export const APPLICATION_MAILBOX_KEYS = {
    */
   applicationCommandIdempotency: (namespace: string, resourceId: string, key: string) =>
     `appidem:v1:${encodeStorageKeyComponent(namespace)}:${encodeStorageKeyComponent(resourceId)}:${encodeStorageKeyComponent(key)}`,
+  /** Scan prefix for a mailbox's full sequence-ordered listing index. */
+  applicationCommandBySequencePrefix: (namespace: string, resourceId: string) =>
+    `appseq:v1:${encodeStorageKeyComponent(namespace)}:${encodeStorageKeyComponent(resourceId)}:`,
+  /**
+   * Every command in the mailbox, ordered by admission sequence.
+   *
+   * Distinct from the delivery index, which holds only the deliverable subset: a
+   * claimed or terminal command leaves that index but stays here until retention
+   * retires it. Bounded, ordered listing needs an index covering every state,
+   * because command records themselves are keyed by minted id and therefore scan
+   * in arbitrary order.
+   */
+  applicationCommandBySequence: (namespace: string, resourceId: string, sequence: number) =>
+    `appseq:v1:${encodeStorageKeyComponent(namespace)}:${encodeStorageKeyComponent(resourceId)}:${formatSortableStorageTimestamp(sequence)}`,
   /** Scan prefix for a mailbox's terminal-receipt retention index. */
   applicationCommandTerminalPrefix: (namespace: string, resourceId: string) =>
     `appterm:v1:${encodeStorageKeyComponent(namespace)}:${encodeStorageKeyComponent(resourceId)}:`,
