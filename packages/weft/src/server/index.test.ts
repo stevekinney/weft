@@ -5968,7 +5968,9 @@ describe('WeftServer.getTaskResult / adoptTaskResult', () => {
 
     const terminal = await server.getTaskResult('result-view-op');
     expect(terminal).toMatchObject({ status: 'terminal', disposition: 'resolved', adopted: false });
-    if (terminal?.status !== 'terminal') throw new Error('expected a terminal view');
+    if (terminal?.status !== 'terminal' || terminal.disposition !== 'resolved') {
+      throw new Error('expected a resolved terminal view');
+    }
 
     const adopted = await server.adoptTaskResult('result-view-op', terminal.resultDigest);
     expect(adopted).toBe(true);

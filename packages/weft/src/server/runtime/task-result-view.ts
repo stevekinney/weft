@@ -11,9 +11,11 @@
  * from this view for the same reason it is absent from the ledger itself:
  * `RemoteTaskTerminalResolved` only ever stores `resultDigest` (a content
  * hash), never the value — the durable ledger proves which attempt won,
- * it does not re-deliver the payload. `resultDigest` exists so a caller
- * that already has the value through whatever channel actually delivered
- * it can verify it matches before adopting.
+ * it does not re-deliver the payload. Only resolved views expose that digest:
+ * cancelled and retry-exhausted records use internal synthetic digests that
+ * include the attempt token. A resolved `resultDigest` exists so a caller that
+ * already has the value through whatever channel actually delivered it can
+ * verify it matches before adopting.
  *
  * "Adoption" (`adoptTaskResultImpl`) is an explicit caller assertion, not
  * something this module infers: nothing in the engine today automatically
@@ -48,7 +50,7 @@ import { commitTaskLedgerTransition } from './task-ledger-runtime.ts';
  * await using server = serve({ engine, port: 0 });
  *
  * const view: TaskResultView | null = await server.getTaskResult('op-1');
- * if (view?.status === 'terminal' && !view.adopted) {
+ * if (view?.status === 'terminal' && view.disposition === 'resolved' && !view.adopted) {
  *   await server.adoptTaskResult('op-1', view.resultDigest);
  * }
  * ```
@@ -57,13 +59,21 @@ export type TaskResultView =
   | Readonly<{ status: 'pending'; state: 'queued' | 'leased' | 'completing' | 'cancelling' }>
   | Readonly<{
       status: 'terminal';
-      disposition: 'resolved' | 'cancelled' | 'retryExhausted';
+      disposition: 'resolved';
       resultDigest: string;
       terminalAt: number;
       adopted: boolean;
       adoptedAt?: number;
-      /** Only present for `disposition: 'resolved'` — whether the worker reported success or failure. */
-      resultStatus?: 'completed' | 'failed';
+      /** Whether the worker reported success or failure. */
+      resultStatus: 'completed' | 'failed';
+      error?: string;
+    }>
+  | Readonly<{
+      status: 'terminal';
+      disposition: 'cancelled' | 'retryExhausted';
+      terminalAt: number;
+      adopted: boolean;
+      adoptedAt?: number;
       error?: string;
     }>
   | Readonly<{
@@ -75,15 +85,26 @@ export type TaskResultView =
     }>;
 
 function terminalTaskResultView(decoded: RemoteTaskTerminal): TaskResultView {
+  if (decoded.disposition === 'resolved') {
+    return {
+      status: 'terminal',
+      disposition: decoded.disposition,
+      resultDigest: decoded.resultDigest,
+      terminalAt: decoded.terminalAt,
+      adopted: decoded.adopted,
+      ...(decoded.adoptedAt !== undefined ? { adoptedAt: decoded.adoptedAt } : {}),
+      resultStatus: decoded.status,
+      ...(decoded.error !== undefined ? { error: decoded.error } : {}),
+    };
+  }
+
   return {
     status: 'terminal',
     disposition: decoded.disposition,
-    resultDigest: decoded.resultDigest,
     terminalAt: decoded.terminalAt,
     adopted: decoded.adopted,
     ...(decoded.adoptedAt !== undefined ? { adoptedAt: decoded.adoptedAt } : {}),
-    ...(decoded.disposition === 'resolved' ? { resultStatus: decoded.status } : {}),
-    ...('error' in decoded && decoded.error !== undefined ? { error: decoded.error } : {}),
+    ...('error' in decoded ? { error: decoded.error } : {}),
   };
 }
 

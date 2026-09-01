@@ -10,6 +10,7 @@ import {
   type RemoteTaskQueued,
   type RemoteTaskTerminalCancelled,
   type RemoteTaskTerminalResolved,
+  type RemoteTaskTerminalRetryExhausted,
 } from '../task-ledger.ts';
 import { minimalServeOptions } from './server-context.test-support.ts';
 import { adoptTaskResultImpl, getTaskResultViewImpl } from './task-result-view.ts';
@@ -123,6 +124,25 @@ function cancelledFixture(
   };
 }
 
+function retryExhaustedFixture(
+  overrides: Partial<RemoteTaskTerminalRetryExhausted> = {},
+): RemoteTaskTerminalRetryExhausted {
+  return {
+    ...baseFields(),
+    generation: 3,
+    state: 'terminal',
+    disposition: 'retryExhausted',
+    attempt: 3,
+    attemptToken: 'attempt-secret-retry-exhausted',
+    error: 'Activity exhausted all 3 retry attempts',
+    resultDigest: 'retry-exhausted:op-1:attempt-secret-retry-exhausted',
+    terminalAt: 4_000,
+    adopted: false,
+    retentionGeneration: 0,
+    ...overrides,
+  };
+}
+
 function deadLetteredFixture(
   overrides: Partial<RemoteTaskDeadLettered> = {},
 ): RemoteTaskDeadLettered {
@@ -191,21 +211,35 @@ describe('getTaskResultViewImpl', () => {
     expect(view).toMatchObject({ resultStatus: 'failed', error: 'boom' });
   });
 
-  it('reports a cancelled terminal record without a resultStatus', async () => {
-    const options = minimalServeOptions();
-    const record = cancelledFixture();
-    await options.engine.storage.put(taskLedgerKey('op-1'), encodeRemoteTaskRecord(record));
+  it.each([
+    [
+      'cancelled',
+      cancelledFixture({
+        attemptToken: 'attempt-secret-cancelled',
+        resultDigest: 'cancelled:op-1:attempt-secret-cancelled',
+      }),
+      'attempt-secret-cancelled',
+    ],
+    ['retryExhausted', retryExhaustedFixture(), 'attempt-secret-retry-exhausted'],
+  ] as const)(
+    'reports a %s terminal record without its synthetic resultDigest or attemptToken',
+    async (disposition, record, attemptToken) => {
+      const options = minimalServeOptions();
+      await options.engine.storage.put(taskLedgerKey('op-1'), encodeRemoteTaskRecord(record));
 
-    const view = await getTaskResultViewImpl(options.engine.storage, 'op-1');
+      const view = await getTaskResultViewImpl(options.engine.storage, 'op-1');
 
-    expect(view).toEqual({
-      status: 'terminal',
-      disposition: 'cancelled',
-      resultDigest: 'cancelled:op-1:0',
-      terminalAt: 4_000,
-      adopted: false,
-    });
-  });
+      expect(view).toEqual({
+        status: 'terminal',
+        disposition,
+        terminalAt: 4_000,
+        adopted: false,
+        ...('error' in record ? { error: record.error } : {}),
+      });
+      expect(view).not.toHaveProperty('resultDigest');
+      expect(JSON.stringify(view)).not.toContain(attemptToken);
+    },
+  );
 
   it('reports a deadLettered record', async () => {
     const options = minimalServeOptions();
