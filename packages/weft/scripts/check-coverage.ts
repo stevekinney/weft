@@ -1394,16 +1394,16 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       // exhaustiveness guard (`getTaskResultViewImpl`'s switch), matching the
       // identical pattern already allowed for `task-ledger-recovery.ts`.
       // `requireUncoveredLines` is intentionally omitted for the same reason
-      // it is omitted there: `default: {` (143) is a case-label/brace line
+      // it is omitted there: `default: {` (145) is a case-label/brace line
       // that flips between hit and unhit run to run with byte-identical
       // source — a coverage-attribution artifact, not a real reachability
-      // signal — so only the two dead statements inside it (146, 147) are
+      // signal — so only the two dead statements inside it (148, 149) are
       // guaranteed to read 0 every run. The line numbers moved when WFT-94
       // split the terminal view into resolved and non-resolved projections.
       {
         reason:
           'Compile-time exhaustiveness guard for a closed discriminated union has no reachable runtime path to test without an unsafe cast.',
-        lines: new Set([143, 146, 147]),
+        lines: new Set([145, 148, 149]),
       },
     ],
     [

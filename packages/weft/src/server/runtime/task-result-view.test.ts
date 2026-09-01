@@ -330,6 +330,7 @@ describe('adoptTaskResultImpl', () => {
     await options.engine.storage.put(taskLedgerKey('op-1'), encodeRemoteTaskRecord(record));
 
     expect(await adoptTaskResultImpl(options.engine.storage, 'op-1', 'digest-1')).toBe(false);
+    expect(await adoptTaskResultImpl(options.engine.storage, 'op-1')).toBe(false);
   });
 
   it('rejects adopting a nonexistent record', async () => {
