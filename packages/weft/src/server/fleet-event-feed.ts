@@ -62,6 +62,7 @@ export type FleetEventFeed = {
 };
 
 const DEFAULT_RETENTION_BATCH_SIZE = 100;
+const REPLAY_PAGE_SIZE = 128;
 
 /**
  * Build a `FleetEventFeed` backed by the given `Storage` — typically
@@ -73,30 +74,14 @@ const DEFAULT_RETENTION_BATCH_SIZE = 100;
  * This feed does not subscribe to `Engine` events on its own. `serve()` bridges
  * engine lifecycle events into it; a direct `handleRequest()` host must append
  * the events it wants `/v1/events/sse` to carry.
- *
- * @example
- * ```ts
- * import { Engine, MemoryStorage } from '@lostgradient/weft';
- * import {
- *   createFleetEventFeed,
- *   handleRequest,
- *   type HandlerOptions,
- * } from '@lostgradient/weft/server/handler';
- *
- * const engine = new Engine({ storage: new MemoryStorage() });
- * const fleetEventFeed = createFleetEventFeed(engine.storage);
- * const options: HandlerOptions = { fleetEventFeed };
- *
- * async function handleFleetEventsSse(request: Request): Promise<Response> {
- *   return handleRequest(request, engine, options);
- * }
- * void handleFleetEventsSse;
- * ```
  */
 export function createFleetEventFeed(
   storage: Storage,
   feedOptions?: FleetEventFeedOptions,
 ): FleetEventFeed {
+  if (!storage.capabilities().conditionalBatch) {
+    throw new Error('Fleet event feeds require storage with conditional batch support.');
+  }
   const liveBufferSize = feedOptions?.liveBufferSize ?? 1000;
   const livePollIntervalMs = feedOptions?.livePollIntervalMs ?? 100;
   if (!Number.isSafeInteger(liveBufferSize) || liveBufferSize < 1) {
@@ -160,6 +145,9 @@ export function createFleetEventFeed(
     callerOperations: readonly BatchOperation[] = [],
     maxAttempts = 25,
   ): Promise<FleetEventEnvelope | null> {
+    if (event.kind === 'fleet:gap') {
+      throw new RangeError('The fleet:gap event kind is reserved for retention notices.');
+    }
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       const conditions = loadConditions === undefined ? [] : await loadConditions();
       if (conditions === null) return null;
@@ -186,21 +174,26 @@ export function createFleetEventFeed(
 
   async function* replayPersistedFleetEvents(options: {
     afterSequence: number;
+    requestedCursor?: Cursor;
   }): AsyncIterable<FleetEventEnvelope> {
-    const { floor, envelopes } = await loadConsistentReplay(storage, options.afterSequence);
-    if (options.afterSequence < floor - 1) {
-      yield {
-        kind: 'fleet:gap',
-        sequence: floor - 1,
-        cursor: encodeCursor(floor - 1),
-        emittedAtMs: 0,
-        payload: {
-          requestedCursor: options.afterSequence < 0 ? '-1' : encodeCursor(options.afterSequence),
-          firstRetainedSequence: floor,
-        },
-      };
+    let deliveredSequence = options.afterSequence;
+    let gapCursor =
+      options.requestedCursor ??
+      (options.afterSequence < 0 ? '-1' : encodeCursor(options.afterSequence));
+    while (true) {
+      const page = await loadConsistentReplayPage(storage, deliveredSequence);
+      if (deliveredSequence < page.floor - 1) {
+        deliveredSequence = page.floor - 1;
+        yield createGapEnvelope(deliveredSequence, gapCursor, page.floor);
+        gapCursor = encodeCursor(deliveredSequence);
+        continue;
+      }
+      for (const envelope of page.envelopes) {
+        deliveredSequence = envelope.sequence;
+        yield envelope;
+      }
+      if (page.envelopes.length < REPLAY_PAGE_SIZE) return;
     }
-    yield* envelopes;
   }
 
   async function snapshotTailSequence(): Promise<number> {
@@ -231,35 +224,38 @@ export function createFleetEventFeed(
     validateRetentionOptions(options);
     const requestedLimit = options.limit ?? DEFAULT_RETENTION_BATCH_SIZE;
     const limit = Math.min(requestedLimit, Math.floor((MAX_BATCH_OPERATIONS - 1) / 2));
-    const watermarkValue = await storage.get(KEYS.fleetEventWatermark());
-    const floor = decodeRetentionFloorOrThrow(watermarkValue);
-    const tail = await snapshotTailSequence();
-    const target = Math.min(options.beforeSequence, tail + 1);
-    if (target <= floor) return 0;
-    const recordsToDelete = await collectRetentionRecords(storage, target, limit);
-    const deletedThrough = recordsToDelete.at(-1)?.key;
-    const deletedThroughSequence =
-      deletedThrough === undefined ? floor : parseFleetEventSequenceFromKey(deletedThrough)! + 1;
-    const newFloor = recordsToDelete.length < limit ? target : deletedThroughSequence;
-    const operations: BatchOperation[] = [
-      ...recordsToDelete.flatMap(({ key, workflowId, sequence }) => [
-        { type: 'delete' as const, key },
-        ...(workflowId === undefined
-          ? []
-          : [{ type: 'delete' as const, key: KEYS.fleetEventByWorkflow(workflowId, sequence) }]),
-      ]),
-      {
-        type: 'put',
-        key: KEYS.fleetEventWatermark(),
-        value: encode({ firstRetainedSequence: newFloor }),
-      },
-    ];
-    const committed = await storageConditionalBatch(
-      storage,
-      [{ key: KEYS.fleetEventWatermark(), expectedValue: watermarkValue }],
-      operations,
-    );
-    return committed ? recordsToDelete.length : 0;
+    for (let attempt = 1; attempt <= 25; attempt += 1) {
+      const watermarkValue = await storage.get(KEYS.fleetEventWatermark());
+      const floor = decodeRetentionFloorOrThrow(watermarkValue);
+      const tail = await snapshotTailSequence();
+      const target = Math.min(options.beforeSequence, tail + 1);
+      if (target <= floor) return 0;
+      const recordsToDelete = await collectRetentionRecords(storage, target, limit);
+      const deletedThrough = recordsToDelete.at(-1)?.key;
+      const deletedThroughSequence =
+        deletedThrough === undefined ? floor : parseFleetEventSequenceFromKey(deletedThrough)! + 1;
+      const newFloor = recordsToDelete.length < limit ? target : deletedThroughSequence;
+      const operations: BatchOperation[] = [
+        ...recordsToDelete.flatMap(({ key, workflowId, sequence }) => [
+          { type: 'delete' as const, key },
+          ...(workflowId === undefined
+            ? []
+            : [{ type: 'delete' as const, key: KEYS.fleetEventByWorkflow(workflowId, sequence) }]),
+        ]),
+        {
+          type: 'put',
+          key: KEYS.fleetEventWatermark(),
+          value: encode({ firstRetainedSequence: newFloor }),
+        },
+      ];
+      const committed = await storageConditionalBatch(
+        storage,
+        [{ key: KEYS.fleetEventWatermark(), expectedValue: watermarkValue }],
+        operations,
+      );
+      if (committed) return recordsToDelete.length;
+    }
+    throw new Error('Fleet event retention lost its storage precondition after 25 attempts.');
   }
 
   function subscribeLive(listener: (envelope: FleetEventEnvelope) => void): () => void {
@@ -288,7 +284,6 @@ export function createFleetEventFeed(
       createDurableSubscription(
         backend,
         {
-          liveBufferSize,
           pollIntervalMs: livePollIntervalMs,
           lifecycleSignal: disposalController.signal,
         },
@@ -309,8 +304,7 @@ async function loadTailAuthority(
   storage: Storage,
 ): Promise<{ tail: number; tailValue: Uint8Array | null } | null> {
   const tailValue = await storage.get(KEYS.fleetEventTail());
-  const tail =
-    tailValue === null ? await requireEmptyFleetHistory(storage) : decodeTailOrThrow(tailValue);
+  const tail = tailValue === null ? -1 : decodeTailOrThrow(tailValue);
   const highest = await highestFleetEventSequence(storage);
   if (highest > tail) {
     const refreshedTailValue = await storage.get(KEYS.fleetEventTail());
@@ -320,7 +314,7 @@ async function loadTailAuthority(
   return { tail, tailValue };
 }
 
-async function loadConsistentReplay(
+async function loadConsistentReplayPage(
   storage: Storage,
   afterSequence: number,
 ): Promise<{ floor: number; envelopes: FleetEventEnvelope[] }> {
@@ -328,7 +322,10 @@ async function loadConsistentReplay(
     const floorValue = await storage.get(KEYS.fleetEventWatermark());
     const floor = decodeRetentionFloorOrThrow(floorValue);
     const envelopes: FleetEventEnvelope[] = [];
-    const scanOptions = afterSequence >= 0 ? { gt: KEYS.fleetEvent(afterSequence) } : undefined;
+    const scanOptions = {
+      ...(afterSequence >= 0 ? { gt: KEYS.fleetEvent(afterSequence) } : {}),
+      limit: REPLAY_PAGE_SIZE,
+    };
     for await (const [key, value] of storage.scan(KEYS.fleetEventPrefix(), scanOptions)) {
       const sequence = parseFleetEventSequenceFromKey(key);
       if (sequence === null) throw new PersistedDataCorruptError(key);
@@ -343,6 +340,20 @@ async function loadConsistentReplay(
     if (bytesEqual(refreshedFloorValue, floorValue)) return { floor, envelopes };
   }
   throw new Error('Fleet event replay could not obtain a stable retention snapshot.');
+}
+
+function createGapEnvelope(
+  sequence: number,
+  requestedCursor: Cursor,
+  firstRetainedSequence: number,
+): FleetEventEnvelope {
+  return {
+    kind: 'fleet:gap',
+    sequence,
+    cursor: encodeCursor(sequence),
+    emittedAtMs: 0,
+    payload: { requestedCursor, firstRetainedSequence },
+  };
 }
 
 function bytesEqual(left: Uint8Array | null, right: Uint8Array | null): boolean {
@@ -438,14 +449,6 @@ function decodeTailOrThrow(value: Uint8Array): number {
   const decoded = decodeStorageValue(value, KEYS.fleetEventTail());
   if (!isTailRecord(decoded)) throw new PersistedDataCorruptError(KEYS.fleetEventTail());
   return decoded.sequence;
-}
-
-async function requireEmptyFleetHistory(storage: Storage): Promise<number> {
-  for await (const [key] of storage.scan(KEYS.fleetEventPrefix(), { reverse: true, limit: 1 })) {
-    if (parseFleetEventSequenceFromKey(key) === null) throw new PersistedDataCorruptError(key);
-    throw new PersistedDataCorruptError(KEYS.fleetEventTail());
-  }
-  return -1;
 }
 
 async function highestFleetEventSequence(storage: Storage): Promise<number> {

@@ -125,6 +125,73 @@ class AdvancingTailDuringScanStorage extends MemoryStorage {
   }
 }
 
+class CommittingFirstEventDuringScanStorage extends MemoryStorage {
+  commitOnNextReverseScan = true;
+
+  override async *scan(prefix: string, options?: ScanOptions): AsyncIterable<[string, Uint8Array]> {
+    if (prefix === KEYS.fleetEventPrefix() && options?.reverse && this.commitOnNextReverseScan) {
+      this.commitOnNextReverseScan = false;
+      const envelope = {
+        kind: 'worker:connected',
+        sequence: 0,
+        cursor: '0',
+        emittedAtMs: 0,
+        payload: { workerId: 'racing-worker' },
+      };
+      await super.conditionalBatch(
+        [{ key: KEYS.fleetEventTail(), expectedValue: null }],
+        [
+          { type: 'put', key: KEYS.fleetEvent(0), value: encode(envelope) },
+          { type: 'put', key: KEYS.fleetEventTail(), value: encode({ sequence: 0 }) },
+        ],
+      );
+    }
+    yield* super.scan(prefix, options);
+  }
+}
+
+class LosingFirstRetentionBatchStorage extends MemoryStorage {
+  loseNextRetentionBatch = true;
+
+  override async conditionalBatch(
+    conditions: ConditionalBatchCondition[],
+    operations: BatchOperation[],
+  ): Promise<boolean> {
+    if (
+      this.loseNextRetentionBatch &&
+      conditions.some((condition) => condition.key === KEYS.fleetEventWatermark())
+    ) {
+      this.loseNextRetentionBatch = false;
+      await super.batch([
+        { type: 'delete', key: KEYS.fleetEvent(0) },
+        {
+          type: 'put',
+          key: KEYS.fleetEventWatermark(),
+          value: encode({ firstRetainedSequence: 1 }),
+        },
+      ]);
+      return false;
+    }
+    return super.conditionalBatch(conditions, operations);
+  }
+}
+
+class ContendedRetentionStorage extends MemoryStorage {
+  override async conditionalBatch(
+    conditions: ConditionalBatchCondition[],
+    operations: BatchOperation[],
+  ): Promise<boolean> {
+    if (conditions.some((condition) => condition.key === KEYS.fleetEventWatermark())) return false;
+    return super.conditionalBatch(conditions, operations);
+  }
+}
+
+class NonConditionalStorage extends MemoryStorage {
+  override capabilities(): ReturnType<MemoryStorage['capabilities']> {
+    return { ...super.capabilities(), conditionalBatch: false };
+  }
+}
+
 class RetainingDuringReplayStorage extends MemoryStorage {
   retainOnNextForwardScan = false;
 
@@ -169,6 +236,14 @@ async function collect(
     if (results.length >= limit) break;
   }
   return results;
+}
+
+async function nextEnvelope(
+  iterator: AsyncIterator<FleetEventEnvelope>,
+): Promise<FleetEventEnvelope> {
+  const result = await iterator.next();
+  if (result.done) throw new Error('Fleet event subscription ended unexpectedly.');
+  return result.value;
 }
 
 describe('createFleetEventFeed', () => {
@@ -219,6 +294,22 @@ describe('createFleetEventFeed', () => {
     expect(appended.sequence).toBe(2);
     const replayed = await collect(feed.replay(), 10);
     expect(replayed.map((event) => event.sequence)).toEqual([0, 1, 2]);
+    feed.dispose();
+  });
+
+  it('retries when another process wins the first append race', async () => {
+    const storage = new CommittingFirstEventDuringScanStorage();
+    const feed = createFleetEventFeed(storage);
+
+    const appended = await feed.append({
+      kind: 'worker:connected',
+      emittedAtMs: 1,
+      payload: { workerId: 'second-worker' },
+    });
+
+    expect(appended.sequence).toBe(1);
+    const replayed = await collect(feed.replay(), 10);
+    expect(replayed.map((event) => event.sequence)).toEqual([0, 1]);
     feed.dispose();
   });
 
@@ -293,6 +384,56 @@ describe('createFleetEventFeed', () => {
     feed.dispose();
   });
 
+  it('preserves the opaque requested cursor in a retention gap', async () => {
+    const feed = createFleetEventFeed(new MemoryStorage());
+    for (let index = 0; index < 3; index += 1) {
+      await feed.append({ kind: 'worker:connected', emittedAtMs: index, payload: { index } });
+    }
+    await feed.retain({ beforeSequence: 2 });
+
+    const [gap] = await collect(feed.replay({ fromCursor: '0000' }), 1);
+
+    expect(gap?.kind).toBe('fleet:gap');
+    expect(gap?.payload).toEqual({ requestedCursor: '0000', firstRetainedSequence: 2 });
+    feed.dispose();
+  });
+
+  it('retries retention after another process advances the watermark', async () => {
+    const storage = new LosingFirstRetentionBatchStorage();
+    const feed = createFleetEventFeed(storage);
+    for (let index = 0; index < 3; index += 1) {
+      await feed.append({ kind: 'worker:connected', emittedAtMs: index, payload: { index } });
+    }
+
+    await expect(feed.retain({ beforeSequence: 3, limit: 10 })).resolves.toBe(2);
+    await expect(feed.snapshotRetentionFloor()).resolves.toBe(3);
+    feed.dispose();
+  });
+
+  it('fails loudly when retention contention exhausts its retry budget', async () => {
+    const feed = createFleetEventFeed(new ContendedRetentionStorage());
+    await feed.append({ kind: 'worker:connected', emittedAtMs: 0, payload: {} });
+
+    await expect(feed.retain({ beforeSequence: 1 })).rejects.toThrow(
+      'lost its storage precondition after 25 attempts',
+    );
+    feed.dispose();
+  });
+
+  it('rejects storage that cannot provide conditional batches', () => {
+    expect(() => createFleetEventFeed(new NonConditionalStorage())).toThrow(
+      'require storage with conditional batch support',
+    );
+  });
+
+  it('rejects the reserved retention-gap event kind', async () => {
+    const feed = createFleetEventFeed(new MemoryStorage());
+    await expect(feed.append({ kind: 'fleet:gap', emittedAtMs: 0, payload: {} })).rejects.toThrow(
+      'reserved',
+    );
+    feed.dispose();
+  });
+
   it('replays persisted fleet events after the supplied cursor', async () => {
     const feed = createFleetEventFeed(new MemoryStorage());
     await feed.append({
@@ -313,6 +454,44 @@ describe('createFleetEventFeed', () => {
     expect(replayed).toEqual([second]);
     expect(second.sequence).toBe(1);
     expect(second.cursor).toBe('1');
+  });
+
+  it('replays large histories in bounded storage pages', async () => {
+    const storage = new RecordingScanStorage();
+    const feed = createFleetEventFeed(storage);
+    for (let index = 0; index < 260; index += 1) {
+      await feed.append({ kind: 'worker:connected', emittedAtMs: index, payload: { index } });
+    }
+
+    const replayed = await collect(feed.replay(), 300);
+    expect(replayed).toHaveLength(260);
+    const replayScans = storage.scanCalls.filter(
+      ({ prefix, options }) => prefix === KEYS.fleetEventPrefix() && !options?.reverse,
+    );
+    expect(replayScans).toHaveLength(3);
+    expect(replayScans.every(({ options }) => options?.limit === 128)).toBeTrue();
+    feed.dispose();
+  });
+
+  it('recovers appends during replay from durable storage without live-buffer overflow', async () => {
+    const feed = createFleetEventFeed(new MemoryStorage(), { liveBufferSize: 1 });
+    for (let index = 0; index < 129; index += 1) {
+      await feed.append({ kind: 'worker:connected', emittedAtMs: index, payload: { index } });
+    }
+    const controller = new AbortController();
+    const iterator = feed.subscribe({ signal: controller.signal })[Symbol.asyncIterator]();
+    const received = [await nextEnvelope(iterator)];
+    for (let index = 129; index < 132; index += 1) {
+      await feed.append({ kind: 'worker:connected', emittedAtMs: index, payload: { index } });
+    }
+    while (received.length < 132) received.push(await nextEnvelope(iterator));
+
+    expect(received.map((event) => event.sequence)).toEqual(
+      Array.from({ length: 132 }, (_, index) => index),
+    );
+    controller.abort();
+    await iterator.return?.();
+    feed.dispose();
   });
 
   it('indexes workflow-owned fleet events for purge', async () => {
@@ -680,7 +859,7 @@ describe('createFleetEventFeed', () => {
     expect(replayed.map((envelope) => envelope.sequence)).toEqual([3, 4]);
     expect(storage.scanCalls).toContainEqual({
       prefix: KEYS.fleetEventPrefix(),
-      options: { gt: KEYS.fleetEvent(2) },
+      options: { gt: KEYS.fleetEvent(2), limit: 128 },
     });
     feed.dispose();
   });

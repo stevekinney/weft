@@ -42,6 +42,7 @@ export {
   type FleetEventAppendOptions,
   type FleetEventEnvelope,
   type FleetEventFeed,
+  type FleetEventFeedOptions,
   type FleetEventGapEnvelope,
   type FleetEventInput,
   type FleetWorkflowEventInput,

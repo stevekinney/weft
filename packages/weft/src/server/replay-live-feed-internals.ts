@@ -15,7 +15,6 @@ import type {
 } from './workflow-event-feed.ts';
 
 type DurableSubscriptionOptions = {
-  readonly liveBufferSize: number;
   readonly pollIntervalMs: number;
   readonly lifecycleSignal?: AbortSignal;
 };
@@ -32,9 +31,6 @@ export function createDurableSubscription<TEnvelope extends SequencedEventEnvelo
       : options.lifecycleSignal === undefined
         ? args.signal
         : AbortSignal.any([args.signal, options.lifecycleSignal]);
-  const buffer: TEnvelope[] = [];
-  let bufferOverflowed = false;
-  let replayComplete = false;
   let waker: (() => void) | null = null;
   let cleanedUp = false;
   const wake = () => {
@@ -42,16 +38,7 @@ export function createDurableSubscription<TEnvelope extends SequencedEventEnvelo
     waker = null;
     pending?.();
   };
-  const unsubscribe = backend.subscribeLive((envelope) => {
-    if (!shouldDeliverEnvelope(envelope, args)) return;
-    if (replayComplete) {
-      wake();
-      return;
-    }
-    if (buffer.length >= options.liveBufferSize) bufferOverflowed = true;
-    else buffer.push(envelope);
-    wake();
-  });
+  const unsubscribe = backend.subscribeLive(wake);
   const cleanup = () => {
     if (cleanedUp) return;
     cleanedUp = true;
@@ -66,10 +53,8 @@ export function createDurableSubscription<TEnvelope extends SequencedEventEnvelo
       if (signal?.aborted) return;
       const snapshot = await backend.snapshotTailSequence();
       yield* replayUpTo(backend, requestedAfter, snapshot, signal, args);
-      if (signal?.aborted || bufferOverflowed) return;
+      if (signal?.aborted) return;
       args?.onReplayComplete?.();
-      buffer.length = 0;
-      replayComplete = true;
       yield* tailDurableEvents(backend, snapshot, signal, args, options.pollIntervalMs, (next) => {
         waker = next;
       });
@@ -148,19 +133,35 @@ export async function* replayUpTo<TEnvelope extends SequencedEventEnvelope>(
   replayOptions: ReplayLiveSubscribeOptions<TEnvelope> | undefined,
 ): AsyncIterable<TEnvelope> {
   let replayCount = 0;
-  for await (const envelope of backend.replay({ afterSequence })) {
+  const backendOptions = createBackendReplayOptions(afterSequence, replayOptions?.fromCursor);
+  for await (const envelope of backend.replay(backendOptions)) {
     if (envelope.sequence > snapshot) break;
     if (signal?.aborted) return;
     if (!shouldDeliverEnvelope(envelope, replayOptions)) continue;
-    if (shouldCountReplayEnvelope(envelope, replayOptions)) {
-      replayCount += 1;
-      const replayLimit = replayOptions?.replayLimit;
-      if (replayLimit !== undefined && replayCount > replayLimit) {
-        throw createReplayLimitError(replayOptions, replayCount, replayLimit);
-      }
-    }
+    replayCount = updateReplayCount(envelope, replayOptions, replayCount);
     yield envelope;
   }
+}
+
+function updateReplayCount<TEnvelope extends SequencedEventEnvelope>(
+  envelope: TEnvelope,
+  replayOptions: ReplayLiveSubscribeOptions<TEnvelope> | undefined,
+  replayCount: number,
+): number {
+  if (!shouldCountReplayEnvelope(envelope, replayOptions)) return replayCount;
+  const nextCount = replayCount + 1;
+  const replayLimit = replayOptions?.replayLimit;
+  if (replayLimit !== undefined && nextCount > replayLimit) {
+    throw createReplayLimitError(replayOptions, nextCount, replayLimit);
+  }
+  return nextCount;
+}
+
+function createBackendReplayOptions(
+  afterSequence: number,
+  requestedCursor: string | undefined,
+): { afterSequence: number; requestedCursor?: string } {
+  return requestedCursor === undefined ? { afterSequence } : { afterSequence, requestedCursor };
 }
 
 export function shouldDeliverEnvelope<TEnvelope extends SequencedEventEnvelope>(

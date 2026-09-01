@@ -267,7 +267,7 @@ export type SequencedEventEnvelope = {
 };
 
 export type ReplayLiveFeedBackend<TEnvelope extends SequencedEventEnvelope> = {
-  replay(options: { afterSequence: number }): AsyncIterable<TEnvelope>;
+  replay(options: { afterSequence: number; requestedCursor?: Cursor }): AsyncIterable<TEnvelope>;
   snapshotTailSequence(): Promise<number>;
   subscribeLive(listener: (envelope: TEnvelope) => void): () => void;
 };
@@ -304,7 +304,10 @@ export function createReplayLiveFeed<TEnvelope extends SequencedEventEnvelope>(
     const afterSequence =
       args?.fromCursor !== undefined ? decodeCursorOrThrow(args.fromCursor) : -1;
     let yielded = 0;
-    for await (const envelope of backend.replay({ afterSequence })) {
+    for await (const envelope of backend.replay({
+      afterSequence,
+      ...(args?.fromCursor === undefined ? {} : { requestedCursor: args.fromCursor }),
+    })) {
       if (args?.limit !== undefined && yielded >= args.limit) return;
       yield envelope;
       yielded += 1;
