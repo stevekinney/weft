@@ -422,6 +422,9 @@ export class ApplicationMailbox {
    * Returns `true` when the FIFO head is claimable. Aborting, disposal, or the
    * timeout returns `false` and releases every process-local resource without
    * touching durable work.
+   *
+   * `timeoutMs` defaults to `0`, so calling this with no options checks once and
+   * returns immediately rather than blocking. Pass a timeout to actually wait.
    */
   async waitForAvailable(options?: ApplicationMailboxWaitOptions): Promise<boolean> {
     this.#assertLive();

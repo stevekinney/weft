@@ -245,7 +245,8 @@ describe('ApplicationMailbox persisted causation', () => {
     });
     // Reading the receipt back decodes the persisted record rather than reusing
     // the in-memory one the admission returned.
-    expect((await mailbox.receipt(commandId))?.causation).toEqual({
+    const receipt = await mailbox.receipt(commandId);
+    expect(receipt?.causation).toEqual({
       correlationId: 'conv-7',
       causationId: 'msg-3',
       traceparent: '00-a-b-01',
@@ -312,7 +313,8 @@ describe('ApplicationMailbox retention edge cases', () => {
 
     await storage.delete(KEYS.applicationCommand('bureau', 'agent-7', commandId));
     clock.advance(1_001);
-    expect((await mailbox.runMaintenance()).retired).toBe(1);
+    const report = await mailbox.runMaintenance();
+    expect(report.retired).toBe(1);
 
     let remaining = 0;
     for await (const _entry of storage.scan(
@@ -334,7 +336,8 @@ describe('ApplicationMailbox retention edge cases', () => {
     await storage.put(`${prefix}${'0'.repeat(16)}:%zz`, encode('x'));
 
     clock.advance(2_000);
-    expect((await mailbox.runMaintenance()).retired).toBe(0);
+    const report = await mailbox.runMaintenance();
+    expect(report.retired).toBe(0);
     mailbox.dispose();
   });
 
@@ -342,7 +345,8 @@ describe('ApplicationMailbox retention edge cases', () => {
     const { mailbox } = createMailboxFixture({ terminalRetentionMs: 1_000 });
     // `now` is far below the retention window, so the horizon is negative and
     // the sweep must not treat every record as expired.
-    expect((await mailbox.runMaintenance(500)).retired).toBe(0);
+    const report = await mailbox.runMaintenance(500);
+    expect(report.retired).toBe(0);
     mailbox.dispose();
   });
 });

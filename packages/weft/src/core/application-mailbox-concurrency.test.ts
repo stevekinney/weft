@@ -83,7 +83,8 @@ describe('ApplicationMailbox concurrent claims', () => {
     // Expire the lease, then wait out the retry backoff the reclaim schedules.
     clock.advance(1_001);
     await mailbox.runMaintenance();
-    expect((await mailbox.receipt(commandId))?.state).toBe('accepted');
+    const receipt = await mailbox.receipt(commandId);
+    expect(receipt?.state).toBe('accepted');
     clock.advance(1_000);
     const second = await claimOne(mailbox);
 
@@ -106,34 +107,38 @@ describe('ApplicationMailbox attempt fencing', () => {
     expect(current.attemptToken).not.toBe(stale.attemptToken);
 
     const failure = { reason: 'application' as const };
-    expect((await mailbox.renew({ commandId, attemptToken: stale.attemptToken })).status).toBe(
-      'stale',
-    );
-    expect(
-      (await mailbox.acknowledge({ commandId, attemptToken: stale.attemptToken })).status,
-    ).toBe('stale');
-    expect(
-      (await mailbox.reject({ commandId, attemptToken: stale.attemptToken, failure })).status,
-    ).toBe('stale');
+    const renewal = await mailbox.renew({ commandId, attemptToken: stale.attemptToken });
+    expect(renewal.status).toBe('stale');
+    const staleAcknowledgement = await mailbox.acknowledge({
+      commandId,
+      attemptToken: stale.attemptToken,
+    });
+    expect(staleAcknowledgement.status).toBe('stale');
+    const rejection = await mailbox.reject({
+      commandId,
+      attemptToken: stale.attemptToken,
+      failure,
+    });
+    expect(rejection.status).toBe('stale');
 
     // The newer attempt is untouched by any of that.
     const receipt = await mailbox.receipt(commandId);
     expect(receipt?.state).toBe('claimed');
-    expect(
-      (await mailbox.acknowledge({ commandId, attemptToken: current.attemptToken })).status,
-    ).toBe('settled');
+    const settled = await mailbox.acknowledge({ commandId, attemptToken: current.attemptToken });
+    expect(settled.status).toBe('settled');
     mailbox.dispose();
   });
 
   it('refuses settlement against an unknown command and an unleased one', async () => {
     const { mailbox } = createMailboxFixture();
-    expect((await mailbox.renew({ commandId: 'nope', attemptToken: 't' })).status).toBe('unknown');
-    expect((await mailbox.acknowledge({ commandId: 'nope', attemptToken: 't' })).status).toBe(
-      'unknown',
-    );
+    const renewal = await mailbox.renew({ commandId: 'nope', attemptToken: 't' });
+    expect(renewal.status).toBe('unknown');
+    const settled = await mailbox.acknowledge({ commandId: 'nope', attemptToken: 't' });
+    expect(settled.status).toBe('unknown');
 
     const commandId = await admitOne(mailbox);
-    expect((await mailbox.renew({ commandId, attemptToken: 't' })).status).toBe('stale');
+    const renewal2 = await mailbox.renew({ commandId, attemptToken: 't' });
+    expect(renewal2.status).toBe('stale');
     mailbox.dispose();
   });
 
@@ -160,7 +165,8 @@ describe('ApplicationMailbox attempt fencing', () => {
     ]);
     const statuses = [left.status, right.status].toSorted();
     expect(statuses).toEqual(['settled', 'stale']);
-    expect((await mailbox.receipt(commandId))?.state).toBe('applied');
+    const receipt = await mailbox.receipt(commandId);
+    expect(receipt?.state).toBe('applied');
     mailbox.dispose();
   });
 });
@@ -181,8 +187,10 @@ describe('ApplicationMailbox concurrent admission', () => {
       second.admit(commandInput({ idempotencyKey: 'shared' })),
     ]);
     expect([left.status, right.status].toSorted()).toEqual(['admitted', 'duplicate']);
-    expect((await first.list()).length).toBe(1);
-    expect((await first.capacity()).admitted).toBe(1);
+    const listed = await first.list();
+    expect(listed.length).toBe(1);
+    const capacity = await first.capacity();
+    expect(capacity.admitted).toBe(1);
     first.dispose();
     second.dispose();
   });
@@ -194,7 +202,8 @@ describe('ApplicationMailbox concurrent admission', () => {
         mailbox.admit(commandInput({ idempotencyKey: `k-${index}` })),
       ),
     );
-    const sequences = (await mailbox.list()).map((receipt) => receipt.sequence);
+    const listed = await mailbox.list();
+    const sequences = listed.map((receipt) => receipt.sequence);
     expect(sequences).toEqual([0, 1, 2, 3, 4, 5]);
     mailbox.dispose();
   });

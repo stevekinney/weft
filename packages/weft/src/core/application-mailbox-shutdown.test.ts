@@ -83,7 +83,8 @@ describe('ApplicationMailbox waitForAvailable', () => {
     await tick(clock, 200);
     expect(await waiting).toBe(false);
     // The durable work is untouched.
-    expect((await mailbox.list()).length).toBe(1);
+    const listed = await mailbox.list();
+    expect(listed.length).toBe(1);
     mailbox.dispose();
   });
 
@@ -101,7 +102,8 @@ describe('ApplicationMailbox waitForAvailable', () => {
     await tick(clock, 50);
     controller.abort();
     expect(await waiting).toBe(false);
-    expect((await mailbox.receipt(commandId))?.state).toBe('accepted');
+    const receipt = await mailbox.receipt(commandId);
+    expect(receipt?.state).toBe('accepted');
     mailbox.dispose();
   });
 
@@ -187,7 +189,8 @@ describe('ApplicationMailbox awaitCleanup', () => {
     });
     await tick(clock, 50);
     controller.abort();
-    expect((await waiting).status).toBe('pending');
+    const value = await waiting;
+    expect(value.status).toBe('pending');
     mailbox.dispose();
   });
 
@@ -201,7 +204,8 @@ describe('ApplicationMailbox awaitCleanup', () => {
     const waiting = mailbox.awaitCleanup({ commandId, timeoutMs: 60_000, pollIntervalMs: 50 });
     await tick(clock, 50);
     mailbox.dispose();
-    expect((await waiting).status).toBe('pending');
+    const value = await waiting;
+    expect(value.status).toBe('pending');
   });
 });
 
@@ -221,8 +225,10 @@ describe('ApplicationMailbox disposal', () => {
 
     // The leases survive disposal; only maintenance may reclaim them.
     const reopened = createMailboxFixture({ storage, clock }).mailbox;
-    expect((await reopened.receipt(firstId))?.state).toBe('claimed');
-    expect((await reopened.list()).length).toBe(2);
+    const receipt = await reopened.receipt(firstId);
+    expect(receipt?.state).toBe('claimed');
+    const listed = await reopened.list();
+    expect(listed.length).toBe(2);
     expect(await reopened.capacity()).toMatchObject({ open: 2 });
     reopened.dispose();
   });
@@ -269,7 +275,8 @@ describe('ApplicationMailbox disposal', () => {
     await admitOne(mailbox);
     await expect(mailbox.claim({ signal: AbortSignal.abort() })).rejects.toThrow();
     // The durable work is untouched by an aborted claim attempt.
-    expect((await mailbox.list())[0]?.state).toBe('available');
+    const listed = await mailbox.list();
+    expect(listed[0]?.state).toBe('available');
     mailbox.dispose();
   });
 
@@ -288,7 +295,8 @@ describe('ApplicationMailbox disposal', () => {
       namespace: 'bureau',
       resourceId: 'agent-7',
     });
-    expect((await reopened.list()).length).toBe(1);
+    const listed = await reopened.list();
+    expect(listed.length).toBe(1);
     reopened.dispose();
   });
 });

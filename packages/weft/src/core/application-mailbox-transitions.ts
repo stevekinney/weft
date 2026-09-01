@@ -228,6 +228,11 @@ export function renewCommandLease(
  * A command whose cancellation was already requested settles as `cancelled`
  * rather than `applied`: the claimant finished cleanup, so cleanup is settled,
  * but the durable cancellation request is not overwritten by a success.
+ *
+ * The caller's `outcome` is still retained on that `cancelled` receipt. A
+ * claimant that completed the work before it observed the cancellation really
+ * did produce a result, and discarding it would lose evidence a reader may need
+ * to decide whether the effect already happened.
  */
 export function acknowledgeCommand(
   record: ApplicationCommandRecord,

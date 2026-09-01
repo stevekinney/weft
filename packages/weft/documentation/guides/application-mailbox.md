@@ -189,9 +189,13 @@ if (renewal.status === 'renewed' && renewal.cancellationRequested) {
 }
 ```
 
+A claimant that finished the work _before_ it observed the cancellation still records its `outcome` on the resulting `cancelled` receipt. That is deliberate: the effect really did happen, and discarding the result would lose evidence a reader needs to decide whether to compensate.
+
 `awaitCleanup()` waits, bounded, for the claimant to settle. A `pending` result means the mailbox stopped waiting. It never claims the handler stopped — a distinction that matters when you are deciding whether it is safe to start replacement work.
 
 ## Backpressure
+
+`waitForAvailable()` polls for work to become due. Its `timeoutMs` defaults to `0`, so calling it with no options checks once and returns immediately — pass a timeout to actually wait.
 
 `maxBacklog` bounds the number of open (non-terminal) commands. Admission past it is rejected _before_ anything is persisted, so a rejected command leaves no trace. `capacity()` reports the accounting as counts only — deliberately low-cardinality, with no per-command detail.
 

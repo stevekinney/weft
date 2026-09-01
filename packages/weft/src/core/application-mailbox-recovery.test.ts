@@ -38,10 +38,10 @@ describe('ApplicationMailbox restart', () => {
     expect(receipt?.state).toBe('claimed');
     expect(receipt?.attempt).toBe(1);
     // The token is still the fence: the surviving claimant settles, a stranger cannot.
-    expect((await after.acknowledge({ commandId, attemptToken: 'guessed' })).status).toBe('stale');
-    expect((await after.acknowledge({ commandId, attemptToken: claim.attemptToken })).status).toBe(
-      'settled',
-    );
+    const settled = await after.acknowledge({ commandId, attemptToken: 'guessed' });
+    expect(settled.status).toBe('stale');
+    const settled2 = await after.acknowledge({ commandId, attemptToken: claim.attemptToken });
+    expect(settled2.status).toBe('settled');
     after.dispose();
   });
 
@@ -98,7 +98,8 @@ describe('ApplicationMailbox FIFO order through expiry and retry', () => {
     // Sequence 1 gets delivered while 0 is in flight — that is ordinary parallel
     // consumption, not an ordering violation.
     const second = await claimOne(mailbox);
-    expect((await mailbox.receipt(second.commandId))?.sequence).toBe(1);
+    const receipt = await mailbox.receipt(second.commandId);
+    expect(receipt?.sequence).toBe(1);
 
     clock.advance(1_001);
     const report = await mailbox.runMaintenance();
@@ -108,7 +109,8 @@ describe('ApplicationMailbox FIFO order through expiry and retry', () => {
     // Sequence 0 re-enters at its original position, ahead of the untouched 2.
     const redelivered = await claimOne(mailbox);
     expect(redelivered.commandId).toBe(first);
-    expect((await mailbox.receipt(first))?.retryCount).toBe(1);
+    const receipt2 = await mailbox.receipt(first);
+    expect(receipt2?.retryCount).toBe(1);
     mailbox.dispose();
   });
 
@@ -123,7 +125,8 @@ describe('ApplicationMailbox FIFO order through expiry and retry', () => {
 
     clock.advance(5_000);
     const claimed = await claimOne(mailbox);
-    expect((await mailbox.receipt(claimed.commandId))?.sequence).toBe(0);
+    const receipt = await mailbox.receipt(claimed.commandId);
+    expect(receipt?.sequence).toBe(0);
     mailbox.dispose();
   });
 
@@ -142,7 +145,8 @@ describe('ApplicationMailbox FIFO order through expiry and retry', () => {
     expect(rejected.status === 'retrying' && rejected.receipt.state).toBe('accepted');
     expect(rejected.status === 'retrying' && rejected.receipt.availableAt).toBe(clock.now() + 100);
 
-    expect((await mailbox.claim()).status).toBe('held');
+    const claimResult = await mailbox.claim();
+    expect(claimResult.status).toBe('held');
     clock.advance(100);
     const second = await claimOne(mailbox);
     expect(second.commandId).toBe(commandId);
@@ -154,7 +158,8 @@ describe('ApplicationMailbox FIFO order through expiry and retry', () => {
       failure: { reason: 'application' },
       retry: true,
     });
-    expect((await mailbox.receipt(commandId))?.availableAt).toBe(clock.now() + 200);
+    const receipt = await mailbox.receipt(commandId);
+    expect(receipt?.availableAt).toBe(clock.now() + 200);
     mailbox.dispose();
   });
 
@@ -175,7 +180,8 @@ describe('ApplicationMailbox FIFO order through expiry and retry', () => {
       });
       clock.advance(1_500);
     }
-    expect((await mailbox.receipt(commandId))?.retryCount).toBe(3);
+    const receipt = await mailbox.receipt(commandId);
+    expect(receipt?.retryCount).toBe(3);
     mailbox.dispose();
   });
 });
@@ -252,10 +258,11 @@ describe('ApplicationMailbox dead-lettering', () => {
     expect(waitingReceipt?.cleanupPending).toBeUndefined();
 
     // The abandoned attempt cannot write a result after the deadline.
-    expect(
-      (await mailbox.acknowledge({ commandId: claimedId, attemptToken: claim.attemptToken }))
-        .status,
-    ).toBe('stale');
+    const abandoned = await mailbox.acknowledge({
+      commandId: claimedId,
+      attemptToken: claim.attemptToken,
+    });
+    expect(abandoned.status).toBe('stale');
     mailbox.dispose();
   });
 
@@ -273,7 +280,8 @@ describe('ApplicationMailbox dead-lettering', () => {
     const settlement = await mailbox.acknowledge({ commandId, attemptToken: claim.attemptToken });
     expect(settlement.status).toBe('deadline-exceeded');
     // Still `claimed` on disk; maintenance owns the terminal write.
-    expect((await mailbox.receipt(commandId))?.state).toBe('claimed');
+    const receipt = await mailbox.receipt(commandId);
+    expect(receipt?.state).toBe('claimed');
     mailbox.dispose();
   });
 
@@ -315,7 +323,8 @@ describe('ApplicationMailbox maintenance', () => {
   it('releases a delayed command and reports what it did', async () => {
     const { mailbox, clock } = createMailboxFixture();
     const commandId = await admitOne(mailbox, { availableAfterMs: 1_000 });
-    expect((await mailbox.runMaintenance()).released).toBe(0);
+    const tooEarly = await mailbox.runMaintenance();
+    expect(tooEarly.released).toBe(0);
 
     clock.advance(1_000);
     const report = await mailbox.runMaintenance();
@@ -326,10 +335,12 @@ describe('ApplicationMailbox maintenance', () => {
       cancelled: 0,
       retired: 0,
     });
-    expect((await mailbox.receipt(commandId))?.state).toBe('available');
+    const receipt = await mailbox.receipt(commandId);
+    expect(receipt?.state).toBe('available');
 
     // A second pass finds nothing left to do.
-    expect((await mailbox.runMaintenance()).released).toBe(0);
+    const report2 = await mailbox.runMaintenance();
+    expect(report2.released).toBe(0);
     mailbox.dispose();
   });
 
@@ -340,9 +351,11 @@ describe('ApplicationMailbox maintenance', () => {
 
     clock.advance(1_000);
     // Nothing has run in the background: the record is still leased.
-    expect((await mailbox.receipt(commandId))?.state).toBe('claimed');
+    const receipt = await mailbox.receipt(commandId);
+    expect(receipt?.state).toBe('claimed');
     await mailbox.runMaintenance();
-    expect((await mailbox.receipt(commandId))?.state).toBe('accepted');
+    const receipt2 = await mailbox.receipt(commandId);
+    expect(receipt2?.state).toBe('accepted');
     mailbox.dispose();
   });
 
@@ -350,7 +363,8 @@ describe('ApplicationMailbox maintenance', () => {
     const { mailbox, clock } = createMailboxFixture();
     const commandId = await admitOne(mailbox, { availableAfterMs: 1_000 });
     await mailbox.runMaintenance(clock.now() + 1_000);
-    expect((await mailbox.receipt(commandId))?.state).toBe('available');
+    const receipt = await mailbox.receipt(commandId);
+    expect(receipt?.state).toBe('available');
     mailbox.dispose();
   });
 
@@ -374,11 +388,13 @@ describe('ApplicationMailbox terminal retention', () => {
     await mailbox.acknowledge({ commandId, attemptToken: claim.attemptToken });
 
     clock.advance(9_000);
-    expect((await mailbox.runMaintenance()).retired).toBe(0);
+    const report = await mailbox.runMaintenance();
+    expect(report.retired).toBe(0);
     expect(await mailbox.receipt(commandId)).not.toBeNull();
 
     clock.advance(2_000);
-    expect((await mailbox.runMaintenance()).retired).toBe(1);
+    const report2 = await mailbox.runMaintenance();
+    expect(report2.retired).toBe(1);
     expect(await mailbox.receipt(commandId)).toBeNull();
     expect(
       await storage.get(KEYS.applicationCommandIdempotency('bureau', 'agent-7', 'k')),
@@ -402,7 +418,8 @@ describe('ApplicationMailbox terminal retention', () => {
     await mailbox.acknowledge({ commandId: newer, attemptToken: newerClaim.attemptToken });
 
     clock.advance(2_000);
-    expect((await mailbox.runMaintenance()).retired).toBe(1);
+    const report = await mailbox.runMaintenance();
+    expect(report.retired).toBe(1);
     expect(await mailbox.receipt(older)).toBeNull();
     expect(await mailbox.receipt(newer)).not.toBeNull();
     mailbox.dispose();
@@ -460,11 +477,13 @@ describe('ApplicationMailbox recovery across storage backends', () => {
       const after = build();
       try {
         clock.advance(1_001);
-        expect((await after.runMaintenance()).reclaimed).toBe(1);
+        const report = await after.runMaintenance();
+        expect(report.reclaimed).toBe(1);
         clock.advance(10);
         const redelivered = await claimOne(after);
         expect(redelivered.commandId).toBe(head);
-        expect((await after.receipt(head))?.retryCount).toBe(1);
+        const receipt = await after.receipt(head);
+        expect(receipt?.retryCount).toBe(1);
       } finally {
         after.dispose();
         await teardown(undefined, created.cleanup);

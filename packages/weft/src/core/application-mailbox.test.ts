@@ -19,20 +19,25 @@ import {
   RecordingEventSink,
 } from './application-mailbox.test-support.ts';
 import { ApplicationMailbox } from './application-mailbox.ts';
-import { encode } from './codec.ts';
+import { decode, encode } from './codec.ts';
 import { PersistedDataCorruptError } from './persisted-data-incompatible-error.ts';
 
 describe('ApplicationMailbox construction', () => {
   it('rejects storage without conditional batch support', () => {
     const storage = new MemoryStorage();
-    const withoutCas = {
-      ...storage,
-      capabilities: () => ({ ...storage.capabilities(), conditionalBatch: false }),
-    };
+    // Subclass rather than spread: spreading an instance drops its prototype,
+    // and the mailbox has to reject the adapter for its reported capability,
+    // not for being structurally broken.
+    class WithoutConditionalBatch extends MemoryStorage {
+      override capabilities(): ReturnType<MemoryStorage['capabilities']> {
+        return { ...super.capabilities(), conditionalBatch: false };
+      }
+    }
+    void storage;
     expect(
       () =>
         new ApplicationMailbox({
-          storage: withoutCas as unknown as MemoryStorage,
+          storage: new WithoutConditionalBatch(),
           namespace: 'n',
           resourceId: 'r',
         }),
@@ -136,8 +141,10 @@ describe('ApplicationMailbox idempotency', () => {
     expect(retry.status === 'duplicate' && retry.receipt.commandId).toBe(
       first.status === 'admitted' ? first.receipt.commandId : '',
     );
-    expect((await mailbox.list()).length).toBe(1);
-    expect((await mailbox.capacity()).admitted).toBe(1);
+    const listed = await mailbox.list();
+    expect(listed.length).toBe(1);
+    const capacity = await mailbox.capacity();
+    expect(capacity.admitted).toBe(1);
     mailbox.dispose();
   });
 
@@ -179,7 +186,8 @@ describe('ApplicationMailbox idempotency', () => {
       );
       expect(conflict.status === 'conflict' && conflict.receipt.commandId).toBe(originalId);
       expect(await mailbox.receipt(originalId)).toEqual(before);
-      expect((await mailbox.list()).length).toBe(1);
+      const listed = await mailbox.list();
+      expect(listed.length).toBe(1);
       mailbox.dispose();
     },
   );
@@ -188,7 +196,8 @@ describe('ApplicationMailbox idempotency', () => {
     const { mailbox } = createMailboxFixture();
     await mailbox.admit(commandInput());
     await mailbox.admit(commandInput());
-    expect((await mailbox.list()).length).toBe(2);
+    const listed = await mailbox.list();
+    expect(listed.length).toBe(2);
     mailbox.dispose();
   });
 
@@ -232,13 +241,15 @@ describe('ApplicationMailbox backlog policy', () => {
   it('frees capacity when a command reaches a terminal disposition', async () => {
     const { mailbox } = createMailboxFixture({ maxBacklog: 1 });
     const commandId = await admitOne(mailbox);
-    expect((await mailbox.admit(commandInput())).status).toBe('rejected');
+    const admission = await mailbox.admit(commandInput());
+    expect(admission.status).toBe('rejected');
 
     const claim = await claimOne(mailbox);
     await mailbox.acknowledge({ commandId, attemptToken: claim.attemptToken });
 
     expect(await mailbox.capacity()).toEqual({ open: 0, limit: 1, remaining: 1, admitted: 1 });
-    expect((await mailbox.admit(commandInput())).status).toBe('admitted');
+    const admission2 = await mailbox.admit(commandInput());
+    expect(admission2.status).toBe('admitted');
     mailbox.dispose();
   });
 
@@ -300,7 +311,7 @@ describe('ApplicationMailbox payload identity', () => {
     const commandId = await admitOne(mailbox);
     const key = KEYS.applicationCommand('bureau', 'agent-7', commandId);
     const stored = await storage.get(key);
-    const record = (await import('./codec.ts')).decode(stored!) as Record<string, unknown>;
+    const record = decode(stored!) as Record<string, unknown>;
     await storage.put(key, encode({ ...record, payload: { form: 'inline', value: 'tampered' } }));
 
     await expect(mailbox.claim()).rejects.toThrow(PersistedDataCorruptError);
@@ -441,8 +452,10 @@ describe('ApplicationMailbox observation', () => {
     await mailbox.receipt(commandId);
     await mailbox.list();
     await mailbox.capacity();
-    expect((await mailbox.receipt(commandId))?.state).toBe('available');
-    expect((await mailbox.claim()).status).toBe('claimed');
+    const receipt = await mailbox.receipt(commandId);
+    expect(receipt?.state).toBe('available');
+    const claimResult = await mailbox.claim();
+    expect(claimResult.status).toBe('claimed');
     mailbox.dispose();
   });
 
@@ -463,16 +476,20 @@ describe('ApplicationMailbox observation', () => {
     const claim = await claimOne(mailbox);
     await mailbox.acknowledge({ commandId, attemptToken: claim.attemptToken });
 
-    expect((await mailbox.list({ states: ['applied'] })).map((r) => r.state)).toEqual(['applied']);
-    expect((await mailbox.list({ states: ['available'] })).length).toBe(1);
-    expect((await mailbox.list({ states: ['claimed'] })).length).toBe(0);
+    const listed = await mailbox.list({ states: ['applied'] });
+    expect(listed.map((r) => r.state)).toEqual(['applied']);
+    const listed2 = await mailbox.list({ states: ['available'] });
+    expect(listed2.length).toBe(1);
+    const listed3 = await mailbox.list({ states: ['claimed'] });
+    expect(listed3.length).toBe(0);
     mailbox.dispose();
   });
 
   it('clamps an oversized listing limit and rejects a nonsensical one', async () => {
     const { mailbox } = createMailboxFixture();
     await admitOne(mailbox);
-    expect((await mailbox.list({ limit: 50_000 })).length).toBe(1);
+    const listed = await mailbox.list({ limit: 50_000 });
+    expect(listed.length).toBe(1);
     await expect(mailbox.list({ limit: 0 })).rejects.toThrow(ApplicationCommandValidationError);
     await expect(mailbox.list({ limit: 1.5 })).rejects.toThrow(ApplicationCommandValidationError);
     mailbox.dispose();
@@ -584,10 +601,8 @@ describe('ApplicationMailbox hostile persisted records', () => {
     const { mailbox, storage } = createMailboxFixture();
     const commandId = await admitOne(mailbox);
     const key = KEYS.applicationCommand('bureau', 'agent-7', commandId);
-    const decoded = (await import('./codec.ts')).decode((await storage.get(key))!) as Record<
-      string,
-      unknown
-    >;
+    const stored = await storage.get(key);
+    const decoded = decode(stored!) as Record<string, unknown>;
     await storage.put(key, encode({ ...decoded, recordVersion: 2 }));
     await expect(mailbox.receipt(commandId)).rejects.toThrow(PersistedDataCorruptError);
     mailbox.dispose();
@@ -597,10 +612,8 @@ describe('ApplicationMailbox hostile persisted records', () => {
     const { mailbox, storage } = createMailboxFixture();
     const commandId = await admitOne(mailbox);
     const key = KEYS.applicationCommand('bureau', 'agent-7', commandId);
-    const decoded = (await import('./codec.ts')).decode((await storage.get(key))!) as Record<
-      string,
-      unknown
-    >;
+    const stored = await storage.get(key);
+    const decoded = decode(stored!) as Record<string, unknown>;
     await storage.put(key, encode({ ...decoded, state: 'levitating' }));
     await expect(mailbox.receipt(commandId)).rejects.toThrow(PersistedDataCorruptError);
     mailbox.dispose();
@@ -645,7 +658,8 @@ describe('ApplicationMailbox disposal', () => {
     }
     // The durable work outlives the disposed handle.
     const reopened = new ApplicationMailbox({ storage, namespace: 'n', resourceId: 'r' });
-    expect((await reopened.list()).length).toBe(1);
+    const listed = await reopened.list();
+    expect(listed.length).toBe(1);
     reopened.dispose();
   });
 });

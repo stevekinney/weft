@@ -25,7 +25,8 @@ describe('ApplicationMailbox lease renewal', () => {
     const { mailbox, clock } = createMailboxFixture({ visibilityTimeoutMs: 1_000 });
     const commandId = await admitOne(mailbox);
     const claim = await claimOne(mailbox);
-    const originalExpiry = (await mailbox.receipt(commandId))?.visibilityExpiresAt;
+    const receipt = await mailbox.receipt(commandId);
+    const originalExpiry = receipt?.visibilityExpiresAt;
 
     clock.advance(500);
     const renewal = await mailbox.renew({ commandId, attemptToken: claim.attemptToken });
@@ -44,18 +45,21 @@ describe('ApplicationMailbox lease renewal', () => {
     });
     const commandId = await admitOne(mailbox);
     const claim = await claimOne(mailbox);
-    const deadline = (await mailbox.receipt(commandId))?.absoluteDeadlineAt ?? 0;
+    const receipt = await mailbox.receipt(commandId);
+    const deadline = receipt?.absoluteDeadlineAt ?? 0;
     expect(deadline).toBe(clock.now() + 3_000);
 
     clock.advance(1_000);
     const renewal = await mailbox.renew({ commandId, attemptToken: claim.attemptToken });
     expect(renewal.status === 'renewed' && renewal.visibilityExpiresAt).toBe(deadline);
-    expect((await mailbox.receipt(commandId))?.absoluteDeadlineAt).toBe(deadline);
+    const receipt2 = await mailbox.receipt(commandId);
+    expect(receipt2?.absoluteDeadlineAt).toBe(deadline);
 
     // Renewing repeatedly never moves the ceiling.
     clock.advance(1_000);
     await mailbox.renew({ commandId, attemptToken: claim.attemptToken });
-    expect((await mailbox.receipt(commandId))?.absoluteDeadlineAt).toBe(deadline);
+    const receipt3 = await mailbox.receipt(commandId);
+    expect(receipt3?.absoluteDeadlineAt).toBe(deadline);
     mailbox.dispose();
   });
 
@@ -63,7 +67,8 @@ describe('ApplicationMailbox lease renewal', () => {
     const { mailbox, clock } = createMailboxFixture();
     const commandId = await admitOne(mailbox);
     const claim = await claimOne(mailbox);
-    const claimedAt = (await mailbox.receipt(commandId))?.claimedAt;
+    const receipt = await mailbox.receipt(commandId);
+    const claimedAt = receipt?.claimedAt;
 
     clock.advance(250);
     await mailbox.renew({ commandId, attemptToken: claim.attemptToken });
@@ -85,7 +90,8 @@ describe('ApplicationMailbox lease renewal', () => {
     // A later heartbeat without progress keeps the last reported progress.
     clock.advance(250);
     await mailbox.renew({ commandId, attemptToken: claim.attemptToken });
-    expect((await mailbox.receipt(commandId))?.progress).toEqual({ step: 'tokenizing', done: 3 });
+    const receipt2 = await mailbox.receipt(commandId);
+    expect(receipt2?.progress).toEqual({ step: 'tokenizing', done: 3 });
     mailbox.dispose();
   });
 
@@ -97,11 +103,14 @@ describe('ApplicationMailbox lease renewal', () => {
     clock.advance(900);
     await mailbox.renew({ commandId, attemptToken: claim.attemptToken });
     clock.advance(900);
-    expect((await mailbox.runMaintenance()).reclaimed).toBe(0);
-    expect((await mailbox.receipt(commandId))?.state).toBe('claimed');
+    const report = await mailbox.runMaintenance();
+    expect(report.reclaimed).toBe(0);
+    const receipt = await mailbox.receipt(commandId);
+    expect(receipt?.state).toBe('claimed');
 
     clock.advance(200);
-    expect((await mailbox.runMaintenance()).reclaimed).toBe(1);
+    const report2 = await mailbox.runMaintenance();
+    expect(report2.reclaimed).toBe(1);
     mailbox.dispose();
   });
 
@@ -121,9 +130,8 @@ describe('ApplicationMailbox lease renewal', () => {
     expect(await mailbox.receipt(commandId)).toEqual(before);
 
     await mailbox.acknowledge({ commandId, attemptToken: current.attemptToken });
-    expect((await mailbox.renew({ commandId, attemptToken: current.attemptToken })).status).toBe(
-      'stale',
-    );
+    const renewal = await mailbox.renew({ commandId, attemptToken: current.attemptToken });
+    expect(renewal.status).toBe('stale');
     mailbox.dispose();
   });
 });
@@ -143,7 +151,8 @@ describe('ApplicationMailbox cancellation', () => {
     });
 
     // It leaves the delivery queue entirely.
-    expect((await mailbox.claim()).status).toBe('empty');
+    const claimResult = await mailbox.claim();
+    expect(claimResult.status).toBe('empty');
     expect(await mailbox.capacity()).toMatchObject({ open: 0 });
     mailbox.dispose();
   });
@@ -159,7 +168,8 @@ describe('ApplicationMailbox cancellation', () => {
     expect(result.status === 'requested' && result.receipt.state).toBe('cancellation-requested');
 
     // Only the current attempt may still settle it.
-    expect((await mailbox.acknowledge({ commandId, attemptToken: 'other' })).status).toBe('stale');
+    const fromStranger = await mailbox.acknowledge({ commandId, attemptToken: 'other' });
+    expect(fromStranger.status).toBe('stale');
     const settled = await mailbox.acknowledge({ commandId, attemptToken: claim.attemptToken });
     expect(settled.status).toBe('settled');
     expect(settled.status === 'settled' && settled.receipt.state).toBe('cancelled');
@@ -175,7 +185,8 @@ describe('ApplicationMailbox cancellation', () => {
 
     await mailbox.requestCancellation({ commandId });
     expect(claim.signal.aborted).toBe(true);
-    expect((await mailbox.receipt(commandId))?.state).toBe('cancellation-requested');
+    const receipt = await mailbox.receipt(commandId);
+    expect(receipt?.state).toBe('cancellation-requested');
     mailbox.dispose();
   });
 
@@ -215,7 +226,8 @@ describe('ApplicationMailbox cancellation', () => {
 
   it('is idempotent and distinguishes every target disposition', async () => {
     const { mailbox } = createMailboxFixture();
-    expect((await mailbox.requestCancellation({ commandId: 'nope' })).status).toBe('unknown');
+    const cancellation = await mailbox.requestCancellation({ commandId: 'nope' });
+    expect(cancellation.status).toBe('unknown');
 
     const commandId = await admitOne(mailbox);
     const claim = await claimOne(mailbox);
@@ -240,10 +252,12 @@ describe('ApplicationMailbox cancellation', () => {
     await claimOne(mailbox);
     await mailbox.requestCancellation({ commandId, reason: 'stop' });
 
-    expect((await mailbox.cleanupState(commandId)).status).toBe('pending');
+    const beforeExpiry = await mailbox.cleanupState(commandId);
+    expect(beforeExpiry.status).toBe('pending');
 
     clock.advance(1_001);
-    expect((await mailbox.runMaintenance()).cancelled).toBe(1);
+    const report = await mailbox.runMaintenance();
+    expect(report.cancelled).toBe(1);
 
     const receipt = await mailbox.receipt(commandId);
     expect(receipt?.state).toBe('cancelled');
@@ -262,13 +276,15 @@ describe('ApplicationMailbox cancellation', () => {
     const claim = await claimOne(mailbox);
     await mailbox.requestCancellation({ commandId });
 
-    expect((await mailbox.cleanupState(commandId)).status).toBe('pending');
+    const beforeSettle = await mailbox.cleanupState(commandId);
+    expect(beforeSettle.status).toBe('pending');
     await mailbox.acknowledge({ commandId, attemptToken: claim.attemptToken });
 
     const cleanup = await mailbox.cleanupState(commandId);
     expect(cleanup.status).toBe('settled');
     expect(cleanup.status === 'settled' && cleanup.receipt.cleanupPending).toBe(false);
-    expect((await mailbox.cleanupState('nope')).status).toBe('unknown');
+    const cleanup2 = await mailbox.cleanupState('nope');
+    expect(cleanup2.status).toBe('unknown');
     mailbox.dispose();
   });
 
@@ -285,9 +301,28 @@ describe('ApplicationMailbox cancellation', () => {
     const cleanup = await mailbox.awaitCleanup({ commandId, timeoutMs: 60_000 });
     expect(cleanup.status).toBe('pending');
     expect(cleanup.status === 'pending' && cleanup.receipt.cleanupPending).toBe(true);
-    expect((await mailbox.awaitCleanup({ commandId: 'nope', timeoutMs: 1 })).status).toBe(
-      'unknown',
-    );
+    const cleanup3 = await mailbox.awaitCleanup({ commandId: 'nope', timeoutMs: 1 });
+    expect(cleanup3.status).toBe('unknown');
+    mailbox.dispose();
+  });
+
+  it('keeps the outcome of work that completed before the cancellation was seen', async () => {
+    const { mailbox } = createMailboxFixture();
+    const commandId = await admitOne(mailbox);
+    const claim = await claimOne(mailbox);
+    await mailbox.requestCancellation({ commandId, reason: 'too late' });
+
+    // The claimant had already finished. The effect really happened, so the
+    // result is retained even though the disposition is `cancelled`.
+    const settled = await mailbox.acknowledge({
+      commandId,
+      attemptToken: claim.attemptToken,
+      outcome: { chargedCents: 500 },
+    });
+    expect(settled.status).toBe('settled');
+    expect(settled.status === 'settled' && settled.receipt.state).toBe('cancelled');
+    expect(settled.status === 'settled' && settled.receipt.outcome).toEqual({ chargedCents: 500 });
+    expect(settled.status === 'settled' && settled.receipt.cleanupPending).toBe(false);
     mailbox.dispose();
   });
 
@@ -322,7 +357,8 @@ describe('ApplicationMailbox cancellation', () => {
     await mailbox.requestCancellation({ commandId, reason: 'stop' });
 
     clock.advance(2_000);
-    expect((await mailbox.runMaintenance()).deadLettered).toBe(1);
+    const report = await mailbox.runMaintenance();
+    expect(report.deadLettered).toBe(1);
     const receipt = await mailbox.receipt(commandId);
     expect(receipt?.state).toBe('dead-lettered');
     expect(receipt?.failure?.reason).toBe('deadline-exceeded');
@@ -353,9 +389,8 @@ describe('ApplicationMailbox observation during a live attempt', () => {
 
     // Nothing an observer did disturbed the lease.
     expect(claim.signal.aborted).toBe(false);
-    expect(
-      (await mailbox.acknowledge({ commandId, attemptToken: claim.attemptToken })).status,
-    ).toBe('settled');
+    const settled = await mailbox.acknowledge({ commandId, attemptToken: claim.attemptToken });
+    expect(settled.status).toBe('settled');
     mailbox.dispose();
   });
 });
