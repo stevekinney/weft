@@ -4,6 +4,7 @@ import {
   restoreRealTimers,
   sleepForTesting,
   useFakeTimers,
+  waitForCondition as waitForTestingCondition,
 } from '../testing/fake-timers.test-support.ts';
 
 import { buildInternalRealmManifest } from '../worker/manifest/internal-realm.ts';
@@ -215,14 +216,6 @@ describe('WorkerExecutionStrategy', () => {
     const message = messages.at(-1);
     expect(message).toBeDefined();
     return message!;
-  }
-
-  async function waitForCondition(condition: () => boolean, description: string): Promise<void> {
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      if (condition()) return;
-      await new Promise<void>((resolve) => setImmediate(resolve));
-    }
-    throw new Error(`Timed out waiting for ${description}.`);
   }
 
   // -------------------------------------------------------------------------
@@ -2484,6 +2477,22 @@ describe('WorkerExecutionStrategy', () => {
       );
     }
 
+    async function waitForWorkerMessageListener(worker: MockWorker): Promise<void> {
+      await waitForTestingCondition(() => worker._listeners.has('message'), {
+        label: 'worker message listener to be attached',
+      });
+    }
+
+    async function waitForWorkerDiscard(worker: MockWorker): Promise<void> {
+      await waitForTestingCondition(
+        () => {
+          expect(mockPool.discard).toHaveBeenCalledWith(worker);
+          return true;
+        },
+        { label: 'worker to be discarded after rejected realm-ready handshake' },
+      );
+    }
+
     it('throws when requireRealmReady is true but getExpectedWorkflowTypes is not provided', () => {
       mockWorkers = [createMockWorker()];
       mockPool = createMockPool(mockWorkers);
@@ -2525,10 +2534,7 @@ describe('WorkerExecutionStrategy', () => {
         checkpoint: new ArrayBuffer(0),
       });
       const worker = firstWorker();
-      await waitForCondition(
-        () => (worker._listeners.get('message')?.size ?? 0) > 0,
-        'the worker message listener',
-      );
+      await waitForWorkerMessageListener(worker);
       expect(worker.postMessage).not.toHaveBeenCalled();
 
       let resolveRunSent!: () => void;
@@ -2556,10 +2562,7 @@ describe('WorkerExecutionStrategy', () => {
         checkpoint: new ArrayBuffer(0),
       });
       const worker = firstWorker();
-      await waitForCondition(
-        () => (worker._listeners.get('message')?.size ?? 0) > 0,
-        'the worker message listener',
-      );
+      await waitForWorkerMessageListener(worker);
       const firstRunSent = Promise.withResolvers<void>();
       worker.postMessage.mockImplementation(() => firstRunSent.resolve());
       dispatchReady(worker);
@@ -2574,7 +2577,13 @@ describe('WorkerExecutionStrategy', () => {
           data: { type: 'completed', turnId: runTurnId, workflowId: 'wf-first', result: 'done' },
         }),
       );
-      await waitForCondition(() => mockPool.availableCount === 1, 'the worker release');
+      await waitForTestingCondition(
+        () => {
+          expect(mockPool.release).toHaveBeenCalledTimes(1);
+          return true;
+        },
+        { label: 'worker release after first workflow completion' },
+      );
 
       const secondRunSent = Promise.withResolvers<void>();
       worker.postMessage.mockImplementation(() => secondRunSent.resolve());
@@ -2603,11 +2612,11 @@ describe('WorkerExecutionStrategy', () => {
         input: null,
         checkpoint: new ArrayBuffer(0),
       });
-      await sleepForTesting(10);
       const worker = firstWorker();
+      await waitForWorkerMessageListener(worker);
 
       dispatchReady(worker, { manifest: buildInternalRealmManifest(['a-different-workflow']) });
-      await sleepForTesting(10);
+      await waitForWorkerDiscard(worker);
 
       expect(worker.postMessage).not.toHaveBeenCalled();
       expect(mockPool.discard).toHaveBeenCalledWith(worker);
@@ -2623,11 +2632,11 @@ describe('WorkerExecutionStrategy', () => {
         input: null,
         checkpoint: new ArrayBuffer(0),
       });
-      await sleepForTesting(10);
       const worker = firstWorker();
+      await waitForWorkerMessageListener(worker);
 
       dispatchReady(worker, { protocolVersion: WORKER_PROTOCOL_VERSION + 1 });
-      await sleepForTesting(10);
+      await waitForWorkerDiscard(worker);
 
       expect(worker.postMessage).not.toHaveBeenCalled();
       expect(mockPool.discard).toHaveBeenCalledWith(worker);
@@ -2725,14 +2734,14 @@ describe('WorkerExecutionStrategy', () => {
         input: null,
         checkpoint: new ArrayBuffer(0),
       });
-      await sleepForTesting(10);
       const worker = firstWorker();
+      await waitForWorkerMessageListener(worker);
 
       const oversizeManifest = buildInternalRealmManifest(
         Array.from({ length: 50 }, (_, index) => `workflow-type-${index}`),
       );
       dispatchReady(worker, { manifest: oversizeManifest });
-      await sleepForTesting(10);
+      await waitForWorkerDiscard(worker);
 
       expect(worker.postMessage).not.toHaveBeenCalled();
       expect(mockPool.discard).toHaveBeenCalledWith(worker);
@@ -2752,11 +2761,11 @@ describe('WorkerExecutionStrategy', () => {
         input: null,
         checkpoint: new ArrayBuffer(0),
       });
-      await sleepForTesting(10);
       const worker = firstWorker();
+      await waitForWorkerMessageListener(worker);
 
       dispatchReady(worker, { realmGeneration: '' });
-      await sleepForTesting(10);
+      await waitForWorkerDiscard(worker);
 
       expect(worker.postMessage).not.toHaveBeenCalled();
       expect(mockPool.discard).toHaveBeenCalledWith(worker);
@@ -2772,11 +2781,11 @@ describe('WorkerExecutionStrategy', () => {
         input: null,
         checkpoint: new ArrayBuffer(0),
       });
-      await sleepForTesting(10);
       const worker = firstWorker();
+      await waitForWorkerMessageListener(worker);
 
       dispatchReady(worker, { manifest: 42 });
-      await sleepForTesting(10);
+      await waitForWorkerDiscard(worker);
 
       expect(worker.postMessage).not.toHaveBeenCalled();
       expect(mockPool.discard).toHaveBeenCalledWith(worker);

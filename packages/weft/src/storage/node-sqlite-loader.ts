@@ -76,8 +76,11 @@ export function isBetterSqlite3LoadFailure(error: unknown): boolean {
     return error.message.includes('better-sqlite3');
   }
 
-  if (error.message.includes('Could not locate the bindings file')) {
-    return error.message.includes('better_sqlite3.node');
+  if (errorCode === undefined) {
+    return (
+      error.message.startsWith('Could not locate the bindings file.') &&
+      error.message.includes('better_sqlite3.node')
+    );
   }
 
   return false;
