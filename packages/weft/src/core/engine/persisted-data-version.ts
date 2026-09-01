@@ -46,7 +46,8 @@ export async function assertCompatiblePersistedDataVersion(storage: WeftStorage)
   // prefix means the database holds unversioned records; reject so the operator
   // chooses explicitly whether to wipe and start fresh.
   for (const prefix of USER_DATA_PREFIXES) {
-    for await (const _entry of storage.scan(prefix, { limit: 1 })) {
+    for await (const entry of storage.scan(prefix, { limit: 1 })) {
+      void entry;
       throw new PersistedDataIncompatibleError(null, CURRENT_PERSISTED_DATA_SCHEMA_VERSION);
     }
   }

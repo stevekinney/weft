@@ -150,19 +150,55 @@ describe('weft.events.subscribe operation', () => {
     await subscription.close();
   });
 
+  it('delivers retention gaps before applying workflow and kind filters', async () => {
+    const gap = fleetEvent(4, {
+      kind: 'fleet:gap',
+      workflowId: undefined,
+      payload: { requestedCursor: '0', firstRetainedSequence: 5 },
+    });
+    const matching = fleetEvent(5, {
+      workflowId: 'wf-match',
+      kind: 'workflow:completed',
+    });
+    const subscription = await invokeFleetSubscription(
+      { workflowId: 'wf-match', kind: 'workflow:completed' },
+      [gap, matching],
+    );
+
+    expect(hasFleetEventIterable(subscription)).toBe(true);
+    if (!hasFleetEventIterable(subscription)) throw new Error('expected subscription result');
+    await expect(collectSequences(subscription.iterable)).resolves.toEqual([4, 5]);
+    await subscription.close();
+  });
+
   it('describes the fleet event envelope for generated discovery clients', () => {
     const schema = eventSchemaJson();
-    const properties = schema['properties'];
-
-    expect(schema['type']).toBe('object');
-    expect(properties).toMatchObject({
-      kind: expect.objectContaining({ type: 'string' }),
-      sequence: expect.objectContaining({ type: 'number' }),
-      cursor: expect.objectContaining({ type: 'string' }),
-      emittedAtMs: expect.objectContaining({ type: 'number' }),
-      payload: {},
-      workflowId: expect.objectContaining({ type: 'string' }),
-    });
+    expect(schema['anyOf']).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'object',
+          properties: expect.objectContaining({
+            kind: expect.objectContaining({ type: 'string' }),
+            sequence: expect.objectContaining({ type: 'number' }),
+            cursor: expect.objectContaining({ type: 'string' }),
+            emittedAtMs: expect.objectContaining({ type: 'number' }),
+            payload: {},
+            workflowId: expect.objectContaining({ type: 'string' }),
+          }),
+        }),
+        expect.objectContaining({
+          properties: expect.objectContaining({
+            kind: expect.objectContaining({ const: 'fleet:gap' }),
+            payload: expect.objectContaining({
+              properties: expect.objectContaining({
+                requestedCursor: expect.objectContaining({ type: 'string' }),
+                firstRetainedSequence: expect.objectContaining({ type: 'number' }),
+              }),
+            }),
+          }),
+        }),
+      ]),
+    );
   });
 
   it('enforces the replay cap from the actual subscription iterable', async () => {
@@ -193,8 +229,8 @@ describe('weft.events.subscribe operation', () => {
     await subscription.close();
   });
 
-  it('filters live events before they consume the subscription live buffer', async () => {
-    const fleetFeed = createFleetEventFeed(new MemoryStorage(), { liveBufferSize: 1 });
+  it('filters live events read from durable storage', async () => {
+    const fleetFeed = createFleetEventFeed(new MemoryStorage());
     const subscription = await fleetEventsSubscriptionOperation.invoke({
       input: { workflowId: 'wf-match' },
       principal: anonymousPrincipal(),

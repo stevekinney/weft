@@ -241,27 +241,64 @@
       },
       "outputSchema": {},
       "eventSchema": {
-        "additionalProperties": false,
-        "properties": {
-          "cursor": {
-            "type": "string"
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "type": "string"
+              },
+              "emittedAtMs": {
+                "type": "number"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "payload": {},
+              "sequence": {
+                "type": "number"
+              },
+              "workflowId": {
+                "type": "string"
+              }
+            },
+            "required": ["kind", "sequence", "cursor", "emittedAtMs", "payload"],
+            "type": "object"
           },
-          "emittedAtMs": {
-            "type": "number"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "payload": {},
-          "sequence": {
-            "type": "number"
-          },
-          "workflowId": {
-            "type": "string"
+          {
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "type": "string"
+              },
+              "emittedAtMs": {
+                "type": "number"
+              },
+              "kind": {
+                "const": "fleet:gap",
+                "type": "string"
+              },
+              "payload": {
+                "additionalProperties": false,
+                "properties": {
+                  "firstRetainedSequence": {
+                    "type": "number"
+                  },
+                  "requestedCursor": {
+                    "type": "string"
+                  }
+                },
+                "required": ["requestedCursor", "firstRetainedSequence"],
+                "type": "object"
+              },
+              "sequence": {
+                "type": "number"
+              }
+            },
+            "required": ["kind", "sequence", "cursor", "emittedAtMs", "payload"],
+            "type": "object"
           }
-        },
-        "required": ["kind", "sequence", "cursor", "emittedAtMs", "payload"],
-        "type": "object"
+        ]
       }
     },
     {
@@ -346,27 +383,64 @@
         "type": "object"
       },
       "eventSchema": {
-        "additionalProperties": false,
-        "properties": {
-          "cursor": {
-            "type": "string"
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "type": "string"
+              },
+              "emittedAtMs": {
+                "type": "number"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "payload": {},
+              "sequence": {
+                "type": "number"
+              },
+              "workflowId": {
+                "type": "string"
+              }
+            },
+            "required": ["kind", "sequence", "cursor", "emittedAtMs", "payload"],
+            "type": "object"
           },
-          "emittedAtMs": {
-            "type": "number"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "payload": {},
-          "sequence": {
-            "type": "number"
-          },
-          "workflowId": {
-            "type": "string"
+          {
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "type": "string"
+              },
+              "emittedAtMs": {
+                "type": "number"
+              },
+              "kind": {
+                "const": "fleet:gap",
+                "type": "string"
+              },
+              "payload": {
+                "additionalProperties": false,
+                "properties": {
+                  "firstRetainedSequence": {
+                    "type": "number"
+                  },
+                  "requestedCursor": {
+                    "type": "string"
+                  }
+                },
+                "required": ["requestedCursor", "firstRetainedSequence"],
+                "type": "object"
+              },
+              "sequence": {
+                "type": "number"
+              }
+            },
+            "required": ["kind", "sequence", "cursor", "emittedAtMs", "payload"],
+            "type": "object"
           }
-        },
-        "required": ["kind", "sequence", "cursor", "emittedAtMs", "payload"],
-        "type": "object"
+        ]
       }
     },
     {

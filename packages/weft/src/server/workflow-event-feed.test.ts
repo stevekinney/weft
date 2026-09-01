@@ -353,6 +353,12 @@ describe('WorkflowEventFeed — subscribe (live + replay)', () => {
     for await (const envelope of feed.subscribe({
       workflowId: 'wf-1',
       selector: 'events',
+      filterEnvelope() {
+        return true;
+      },
+      countReplayEnvelope() {
+        return true;
+      },
       onReplayComplete() {
         order.push('replay-complete');
       },
