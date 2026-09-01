@@ -673,7 +673,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       {
         reason:
           'Bun maps the returned subscribe reference and no-op dispose body inconsistently across platforms even though both are exercised by the feed tests.',
-        lines: new Set(process.platform === 'darwin' ? [] : [390]),
+        lines: new Set(process.platform === 'darwin' ? [] : [398]),
         requireUncoveredLines: true,
       },
     ],
