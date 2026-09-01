@@ -28,9 +28,10 @@
     children: Snippet;
     /** Defaults to every scope granted (the optimistic-grant default). Pass a narrower list to test a denied/disabled state. */
     scopes?: readonly AuthorizationScope[] | undefined;
+    onQueryClientReady?: ((queryClient: QueryClient) => void) | undefined;
   }
 
-  let { client, children, scopes }: Props = $props();
+  let { client, children, scopes, onQueryClientReady }: Props = $props();
 
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -44,6 +45,7 @@
       mutations: { retry: false },
     },
   });
+  untrack(() => onQueryClientReady?.(queryClient));
 
   provideClient(untrack(() => client));
   const principalStore = providePrincipalStore();
