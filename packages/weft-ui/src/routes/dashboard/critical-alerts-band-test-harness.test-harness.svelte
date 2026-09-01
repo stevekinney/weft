@@ -1,6 +1,7 @@
 <script lang="ts">
   /** Test-only composition of `<DashboardTestHarness>` + `<CriticalAlertsBand>`. */
   import type { HttpClient } from '@lostgradient/weft/client';
+  import type { QueryClient } from '@tanstack/svelte-query';
 
   import type { AuthorizationScope } from '../../lib/scopes.svelte.ts';
   import CriticalAlertsBand from './critical-alerts-band.svelte';
@@ -9,12 +10,13 @@
   interface Props {
     client: HttpClient;
     scopes?: readonly AuthorizationScope[] | undefined;
+    onQueryClientReady?: ((queryClient: QueryClient) => void) | undefined;
   }
 
-  let { client, scopes }: Props = $props();
+  let { client, scopes, onQueryClientReady }: Props = $props();
 </script>
 
-<DashboardTestHarness {client} {scopes}>
+<DashboardTestHarness {client} {scopes} {onQueryClientReady}>
   {#snippet children()}
     <CriticalAlertsBand />
   {/snippet}
