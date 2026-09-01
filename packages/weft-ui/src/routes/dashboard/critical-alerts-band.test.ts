@@ -5,8 +5,10 @@
  * mutating `globalThis.fetch`, which must remain isolated while Bun executes
  * component tests in parallel.
  */
+import { notifyManager, type QueryClient } from '@tanstack/svelte-query';
 import { render, waitFor } from '@testing-library/svelte';
 import { describe, expect, test } from 'bun:test';
+import { tick } from 'svelte';
 
 import { HttpClientError, type HttpClient } from '@lostgradient/weft/client';
 
@@ -16,6 +18,21 @@ import CriticalAlertsBandHarness from './critical-alerts-band-test-harness.test-
 // observers. Keep the established full-suite window rather than depending on
 // Testing Library's 1-second default while Bun is executing other files.
 const WAIT_FOR_TWO_QUERIES = { timeout: 3_000 };
+
+async function waitForSettledQueries(queryClient: QueryClient): Promise<void> {
+  if (queryClient.isFetching() > 0) {
+    await new Promise<void>((resolve) => {
+      const unsubscribe = queryClient.getQueryCache().subscribe(() => {
+        if (queryClient.isFetching() === 0) {
+          unsubscribe();
+          resolve();
+        }
+      });
+    });
+  }
+  await new Promise<void>((resolve) => notifyManager.schedule(resolve));
+  await tick();
+}
 
 const EMPTY_DIAGNOSTICS_SUMMARY = {
   stuckQueued: 0,
@@ -51,14 +68,13 @@ describe('CriticalAlertsBand', () => {
       reviews: [],
     });
 
+    let queryClient!: QueryClient;
     const { container, queryByLabelText } = render(CriticalAlertsBandHarness, {
-      props: { client },
+      props: { client, onQueryClientReady: (value) => (queryClient = value) },
     });
 
-    await waitFor(
-      () => expect(queryByLabelText('Loading alerts')).toBeNull(),
-      WAIT_FOR_TWO_QUERIES,
-    );
+    await waitForSettledQueries(queryClient);
+    expect(queryByLabelText('Loading alerts')).toBeNull();
     expect(container.textContent).toBe('');
   });
 
@@ -72,16 +88,17 @@ describe('CriticalAlertsBand', () => {
       reviews,
     });
 
-    const { queryByLabelText } = render(CriticalAlertsBandHarness, { props: { client } });
+    let queryClient!: QueryClient;
+    const { queryByLabelText } = render(CriticalAlertsBandHarness, {
+      props: { client, onQueryClientReady: (value) => (queryClient = value) },
+    });
 
     expect(queryByLabelText('Loading alerts')).not.toBeNull();
 
     resolveReviews([]);
 
-    await waitFor(
-      () => expect(queryByLabelText('Loading alerts')).toBeNull(),
-      WAIT_FOR_TWO_QUERIES,
-    );
+    await waitForSettledQueries(queryClient);
+    expect(queryByLabelText('Loading alerts')).toBeNull();
   });
 
   test('renders a diagnostic chip that deep-links to the workers queue view', async () => {

@@ -2548,8 +2548,15 @@ describe('WorkerExecutionStrategy', () => {
       });
       await sleepForTesting(10);
       const worker = firstWorker();
+
+      let resolveFirstRunSent!: () => void;
+      const firstRunSent = new Promise<void>((resolve) => {
+        resolveFirstRunSent = resolve;
+      });
+      worker.postMessage.mockImplementationOnce(() => resolveFirstRunSent());
+
       dispatchReady(worker);
-      await sleepForTesting(10);
+      await firstRunSent;
       expect(worker.postMessage).toHaveBeenCalledTimes(1);
 
       const runTurnId = (worker.postMessage.mock.calls[0]![0] as { turnId?: number }).turnId ?? 0;
@@ -2560,7 +2567,11 @@ describe('WorkerExecutionStrategy', () => {
           data: { type: 'completed', turnId: runTurnId, workflowId: 'wf-first', result: 'done' },
         }),
       );
-      await sleepForTesting(10);
+      let resolveSecondRunSent!: () => void;
+      const secondRunSent = new Promise<void>((resolve) => {
+        resolveSecondRunSent = resolve;
+      });
+      worker.postMessage.mockImplementationOnce(() => resolveSecondRunSent());
 
       strategy.startWorkflow({
         workflowId: 'wf-second',
@@ -2568,7 +2579,7 @@ describe('WorkerExecutionStrategy', () => {
         input: null,
         checkpoint: new ArrayBuffer(0),
       });
-      await sleepForTesting(10);
+      await secondRunSent;
 
       // Recycled worker: the second run is sent without waiting for another ready.
       expect(worker.postMessage).toHaveBeenCalledTimes(2);
