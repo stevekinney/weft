@@ -41,6 +41,15 @@ const HINT_FIELD_LIMIT = 3;
 const HINT_MAX_LENGTH = 24;
 
 /**
+ * Sentinel returned by {@link unionBranches} for a combinator arrangement the
+ * emitter deliberately refuses to interpret, distinguishing "degrade to
+ * `unknown`" from "no combinator here, keep parsing". Declared alongside the
+ * other module constants so the `import.meta.main` entrypoint below — which
+ * runs during module evaluation — never reaches it in the temporal dead zone.
+ */
+const UNSUPPORTED_COMBINATOR = Symbol('unsupported-combinator');
+
+/**
  * A normalized type node — the single source of truth for both the structural
  * dedup key and the emitted TypeScript text. Two nodes share a `canonicalKey`
  * if and only if they would render to identical TypeScript.
@@ -195,12 +204,44 @@ function stringEnumMembers(schema: Record<string, unknown>): readonly string[] |
 }
 
 /**
+ * Return the branch schemas of a `anyOf`/`oneOf` union, `undefined` when the
+ * schema is not a union, or {@link UNSUPPORTED_COMBINATOR} when it is one the
+ * emitter refuses to interpret.
+ *
+ * TypeScript has no exclusive-or type, so `oneOf` and `anyOf` both render to
+ * the same `A | B` union text; Zod's `discriminatedUnion()` compiles to `oneOf`
+ * with a `const` discriminant per branch, which the `const` handling above
+ * already preserves as a literal (WFT-93). `allOf` stays unsupported.
+ *
+ * JSON Schema applies sibling combinators conjunctively, so a node carrying
+ * more than one is a constraint this emitter does not compose. Degrade to
+ * `unknown` rather than silently honoring one and dropping the rest — the same
+ * posture `src/cli/codegen-emit.ts` takes for the same case.
+ */
+function unionBranches(
+  schema: Record<string, unknown>,
+): readonly unknown[] | undefined | typeof UNSUPPORTED_COMBINATOR {
+  let found:
+    { readonly keyword: 'anyOf' | 'oneOf'; readonly branches: readonly unknown[] } | undefined;
+  for (const keyword of ['anyOf', 'oneOf', 'allOf'] as const) {
+    const value = schema[keyword];
+    if (!Array.isArray(value)) continue;
+    if (found !== undefined || keyword === 'allOf') return UNSUPPORTED_COMBINATOR;
+    found = { keyword, branches: value };
+  }
+  if (found === undefined) return undefined;
+  // An empty combinator array is a degenerate schema with no branches to union.
+  return found.branches.length > 0 ? found.branches : UNSUPPORTED_COMBINATOR;
+}
+
+/**
  * Parse a JSON Schema fragment into a normalized {@link TypeNode}. Reproduces
  * exactly the schema subset the emitter supports: primitives, arrays,
  * string `enum` literal unions, primitive `const` literals, `type: []` unions,
- * `anyOf` unions, objects (honoring `required`), no-`properties` objects as
- * `Record<string, unknown>`, and an `unknown` fallback for every other schema
- * feature (non-string `enum`, oneOf/allOf, additionalProperties, nullable patterns).
+ * `anyOf`/`oneOf` unions, objects (honoring `required`), no-`properties` objects
+ * as `Record<string, unknown>`, and an `unknown` fallback for every other schema
+ * feature (non-string `enum`, `allOf`, co-occurring combinators,
+ * additionalProperties, nullable patterns).
  */
 function schemaToNode(schema: Record<string, unknown>): TypeNode {
   const constant = schema['const'];
@@ -213,9 +254,10 @@ function schemaToNode(schema: Record<string, unknown>): TypeNode {
     return { kind: 'primitive', text: JSON.stringify(constant) };
   }
 
-  const anyOf = schema['anyOf'];
-  if (Array.isArray(anyOf) && anyOf.length > 0) {
-    const members = anyOf.map((member) =>
+  const branches = unionBranches(schema);
+  if (branches === UNSUPPORTED_COMBINATOR) return { kind: 'primitive', text: 'unknown' };
+  if (branches !== undefined) {
+    const members = branches.map((member) =>
       isRecord(member)
         ? schemaToNode(member)
         : ({ kind: 'primitive', text: 'unknown' } satisfies TypeNode),
