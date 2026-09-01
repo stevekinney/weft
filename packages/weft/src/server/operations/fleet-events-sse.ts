@@ -107,6 +107,7 @@ function matchesFleetEventFilter(
   envelope: FleetEventEnvelope,
   input: FleetEventsSseInput,
 ): boolean {
+  if (envelope.kind === 'fleet:gap') return true;
   if (input.workflowId !== undefined && envelope.workflowId !== input.workflowId) return false;
   if (input.kind !== undefined && envelope.kind !== input.kind) return false;
   return true;
@@ -130,6 +131,7 @@ function createFleetEventsIterable(
         signal: controller.signal,
         replayLimit: MAX_FLEET_SSE_REPLAY_EVENTS,
         filterEnvelope: (envelope) => matchesFleetEventFilter(envelope, input),
+        countReplayEnvelope: (envelope) => envelope.kind !== 'fleet:gap',
         onReplayComplete,
         createReplayLimitError: (count, limit) =>
           invalidParamsFault(

@@ -327,6 +327,7 @@ export {
   EngineDisposalError,
   EngineDisposedError,
   IdempotencyKeyPurgedError,
+  PersistedDataCorruptError,
   PersistedDataIncompatibleError,
   StartOrSignalConflictError,
   WorkflowAlreadyExistsError,
@@ -2689,5 +2690,27 @@ export class Engine<
  * files in the same program. Removing the registry-typed members entirely,
  * rather than widening their generic arguments, avoids the recursive
  * comparison altogether.)
+ *
+ * @example Retain an engine with a concrete workflow registry behind a host-facing type
+ * ```ts
+ * import {
+ *   Engine,
+ *   MemoryStorage,
+ *   workflow,
+ *   type RegistryAgnosticEngine,
+ * } from '@lostgradient/weft';
+ *
+ * const greeting = workflow({ name: 'greeting' }).execute(async function* () {
+ *   return 'hello';
+ * });
+ *
+ * const engine: RegistryAgnosticEngine = await Engine.create({
+ *   storage: new MemoryStorage(),
+ *   workflows: { greeting },
+ * });
+ *
+ * void engine.start;
+ * void engine.startOrSignal;
+ * ```
  */
 export type RegistryAgnosticEngine = Omit<Engine, 'register' | 'registerWorkflows'>;

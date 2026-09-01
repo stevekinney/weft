@@ -480,4 +480,7 @@ export class IdempotencyKeyPurgedError extends WeftError<'IdempotencyKeyPurgedEr
   }
 }
 
-export { PersistedDataIncompatibleError } from '../persisted-data-incompatible-error.ts';
+export {
+  PersistedDataCorruptError,
+  PersistedDataIncompatibleError,
+} from '../persisted-data-incompatible-error.ts';

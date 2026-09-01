@@ -11,9 +11,11 @@
  * from this view for the same reason it is absent from the ledger itself:
  * `RemoteTaskTerminalResolved` only ever stores `resultDigest` (a content
  * hash), never the value — the durable ledger proves which attempt won,
- * it does not re-deliver the payload. `resultDigest` exists so a caller
- * that already has the value through whatever channel actually delivered
- * it can verify it matches before adopting.
+ * it does not re-deliver the payload. Only resolved views expose that digest:
+ * cancelled and retry-exhausted records use internal synthetic digests that
+ * include the attempt token. A resolved `resultDigest` exists so a caller that
+ * already has the value through whatever channel actually delivered it can
+ * verify it matches before adopting.
  *
  * "Adoption" (`adoptTaskResultImpl`) is an explicit caller assertion, not
  * something this module infers: nothing in the engine today automatically
@@ -27,6 +29,7 @@
  */
 
 import type { Storage } from '../../storage/interface.ts';
+import { sha256Hex } from '../../worker/manifest/content-digest.ts';
 import { markWorkflowResultAdopted } from '../task-ledger-transitions.ts';
 import {
   decodeRemoteTaskRecord,
@@ -48,8 +51,14 @@ import { commitTaskLedgerTransition } from './task-ledger-runtime.ts';
  * await using server = serve({ engine, port: 0 });
  *
  * const view: TaskResultView | null = await server.getTaskResult('op-1');
- * if (view?.status === 'terminal' && !view.adopted) {
+ * if (view?.status === 'terminal' && view.disposition === 'resolved' && !view.adopted) {
  *   await server.adoptTaskResult('op-1', view.resultDigest);
+ * } else if (
+ *   view?.status === 'terminal' &&
+ *   view.disposition !== 'resolved' &&
+ *   !view.adopted
+ * ) {
+ *   await server.adoptTaskResult('op-1', view.adoptionToken);
  * }
  * ```
  */
@@ -57,13 +66,23 @@ export type TaskResultView =
   | Readonly<{ status: 'pending'; state: 'queued' | 'leased' | 'completing' | 'cancelling' }>
   | Readonly<{
       status: 'terminal';
-      disposition: 'resolved' | 'cancelled' | 'retryExhausted';
+      disposition: 'resolved';
       resultDigest: string;
       terminalAt: number;
       adopted: boolean;
       adoptedAt?: number;
-      /** Only present for `disposition: 'resolved'` — whether the worker reported success or failure. */
-      resultStatus?: 'completed' | 'failed';
+      /** Whether the worker reported success or failure. */
+      resultStatus: 'completed' | 'failed';
+      error?: string;
+    }>
+  | Readonly<{
+      status: 'terminal';
+      disposition: 'cancelled' | 'retryExhausted';
+      /** Token-safe fence for adopting this exact terminal incarnation. */
+      adoptionToken: string;
+      terminalAt: number;
+      adopted: boolean;
+      adoptedAt?: number;
       error?: string;
     }>
   | Readonly<{
@@ -74,17 +93,38 @@ export type TaskResultView =
       error?: string;
     }>;
 
-function terminalTaskResultView(decoded: RemoteTaskTerminal): TaskResultView {
+async function terminalTaskResultView(decoded: RemoteTaskTerminal): Promise<TaskResultView> {
+  if (decoded.disposition === 'resolved') {
+    return {
+      status: 'terminal',
+      disposition: decoded.disposition,
+      resultDigest: decoded.resultDigest,
+      terminalAt: decoded.terminalAt,
+      adopted: decoded.adopted,
+      ...(decoded.adoptedAt !== undefined ? { adoptedAt: decoded.adoptedAt } : {}),
+      resultStatus: decoded.status,
+      ...(decoded.error !== undefined ? { error: decoded.error } : {}),
+    };
+  }
+
   return {
     status: 'terminal',
     disposition: decoded.disposition,
-    resultDigest: decoded.resultDigest,
+    adoptionToken: await nonResolvedAdoptionToken(decoded),
     terminalAt: decoded.terminalAt,
     adopted: decoded.adopted,
     ...(decoded.adoptedAt !== undefined ? { adoptedAt: decoded.adoptedAt } : {}),
-    ...(decoded.disposition === 'resolved' ? { resultStatus: decoded.status } : {}),
-    ...('error' in decoded && decoded.error !== undefined ? { error: decoded.error } : {}),
+    ...('error' in decoded ? { error: decoded.error } : {}),
   };
+}
+
+function nonResolvedAdoptionToken(decoded: RemoteTaskTerminal): Promise<string> {
+  return sha256Hex(
+    JSON.stringify({
+      createdAt: decoded.createdAt,
+      resultDigest: decoded.resultDigest,
+    }),
+  );
 }
 
 function deadLetteredTaskResultView(decoded: RemoteTaskDeadLettered): TaskResultView {
@@ -102,6 +142,7 @@ function deadLetteredTaskResultView(decoded: RemoteTaskDeadLettered): TaskResult
  * no record exists for `operationId` — either it was never dispatched, or a
  * retained terminal record has already been reaped.
  */
+// oxlint-disable-next-line typescript/consistent-return -- TypeScript proves this closed discriminated-union switch exhaustive; adding a runtime default creates nondeterministic Bun coverage attribution.
 export async function getTaskResultViewImpl(
   storage: Storage,
   operationId: string,
@@ -116,15 +157,9 @@ export async function getTaskResultViewImpl(
     case 'cancelling':
       return { status: 'pending', state: decoded.state };
     case 'terminal':
-      return terminalTaskResultView(decoded);
+      return await terminalTaskResultView(decoded);
     case 'deadLettered':
       return deadLetteredTaskResultView(decoded);
-    default: {
-      // Exhaustiveness guard: adding a new RemoteTaskRecord state without a
-      // case above must fail this typecheck.
-      const exhaustive: never = decoded;
-      return exhaustive;
-    }
   }
 }
 
@@ -133,21 +168,28 @@ export async function getTaskResultViewImpl(
  * assertion that "the workflow checkpoint (or whatever consumed this
  * result) has incorporated it," per the project brief's adoption/retention
  * split. Returns `true` once adopted, `false` if the record is not
- * currently `terminal` or `resultDigest` does not match (including a
- * record that no longer exists, e.g. already reaped). Idempotent: adopting
- * an already-adopted record with the same digest succeeds again, refreshing
- * `adoptedAt`.
+ * currently `terminal`, or the supplied resolved digest/non-resolved
+ * adoption token does not match (including a record that no longer exists,
+ * e.g. already reaped). The adoption token is a one-way digest of the
+ * internal synthetic digest, fencing adoption to the observed incarnation
+ * without exposing the attempt token. Idempotent: adopting an already-adopted
+ * record succeeds again, refreshing `adoptedAt`.
  */
 export async function adoptTaskResultImpl(
   storage: Storage,
   operationId: string,
-  resultDigest: string,
+  adoptionKey: string,
 ): Promise<boolean> {
+  const observed = decodeRemoteTaskRecord(await storage.get(taskLedgerKey(operationId)));
+  let expectedResultDigest = adoptionKey;
+  if (observed?.state === 'terminal' && observed.disposition !== 'resolved') {
+    if ((await nonResolvedAdoptionToken(observed)) !== adoptionKey) return false;
+    expectedResultDigest = observed.resultDigest;
+  }
   const result = await commitTaskLedgerTransition(
     storage,
     operationId,
-    (current, now) =>
-      markWorkflowResultAdopted(current, { expectedResultDigest: resultDigest }, now),
+    (current, now) => markWorkflowResultAdopted(current, { expectedResultDigest }, now),
     1,
   );
   return result.ok;

@@ -57,6 +57,7 @@ export {
   EngineLeaseCorruptedError,
   EngineLeaseNotHeldError,
   IdempotencyKeyPurgedError,
+  PersistedDataCorruptError,
   PersistedDataIncompatibleError,
   ScheduleHandle,
   StartOrSignalConflictError,
@@ -90,6 +91,7 @@ export type {
   LeaseLostReason,
   RecoverAllOptions,
   RecoveredWorkflowInfo,
+  RegistryAgnosticEngine,
   WorkflowWakeKind,
 } from './core/engine';
 export {

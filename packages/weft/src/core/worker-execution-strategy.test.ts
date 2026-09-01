@@ -4,7 +4,7 @@ import {
   restoreRealTimers,
   sleepForTesting,
   useFakeTimers,
-  waitForCondition,
+  waitForCondition as waitForTestingCondition,
 } from '../testing/fake-timers.test-support.ts';
 
 import { buildInternalRealmManifest } from '../worker/manifest/internal-realm.ts';
@@ -2478,13 +2478,13 @@ describe('WorkerExecutionStrategy', () => {
     }
 
     async function waitForWorkerMessageListener(worker: MockWorker): Promise<void> {
-      await waitForCondition(() => worker._listeners.has('message'), {
+      await waitForTestingCondition(() => worker._listeners.has('message'), {
         label: 'worker message listener to be attached',
       });
     }
 
     async function waitForWorkerDiscard(worker: MockWorker): Promise<void> {
-      await waitForCondition(
+      await waitForTestingCondition(
         () => {
           expect(mockPool.discard).toHaveBeenCalledWith(worker);
           return true;
@@ -2533,15 +2533,17 @@ describe('WorkerExecutionStrategy', () => {
         input: null,
         checkpoint: new ArrayBuffer(0),
       });
-
       const worker = firstWorker();
       await waitForWorkerMessageListener(worker);
       expect(worker.postMessage).not.toHaveBeenCalled();
 
-      dispatchReady(worker);
-      await waitForCondition(() => worker.postMessage.mock.calls.length === 1, {
-        label: 'run message after realm-ready handshake',
+      let resolveRunSent!: () => void;
+      const runSent = new Promise<void>((resolve) => {
+        resolveRunSent = resolve;
       });
+      worker.postMessage.mockImplementation(() => resolveRunSent());
+      dispatchReady(worker);
+      await runSent;
 
       expect(worker.postMessage).toHaveBeenCalledTimes(1);
       expect(worker.postMessage.mock.calls[0]![0]).toMatchObject({
@@ -2561,10 +2563,10 @@ describe('WorkerExecutionStrategy', () => {
       });
       const worker = firstWorker();
       await waitForWorkerMessageListener(worker);
+      const firstRunSent = Promise.withResolvers<void>();
+      worker.postMessage.mockImplementation(() => firstRunSent.resolve());
       dispatchReady(worker);
-      await waitForCondition(() => worker.postMessage.mock.calls.length === 1, {
-        label: 'first run message after realm-ready handshake',
-      });
+      await firstRunSent.promise;
       expect(worker.postMessage).toHaveBeenCalledTimes(1);
 
       const runTurnId = (worker.postMessage.mock.calls[0]![0] as { turnId?: number }).turnId ?? 0;
@@ -2575,7 +2577,7 @@ describe('WorkerExecutionStrategy', () => {
           data: { type: 'completed', turnId: runTurnId, workflowId: 'wf-first', result: 'done' },
         }),
       );
-      await waitForCondition(
+      await waitForTestingCondition(
         () => {
           expect(mockPool.release).toHaveBeenCalledTimes(1);
           return true;
@@ -2583,15 +2585,15 @@ describe('WorkerExecutionStrategy', () => {
         { label: 'worker release after first workflow completion' },
       );
 
+      const secondRunSent = Promise.withResolvers<void>();
+      worker.postMessage.mockImplementation(() => secondRunSent.resolve());
       strategy.startWorkflow({
         workflowId: 'wf-second',
         workflowType: 'test',
         input: null,
         checkpoint: new ArrayBuffer(0),
       });
-      await waitForCondition(() => worker.postMessage.mock.calls.length === 2, {
-        label: 'second run message on ready recycled worker',
-      });
+      await secondRunSent.promise;
 
       // Recycled worker: the second run is sent without waiting for another ready.
       expect(worker.postMessage).toHaveBeenCalledTimes(2);

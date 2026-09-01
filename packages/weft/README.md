@@ -1,6 +1,6 @@
 # Weft
 
-A Bun-native durable execution engine. Current release: `0.22.0`.
+A Bun-native durable execution engine. Current release: `0.23.0`.
 
 Install the library from npm as `@lostgradient/weft`:
 
@@ -406,9 +406,7 @@ Schedules also emit `schedule:fired` on the live engine each time a schedule act
 ```typescript
 import { createObservabilityInterceptors, createOpenTelemetryMetrics } from '@lostgradient/weft';
 
-const metrics = createOpenTelemetryMetrics({
-  /* your meter provider */
-});
+const metrics = createOpenTelemetryMetrics({/* your meter provider */});
 const interceptors = createObservabilityInterceptors({ metrics });
 
 const engine = new Engine({

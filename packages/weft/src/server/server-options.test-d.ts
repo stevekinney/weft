@@ -142,6 +142,17 @@ void taskQueue;
 // WeftServer.getTaskResult, WFT-24's adoption/retention read surface.
 async function verifyTaskResultViewNameable(): Promise<void> {
   const result: TaskResultView | null = await server.getTaskResult('op-1');
+  if (result?.status === 'terminal' && result.disposition === 'resolved') {
+    const digest: string = result.resultDigest;
+    void digest;
+  }
+  if (result?.status === 'terminal' && result.disposition !== 'resolved') {
+    // @ts-expect-error Synthetic terminal digests are intentionally excluded from the public view.
+    void result.resultDigest;
+    const adoptionToken: string = result.adoptionToken;
+    const adopted: boolean = await server.adoptTaskResult('op-1', adoptionToken);
+    void adopted;
+  }
   void result;
 }
 void verifyTaskResultViewNameable;

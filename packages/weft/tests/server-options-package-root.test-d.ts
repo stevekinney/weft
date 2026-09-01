@@ -33,6 +33,7 @@ import {
   type EventEnvelope,
   type FleetEventEnvelope,
   type FleetEventFeed,
+  type FleetEventFeedOptions,
   type HandlerOptions,
   type WorkflowEventFeed,
   type WorkflowEventFeedBackend,
@@ -100,6 +101,8 @@ const packageRootHandlerOptions: HandlerOptions = {
   prometheusExporter: packageRootPrometheusExporter,
 };
 void packageRootHandlerOptions;
+const packageRootFleetEventFeedOptions: FleetEventFeedOptions = { livePollIntervalMs: 100 };
+void packageRootFleetEventFeedOptions;
 
 // @ts-expect-error `metricsCollector` is no longer a public package handler option.
 const removedMetricsCollectorHandlerOptions: HandlerOptions = { metricsCollector: undefined };

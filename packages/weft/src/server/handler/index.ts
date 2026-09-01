@@ -39,8 +39,13 @@ export { extractRouteParameters, getRequiredRouteParameter } from './route-match
 export { createEngineEventFeedBackend } from '../engine-event-feed-backend.ts';
 export {
   createFleetEventFeed,
+  type FleetEventAppendOptions,
   type FleetEventEnvelope,
   type FleetEventFeed,
+  type FleetEventFeedOptions,
+  type FleetEventGapEnvelope,
+  type FleetEventInput,
+  type FleetWorkflowEventInput,
 } from '../fleet-event-feed.ts';
 export {
   createWorkflowEventFeed,

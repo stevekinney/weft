@@ -40,6 +40,7 @@ export type WeftErrorCode =
   | 'ActivityResolutionError'
   | 'BranchTopologyChangedError'
   | 'PersistedDataIncompatibleError'
+  | 'PersistedDataCorruptError'
   | 'WorkflowTimeoutError'
   | 'HttpClientError'
   | 'WorkerProtocolIncompatibleError'
@@ -115,6 +116,7 @@ const publicWeftErrorCodeMap = {
   ActivityResolutionError: true,
   BranchTopologyChangedError: true,
   PersistedDataIncompatibleError: true,
+  PersistedDataCorruptError: true,
   WorkflowTimeoutError: true,
   HttpClientError: true,
   WorkerProtocolIncompatibleError: true,

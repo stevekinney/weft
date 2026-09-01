@@ -22,8 +22,7 @@ export { WEFT_RESERVED_KEY_PREFIXES } from './key-prefixes.ts';
  * discriminant selects the variant; delete operations carry no value.
  */
 export type BatchOperation =
-  | { type: 'put'; key: string; value: Uint8Array }
-  | { type: 'delete'; key: string };
+  { type: 'put'; key: string; value: Uint8Array } | { type: 'delete'; key: string };
 
 /**
  * Maximum number of operations or conditions accepted by one storage batch call.
@@ -61,9 +60,7 @@ export const MAX_SCAN_LIMIT = 10_000;
  * ```
  */
 export type StorageBatchOperationLimitTarget =
-  | 'batch operations'
-  | 'conditionalBatch conditions'
-  | 'conditionalBatch operations';
+  'batch operations' | 'conditionalBatch conditions' | 'conditionalBatch operations';
 
 /**
  * Error thrown before a storage batch exceeds {@link MAX_BATCH_OPERATIONS}.
@@ -531,6 +528,7 @@ export const KEYS = {
   fleetEventPrefix: () => 'fleet-event:',
   fleetEvent: (sequence: number) => `fleet-event:${String(sequence).padStart(10, '0')}`,
   fleetEventTail: () => 'fleet-event-tail',
+  fleetEventWatermark: () => 'fleet-event-watermark',
   fleetEventByWorkflowPrefix: (workflowId: string) =>
     `fleet-event-by-workflow:${encodeStorageKeyComponent(workflowId)}:`,
   fleetEventByWorkflow: (workflowId: string, sequence: number) =>

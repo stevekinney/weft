@@ -210,7 +210,7 @@ interface WeftServer extends AsyncDisposable {
   stop(): Promise<void>;
   dispatchTask(task: TaskDispatch): Promise<boolean>;
   getTaskResult(operationId: string): Promise<TaskResultView | null>;
-  adoptTaskResult(operationId: string, resultDigest: string): Promise<boolean>;
+  adoptTaskResult(operationId: string, adoptionKey: string): Promise<boolean>;
   shutdownWorker(workerId: string, options?: { timeoutMs?: number }): Promise<boolean>;
   shutdownAllWorkers(options?: { timeoutMs?: number }): Promise<void>;
   cancelTask(operationId: string): boolean;
@@ -221,19 +221,28 @@ interface WeftServer extends AsyncDisposable {
 
 ### `getTaskResult` and `adoptTaskResult`
 
-`getTaskResult(operationId)` reads the current public view of a dispatched task. It returns `null` if no record exists — the task was never dispatched, or a retained terminal record has already been reaped. A non-terminal task reports `{ status: 'pending', state }`; a terminal task reports its `disposition`, `resultDigest`, and adoption state; a dead-lettered task reports why its result could not be durably persisted. The resolved terminal `resultStatus`/`error` describe the worker's own outcome — the actual result _value_ is never included, since the durable ledger only ever stores a content digest of it, not the payload itself.
+`getTaskResult(operationId)` reads the current public view of a dispatched task. It returns `null` if no record exists — the task was never dispatched, or a retained terminal record has already been reaped. A non-terminal task reports `{ status: 'pending', state }`; a terminal task reports its `disposition` and adoption state; a dead-lettered task reports why its result could not be durably persisted. Only a resolved terminal task exposes `resultDigest`, the content hash of the worker result. Cancelled and retry-exhausted tasks omit their internal synthetic digest because it contains the private attempt token. The resolved terminal `resultStatus`/`error` describe the worker's own outcome — the actual result _value_ is never included, since the durable ledger only ever stores a content digest of it, not the payload itself.
 
 ```typescript partial
 type TaskResultView =
   | { status: 'pending'; state: 'queued' | 'leased' | 'completing' | 'cancelling' }
   | {
       status: 'terminal';
-      disposition: 'resolved' | 'cancelled' | 'retryExhausted';
+      disposition: 'resolved';
       resultDigest: string;
       terminalAt: number;
       adopted: boolean;
       adoptedAt?: number;
-      resultStatus?: 'completed' | 'failed'; // only present for disposition: 'resolved'
+      resultStatus: 'completed' | 'failed';
+      error?: string;
+    }
+  | {
+      status: 'terminal';
+      disposition: 'cancelled' | 'retryExhausted';
+      adoptionToken: string;
+      terminalAt: number;
+      adopted: boolean;
+      adoptedAt?: number;
       error?: string;
     }
   | {
@@ -245,7 +254,7 @@ type TaskResultView =
     };
 ```
 
-`adoptTaskResult(operationId, resultDigest)` marks a terminal task's result as adopted — the durable assertion that whatever consumed the result (application logic, or a workflow's own checkpoint once a future project closes that loop) has incorporated it. `resultDigest` must match the digest from `getTaskResult`; a mismatch (or a record that is not currently terminal) returns `false` without changing anything. Adoption is required before `taskRetentionWindowMs` will ever reap a terminal record — until a caller adopts a result, it is retained forever, by design. Adoption is also idempotent: adopting an already-adopted record with the same digest succeeds again and refreshes `adoptedAt`.
+`adoptTaskResult(operationId, adoptionKey)` marks a terminal task's result as adopted — the durable assertion that whatever consumed the result (application logic, or a workflow's own checkpoint once a future project closes that loop) has incorporated it. For a resolved task, pass the `resultDigest` from `getTaskResult`. For a cancelled or retry-exhausted task, pass its `adoptionToken`, a one-way digest that fences adoption to that exact terminal incarnation without exposing the synthetic internal digest or attempt token. A mismatch or a record that is not currently terminal returns `false` without changing anything. Adoption is required before `taskRetentionWindowMs` will ever reap a terminal record — until a caller adopts a result, it is retained forever, by design. Adoption is also idempotent: adopting an already-adopted record succeeds again and refreshes `adoptedAt`.
 
 ```typescript partial
 {
@@ -423,7 +432,7 @@ Four WebSocket routes are available:
 
 When `auth` is configured, raw `/watch` sockets require `events:read` and raw token `/stream` sockets require `streams:read`. When `auth` is omitted, these raw sockets follow the same open local-development posture as the rest of `serve({ engine })`: anyone who can connect can observe the matching workflow stream.
 
-`resumeFrom` accepts `-1` or a non-negative decimal sequence cursor. Missing `resumeFrom` starts before the first retained frame. Malformed values such as an empty string, decimals, hexadecimal, or exponent notation reject the WebSocket upgrade with `400`. Future cursors above the durable tail are clamped to the current tail, so the socket stays connected and receives later live frames instead of replaying from the beginning. Fleet-wide `weft.events.subscribe` uses a single fleet cursor, rejects replay windows above 1,000 retained events, and follows Weft's current one-server-process-per-durable-store deployment model for fleet event ordering.
+`resumeFrom` accepts `-1` or a non-negative decimal sequence cursor. Missing `resumeFrom` starts before the first retained frame. Malformed values such as an empty string, decimals, hexadecimal, or exponent notation reject the WebSocket upgrade with `400`. Future cursors above the durable tail are clamped to the current tail, so the socket stays connected and receives later live frames instead of replaying from the beginning. Fleet-wide `weft.events.subscribe` uses a single fleet cursor, rejects replay windows above 1,000 retained events, and allocates one ordered cursor space across server processes that share the same compare-and-swap-capable durable store.
 
 HTTP long-poll task requests use the request's `AbortSignal`. If the client
 disconnects before or during the poll, the waiter settles promptly and does

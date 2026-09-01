@@ -33,6 +33,8 @@ export type RecordCancellationIntentInput = Readonly<{
   expectedGeneration: number;
   expectedAttempt: number;
   cancellationReason: string;
+  /** Unique per cancellation request; fences queued-origin terminal incarnations. */
+  cancellationToken: string;
 }>;
 
 export function recordCancellationIntent(
@@ -60,7 +62,7 @@ export function recordCancellationIntent(
       disposition: 'cancelled',
       attempt: current.attempt,
       cancellationReason: input.cancellationReason,
-      resultDigest: `cancelled:${current.operationId}:${String(current.generation)}`,
+      resultDigest: `cancelled:${current.operationId}:${input.cancellationToken}`,
       terminalAt: now,
       adopted: false,
       retentionGeneration: 0,

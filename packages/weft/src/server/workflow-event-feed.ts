@@ -1,4 +1,5 @@
 import type { WeftEventMap } from '../core/events.ts';
+import type { BatchOperation, ConditionalBatchCondition } from '../storage/interface.ts';
 import { drainLive, replayUpTo, shouldDeliverEnvelope } from './replay-live-feed-internals.ts';
 
 /** Discriminator string carried on every feed envelope. */
@@ -181,13 +182,100 @@ export type WorkflowEventFeedOptions = {
   liveBufferSize?: number;
 };
 
+/**
+ * A committed fleet-wide event, optionally scoped to one workflow.
+ * @example
+ * ```ts
+ * import type { FleetEventEnvelope } from '@lostgradient/weft/server/handler';
+ * declare const event: FleetEventEnvelope;
+ * console.log(event.cursor);
+ * ```
+ */
+export type FleetEventEnvelope = {
+  readonly kind: FeedEventKind;
+  readonly workflowId?: string | undefined;
+  readonly sequence: number;
+  readonly cursor: Cursor;
+  readonly emittedAtMs: number;
+  readonly payload: unknown;
+};
+
+/**
+ * The caller-supplied fields for a new fleet event.
+ * @example
+ * ```ts
+ * import type { FleetEventInput } from '@lostgradient/weft/server/handler';
+ * const event: FleetEventInput = { kind: 'worker:connected', emittedAtMs: 1, payload: {} };
+ * ```
+ */
+export type FleetEventInput = {
+  readonly kind: FeedEventKind;
+  readonly workflowId?: string | undefined;
+  readonly emittedAtMs: number;
+  readonly payload: unknown;
+};
+
+/**
+ * A fleet event input guaranteed to identify its workflow.
+ * @example
+ * ```ts
+ * import type { FleetWorkflowEventInput } from '@lostgradient/weft/server/handler';
+ * declare const event: FleetWorkflowEventInput;
+ * console.log(event.workflowId);
+ * ```
+ */
+export type FleetWorkflowEventInput = FleetEventInput & { readonly workflowId: string };
+
+/**
+ * Caller-owned state operations committed atomically with an event.
+ * @example
+ * ```ts
+ * import type { FleetEventAppendOptions } from '@lostgradient/weft/server/handler';
+ * const options: FleetEventAppendOptions = { operations: [{ type: 'delete', key: 'app:pending' }] };
+ * ```
+ */
+export type FleetEventAppendOptions = {
+  readonly conditions?: readonly ConditionalBatchCondition[];
+  readonly operations?: readonly BatchOperation[];
+};
+
+/**
+ * The compaction boundary returned when a cursor predates retained history.
+ * @example
+ * ```ts
+ * import type { FleetEventGapEnvelope } from '@lostgradient/weft/server/handler';
+ * declare const gap: FleetEventGapEnvelope;
+ * console.log(gap.payload.firstRetainedSequence);
+ * ```
+ */
+export type FleetEventGapEnvelope = {
+  readonly kind: 'fleet:gap';
+  readonly sequence: number;
+  readonly cursor: Cursor;
+  readonly emittedAtMs: number;
+  readonly payload: { readonly requestedCursor: Cursor; readonly firstRetainedSequence: number };
+};
+
+/**
+ * Durable fleet-feed polling and replay handoff options.
+ * @example
+ * ```ts
+ * import type { FleetEventFeedOptions } from '@lostgradient/weft/server/handler';
+ * const options: FleetEventFeedOptions = { livePollIntervalMs: 100 };
+ * ```
+ */
+export type FleetEventFeedOptions = {
+  /** How often a subscriber checks durable storage for commits from another process. */
+  readonly livePollIntervalMs?: number;
+};
+
 export type SequencedEventEnvelope = {
   readonly sequence: number;
   readonly cursor: Cursor;
 };
 
 export type ReplayLiveFeedBackend<TEnvelope extends SequencedEventEnvelope> = {
-  replay(options: { afterSequence: number }): AsyncIterable<TEnvelope>;
+  replay(options: { afterSequence: number; requestedCursor?: Cursor }): AsyncIterable<TEnvelope>;
   snapshotTailSequence(): Promise<number>;
   subscribeLive(listener: (envelope: TEnvelope) => void): () => void;
 };
@@ -224,7 +312,10 @@ export function createReplayLiveFeed<TEnvelope extends SequencedEventEnvelope>(
     const afterSequence =
       args?.fromCursor !== undefined ? decodeCursorOrThrow(args.fromCursor) : -1;
     let yielded = 0;
-    for await (const envelope of backend.replay({ afterSequence })) {
+    for await (const envelope of backend.replay({
+      afterSequence,
+      ...(args?.fromCursor === undefined ? {} : { requestedCursor: args.fromCursor }),
+    })) {
       if (args?.limit !== undefined && yielded >= args.limit) return;
       yield envelope;
       yielded += 1;

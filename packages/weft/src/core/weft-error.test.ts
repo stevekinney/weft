@@ -22,6 +22,7 @@ import {
   IdempotencyKeyPurgedError,
   OwnershipModeMismatchError,
   PayloadSizeExceededError,
+  PersistedDataCorruptError,
   PersistedDataIncompatibleError,
   ReviewTimeoutError,
   StartOrSignalConflictError,
@@ -98,6 +99,7 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
   BranchTopologyChangedError: () =>
     new BranchTopologyChangedError('branch topology changed across retry'),
   PersistedDataIncompatibleError: () => new PersistedDataIncompatibleError(0, 1),
+  PersistedDataCorruptError: () => new PersistedDataCorruptError('fleet-event:1'),
   WorkflowTimeoutError: () => new WorkflowTimeoutError('wf-1', 'execution', 1_000),
   HttpClientError: () => new HttpClientError(500, 'boom'),
   WorkerProtocolIncompatibleError: () =>
