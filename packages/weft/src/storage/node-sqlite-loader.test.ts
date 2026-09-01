@@ -64,6 +64,16 @@ describe('isBetterSqlite3LoadFailure', () => {
     ).toBe(false);
   });
 
+  it('recognizes a bindings lookup failure for the better-sqlite3 native module', () => {
+    expect(
+      isBetterSqlite3LoadFailure(
+        new Error(
+          'Could not locate the bindings file. Tried:\n → /app/node_modules/better-sqlite3/build/Release/better_sqlite3.node',
+        ),
+      ),
+    ).toBe(true);
+  });
+
   it('does not recognize an error with an unrelated code', () => {
     expect(isBetterSqlite3LoadFailure(errorWithCode('boom', 'EACCES'))).toBe(false);
   });

@@ -4,6 +4,7 @@ import {
   restoreRealTimers,
   sleepForTesting,
   useFakeTimers,
+  waitForCondition,
 } from '../testing/fake-timers.test-support.ts';
 
 import { buildInternalRealmManifest } from '../worker/manifest/internal-realm.ts';
@@ -2476,6 +2477,22 @@ describe('WorkerExecutionStrategy', () => {
       );
     }
 
+    async function waitForWorkerMessageListener(worker: MockWorker): Promise<void> {
+      await waitForCondition(() => worker._listeners.has('message'), {
+        label: 'worker message listener to be attached',
+      });
+    }
+
+    async function waitForWorkerDiscard(worker: MockWorker): Promise<void> {
+      await waitForCondition(
+        () => {
+          expect(mockPool.discard).toHaveBeenCalledWith(worker);
+          return true;
+        },
+        { label: 'worker to be discarded after rejected realm-ready handshake' },
+      );
+    }
+
     it('throws when requireRealmReady is true but getExpectedWorkflowTypes is not provided', () => {
       mockWorkers = [createMockWorker()];
       mockPool = createMockPool(mockWorkers);
@@ -2516,13 +2533,15 @@ describe('WorkerExecutionStrategy', () => {
         input: null,
         checkpoint: new ArrayBuffer(0),
       });
-      await sleepForTesting(10);
 
       const worker = firstWorker();
+      await waitForWorkerMessageListener(worker);
       expect(worker.postMessage).not.toHaveBeenCalled();
 
       dispatchReady(worker);
-      await sleepForTesting(10);
+      await waitForCondition(() => worker.postMessage.mock.calls.length === 1, {
+        label: 'run message after realm-ready handshake',
+      });
 
       expect(worker.postMessage).toHaveBeenCalledTimes(1);
       expect(worker.postMessage.mock.calls[0]![0]).toMatchObject({
@@ -2540,10 +2559,12 @@ describe('WorkerExecutionStrategy', () => {
         input: null,
         checkpoint: new ArrayBuffer(0),
       });
-      await sleepForTesting(10);
       const worker = firstWorker();
+      await waitForWorkerMessageListener(worker);
       dispatchReady(worker);
-      await sleepForTesting(10);
+      await waitForCondition(() => worker.postMessage.mock.calls.length === 1, {
+        label: 'first run message after realm-ready handshake',
+      });
       expect(worker.postMessage).toHaveBeenCalledTimes(1);
 
       const runTurnId = (worker.postMessage.mock.calls[0]![0] as { turnId?: number }).turnId ?? 0;
@@ -2554,7 +2575,13 @@ describe('WorkerExecutionStrategy', () => {
           data: { type: 'completed', turnId: runTurnId, workflowId: 'wf-first', result: 'done' },
         }),
       );
-      await sleepForTesting(10);
+      await waitForCondition(
+        () => {
+          expect(mockPool.release).toHaveBeenCalledTimes(1);
+          return true;
+        },
+        { label: 'worker release after first workflow completion' },
+      );
 
       strategy.startWorkflow({
         workflowId: 'wf-second',
@@ -2562,7 +2589,9 @@ describe('WorkerExecutionStrategy', () => {
         input: null,
         checkpoint: new ArrayBuffer(0),
       });
-      await sleepForTesting(10);
+      await waitForCondition(() => worker.postMessage.mock.calls.length === 2, {
+        label: 'second run message on ready recycled worker',
+      });
 
       // Recycled worker: the second run is sent without waiting for another ready.
       expect(worker.postMessage).toHaveBeenCalledTimes(2);
@@ -2581,11 +2610,11 @@ describe('WorkerExecutionStrategy', () => {
         input: null,
         checkpoint: new ArrayBuffer(0),
       });
-      await sleepForTesting(10);
       const worker = firstWorker();
+      await waitForWorkerMessageListener(worker);
 
       dispatchReady(worker, { manifest: buildInternalRealmManifest(['a-different-workflow']) });
-      await sleepForTesting(10);
+      await waitForWorkerDiscard(worker);
 
       expect(worker.postMessage).not.toHaveBeenCalled();
       expect(mockPool.discard).toHaveBeenCalledWith(worker);
@@ -2601,11 +2630,11 @@ describe('WorkerExecutionStrategy', () => {
         input: null,
         checkpoint: new ArrayBuffer(0),
       });
-      await sleepForTesting(10);
       const worker = firstWorker();
+      await waitForWorkerMessageListener(worker);
 
       dispatchReady(worker, { protocolVersion: WORKER_PROTOCOL_VERSION + 1 });
-      await sleepForTesting(10);
+      await waitForWorkerDiscard(worker);
 
       expect(worker.postMessage).not.toHaveBeenCalled();
       expect(mockPool.discard).toHaveBeenCalledWith(worker);
@@ -2703,14 +2732,14 @@ describe('WorkerExecutionStrategy', () => {
         input: null,
         checkpoint: new ArrayBuffer(0),
       });
-      await sleepForTesting(10);
       const worker = firstWorker();
+      await waitForWorkerMessageListener(worker);
 
       const oversizeManifest = buildInternalRealmManifest(
         Array.from({ length: 50 }, (_, index) => `workflow-type-${index}`),
       );
       dispatchReady(worker, { manifest: oversizeManifest });
-      await sleepForTesting(10);
+      await waitForWorkerDiscard(worker);
 
       expect(worker.postMessage).not.toHaveBeenCalled();
       expect(mockPool.discard).toHaveBeenCalledWith(worker);
@@ -2730,11 +2759,11 @@ describe('WorkerExecutionStrategy', () => {
         input: null,
         checkpoint: new ArrayBuffer(0),
       });
-      await sleepForTesting(10);
       const worker = firstWorker();
+      await waitForWorkerMessageListener(worker);
 
       dispatchReady(worker, { realmGeneration: '' });
-      await sleepForTesting(10);
+      await waitForWorkerDiscard(worker);
 
       expect(worker.postMessage).not.toHaveBeenCalled();
       expect(mockPool.discard).toHaveBeenCalledWith(worker);
@@ -2750,11 +2779,11 @@ describe('WorkerExecutionStrategy', () => {
         input: null,
         checkpoint: new ArrayBuffer(0),
       });
-      await sleepForTesting(10);
       const worker = firstWorker();
+      await waitForWorkerMessageListener(worker);
 
       dispatchReady(worker, { manifest: 42 });
-      await sleepForTesting(10);
+      await waitForWorkerDiscard(worker);
 
       expect(worker.postMessage).not.toHaveBeenCalled();
       expect(mockPool.discard).toHaveBeenCalledWith(worker);
