@@ -147,6 +147,18 @@ class RetainingDuringReplayStorage extends MemoryStorage {
   }
 }
 
+class UnstableWatermarkStorage extends MemoryStorage {
+  watermarkReads = 0;
+
+  override async get(key: string): Promise<Uint8Array | null> {
+    if (key === KEYS.fleetEventWatermark()) {
+      this.watermarkReads += 1;
+      return encode({ firstRetainedSequence: this.watermarkReads });
+    }
+    return super.get(key);
+  }
+}
+
 async function collect(
   iterable: AsyncIterable<FleetEventEnvelope>,
   limit: number,
@@ -205,7 +217,8 @@ describe('createFleetEventFeed', () => {
     });
 
     expect(appended.sequence).toBe(2);
-    expect((await collect(feed.replay(), 10)).map((event) => event.sequence)).toEqual([0, 1, 2]);
+    const replayed = await collect(feed.replay(), 10);
+    expect(replayed.map((event) => event.sequence)).toEqual([0, 1, 2]);
     feed.dispose();
   });
 
@@ -264,7 +277,9 @@ describe('createFleetEventFeed', () => {
         payload: { index },
       });
     }
+    expect(await feed.snapshotRetentionFloor()).toBe(0);
     expect(await feed.retain({ beforeSequence: 2, limit: 10 })).toBe(2);
+    expect(await feed.snapshotRetentionFloor()).toBe(2);
     expect(await storage.get(KEYS.fleetEventByWorkflow('wf-0', 0))).toBeNull();
     expect(await storage.get(KEYS.fleetEventByWorkflow('wf-1', 1))).toBeNull();
     expect(await storage.get(KEYS.fleetEventByWorkflow('wf-2', 2))).not.toBeNull();
@@ -519,6 +534,7 @@ describe('createFleetEventFeed', () => {
     await malformedEventStorage.put(KEYS.fleetEvent(0), encode({ sequence: 1 }));
     await malformedEventStorage.put(KEYS.fleetEventTail(), encode({ sequence: 0 }));
     const malformedEventFeed = createFleetEventFeed(malformedEventStorage);
+    await expect(collect(malformedEventFeed.replay(), 10)).rejects.toThrow(KEYS.fleetEvent(0));
     await expect(malformedEventFeed.retain({ beforeSequence: 1 })).rejects.toThrow(
       KEYS.fleetEvent(0),
     );
@@ -526,12 +542,45 @@ describe('createFleetEventFeed', () => {
     const malformedWatermarkStorage = new MemoryStorage();
     await malformedWatermarkStorage.put(KEYS.fleetEventWatermark(), encode({ floor: 1 }));
     const malformedWatermarkFeed = createFleetEventFeed(malformedWatermarkStorage);
+    await expect(malformedWatermarkFeed.snapshotRetentionFloor()).rejects.toThrow(
+      KEYS.fleetEventWatermark(),
+    );
     await expect(malformedWatermarkFeed.retain({ beforeSequence: 1 })).rejects.toThrow(
       KEYS.fleetEventWatermark(),
     );
     malformedKeyFeed.dispose();
     malformedEventFeed.dispose();
     malformedWatermarkFeed.dispose();
+  });
+
+  it('rejects a stable tail that lags committed event history', async () => {
+    const storage = new MemoryStorage();
+    await storage.put(
+      KEYS.fleetEvent(1),
+      encode({
+        kind: 'worker:connected',
+        sequence: 1,
+        cursor: '1',
+        emittedAtMs: 1,
+        payload: {},
+      }),
+    );
+    await storage.put(KEYS.fleetEventTail(), encode({ sequence: 0 }));
+    const feed = createFleetEventFeed(storage);
+
+    await expect(
+      feed.append({ kind: 'worker:connected', emittedAtMs: 2, payload: {} }),
+    ).rejects.toThrow(KEYS.fleetEventTail());
+    feed.dispose();
+  });
+
+  it('fails loudly when retention never provides a stable replay snapshot', async () => {
+    const feed = createFleetEventFeed(new UnstableWatermarkStorage());
+
+    await expect(collect(feed.replay(), 10)).rejects.toThrow(
+      'could not obtain a stable retention snapshot',
+    );
+    feed.dispose();
   });
 
   it('rejects a malformed tail instead of reusing an existing sequence', async () => {
