@@ -293,6 +293,37 @@ describe('adoptTaskResultImpl', () => {
     expect(view).toMatchObject({ adopted: false });
   });
 
+  it.each([
+    ['cancelled', cancelledFixture()],
+    ['retry-exhausted', retryExhaustedFixture()],
+  ] as const)(
+    'adopts a %s terminal record without exposing its synthetic digest',
+    async (_, record) => {
+      const options = minimalServeOptions();
+      await options.engine.storage.put(taskLedgerKey('op-1'), encodeRemoteTaskRecord(record));
+
+      const adopted = await adoptTaskResultImpl(options.engine.storage, 'op-1');
+
+      expect(adopted).toBe(true);
+      const view = await getTaskResultViewImpl(options.engine.storage, 'op-1');
+      expect(view).toMatchObject({ adopted: true });
+      expect(view).not.toHaveProperty('resultDigest');
+    },
+  );
+
+  it('requires the public resultDigest to adopt a resolved terminal record', async () => {
+    const options = minimalServeOptions();
+    await options.engine.storage.put(
+      taskLedgerKey('op-1'),
+      encodeRemoteTaskRecord(resolvedFixture()),
+    );
+
+    expect(await adoptTaskResultImpl(options.engine.storage, 'op-1')).toBe(false);
+    expect(await getTaskResultViewImpl(options.engine.storage, 'op-1')).toMatchObject({
+      adopted: false,
+    });
+  });
+
   it('rejects adopting a non-terminal record', async () => {
     const options = minimalServeOptions();
     const record = leasedFixture();

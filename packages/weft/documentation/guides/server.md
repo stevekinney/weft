@@ -221,19 +221,27 @@ interface WeftServer extends AsyncDisposable {
 
 ### `getTaskResult` and `adoptTaskResult`
 
-`getTaskResult(operationId)` reads the current public view of a dispatched task. It returns `null` if no record exists — the task was never dispatched, or a retained terminal record has already been reaped. A non-terminal task reports `{ status: 'pending', state }`; a terminal task reports its `disposition`, `resultDigest`, and adoption state; a dead-lettered task reports why its result could not be durably persisted. The resolved terminal `resultStatus`/`error` describe the worker's own outcome — the actual result _value_ is never included, since the durable ledger only ever stores a content digest of it, not the payload itself.
+`getTaskResult(operationId)` reads the current public view of a dispatched task. It returns `null` if no record exists — the task was never dispatched, or a retained terminal record has already been reaped. A non-terminal task reports `{ status: 'pending', state }`; a terminal task reports its `disposition` and adoption state; a dead-lettered task reports why its result could not be durably persisted. Only a resolved terminal task exposes `resultDigest`, the content hash of the worker result. Cancelled and retry-exhausted tasks omit their internal synthetic digest because it contains the private attempt token. The resolved terminal `resultStatus`/`error` describe the worker's own outcome — the actual result _value_ is never included, since the durable ledger only ever stores a content digest of it, not the payload itself.
 
 ```typescript partial
 type TaskResultView =
   | { status: 'pending'; state: 'queued' | 'leased' | 'completing' | 'cancelling' }
   | {
       status: 'terminal';
-      disposition: 'resolved' | 'cancelled' | 'retryExhausted';
+      disposition: 'resolved';
       resultDigest: string;
       terminalAt: number;
       adopted: boolean;
       adoptedAt?: number;
-      resultStatus?: 'completed' | 'failed'; // only present for disposition: 'resolved'
+      resultStatus: 'completed' | 'failed';
+      error?: string;
+    }
+  | {
+      status: 'terminal';
+      disposition: 'cancelled' | 'retryExhausted';
+      terminalAt: number;
+      adopted: boolean;
+      adoptedAt?: number;
       error?: string;
     }
   | {
@@ -245,7 +253,7 @@ type TaskResultView =
     };
 ```
 
-`adoptTaskResult(operationId, resultDigest)` marks a terminal task's result as adopted — the durable assertion that whatever consumed the result (application logic, or a workflow's own checkpoint once a future project closes that loop) has incorporated it. `resultDigest` must match the digest from `getTaskResult`; a mismatch (or a record that is not currently terminal) returns `false` without changing anything. Adoption is required before `taskRetentionWindowMs` will ever reap a terminal record — until a caller adopts a result, it is retained forever, by design. Adoption is also idempotent: adopting an already-adopted record with the same digest succeeds again and refreshes `adoptedAt`.
+`adoptTaskResult(operationId, resultDigest)` marks a terminal task's result as adopted — the durable assertion that whatever consumed the result (application logic, or a workflow's own checkpoint once a future project closes that loop) has incorporated it. For a resolved task, `resultDigest` is required and must match the digest from `getTaskResult`. For a cancelled or retry-exhausted task, omit `resultDigest` and adopt by operation ID; their synthetic internal digest is intentionally never public. A mismatch, a missing digest for a resolved task, or a record that is not currently terminal returns `false` without changing anything. Adoption is required before `taskRetentionWindowMs` will ever reap a terminal record — until a caller adopts a result, it is retained forever, by design. Adoption is also idempotent: adopting an already-adopted record succeeds again and refreshes `adoptedAt`.
 
 ```typescript partial
 {

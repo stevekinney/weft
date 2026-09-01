@@ -149,6 +149,8 @@ async function verifyTaskResultViewNameable(): Promise<void> {
   if (result?.status === 'terminal' && result.disposition !== 'resolved') {
     // @ts-expect-error Synthetic terminal digests are intentionally excluded from the public view.
     void result.resultDigest;
+    const adopted: boolean = await server.adoptTaskResult('op-1');
+    void adopted;
   }
   void result;
 }

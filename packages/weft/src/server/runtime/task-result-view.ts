@@ -52,6 +52,8 @@ import { commitTaskLedgerTransition } from './task-ledger-runtime.ts';
  * const view: TaskResultView | null = await server.getTaskResult('op-1');
  * if (view?.status === 'terminal' && view.disposition === 'resolved' && !view.adopted) {
  *   await server.adoptTaskResult('op-1', view.resultDigest);
+ * } else if (view?.status === 'terminal' && !view.adopted) {
+ *   await server.adoptTaskResult('op-1');
  * }
  * ```
  */
@@ -154,21 +156,37 @@ export async function getTaskResultViewImpl(
  * assertion that "the workflow checkpoint (or whatever consumed this
  * result) has incorporated it," per the project brief's adoption/retention
  * split. Returns `true` once adopted, `false` if the record is not
- * currently `terminal` or `resultDigest` does not match (including a
- * record that no longer exists, e.g. already reaped). Idempotent: adopting
- * an already-adopted record with the same digest succeeds again, refreshing
- * `adoptedAt`.
+ * currently `terminal`, a resolved record is adopted without its required
+ * `resultDigest`, or a supplied digest does not match (including a record
+ * that no longer exists, e.g. already reaped). Cancelled and retry-exhausted
+ * records can be adopted without a digest because their internal synthetic
+ * digests embed the private attempt token. Idempotent: adopting an
+ * already-adopted record succeeds again, refreshing `adoptedAt`.
  */
 export async function adoptTaskResultImpl(
   storage: Storage,
   operationId: string,
-  resultDigest: string,
+  resultDigest?: string,
 ): Promise<boolean> {
   const result = await commitTaskLedgerTransition(
     storage,
     operationId,
-    (current, now) =>
-      markWorkflowResultAdopted(current, { expectedResultDigest: resultDigest }, now),
+    (current, now) => {
+      if (resultDigest === undefined) {
+        if (current === null || current.state !== 'terminal') {
+          return { ok: false, reason: 'expected task state "terminal"' };
+        }
+        if (current.disposition === 'resolved') {
+          return { ok: false, reason: 'resolved task adoption requires resultDigest' };
+        }
+        return markWorkflowResultAdopted(
+          current,
+          { expectedResultDigest: current.resultDigest },
+          now,
+        );
+      }
+      return markWorkflowResultAdopted(current, { expectedResultDigest: resultDigest }, now);
+    },
     1,
   );
   return result.ok;
