@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.1] - 2026-09-01
+
+### Fixed
+
+- Worker realm-ready validation and optional `better-sqlite3` native-binding diagnostics now settle deterministically under concurrent load, avoiding intermittent startup-test failures and preserving the actionable peer-dependency error when the native binding is unavailable.
+
 ## [0.23.0] - 2026-09-01
 
 ### Added
