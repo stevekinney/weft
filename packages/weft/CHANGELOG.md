@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-09-01
+
+### Added
+
+- Fleet event feeds now persist one ordered cursor space across processes, support durable replay and retention-gap notices, expose direct-host configuration through the public handler API, and recover live delivery from storage without relying on an in-memory handoff buffer.
+
+### Changed
+
+- **Upgrade warning:** this release advances the persisted-data schema from version 1 to version 2. Stores created by Weft 0.22.x are rejected at startup with `PersistedDataIncompatibleError`; start 0.23.0 with a fresh store or explicitly archive and replace the existing store before upgrading. There is no in-place migration for persisted workflows.
+
 ### Fixed
 
 - `WeftServer.getTaskResult()` no longer exposes internal synthetic `resultDigest` values for cancelled or retry-exhausted tasks, preventing those values from revealing the task's attempt token. Resolved task views continue to expose their content digest for adoption checks, while non-resolved terminal tasks expose a one-way, incarnation-fenced adoption token for retention cleanup.
