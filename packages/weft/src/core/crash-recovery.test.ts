@@ -21,7 +21,7 @@ import {
 import type { WorkflowState, WorkflowStatus } from './types.ts';
 import { activity } from './types.ts';
 import { workflow } from './types/workflow-function.ts';
-import { DEFAULT_WORKFLOW_VERSION } from './versioning.ts';
+import { DEFAULT_WORKFLOW_VERSION, VersionMismatchError } from './versioning.ts';
 
 /** Drain microtasks so fire-and-forget work completes. */
 async function flush(): Promise<void> {
@@ -394,8 +394,8 @@ describe('crash recovery', () => {
       }),
     );
 
-    await expect(engine2.recoverAll({ versionMismatchPolicy: 'throw' })).rejects.toThrow(
-      'Version mismatch',
+    await expect(engine2.recoverAll({ versionMismatchPolicy: 'throw' })).rejects.toBeInstanceOf(
+      VersionMismatchError,
     );
 
     engine2[Symbol.dispose]();

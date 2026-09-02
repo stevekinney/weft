@@ -123,6 +123,45 @@ describe('buildWorkflowContract', () => {
     expect(contract.queries?.['localQueryAlias']).toBeUndefined();
   });
 
+  it('throws when two builder-map entries alias the same runtime signal name', () => {
+    // normalizeMessageDefinitions() (core/engine/registration.ts) rejects
+    // this exact shape at registration time with "Duplicate signal runtime
+    // name...", so buildWorkflowContract() must refuse to silently collapse
+    // it into one contract entry rather than hashing a contract for a
+    // signal name the engine would never actually register.
+    expect(() =>
+      buildWorkflowContract({
+        name: 'checkout',
+        signals: {
+          localAlias: signal('sharedWireName'),
+          otherAlias: signal('sharedWireName'),
+        },
+      }),
+    ).toThrow('Duplicate signal runtime name "sharedWireName" in workflow "checkout"');
+  });
+
+  it('throws when two builder-map entries alias the same runtime update or query name', () => {
+    expect(() =>
+      buildWorkflowContract({
+        name: 'checkout',
+        updates: {
+          localAlias: update('sharedWireName'),
+          otherAlias: update('sharedWireName'),
+        },
+      }),
+    ).toThrow('Duplicate update runtime name "sharedWireName" in workflow "checkout"');
+
+    expect(() =>
+      buildWorkflowContract({
+        name: 'checkout',
+        queries: {
+          localAlias: query('sharedWireName'),
+          otherAlias: query('sharedWireName'),
+        },
+      }),
+    ).toThrow('Duplicate query runtime name "sharedWireName" in workflow "checkout"');
+  });
+
   it('returns a normalized WorkflowContract (sorted keys) rather than the raw draft', () => {
     // Source keys are declared out of canonical order; the returned contract
     // must come back sorted, matching normalizeWorkflowContract()'s

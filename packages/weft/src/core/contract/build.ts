@@ -128,6 +128,16 @@ function buildMessageRecord(
   for (const localKey of localKeys) {
     const source = sources[localKey] as WorkflowContractMessageSource;
     const wireName = source.name;
+    // Mirror normalizeMessageDefinitions()'s duplicate-name check
+    // (core/engine/registration.ts): two builder-map entries that alias
+    // different local keys to the same runtime `.name` collide at
+    // registration, so they must collide here too rather than silently
+    // overwriting one contract entry with the other.
+    if (Object.hasOwn(built, wireName)) {
+      throw new Error(
+        `Duplicate ${entityKind} runtime name "${wireName}" in workflow "${workflowName}"`,
+      );
+    }
     built[wireName] = buildMessageContract(
       entityKind,
       `${workflowName}.${entityKind}.${wireName}`,
