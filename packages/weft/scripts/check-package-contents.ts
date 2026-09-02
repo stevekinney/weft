@@ -8,7 +8,13 @@ const maximumUnpackedBytes = 12 * 1024 * 1024;
 // fixture, or stray build output) rather than a hard size ceiling — the packed
 // and unpacked byte budgets above are the primary bloat backstop. Bump this
 // when the published `dist/` surface legitimately grows.
-const maximumEntryCount = 1463;
+//
+// WFT-5 added the `core/contract` module (`build.ts`, `hash.ts`,
+// `manifest.ts`, `manifest-parse.ts`, `manifest-parse-schema.ts`,
+// `normalize.ts`, `revision.ts`, `types.ts`, `limits.ts`, `failure.ts`,
+// `index.ts`) — 11 new source files, each shipping a `.js` and a `.d.ts` in
+// `dist/`, which legitimately grows the entry count by 22.
+const maximumEntryCount = 1485;
 
 type PackFile = {
   path: string;

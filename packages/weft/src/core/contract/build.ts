@@ -14,6 +14,7 @@ import { definitionSchemaToJsonSchema } from '../types/definition-schema-to-json
 import type { DefinitionSchema } from '../types/definition-schema.ts';
 import { DEFAULT_WORKFLOW_VERSION } from '../versioning.ts';
 import { WeftError } from '../weft-error.ts';
+import { normalizeWorkflowContract } from './normalize.ts';
 import type {
   WorkflowActivityContract,
   WorkflowContract,
@@ -112,18 +113,25 @@ function buildMessageRecord(
   sources: Readonly<Record<string, WorkflowContractMessageSource>> | undefined,
 ): Readonly<Record<string, WorkflowMessageContract>> | undefined {
   if (sources === undefined) return undefined;
-  const names = Object.keys(sources);
-  if (names.length === 0) return undefined;
+  const localKeys = Object.keys(sources);
+  if (localKeys.length === 0) return undefined;
 
+  // Key by each definition's own `.name` — the wire name
+  // `normalizeMessageDefinitions()` (`core/engine/registration.ts`) actually
+  // registers under — not by the JS object key the caller used in
+  // `.signals({...})`/`.updates({...})`/`.queries({...})`, which may alias a
+  // different local name (e.g. `.signals({ localAlias: signal('wireName') })`).
   const built: Record<string, WorkflowMessageContract> = Object.create(null) as Record<
     string,
     WorkflowMessageContract
   >;
-  for (const name of names) {
-    built[name] = buildMessageContract(
+  for (const localKey of localKeys) {
+    const source = sources[localKey] as WorkflowContractMessageSource;
+    const wireName = source.name;
+    built[wireName] = buildMessageContract(
       entityKind,
-      `${workflowName}.${entityKind}.${name}`,
-      sources[name] as WorkflowContractMessageSource,
+      `${workflowName}.${entityKind}.${wireName}`,
+      source,
     );
   }
   return built;
@@ -236,5 +244,5 @@ export function buildWorkflowContract(source: WorkflowContractSource): WorkflowC
     );
   }
 
-  return draft;
+  return normalizeWorkflowContract(draft);
 }

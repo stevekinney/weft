@@ -152,6 +152,16 @@ export type WorkflowContract = Readonly<{
  * ```
  */
 export interface WorkflowContractMessageSource {
+  /**
+   * The message's own wire name, as recorded by `signal()`/`update()`/`query()`
+   * and used by `normalizeMessageDefinitions()` (`core/engine/registration.ts`)
+   * to key the registered message — not necessarily the JS object key the
+   * caller used in `.signals({...})`/`.updates({...})`/`.queries({...})`,
+   * which may alias a different local name. {@link buildWorkflowContract}
+   * keys `WorkflowContract.signals`/`updates`/`queries` by this field so the
+   * built contract matches what the registry and codegen actually expose.
+   */
+  readonly name: string;
   readonly inputSchema?: DefinitionSchema;
   readonly outputSchema?: DefinitionSchema;
 }

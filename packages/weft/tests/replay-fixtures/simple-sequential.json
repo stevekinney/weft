@@ -19,7 +19,7 @@
       "timestamp": 0,
       "status": "completed",
       "versionTuple": {
-        "workflowVersion": "0.0.0"
+        "workflowVersion": "1"
       },
       "outputSummary": "\"processed:hello\"",
       "duration": 0
@@ -31,7 +31,7 @@
     "status": "completed",
     "input": "hello",
     "versionTuple": {
-      "workflowVersion": "0.0.0"
+      "workflowVersion": "1"
     },
     "workflowExecutionToken": "00000000-0000-4000-8000-000000000001",
     "executionStateOwnerId": "wf-simple-sequential",
@@ -41,17 +41,17 @@
     "result": "processed:hello"
   },
   "storage": {
-    "ev:wf-simple-sequential:0000000000": "h6R0eXBls3dvcmtmbG93OmNoZWNrcG9pbnSqd29ya2Zsb3dJZLR3Zi1zaW1wbGUtc2VxdWVudGlhbKhzZXF1ZW5jZQCocHJldkhhc2iwMDAwMDAwMDAwMDAwMDAwMKdwYXlsb2FkgaRzdGVwAal0aW1lc3RhbXAArHZlcnNpb25UdXBsZYGvd29ya2Zsb3dWZXJzaW9upTAuMC4w",
-    "ev:wf-simple-sequential:head": "gqhzZXF1ZW5jZQCobGFzdEhhc2iwYjJlOTVhMzU5ZGM1Nzc0Mg==",
+    "ev:wf-simple-sequential:0000000000": "h6R0eXBls3dvcmtmbG93OmNoZWNrcG9pbnSqd29ya2Zsb3dJZLR3Zi1zaW1wbGUtc2VxdWVudGlhbKhzZXF1ZW5jZQCocHJldkhhc2iwMDAwMDAwMDAwMDAwMDAwMKdwYXlsb2FkgaRzdGVwAal0aW1lc3RhbXAArHZlcnNpb25UdXBsZYGvd29ya2Zsb3dWZXJzaW9uoTE=",
+    "ev:wf-simple-sequential:head": "gqhzZXF1ZW5jZQCobGFzdEhhc2iwZjU1OTAxNjgzNTU1YzI0OQ==",
     "wf-idx-created:0000000000000000:wf-simple-sequential": "",
     "wf-idx-manifest:wf-simple-sequential": "gqd2ZXJzaW9uAaRrZXlzlNk0d2YtaWR4LWNyZWF0ZWQ6MDAwMDAwMDAwMDAwMDAwMDp3Zi1zaW1wbGUtc2VxdWVudGlhbNksd2YtaWR4LXN0YXR1czpjb21wbGV0ZWQ6d2Ytc2ltcGxlLXNlcXVlbnRpYWzZMndmLWlkeC10eXBlOnNpbXBsZS1zZXF1ZW50aWFsOndmLXNpbXBsZS1zZXF1ZW50aWFs2TR3Zi1pZHgtdXBkYXRlZDowMDAwMDAwMDAwMDAwMDAwOndmLXNpbXBsZS1zZXF1ZW50aWFs",
     "wf-idx-status:completed:wf-simple-sequential": "",
     "wf-idx-type:simple-sequential:wf-simple-sequential": "",
     "wf-idx-updated:0000000000000000:wf-simple-sequential": "",
     "wf-terminal:0000000000000000:wf-simple-sequential": "",
-    "wf:wf-simple-sequential": "i6JpZLR3Zi1zaW1wbGUtc2VxdWVudGlhbKR0eXBlsXNpbXBsZS1zZXF1ZW50aWFspnN0YXR1c6ljb21wbGV0ZWSlaW5wdXSlaGVsbG+sdmVyc2lvblR1cGxlga93b3JrZmxvd1ZlcnNpb26lMC4wLjC2d29ya2Zsb3dFeGVjdXRpb25Ub2tlbtkkMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxtWV4ZWN1dGlvblN0YXRlT3duZXJJZLR3Zi1zaW1wbGUtc2VxdWVudGlhbKljcmVhdGVkQXQAqXN0YXJ0ZWRBdACpdXBkYXRlZEF0AKZyZXN1bHSvcHJvY2Vzc2VkOmhlbGxv",
-    "wf:wf-simple-sequential:ckpt": "iKp3b3JrZmxvd0lktHdmLXNpbXBsZS1zZXF1ZW50aWFspHN0ZXABpmxvY2Fsc4CyYWNjdW11bGF0ZWRSZXN1bHRzkLBzZWFyY2hBdHRyaWJ1dGVzgKd2ZXJzaW9upTAuMC4wrXNjaGVtYVZlcnNpb24CqWNyZWF0ZWRBdAA=",
-    "wf:wf-simple-sequential:ckpt:0000000001": "iKp3b3JrZmxvd0lktHdmLXNpbXBsZS1zZXF1ZW50aWFspHN0ZXABpmxvY2Fsc4CyYWNjdW11bGF0ZWRSZXN1bHRzkLBzZWFyY2hBdHRyaWJ1dGVzgKd2ZXJzaW9upTAuMC4wrXNjaGVtYVZlcnNpb24CqWNyZWF0ZWRBdAA=",
-    "wf:wf-simple-sequential:timeline:0000000001": "iaRzdGVwAa1vcGVyYXRpb25UeXBlqGFjdGl2aXR5rm9wZXJhdGlvbkxhYmVsqWFub255bW91c6xpbnB1dFN1bW1hcnmnImhlbGxvIql0aW1lc3RhbXAApnN0YXR1c6ljb21wbGV0ZWSsdmVyc2lvblR1cGxlga93b3JrZmxvd1ZlcnNpb26lMC4wLjCtb3V0cHV0U3VtbWFyebEicHJvY2Vzc2VkOmhlbGxvIqhkdXJhdGlvbgA="
+    "wf:wf-simple-sequential": "i6JpZLR3Zi1zaW1wbGUtc2VxdWVudGlhbKR0eXBlsXNpbXBsZS1zZXF1ZW50aWFspnN0YXR1c6ljb21wbGV0ZWSlaW5wdXSlaGVsbG+sdmVyc2lvblR1cGxlga93b3JrZmxvd1ZlcnNpb26hMbZ3b3JrZmxvd0V4ZWN1dGlvblRva2Vu2SQwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDG1ZXhlY3V0aW9uU3RhdGVPd25lcklktHdmLXNpbXBsZS1zZXF1ZW50aWFsqWNyZWF0ZWRBdACpc3RhcnRlZEF0AKl1cGRhdGVkQXQApnJlc3VsdK9wcm9jZXNzZWQ6aGVsbG8=",
+    "wf:wf-simple-sequential:ckpt": "iKp3b3JrZmxvd0lktHdmLXNpbXBsZS1zZXF1ZW50aWFspHN0ZXABpmxvY2Fsc4CyYWNjdW11bGF0ZWRSZXN1bHRzkLBzZWFyY2hBdHRyaWJ1dGVzgKd2ZXJzaW9uoTGtc2NoZW1hVmVyc2lvbgKpY3JlYXRlZEF0AA==",
+    "wf:wf-simple-sequential:ckpt:0000000001": "iKp3b3JrZmxvd0lktHdmLXNpbXBsZS1zZXF1ZW50aWFspHN0ZXABpmxvY2Fsc4CyYWNjdW11bGF0ZWRSZXN1bHRzkLBzZWFyY2hBdHRyaWJ1dGVzgKd2ZXJzaW9uoTGtc2NoZW1hVmVyc2lvbgKpY3JlYXRlZEF0AA==",
+    "wf:wf-simple-sequential:timeline:0000000001": "iaRzdGVwAa1vcGVyYXRpb25UeXBlqGFjdGl2aXR5rm9wZXJhdGlvbkxhYmVsqWFub255bW91c6xpbnB1dFN1bW1hcnmnImhlbGxvIql0aW1lc3RhbXAApnN0YXR1c6ljb21wbGV0ZWSsdmVyc2lvblR1cGxlga93b3JrZmxvd1ZlcnNpb26hMa1vdXRwdXRTdW1tYXJ5sSJwcm9jZXNzZWQ6aGVsbG8iqGR1cmF0aW9uAA=="
   }
 }

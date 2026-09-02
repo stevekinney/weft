@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { jsonSchemaToTypeScript } from '../../cli/codegen-emit.ts';
 import type { DefinitionSchema, StandardJSONSchemaV1 } from '../types/definition-schema.ts';
+import { query, signal, update } from '../types/message-handles.ts';
 import hostileSchemas from './__fixtures__/hostile-schemas.json';
 import { buildWorkflowContract, WorkflowContractConversionError } from './build.ts';
 import type { WorkflowContractSource } from './types.ts';
@@ -72,14 +73,15 @@ describe('buildWorkflowContract', () => {
   it('converts signals, updates, queries, activities, and the finalizer', () => {
     const contract = buildWorkflowContract({
       name: 'checkout',
-      signals: { cancel: { inputSchema: fixedSchema({ type: 'string' }) } },
+      signals: { cancel: { name: 'cancel', inputSchema: fixedSchema({ type: 'string' }) } },
       updates: {
         applyDiscount: {
+          name: 'applyDiscount',
           inputSchema: fixedSchema({ type: 'string' }),
           outputSchema: fixedSchema({ type: 'boolean' }),
         },
       },
-      queries: { status: { outputSchema: fixedSchema({ type: 'string' }) } },
+      queries: { status: { name: 'status', outputSchema: fixedSchema({ type: 'string' }) } },
       activities: { charge: { name: 'charge', inputSchema: fixedSchema({ type: 'number' }) } },
       finalizer: { name: 'cleanup', inputSchema: fixedSchema({ type: 'string' }) },
     });
@@ -88,6 +90,59 @@ describe('buildWorkflowContract', () => {
     expect(contract.queries?.['status']?.outputSchema).toEqual({ type: 'string' });
     expect(contract.activities?.['charge']?.inputSchema).toEqual({ type: 'number' });
     expect(contract.finalizer?.inputSchema).toEqual({ type: 'string' });
+  });
+
+  it("keys signals/updates/queries by the message definition's own runtime name, not the builder-map alias", () => {
+    // `.signals({ localAlias: signal('wireName') })` registers under the
+    // handle's own `.name` (`normalizeMessageDefinitions()` in
+    // `core/engine/registration.ts` rekeys by `definition.name`), not the JS
+    // object key the caller happened to use. buildWorkflowContract() must
+    // match that so the built contract's keys line up with what the
+    // registry and codegen actually expose.
+    const contract = buildWorkflowContract({
+      name: 'checkout',
+      signals: {
+        localSignalAlias: signal('wireSignalName', {
+          inputSchema: fixedSchema({ type: 'string' }),
+        }),
+      },
+      updates: {
+        localUpdateAlias: update('wireUpdateName', {
+          inputSchema: fixedSchema({ type: 'number' }),
+        }),
+      },
+      queries: {
+        localQueryAlias: query('wireQueryName', { outputSchema: fixedSchema({ type: 'boolean' }) }),
+      },
+    });
+    expect(Object.keys(contract.signals ?? {})).toEqual(['wireSignalName']);
+    expect(Object.keys(contract.updates ?? {})).toEqual(['wireUpdateName']);
+    expect(Object.keys(contract.queries ?? {})).toEqual(['wireQueryName']);
+    expect(contract.signals?.['localSignalAlias']).toBeUndefined();
+    expect(contract.updates?.['localUpdateAlias']).toBeUndefined();
+    expect(contract.queries?.['localQueryAlias']).toBeUndefined();
+  });
+
+  it('returns a normalized WorkflowContract (sorted keys) rather than the raw draft', () => {
+    // Source keys are declared out of canonical order; the returned contract
+    // must come back sorted, matching normalizeWorkflowContract()'s
+    // contract, since buildWorkflowContract()'s own JSDoc and types.ts both
+    // describe its return value as normalized. (Schema-fragment
+    // null-prototype cloning and __proto__-key safety are already pinned
+    // directly against normalizeWorkflowContract() in normalize.test.ts —
+    // this only needs to prove buildWorkflowContract() actually routes
+    // through it.)
+    const contract = buildWorkflowContract({
+      name: 'checkout',
+      tags: ['zeta', 'alpha'],
+      signals: {
+        zetaSignal: signal('zeta-signal'),
+        alphaSignal: signal('alpha-signal'),
+      },
+    });
+    expect(contract.tags).toEqual(['alpha', 'zeta']);
+    expect(Object.keys(contract.signals ?? {})).toEqual(['alpha-signal', 'zeta-signal']);
+    expect(Object.getPrototypeOf(contract.signals)).toBeNull();
   });
 
   it('omits signals/updates/queries/activities entirely when none are declared', () => {
@@ -141,14 +196,17 @@ describe('buildWorkflowContract', () => {
       {
         entityKind: 'signal',
         direction: 'inputSchema',
-        source: { name: 'checkout', signals: { cancel: { inputSchema: throwingSchema() } } },
+        source: {
+          name: 'checkout',
+          signals: { cancel: { name: 'cancel', inputSchema: throwingSchema() } },
+        },
       },
       {
         entityKind: 'update',
         direction: 'inputSchema',
         source: {
           name: 'checkout',
-          updates: { applyDiscount: { inputSchema: throwingSchema() } },
+          updates: { applyDiscount: { name: 'applyDiscount', inputSchema: throwingSchema() } },
         },
       },
       {
@@ -156,13 +214,16 @@ describe('buildWorkflowContract', () => {
         direction: 'outputSchema',
         source: {
           name: 'checkout',
-          updates: { applyDiscount: { outputSchema: throwingSchema() } },
+          updates: { applyDiscount: { name: 'applyDiscount', outputSchema: throwingSchema() } },
         },
       },
       {
         entityKind: 'query',
         direction: 'outputSchema',
-        source: { name: 'checkout', queries: { status: { outputSchema: throwingSchema() } } },
+        source: {
+          name: 'checkout',
+          queries: { status: { name: 'status', outputSchema: throwingSchema() } },
+        },
       },
       {
         entityKind: 'activity',
@@ -196,12 +257,18 @@ describe('buildWorkflowContract', () => {
       {
         entityKind: 'signal',
         direction: 'outputSchema',
-        source: { name: 'checkout', signals: { cancel: { outputSchema: throwingSchema() } } },
+        source: {
+          name: 'checkout',
+          signals: { cancel: { name: 'cancel', outputSchema: throwingSchema() } },
+        },
       },
       {
         entityKind: 'query',
         direction: 'inputSchema',
-        source: { name: 'checkout', queries: { status: { inputSchema: throwingSchema() } } },
+        source: {
+          name: 'checkout',
+          queries: { status: { name: 'status', inputSchema: throwingSchema() } },
+        },
       },
     ];
 

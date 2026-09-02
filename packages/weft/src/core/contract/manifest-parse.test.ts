@@ -25,7 +25,7 @@ async function validManifest() {
   const contract = buildWorkflowContract({
     name: 'checkout',
     version: '2.1.0',
-    signals: { cancel: {} },
+    signals: { cancel: { name: 'cancel' } },
   });
   return buildWorkflowRevisionManifest(contract);
 }
@@ -37,7 +37,7 @@ async function fullFeaturedManifest() {
     version: '2.1.0',
     description: 'Runs the checkout flow.',
     tags: ['commerce', 'billing'],
-    signals: { cancel: {} },
+    signals: { cancel: { name: 'cancel' } },
     finalizer: { name: 'cleanup', inputSchema: fixedSchema({ type: 'string' }) },
   });
   return buildWorkflowRevisionManifest(contract);
@@ -269,6 +269,24 @@ describe('parseWorkflowRevisionManifest', () => {
     expect(result.reason).toBe('invalid-field');
   });
 
+  it('accepts an empty tag and a tag longer than MAX_CONTRACT_IDENTIFIER_BYTES (free-form label, not an identifier)', async () => {
+    // Tags are user-facing labels, not wire identifiers: `WorkflowContractSource.tags`
+    // accepts any `ReadonlyArray<string>` and `buildWorkflowContract()` imposes no
+    // length or non-emptiness constraint on an individual tag (only `description`
+    // gets that carve-out documented before this fix — tags are in the same boat).
+    // Routing tags through the identifier parser used for `name`/`workflowVersion`
+    // would reject a producer-emitted manifest the builder itself considers valid.
+    const overlongTag = 'x'.repeat(MAX_CONTRACT_IDENTIFIER_BYTES + 1);
+    const manifest = await validManifest();
+    const result = await parseWorkflowRevisionManifest({
+      ...manifest,
+      contract: { ...manifest.contract, tags: ['', overlongTag] },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected ok');
+    expect(result.manifest.contract.tags).toEqual(['', overlongTag].toSorted());
+  });
+
   it('rejects a non-string description', async () => {
     const manifest = await validManifest();
     const result = await parseWorkflowRevisionManifest({
@@ -309,7 +327,7 @@ describe('parseWorkflowRevisionManifest', () => {
     const contract = buildWorkflowContract({
       name: 'checkout',
       version: '2.1.0',
-      signals: { '': {} },
+      signals: { '': { name: '' } },
     });
     const manifest = await buildWorkflowRevisionManifest(contract);
     const result = await parseWorkflowRevisionManifest(manifest);
@@ -317,6 +335,26 @@ describe('parseWorkflowRevisionManifest', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error('expected ok');
     expect(Object.keys(result.manifest.contract.signals ?? {})).toEqual(['']);
+  });
+
+  it('accepts a signal/update/query name longer than MAX_CONTRACT_IDENTIFIER_BYTES (no length limit at the type level either)', async () => {
+    // `signal()`/`update()`/`query()` in `message-handles.ts` impose no
+    // length constraint on `name` at all, so the producer-emitted manifest
+    // for a long message name must round-trip through the parser, matching
+    // `checkContractKey`'s `kind === undefined` branch (signals/updates/
+    // queries pass `keyKind: undefined`, unlike `activities`).
+    const longName = 'x'.repeat(MAX_CONTRACT_IDENTIFIER_BYTES + 100);
+    const contract = buildWorkflowContract({
+      name: 'checkout',
+      version: '2.1.0',
+      signals: { [longName]: { name: longName } },
+    });
+    const manifest = await buildWorkflowRevisionManifest(contract);
+    const result = await parseWorkflowRevisionManifest(manifest);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected ok');
+    expect(Object.keys(result.manifest.contract.signals ?? {})).toEqual([longName]);
   });
 
   it('rejects a non-object finalizer', async () => {

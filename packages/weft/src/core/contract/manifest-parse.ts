@@ -104,6 +104,25 @@ function parseDescription(value: unknown, path: string): Outcome<string> {
   return { ok: true, value };
 }
 
+/**
+ * Validate one tag: any string, including empty or longer than
+ * `MAX_CONTRACT_IDENTIFIER_BYTES` — like `description` (see
+ * {@link parseDescription}), tags are free-form user-facing labels, not
+ * wire identifiers. `WorkflowContractSource.tags` accepts any
+ * `ReadonlyArray<string>` and `buildWorkflowContract()` imposes no
+ * length or non-emptiness constraint on individual tags, so routing tags
+ * through `parseIdentifier()` (which enforces both) would reject
+ * producer-emitted manifests the builder itself considers valid. Bounded
+ * only by the overall `MAX_NORMALIZED_CONTRACT_BYTES` contract size
+ * backstop, applied later in `finalizeManifest`.
+ */
+function parseTag(value: unknown, path: string): Outcome<string> {
+  if (typeof value !== 'string') {
+    return workflowRevisionManifestFailure('invalid-field', 'must be a string', path);
+  }
+  return { ok: true, value };
+}
+
 function parseTags(value: unknown, path: string): Outcome<ReadonlyArray<string> | undefined> {
   if (value === undefined) return { ok: true, value: undefined };
   if (!Array.isArray(value)) {
@@ -111,7 +130,7 @@ function parseTags(value: unknown, path: string): Outcome<ReadonlyArray<string> 
   }
   const tags: string[] = [];
   for (const [index, entry] of value.entries()) {
-    const tag = parseIdentifier(entry, `${path}[${index}]`);
+    const tag = parseTag(entry, `${path}[${index}]`);
     if (!tag.ok) return tag;
     tags.push(tag.value);
   }

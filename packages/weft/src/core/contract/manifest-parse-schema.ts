@@ -137,15 +137,22 @@ export function checkContractKey(
   if (kind !== undefined && key.length === 0) {
     return workflowRevisionManifestFailure('invalid-field', 'must not be an empty string', path);
   }
-  const bytes = utf8ByteLength(key);
-  if (bytes > MAX_CONTRACT_IDENTIFIER_BYTES) {
-    return workflowRevisionManifestFailure(
-      'identifier-too-long',
-      `is ${bytes} bytes, exceeding the maximum identifier size of ${MAX_CONTRACT_IDENTIFIER_BYTES}`,
-      path,
-    );
-  }
+  // The `MAX_CONTRACT_IDENTIFIER_BYTES` length ceiling, like the emptiness
+  // check above, applies only to workflow/activity names (`kind !==
+  // undefined`). Signal/update/query names have no length limit at the type
+  // level either — `signal()`/`update()`/`query()` in `message-handles.ts`
+  // impose no length constraint on `name` — so applying it unconditionally
+  // would reject a producer-emitted manifest for a message name the builder
+  // itself accepts.
   if (kind !== undefined) {
+    const bytes = utf8ByteLength(key);
+    if (bytes > MAX_CONTRACT_IDENTIFIER_BYTES) {
+      return workflowRevisionManifestFailure(
+        'identifier-too-long',
+        `is ${bytes} bytes, exceeding the maximum identifier size of ${MAX_CONTRACT_IDENTIFIER_BYTES}`,
+        path,
+      );
+    }
     try {
       validateWorkflowOrActivityName(key, kind);
     } catch (error) {

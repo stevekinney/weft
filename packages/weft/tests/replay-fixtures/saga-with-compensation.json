@@ -33,7 +33,7 @@
       "timestamp": 0,
       "status": "completed",
       "versionTuple": {
-        "workflowVersion": "0.0.0"
+        "workflowVersion": "1"
       },
       "outputSummary": "\"output-one\"",
       "duration": 0
@@ -46,7 +46,7 @@
       "timestamp": 0,
       "status": "failed",
       "versionTuple": {
-        "workflowVersion": "0.0.0"
+        "workflowVersion": "1"
       },
       "outputSummary": "\"step-two-failed\"",
       "duration": 0
@@ -59,7 +59,7 @@
       "timestamp": 0,
       "status": "completed",
       "versionTuple": {
-        "workflowVersion": "0.0.0"
+        "workflowVersion": "1"
       },
       "outputSummary": "undefined",
       "duration": 0
@@ -71,7 +71,7 @@
     "status": "completed",
     "input": null,
     "versionTuple": {
-      "workflowVersion": "0.0.0"
+      "workflowVersion": "1"
     },
     "workflowExecutionToken": "00000000-0000-4000-8000-000000000001",
     "executionStateOwnerId": "wf-saga-with-compensation",
@@ -81,23 +81,23 @@
     "result": "compensated:output-one"
   },
   "storage": {
-    "ev:wf-saga-with-compensation:0000000000": "h6R0eXBls3dvcmtmbG93OmNoZWNrcG9pbnSqd29ya2Zsb3dJZLl3Zi1zYWdhLXdpdGgtY29tcGVuc2F0aW9uqHNlcXVlbmNlAKhwcmV2SGFzaLAwMDAwMDAwMDAwMDAwMDAwp3BheWxvYWSBpHN0ZXABqXRpbWVzdGFtcACsdmVyc2lvblR1cGxlga93b3JrZmxvd1ZlcnNpb26lMC4wLjA=",
-    "ev:wf-saga-with-compensation:0000000001": "h6R0eXBls3dvcmtmbG93OmNoZWNrcG9pbnSqd29ya2Zsb3dJZLl3Zi1zYWdhLXdpdGgtY29tcGVuc2F0aW9uqHNlcXVlbmNlAahwcmV2SGFzaLA2ODRiYzg3M2E0MWY2NThkp3BheWxvYWSCpHN0ZXACtl9fd2VmdENoZWNrcG9pbnRSZXBsYXmBsmFjY3VtdWxhdGVkUmVzdWx0c5GSAKpvdXRwdXQtb25lqXRpbWVzdGFtcACsdmVyc2lvblR1cGxlga93b3JrZmxvd1ZlcnNpb26lMC4wLjA=",
-    "ev:wf-saga-with-compensation:0000000002": "h6R0eXBls3dvcmtmbG93OmNoZWNrcG9pbnSqd29ya2Zsb3dJZLl3Zi1zYWdhLXdpdGgtY29tcGVuc2F0aW9uqHNlcXVlbmNlAqhwcmV2SGFzaLA1MjE2ZmM5MmRjZTQ1NjY1p3BheWxvYWSBpHN0ZXADqXRpbWVzdGFtcACsdmVyc2lvblR1cGxlga93b3JrZmxvd1ZlcnNpb26lMC4wLjA=",
-    "ev:wf-saga-with-compensation:head": "gqhzZXF1ZW5jZQKobGFzdEhhc2iwMzczMWQxNjMwZGQzYmE5Yg==",
+    "ev:wf-saga-with-compensation:0000000000": "h6R0eXBls3dvcmtmbG93OmNoZWNrcG9pbnSqd29ya2Zsb3dJZLl3Zi1zYWdhLXdpdGgtY29tcGVuc2F0aW9uqHNlcXVlbmNlAKhwcmV2SGFzaLAwMDAwMDAwMDAwMDAwMDAwp3BheWxvYWSBpHN0ZXABqXRpbWVzdGFtcACsdmVyc2lvblR1cGxlga93b3JrZmxvd1ZlcnNpb26hMQ==",
+    "ev:wf-saga-with-compensation:0000000001": "h6R0eXBls3dvcmtmbG93OmNoZWNrcG9pbnSqd29ya2Zsb3dJZLl3Zi1zYWdhLXdpdGgtY29tcGVuc2F0aW9uqHNlcXVlbmNlAahwcmV2SGFzaLAxYWI2OWEwYmNlMDUwNGU2p3BheWxvYWSCpHN0ZXACtl9fd2VmdENoZWNrcG9pbnRSZXBsYXmBsmFjY3VtdWxhdGVkUmVzdWx0c5GSAKpvdXRwdXQtb25lqXRpbWVzdGFtcACsdmVyc2lvblR1cGxlga93b3JrZmxvd1ZlcnNpb26hMQ==",
+    "ev:wf-saga-with-compensation:0000000002": "h6R0eXBls3dvcmtmbG93OmNoZWNrcG9pbnSqd29ya2Zsb3dJZLl3Zi1zYWdhLXdpdGgtY29tcGVuc2F0aW9uqHNlcXVlbmNlAqhwcmV2SGFzaLAwNzFjZDI1ZDY0OGQxYTJlp3BheWxvYWSBpHN0ZXADqXRpbWVzdGFtcACsdmVyc2lvblR1cGxlga93b3JrZmxvd1ZlcnNpb26hMQ==",
+    "ev:wf-saga-with-compensation:head": "gqhzZXF1ZW5jZQKobGFzdEhhc2iwMjljMzRhMDJlYjRjNTNiNQ==",
     "wf-idx-created:0000000000000000:wf-saga-with-compensation": "",
     "wf-idx-manifest:wf-saga-with-compensation": "gqd2ZXJzaW9uAaRrZXlzlNk5d2YtaWR4LWNyZWF0ZWQ6MDAwMDAwMDAwMDAwMDAwMDp3Zi1zYWdhLXdpdGgtY29tcGVuc2F0aW9u2TF3Zi1pZHgtc3RhdHVzOmNvbXBsZXRlZDp3Zi1zYWdhLXdpdGgtY29tcGVuc2F0aW9u2Tx3Zi1pZHgtdHlwZTpzYWdhLXdpdGgtY29tcGVuc2F0aW9uOndmLXNhZ2Etd2l0aC1jb21wZW5zYXRpb27ZOXdmLWlkeC11cGRhdGVkOjAwMDAwMDAwMDAwMDAwMDA6d2Ytc2FnYS13aXRoLWNvbXBlbnNhdGlvbg==",
     "wf-idx-status:completed:wf-saga-with-compensation": "",
     "wf-idx-type:saga-with-compensation:wf-saga-with-compensation": "",
     "wf-idx-updated:0000000000000000:wf-saga-with-compensation": "",
     "wf-terminal:0000000000000000:wf-saga-with-compensation": "",
-    "wf:wf-saga-with-compensation": "i6JpZLl3Zi1zYWdhLXdpdGgtY29tcGVuc2F0aW9upHR5cGW2c2FnYS13aXRoLWNvbXBlbnNhdGlvbqZzdGF0dXOpY29tcGxldGVkpWlucHV0wKx2ZXJzaW9uVHVwbGWBr3dvcmtmbG93VmVyc2lvbqUwLjAuMLZ3b3JrZmxvd0V4ZWN1dGlvblRva2Vu2SQwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDG1ZXhlY3V0aW9uU3RhdGVPd25lcklkuXdmLXNhZ2Etd2l0aC1jb21wZW5zYXRpb26pY3JlYXRlZEF0AKlzdGFydGVkQXQAqXVwZGF0ZWRBdACmcmVzdWx0tmNvbXBlbnNhdGVkOm91dHB1dC1vbmU=",
-    "wf:wf-saga-with-compensation:ckpt": "iap3b3JrZmxvd0lkuXdmLXNhZ2Etd2l0aC1jb21wZW5zYXRpb26kc3RlcAOmbG9jYWxzgLJhY2N1bXVsYXRlZFJlc3VsdHOQ2SBhY2N1bXVsYXRlZFJlc3VsdFJlcGxheVdhdGVybWFyawCwc2VhcmNoQXR0cmlidXRlc4CndmVyc2lvbqUwLjAuMK1zY2hlbWFWZXJzaW9uAqljcmVhdGVkQXQA",
-    "wf:wf-saga-with-compensation:ckpt:0000000001": "iKp3b3JrZmxvd0lkuXdmLXNhZ2Etd2l0aC1jb21wZW5zYXRpb26kc3RlcAGmbG9jYWxzgLJhY2N1bXVsYXRlZFJlc3VsdHOQsHNlYXJjaEF0dHJpYnV0ZXOAp3ZlcnNpb26lMC4wLjCtc2NoZW1hVmVyc2lvbgKpY3JlYXRlZEF0AA==",
-    "wf:wf-saga-with-compensation:ckpt:0000000002": "iqp3b3JrZmxvd0lkuXdmLXNhZ2Etd2l0aC1jb21wZW5zYXRpb26kc3RlcAKmbG9jYWxzgLJhY2N1bXVsYXRlZFJlc3VsdHOQsHNlYXJjaEF0dHJpYnV0ZXOAp3ZlcnNpb26lMC4wLjCtc2NoZW1hVmVyc2lvbgKpY3JlYXRlZEF0ANkgYWNjdW11bGF0ZWRSZXN1bHRSZXBsYXlXYXRlcm1hcmsAtl9fd2VmdENoZWNrcG9pbnRSZXBsYXmBsmFjY3VtdWxhdGVkUmVzdWx0c5GSAKpvdXRwdXQtb25l",
-    "wf:wf-saga-with-compensation:ckpt:0000000003": "iap3b3JrZmxvd0lkuXdmLXNhZ2Etd2l0aC1jb21wZW5zYXRpb26kc3RlcAOmbG9jYWxzgLJhY2N1bXVsYXRlZFJlc3VsdHOQ2SBhY2N1bXVsYXRlZFJlc3VsdFJlcGxheVdhdGVybWFyawCwc2VhcmNoQXR0cmlidXRlc4CndmVyc2lvbqUwLjAuMK1zY2hlbWFWZXJzaW9uAqljcmVhdGVkQXQA",
-    "wf:wf-saga-with-compensation:timeline:0000000001": "iaRzdGVwAa1vcGVyYXRpb25UeXBlqGFjdGl2aXR5rm9wZXJhdGlvbkxhYmVsqHN0ZXAtb25lrGlucHV0U3VtbWFyeaMiYSKpdGltZXN0YW1wAKZzdGF0dXOpY29tcGxldGVkrHZlcnNpb25UdXBsZYGvd29ya2Zsb3dWZXJzaW9upTAuMC4wrW91dHB1dFN1bW1hcnmsIm91dHB1dC1vbmUiqGR1cmF0aW9uAA==",
-    "wf:wf-saga-with-compensation:timeline:0000000002": "iaRzdGVwAq1vcGVyYXRpb25UeXBlqGFjdGl2aXR5rm9wZXJhdGlvbkxhYmVsqHN0ZXAtdHdvrGlucHV0U3VtbWFyeaMiYiKpdGltZXN0YW1wAKZzdGF0dXOmZmFpbGVkrHZlcnNpb25UdXBsZYGvd29ya2Zsb3dWZXJzaW9upTAuMC4wrW91dHB1dFN1bW1hcnmxInN0ZXAtdHdvLWZhaWxlZCKoZHVyYXRpb24A",
-    "wf:wf-saga-with-compensation:timeline:0000000003": "iaRzdGVwA61vcGVyYXRpb25UeXBlqGFjdGl2aXR5rm9wZXJhdGlvbkxhYmVss2NvbXBlbnNhdGU6c3RlcC1vbmWsaW5wdXRTdW1tYXJ5qXVuZGVmaW5lZKl0aW1lc3RhbXAApnN0YXR1c6ljb21wbGV0ZWSsdmVyc2lvblR1cGxlga93b3JrZmxvd1ZlcnNpb26lMC4wLjCtb3V0cHV0U3VtbWFyeal1bmRlZmluZWSoZHVyYXRpb24A"
+    "wf:wf-saga-with-compensation": "i6JpZLl3Zi1zYWdhLXdpdGgtY29tcGVuc2F0aW9upHR5cGW2c2FnYS13aXRoLWNvbXBlbnNhdGlvbqZzdGF0dXOpY29tcGxldGVkpWlucHV0wKx2ZXJzaW9uVHVwbGWBr3dvcmtmbG93VmVyc2lvbqExtndvcmtmbG93RXhlY3V0aW9uVG9rZW7ZJDAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMbVleGVjdXRpb25TdGF0ZU93bmVySWS5d2Ytc2FnYS13aXRoLWNvbXBlbnNhdGlvbqljcmVhdGVkQXQAqXN0YXJ0ZWRBdACpdXBkYXRlZEF0AKZyZXN1bHS2Y29tcGVuc2F0ZWQ6b3V0cHV0LW9uZQ==",
+    "wf:wf-saga-with-compensation:ckpt": "iap3b3JrZmxvd0lkuXdmLXNhZ2Etd2l0aC1jb21wZW5zYXRpb26kc3RlcAOmbG9jYWxzgLJhY2N1bXVsYXRlZFJlc3VsdHOQ2SBhY2N1bXVsYXRlZFJlc3VsdFJlcGxheVdhdGVybWFyawCwc2VhcmNoQXR0cmlidXRlc4CndmVyc2lvbqExrXNjaGVtYVZlcnNpb24CqWNyZWF0ZWRBdAA=",
+    "wf:wf-saga-with-compensation:ckpt:0000000001": "iKp3b3JrZmxvd0lkuXdmLXNhZ2Etd2l0aC1jb21wZW5zYXRpb26kc3RlcAGmbG9jYWxzgLJhY2N1bXVsYXRlZFJlc3VsdHOQsHNlYXJjaEF0dHJpYnV0ZXOAp3ZlcnNpb26hMa1zY2hlbWFWZXJzaW9uAqljcmVhdGVkQXQA",
+    "wf:wf-saga-with-compensation:ckpt:0000000002": "iqp3b3JrZmxvd0lkuXdmLXNhZ2Etd2l0aC1jb21wZW5zYXRpb26kc3RlcAKmbG9jYWxzgLJhY2N1bXVsYXRlZFJlc3VsdHOQsHNlYXJjaEF0dHJpYnV0ZXOAp3ZlcnNpb26hMa1zY2hlbWFWZXJzaW9uAqljcmVhdGVkQXQA2SBhY2N1bXVsYXRlZFJlc3VsdFJlcGxheVdhdGVybWFyawC2X193ZWZ0Q2hlY2twb2ludFJlcGxheYGyYWNjdW11bGF0ZWRSZXN1bHRzkZIAqm91dHB1dC1vbmU=",
+    "wf:wf-saga-with-compensation:ckpt:0000000003": "iap3b3JrZmxvd0lkuXdmLXNhZ2Etd2l0aC1jb21wZW5zYXRpb26kc3RlcAOmbG9jYWxzgLJhY2N1bXVsYXRlZFJlc3VsdHOQ2SBhY2N1bXVsYXRlZFJlc3VsdFJlcGxheVdhdGVybWFyawCwc2VhcmNoQXR0cmlidXRlc4CndmVyc2lvbqExrXNjaGVtYVZlcnNpb24CqWNyZWF0ZWRBdAA=",
+    "wf:wf-saga-with-compensation:timeline:0000000001": "iaRzdGVwAa1vcGVyYXRpb25UeXBlqGFjdGl2aXR5rm9wZXJhdGlvbkxhYmVsqHN0ZXAtb25lrGlucHV0U3VtbWFyeaMiYSKpdGltZXN0YW1wAKZzdGF0dXOpY29tcGxldGVkrHZlcnNpb25UdXBsZYGvd29ya2Zsb3dWZXJzaW9uoTGtb3V0cHV0U3VtbWFyeawib3V0cHV0LW9uZSKoZHVyYXRpb24A",
+    "wf:wf-saga-with-compensation:timeline:0000000002": "iaRzdGVwAq1vcGVyYXRpb25UeXBlqGFjdGl2aXR5rm9wZXJhdGlvbkxhYmVsqHN0ZXAtdHdvrGlucHV0U3VtbWFyeaMiYiKpdGltZXN0YW1wAKZzdGF0dXOmZmFpbGVkrHZlcnNpb25UdXBsZYGvd29ya2Zsb3dWZXJzaW9uoTGtb3V0cHV0U3VtbWFyebEic3RlcC10d28tZmFpbGVkIqhkdXJhdGlvbgA=",
+    "wf:wf-saga-with-compensation:timeline:0000000003": "iaRzdGVwA61vcGVyYXRpb25UeXBlqGFjdGl2aXR5rm9wZXJhdGlvbkxhYmVss2NvbXBlbnNhdGU6c3RlcC1vbmWsaW5wdXRTdW1tYXJ5qXVuZGVmaW5lZKl0aW1lc3RhbXAApnN0YXR1c6ljb21wbGV0ZWSsdmVyc2lvblR1cGxlga93b3JrZmxvd1ZlcnNpb26hMa1vdXRwdXRTdW1tYXJ5qXVuZGVmaW5lZKhkdXJhdGlvbgA="
   }
 }

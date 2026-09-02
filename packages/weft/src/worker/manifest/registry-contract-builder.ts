@@ -43,6 +43,7 @@ import {
   deriveWorkflowRevision,
   type WorkflowActivityContract,
   type WorkflowContract,
+  type WorkflowMessageContract,
 } from '../../core/contract/index.ts';
 import type { Engine } from '../../core/engine.ts';
 import {
@@ -167,28 +168,45 @@ function toActivityContract(entry: RegistryActivityEntry): WorkflowActivityContr
   return contract;
 }
 
-function applyDescriptionAndTags(
-  draft: Record<string, unknown>,
-  entry: RegistryWorkflowEntry,
-): void {
-  if (entry.description !== undefined) draft['description'] = entry.description;
-  if (entry.tags !== undefined && entry.tags.length > 0) draft['tags'] = [...entry.tags];
+/**
+ * Mutable draft of a {@link WorkflowContract}, built up field by field before
+ * being returned. Typed to the same shape `WorkflowContract` declares (this
+ * function never sets `activities`/`finalizer` — the caller layers
+ * `activities` on afterward, see `buildWorkflowContract` below) so a future
+ * field addition to `WorkflowContract` is a compile error here instead of a
+ * silent gap, matching `core/contract/build.ts`'s own `ContractDraft`.
+ */
+type ContractDraft = {
+  name: string;
+  workflowVersion: string;
+  description?: string;
+  tags?: ReadonlyArray<string>;
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  signals?: Record<string, WorkflowMessageContract>;
+  updates?: Record<string, WorkflowMessageContract>;
+  queries?: Record<string, WorkflowMessageContract>;
+};
+
+function applyDescriptionAndTags(draft: ContractDraft, entry: RegistryWorkflowEntry): void {
+  if (entry.description !== undefined) draft.description = entry.description;
+  if (entry.tags !== undefined && entry.tags.length > 0) draft.tags = [...entry.tags];
 }
 
-function applySchemas(draft: Record<string, unknown>, entry: RegistryWorkflowEntry): void {
-  if (entry.inputSchema !== undefined) draft['inputSchema'] = entry.inputSchema;
-  if (entry.outputSchema !== undefined) draft['outputSchema'] = entry.outputSchema;
+function applySchemas(draft: ContractDraft, entry: RegistryWorkflowEntry): void {
+  if (entry.inputSchema !== undefined) draft.inputSchema = entry.inputSchema;
+  if (entry.outputSchema !== undefined) draft.outputSchema = entry.outputSchema;
 }
 
-function applyMessageRecords(draft: Record<string, unknown>, entry: RegistryWorkflowEntry): void {
+function applyMessageRecords(draft: ContractDraft, entry: RegistryWorkflowEntry): void {
   if (entry.signals !== undefined && Object.keys(entry.signals).length > 0) {
-    draft['signals'] = entry.signals;
+    draft.signals = entry.signals;
   }
   if (entry.updates !== undefined && Object.keys(entry.updates).length > 0) {
-    draft['updates'] = entry.updates;
+    draft.updates = entry.updates;
   }
   if (entry.queries !== undefined && Object.keys(entry.queries).length > 0) {
-    draft['queries'] = entry.queries;
+    draft.queries = entry.queries;
   }
 }
 
@@ -204,11 +222,11 @@ function toWorkflowContract(
   workflowType: string,
   workflowVersion: string,
 ): WorkflowContract {
-  const draft: Record<string, unknown> = { name: workflowType, workflowVersion };
+  const draft: ContractDraft = { name: workflowType, workflowVersion };
   applyDescriptionAndTags(draft, entry);
   applySchemas(draft, entry);
   applyMessageRecords(draft, entry);
-  return draft as WorkflowContract;
+  return draft;
 }
 
 async function buildActivityContract(

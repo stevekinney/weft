@@ -4,16 +4,13 @@
  * @module core/contract/manifest
  */
 
+import { utf8ByteLength } from '../../worker/manifest/utf8.ts';
 import { contractHash } from './hash.ts';
 import { MAX_CONTRACT_IDENTIFIER_BYTES } from './limits.ts';
 import { normalizeWorkflowContract } from './normalize.ts';
 import { deriveWorkflowRevision } from './revision.ts';
 import type { WorkflowContract, WorkflowRevisionManifest } from './types.ts';
 import { WORKFLOW_REVISION_MANIFEST_VERSION } from './types.ts';
-
-function utf8ByteLength(value: string): number {
-  return new TextEncoder().encode(value).byteLength;
-}
 
 /**
  * Options accepted by {@link buildWorkflowRevisionManifest}.
