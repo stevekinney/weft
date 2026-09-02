@@ -125,8 +125,7 @@ export async function renewClaim(
 /**
  * Dead-letter a lease whose renewal committed past the absolute deadline.
  *
- * A lost compare-and-swap means another actor already moved the record on; the
- * renewed receipt is returned then so the caller still sees the lease it held.
+ * The renewed receipt is the fallback only for a record that has vanished.
  */
 async function deadLetterRenewed(
   runtime: MailboxRuntime,
@@ -134,8 +133,12 @@ async function deadLetterRenewed(
   renewed: ApplicationCommandReceipt,
 ): Promise<ApplicationCommandReceipt> {
   const loaded = await loadCommand(runtime.storage, runtime.keys, commandId);
-  const receipt = loaded === null ? null : await deadLetterExpired(runtime, loaded, runtime.now());
-  return receipt ?? renewed;
+  if (loaded === null) return renewed;
+  // `null` here means no transition was needed or ours lost: another actor
+  // already terminalized the record, so its receipt — not the obsolete renewed
+  // one — is what the caller must see next to `deadline-exceeded`.
+  const receipt = await deadLetterExpired(runtime, loaded, runtime.now());
+  return receipt ?? toApplicationCommandReceipt(loaded.record);
 }
 
 /** Settle a claimed command successfully. */

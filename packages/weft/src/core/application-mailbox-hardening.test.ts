@@ -1444,3 +1444,96 @@ describe('seventh-round hardening', () => {
     mailbox.dispose();
   });
 });
+
+describe('eighth-round hardening', () => {
+  it('fails closed on a waiting record with an exhausted attempt budget', async () => {
+    const { mailbox, storage } = createMailboxFixture({ maxAttempts: 3 });
+    const commandId = await admitOne(mailbox);
+    const key = KEYS.applicationCommand('bureau', 'agent-7', commandId);
+    const record = decode((await storage.get(key)) as Uint8Array) as Record<string, unknown>;
+    await storage.put(key, encode({ ...record, attempt: 3 }));
+    await expect(mailbox.claim()).rejects.toThrow(PersistedDataCorruptError);
+    mailbox.dispose();
+  });
+
+  it('discards a ready entry whose key disagrees with its record', async () => {
+    const { mailbox, storage } = createMailboxFixture({ generateId: createIdSource('c') });
+    await admitOne(mailbox, { idempotencyKey: 'a' });
+    const second = await admitOne(mailbox, { idempotencyKey: 'b' });
+    // Claim the first command so its genuine entry (sequence 0) is gone, then
+    // plant a stale entry at sequence 0 that names the second command, whose
+    // real entry sits at sequence 1.
+    await claimOne(mailbox);
+    const stale = KEYS.applicationCommandReady('bureau', 'agent-7', 0);
+    await storage.put(stale, encodeApplicationReadyEntry(second));
+
+    const claim = await claimOne(mailbox);
+    expect(claim.commandId).toBe(second);
+    // Both the stale entry and the genuine one are gone; claiming through the
+    // stale one would have left it behind.
+    let entries = 0;
+    for await (const _entry of storage.scan(
+      KEYS.applicationCommandReadyPrefix('bureau', 'agent-7'),
+    )) {
+      entries += 1;
+    }
+    expect(entries).toBe(0);
+    mailbox.dispose();
+  });
+
+  it('returns the terminal receipt when a renewal race already dead-lettered the command', async () => {
+    const storage = new MemoryStorage();
+    const clock = createMailboxClock();
+    const { mailbox } = createMailboxFixture({
+      storage,
+      clock,
+      commandTimeoutMs: 1_000,
+      visibilityTimeoutMs: 10_000,
+    });
+    const other = createMailboxFixture({ storage, clock }).mailbox;
+    const commandId = await admitOne(mailbox);
+    const claim = await claimOne(mailbox);
+
+    // The renewal commits; the deadline passes; maintenance dead-letters the
+    // command before the renewal's post-commit reload.
+    const original = storage.conditionalBatch.bind(storage);
+    let raced = false;
+    storage.conditionalBatch = async (
+      ...args: Parameters<MemoryStorage['conditionalBatch']>
+    ): Promise<boolean> => {
+      const result = await original(...args);
+      if (!raced) {
+        raced = true;
+        clock.advance(1_000);
+        await other.runMaintenance();
+      }
+      return result;
+    };
+
+    const renewal = await mailbox.renew({ commandId, attemptToken: claim.attemptToken });
+    expect(renewal.status).toBe('deadline-exceeded');
+    expect(renewal.status === 'deadline-exceeded' && renewal.receipt.state).toBe('dead-lettered');
+    other.dispose();
+    mailbox.dispose();
+  });
+
+  it('retires valid receipts behind a malformed terminal entry', async () => {
+    const { mailbox, storage, clock } = createMailboxFixture({
+      terminalRetentionMs: 1_000,
+      maintenanceBatchSize: 1,
+    });
+    const commandId = await admitOne(mailbox);
+    const claim = await claimOne(mailbox);
+    await mailbox.acknowledge({ commandId, attemptToken: claim.attemptToken });
+    // An entry that sorts first and whose command-id suffix cannot be decoded.
+    const malformed = `${KEYS.applicationCommandTerminalPrefix('bureau', 'agent-7')}${'0'.repeat(16)}:%ZZ`;
+    await storage.put(malformed, encodeApplicationReadyEntry('nope'));
+    clock.advance(5_000);
+
+    await mailbox.runMaintenance();
+    expect(await storage.get(malformed)).toBeNull();
+    await mailbox.runMaintenance();
+    expect(await mailbox.receipt(commandId)).toBeNull();
+    mailbox.dispose();
+  });
+});

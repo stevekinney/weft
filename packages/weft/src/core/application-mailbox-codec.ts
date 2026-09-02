@@ -254,6 +254,21 @@ function ownKey(build: () => string, key: string): string {
   }
 }
 
+/**
+ * The transitions dead-letter a final attempt rather than release it, so a
+ * waiting record with no attempt budget left cannot be produced by them. It is
+ * damage, and claiming it would run attempt `maxAttempts + 1`.
+ */
+function readWaitingRecord(
+  decoded: Record<string, unknown>,
+  key: string,
+  state: 'accepted' | 'available',
+): ApplicationCommandRecord {
+  const base = readBase(decoded, key);
+  if (base.attempt >= base.maxAttempts) fail(key);
+  return { ...base, state };
+}
+
 export function decodeApplicationCommandRecord(
   bytes: Uint8Array,
   key: string,
@@ -270,7 +285,7 @@ export function decodeApplicationCommandRecord(
   const state = decoded['state'];
   if (typeof state !== 'string' || !COMMAND_STATES.has(state)) fail(key);
   if (state === 'accepted' || state === 'available') {
-    return { ...readBase(decoded, key), state };
+    return readWaitingRecord(decoded, key, state);
   }
   if (state === 'claimed') {
     return { ...readBase(decoded, key), ...readLease(decoded, key), state };

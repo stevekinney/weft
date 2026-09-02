@@ -69,9 +69,20 @@ export async function verifyClaimedPayload(
   return { form: 'inline', value: record.payload.value, digest, verified: true };
 }
 
-/** Whether a record has moved past the point where a delivery-index entry is meaningful. */
-function isUndeliverable(loaded: LoadedCommandRecord | null): boolean {
-  return loaded === null || !isWaitingState(loaded.record);
+/**
+ * Whether a delivery-index entry no longer describes a claimable head: its
+ * record is gone or has moved on, or the entry's key is not the one the
+ * record's own sequence names. The last case is a stale or corrupted entry
+ * pointing at a real waiting command; claiming through it would deliver that
+ * command out of FIFO order and delete its genuine entry while leaving the
+ * false one behind.
+ */
+function isOrphanedEntry(
+  runtime: MailboxRuntime,
+  head: { readonly key: string },
+  loaded: LoadedCommandRecord,
+): boolean {
+  return !isWaitingState(loaded.record) || head.key !== runtime.keys.ready(loaded.record.sequence);
 }
 
 /**
@@ -152,7 +163,7 @@ async function resolveDeliverableHead(
   const head = await loadDeliveryHead(runtime.storage, runtime.keys);
   if (head === null) return { status: 'empty' };
   const loaded = await loadCommand(runtime.storage, runtime.keys, head.commandId);
-  if (loaded === null || isUndeliverable(loaded)) {
+  if (loaded === null || isOrphanedEntry(runtime, head, loaded)) {
     await discardOrphanedEntry(runtime, head, loaded);
     return { status: 'retry' };
   }

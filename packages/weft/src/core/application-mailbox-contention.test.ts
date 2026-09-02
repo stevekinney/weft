@@ -331,13 +331,16 @@ describe('ApplicationMailbox retention edge cases', () => {
     const prefix = KEYS.applicationCommandTerminalPrefix('bureau', 'agent-7');
     const { encode } = await import('./codec.ts');
     // A malformed suffix and an undecodable command component: neither may crash
-    // the sweep, and neither may be counted as retired.
+    // the sweep, neither may be counted as retired, and neither may stay behind
+    // to stall every later pass at the front of the index.
     await storage.put(`${prefix}not-a-timestamp`, encode('x'));
     await storage.put(`${prefix}${'0'.repeat(16)}:%zz`, encode('x'));
 
     clock.advance(2_000);
     const report = await mailbox.runMaintenance();
     expect(report.retired).toBe(0);
+    expect(await storage.get(`${prefix}not-a-timestamp`)).toBeNull();
+    expect(await storage.get(`${prefix}${'0'.repeat(16)}:%zz`)).toBeNull();
     mailbox.dispose();
   });
 

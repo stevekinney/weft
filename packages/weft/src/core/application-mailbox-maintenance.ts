@@ -20,7 +20,10 @@
 import type { BatchOperation } from '../storage/interface.ts';
 import { storageConditionalBatch } from '../storage/interface.ts';
 import { decodeApplicationCommandRecord } from './application-mailbox-codec.ts';
-import type { ApplicationMailboxMaintenanceReport } from './application-mailbox-contract.ts';
+import type {
+  ApplicationMailboxMaintenanceReport,
+  LoadedCommandRecord,
+} from './application-mailbox-contract.ts';
 import {
   ApplicationMailboxContentionError,
   commitCommandTransition,
@@ -125,19 +128,22 @@ async function advanceCommand(
  */
 async function retireOneReceipt(runtime: MailboxRuntime, indexKey: string): Promise<boolean> {
   const commandId = commandIdFromTerminalKey(indexKey);
-  if (commandId === null) return false;
-  const loaded = await loadCommand(runtime.storage, runtime.keys, commandId);
-  const operations: BatchOperation[] = [{ type: 'delete', key: indexKey }];
+  const loaded =
+    commandId === null ? null : await loadCommand(runtime.storage, runtime.keys, commandId);
   // Only a terminal record whose own `terminalAt` rebuilds this exact index key
-  // is retired through it. A stale or corrupted entry naming a live command, or
-  // a terminal one under a different timestamp, is an orphaned index entry: it
-  // is removed on its own, and the record it points at is left alone rather
-  // than deleted out from under the mailbox.
-  const owned =
-    loaded !== null &&
-    isTerminalRecord(loaded.record) &&
-    runtime.keys.terminal(loaded.record.terminalAt, commandId) === indexKey;
-  if (loaded === null || !owned) {
+  // is retired through it. A malformed entry, a stale or corrupted one naming a
+  // live command, or a terminal one under a different timestamp is an orphaned
+  // index entry: it is removed on its own so it cannot monopolize every
+  // retention pass, and the record it points at is left alone rather than
+  // deleted out from under the mailbox.
+  if (commandId === null || (loaded !== null && !ownsTerminalEntry(runtime, indexKey, loaded))) {
+    await discardTerminalEntry(runtime, indexKey);
+    return false;
+  }
+  const operations: BatchOperation[] = [{ type: 'delete', key: indexKey }];
+  // The record is already gone: the entry is the last trace of a retired
+  // receipt, and removing it completes that retirement.
+  if (loaded === null) {
     return storageConditionalBatch(
       runtime.storage,
       [{ key: indexKey, expectedValue: await runtime.storage.get(indexKey) }],
@@ -159,6 +165,29 @@ async function retireOneReceipt(runtime: MailboxRuntime, indexKey: string): Prom
   );
 }
 
+function ownsTerminalEntry(
+  runtime: MailboxRuntime,
+  indexKey: string,
+  loaded: LoadedCommandRecord,
+): boolean {
+  return (
+    isTerminalRecord(loaded.record) &&
+    runtime.keys.terminal(loaded.record.terminalAt, loaded.record.commandId) === indexKey
+  );
+}
+
+/**
+ * Remove an index entry that nothing owns, fenced on the bytes it was seen
+ * with. Not a retirement: no receipt is retired, so it is not counted as one.
+ */
+async function discardTerminalEntry(runtime: MailboxRuntime, indexKey: string): Promise<void> {
+  await storageConditionalBatch(
+    runtime.storage,
+    [{ key: indexKey, expectedValue: await runtime.storage.get(indexKey) }],
+    [{ type: 'delete', key: indexKey }],
+  );
+}
+
 async function retireTerminalReceipts(
   runtime: MailboxRuntime,
   now: number,
@@ -167,13 +196,22 @@ async function retireTerminalReceipts(
   const horizon = now - runtime.policy.terminalRetentionMs;
   if (horizon < 0) return;
   const expired: string[] = [];
+  const malformed: string[] = [];
   for await (const [key] of runtime.storage.scan(runtime.keys.terminalPrefix, {
     limit: runtime.policy.maintenanceBatchSize,
   })) {
     const terminalAt = parseTerminalAt(key, runtime.keys.terminalPrefix);
-    if (terminalAt === null || terminalAt >= horizon) break;
+    // An entry whose timestamp cannot be parsed is malformed, not "not yet due";
+    // stopping at it would leave every valid receipt behind it unretired on
+    // every pass. It is discarded on its own and never counted as retired.
+    if (terminalAt === null) {
+      malformed.push(key);
+      continue;
+    }
+    if (terminalAt >= horizon) break;
     expired.push(key);
   }
+  for (const indexKey of malformed) await discardTerminalEntry(runtime, indexKey);
   for (const indexKey of expired) {
     if (await retireOneReceipt(runtime, indexKey)) counters.retired += 1;
   }
