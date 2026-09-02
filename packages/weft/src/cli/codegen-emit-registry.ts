@@ -33,11 +33,14 @@
  * tooling, but the emitter intentionally drops them from the generated
  * `.d.ts`.
  *
- * When a normalized `inputSchema`/`outputSchema` recurs across two or more
- * workflow entries with a non-trivial emitted TypeScript type (see
- * `codegen-emit-dedup.ts`), it is hoisted into a single, unexported,
- * file-top-level `type __WeftSchema_<hash> = <TS type>;` alias declared
- * BEFORE `declare module '@lostgradient/weft' { ... }` — never inside it.
+ * When two or more workflow entries' `inputSchema`/`outputSchema` render to
+ * the same non-trivial TypeScript text (see `codegen-emit-dedup.ts` — grouped
+ * by the emitted text itself, not by a JSON-level normalization of the
+ * source schema, so schemas differing only in an order-insensitive JSON
+ * construct like `required` array order still dedupe correctly), that text
+ * is hoisted into a single, unexported, file-top-level
+ * `type __WeftSchema_<hash> = <TS type>;` alias declared BEFORE
+ * `declare module '@lostgradient/weft' { ... }` — never inside it.
  * Placing an alias inside the augmentation block would make it a
  * pseudo-public exported type name of `@lostgradient/weft` (autocomplete
  * pollution for every consumer), and because TypeScript `type` aliases
@@ -51,7 +54,6 @@
  */
 
 import { compareCodepoint } from '../core/compare-codepoint.ts';
-import { canonicalJsonStringify } from '../worker/manifest/canonical-json.ts';
 import {
   buildSchemaAliasTable,
   type SchemaAliasEntry,
@@ -94,11 +96,6 @@ function sortedWorkflowEntries(
   return Object.entries(workflows).toSorted(([a], [b]) => compareCodepoint(a, b));
 }
 
-/** Normalize a schema field (possibly absent) to the canonicalization input `canonicalJsonStringify` and `jsonSchemaToTypeScript` both accept. */
-function schemaKey(schema: Record<string, unknown> | undefined): string {
-  return canonicalJsonStringify(schema ?? null);
-}
-
 /**
  * Walk every active workflow's `inputSchema` then `outputSchema`, in that
  * fixed order, building the deterministic occurrence sequence
@@ -114,23 +111,20 @@ function collectSchemaOccurrences(
   const occurrences: SchemaFragmentOccurrence[] = [];
   for (const [, entry] of workflows) {
     for (const schema of [entry.inputSchema, entry.outputSchema]) {
-      occurrences.push({
-        canonicalKey: schemaKey(schema),
-        tsType: jsonSchemaToTypeScript(schema),
-      });
+      occurrences.push({ tsType: jsonSchemaToTypeScript(schema) });
     }
   }
   return occurrences;
 }
 
-/** Resolve a schema field to its TypeScript type reference: the hoisted alias name when one exists for this schema, otherwise the inline emitted type. */
+/** Resolve a schema field to its TypeScript type reference: the hoisted alias name when one exists for this emitted type, otherwise the inline emitted type. */
 function schemaTypeReference(
   schema: Record<string, unknown> | undefined,
   aliasTable: ReadonlyMap<string, SchemaAliasEntry>,
 ): string {
-  const aliasEntry = aliasTable.get(schemaKey(schema));
-  if (aliasEntry !== undefined) return aliasEntry.alias;
-  return jsonSchemaToTypeScript(schema);
+  const tsType = jsonSchemaToTypeScript(schema);
+  const aliasEntry = aliasTable.get(tsType);
+  return aliasEntry !== undefined ? aliasEntry.alias : tsType;
 }
 
 function emitWorkflowEntry(

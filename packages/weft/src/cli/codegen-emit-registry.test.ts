@@ -230,6 +230,38 @@ describe('emitRegistryDeclaration', () => {
       expect([...aliasNames].toSorted()).toEqual(aliasNames);
     });
 
+    it('dedupes two schemas that differ only in JSON-level property/required order (same rendered type)', () => {
+      // `required: ['cartId', 'note']` vs `required: ['note', 'cartId']` are
+      // different JSON arrays, but `jsonSchemaToTypeScript` sorts object
+      // properties by key regardless of declaration order, so both render
+      // to byte-identical TypeScript. Grouping by the emitted text (not by
+      // a JSON-level canonicalization of the schema) means these two still
+      // dedupe correctly instead of each staying inline.
+      const schemaA = {
+        type: 'object',
+        properties: { cartId: { type: 'string' }, note: { type: 'string' } },
+        required: ['cartId', 'note'],
+        additionalProperties: false,
+      };
+      const schemaB = {
+        type: 'object',
+        properties: { note: { type: 'string' }, cartId: { type: 'string' } },
+        required: ['note', 'cartId'],
+        additionalProperties: false,
+      };
+      const output = emitRegistryDeclaration(
+        buildWorkflows({
+          checkout: { inputSchema: schemaA },
+          reorder: { inputSchema: schemaB },
+        }),
+      );
+      const aliasDeclarations = output.match(/^type __WeftSchema_[0-9a-f]+ = .+;$/gm) ?? [];
+      expect(aliasDeclarations).toHaveLength(1);
+      const aliasName = aliasDeclarations[0]!.match(/^type (__WeftSchema_[0-9a-f]+)/)![1]!;
+      expect(output).toContain(`"checkout": { input: ${aliasName};`);
+      expect(output).toContain(`"reorder": { input: ${aliasName};`);
+    });
+
     it('two workflows both lacking an input schema do not spuriously share an aliased type', () => {
       // inputSchema undefined -> canonicalKey 'null', tsType 'unknown' for
       // both. `unknown` is trivial, so no alias is emitted even though the
