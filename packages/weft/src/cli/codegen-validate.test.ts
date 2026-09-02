@@ -99,6 +99,8 @@ describe('validateRegistrySnapshot', () => {
         description: 'Greets a person.',
         tags: ['demo'],
         inputSchema: { type: 'object', properties: { name: { type: 'string' } } },
+        revision: manifest.revision,
+        workflowVersion: manifest.workflowVersion,
       },
     });
     expect(Object.keys(result.value.activities)).toEqual(['ping']);

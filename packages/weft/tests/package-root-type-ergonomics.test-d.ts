@@ -43,9 +43,15 @@ declare module '@lostgradient/weft' {
     // Module-augmented workflow name, distinct from any `engine.register(...)`
     // call site below so the builder's `WorkflowAlreadyRegistered` brand does
     // not intersect.
+    //
+    // `revision`/`workflowVersion` mirror what `weft codegen` now actually
+    // generates alongside `input`/`output` — proving the extra fields don't
+    // interfere with `WorkflowInput`/`WorkflowOutput` narrowing.
     packageRootModuleAugmented: {
       input: PackageRootWelcomeInput;
       output: PackageRootWelcomeOutput;
+      revision: 'sha256:package-root-module-augmented';
+      workflowVersion: '1.0.0';
     };
   }
 }

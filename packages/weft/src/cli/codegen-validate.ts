@@ -20,13 +20,10 @@ import {
 } from '../core/contract/index.ts';
 import { MAX_CONTRACT_IDENTIFIER_BYTES } from '../core/contract/limits.ts';
 import { MAX_REGISTRY_WORKFLOW_COUNT } from '../core/registry-limits.ts';
-import {
-  REGISTRY_VERSION,
-  type RegistryActivityEntry,
-  type RegistryWorkflowEntry,
-} from '../core/registry-snapshot.ts';
+import { REGISTRY_VERSION, type RegistryActivityEntry } from '../core/registry-snapshot.ts';
 import { isRecord } from '../worker/manifest/is-record.ts';
 import { utf8ByteLength } from '../worker/manifest/utf8.ts';
+import type { CodegenWorkflowEntry } from './codegen-emit-registry.ts';
 
 /**
  * Ceiling on the raw `workflows` array's length, checked before a single
@@ -45,7 +42,7 @@ export type ValidateSnapshotResult<T> = { ok: true; value: T } | { ok: false; er
 
 /** The active workflow projection `weft codegen` emits from, plus the activity count for the CLI's summary line. */
 export interface ActiveRegistryProjection {
-  workflows: Record<string, RegistryWorkflowEntry>;
+  workflows: Record<string, CodegenWorkflowEntry>;
   activities: Record<string, RegistryActivityEntry>;
 }
 
@@ -245,9 +242,20 @@ function indexManifestsByIdentity(
   return { ok: true, value: byName };
 }
 
-/** Project one manifest's contract into the `{ inputSchema?, outputSchema?, description?, tags? }` shape {@link emitRegistryDeclaration} consumes. */
-function toRegistryWorkflowEntry(manifest: WorkflowRevisionManifest): RegistryWorkflowEntry {
-  const entry: RegistryWorkflowEntry = {};
+/**
+ * Project one manifest's contract into the
+ * `{ inputSchema?, outputSchema?, description?, tags?, revision, workflowVersion }`
+ * shape {@link emitRegistryDeclaration} consumes. `revision`/`workflowVersion`
+ * come straight off the manifest itself (its two identity fields, not its
+ * contract) — every `WorkflowRevisionManifest` always carries both, so
+ * unlike `inputSchema`/`outputSchema`/`description`/`tags` they are never
+ * conditionally omitted.
+ */
+function toCodegenWorkflowEntry(manifest: WorkflowRevisionManifest): CodegenWorkflowEntry {
+  const entry: CodegenWorkflowEntry = {
+    revision: manifest.revision,
+    workflowVersion: manifest.workflowVersion,
+  };
   if (manifest.contract.inputSchema !== undefined)
     entry.inputSchema = manifest.contract.inputSchema;
   if (manifest.contract.outputSchema !== undefined)
@@ -284,7 +292,7 @@ function toRegistryWorkflowEntry(manifest: WorkflowRevisionManifest): RegistryWo
 async function resolveActiveWorkflowEntries(
   workflowsRaw: readonly unknown[],
   activeRevisions: Readonly<Record<string, string>>,
-): Promise<ValidateSnapshotResult<Record<string, RegistryWorkflowEntry>>> {
+): Promise<ValidateSnapshotResult<Record<string, CodegenWorkflowEntry>>> {
   // The `workflows` array-length ceiling is enforced by `validateRegistrySnapshot`
   // on the raw value, before `registryEnvelopeSchema.safeParse()` ever runs
   // Zod's `z.array(...)` over it — see that function's doc. By the time
@@ -296,9 +304,9 @@ async function resolveActiveWorkflowEntries(
   if (!indexed.ok) return indexed;
   const byName = indexed.value;
 
-  const projected: Record<string, RegistryWorkflowEntry> = Object.create(null) as Record<
+  const projected: Record<string, CodegenWorkflowEntry> = Object.create(null) as Record<
     string,
-    RegistryWorkflowEntry
+    CodegenWorkflowEntry
   >;
   for (const [name, revision] of Object.entries(activeRevisions)) {
     const manifest = byName.get(name)?.get(revision);
@@ -308,7 +316,7 @@ async function resolveActiveWorkflowEntries(
         error: `codegen: invalid registry snapshot: activeRevisions[${JSON.stringify(name)}] = ${JSON.stringify(revision)} has no matching entry in workflows`,
       };
     }
-    projected[name] = toRegistryWorkflowEntry(manifest);
+    projected[name] = toCodegenWorkflowEntry(manifest);
   }
   return { ok: true, value: projected };
 }
