@@ -11,6 +11,7 @@
 
 import { describe, expect, it } from 'bun:test';
 
+import type { Storage } from '../storage/interface.ts';
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import {
@@ -2150,5 +2151,105 @@ describe('thirteenth-round hardening', () => {
     await expect(mailbox.awaitCleanup({ commandId, timeoutMs: 10_000 })).rejects.toThrow(
       /disposed/,
     );
+  });
+});
+
+/** A second identity over the same bytes, standing in for another process's storage handle. */
+function remoteView(storage: MemoryStorage): Storage {
+  return {
+    get: storage.get.bind(storage),
+    put: storage.put.bind(storage),
+    delete: storage.delete.bind(storage),
+    scan: storage.scan.bind(storage),
+    batch: storage.batch.bind(storage),
+    conditionalBatch: storage.conditionalBatch.bind(storage),
+    capabilities: () => storage.capabilities(),
+    [Symbol.dispose]: () => {},
+  };
+}
+
+describe('fourteenth-round hardening', () => {
+  it('releases local attempts when a cleanup read finds the command retired elsewhere', async () => {
+    const storage = new MemoryStorage();
+    const clock = createMailboxClock();
+    const local = createMailboxFixture({
+      storage,
+      clock,
+      visibilityTimeoutMs: 500,
+      terminalRetentionMs: 1_000,
+      retryBackoffMs: 1,
+      generateId: createIdSource('l'),
+    }).mailbox;
+    // Another process: same durable bytes, a different registry.
+    const remote = new ApplicationMailbox({
+      storage: remoteView(storage),
+      namespace: 'bureau',
+      resourceId: 'agent-7',
+      now: clock.now,
+      generateId: createIdSource('r'),
+      visibilityTimeoutMs: 500,
+      terminalRetentionMs: 1_000,
+      retryBackoffMs: 1,
+    });
+    const commandId = await admitOne(local);
+    const claim = await claimOne(local);
+    clock.advance(501);
+    await remote.runMaintenance();
+    // Past the retry backoff the reclaimed command is due again.
+    clock.advance(10);
+    const reclaimed = await remote.claim();
+    expect(reclaimed.status).toBe('claimed');
+    if (reclaimed.status !== 'claimed') return;
+    await remote.acknowledge({ commandId, attemptToken: reclaimed.claim.attemptToken });
+    clock.advance(5_000);
+    await remote.runMaintenance();
+    // The local claimant's attempt was never released by anything in this process.
+    expect(claim.signal.aborted).toBe(false);
+
+    const cleanup = await local.cleanupState(commandId);
+    expect(cleanup.status).toBe('unknown');
+    expect(claim.signal.aborted).toBe(true);
+    expect(attemptControllerRegistry(storage, 'bureau', 'agent-7').has(claim.attemptToken)).toBe(
+      false,
+    );
+    remote.dispose();
+    local.dispose();
+  });
+
+  it('stops a claim aborted during a stalled head read', async () => {
+    const storage = new MemoryStorage();
+    const { mailbox } = createMailboxFixture({ storage });
+    await admitOne(mailbox);
+    const controller = new AbortController();
+    let stalled = false;
+    const originalGet = storage.get.bind(storage);
+    storage.get = (key: string): Promise<Uint8Array | null> => {
+      if (!stalled && key.startsWith('appcmd:')) {
+        stalled = true;
+        queueMicrotask(() => {
+          controller.abort(new Error('caller gone'));
+        });
+        return new Promise<Uint8Array | null>(() => {});
+      }
+      return originalGet(key);
+    };
+    await expect(mailbox.claim({ signal: controller.signal })).rejects.toThrow('caller gone');
+    mailbox.dispose();
+  });
+
+  it('does not hide an abort behind an empty claim result', async () => {
+    const storage = new MemoryStorage();
+    const { mailbox } = createMailboxFixture({ storage });
+    const controller = new AbortController();
+    // The index scan sees an empty mailbox; the abort lands just as it returns.
+    const originalScan = storage.scan.bind(storage);
+    storage.scan = (
+      ...args: Parameters<MemoryStorage['scan']>
+    ): ReturnType<MemoryStorage['scan']> => {
+      controller.abort(new Error('late abort'));
+      return originalScan(...args);
+    };
+    await expect(mailbox.claim({ signal: controller.signal })).rejects.toThrow('late abort');
+    mailbox.dispose();
   });
 });

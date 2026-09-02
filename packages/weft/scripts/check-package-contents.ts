@@ -14,8 +14,8 @@ const maximumUnpackedBytes = 12 * 1024 * 1024;
 // `normalize.ts`, `revision.ts`, `types.ts`, `limits.ts`, `failure.ts`,
 // `index.ts`) — 11 new source files, each shipping a `.js` and a `.d.ts` in
 // `dist/`, which legitimately grows the entry count by 22. WFT-84 added the
-// application mailbox modules (19 source files); the merged surface reports 1525.
-const maximumEntryCount = 1525;
+// application mailbox modules (20 source files); the merged surface reports 1527.
+const maximumEntryCount = 1527;
 
 type PackFile = {
   path: string;

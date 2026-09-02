@@ -16,6 +16,7 @@
  * @module core/application-mailbox-waits
  */
 
+import { raceAbort } from './application-mailbox-abort.ts';
 import type {
   ApplicationCommandCleanupResult,
   ApplicationMailboxWaitOptions,
@@ -190,53 +191,6 @@ export async function waitForCleanup(
     latest = await readUnlessAborted(runtime, options.commandId, disposal, options.signal);
   }
   return latest;
-}
-
-/** The outcome of racing an in-flight observation against the abort signals. */
-type Raced<T> =
-  | { readonly aborted: false; readonly value: T }
-  | { readonly aborted: true; readonly reason: unknown };
-
-/**
- * Run an observation unless the caller's signal or the mailbox's disposal is,
- * or becomes, aborted while it is in flight.
- *
- * A stalled remote read would otherwise hold an "abortable" wait open until
- * storage answered. The read itself is not cancelled — storage has no such
- * contract — but the wait stops honouring it.
- */
-function raceAbort<T>(
-  run: () => Promise<T>,
-  disposal: AbortSignal,
-  signal: AbortSignal | undefined,
-): Promise<Raced<T>> {
-  if (isAborted(disposal, signal)) {
-    return Promise.resolve({ aborted: true, reason: abortReason(disposal, signal) });
-  }
-  // Kept to the fewest promise hops: the deterministic fake-timer tests drain a
-  // fixed number of microtask turns between ticks.
-  return new Promise<Raced<T>>((resolve, reject) => {
-    const cleanup = new AbortController();
-    const settle = (): void => {
-      cleanup.abort();
-      resolve({ aborted: true, reason: abortReason(disposal, signal) });
-    };
-    disposal.addEventListener('abort', settle, { once: true, signal: cleanup.signal });
-    signal?.addEventListener('abort', settle, { once: true, signal: cleanup.signal });
-    run()
-      .then((value) => {
-        cleanup.abort();
-        resolve({ aborted: false, value });
-      })
-      .catch((error: unknown) => {
-        cleanup.abort();
-        reject(error as Error);
-      });
-  });
-}
-
-function abortReason(disposal: AbortSignal, signal: AbortSignal | undefined): unknown {
-  return signal?.aborted === true ? (signal.reason as unknown) : (disposal.reason as unknown);
 }
 
 /** A cleanup-state read that rejects with the abort reason instead of outliving the wait. */

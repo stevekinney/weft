@@ -31,6 +31,7 @@ import {
   isTerminalRecord,
   MAX_MAILBOX_TRANSITION_ATTEMPTS,
   releaseAttemptController,
+  releaseAttemptsForCommand,
   toApplicationCommandReceipt,
   type MailboxRuntime,
 } from './application-mailbox-internals.ts';
@@ -395,7 +396,17 @@ export async function readCleanupState(
   commandId: string,
 ): Promise<ApplicationCommandCleanupResult> {
   const loaded = await loadCommand(runtime.storage, runtime.keys, commandId);
-  if (loaded === null) return { status: 'unknown' };
+  if (loaded === null) {
+    // Retired elsewhere while a local claimant may still hold it: that
+    // claimant's attempt is over, and the process that retired the record
+    // cannot reach this registry to say so.
+    releaseAttemptsForCommand(
+      runtime,
+      commandId,
+      'This command no longer exists; its receipt was retired.',
+    );
+    return { status: 'unknown' };
+  }
   const receipt = toApplicationCommandReceipt(loaded.record);
   // `receipt.cleanupPending` is already the projected, narrowed view: it is
   // defined only on a terminal record, so reading it here needs no re-narrowing.

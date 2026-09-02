@@ -12,6 +12,7 @@
  */
 
 import { storageConditionalBatch } from '../storage/interface.ts';
+import { raceAbort } from './application-mailbox-abort.ts';
 import type {
   ApplicationCommandClaimedPayload,
   ApplicationMailboxClaimResult,
@@ -249,7 +250,7 @@ export async function claimNextCommand(
   for (let attempt = 1; attempt <= MAX_MAILBOX_TRANSITION_ATTEMPTS; attempt += 1) {
     options?.signal?.throwIfAborted();
     const now = runtime.now();
-    const head = await resolveDeliverableHead(runtime, now);
+    const head = await observeHead(runtime, now, options?.signal);
     if (head.status === 'empty') return { status: 'empty' };
     if (head.status === 'held') return { status: 'held', availableAt: head.availableAt };
     if (head.status === 'retry') continue;
@@ -282,6 +283,25 @@ async function deadLetterCommittedLease(runtime: MailboxRuntime, commandId: stri
     next: transition.next,
     now,
   });
+}
+
+/**
+ * Resolve the head while honouring the request signal.
+ *
+ * A caller that aborts while the index scan or the record read is stalled on
+ * remote storage must not stay pending until storage answers, and an
+ * observation that lands a moment before the abort must not turn into a normal
+ * `empty` or `held` result that hides it.
+ */
+async function observeHead(
+  runtime: MailboxRuntime,
+  now: number,
+  signal: AbortSignal | undefined,
+): Promise<DeliverableHead> {
+  const observed = await raceAbort(() => resolveDeliverableHead(runtime, now), signal);
+  if (observed.aborted) throw observed.reason as Error;
+  signal?.throwIfAborted();
+  return observed.value;
 }
 
 /**

@@ -365,6 +365,25 @@ export function releaseAttemptController(
 }
 
 /**
+ * Release every attempt this process holds for one command.
+ *
+ * For an observer that finds the command gone — retired by retention in
+ * another process, whose maintenance cannot reach this registry — every local
+ * attempt on it is over, whatever token it held.
+ */
+export function releaseAttemptsForCommand(
+  runtime: MailboxRuntime,
+  commandId: string,
+  reason: string,
+): void {
+  for (const [attemptToken, registration] of runtime.attemptControllers) {
+    if (registration.commandId === commandId) {
+      releaseAttemptController(runtime, attemptToken, reason);
+    }
+  }
+}
+
+/**
  * Commit one command transition together with the index maintenance and
  * backlog accounting it implies.
  *
