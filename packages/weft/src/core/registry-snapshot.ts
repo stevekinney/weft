@@ -213,20 +213,14 @@ type WorkflowContractDraft = {
   finalizer?: RegistryMessageEntry;
 };
 
-function applyDraftIdentityAndSchemas(
-  draft: WorkflowContractDraft,
-  entry: RegistryWorkflowEntry,
-): void {
+function applyDraftSchemas(draft: WorkflowContractDraft, entry: RegistryWorkflowEntry): void {
   if (entry.description !== undefined) draft.description = entry.description;
   if (entry.tags !== undefined && entry.tags.length > 0) draft.tags = entry.tags;
   if (entry.inputSchema !== undefined) draft.inputSchema = entry.inputSchema;
   if (entry.outputSchema !== undefined) draft.outputSchema = entry.outputSchema;
 }
 
-function applyDraftMessageRecords(
-  draft: WorkflowContractDraft,
-  entry: RegistryWorkflowEntry,
-): void {
+function applyDraftMessages(draft: WorkflowContractDraft, entry: RegistryWorkflowEntry): void {
   if (entry.signals !== undefined && Object.keys(entry.signals).length > 0) {
     draft.signals = entry.signals;
   }
@@ -257,8 +251,8 @@ function toWorkflowContractDraft(
   entry: RegistryWorkflowEntry,
 ): WorkflowContract {
   const draft: WorkflowContractDraft = { name: workflowType, workflowVersion };
-  applyDraftIdentityAndSchemas(draft, entry);
-  applyDraftMessageRecords(draft, entry);
+  applyDraftSchemas(draft, entry);
+  applyDraftMessages(draft, entry);
   if (entry.finalizer !== undefined) draft.finalizer = entry.finalizer;
   return draft;
 }
