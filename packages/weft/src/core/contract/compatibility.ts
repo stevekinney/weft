@@ -92,15 +92,25 @@ export type WorkflowCompatibilityVerdict =
  * Compatibility issue asks for.
  *
  * - `true` (the strict default): a candidate whose `revision` differs from
- *   `current`'s—even when `contractHash` is identical, i.e. the only
- *   difference is a documentation-only field (`contract.description` or
- *   `contract.tags`, since `contractHash` deliberately excludes both) —
- *   reports `artifact-revision-mismatch` and is not compatible.
+ *   `current`'s—even when `contractHash` is identical—reports
+ *   `artifact-revision-mismatch` and is not compatible.
  * - `false`: a `revision`-only difference is tolerated; `artifact-revision-mismatch`
- *   is never reported. A `contractHash` difference always implies a
- *   `revision` difference too (the full contract hash a `revision` covers a
- *   strict superset of what `contractHash` covers), so `contract-hash-mismatch`
- *   is unaffected by this setting and still blocks activation on its own.
+ *   is never reported. What that difference *means* depends on how `revision`
+ *   was produced. Under the default content-derived revision
+ *   ({@link deriveWorkflowRevision}), a `revision`-only difference is always a
+ *   documentation-only edit (`contract.description` or `contract.tags`, since
+ *   `contractHash` deliberately excludes both). Under a caller-supplied
+ *   revision (`buildWorkflowRevisionManifest(contract, { revision })`), a
+ *   `revision`-only difference can be any artifact-identity change the caller
+ *   chose to encode there (a build id, a deployment tag)—`false` tolerates
+ *   that too, since this module has no way to distinguish an opaque supplied
+ *   revision from a derived one by inspecting the manifest alone. Do not set
+ *   `false` when your manifests use explicit revisions unless you intend to
+ *   accept any `revision` change as compatible. A `contractHash` difference
+ *   always implies a `revision` difference too (`revision`'s full-contract
+ *   digest is a strict superset of what `contractHash` covers), so
+ *   `contract-hash-mismatch` is unaffected by this setting and still blocks
+ *   activation on its own.
  *
  * @example
  * ```ts
@@ -122,8 +132,11 @@ export interface WorkflowCompatibilityPolicy {
 /**
  * The strict default policy `checkWorkflowCompatibility` uses when no
  * policy argument is supplied. Exported so a catalog can name the default
- * explicitly—in a log line, a configuration default, a test fixture —
- * rather than relying on an implicit fallback.
+ * explicitly—in a log line, a configuration default, a test fixture—rather
+ * than relying on an implicit fallback. Frozen: `checkWorkflowCompatibility`
+ * consults this exact object as the default argument for every call that
+ * omits a policy, so a caller that mutated it would silently change the
+ * default for every other caller in the process.
  *
  * @example
  * ```ts
@@ -132,9 +145,11 @@ export interface WorkflowCompatibilityPolicy {
  * console.log(DEFAULT_WORKFLOW_COMPATIBILITY_POLICY.requireExactRevision); // true
  * ```
  */
-export const DEFAULT_WORKFLOW_COMPATIBILITY_POLICY: Required<WorkflowCompatibilityPolicy> = {
+export const DEFAULT_WORKFLOW_COMPATIBILITY_POLICY: Readonly<
+  Required<WorkflowCompatibilityPolicy>
+> = Object.freeze({
   requireExactRevision: true,
-};
+});
 
 /**
  * Whether a raw `manifestVersion` value matches the schema version this

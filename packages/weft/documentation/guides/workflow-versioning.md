@@ -276,15 +276,22 @@ answer a narrower question than either:
   make possible for the first time.
 
 Only one axis is policy-tunable. `requireExactRevision` (default `true`,
-see `DEFAULT_WORKFLOW_COMPATIBILITY_POLICY`) controls whether a
+see `DEFAULT_WORKFLOW_COMPATIBILITY_POLICY`, frozen) controls whether a
 `revision`-only difference—same `name`, same `workflowVersion`, same
-`contractHash`, only `contract.description`/`contract.tags` differing —
-still blocks activation. Setting `requireExactRevision: false` tolerates
-that specific case; it never suppresses `contract-hash-mismatch`, since a
-payload difference always implies a `revision` difference too, and the two
-reasons are independent checks. The other four reasons can never be loosened
-by policy at all—that is the concrete mechanism behind "the refresh system
-may report these reasons but may not override them during automatic
+`contractHash`, only `revision` differing—still blocks activation. What that
+`revision`-only difference _means_ depends on how `revision` was produced:
+under the default content-derived revision it is always
+`contract.description`/`contract.tags` differing, but under a caller-supplied
+revision (`buildWorkflowRevisionManifest(contract, { revision })`) it can be
+any artifact-identity change the caller encoded there—this module has no way
+to tell an opaque supplied revision from a derived one by inspecting the
+manifest alone, so do not set `requireExactRevision: false` for manifests
+using explicit revisions unless you intend to tolerate any `revision` change.
+Setting `requireExactRevision: false` never suppresses `contract-hash-mismatch`,
+since a payload difference always implies a `revision` difference too, and the
+two reasons are independent checks. The other four reasons can never be
+loosened by policy at all—that is the concrete mechanism behind "the refresh
+system may report these reasons but may not override them during automatic
 activation."
 
 ```ts

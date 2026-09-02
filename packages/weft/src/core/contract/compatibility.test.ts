@@ -300,4 +300,8 @@ describe('checkWorkflowCompatibility', () => {
       checkWorkflowCompatibility(current, candidate, DEFAULT_WORKFLOW_COMPATIBILITY_POLICY),
     );
   });
+
+  it('freezes DEFAULT_WORKFLOW_COMPATIBILITY_POLICY so a caller cannot mutate the shared default', () => {
+    expect(Object.isFrozen(DEFAULT_WORKFLOW_COMPATIBILITY_POLICY)).toBe(true);
+  });
 });
