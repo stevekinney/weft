@@ -25,6 +25,17 @@
  *   for structurally similar situations—hostile-input rejection there,
  *   activation compatibility here. The two unions are intentionally
  *   independent; the shared literal is vocabulary reuse, not a coupling.
+ *   `manifest-version-unsupported` specifically is unreachable through this
+ *   module's own type-safe surface today—`WorkflowRevisionManifest.manifestVersion`
+ *   is typed as the single supported literal, and every in-repo producer
+ *   ({@link buildWorkflowRevisionManifest}, {@link parseWorkflowRevisionManifest})
+ *   guarantees it—so it costs nothing to check here and exists for the
+ *   consumer this module is exported for but does not yet have: a future
+ *   catalog or refresh system comparing a manifest it read from storage or
+ *   the wire, which may not have round-tripped through
+ *   `parseWorkflowRevisionManifest()` immediately before the comparison.
+ *   Widening the parameter type to accept that case is deferred to whichever
+ *   catalog work (WFT-9) first needs a type-safe way to trigger it.
  *
  * `checkWorkflowCompatibility()` is pure and synchronous: both manifests
  * already carry their computed `contractHash`/`revision`, so no hashing
