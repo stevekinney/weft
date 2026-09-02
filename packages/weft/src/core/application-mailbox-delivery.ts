@@ -200,6 +200,7 @@ async function resolveDeliverableHead(
 function registerAttemptController(
   runtime: MailboxRuntime,
   attemptToken: string,
+  commandId: string,
 ): { readonly controller: AbortController; readonly registration: AttemptRegistration | null } {
   const controller = new AbortController();
   const release = runtime.adoptAttempt(attemptToken);
@@ -207,7 +208,7 @@ function registerAttemptController(
     controller.abort(new Error('The application mailbox was disposed while this claim committed.'));
     return { controller, registration: null };
   }
-  const registration = { controller, release };
+  const registration = { controller, release, commandId };
   runtime.attemptControllers.set(attemptToken, registration);
   return { controller, registration };
 }
@@ -326,7 +327,11 @@ async function leaseHead(
   // this claim would hand back a live signal for work whose cancellation is
   // already durable. A registration for a lease that never commits, or that is
   // withheld below, is released again.
-  const { controller, registration } = registerAttemptController(runtime, attemptToken);
+  const { controller, registration } = registerAttemptController(
+    runtime,
+    attemptToken,
+    loaded.record.commandId,
+  );
   let committed: boolean;
   try {
     committed = await commitCommandTransition(runtime, {

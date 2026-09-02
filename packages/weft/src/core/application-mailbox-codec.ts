@@ -236,6 +236,29 @@ function readLease(source: Record<string, unknown>, key: string) {
  * @throws {PersistedDataCorruptError} When the stored bytes are not a
  * well-formed current-version command record.
  */
+/**
+ * Each terminal disposition is produced by exactly one kind of transition and
+ * carries the failure that transition writes: `applied` none, `rejected` the
+ * claimant's `application` failure, `cancelled` the mailbox's `cancelled`, and
+ * `dead-lettered` either `attempts-exhausted` or `deadline-exceeded`. A record
+ * pairing any other combination gives observers contradictory evidence.
+ */
+function failureMatchesState(
+  state: ApplicationCommandTerminalState,
+  reason: string | undefined,
+): boolean {
+  switch (state) {
+    case 'applied':
+      return reason === undefined;
+    case 'rejected':
+      return reason === 'application';
+    case 'cancelled':
+      return reason === 'cancelled';
+    default:
+      return reason === 'attempts-exhausted' || reason === 'deadline-exceeded';
+  }
+}
+
 function decodeTerminalRecord(
   decoded: Record<string, unknown>,
   key: string,
@@ -243,12 +266,14 @@ function decodeTerminalRecord(
 ): ApplicationCommandRecord {
   const cleanupPending = decoded['cleanupPending'];
   if (cleanupPending !== undefined && typeof cleanupPending !== 'boolean') fail(key);
+  const failure = readFailure(decoded, key);
+  if (!failureMatchesState(state, failure?.reason)) fail(key);
   return {
     ...readBase(decoded, key),
     state,
     terminalAt: readInteger(decoded, 'terminalAt', key),
     outcome: readOptionalJSONValue(decoded, 'outcome', key),
-    failure: readFailure(decoded, key),
+    failure,
     cancellationRequestedAt: readOptionalInteger(decoded, 'cancellationRequestedAt', key),
     cancellationReason: readOptionalString(decoded, 'cancellationReason', key),
     cleanupPending,
@@ -406,7 +431,7 @@ export function decodeApplicationCommandIdempotencyRecord(
   readVersion(decoded, key);
   return {
     recordVersion: APPLICATION_MAILBOX_RECORD_VERSION,
-    commandId: readString(decoded, 'commandId', key),
+    commandId: readCommandIdentifier(decoded['commandId'], key),
     identityDigest: readString(decoded, 'identityDigest', key),
   };
 }
@@ -425,6 +450,24 @@ export function encodeApplicationCommandIdempotencyRecord(
  *
  * @throws {PersistedDataCorruptError} When the entry is not a non-empty string.
  */
+/**
+ * A persisted command id is handed straight to key construction by `claim()`,
+ * `list()`, the waits, and idempotency lookups; an unpaired surrogate or an
+ * oversized value there would escape as a raw `URIError` rather than the
+ * corruption it is.
+ */
+function readCommandIdentifier(value: unknown, key: string): string {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    !isWellFormedString(value) ||
+    new TextEncoder().encode(value).byteLength > MAX_APPLICATION_IDENTITY_BYTES
+  ) {
+    fail(key);
+  }
+  return value;
+}
+
 export function decodeApplicationReadyEntry(bytes: Uint8Array, key: string): string {
   let decoded: unknown;
   try {
@@ -432,18 +475,7 @@ export function decodeApplicationReadyEntry(bytes: Uint8Array, key: string): str
   } catch {
     fail(key);
   }
-  // The id is handed straight to key construction by `claim()`, `list()`, and
-  // the waits; an unpaired surrogate or an oversized value there would escape
-  // as a raw `URIError` rather than the corruption it is.
-  if (
-    typeof decoded !== 'string' ||
-    decoded.length === 0 ||
-    !isWellFormedString(decoded) ||
-    new TextEncoder().encode(decoded).byteLength > MAX_APPLICATION_IDENTITY_BYTES
-  ) {
-    fail(key);
-  }
-  return decoded;
+  return readCommandIdentifier(decoded, key);
 }
 
 /**

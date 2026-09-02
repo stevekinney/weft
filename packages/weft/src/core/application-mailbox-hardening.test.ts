@@ -1723,3 +1723,78 @@ describe('ninth-round hardening', () => {
     mailbox.dispose();
   });
 });
+
+describe('tenth-round hardening', () => {
+  it('does not release another command attempt on a mismatched renewal', async () => {
+    const { mailbox, storage } = createMailboxFixture({ generateId: createIdSource('c') });
+    const first = await admitOne(mailbox, { idempotencyKey: 'a' });
+    const second = await admitOne(mailbox, { idempotencyKey: 'b' });
+    const firstClaim = await claimOne(mailbox);
+    const secondClaim = await claimOne(mailbox);
+    expect(firstClaim.commandId).toBe(first);
+    expect(secondClaim.commandId).toBe(second);
+
+    // Command A's id paired with command B's token is refused as stale for A —
+    // and must leave B's live attempt exactly as it was.
+    const mismatched = await mailbox.renew({
+      commandId: first,
+      attemptToken: secondClaim.attemptToken,
+    });
+    expect(mismatched.status).toBe('stale');
+    expect(secondClaim.signal.aborted).toBe(false);
+    expect(
+      attemptControllerRegistry(storage, 'bureau', 'agent-7').has(secondClaim.attemptToken),
+    ).toBe(true);
+    const genuine = await mailbox.renew({
+      commandId: second,
+      attemptToken: secondClaim.attemptToken,
+    });
+    expect(genuine.status).toBe('renewed');
+    mailbox.dispose();
+  });
+
+  it('fails closed on an idempotency binding whose command id is malformed', async () => {
+    const { mailbox, storage } = createMailboxFixture();
+    await admitOne(mailbox, { idempotencyKey: 'a' });
+    const key = KEYS.applicationCommandIdempotency('bureau', 'agent-7', 'a');
+    const binding = decode((await storage.get(key)) as Uint8Array) as Record<string, unknown>;
+    await storage.put(key, encode({ ...binding, commandId: 'id-\ud800' }));
+    await expect(mailbox.admit(commandInput({ idempotencyKey: 'a' }))).rejects.toThrow(
+      PersistedDataCorruptError,
+    );
+    mailbox.dispose();
+  });
+
+  it('fails closed on a terminal record whose failure disagrees with its state', async () => {
+    const { mailbox, storage } = createMailboxFixture();
+    const commandId = await admitOne(mailbox);
+    const claim = await claimOne(mailbox);
+    await mailbox.acknowledge({ commandId, attemptToken: claim.attemptToken });
+    const key = KEYS.applicationCommand('bureau', 'agent-7', commandId);
+    const applied = decode((await storage.get(key)) as Uint8Array) as Record<string, unknown>;
+
+    // An applied record cannot carry a failure.
+    await storage.put(key, encode({ ...applied, failure: { reason: 'attempts-exhausted' } }));
+    await expect(mailbox.receipt(commandId)).rejects.toThrow(PersistedDataCorruptError);
+    // A dead-lettered record cannot carry a claimant failure, and a rejected one
+    // cannot carry a mailbox-owned reason.
+    await storage.put(
+      key,
+      encode({ ...applied, state: 'dead-lettered', failure: { reason: 'application' } }),
+    );
+    await expect(mailbox.receipt(commandId)).rejects.toThrow(PersistedDataCorruptError);
+    await storage.put(
+      key,
+      encode({ ...applied, state: 'rejected', failure: { reason: 'cancelled' } }),
+    );
+    await expect(mailbox.receipt(commandId)).rejects.toThrow(PersistedDataCorruptError);
+    // The legal pairings still decode.
+    await storage.put(
+      key,
+      encode({ ...applied, state: 'dead-lettered', failure: { reason: 'deadline-exceeded' } }),
+    );
+    const receipt = await mailbox.receipt(commandId);
+    expect(receipt?.state).toBe('dead-lettered');
+    mailbox.dispose();
+  });
+});

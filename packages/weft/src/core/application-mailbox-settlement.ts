@@ -92,6 +92,7 @@ export async function renewClaim(
         runtime,
         options.attemptToken,
         'This attempt is no longer current: its renewal was refused.',
+        options.commandId,
       );
       return {
         status: transition.reason === 'deadline-exceeded' ? 'deadline-exceeded' : 'stale',

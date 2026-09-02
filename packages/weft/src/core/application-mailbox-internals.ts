@@ -109,6 +109,8 @@ export type MailboxRuntime = {
 export type AttemptRegistration = {
   readonly controller: AbortController;
   readonly release: () => void;
+  /** The command the attempt belongs to, so a caller-supplied token cannot release another command's attempt. */
+  readonly commandId: string;
 };
 
 /**
@@ -347,9 +349,14 @@ export function releaseAttemptController(
   runtime: MailboxRuntime,
   attemptToken: string,
   reason: string,
+  commandId?: string,
 ): void {
   const registration = runtime.attemptControllers.get(attemptToken);
   if (registration === undefined) return;
+  // A caller that paired command A's id with command B's token must not take
+  // B's live attempt down with A's refusal. Callers passing a token read from
+  // the record itself omit `commandId`; the token is the record's own.
+  if (commandId !== undefined && registration.commandId !== commandId) return;
   runtime.attemptControllers.delete(attemptToken);
   // Release through the registration, so the handle that CLAIMED the attempt
   // forgets it even when a sibling handle is the one settling or reclaiming.
