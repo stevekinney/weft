@@ -196,12 +196,6 @@ function readLease(source: Record<string, unknown>, key: string) {
 }
 
 /**
- * Decode one persisted command record, failing closed on anything unexpected.
- *
- * @throws {PersistedDataCorruptError} When the stored bytes are not a
- * well-formed current-version command record.
- */
-/**
  * Each terminal disposition is produced by exactly one kind of transition and
  * carries the failure that transition writes: `applied` none, `rejected` the
  * claimant's `application` failure, `cancelled` the mailbox's `cancelled`, and
@@ -276,6 +270,12 @@ function readWaitingRecord(
   return { ...base, state };
 }
 
+/**
+ * Decode one persisted command record, failing closed on anything unexpected.
+ *
+ * @throws {PersistedDataCorruptError} When the stored bytes are not a
+ * well-formed current-version command record.
+ */
 export function decodeApplicationCommandRecord(
   bytes: Uint8Array,
   key: string,
