@@ -1575,14 +1575,27 @@
       "outputSchema": {
         "additionalProperties": false,
         "properties": {
+          "activeRevisions": {},
           "activities": {},
+          "generatedAt": {
+            "type": "string"
+          },
           "registryVersion": {
-            "const": 1,
+            "const": 2,
             "type": "number"
           },
-          "workflows": {}
+          "workflows": {
+            "items": {},
+            "type": "array"
+          }
         },
-        "required": ["registryVersion", "workflows", "activities"],
+        "required": [
+          "registryVersion",
+          "generatedAt",
+          "workflows",
+          "activeRevisions",
+          "activities"
+        ],
         "type": "object"
       }
     },

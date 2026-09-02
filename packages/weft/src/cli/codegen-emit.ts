@@ -1,10 +1,13 @@
 /**
  * Deterministic JSON-Schema → TypeScript emitter for `weft codegen`.
  *
- * Consumes a {@link RegistrySnapshot} (the same shape served by
- * `GET /v1/registry`) and produces a single `.d.ts` string that
- * augments the public `'@lostgradient/weft'` module with typed `WorkflowRegistry`
- * entries. The output is byte-stable across runs with the same input:
+ * Consumes the active workflow projection of a registry snapshot
+ * (`Record<name, RegistryWorkflowEntry>`, the same data served by
+ * `GET /v1/registry` and resolved from its v2 manifest array by
+ * `codegen-validate.ts`'s `resolveActiveWorkflowEntries`) and produces a
+ * single `.d.ts` string that augments the public `'@lostgradient/weft'`
+ * module with typed `WorkflowRegistry` entries. The output is byte-stable
+ * across runs with the same input:
  * keys are sorted with explicit codepoint comparators, property names
  * are uniformly double-quoted via `JSON.stringify`, and there are no
  * timestamps or environment-dependent paths.
@@ -35,7 +38,7 @@
  * @module cli/codegen-emit
  */
 
-import type { RegistrySnapshot, RegistryWorkflowEntry } from '../core/registry-snapshot.ts';
+import type { RegistryWorkflowEntry } from '../core/registry-snapshot.ts';
 import {
   ARRAY_SUPPORTED_KEYS,
   CodegenEmitError,
@@ -454,14 +457,17 @@ function emitWorkflowEntry(name: string, entry: RegistryWorkflowEntry): string {
 }
 
 /**
- * Emit the full `.d.ts` declaration string for a registry snapshot.
+ * Emit the full `.d.ts` declaration string for a registry's active workflow
+ * projection.
  *
  * The output is deterministic: keys are sorted by codepoint, property
  * names go through {@link emitPropertyKey}, and unions/intersections
  * are always parenthesized so they compose correctly when nested.
  */
-export function emitRegistryDeclaration(snapshot: RegistrySnapshot): string {
-  const workflows = sortedWorkflowEntries(snapshot.workflows);
+export function emitRegistryDeclaration(
+  activeWorkflows: Record<string, RegistryWorkflowEntry>,
+): string {
+  const workflows = sortedWorkflowEntries(activeWorkflows);
 
   const workflowLines = workflows.map(([name, entry]) => emitWorkflowEntry(name, entry));
 

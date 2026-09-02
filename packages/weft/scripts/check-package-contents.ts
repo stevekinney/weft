@@ -13,9 +13,41 @@ const maximumUnpackedBytes = 12 * 1024 * 1024;
 // `manifest.ts`, `manifest-parse.ts`, `manifest-parse-schema.ts`,
 // `normalize.ts`, `revision.ts`, `types.ts`, `limits.ts`, `failure.ts`,
 // `index.ts`) — 11 new source files, each shipping a `.js` and a `.d.ts` in
-// `dist/`, which legitimately grows the entry count by 22. WFT-84 added the
-// application mailbox modules (22 source files); the merged surface reports 1531.
-const maximumEntryCount = 1531;
+// `dist/`, which legitimately grows the entry count by 22.
+//
+// WFT-6 added 3 new source files — `src/cli/codegen-validate.ts`,
+// `src/core/registry-workflow-contract-draft.ts`, and
+// `src/core/registry-schema-conversion.ts` (both `core/` additions are
+// file-size-ceiling extractions from `core/registry-snapshot.ts`, split out
+// once WFT-6's own additions there — workflow-scoped activity folding —
+// pushed it over 500 lines) — each shipping a `.js` and a `.d.ts` in
+// `dist/`, +6 entries by that formula (1485 -> 1491). The measured
+// `npm pack --dry-run --json --ignore-scripts` entry count on this change
+// is 1493, 2 higher than the formula predicts; the same +2 unattributed
+// baseline drift the previous entry in this comment (2ac2e27e, WFT-6's
+// `codegen-validate.ts`-only revision) already found and left unattributed,
+// carried forward rather than re-caused. Bumped to the actual measured
+// count rather than the unverified formula value.
+//
+// WFT-6's second review round added a 4th new source file,
+// `src/core/registry-limits.ts` (the `MAX_REGISTRY_WORKFLOW_COUNT`
+// constant and `RegistryWorkflowCountLimitError`, shared between the
+// producer in `registry-snapshot.ts` and the consumer in
+// `codegen-validate.ts` so the two ceilings can never drift apart) — one
+// more `.js`/`.d.ts` pair, +2 entries (1493 -> 1495).
+//
+// WFT-6's third review round (fixing `buildWorkerManifestFromRegistry()`'s
+// unrelated-registration blast radius, see CHANGELOG.md) split two more
+// files out of `registry-snapshot.ts`: `src/core/compare-codepoint.ts`
+// (the shared codepoint comparator, extracted to avoid an import cycle)
+// and `src/core/registry-workflow-manifest.ts` (`buildWorkflowManifestForType`
+// and the per-workflow entry/message/scoped-activity builders it and
+// `buildRegistrySnapshot` both call) — two more `.js`/`.d.ts` pairs, +4
+// entries (1495 -> 1499).
+//
+// WFT-84 added the application mailbox modules (22 source files, each a
+// `.js`/`.d.ts` pair, +44 by the formula); the merged surface measures 1543.
+const maximumEntryCount = 1543;
 
 type PackFile = {
   path: string;

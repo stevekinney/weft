@@ -452,6 +452,76 @@ These extensions describe operation authorization, while OpenAPI's standard `sec
 
 The OpenAPI and OpenRPC documents enumerate operations from the unified catalog. To see which transports an operation is bound to, look at the `tags` and binding metadata in the document. To see the input/output schemas for an operation, follow the `$ref` links into `components.schemas`. To build a scope matrix without guessing from tags or operation names, read `x-weft-access` and any `x-weft-parameterizedAccess` variants.
 
+### Registry Snapshot
+
+`weft.system.registry` and `GET /v1/registry` return a snapshot of every
+locally-registered workflow and activity, with their JSON Schemas. It powers
+`weft codegen` (see [`cli.md`](./cli.md)) and any tooling that needs to
+introspect what an engine can run. The operation requires `system:read` and
+is read-only.
+
+As of `registryVersion: 2`, the response is:
+
+```json
+{
+  "registryVersion": 2,
+  "generatedAt": "2026-01-01T00:00:00.000Z",
+  "workflows": [
+    {
+      "manifestVersion": 1,
+      "name": "welcome",
+      "workflowVersion": "0.0.0",
+      "revision": "sha256:…",
+      "contractHash": "sha256:…",
+      "contract": {
+        "name": "welcome",
+        "workflowVersion": "0.0.0",
+        "inputSchema": { "type": "object", "properties": { "name": { "type": "string" } } },
+        "outputSchema": { "type": "object", "properties": { "greeting": { "type": "string" } } }
+      }
+    }
+  ],
+  "activeRevisions": { "welcome": "sha256:…" },
+  "activities": {
+    "formatGreeting": { "queue": "default", "inputSchema": { "type": "object" } }
+  }
+}
+```
+
+`workflows` is an array of `WorkflowRevisionManifest` (see
+[`workflow-versioning.md`](../guides/workflow-versioning.md)), sorted by
+`(name, revision)` — one entry per registered workflow, each pairing its
+normalized `contract` with a content-derived `revision` and payload-only
+`contractHash`. `activeRevisions` maps each workflow name to the `revision`
+of the manifest currently active for it; today the engine registers exactly
+one implementation per name, so that manifest is the only one a caller will
+find, but the pointer indirection means a future multi-revision registry
+source does not require another wire-shape bump. `generatedAt` is an
+informational ISO-8601 timestamp — it is excluded from `weft codegen`'s
+determinism and drift checks, since two snapshots of an unchanged registry
+must produce identical generated code regardless of when each was taken.
+`activities` is unchanged from `registryVersion: 1`: a flat
+`Record<name, entry>` of queue, schema, description, retry, and timeout
+metadata, since activities are not versioned contracts the way workflows are.
+A workflow's own `.activities({...})`-scoped registrations are separate from
+that flat catalog: when present, they appear under that workflow's own
+`contract.activities` (an `{ inputSchema?, outputSchema? }` pair per activity
+name), and factor into that workflow's `contractHash`/`revision` — a scoped
+activity's schema change moves the owning workflow's identity, the same way a
+change to its own input/output schema does. `contract.activities` is omitted
+entirely for a workflow with no `.activities({...})` step.
+
+The snapshot as a whole is capped at 512 registered workflows: an engine
+with more than that fails the whole snapshot with a masked `500`, the same
+way an individual workflow whose contract exceeds a WFT-5 hostile-input
+limit does (see above). `weft codegen --server`'s own consumer-side ceiling
+on the `workflows` array it reads from the wire uses the same 512-workflow
+limit, so a snapshot this operation actually returns can never be rejected
+by `weft codegen` for exceeding that count.
+
+Weft is pre-release, so `registryVersion: 1` is not accepted — see
+[`CHANGELOG.md`](../../CHANGELOG.md) for the migration note.
+
 ### Active alerts
 
 `weft.alerts.list` and `GET /v1/alerts` return the alert rules that are

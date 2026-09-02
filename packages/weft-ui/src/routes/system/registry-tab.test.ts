@@ -18,6 +18,36 @@ afterEach(() => {
   scripted = undefined;
 });
 
+/** One `WorkflowRevisionManifest`-shaped fixture entry, active by construction (`revision` is what `activeRevisionsFor` reads back). */
+function manifestFixture(name: string, contract: Record<string, unknown> = {}) {
+  return {
+    manifestVersion: 1,
+    name,
+    workflowVersion: '1.0.0',
+    revision: `${name}-rev`,
+    contractHash: `${name}-hash`,
+    contract: { name, workflowVersion: '1.0.0', ...contract },
+  };
+}
+
+function activeRevisionsFor(workflows: readonly { name: string; revision: string }[]) {
+  return Object.fromEntries(workflows.map((entry) => [entry.name, entry.revision]));
+}
+
+/** A v2 registry snapshot with the given workflow manifests (each marked active) and activities. */
+function registrySnapshot(
+  workflows: readonly ReturnType<typeof manifestFixture>[],
+  activities: Record<string, unknown> = {},
+) {
+  return {
+    registryVersion: 2,
+    generatedAt: '2026-01-01T00:00:00.000Z',
+    workflows,
+    activeRevisions: activeRevisionsFor(workflows),
+    activities,
+  };
+}
+
 async function renderRegistryTab(
   manifestFixtures: {
     workers?: readonly Record<string, unknown>[];
@@ -60,7 +90,7 @@ describe('RegistryTab', () => {
       },
       { status: 200 },
     );
-    scripted.enqueueJsonRpcResult({ registryVersion: 1, workflows: {}, activities: {} });
+    scripted.enqueueJsonRpcResult(registrySnapshot([]));
     const { findByText, getByRole } = await renderRegistryTab();
     expect(await findByText('Not authorized')).not.toBeNull();
 
@@ -70,14 +100,14 @@ describe('RegistryTab', () => {
 
   test('renders the 3-step onboarding empty state when nothing is registered', async () => {
     scripted = new ScriptedFetch();
-    scripted.enqueueJsonRpcResult({ registryVersion: 1, workflows: {}, activities: {} });
+    scripted.enqueueJsonRpcResult(registrySnapshot([]));
     const { findByText } = await renderRegistryTab();
     expect(await findByText('Install the SDK', { exact: false })).not.toBeNull();
   });
 
   test('adds accepted worker-manifest and admission diagnostics to the registry surface', async () => {
     scripted = new ScriptedFetch();
-    scripted.enqueueJsonRpcResult({ registryVersion: 1, workflows: {}, activities: {} });
+    scripted.enqueueJsonRpcResult(registrySnapshot([]));
     const { findByText } = await renderRegistryTab({
       workers: [{ id: 'worker-a' }],
       diagnostics: {
@@ -115,34 +145,35 @@ describe('RegistryTab', () => {
 
   test('lists workflow definitions and activities, then drills into a definition detail', async () => {
     scripted = new ScriptedFetch();
-    scripted.enqueueJsonRpcResult({
-      registryVersion: 1,
-      workflows: {
-        'order-processing': {
-          description: 'Processes an order end to end.',
-          tags: ['payments'],
-          inputSchema: {
-            type: 'object',
-            required: ['orderId'],
-            properties: {
-              orderId: { type: 'string' },
-              note: { type: 'string' },
+    scripted.enqueueJsonRpcResult(
+      registrySnapshot(
+        [
+          manifestFixture('order-processing', {
+            description: 'Processes an order end to end.',
+            tags: ['payments'],
+            inputSchema: {
+              type: 'object',
+              required: ['orderId'],
+              properties: {
+                orderId: { type: 'string' },
+                note: { type: 'string' },
+              },
+            },
+          }),
+          manifestFixture('heartbeat'),
+        ],
+        {
+          chargeCard: {
+            queue: 'default',
+            inputSchema: {
+              type: 'object',
+              required: ['amount'],
+              properties: { amount: { type: 'number' } },
             },
           },
         },
-        heartbeat: {},
-      },
-      activities: {
-        chargeCard: {
-          queue: 'default',
-          inputSchema: {
-            type: 'object',
-            required: ['amount'],
-            properties: { amount: { type: 'number' } },
-          },
-        },
-      },
-    });
+      ),
+    );
 
     const { findByText, findAllByText, getByRole } = await renderRegistryTab();
 
@@ -202,21 +233,16 @@ describe('RegistryTab', () => {
 
   test('shows the honest "no activities" note when the engine has none registered', async () => {
     scripted = new ScriptedFetch();
-    scripted.enqueueJsonRpcResult({
-      registryVersion: 1,
-      workflows: { heartbeat: {} },
-      activities: {},
-    });
+    scripted.enqueueJsonRpcResult(registrySnapshot([manifestFixture('heartbeat')]));
     const { findByText } = await renderRegistryTab();
     expect(await findByText('No activities registered for this engine.')).not.toBeNull();
   });
 
   test('renders a nested object field as an expandable schema tree branch', async () => {
     scripted = new ScriptedFetch();
-    scripted.enqueueJsonRpcResult({
-      registryVersion: 1,
-      workflows: {
-        'order-processing': {
+    scripted.enqueueJsonRpcResult(
+      registrySnapshot([
+        manifestFixture('order-processing', {
           inputSchema: {
             type: 'object',
             required: ['address'],
@@ -228,10 +254,9 @@ describe('RegistryTab', () => {
               },
             },
           },
-        },
-      },
-      activities: {},
-    });
+        }),
+      ]),
+    );
 
     const { findAllByText, findByRole } = await renderRegistryTab();
 

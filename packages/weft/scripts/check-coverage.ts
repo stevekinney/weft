@@ -881,9 +881,11 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       'src/cli/codegen.ts',
       {
         reason:
-          'Process-entry and failure-exit behavior runs in child processes whose hits are not attributed to the parent Bun LCOV report.',
+          "Filesystem/network edge cases unreachable through the public --from/--server path: an OS-level rename failure (and its best-effort temp-file cleanup), a parent path that exists but is not a directory, resolveConnection() rethrowing something other than ConnectionConfigurationError, AbortSignal.timeout() producing anything but a TimeoutError, composeRegistryUrl() throwing on a URL resolveConnection() already validated, and emitRegistryDeclaration() throwing something other than CodegenEmitError. That last one is new in WFT-6: codegen-validate.ts now validates every workflow manifest (including its schema-depth bound, MAX_CONTRACT_SCHEMA_DEPTH = 64) before the emitter ever runs, and that bound matches the emitter's own MAX_RECURSION_DEPTH, so the manifest parser always rejects a too-deep schema first — the emitter's CodegenEmitError catch in this file is defense-in-depth for a case codegen-validate.ts already forecloses, not a reachable path.",
         functions: 1,
-        lines: new Set([94, 95, 184, 185, 234, 279, 280, 410, 441, 442, 443, 445, 446, 447, 448]),
+        lines: new Set([
+          52, 53, 54, 55, 56, 145, 146, 195, 240, 241, 265, 296, 297, 298, 300, 301, 302, 303,
+        ]),
         requireUncoveredLines: true,
       },
     ],

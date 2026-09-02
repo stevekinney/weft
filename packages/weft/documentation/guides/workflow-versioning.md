@@ -199,3 +199,15 @@ is an opaque label the parser trusts once it is well-formed, not a value it
 can independently verify. See the [`WorkflowContract` and
 `WorkflowRevisionManifest` reference](../reference/types.md#workflowcontract)
 for the full type shapes.
+
+### Discovering revisions at runtime
+
+`GET /v1/registry` (`weft.system.registry` — see
+[`api-server.md`](../reference/api-server.md#registry-snapshot)) is how a
+caller discovers, over the wire, which content-addressed revision is
+currently active for a workflow name: `activeRevisions[name]` names the
+`revision`, and the matching entry in `workflows` carries that manifest's
+full `contract`, `contractHash`, and `revision`. This is the same
+`WorkflowRevisionManifest` this guide describes — the registry snapshot is
+just its runtime-introspection surface, built fresh from the engine's
+current registrations on every request rather than persisted.

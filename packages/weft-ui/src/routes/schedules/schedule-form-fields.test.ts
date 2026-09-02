@@ -18,17 +18,48 @@ describe('ScheduleFormFields — create mode', () => {
     });
 
     expect(getByRole('combobox', { name: 'Workflow type' })).not.toBeNull();
-    expect(queryByText('Registry lookup unavailable — enter the workflow type name.')).toBeNull();
+    expect(
+      queryByText('No registered workflow types found — enter the workflow type name.'),
+    ).toBeNull();
   });
 
-  test('degrades to a free-text field when registry options are unavailable', async () => {
+  test('degrades to a free-text field with an "unavailable" message when registry options are undefined (still loading, errored, or unauthorized)', async () => {
+    // `undefined` must read as "the lookup hasn't told us anything yet",
+    // never as "the server has no workflows" (WFT-6) — an authorized
+    // schedule creator seeing the latter while the query is merely still in
+    // flight would be actively misled about server state.
     const form = new ScheduleFormState();
 
-    const { getByText, queryByRole } = render(ScheduleFormFields, {
+    const { getByText, queryByRole, queryByText } = render(ScheduleFormFields, {
       props: { form, mode: 'create', workflowTypeOptions: undefined },
     });
 
     expect(getByText('Registry lookup unavailable — enter the workflow type name.')).not.toBeNull();
+    expect(
+      queryByText('No registered workflow types found — enter the workflow type name.'),
+    ).toBeNull();
+    expect(queryByRole('combobox', { name: 'Workflow type' })).toBeNull();
+  });
+
+  test('degrades to a free-text field with a "no registered types" message when the registry resolves with zero registered workflow types', async () => {
+    // A resolved-but-empty registry (WFT-6) is a distinct state from
+    // still-loading/errored (both collapse to `undefined` upstream in
+    // `schedule-form-drawer.svelte`) — an empty array is `!== undefined`, so
+    // this must be handled explicitly rather than falling out of the same
+    // check, or a genuinely empty registry renders an unusable zero-option
+    // Select instead of the free-text fallback, and it must show a distinct
+    // message from the `undefined` case above rather than the misleading
+    // "unavailable" copy.
+    const form = new ScheduleFormState();
+
+    const { getByText, queryByRole, queryByText } = render(ScheduleFormFields, {
+      props: { form, mode: 'create', workflowTypeOptions: [] },
+    });
+
+    expect(
+      getByText('No registered workflow types found — enter the workflow type name.'),
+    ).not.toBeNull();
+    expect(queryByText('Registry lookup unavailable — enter the workflow type name.')).toBeNull();
     expect(queryByRole('combobox', { name: 'Workflow type' })).toBeNull();
   });
 
@@ -73,6 +104,25 @@ describe('ScheduleFormFields — create mode', () => {
 
     expect(form.backfill).toBe(true);
     expect(getByText(/missed occurrences fire/)).not.toBeNull();
+  });
+
+  test('renders the catch-up-window warning already mounted when backfill starts enabled, and removes it when disabled', async () => {
+    // Complements the toggle-on case above: mounting with `backfill` already
+    // `true` exercises the `{#if}` block's initial-render path directly
+    // (rather than only its post-toggle transition-in), and toggling back
+    // off exercises its teardown/transition-out path — both are distinct
+    // compiled code paths from the toggle-on assertion alone.
+    const form = new ScheduleFormState({ backfill: true });
+
+    const { getByRole, queryByText, getByText } = render(ScheduleFormFields, {
+      props: { form, mode: 'create', workflowTypeOptions: [] },
+    });
+
+    expect(getByText(/missed occurrences fire/)).not.toBeNull();
+    await fireEvent.click(getByRole('switch', { name: 'Backfill missed occurrences' }));
+
+    expect(form.backfill).toBe(false);
+    expect(queryByText(/missed occurrences fire/)).toBeNull();
   });
 
   test('shows a field-level error message for invalid JSON input', async () => {

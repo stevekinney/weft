@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import type { RegistrySnapshot } from '../core/registry-snapshot.ts';
+import type { RegistryWorkflowEntry } from '../core/registry-snapshot.ts';
 import {
   CodegenEmitError,
   emitPropertyKey,
@@ -552,16 +552,14 @@ describe('jsonSchemaToTypeScript $ref and ignored keywords', () => {
 });
 
 describe('emitRegistryDeclaration', () => {
-  function buildSnapshot(input: Partial<RegistrySnapshot> = {}): RegistrySnapshot {
-    return {
-      registryVersion: 1,
-      workflows: input.workflows ?? {},
-      activities: input.activities ?? {},
-    };
+  function buildWorkflows(
+    workflows: Record<string, RegistryWorkflowEntry> = {},
+  ): Record<string, RegistryWorkflowEntry> {
+    return workflows;
   }
 
-  it('emits a valid empty file when the snapshot has no entries', () => {
-    const output = emitRegistryDeclaration(buildSnapshot());
+  it('emits a valid empty file when there are no active workflows', () => {
+    const output = emitRegistryDeclaration(buildWorkflows());
     expect(output).toContain("declare module '@lostgradient/weft' {");
     expect(output).toContain('interface WorkflowRegistry {}');
     // Activity names are typed per-workflow via the builder's
@@ -577,86 +575,66 @@ describe('emitRegistryDeclaration', () => {
     // and `result()` output narrowing. The banner records that intent so the
     // generated file is self-explanatory and consumers know it is not
     // engine-only.
-    const output = emitRegistryDeclaration(buildSnapshot());
+    const output = emitRegistryDeclaration(buildWorkflows());
     expect(output).toContain('type engine and client call sites');
   });
 
   it('is byte-identical across two runs with the same input', () => {
-    const snapshot = buildSnapshot({
-      workflows: {
-        welcome: {
-          inputSchema: {
-            type: 'object',
-            properties: { name: { type: 'string' } },
-            required: ['name'],
-            additionalProperties: false,
-          },
-          outputSchema: { type: 'string' },
+    const workflows = buildWorkflows({
+      welcome: {
+        inputSchema: {
+          type: 'object',
+          properties: { name: { type: 'string' } },
+          required: ['name'],
+          additionalProperties: false,
         },
+        outputSchema: { type: 'string' },
       },
     });
-    expect(emitRegistryDeclaration(snapshot)).toBe(emitRegistryDeclaration(snapshot));
+    expect(emitRegistryDeclaration(workflows)).toBe(emitRegistryDeclaration(workflows));
   });
 
   it('sorts keys deterministically regardless of insertion order', () => {
-    // Two snapshots with explicitly reversed insertion order: V8
+    // Two records with explicitly reversed insertion order: V8
     // preserves string-key insertion order, so this is the only way
     // to prove the emitter sorts rather than relying on iteration
     // luck.
-    const snapshotA = buildSnapshot({
-      workflows: {
-        zeta: { inputSchema: { type: 'string' } },
-        alpha: { inputSchema: { type: 'string' } },
-      },
+    const workflowsA = buildWorkflows({
+      zeta: { inputSchema: { type: 'string' } },
+      alpha: { inputSchema: { type: 'string' } },
     });
-    const snapshotB = buildSnapshot({
-      workflows: {
-        alpha: { inputSchema: { type: 'string' } },
-        zeta: { inputSchema: { type: 'string' } },
-      },
+    const workflowsB = buildWorkflows({
+      alpha: { inputSchema: { type: 'string' } },
+      zeta: { inputSchema: { type: 'string' } },
     });
-    const outputA = emitRegistryDeclaration(snapshotA);
-    const outputB = emitRegistryDeclaration(snapshotB);
+    const outputA = emitRegistryDeclaration(workflowsA);
+    const outputB = emitRegistryDeclaration(workflowsB);
     expect(outputA).toBe(outputB);
     expect(outputA.indexOf('"alpha"')).toBeLessThan(outputA.indexOf('"zeta"'));
   });
 
   it('uses null-prototype-safe key handling for names like __proto__', () => {
-    const workflows: Record<string, { inputSchema?: Record<string, unknown> }> =
-      Object.create(null);
+    const workflows: Record<string, RegistryWorkflowEntry> = Object.create(null);
     workflows['__proto__'] = { inputSchema: { type: 'string' } };
     workflows['valid'] = { inputSchema: { type: 'string' } };
-    const output = emitRegistryDeclaration(buildSnapshot({ workflows }));
+    const output = emitRegistryDeclaration(workflows);
     expect(output).toContain('"__proto__"');
     expect(output).toContain('"valid"');
   });
 
-  it('does not emit activity entries (they live on per-workflow builders, not a global registry)', () => {
-    const output = emitRegistryDeclaration(
-      buildSnapshot({
-        activities: {
-          ping: { queue: 'default', outputSchema: { type: 'string' } },
-        },
-      }),
-    );
-    expect(output).not.toContain('ActivityTypes');
-    expect(output).not.toContain('"ping"');
-  });
+  // The prior "does not emit activity entries" coverage no longer applies:
+  // `emitRegistryDeclaration`'s parameter type is `Record<string,
+  // RegistryWorkflowEntry>` — there is no `activities` field to pass, so the
+  // compiler enforces the same contract this test used to assert at runtime.
 
   it('emits unknown for workflows with no schemas', () => {
-    const output = emitRegistryDeclaration(
-      buildSnapshot({
-        workflows: { bare: {} },
-      }),
-    );
+    const output = emitRegistryDeclaration(buildWorkflows({ bare: {} }));
     expect(output).toContain('"bare": { input: unknown; output: unknown };');
   });
 
   it('quotes names with special characters', () => {
     const output = emitRegistryDeclaration(
-      buildSnapshot({
-        workflows: { 'kebab-name': {}, 'with "quote"': {} },
-      }),
+      buildWorkflows({ 'kebab-name': {}, 'with "quote"': {} }),
     );
     expect(output).toContain('"kebab-name"');
     expect(output).toContain('"with \\"quote\\""');

@@ -56,18 +56,39 @@ describe('extractSchemaFields', () => {
 });
 
 const SNAPSHOT: RegistrySnapshotSource = {
-  registryVersion: 1,
-  workflows: {
-    'order-processing': {
-      description: 'Processes an order end to end.',
-      tags: ['commerce'],
-      inputSchema: {
-        type: 'object',
-        required: ['orderId'],
-        properties: { orderId: { type: 'string' } },
+  registryVersion: 2,
+  generatedAt: '2026-01-01T00:00:00.000Z',
+  workflows: [
+    {
+      manifestVersion: 1,
+      name: 'order-processing',
+      workflowVersion: '1.0.0',
+      revision: 'sha256:order-processing-revision',
+      contractHash: 'sha256:order-processing-hash',
+      contract: {
+        name: 'order-processing',
+        workflowVersion: '1.0.0',
+        description: 'Processes an order end to end.',
+        tags: ['commerce'],
+        inputSchema: {
+          type: 'object',
+          required: ['orderId'],
+          properties: { orderId: { type: 'string' } },
+        },
       },
     },
-    'audit-sweep': {},
+    {
+      manifestVersion: 1,
+      name: 'audit-sweep',
+      workflowVersion: '1.0.0',
+      revision: 'sha256:audit-sweep-revision',
+      contractHash: 'sha256:audit-sweep-hash',
+      contract: { name: 'audit-sweep', workflowVersion: '1.0.0' },
+    },
+  ],
+  activeRevisions: {
+    'order-processing': 'sha256:order-processing-revision',
+    'audit-sweep': 'sha256:audit-sweep-revision',
   },
   activities: {
     chargeCard: { queue: 'default', description: 'Charges a card.' },
@@ -97,6 +118,26 @@ describe('registryWorkflowRows', () => {
     const auditSweep = rows[0];
     expect(auditSweep?.hasInputSchema).toBe(false);
     expect(auditSweep?.tags).toEqual([]);
+  });
+
+  test('excludes a manifest whose revision is not the active one', () => {
+    const withInactiveRevision: RegistrySnapshotSource = {
+      ...SNAPSHOT,
+      workflows: [
+        ...SNAPSHOT.workflows,
+        {
+          manifestVersion: 1,
+          name: 'audit-sweep',
+          workflowVersion: '0.9.0',
+          revision: 'sha256:audit-sweep-old-revision',
+          contractHash: 'sha256:audit-sweep-old-hash',
+          contract: { name: 'audit-sweep', workflowVersion: '0.9.0', description: 'Old.' },
+        },
+      ],
+    };
+    const rows = registryWorkflowRows(withInactiveRevision);
+    expect(rows.map((row) => row.type)).toEqual(['audit-sweep', 'order-processing']);
+    expect(rows[0]?.description).toBeUndefined();
   });
 });
 
@@ -185,14 +226,21 @@ describe('buildSchemaTree', () => {
 });
 
 describe('isRegistryEmpty', () => {
-  test('true when both maps are empty', () => {
-    expect(isRegistryEmpty({ registryVersion: 1, workflows: {}, activities: {} })).toBe(true);
+  test('true when both the workflow array and activities map are empty', () => {
+    expect(
+      isRegistryEmpty({ registryVersion: 2, workflows: [], activeRevisions: {}, activities: {} }),
+    ).toBe(true);
   });
 
   test('false when at least one workflow or activity exists', () => {
     expect(isRegistryEmpty(SNAPSHOT)).toBe(false);
     expect(
-      isRegistryEmpty({ registryVersion: 1, workflows: {}, activities: SNAPSHOT.activities }),
+      isRegistryEmpty({
+        registryVersion: 2,
+        workflows: [],
+        activeRevisions: {},
+        activities: SNAPSHOT.activities,
+      }),
     ).toBe(false);
   });
 });

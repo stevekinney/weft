@@ -43,8 +43,10 @@ afterEach(() => {
 
 async function renderSystemRoute(
   registry: RegistrySnapshotSource = {
-    registryVersion: 1,
-    workflows: {},
+    registryVersion: 2,
+    generatedAt: '2026-01-01T00:00:00.000Z',
+    workflows: [],
+    activeRevisions: {},
     activities: {},
   },
 ) {
@@ -127,20 +129,41 @@ describe('System route', () => {
 
   test('renders public Cinder badges throughout the Registry route', async () => {
     const { findAllByText, findByRole, findByText } = await renderSystemRoute({
-      registryVersion: 1,
-      workflows: {
-        'order-processing': {
-          tags: ['payments'],
-          inputSchema: {
-            type: 'object',
-            required: ['orderId'],
-            properties: {
-              note: { type: 'string' },
-              orderId: { type: 'string' },
+      registryVersion: 2,
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      workflows: [
+        {
+          manifestVersion: 1,
+          name: 'order-processing',
+          workflowVersion: '1.0.0',
+          revision: 'order-processing-rev',
+          contractHash: 'order-processing-hash',
+          contract: {
+            name: 'order-processing',
+            workflowVersion: '1.0.0',
+            tags: ['payments'],
+            inputSchema: {
+              type: 'object',
+              required: ['orderId'],
+              properties: {
+                note: { type: 'string' },
+                orderId: { type: 'string' },
+              },
             },
           },
         },
-        heartbeat: {},
+        {
+          manifestVersion: 1,
+          name: 'heartbeat',
+          workflowVersion: '1.0.0',
+          revision: 'heartbeat-rev',
+          contractHash: 'heartbeat-hash',
+          contract: { name: 'heartbeat', workflowVersion: '1.0.0' },
+        },
+      ],
+      activeRevisions: {
+        'order-processing': 'order-processing-rev',
+        heartbeat: 'heartbeat-rev',
       },
       activities: {
         chargeCard: {

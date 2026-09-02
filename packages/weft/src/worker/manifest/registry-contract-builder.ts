@@ -43,15 +43,11 @@ import {
   deriveWorkflowRevision,
   type WorkflowActivityContract,
   type WorkflowContract,
-  type WorkflowMessageContract,
+  type WorkflowRevisionManifest,
 } from '../../core/contract/index.ts';
 import type { Engine } from '../../core/engine.ts';
-import {
-  buildActivityEntry,
-  buildRegistrySnapshot,
-  type RegistryActivityEntry,
-  type RegistryWorkflowEntry,
-} from '../../core/registry-snapshot.ts';
+import { buildActivityEntry, type RegistryActivityEntry } from '../../core/registry-snapshot.ts';
+import { buildWorkflowManifestForType } from '../../core/registry-workflow-manifest.ts';
 import { WeftError } from '../../core/weft-error.ts';
 import { VERSION } from '../../version.ts';
 import { REMOTE_WORKER_PROTOCOL_VERSION } from '../protocol.ts';
@@ -130,17 +126,27 @@ export interface WorkerManifestFromRegistryOptions {
   capabilities?: WorkerManifest['capabilities'];
 }
 
-function findWorkflowEntry(
-  snapshot: ReturnType<typeof buildRegistrySnapshot>,
+/**
+ * Resolve the {@link WorkflowRevisionManifest} for `workflowType` directly
+ * via `core/registry-workflow-manifest.ts`'s single-workflow builder —
+ * never the full `buildRegistrySnapshot()` snapshot. This is what actually
+ * fixes the aggregate-count and unrelated-workflow-limit blast radius this
+ * module's own review found: building only the requested workflow's
+ * manifest means an unrelated registration elsewhere on the engine (over
+ * the registry's aggregate count, or individually over a WFT-5 contract
+ * limit) can never block this one from succeeding.
+ */
+async function findWorkflowManifest(
+  engine: Engine,
   workflowType: string,
-): RegistryWorkflowEntry {
-  const entry = snapshot.workflows[workflowType];
-  if (entry === undefined) {
+): Promise<WorkflowRevisionManifest> {
+  const manifest = await buildWorkflowManifestForType(engine, workflowType);
+  if (manifest === undefined) {
     throw new WorkerManifestBuildError(
       `Cannot build a worker manifest: workflow type "${workflowType}" is not registered on the source Engine.`,
     );
   }
-  return entry;
+  return manifest;
 }
 
 /**
@@ -179,90 +185,6 @@ function toActivityContract(entry: RegistryActivityEntry): WorkflowActivityContr
   return contract;
 }
 
-/**
- * Mutable draft of a {@link WorkflowContract}, built up field by field before
- * being returned. Typed to the same shape `WorkflowContract` declares (this
- * function never sets `activities`/`finalizer` — the caller layers
- * `activities` on afterward, see `buildWorkflowContract` below) so a future
- * field addition to `WorkflowContract` is a compile error here instead of a
- * silent gap, matching `core/contract/build.ts`'s own `ContractDraft`.
- */
-type ContractDraft = {
-  name: string;
-  workflowVersion: string;
-  description?: string;
-  tags?: ReadonlyArray<string>;
-  inputSchema?: Record<string, unknown>;
-  outputSchema?: Record<string, unknown>;
-  signals?: Record<string, WorkflowMessageContract>;
-  updates?: Record<string, WorkflowMessageContract>;
-  queries?: Record<string, WorkflowMessageContract>;
-  finalizer?: WorkflowActivityContract;
-};
-
-function applyDescriptionAndTags(draft: ContractDraft, entry: RegistryWorkflowEntry): void {
-  if (entry.description !== undefined) draft.description = entry.description;
-  if (entry.tags !== undefined && entry.tags.length > 0) draft.tags = [...entry.tags];
-}
-
-function applySchemas(draft: ContractDraft, entry: RegistryWorkflowEntry): void {
-  if (entry.inputSchema !== undefined) draft.inputSchema = entry.inputSchema;
-  if (entry.outputSchema !== undefined) draft.outputSchema = entry.outputSchema;
-}
-
-function applyMessageRecords(draft: ContractDraft, entry: RegistryWorkflowEntry): void {
-  if (entry.signals !== undefined && Object.keys(entry.signals).length > 0) {
-    draft.signals = entry.signals;
-  }
-  if (entry.updates !== undefined && Object.keys(entry.updates).length > 0) {
-    draft.updates = entry.updates;
-  }
-  if (entry.queries !== undefined && Object.keys(entry.queries).length > 0) {
-    draft.queries = entry.queries;
-  }
-}
-
-/**
- * Fold the registered definition-level finalizer's schema into
- * `contractHash`/`workflowRevision`, matching `buildWorkflowContract(definition)`'s
- * direct-definition path — see WFT-5 PR #943 review thread PRRT_kwDORwthfM6eWFwr.
- * Without this, two registrations that differ only by declaring a
- * `finalizer` would produce the same registry-derived `contractHash`.
- */
-function applyFinalizer(draft: ContractDraft, entry: RegistryWorkflowEntry): void {
-  if (entry.finalizer === undefined) return;
-  const finalizer: {
-    inputSchema?: Record<string, unknown>;
-    outputSchema?: Record<string, unknown>;
-  } = {};
-  if (entry.finalizer.inputSchema !== undefined)
-    finalizer.inputSchema = entry.finalizer.inputSchema;
-  if (entry.finalizer.outputSchema !== undefined) {
-    finalizer.outputSchema = entry.finalizer.outputSchema;
-  }
-  draft.finalizer = finalizer;
-}
-
-/**
- * Build the `core/contract` `WorkflowContract` this workflow type's
- * `contractHash`/`workflowRevision` are computed from. Only the activities in
- * `activityNames` (the caller-declared subset this worker actually invokes)
- * are included — see this module's JSDoc for why that is a deliberate
- * `contractHash` semantic, not an oversight.
- */
-function toWorkflowContract(
-  entry: RegistryWorkflowEntry,
-  workflowType: string,
-  workflowVersion: string,
-): WorkflowContract {
-  const draft: ContractDraft = { name: workflowType, workflowVersion };
-  applyDescriptionAndTags(draft, entry);
-  applySchemas(draft, entry);
-  applyMessageRecords(draft, entry);
-  applyFinalizer(draft, entry);
-  return draft;
-}
-
 async function buildActivityContract(
   engine: Engine,
   workflowType: string,
@@ -276,18 +198,12 @@ async function buildActivityContract(
 
 async function buildWorkflowContract(
   engine: Engine,
-  snapshot: ReturnType<typeof buildRegistrySnapshot>,
-  workflowVersionsByType: ReadonlyMap<string, string>,
   workflowType: string,
   activityNames: readonly string[],
   implementationRevision: string,
 ): Promise<WorkerWorkflowContract> {
-  const entry = findWorkflowEntry(snapshot, workflowType);
-  // snapshot and workflowVersionsByType are both derived from the same
-  // engine.listWorkflowDefinitions() / buildRegistrySnapshot(engine) pair
-  // (see buildWorkerManifestFromRegistry below) — findWorkflowEntry above
-  // already proved workflowType is registered, so a version is guaranteed.
-  const workflowVersion = workflowVersionsByType.get(workflowType) as string;
+  const manifest = await findWorkflowManifest(engine, workflowType);
+  const workflowVersion = manifest.contract.workflowVersion;
 
   const sortedActivityNames = [...activityNames].toSorted();
   // Null-prototype: an activity literally named `__proto__` is a
@@ -304,7 +220,7 @@ async function buildWorkflowContract(
     );
   }
 
-  const baseContract = toWorkflowContract(entry, workflowType, workflowVersion);
+  const baseContract = manifest.contract;
   const contractForHash: WorkflowContract =
     Object.keys(activities).length > 0 ? { ...baseContract, activities } : baseContract;
 
@@ -373,18 +289,18 @@ export async function buildWorkerManifestFromRegistry(
   engine: Engine,
   options: WorkerManifestFromRegistryOptions,
 ): Promise<WorkerManifest> {
-  const snapshot = buildRegistrySnapshot(engine);
-  const workflowVersionsByType = new Map(
-    engine.listWorkflowDefinitions().map((definition) => [definition.type, definition.version]),
-  );
-
+  // No full `buildRegistrySnapshot()` call here — `buildWorkflowContract`
+  // (via `findWorkflowManifest`) resolves each requested workflow's
+  // manifest directly through `buildWorkflowManifestForType`, so an
+  // unrelated registration elsewhere on the engine (over the registry's
+  // aggregate workflow-count ceiling, or individually over a WFT-5
+  // contract limit) can never block this call from producing a manifest
+  // for the workflows `options.workflows` actually names.
   const sortedWorkflowTypes = Object.keys(options.workflows).toSorted();
   const workflowContracts = await Promise.all(
     sortedWorkflowTypes.map((workflowType) =>
       buildWorkflowContract(
         engine,
-        snapshot,
-        workflowVersionsByType,
         workflowType,
         options.workflows[workflowType] ?? [],
         options.deployment.buildId,

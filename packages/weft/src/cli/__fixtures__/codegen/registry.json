@@ -1,28 +1,41 @@
 {
-  "registryVersion": 1,
-  "workflows": {
-    "welcome": {
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string"
-          }
+  "registryVersion": 2,
+  "generatedAt": "2026-01-01T00:00:00.000Z",
+  "workflows": [
+    {
+      "manifestVersion": 1,
+      "name": "welcome",
+      "workflowVersion": "0.0.0",
+      "revision": "sha256:459490e35ec0c6cab26b944ac5d023f0d3a581f3ab8229cd2ac3b500f779f924",
+      "contractHash": "sha256:bde06376052a19f389af708478bff226f1615601f1982416bd0533768b607edc",
+      "contract": {
+        "name": "welcome",
+        "workflowVersion": "0.0.0",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": ["name"],
+          "additionalProperties": false
         },
-        "required": ["name"],
-        "additionalProperties": false
-      },
-      "outputSchema": {
-        "type": "object",
-        "properties": {
-          "greeting": {
-            "type": "string"
-          }
-        },
-        "required": ["greeting"],
-        "additionalProperties": false
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "greeting": {
+              "type": "string"
+            }
+          },
+          "required": ["greeting"],
+          "additionalProperties": false
+        }
       }
     }
+  ],
+  "activeRevisions": {
+    "welcome": "sha256:459490e35ec0c6cab26b944ac5d023f0d3a581f3ab8229cd2ac3b500f779f924"
   },
   "activities": {
     "formatGreeting": {
