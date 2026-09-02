@@ -72,6 +72,11 @@ export function recoverExpiredCommand(
       state: 'dead-lettered',
       terminalAt: options.now,
       failure: { reason: 'attempts-exhausted' },
+      // The lease expired, which is not evidence the claimant stopped: it may
+      // still be executing. Record that cleanup is outstanding, as the deadline
+      // and cancellation-expiry paths do, so `cleanupState()` does not report
+      // `settled` for work that may still be running.
+      cleanupPending: true,
       abandonedAttemptToken: live.attemptToken,
     });
   }

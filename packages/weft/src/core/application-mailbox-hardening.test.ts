@@ -25,6 +25,7 @@ import {
   hasAttemptControllerScope,
   MAILBOX_MAINTENANCE_MAX_PAGES,
 } from './application-mailbox-internals.ts';
+import type { ApplicationCommandFailure } from './application-mailbox-types.ts';
 import { ApplicationCommandValidationError } from './application-mailbox-validation.ts';
 import {
   admitOne,
@@ -1795,6 +1796,114 @@ describe('tenth-round hardening', () => {
     );
     const receipt = await mailbox.receipt(commandId);
     expect(receipt?.state).toBe('dead-lettered');
+    mailbox.dispose();
+  });
+});
+
+describe('eleventh-round hardening', () => {
+  it('records cleanup as pending when an exhausted final attempt is abandoned', async () => {
+    const { mailbox, clock } = createMailboxFixture({ maxAttempts: 1, visibilityTimeoutMs: 500 });
+    const commandId = await admitOne(mailbox);
+    await claimOne(mailbox);
+    clock.advance(501);
+    await mailbox.runMaintenance();
+    const receipt = await mailbox.receipt(commandId);
+    expect(receipt?.state).toBe('dead-lettered');
+    expect(receipt?.failure?.reason).toBe('attempts-exhausted');
+    // The lease expired; the claimant may still be running. That is not settled.
+    const cleanup = await mailbox.cleanupState(commandId);
+    expect(cleanup.status).toBe('pending');
+    mailbox.dispose();
+  });
+
+  it('releases the local registration when a settlement is refused', async () => {
+    const storage = new MemoryStorage();
+    const clock = createMailboxClock();
+    const { mailbox } = createMailboxFixture({ storage, clock, visibilityTimeoutMs: 500 });
+    const other = createMailboxFixture({ storage, clock }).mailbox;
+    const commandId = await admitOne(mailbox);
+    const claim = await claimOne(mailbox);
+    clock.advance(501);
+    await other.runMaintenance();
+
+    const settled = await mailbox.acknowledge({ commandId, attemptToken: claim.attemptToken });
+    expect(settled.status).toBe('stale');
+    expect(claim.signal.aborted).toBe(true);
+    expect(attemptControllerRegistry(storage, 'bureau', 'agent-7').has(claim.attemptToken)).toBe(
+      false,
+    );
+    other.dispose();
+    mailbox.dispose();
+  });
+
+  it('does not release another command attempt on a mismatched settlement', async () => {
+    const { mailbox, storage } = createMailboxFixture({ generateId: createIdSource('c') });
+    const first = await admitOne(mailbox, { idempotencyKey: 'a' });
+    await admitOne(mailbox, { idempotencyKey: 'b' });
+    await claimOne(mailbox);
+    const secondClaim = await claimOne(mailbox);
+    const mismatched = await mailbox.reject({
+      commandId: first,
+      attemptToken: secondClaim.attemptToken,
+      failure: { reason: 'application' },
+    });
+    expect(mismatched.status).toBe('stale');
+    expect(secondClaim.signal.aborted).toBe(false);
+    expect(
+      attemptControllerRegistry(storage, 'bureau', 'agent-7').has(secondClaim.attemptToken),
+    ).toBe(true);
+    mailbox.dispose();
+  });
+
+  it('fails closed on a persisted idempotency key that is malformed', async () => {
+    const { mailbox, storage } = createMailboxFixture();
+    const commandId = await admitOne(mailbox, { idempotencyKey: 'a' });
+    const key = KEYS.applicationCommand('bureau', 'agent-7', commandId);
+    const record = decode((await storage.get(key)) as Uint8Array) as Record<string, unknown>;
+    await storage.put(key, encode({ ...record, idempotencyKey: 'k-\ud800' }));
+    await expect(mailbox.receipt(commandId)).rejects.toThrow(PersistedDataCorruptError);
+    mailbox.dispose();
+  });
+
+  it('snapshots the failure reason it validated', async () => {
+    const { mailbox } = createMailboxFixture();
+    const commandId = await admitOne(mailbox);
+    const claim = await claimOne(mailbox);
+    let reads = 0;
+    const failure = {
+      get reason(): 'application' | 'cancelled' {
+        reads += 1;
+        return reads === 1 ? 'application' : 'cancelled';
+      },
+    };
+    const settled = await mailbox.reject({
+      commandId,
+      attemptToken: claim.attemptToken,
+      failure: failure as unknown as ApplicationCommandFailure,
+    });
+    expect(settled.status).toBe('settled');
+    const receipt = await mailbox.receipt(commandId);
+    expect(receipt?.state).toBe('rejected');
+    expect(receipt?.failure?.reason).toBe('application');
+    mailbox.dispose();
+  });
+
+  it('refuses an already-aborted cleanup wait before reading storage', async () => {
+    const storage = new MemoryStorage();
+    const { mailbox } = createMailboxFixture({ storage });
+    const commandId = await admitOne(mailbox);
+    let reads = 0;
+    const originalGet = storage.get.bind(storage);
+    storage.get = async (key: string): Promise<Uint8Array | null> => {
+      reads += 1;
+      return originalGet(key);
+    };
+    const controller = new AbortController();
+    controller.abort(new Error('gone'));
+    await expect(
+      mailbox.awaitCleanup({ commandId, timeoutMs: 1_000, signal: controller.signal }),
+    ).rejects.toThrow('gone');
+    expect(reads).toBe(0);
     mailbox.dispose();
   });
 });

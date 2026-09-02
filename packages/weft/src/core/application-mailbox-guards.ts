@@ -180,14 +180,17 @@ export function validateFailure(failure: ApplicationCommandFailure): Application
   if (typeof failure !== 'object' || failure === null) {
     throw new ApplicationCommandValidationError('failure must be an object.');
   }
-  if (!CALLER_FAILURE_REASONS.has(failure.reason)) {
+  // Read once: a getter could answer the validation with one value and the
+  // snapshot with another, committing a record the decoder rejects as corrupt.
+  const reason = failure.reason;
+  if (!CALLER_FAILURE_REASONS.has(reason)) {
     throw new ApplicationCommandValidationError(
       `failure.reason must be one of ${[...CALLER_FAILURE_REASONS].join(', ')}; attempts-exhausted, deadline-exceeded, and cancelled are assigned by the mailbox.`,
     );
   }
   const details = validateDurableJSONValue(failure.details, 'failure.details');
   return {
-    reason: failure.reason,
+    reason,
     message: optionalIdentityOf(failure.message, 'failure.message', MAX_FAILURE_MESSAGE_BYTES),
     details,
   };

@@ -178,7 +178,11 @@ function readBase(source: Record<string, unknown>, key: string) {
     resourceId: readString(source, 'resourceId', key),
     commandId: readString(source, 'commandId', key),
     sequence: readInteger(source, 'sequence', key),
-    idempotencyKey: readOptionalString(source, 'idempotencyKey', key),
+    // A persisted key component, validated like every other identifier.
+    idempotencyKey:
+      source['idempotencyKey'] === undefined
+        ? undefined
+        : readCommandIdentifier(source['idempotencyKey'], key),
     caller: readString(source, 'caller', key),
     target: readString(source, 'target', key),
     kind: readString(source, 'kind', key),

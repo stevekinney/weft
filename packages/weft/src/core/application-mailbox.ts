@@ -390,7 +390,8 @@ export class ApplicationMailbox {
    * Wait, bounded, for a cancelled command's claimant to settle.
    *
    * A `pending` result means this mailbox stopped waiting — never that the
-   * handler stopped.
+   * handler stopped. A signal that is already aborted when the wait begins
+   * rejects with that signal's reason before any storage read starts.
    */
   async awaitCleanup(options: {
     readonly commandId: string;

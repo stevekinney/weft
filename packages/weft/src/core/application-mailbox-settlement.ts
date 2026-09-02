@@ -160,7 +160,7 @@ export async function acknowledgeClaim(
     readonly outcome?: JSONValue | undefined;
   },
 ): Promise<ApplicationCommandSettleResult> {
-  return settle(runtime, options.commandId, 'acknowledge', (record, now) =>
+  return settle(runtime, options.commandId, options.attemptToken, 'acknowledge', (record, now) =>
     acknowledgeCommand(record, {
       attemptToken: options.attemptToken,
       now,
@@ -182,7 +182,7 @@ export async function rejectClaim(
     readonly retry: boolean;
   },
 ): Promise<ApplicationCommandSettleResult> {
-  return settle(runtime, options.commandId, 'reject', (record, now) =>
+  return settle(runtime, options.commandId, options.attemptToken, 'reject', (record, now) =>
     rejectCommand(record, {
       attemptToken: options.attemptToken,
       now,
@@ -206,16 +206,21 @@ type SettlementDecision = (
 async function settle(
   runtime: MailboxRuntime,
   commandId: string,
+  attemptToken: string,
   operation: string,
   decide: SettlementDecision,
 ): Promise<ApplicationCommandSettleResult> {
   for (let attempt = 1; attempt <= MAX_MAILBOX_TRANSITION_ATTEMPTS; attempt += 1) {
     const loaded = await loadCommand(runtime.storage, runtime.keys, commandId);
-    if (loaded === null) return { status: 'unknown' };
+    if (loaded === null) {
+      releaseRefusedAttempt(runtime, commandId, attemptToken);
+      return { status: 'unknown' };
+    }
     // Fresh clock after the asynchronous load, for the same reason as renewal.
     const now = runtime.now();
     const transition = decide(loaded.record, now);
     if (!transition.ok) {
+      releaseRefusedAttempt(runtime, commandId, attemptToken);
       return {
         status: transition.reason === 'deadline-exceeded' ? 'deadline-exceeded' : 'stale',
         receipt: toApplicationCommandReceipt(loaded.record),
@@ -241,6 +246,27 @@ async function settle(
     };
   }
   throw new ApplicationMailboxContentionError(operation, commandId);
+}
+
+/**
+ * Release the caller's process-local registration when its attempt is refused.
+ *
+ * Another process that reclaimed, terminalized, or retired the lease cannot
+ * reach this registry, so a refusal is where the abandoned claim's signal is
+ * aborted and its entry dropped. Scoped to the command so a mismatched token
+ * cannot take another command's attempt down.
+ */
+function releaseRefusedAttempt(
+  runtime: MailboxRuntime,
+  commandId: string,
+  attemptToken: string,
+): void {
+  releaseAttemptController(
+    runtime,
+    attemptToken,
+    'This attempt is no longer current: its settlement was refused.',
+    commandId,
+  );
 }
 
 /**

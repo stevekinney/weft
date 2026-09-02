@@ -167,6 +167,12 @@ export async function waitForCleanup(
     requireClockInstant(runtime.now()) + timeoutMs,
     'deadline',
   );
+  // An already-aborted wait must not begin a storage read it could never
+  // abandon: a stalled remote read would hold the "abortable" wait open. The
+  // abort surfaces as the signal's own reason, as `claim()` does for its
+  // request signal.
+  options.signal?.throwIfAborted();
+  disposal.throwIfAborted();
   let latest = await readCleanupState(runtime, options.commandId);
   // A terminal record with `cleanupPending: true` is already final: the mailbox
   // recorded that it stopped waiting for an abandoned attempt. Polling it would
