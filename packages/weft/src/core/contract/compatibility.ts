@@ -106,9 +106,13 @@ export type WorkflowCompatibilityVerdict =
  *   that too, since this module has no way to distinguish an opaque supplied
  *   revision from a derived one by inspecting the manifest alone. Do not set
  *   `false` when your manifests use explicit revisions unless you intend to
- *   accept any `revision` change as compatible. A `contractHash` difference
- *   always implies a `revision` difference too (`revision`'s full-contract
- *   digest is a strict superset of what `contractHash` covers), so
+ *   accept any `revision` change as compatible. Under the default
+ *   content-derived revision, a `contractHash` difference always implies a
+ *   `revision` difference too (`revision`'s full-contract digest is a strict
+ *   superset of what `contractHash` covers); under a caller-supplied
+ *   revision, two manifests can share the same `revision` string despite
+ *   different `contractHash` values, since the caller controls that string
+ *   independently of contract content. Either way,
  *   `contract-hash-mismatch` is unaffected by this setting and still blocks
  *   activation on its own.
  *

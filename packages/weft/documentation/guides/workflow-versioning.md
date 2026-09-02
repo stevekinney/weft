@@ -288,8 +288,11 @@ to tell an opaque supplied revision from a derived one by inspecting the
 manifest alone, so do not set `requireExactRevision: false` for manifests
 using explicit revisions unless you intend to tolerate any `revision` change.
 Setting `requireExactRevision: false` never suppresses `contract-hash-mismatch`,
-since a payload difference always implies a `revision` difference too, and the
-two reasons are independent checks. The other four reasons can never be
+since the two reasons are independent checks: under the default content-derived
+revision a payload difference always implies a `revision` difference too, but
+under a caller-supplied revision two manifests can share the same `revision`
+string despite different `contractHash` values, so the independent hash check
+is what still blocks activation there. The other four reasons can never be
 loosened by policy at all—that is the concrete mechanism behind "the refresh
 system may report these reasons but may not override them during automatic
 activation."
