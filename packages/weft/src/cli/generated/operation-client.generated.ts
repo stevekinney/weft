@@ -157,6 +157,27 @@ export const CLIENT_REST_OPERATION_BINDINGS = {
   },
 } as const satisfies Readonly<Record<string, ClientRestOperationBinding>>;
 
+type SharedActivityContractHashArti_d7d91df4 = {
+  readonly activityContractHash?: string;
+  readonly artifactDigest?: string;
+  readonly buildId?: string;
+  readonly deploymentName?: string;
+  readonly workflowRevision?: string;
+};
+type SharedAffectedWorkersDeploymen_e4c61ae8 = {
+  readonly affectedWorkers: number;
+  readonly deploymentName: string;
+  readonly health: 'active' | 'draining' | 'drained';
+  readonly inFlight: number;
+  readonly target: 'deployment';
+};
+type SharedAffectedWorkersHealthInF_c3f6ebcc = {
+  readonly affectedWorkers: number;
+  readonly health: 'active' | 'draining' | 'drained';
+  readonly inFlight: number;
+  readonly target: 'worker';
+  readonly workerId: string;
+};
 type SharedAttributesBulkConcurrenc_0f0d07d6 = {
   readonly attributes?: ReadonlyArray<SharedGtGteKey_e658e64c>;
   readonly bulkConcurrency?: number;
@@ -224,6 +245,13 @@ type SharedAttributesCreatedAtExecu_47f8e20e = {
   readonly tags?: ReadonlyArray<string>;
   readonly type?: string;
   readonly updatedAt?: SharedGtGteLt_d9a61361;
+};
+type SharedBackoffMultiplierInitial_64d024ea = {
+  readonly backoffMultiplier: number;
+  readonly initialBackoff: number | string;
+  readonly maxAttempts: number;
+  readonly maxBackoff: number | string;
+  readonly nonRetryableErrors?: ReadonlyArray<string>;
 };
 type SharedGtGteKey_e658e64c = {
   readonly gt?: unknown;
@@ -563,7 +591,220 @@ export type ClientOperationTypes = {
   };
   'weft.tasks.get': {
     readonly input: { readonly operationId: string };
-    readonly output: unknown;
+    readonly output:
+      | {
+          readonly activityName: string;
+          readonly attempt: number;
+          readonly availableAt: number;
+          readonly createdAt: number;
+          readonly executionRequirement?: SharedActivityContractHashArti_d7d91df4;
+          readonly fairShareKey?: string;
+          readonly firstQueuedAt: number;
+          readonly headerKeys: ReadonlyArray<string>;
+          readonly lastDispatchedAt?: number;
+          readonly lastQueuedAt: number;
+          readonly lastRequeueReason?: string;
+          readonly operationId: string;
+          readonly priority?: number;
+          readonly queue: string;
+          readonly requeueCount: number;
+          readonly retryCount: number;
+          readonly retryPolicy?: SharedBackoffMultiplierInitial_64d024ea;
+          readonly scheduleToCloseDeadline?: number;
+          readonly startedAt?: number;
+          readonly state: 'queued';
+          readonly stickyWorkflowId?: string;
+          readonly visibilityTimeoutMilliseconds: number;
+          readonly workflowExecutionToken?: string;
+          readonly workflowId?: string;
+          readonly workflowType: string;
+        }
+      | {
+          readonly activityName: string;
+          readonly attempt: number;
+          readonly createdAt: number;
+          readonly executionRequirement?: SharedActivityContractHashArti_d7d91df4;
+          readonly fairShareKey?: string;
+          readonly firstQueuedAt: number;
+          readonly headerKeys: ReadonlyArray<string>;
+          readonly lastHeartbeatAt: number;
+          readonly lastQueuedAt: number;
+          readonly lastRequeueReason?: string;
+          readonly leaseDeadline: number;
+          readonly operationId: string;
+          readonly priority?: number;
+          readonly queue: string;
+          readonly requeueCount: number;
+          readonly retryCount: number;
+          readonly retryPolicy?: SharedBackoffMultiplierInitial_64d024ea;
+          readonly scheduleToCloseDeadline?: number;
+          readonly startedAt: number;
+          readonly state: 'leased';
+          readonly stickyWorkflowId?: string;
+          readonly visibilityTimeoutMilliseconds: number;
+          readonly workflowExecutionToken?: string;
+          readonly workflowId?: string;
+          readonly workflowType: string;
+        }
+      | {
+          readonly activityName: string;
+          readonly attempt: number;
+          readonly createdAt: number;
+          readonly executionRequirement?: SharedActivityContractHashArti_d7d91df4;
+          readonly fairShareKey?: string;
+          readonly firstQueuedAt: number;
+          readonly headerKeys: ReadonlyArray<string>;
+          readonly lastHeartbeatAt: number;
+          readonly lastQueuedAt: number;
+          readonly lastRequeueReason?: string;
+          readonly leaseDeadline: number;
+          readonly operationId: string;
+          readonly pendingStatus: 'completed' | 'failed';
+          readonly priority?: number;
+          readonly queue: string;
+          readonly requeueCount: number;
+          readonly resultDigest: string;
+          readonly retryCount: number;
+          readonly retryPolicy?: SharedBackoffMultiplierInitial_64d024ea;
+          readonly scheduleToCloseDeadline?: number;
+          readonly startedAt: number;
+          readonly state: 'completing';
+          readonly stickyWorkflowId?: string;
+          readonly visibilityTimeoutMilliseconds: number;
+          readonly workflowExecutionToken?: string;
+          readonly workflowId?: string;
+          readonly workflowType: string;
+        }
+      | {
+          readonly activityName: string;
+          readonly attempt: number;
+          readonly cancellationReason: string;
+          readonly cancellationRequestedAt: number;
+          readonly createdAt: number;
+          readonly executionRequirement?: SharedActivityContractHashArti_d7d91df4;
+          readonly fairShareKey?: string;
+          readonly firstQueuedAt: number;
+          readonly headerKeys: ReadonlyArray<string>;
+          readonly lastHeartbeatAt: number;
+          readonly lastQueuedAt: number;
+          readonly lastRequeueReason?: string;
+          readonly leaseDeadline: number;
+          readonly operationId: string;
+          readonly priority?: number;
+          readonly queue: string;
+          readonly requeueCount: number;
+          readonly retryCount: number;
+          readonly retryPolicy?: SharedBackoffMultiplierInitial_64d024ea;
+          readonly scheduleToCloseDeadline?: number;
+          readonly startedAt: number;
+          readonly state: 'cancelling';
+          readonly stickyWorkflowId?: string;
+          readonly visibilityTimeoutMilliseconds: number;
+          readonly workflowExecutionToken?: string;
+          readonly workflowId?: string;
+          readonly workflowType: string;
+        }
+      | {
+          readonly activityName: string;
+          readonly adopted: boolean;
+          readonly adoptedAt?: number;
+          readonly attempt: number;
+          readonly createdAt: number;
+          readonly disposition: 'resolved';
+          readonly error?: string;
+          readonly executionRequirement?: SharedActivityContractHashArti_d7d91df4;
+          readonly fairShareKey?: string;
+          readonly headerKeys: ReadonlyArray<string>;
+          readonly operationId: string;
+          readonly priority?: number;
+          readonly queue: string;
+          readonly resultDigest: string;
+          readonly resultStatus: 'completed' | 'failed';
+          readonly retryPolicy?: SharedBackoffMultiplierInitial_64d024ea;
+          readonly scheduleToCloseDeadline?: number;
+          readonly state: 'terminal';
+          readonly stickyWorkflowId?: string;
+          readonly terminalAt: number;
+          readonly visibilityTimeoutMilliseconds: number;
+          readonly workflowExecutionToken?: string;
+          readonly workflowId?: string;
+          readonly workflowType: string;
+        }
+      | {
+          readonly activityName: string;
+          readonly adopted: boolean;
+          readonly adoptedAt?: number;
+          readonly attempt: number;
+          readonly cancellationReason: string;
+          readonly createdAt: number;
+          readonly disposition: 'cancelled';
+          readonly executionRequirement?: SharedActivityContractHashArti_d7d91df4;
+          readonly fairShareKey?: string;
+          readonly headerKeys: ReadonlyArray<string>;
+          readonly operationId: string;
+          readonly priority?: number;
+          readonly queue: string;
+          readonly retryPolicy?: SharedBackoffMultiplierInitial_64d024ea;
+          readonly scheduleToCloseDeadline?: number;
+          readonly state: 'terminal';
+          readonly stickyWorkflowId?: string;
+          readonly terminalAt: number;
+          readonly visibilityTimeoutMilliseconds: number;
+          readonly workflowExecutionToken?: string;
+          readonly workflowId?: string;
+          readonly workflowType: string;
+        }
+      | {
+          readonly activityName: string;
+          readonly adopted: boolean;
+          readonly adoptedAt?: number;
+          readonly attempt: number;
+          readonly createdAt: number;
+          readonly disposition: 'retryExhausted';
+          readonly error: string;
+          readonly executionRequirement?: SharedActivityContractHashArti_d7d91df4;
+          readonly fairShareKey?: string;
+          readonly headerKeys: ReadonlyArray<string>;
+          readonly operationId: string;
+          readonly priority?: number;
+          readonly queue: string;
+          readonly retryPolicy?: SharedBackoffMultiplierInitial_64d024ea;
+          readonly scheduleToCloseDeadline?: number;
+          readonly state: 'terminal';
+          readonly stickyWorkflowId?: string;
+          readonly terminalAt: number;
+          readonly visibilityTimeoutMilliseconds: number;
+          readonly workflowExecutionToken?: string;
+          readonly workflowId?: string;
+          readonly workflowType: string;
+        }
+      | {
+          readonly activityName: string;
+          readonly attempt: number;
+          readonly createdAt: number;
+          readonly deadLetteredAt: number;
+          readonly error?: string;
+          readonly executionRequirement?: SharedActivityContractHashArti_d7d91df4;
+          readonly fairShareKey?: string;
+          readonly headerKeys: ReadonlyArray<string>;
+          readonly lastRequeueReason?: string;
+          readonly operationId: string;
+          readonly pendingStatus: 'completed' | 'failed';
+          readonly persistenceFailureReason: string;
+          readonly priority?: number;
+          readonly queue: string;
+          readonly requeueCount: number;
+          readonly resultDigest: string;
+          readonly retryCount: number;
+          readonly retryPolicy?: SharedBackoffMultiplierInitial_64d024ea;
+          readonly scheduleToCloseDeadline?: number;
+          readonly state: 'deadLettered';
+          readonly stickyWorkflowId?: string;
+          readonly visibilityTimeoutMilliseconds: number;
+          readonly workflowExecutionToken?: string;
+          readonly workflowId?: string;
+          readonly workflowType: string;
+        };
     readonly faults: 'NotFound';
   };
   'weft.updates.result.get': {
@@ -573,12 +814,14 @@ export type ClientOperationTypes = {
   };
   'weft.worker.deployments.drain': {
     readonly input: { readonly deploymentName: string; readonly reason?: string };
-    readonly output: unknown;
+    readonly output:
+      SharedAffectedWorkersHealthInF_c3f6ebcc | SharedAffectedWorkersDeploymen_e4c61ae8;
     readonly faults: never;
   };
   'weft.worker.deployments.resume': {
     readonly input: { readonly deploymentName: string };
-    readonly output: unknown;
+    readonly output:
+      SharedAffectedWorkersHealthInF_c3f6ebcc | SharedAffectedWorkersDeploymen_e4c61ae8;
     readonly faults: never;
   };
   'weft.workers.diagnostics': {
@@ -612,7 +855,8 @@ export type ClientOperationTypes = {
   };
   'weft.workers.drain': {
     readonly input: { readonly reason?: string; readonly workerId: string };
-    readonly output: unknown;
+    readonly output:
+      SharedAffectedWorkersHealthInF_c3f6ebcc | SharedAffectedWorkersDeploymen_e4c61ae8;
     readonly faults: 'NotFound';
   };
   'weft.workers.list': {
@@ -672,7 +916,8 @@ export type ClientOperationTypes = {
   };
   'weft.workers.resume': {
     readonly input: { readonly workerId: string };
-    readonly output: unknown;
+    readonly output:
+      SharedAffectedWorkersHealthInF_c3f6ebcc | SharedAffectedWorkersDeploymen_e4c61ae8;
     readonly faults: 'NotFound';
   };
   'weft.workflows.activities.pending.list': {
@@ -836,7 +1081,17 @@ export type ClientOperationTypes = {
   };
   'weft.workflows.finalizer.get': {
     readonly input: { readonly workflowId: string };
-    readonly output: unknown;
+    readonly output:
+      | { readonly attempts: number; readonly status: 'pending' }
+      | { readonly attempts: number; readonly startedAt: number; readonly status: 'running' }
+      | { readonly attempts: number; readonly completedAt: number; readonly status: 'succeeded' }
+      | {
+          readonly attempts: number;
+          readonly error: string;
+          readonly failedAt: number;
+          readonly status: 'failed';
+        }
+      | null;
     readonly faults: never;
   };
   'weft.workflows.fork': {

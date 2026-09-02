@@ -1579,6 +1579,25 @@ export class Engine<
   listActivityDefinitions(): ActivityMetadata[] {
     return getInternals(this).activityRegistry.listDefinitions();
   }
+  /**
+   * Resolve one activity's catalog metadata the same way dispatch resolves
+   * it for a running workflow of this type: the workflow's per-workflow
+   * `.activities({...})` registry first, falling back to the global registry
+   * — see `activity-resolution.ts`'s `resolveActivityViaRegistries`. Build
+   * tooling (`buildWorkerManifestFromRegistry`) uses this so a workflow-scoped
+   * activity's schema, not a same-named global activity's, feeds its
+   * `contractHash` when both are registered.
+   */
+  getWorkflowActivityDefinition(
+    workflowType: string,
+    activityName: string,
+  ): ActivityMetadata | undefined {
+    const internals = getInternals(this);
+    const perWorkflow = internals.activityRegistriesByWorkflow
+      .get(workflowType)
+      ?.getDefinition(activityName);
+    return perWorkflow ?? internals.activityRegistry.getDefinition(activityName);
+  }
   async start<TName extends KnownWorkflowNames<TWorkflows>>(
     type: TName,
     input: WorkflowInput<TWorkflows, TName>,

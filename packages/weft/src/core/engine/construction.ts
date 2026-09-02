@@ -27,6 +27,7 @@ import type {
   RegistrationEntry,
   ResolvedOptions,
 } from './engine-internal-types.ts';
+import { copyFinalizerMetadata } from './finalizer-metadata.ts';
 import { resolveBackgroundTaskMode, resolveOwnershipFields } from './ownership-options.ts';
 import {
   normalizeHistoryPolicy,
@@ -191,6 +192,7 @@ export function copyWorkflowDefinition(
       ? {}
       : { searchAttributes: registration.searchAttributes }),
     ...(registration.concurrency === undefined ? {} : { concurrency: registration.concurrency }),
+    ...copyFinalizerMetadata(registration.finalizer),
   };
 }
 

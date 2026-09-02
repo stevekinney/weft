@@ -36,7 +36,7 @@ async function pipeStageThree(_ctx: StepWorkflowContext, input: unknown): Promis
 
 function registerSimpleSequential(engine: Engine): void {
   engine.register(
-    workflow({ name: 'simple-sequential' }).execute(async function* (
+    workflow({ name: 'simple-sequential', version: '1' }).execute(async function* (
       ctx: WorkflowContext,
       input: unknown,
     ) {
@@ -48,7 +48,7 @@ function registerSimpleSequential(engine: Engine): void {
 
 function registerTwoParallel(engine: Engine): void {
   engine.register(
-    workflow({ name: 'two-parallel' }).execute(async function* (
+    workflow({ name: 'two-parallel', version: '1' }).execute(async function* (
       ctx: WorkflowContext,
       input: unknown,
     ) {
@@ -65,7 +65,9 @@ function registerTwoParallel(engine: Engine): void {
 
 function registerRaceTakesFirst(engine: Engine): void {
   engine.register(
-    workflow({ name: 'race-takes-first' }).execute(async function* (ctx: WorkflowContext) {
+    workflow({ name: 'race-takes-first', version: '1' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
       const context = ctx;
       const result = yield* context.race([
         context.run(async () => 'fast'),
@@ -82,7 +84,9 @@ function registerRaceTakesFirst(engine: Engine): void {
 
 function registerSignalAndWait(engine: Engine): void {
   engine.register(
-    workflow({ name: 'signal-and-wait' }).execute(async function* (ctx: WorkflowContext) {
+    workflow({ name: 'signal-and-wait', version: '1' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
       const payload = yield* ctx.waitForSignal('go');
       return { received: payload };
     }),
@@ -91,7 +95,9 @@ function registerSignalAndWait(engine: Engine): void {
 
 function registerSleepAndResume(engine: Engine): void {
   engine.register(
-    workflow({ name: 'sleep-and-resume' }).execute(async function* (ctx: WorkflowContext) {
+    workflow({ name: 'sleep-and-resume', version: '1' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
       yield* ctx.sleep(100);
       return 'awake';
     }),
@@ -100,7 +106,7 @@ function registerSleepAndResume(engine: Engine): void {
 
 function registerChildWorkflow(engine: Engine): void {
   engine.register(
-    workflow({ name: 'child-workflow-child' }).execute(
+    workflow({ name: 'child-workflow-child', version: '1' }).execute(
       compileStepWorkflow(async function childWorkflowChild(
         _ctx: StepWorkflowContext,
         input: unknown,
@@ -111,7 +117,7 @@ function registerChildWorkflow(engine: Engine): void {
   );
 
   engine.register(
-    workflow({ name: 'child-workflow' }).execute(async function* (
+    workflow({ name: 'child-workflow', version: '1' }).execute(async function* (
       ctx: WorkflowContext,
       input: unknown,
     ) {
@@ -125,7 +131,9 @@ function registerSagaWithCompensation(engine: Engine): void {
   const compensated: string[] = [];
 
   engine.register(
-    workflow({ name: 'saga-with-compensation' }).execute(async function* (ctx: WorkflowContext) {
+    workflow({ name: 'saga-with-compensation', version: '1' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
       const stepOne: ActivityDefinition<unknown, string> = {
         name: 'step-one',
         execute: async () => 'output-one',
@@ -155,7 +163,7 @@ function registerSagaWithCompensation(engine: Engine): void {
 
 function registerPipeThreeStages(engine: Engine): void {
   engine.register(
-    workflow({ name: 'pipe-three-stages' }).execute(async function* (
+    workflow({ name: 'pipe-three-stages', version: '1' }).execute(async function* (
       ctx: WorkflowContext,
       input: unknown,
     ) {
@@ -168,14 +176,22 @@ function registerPipeThreeStages(engine: Engine): void {
       return yield* ctx.pipe(['stage1', 'stage2', 'stage3'], input);
     }),
   );
-  engine.register(workflow({ name: 'stage1' }).execute(compileStepWorkflow(pipeStageOne)));
-  engine.register(workflow({ name: 'stage2' }).execute(compileStepWorkflow(pipeStageTwo)));
-  engine.register(workflow({ name: 'stage3' }).execute(compileStepWorkflow(pipeStageThree)));
+  engine.register(
+    workflow({ name: 'stage1', version: '1' }).execute(compileStepWorkflow(pipeStageOne)),
+  );
+  engine.register(
+    workflow({ name: 'stage2', version: '1' }).execute(compileStepWorkflow(pipeStageTwo)),
+  );
+  engine.register(
+    workflow({ name: 'stage3', version: '1' }).execute(compileStepWorkflow(pipeStageThree)),
+  );
 }
 
 function registerForkFromCheckpoint(engine: Engine): void {
   engine.register(
-    workflow({ name: 'fork-from-checkpoint' }).execute(async function* (ctx: WorkflowContext) {
+    workflow({ name: 'fork-from-checkpoint', version: '1' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
       const context = ctx;
       const phaseOne = yield* context.run(async () => 'phase-one');
       const branch = yield* context.waitForSignal('branch');
@@ -186,7 +202,9 @@ function registerForkFromCheckpoint(engine: Engine): void {
 
 function registerRecoveryAfterCrash(engine: Engine): void {
   engine.register(
-    workflow({ name: 'recovery-after-crash' }).execute(async function* (ctx: WorkflowContext) {
+    workflow({ name: 'recovery-after-crash', version: '1' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
       const context = ctx;
       const stepOne = yield* context.run(async () => 'checkpoint-me');
       const stepTwo = yield* context.run(async () => `resumed:${String(stepOne)}`);

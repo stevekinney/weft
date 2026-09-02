@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { Engine } from '../engine.ts';
 import { activity, workflow } from '../types.ts';
+import { DEFAULT_WORKFLOW_VERSION } from '../versioning.ts';
 import { getInternals } from './internals.ts';
 import { resolveWorkflowTypeTarget, type RegistrationCallbacks } from './registration.ts';
 
@@ -148,6 +149,50 @@ describe('finalizer registration (#446)', () => {
     const entry = getInternals(engine).registrations.get('worker-mode-finalized');
     expect(entry?.finalizer).toBeDefined();
     expect(entry?.finalizer?.name).toBe('destroySandbox');
+
+    engine[Symbol.dispose]();
+  });
+});
+
+describe('unversioned workflow default (WFT-5 registration.ts fix)', () => {
+  it('defaults an unversioned workflow registration to DEFAULT_WORKFLOW_VERSION, not the literal "1"', () => {
+    const engine = new Engine();
+    engine.register(workflow({ name: 'no-explicit-version' }).execute(async function* () {}));
+
+    const [definition] = engine.listWorkflowDefinitions();
+    expect(definition?.version).toBe(DEFAULT_WORKFLOW_VERSION);
+    expect(definition?.version).toBe('0.0.0');
+    expect(definition?.version).not.toBe('1');
+
+    engine[Symbol.dispose]();
+  });
+
+  it('agrees with the fresh worker-manifest placeholder default (worker/options.ts, worker/manifest/internal-realm.ts)', () => {
+    // Both worker/options.ts and worker/manifest/internal-realm.ts already
+    // fall back to DEFAULT_WORKFLOW_VERSION for an artifact that declares no
+    // real workflowVersion. This registration must agree with the same
+    // constant so a registered-but-unversioned workflow and a
+    // registered-but-unversioned worker artifact never disagree about what
+    // "unversioned" means.
+    const engine = new Engine();
+    engine.register(
+      workflow({ name: 'agrees-with-worker-default' }).execute(async function* () {}),
+    );
+
+    const [definition] = engine.listWorkflowDefinitions();
+    expect(definition?.version).toBe(DEFAULT_WORKFLOW_VERSION);
+
+    engine[Symbol.dispose]();
+  });
+
+  it('still honors an explicitly supplied version', () => {
+    const engine = new Engine();
+    engine.register(
+      workflow({ name: 'explicit-version', version: '1' }).execute(async function* () {}),
+    );
+
+    const [definition] = engine.listWorkflowDefinitions();
+    expect(definition?.version).toBe('1');
 
     engine[Symbol.dispose]();
   });

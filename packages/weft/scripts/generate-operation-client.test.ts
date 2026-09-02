@@ -113,6 +113,120 @@ describe('schemaToNode + renderNode — emitted text contract', () => {
     expect(renderInline({ anyOf: [{ type: 'string' }, 123] })).toBe('unknown');
   });
 
+  // WFT-93: `z.discriminatedUnion()` compiles to `oneOf` with a `const`
+  // discriminant on each branch. These pin the emitted union so consumers can
+  // narrow on the discriminant rather than receiving `unknown`.
+  it('renders oneOf branches as a union preserving const discriminants', () => {
+    expect(
+      renderInline({
+        oneOf: [
+          {
+            type: 'object',
+            properties: { state: { const: 'queued', type: 'string' }, queue: { type: 'string' } },
+            required: ['state', 'queue'],
+          },
+          {
+            type: 'object',
+            properties: { state: { const: 'terminal', type: 'string' } },
+            required: ['state'],
+          },
+        ],
+      }),
+    ).toBe(
+      '{ readonly "queue": string; readonly "state": "queued"; } | { readonly "state": "terminal"; }',
+    );
+  });
+
+  it('flattens a oneOf branch that is itself a oneOf', () => {
+    expect(
+      renderInline({
+        oneOf: [
+          {
+            type: 'object',
+            properties: { state: { const: 'queued', type: 'string' } },
+            required: ['state'],
+          },
+          {
+            oneOf: [
+              {
+                type: 'object',
+                properties: {
+                  disposition: { const: 'resolved', type: 'string' },
+                  state: { const: 'terminal', type: 'string' },
+                },
+                required: ['state', 'disposition'],
+              },
+              {
+                type: 'object',
+                properties: {
+                  disposition: { const: 'cancelled', type: 'string' },
+                  state: { const: 'terminal', type: 'string' },
+                },
+                required: ['state', 'disposition'],
+              },
+            ],
+          },
+        ],
+      }),
+    ).toBe(
+      '{ readonly "state": "queued"; } | ' +
+        '{ readonly "disposition": "resolved"; readonly "state": "terminal"; } | ' +
+        '{ readonly "disposition": "cancelled"; readonly "state": "terminal"; }',
+    );
+  });
+
+  it('renders a nullable oneOf nested under anyOf', () => {
+    expect(
+      renderInline({
+        anyOf: [
+          {
+            oneOf: [
+              {
+                type: 'object',
+                properties: { status: { const: 'pending', type: 'string' } },
+                required: ['status'],
+              },
+              {
+                type: 'object',
+                properties: { status: { const: 'failed', type: 'string' } },
+                required: ['status'],
+              },
+            ],
+          },
+          { type: 'null' },
+        ],
+      }),
+    ).toBe('{ readonly "status": "pending"; } | { readonly "status": "failed"; } | null');
+  });
+
+  it('falls back to unknown for unsupported oneOf members', () => {
+    expect(renderInline({ oneOf: [{ type: 'string' }, 123] })).toBe('unknown');
+    expect(renderInline({ oneOf: [] })).toBe('unknown');
+  });
+
+  // JSON Schema applies sibling combinators conjunctively. Composing them is a
+  // non-goal here, so degrade rather than silently honoring one and dropping
+  // the other — the same posture `src/cli/codegen-emit.ts` takes. `allOf` is an
+  // intersection this emitter never interprets, so it degrades even alone, and
+  // even when sibling `type`/`properties` keywords would otherwise have matched.
+  it('falls back to unknown for allOf and for co-occurring combinators', () => {
+    expect(renderInline({ allOf: [{ type: 'string' }] })).toBe('unknown');
+    expect(
+      renderInline({
+        allOf: [{ type: 'object', properties: { a: { type: 'string' } } }],
+        type: 'object',
+        properties: { b: { type: 'string' } },
+      }),
+    ).toBe('unknown');
+    expect(renderInline({ anyOf: [{ type: 'string' }], oneOf: [{ type: 'number' }] })).toBe(
+      'unknown',
+    );
+    expect(renderInline({ anyOf: [{ type: 'string' }], allOf: [{ type: 'number' }] })).toBe(
+      'unknown',
+    );
+    expect(renderInline({ anyOf: [] })).toBe('unknown');
+  });
+
   it('renders objects with sorted fields and required handling', () => {
     expect(
       renderInline({

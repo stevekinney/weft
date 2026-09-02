@@ -12,6 +12,7 @@ import {
 } from '../types.ts';
 import { clonePlain } from '../types/clone-plain.ts';
 import { validateWorkflowOrActivityName } from '../types/name-grammar.ts';
+import { DEFAULT_WORKFLOW_VERSION } from '../versioning.ts';
 import type { EngineInternals } from './internals.ts';
 import { normalizeRetentionPolicy } from './validation.ts';
 
@@ -66,7 +67,7 @@ function buildBaseRegistrationEntry(
   );
   return {
     handler: registration.handler,
-    version: registration.version ?? '1',
+    version: registration.version ?? DEFAULT_WORKFLOW_VERSION,
     ...(registration.description === undefined ? {} : { description: registration.description }),
     ...(tags === undefined ? {} : { tags }),
     ...(registration.inputSchema === undefined

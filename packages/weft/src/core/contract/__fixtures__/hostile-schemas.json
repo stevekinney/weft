@@ -1,0 +1,57 @@
+[
+  { "name": "$ref alone", "schema": { "$ref": "#/definitions/thing" } },
+  {
+    "name": "$ref sibling of type/properties",
+    "schema": {
+      "type": "object",
+      "properties": { "id": { "type": "string" } },
+      "$ref": "#/definitions/thing"
+    }
+  },
+  {
+    "name": "patternProperties alone",
+    "schema": { "patternProperties": { "^x-": { "type": "string" } } }
+  },
+  {
+    "name": "patternProperties sibling of type/properties",
+    "schema": {
+      "type": "object",
+      "properties": { "id": { "type": "string" } },
+      "patternProperties": { "^x-": { "type": "string" } }
+    }
+  },
+  {
+    "name": "if/then/else alone",
+    "schema": {
+      "if": { "properties": { "kind": { "const": "a" } } },
+      "then": { "properties": { "value": { "type": "string" } } },
+      "else": { "properties": { "value": { "type": "number" } } }
+    }
+  },
+  {
+    "name": "if/then/else sibling of type/properties",
+    "schema": {
+      "type": "object",
+      "properties": { "kind": { "type": "string" } },
+      "if": { "properties": { "kind": { "const": "a" } } },
+      "then": { "properties": { "value": { "type": "string" } } }
+    }
+  },
+  { "name": "not alone", "schema": { "not": { "type": "string" } } },
+  {
+    "name": "not sibling of type",
+    "schema": { "type": "string", "not": { "const": "forbidden" } }
+  },
+  {
+    "name": "dependentSchemas alone",
+    "schema": { "dependentSchemas": { "credit": { "required": ["billingAddress"] } } }
+  },
+  {
+    "name": "dependentSchemas sibling of type/properties",
+    "schema": {
+      "type": "object",
+      "properties": { "credit": { "type": "boolean" } },
+      "dependentSchemas": { "credit": { "required": ["billingAddress"] } }
+    }
+  }
+]

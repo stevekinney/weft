@@ -7,9 +7,27 @@
  * manifest — see {@link declaredShapeDigest}. This module is that build
  * tooling: it derives `WorkerWorkflowContract`/`WorkerActivityContract`
  * values from the *same* normalized representation `buildRegistrySnapshot`
- * produces for `GET /v1/registry` and `weft codegen`, hashed with the
- * collision-resistant {@link sha256Hex} rather than the cache-key-quality
- * FNV-1a scheme those placeholders use.
+ * produces for `GET /v1/registry` and `weft codegen`, hashed via
+ * `core/contract`'s canonical `contractHash()`/`activityContractHash()`/
+ * `deriveWorkflowRevision()` (WFT-5) — the same normalized-contract vocabulary
+ * `weft codegen` and `WorkflowRevisionManifest` use, rather than this
+ * module's own ad hoc hashing (as it did before WFT-5).
+ *
+ * **WFT-5 digest-value change.** `contractHash`/`workflowRevision` here now
+ * fold in a `contractVersion` domain separator (`WORKFLOW_CONTRACT_VERSION`)
+ * that the pre-WFT-5 formula never had, so digest *strings* for an
+ * otherwise-unchanged registration differ from 0.23.x output — see
+ * `CHANGELOG.md`. `workflowRevision` also now derives from a `WorkflowContract`
+ * that omits `queue`/`retry`/`timeout` (registry-only activity metadata with
+ * no contract-identity meaning), which the pre-WFT-5 formula's
+ * `{ ...entry, version }` spread incidentally included; this is a narrowing,
+ * not a behavior a caller could rely on. `contractHash` also now folds in
+ * whichever activities `options.workflows[type]` names (previously
+ * independent of that list, since only the activity's *own* schema was
+ * hashed) — declaring a different activity subset for the same workflow type
+ * now changes `contractHash`, which is the intended effect of a contract
+ * identity that is supposed to answer "what can a caller do with this
+ * workflow", not just "what does the workflow's own input/output look like".
  *
  * Intended use is a build script: construct an `Engine` with every workflow
  * the artifact bundles registered (never started), call
@@ -19,8 +37,17 @@
  * @module worker/manifest/registry-contract-builder
  */
 
+import {
+  activityContractHash,
+  contractHash,
+  deriveWorkflowRevision,
+  type WorkflowActivityContract,
+  type WorkflowContract,
+  type WorkflowMessageContract,
+} from '../../core/contract/index.ts';
 import type { Engine } from '../../core/engine.ts';
 import {
+  buildActivityEntry,
   buildRegistrySnapshot,
   type RegistryActivityEntry,
   type RegistryWorkflowEntry,
@@ -28,8 +55,6 @@ import {
 import { WeftError } from '../../core/weft-error.ts';
 import { VERSION } from '../../version.ts';
 import { REMOTE_WORKER_PROTOCOL_VERSION } from '../protocol.ts';
-import { canonicalJsonStringify } from './canonical-json.ts';
-import { sha256Hex } from './content-digest.ts';
 import type {
   WorkerActivityContract,
   WorkerDeploymentIdentity,
@@ -118,53 +143,139 @@ function findWorkflowEntry(
   return entry;
 }
 
+/**
+ * Resolve `activityName` under `workflowType` the same way dispatch does —
+ * the workflow's per-workflow `.activities({...})` registry first, falling
+ * back to the global registry (`Engine.getWorkflowActivityDefinition`,
+ * mirroring `activity-resolution.ts`'s `resolveActivityViaRegistries`) —
+ * rather than always reading the flat global snapshot. Two registrations
+ * sharing an activity name (one workflow-scoped, one global) must hash the
+ * one execution would actually invoke; see WFT-5 PR #943 review thread
+ * PRRT_kwDORwthfM6eWFw5.
+ */
 function findActivityEntry(
-  snapshot: ReturnType<typeof buildRegistrySnapshot>,
+  engine: Engine,
   workflowType: string,
   activityName: string,
 ): RegistryActivityEntry {
-  const entry = snapshot.activities[activityName];
-  if (entry === undefined) {
+  const metadata = engine.getWorkflowActivityDefinition(workflowType, activityName);
+  if (metadata === undefined) {
     throw new WorkerManifestBuildError(
       `Cannot build a worker manifest: activity "${activityName}" declared under workflow ` +
         `"${workflowType}" is not registered on the source Engine.`,
     );
   }
-  return entry;
+  return buildActivityEntry(metadata);
+}
+
+/** Registry activity metadata carries `queue`/`retry`/`timeout`; a contract carries only the schema pair. */
+function toActivityContract(entry: RegistryActivityEntry): WorkflowActivityContract {
+  const contract: {
+    inputSchema?: Record<string, unknown>;
+    outputSchema?: Record<string, unknown>;
+  } = {};
+  if (entry.inputSchema !== undefined) contract.inputSchema = entry.inputSchema;
+  if (entry.outputSchema !== undefined) contract.outputSchema = entry.outputSchema;
+  return contract;
 }
 
 /**
- * Canonical payload-contract content for a workflow: everything a caller may
- * send and expect back. `description` and `tags` are deliberately excluded
- * — they are documentation, and including them would change `contractHash`
- * on every doc edit with no change to the actual wire contract.
+ * Mutable draft of a {@link WorkflowContract}, built up field by field before
+ * being returned. Typed to the same shape `WorkflowContract` declares (this
+ * function never sets `activities`/`finalizer` — the caller layers
+ * `activities` on afterward, see `buildWorkflowContract` below) so a future
+ * field addition to `WorkflowContract` is a compile error here instead of a
+ * silent gap, matching `core/contract/build.ts`'s own `ContractDraft`.
  */
-function workflowContractPayload(entry: RegistryWorkflowEntry): unknown {
-  return {
-    inputSchema: entry.inputSchema,
-    outputSchema: entry.outputSchema,
-    signals: entry.signals,
-    updates: entry.updates,
-    queries: entry.queries,
-  };
+type ContractDraft = {
+  name: string;
+  workflowVersion: string;
+  description?: string;
+  tags?: ReadonlyArray<string>;
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  signals?: Record<string, WorkflowMessageContract>;
+  updates?: Record<string, WorkflowMessageContract>;
+  queries?: Record<string, WorkflowMessageContract>;
+  finalizer?: WorkflowActivityContract;
+};
+
+function applyDescriptionAndTags(draft: ContractDraft, entry: RegistryWorkflowEntry): void {
+  if (entry.description !== undefined) draft.description = entry.description;
+  if (entry.tags !== undefined && entry.tags.length > 0) draft.tags = [...entry.tags];
 }
 
-function activityContractPayload(entry: RegistryActivityEntry): unknown {
-  return { inputSchema: entry.inputSchema, outputSchema: entry.outputSchema };
+function applySchemas(draft: ContractDraft, entry: RegistryWorkflowEntry): void {
+  if (entry.inputSchema !== undefined) draft.inputSchema = entry.inputSchema;
+  if (entry.outputSchema !== undefined) draft.outputSchema = entry.outputSchema;
+}
+
+function applyMessageRecords(draft: ContractDraft, entry: RegistryWorkflowEntry): void {
+  if (entry.signals !== undefined && Object.keys(entry.signals).length > 0) {
+    draft.signals = entry.signals;
+  }
+  if (entry.updates !== undefined && Object.keys(entry.updates).length > 0) {
+    draft.updates = entry.updates;
+  }
+  if (entry.queries !== undefined && Object.keys(entry.queries).length > 0) {
+    draft.queries = entry.queries;
+  }
+}
+
+/**
+ * Fold the registered definition-level finalizer's schema into
+ * `contractHash`/`workflowRevision`, matching `buildWorkflowContract(definition)`'s
+ * direct-definition path — see WFT-5 PR #943 review thread PRRT_kwDORwthfM6eWFwr.
+ * Without this, two registrations that differ only by declaring a
+ * `finalizer` would produce the same registry-derived `contractHash`.
+ */
+function applyFinalizer(draft: ContractDraft, entry: RegistryWorkflowEntry): void {
+  if (entry.finalizer === undefined) return;
+  const finalizer: {
+    inputSchema?: Record<string, unknown>;
+    outputSchema?: Record<string, unknown>;
+  } = {};
+  if (entry.finalizer.inputSchema !== undefined)
+    finalizer.inputSchema = entry.finalizer.inputSchema;
+  if (entry.finalizer.outputSchema !== undefined) {
+    finalizer.outputSchema = entry.finalizer.outputSchema;
+  }
+  draft.finalizer = finalizer;
+}
+
+/**
+ * Build the `core/contract` `WorkflowContract` this workflow type's
+ * `contractHash`/`workflowRevision` are computed from. Only the activities in
+ * `activityNames` (the caller-declared subset this worker actually invokes)
+ * are included — see this module's JSDoc for why that is a deliberate
+ * `contractHash` semantic, not an oversight.
+ */
+function toWorkflowContract(
+  entry: RegistryWorkflowEntry,
+  workflowType: string,
+  workflowVersion: string,
+): WorkflowContract {
+  const draft: ContractDraft = { name: workflowType, workflowVersion };
+  applyDescriptionAndTags(draft, entry);
+  applySchemas(draft, entry);
+  applyMessageRecords(draft, entry);
+  applyFinalizer(draft, entry);
+  return draft;
 }
 
 async function buildActivityContract(
-  snapshot: ReturnType<typeof buildRegistrySnapshot>,
+  engine: Engine,
   workflowType: string,
   activityName: string,
   implementationRevision: string,
 ): Promise<WorkerActivityContract> {
-  const entry = findActivityEntry(snapshot, workflowType, activityName);
-  const contractHash = await sha256Hex(canonicalJsonStringify(activityContractPayload(entry)));
-  return { contractHash, implementationRevision };
+  const entry = findActivityEntry(engine, workflowType, activityName);
+  const hash = await activityContractHash(toActivityContract(entry));
+  return { contractHash: hash, implementationRevision };
 }
 
 async function buildWorkflowContract(
+  engine: Engine,
   snapshot: ReturnType<typeof buildRegistrySnapshot>,
   workflowVersionsByType: ReadonlyMap<string, string>,
   workflowType: string,
@@ -178,30 +289,50 @@ async function buildWorkflowContract(
   // already proved workflowType is registered, so a version is guaranteed.
   const workflowVersion = workflowVersionsByType.get(workflowType) as string;
 
-  const contractHash = await sha256Hex(canonicalJsonStringify(workflowContractPayload(entry)));
-  // Deliberately the FULL entry (description and tags included), not
-  // workflowContractPayload(entry) — contractHash answers "which public
-  // payload contract," workflowRevision answers "which exact definition was
-  // loaded" (see the manifest field table in worker/manifest/types.ts), a
-  // strictly broader identity. A description/tag edit changing
-  // workflowRevision but not contractHash is the intended, distinguishing
-  // behavior between these two fields, not drift in either one.
-  const workflowRevision = await sha256Hex(
-    canonicalJsonStringify({ ...entry, version: workflowVersion }),
-  );
-
   const sortedActivityNames = [...activityNames].toSorted();
+  // Null-prototype: an activity literally named `__proto__` is a
+  // grammar-valid name (see name-grammar.ts) that a plain `{}` object would
+  // silently swallow into the prototype chain instead of storing as an own
+  // property, dropping it from the hashed contract entirely.
+  const activities: Record<string, WorkflowActivityContract> = Object.create(null) as Record<
+    string,
+    WorkflowActivityContract
+  >;
+  for (const activityName of sortedActivityNames) {
+    activities[activityName] = toActivityContract(
+      findActivityEntry(engine, workflowType, activityName),
+    );
+  }
+
+  const baseContract = toWorkflowContract(entry, workflowType, workflowVersion);
+  const contractForHash: WorkflowContract =
+    Object.keys(activities).length > 0 ? { ...baseContract, activities } : baseContract;
+
+  const [hash, revision] = await Promise.all([
+    contractHash(contractForHash),
+    deriveWorkflowRevision(contractForHash),
+  ]);
+
   const activityContracts = await Promise.all(
     sortedActivityNames.map((activityName) =>
-      buildActivityContract(snapshot, workflowType, activityName, implementationRevision),
+      buildActivityContract(engine, workflowType, activityName, implementationRevision),
     ),
   );
-  const activities: Record<string, WorkerActivityContract> = {};
+  // Same null-prototype rationale as `activities` above.
+  const workerActivities: Record<string, WorkerActivityContract> = Object.create(null) as Record<
+    string,
+    WorkerActivityContract
+  >;
   sortedActivityNames.forEach((activityName, index) => {
-    activities[activityName] = activityContracts[index] as WorkerActivityContract;
+    workerActivities[activityName] = activityContracts[index] as WorkerActivityContract;
   });
 
-  return { workflowVersion, workflowRevision, contractHash, activities };
+  return {
+    workflowVersion,
+    workflowRevision: revision,
+    contractHash: hash,
+    activities: workerActivities,
+  };
 }
 
 /**
@@ -251,6 +382,7 @@ export async function buildWorkerManifestFromRegistry(
   const workflowContracts = await Promise.all(
     sortedWorkflowTypes.map((workflowType) =>
       buildWorkflowContract(
+        engine,
         snapshot,
         workflowVersionsByType,
         workflowType,
@@ -259,7 +391,12 @@ export async function buildWorkerManifestFromRegistry(
       ),
     ),
   );
-  const workflows: Record<string, WorkerWorkflowContract> = {};
+  // A workflow literally named `__proto__` is grammar-valid too; same
+  // null-prototype rationale as `activities` above.
+  const workflows: Record<string, WorkerWorkflowContract> = Object.create(null) as Record<
+    string,
+    WorkerWorkflowContract
+  >;
   sortedWorkflowTypes.forEach((workflowType, index) => {
     workflows[workflowType] = workflowContracts[index] as WorkerWorkflowContract;
   });

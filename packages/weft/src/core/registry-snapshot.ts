@@ -48,6 +48,8 @@ export type RegistryWorkflowEntry = {
   signals?: Record<string, RegistryMessageEntry>;
   updates?: Record<string, RegistryMessageEntry>;
   queries?: Record<string, RegistryMessageEntry>;
+  /** Schema metadata for the workflow's definition-level finalizer activity, when registered. */
+  finalizer?: RegistryMessageEntry;
 };
 
 /**
@@ -186,7 +188,34 @@ function buildWorkflowEntry(definition: RegisteredWorkflowDefinition): RegistryW
     entry.tags = [...definition.tags];
   }
   addWorkflowMessageEntries(entry, definition);
+  addFinalizerEntry(entry, definition);
   return entry;
+}
+
+function addFinalizerEntry(
+  entry: RegistryWorkflowEntry,
+  definition: RegisteredWorkflowDefinition,
+): void {
+  if (definition.finalizer === undefined) return;
+  const entityName = `${definition.type}.finalizer`;
+  const finalizerEntry: RegistryMessageEntry = {};
+  if (definition.finalizer.inputSchema !== undefined) {
+    finalizerEntry.inputSchema = convertSchema(
+      'workflow',
+      entityName,
+      'inputSchema',
+      definition.finalizer.inputSchema,
+    );
+  }
+  if (definition.finalizer.outputSchema !== undefined) {
+    finalizerEntry.outputSchema = convertSchema(
+      'workflow',
+      entityName,
+      'outputSchema',
+      definition.finalizer.outputSchema,
+    );
+  }
+  entry.finalizer = finalizerEntry;
 }
 
 function addWorkflowMessageEntries(
@@ -241,7 +270,16 @@ function buildMessageEntries(
   return entries;
 }
 
-function buildActivityEntry(metadata: ActivityMetadata): RegistryActivityEntry {
+/**
+ * Convert one activity's catalog metadata to its `RegistryActivityEntry`
+ * projection (schema pair plus queue/description/retry/timeout). Exported
+ * so build tooling that resolves a single activity outside a full
+ * {@link buildRegistrySnapshot} pass — see
+ * `worker/manifest/registry-contract-builder.ts`'s workflow-scoped-first
+ * activity resolution — can reuse the same conversion rather than
+ * reimplementing it.
+ */
+export function buildActivityEntry(metadata: ActivityMetadata): RegistryActivityEntry {
   const entry: RegistryActivityEntry = { queue: metadata.queue };
   if (metadata.inputSchema !== undefined) {
     entry.inputSchema = convertSchema(
