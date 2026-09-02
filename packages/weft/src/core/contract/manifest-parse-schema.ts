@@ -156,11 +156,19 @@ export function checkContractKey(
     try {
       validateWorkflowOrActivityName(key, kind);
     } catch (error) {
-      return workflowRevisionManifestFailure(
-        'invalid-field',
-        error instanceof Error ? error.message : 'is not a wire-safe name',
-        path,
-      );
+      const rawMessage = error instanceof Error ? error.message : 'is not a wire-safe name';
+      // `validateWorkflowOrActivityName`'s own message embeds the raw
+      // offending name verbatim (see `types/name-grammar.ts`'s two `throw`
+      // sites) — replace every literal occurrence with its JSON-escaped
+      // form so a hostile `--from`/`--server` manifest's name containing a
+      // newline or ANSI escape sequence can never inject itself into a
+      // diagnostic a caller prints straight to a terminal
+      // (`executeCodegen()`'s single-line stderr contract,
+      // `cli/codegen-validate.ts`). `key` is guaranteed non-empty here (the
+      // empty-string case returns above), so `replaceAll` cannot degenerate
+      // into inserting between every character.
+      const message = rawMessage.replaceAll(key, JSON.stringify(key));
+      return workflowRevisionManifestFailure('invalid-field', message, path);
     }
   }
   return undefined;

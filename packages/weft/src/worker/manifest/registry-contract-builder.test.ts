@@ -524,4 +524,28 @@ describe('buildWorkerManifestFromRegistry', () => {
 
     expect(Object.keys(manifest.workflows)).toEqual(['checkout']);
   });
+
+  it('builds a manifest for the selected workflow even when an unrelated registered workflow individually exceeds a WFT-5 contract limit (WFT-6)', async () => {
+    // Fresh Codex finding on the prior fix: `enforceWorkflowCountLimit: false`
+    // (the previous attempt) disabled only the aggregate-count check —
+    // `buildRegistrySnapshot()` still built and hashed every registered
+    // workflow's manifest, so an unrelated workflow whose contract
+    // individually exceeds a WFT-5 limit (`RegistryManifestLimitError`)
+    // still aborted the whole call. The actual fix resolves only the
+    // requested workflow's manifest directly (`buildWorkflowManifestForType`),
+    // never touching the unrelated one's contract at all.
+    engine = createEngine();
+    engine.register(workflow({ name: 'checkout' }).execute(async function* () {}));
+    engine.register(
+      workflow({ name: 'oversized', version: 'a'.repeat(600) }).execute(async function* () {}),
+    );
+
+    const manifest = await buildWorkerManifestFromRegistry(engine, {
+      workflows: { checkout: [] },
+      deployment: DEPLOYMENT,
+      runtime: RUNTIME,
+    });
+
+    expect(Object.keys(manifest.workflows)).toEqual(['checkout']);
+  });
 });

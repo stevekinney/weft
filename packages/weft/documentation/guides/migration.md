@@ -11,7 +11,7 @@ This is the canonical location for per-release migration guidance. When a releas
 
 `weft.system.registry` / `GET /v1/registry`'s response shape changed. `workflows` was a flat `Record<name, entry>`; it is now an array of `WorkflowRevisionManifest` (WFT-5's canonical vocabulary), sorted by `(name, revision)`, and a new `activeRevisions: Record<name, revision>` field points each workflow name at its currently active manifest in that array. A new `generatedAt` field reports an informational ISO-8601 timestamp. `activities` is unchanged.
 
-If you consume this endpoint directly (rather than through `weft codegen` or the bundled Console, both already updated), resolve a workflow's active entry as:
+If you consume this endpoint directly (rather than through `weft codegen` or the separately-installed `@lostgradient/weft-ui` operator Console — packaged apart from `@lostgradient/weft` and updated in step with it, not bundled with this package), resolve a workflow's active entry as:
 
 ```ts partial
 const snapshot = await fetch('/v1/registry').then((response) => response.json());

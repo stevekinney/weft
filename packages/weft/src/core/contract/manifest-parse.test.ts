@@ -225,6 +225,27 @@ describe('parseWorkflowRevisionManifest', () => {
     expect(result.reason).toBe('invalid-field');
   });
 
+  it('escapes a hostile activity map key before it reaches the failure message (WFT-6)', async () => {
+    // The underlying `validateWorkflowOrActivityName` grammar check embeds
+    // the raw offending name verbatim in its own thrown message; a name
+    // containing a newline or ANSI escape sequence must not survive into
+    // `result.message` unescaped — a caller (`weft codegen`'s
+    // single-line stderr diagnostic contract) prints this straight to a
+    // terminal.
+    const hostileName = 'bad.name\n[31mFAKE ERROR[0m';
+    const manifest = await validManifest();
+    const result = await parseWorkflowRevisionManifest({
+      ...manifest,
+      contract: { ...manifest.contract, activities: { [hostileName]: {} } },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected rejection');
+    expect(result.reason).toBe('invalid-field');
+    expect(result.message).not.toContain('\n');
+    expect(result.message).not.toContain('');
+    expect(result.message).toContain(JSON.stringify(hostileName));
+  });
+
   it('accepts an unconstrained signal name that would fail activity-name grammar', async () => {
     const manifest = await validManifest();
     const result = await parseWorkflowRevisionManifest({

@@ -46,12 +46,8 @@ import {
   type WorkflowRevisionManifest,
 } from '../../core/contract/index.ts';
 import type { Engine } from '../../core/engine.ts';
-import {
-  buildActivityEntry,
-  buildRegistrySnapshot,
-  type RegistryActivityEntry,
-  type RegistrySnapshot,
-} from '../../core/registry-snapshot.ts';
+import { buildActivityEntry, type RegistryActivityEntry } from '../../core/registry-snapshot.ts';
+import { buildWorkflowManifestForType } from '../../core/registry-workflow-manifest.ts';
 import { WeftError } from '../../core/weft-error.ts';
 import { VERSION } from '../../version.ts';
 import { REMOTE_WORKER_PROTOCOL_VERSION } from '../protocol.ts';
@@ -131,29 +127,26 @@ export interface WorkerManifestFromRegistryOptions {
 }
 
 /**
- * Resolve the active {@link WorkflowRevisionManifest} for `workflowType` —
- * `snapshot.activeRevisions[workflowType]` names which `revision` in
- * `snapshot.workflows` is current, matching the same active-manifest
- * resolution `codegen-validate.ts` and the weft-ui registry consumers use.
+ * Resolve the {@link WorkflowRevisionManifest} for `workflowType` directly
+ * via `core/registry-workflow-manifest.ts`'s single-workflow builder —
+ * never the full `buildRegistrySnapshot()` snapshot. This is what actually
+ * fixes the aggregate-count and unrelated-workflow-limit blast radius this
+ * module's own review found: building only the requested workflow's
+ * manifest means an unrelated registration elsewhere on the engine (over
+ * the registry's aggregate count, or individually over a WFT-5 contract
+ * limit) can never block this one from succeeding.
  */
-function findWorkflowManifest(
-  snapshot: RegistrySnapshot,
+async function findWorkflowManifest(
+  engine: Engine,
   workflowType: string,
-): WorkflowRevisionManifest {
-  const activeRevision = snapshot.activeRevisions[workflowType];
-  if (activeRevision === undefined) {
+): Promise<WorkflowRevisionManifest> {
+  const manifest = await buildWorkflowManifestForType(engine, workflowType);
+  if (manifest === undefined) {
     throw new WorkerManifestBuildError(
       `Cannot build a worker manifest: workflow type "${workflowType}" is not registered on the source Engine.`,
     );
   }
-  // `snapshot` comes from `buildRegistrySnapshot(engine)` (see
-  // `buildWorkerManifestFromRegistry` below), which pushes every manifest
-  // into `workflows` in the same pass it records that manifest's `revision`
-  // into `activeRevisions` — the two collections can never disagree, so a
-  // defined `activeRevision` guarantees a matching manifest exists.
-  return snapshot.workflows.find(
-    (candidate) => candidate.name === workflowType && candidate.revision === activeRevision,
-  ) as WorkflowRevisionManifest;
+  return manifest;
 }
 
 /**
@@ -205,12 +198,11 @@ async function buildActivityContract(
 
 async function buildWorkflowContract(
   engine: Engine,
-  snapshot: RegistrySnapshot,
   workflowType: string,
   activityNames: readonly string[],
   implementationRevision: string,
 ): Promise<WorkerWorkflowContract> {
-  const manifest = findWorkflowManifest(snapshot, workflowType);
+  const manifest = await findWorkflowManifest(engine, workflowType);
   const workflowVersion = manifest.contract.workflowVersion;
 
   const sortedActivityNames = [...activityNames].toSorted();
@@ -297,21 +289,18 @@ export async function buildWorkerManifestFromRegistry(
   engine: Engine,
   options: WorkerManifestFromRegistryOptions,
 ): Promise<WorkerManifest> {
-  // `enforceWorkflowCountLimit: false` — this builder only looks up the
-  // handful of workflows `options.workflows` names below; it never
-  // publishes `snapshot.workflows` in full the way `GET /v1/registry` does.
-  // An engine with more than `MAX_REGISTRY_WORKFLOW_COUNT` registrations
-  // elsewhere (unrelated to this manifest) must not block it from
-  // producing an otherwise-valid, independently-bounded worker manifest —
-  // see `BuildRegistrySnapshotOptions.enforceWorkflowCountLimit`'s doc.
-  const snapshot = await buildRegistrySnapshot(engine, { enforceWorkflowCountLimit: false });
-
+  // No full `buildRegistrySnapshot()` call here — `buildWorkflowContract`
+  // (via `findWorkflowManifest`) resolves each requested workflow's
+  // manifest directly through `buildWorkflowManifestForType`, so an
+  // unrelated registration elsewhere on the engine (over the registry's
+  // aggregate workflow-count ceiling, or individually over a WFT-5
+  // contract limit) can never block this call from producing a manifest
+  // for the workflows `options.workflows` actually names.
   const sortedWorkflowTypes = Object.keys(options.workflows).toSorted();
   const workflowContracts = await Promise.all(
     sortedWorkflowTypes.map((workflowType) =>
       buildWorkflowContract(
         engine,
-        snapshot,
         workflowType,
         options.workflows[workflowType] ?? [],
         options.deployment.buildId,

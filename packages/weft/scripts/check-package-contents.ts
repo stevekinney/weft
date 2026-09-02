@@ -35,7 +35,16 @@ const maximumUnpackedBytes = 12 * 1024 * 1024;
 // producer in `registry-snapshot.ts` and the consumer in
 // `codegen-validate.ts` so the two ceilings can never drift apart) — one
 // more `.js`/`.d.ts` pair, +2 entries (1493 -> 1495).
-const maximumEntryCount = 1495;
+//
+// WFT-6's third review round (fixing `buildWorkerManifestFromRegistry()`'s
+// unrelated-registration blast radius, see CHANGELOG.md) split two more
+// files out of `registry-snapshot.ts`: `src/core/compare-codepoint.ts`
+// (the shared codepoint comparator, extracted to avoid an import cycle)
+// and `src/core/registry-workflow-manifest.ts` (`buildWorkflowManifestForType`
+// and the per-workflow entry/message/scoped-activity builders it and
+// `buildRegistrySnapshot` both call) — two more `.js`/`.d.ts` pairs, +4
+// entries (1495 -> 1499).
+const maximumEntryCount = 1499;
 
 type PackFile = {
   path: string;
