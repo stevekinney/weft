@@ -30,6 +30,14 @@ export const APPLICATION_MAILBOX_KEYS = {
    */
   applicationMailbox: (namespace: string, resourceId: string) =>
     `appmbx:v1:${encodeStorageKeyComponent(namespace)}:${encodeStorageKeyComponent(resourceId)}`,
+  /**
+   * A single-use probe an event sink writes in the first commit it makes for a
+   * mailbox, read back from the mailbox's own storage. Its presence proves the
+   * sink committed here rather than to some other backend; it is deleted as
+   * soon as it has been observed.
+   */
+  applicationMailboxSinkProbe: (namespace: string, resourceId: string, nonce: string) =>
+    `appprobe:v1:${encodeStorageKeyComponent(namespace)}:${encodeStorageKeyComponent(resourceId)}:${encodeStorageKeyComponent(nonce)}`,
   /** Scan prefix for every canonical command record in one mailbox. */
   applicationCommandPrefix: (namespace: string, resourceId: string) =>
     `appcmd:v1:${encodeStorageKeyComponent(namespace)}:${encodeStorageKeyComponent(resourceId)}:`,

@@ -24,7 +24,7 @@ import {
   toApplicationCommandReceipt,
   type MailboxRuntime,
 } from './application-mailbox-internals.ts';
-import { loadCommand, loadDeliveryHead } from './application-mailbox-storage.ts';
+import { isWaitingState, loadCommand, loadDeliveryHead } from './application-mailbox-storage.ts';
 import { recoverExpiredCommand } from './application-mailbox-transitions-recovery.ts';
 import { claimWaitingCommand } from './application-mailbox-transitions.ts';
 import type { ApplicationCommandRecord } from './application-mailbox-types.ts';
@@ -67,9 +67,7 @@ export async function verifyClaimedPayload(
 
 /** Whether a record has moved past the point where a delivery-index entry is meaningful. */
 function isUndeliverable(loaded: LoadedCommandRecord | null): boolean {
-  return (
-    loaded === null || (loaded.record.state !== 'accepted' && loaded.record.state !== 'available')
-  );
+  return loaded === null || !isWaitingState(loaded.record);
 }
 
 /**

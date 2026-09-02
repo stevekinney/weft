@@ -22,6 +22,7 @@ import {
 import { encodeApplicationReadyEntry } from './application-mailbox-codec.ts';
 import {
   attemptControllerRegistry,
+  hasAttemptControllerScope,
   MAILBOX_MAINTENANCE_MAX_PAGES,
 } from './application-mailbox-internals.ts';
 import { ApplicationCommandValidationError } from './application-mailbox-validation.ts';
@@ -854,7 +855,7 @@ describe('third-round hardening', () => {
     ).toThrow(/snapshot scan consistency/);
   });
 
-  it('verifies a sink by the bytes it committed, not by key presence', async () => {
+  it('verifies a sink by a probe it must commit locally, not by key presence', async () => {
     const storage = new MemoryStorage();
     const { mailbox } = createMailboxFixture({ storage });
     const commandId = await admitOne(mailbox);
@@ -862,8 +863,9 @@ describe('third-round hardening', () => {
 
     // A sink over a different backend that holds a byte-identical copy of the
     // local records, first used for a TRANSITION on an existing record. The key
-    // already exists locally, so a presence check would pass against the
-    // pre-transition bytes and cache the bad sink as verified.
+    // already exists locally, so a presence check on the record would pass
+    // against the pre-transition bytes and cache the bad sink as verified. The
+    // sink's probe lands on the other backend and is never observed here.
     const elsewhere = new MemoryStorage();
     for await (const [key, value] of storage.scan('')) {
       await elsewhere.put(key, value);
@@ -1077,4 +1079,130 @@ describe('fourth-round hardening', () => {
       mailbox.dispose();
     },
   );
+});
+
+describe('fifth-round hardening', () => {
+  it('admits exactly once when a sibling claims during the first sink verification', async () => {
+    const storage = new MemoryStorage();
+    const events = new RecordingEventSink(storage);
+    const { mailbox } = createMailboxFixture({ storage, events });
+    const sibling = createMailboxFixture({ storage, events }).mailbox;
+
+    // The sink's first commit is followed by a verification read. A sibling that
+    // claims the new command in between changes the record's bytes; the old
+    // byte comparison then reported a lost admission and a keyless admit retried
+    // into a second command. The probe key is untouched by that claim.
+    const originalGet = storage.get.bind(storage);
+    let raced = false;
+    storage.get = async (key: string): Promise<Uint8Array | null> => {
+      if (!raced && key.startsWith('appprobe:')) {
+        raced = true;
+        await sibling.claim();
+      }
+      return originalGet(key);
+    };
+
+    const admission = await mailbox.admit(commandInput());
+    expect(admission.status).toBe('admitted');
+    expect(raced).toBe(true);
+    const listed = await mailbox.list();
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.state).toBe('claimed');
+    // The probe is single-use and gone.
+    let probes = 0;
+    for await (const _entry of storage.scan('appprobe:')) probes += 1;
+    expect(probes).toBe(0);
+    sibling.dispose();
+    mailbox.dispose();
+  });
+
+  it('refuses a renewal whose commit crossed the deadline', async () => {
+    const storage = new MemoryStorage();
+    const clock = createMailboxClock();
+    const { mailbox } = createMailboxFixture({
+      storage,
+      clock,
+      commandTimeoutMs: 1_000,
+      visibilityTimeoutMs: 10_000,
+    });
+    const commandId = await admitOne(mailbox);
+    const claim = await claimOne(mailbox);
+
+    const original = storage.conditionalBatch.bind(storage);
+    let crossed = false;
+    storage.conditionalBatch = async (
+      ...args: Parameters<MemoryStorage['conditionalBatch']>
+    ): Promise<boolean> => {
+      const result = await original(...args);
+      if (!crossed) {
+        crossed = true;
+        clock.advance(1_000);
+      }
+      return result;
+    };
+
+    const renewal = await mailbox.renew({ commandId, attemptToken: claim.attemptToken });
+    expect(renewal.status).toBe('deadline-exceeded');
+    expect(renewal.status === 'deadline-exceeded' && renewal.receipt.state).toBe('dead-lettered');
+    expect(claim.signal.aborted).toBe(true);
+    mailbox.dispose();
+  });
+
+  it('does not report due work for a head claimed between the index and record reads', async () => {
+    const storage = new MemoryStorage();
+    const { mailbox } = createMailboxFixture({ storage, generateId: createIdSource('w') });
+    const other = createMailboxFixture({ storage, generateId: createIdSource('o') }).mailbox;
+    await admitOne(mailbox);
+
+    const originalGet = storage.get.bind(storage);
+    let raced = false;
+    storage.get = async (key: string): Promise<Uint8Array | null> => {
+      if (!raced && key.startsWith('appcmd:')) {
+        raced = true;
+        await other.claim();
+      }
+      return originalGet(key);
+    };
+
+    expect(await mailbox.waitForAvailable({ timeoutMs: 0 })).toBe(false);
+    expect(raced).toBe(true);
+    other.dispose();
+    mailbox.dispose();
+  });
+
+  it('rejects a wait deadline outside the safe-integer range', async () => {
+    const { mailbox } = createMailboxFixture({ now: () => Number.MAX_SAFE_INTEGER - 5_000 });
+    await expect(mailbox.waitForAvailable({ timeoutMs: 10_000 })).rejects.toThrow(
+      /safe-integer millisecond range/,
+    );
+    await expect(mailbox.awaitCleanup({ commandId: 'c', timeoutMs: 10_000 })).rejects.toThrow(
+      /safe-integer millisecond range/,
+    );
+    mailbox.dispose();
+  });
+
+  it('rejects a malformed command id with the public validation error', async () => {
+    const { mailbox } = createMailboxFixture();
+    await expect(mailbox.receipt('id-\ud800')).rejects.toThrow(ApplicationCommandValidationError);
+    await expect(mailbox.requestCancellation({ commandId: 'x'.repeat(300) })).rejects.toThrow(
+      ApplicationCommandValidationError,
+    );
+    await expect(mailbox.cleanupState('')).rejects.toThrow(ApplicationCommandValidationError);
+    mailbox.dispose();
+  });
+
+  it('releases the per-scope controller registry when the last handle is disposed', async () => {
+    const storage = new MemoryStorage();
+    const first = createMailboxFixture({ storage }).mailbox;
+    const second = createMailboxFixture({ storage }).mailbox;
+    await admitOne(first);
+    const claim = await claimOne(first);
+    expect(hasAttemptControllerScope(storage, 'bureau', 'agent-7')).toBe(true);
+    second.dispose();
+    // One handle and one live attempt remain.
+    expect(hasAttemptControllerScope(storage, 'bureau', 'agent-7')).toBe(true);
+    await first.acknowledge({ commandId: claim.commandId, attemptToken: claim.attemptToken });
+    first.dispose();
+    expect(hasAttemptControllerScope(storage, 'bureau', 'agent-7')).toBe(false);
+  });
 });

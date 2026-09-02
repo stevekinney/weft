@@ -22,8 +22,12 @@ import type {
 } from './application-mailbox-contract.ts';
 import type { MailboxRuntime } from './application-mailbox-internals.ts';
 import { readCleanupState } from './application-mailbox-settlement.ts';
-import { loadCommand, loadDeliveryHead } from './application-mailbox-storage.ts';
-import { requireClockInstant, requireWaitBudget } from './application-mailbox-validation.ts';
+import { isWaitingState, loadCommand, loadDeliveryHead } from './application-mailbox-storage.ts';
+import {
+  requireClockInstant,
+  requireDerivedInstant,
+  requireWaitBudget,
+} from './application-mailbox-validation.ts';
 
 export { DEFAULT_WAIT_POLL_INTERVAL_MS as DEFAULT_MAILBOX_POLL_INTERVAL_MS } from './application-mailbox-validation.ts';
 
@@ -70,7 +74,10 @@ export async function hasDueWork(runtime: MailboxRuntime): Promise<boolean> {
   const head = await loadDeliveryHead(runtime.storage, runtime.keys);
   if (head === null) return false;
   const loaded = await loadCommand(runtime.storage, runtime.keys, head.commandId);
-  if (loaded === null) return false;
+  // The record is read after the index. Another consumer can claim the head in
+  // between, and a claimed or terminal record reached through a stale entry is
+  // not claimable whatever its timestamps say.
+  if (loaded === null || !isWaitingState(loaded.record)) return false;
   const now = runtime.now();
   return now >= loaded.record.availableAt && now < loaded.record.absoluteDeadlineAt;
 }
@@ -87,7 +94,13 @@ export async function waitForAvailableWork(
   options?: ApplicationMailboxWaitOptions,
 ): Promise<boolean> {
   const { timeoutMs, pollIntervalMs } = requireWaitBudget(options ?? {});
-  const deadline = requireClockInstant(runtime.now()) + timeoutMs;
+  // Both operands are valid on their own; the sum can still leave the range no
+  // later clock reading can reach, which would turn a bounded wait into polling
+  // until aborted.
+  const deadline = requireDerivedInstant(
+    requireClockInstant(runtime.now()) + timeoutMs,
+    'deadline',
+  );
   let remaining = 0;
   do {
     // Aborting or disposal means `false`, and that outranks any observation —
@@ -133,7 +146,13 @@ export async function waitForCleanup(
   },
 ): Promise<ApplicationCommandCleanupResult> {
   const { timeoutMs, pollIntervalMs } = requireWaitBudget(options);
-  const deadline = requireClockInstant(runtime.now()) + timeoutMs;
+  // Both operands are valid on their own; the sum can still leave the range no
+  // later clock reading can reach, which would turn a bounded wait into polling
+  // until aborted.
+  const deadline = requireDerivedInstant(
+    requireClockInstant(runtime.now()) + timeoutMs,
+    'deadline',
+  );
   let latest = await readCleanupState(runtime, options.commandId);
   // A terminal record with `cleanupPending: true` is already final: the mailbox
   // recorded that it stopped waiting for an abandoned attempt. Polling it would

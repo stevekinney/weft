@@ -43,6 +43,7 @@ import {
 /** Every key builder for one `(namespace, resourceId)` mailbox, bound once. */
 export type MailboxKeys = Readonly<{
   header: string;
+  sinkProbe: (nonce: string) => string;
   commandPrefix: string;
   command: (commandId: string) => string;
   readyPrefix: string;
@@ -60,6 +61,7 @@ export type MailboxKeys = Readonly<{
 export function createMailboxKeys(namespace: string, resourceId: string): MailboxKeys {
   return {
     header: KEYS.applicationMailbox(namespace, resourceId),
+    sinkProbe: (nonce) => KEYS.applicationMailboxSinkProbe(namespace, resourceId, nonce),
     commandPrefix: KEYS.applicationCommandPrefix(namespace, resourceId),
     command: (commandId) => KEYS.applicationCommand(namespace, resourceId, commandId),
     readyPrefix: KEYS.applicationCommandReadyPrefix(namespace, resourceId),
@@ -204,7 +206,8 @@ export function indexOperationsFor(
   return operations;
 }
 
-function isWaitingState(record: ApplicationCommandRecord): boolean {
+/** Whether a record is in the delivery index: admitted or released, not yet claimed or settled. */
+export function isWaitingState(record: ApplicationCommandRecord): boolean {
   return record.state === 'accepted' || record.state === 'available';
 }
 
@@ -255,8 +258,12 @@ export type MailboxCommitPlan = {
   readonly operations: readonly BatchOperation[];
   readonly event: { readonly kind: string; readonly payload: unknown } | null;
   readonly now: number;
-  /** The key an event sink's commit must be observable at in the mailbox's own storage. */
-  readonly verifyKey: string;
+  /**
+   * Where the first commit through an event sink writes its verification
+   * probe. Unique per plan, so a concurrent transition on the record can never
+   * be mistaken for a sink that committed somewhere else.
+   */
+  readonly sinkProbeKey: string;
 };
 
 /**
@@ -275,18 +282,29 @@ export async function commitMailboxTransition(
   if (events === undefined || plan.event === null) {
     return storageConditionalBatch(storage, [...plan.conditions], [...plan.operations]);
   }
+  // A sink is only allowed to commit against THIS mailbox's storage. A feed
+  // built over a different backend would apply these operations there and
+  // report success, so `admit()` would hand back a durable-looking receipt that
+  // never existed here. The first commit through a sink carries a single-use
+  // probe key that is read back afterwards: unlike the record itself, nothing
+  // else ever writes that key, so a concurrent transition on the record between
+  // the commit and the read cannot be mistaken for a sink that committed
+  // elsewhere — which would otherwise fail a keyless admission into a retry
+  // that creates a second command.
+  const probe = isSinkVerified(storage, events)
+    ? null
+    : { key: plan.sinkProbeKey, value: new TextEncoder().encode(plan.sinkProbeKey) };
   try {
     await events.append(
       { kind: plan.event.kind, emittedAtMs: plan.now, payload: plan.event.payload },
-      { conditions: plan.conditions, operations: plan.operations },
+      {
+        conditions: plan.conditions,
+        operations:
+          probe === null
+            ? plan.operations
+            : [...plan.operations, { type: 'put', key: probe.key, value: probe.value }],
+      },
     );
-    // A sink is only allowed to commit against THIS mailbox's storage. A feed
-    // built over a different backend would apply these operations there and
-    // report success, so `admit()` would hand back a durable-looking receipt
-    // that never existed here. Verify the first commit landed where it belongs;
-    // one read per mailbox catches the misconfiguration at its first use.
-    await assertSinkCommittedLocally(storage, events, plan);
-    return true;
   } catch (error) {
     // The feed retries its own sequence allocation internally and only throws
     // once it has exhausted those attempts. That exhaustion is indistinguishable
@@ -295,6 +313,11 @@ export async function commitMailboxTransition(
     if (await conditionsStillHold(storage, plan.conditions)) throw error;
     return false;
   }
+  // Outside the catch above on purpose. A missing probe after a successful
+  // append is unambiguous — the batch did not land here — and must never be
+  // reported as a lost compare-and-swap for the caller to retry.
+  if (probe !== null) await assertSinkCommittedLocally(storage, events, probe);
+  return true;
 }
 
 /**
@@ -306,40 +329,39 @@ export async function commitMailboxTransition(
  */
 const VERIFIED_SINK_BACKENDS = new WeakMap<ApplicationMailboxEventSink, WeakSet<Storage>>();
 
-async function assertSinkCommittedLocally(
-  storage: Storage,
-  events: ApplicationMailboxEventSink,
-  plan: MailboxCommitPlan,
-): Promise<void> {
-  // Keyed by the sink AND the backend. Keying by backend alone would let one
-  // correctly configured mailbox mark a store verified, after which a second
-  // mailbox on the same store with a feed over a DIFFERENT store would skip the
-  // check entirely and report durable-looking admissions that never landed here.
+/**
+ * Keyed by the sink AND the backend. Keying by backend alone would let one
+ * correctly configured mailbox mark a store verified, after which a second
+ * mailbox on the same store with a feed over a DIFFERENT store would skip the
+ * check entirely and report durable-looking admissions that never landed here.
+ */
+function verifiedBackendsFor(events: ApplicationMailboxEventSink): WeakSet<Storage> {
   let verified = VERIFIED_SINK_BACKENDS.get(events);
   if (verified === undefined) {
     verified = new WeakSet();
     VERIFIED_SINK_BACKENDS.set(events, verified);
   }
-  if (verified.has(storage)) return;
-  // Compare the bytes this plan intended to write, not mere key presence. On any
-  // transition of an existing record the key is already present locally, so a
-  // presence check would pass against the PRE-transition bytes and cache a sink
-  // that committed somewhere else as verified.
-  const intended = plan.operations.find(
-    (operation): operation is Extract<BatchOperation, { type: 'put' }> =>
-      operation.type === 'put' && operation.key === plan.verifyKey,
-  );
-  const stored = await storage.get(plan.verifyKey);
-  const landed =
-    intended === undefined
-      ? stored !== null
-      : stored !== null && bytesEqual(stored, intended.value);
-  if (!landed) {
+  return verified;
+}
+
+function isSinkVerified(storage: Storage, events: ApplicationMailboxEventSink): boolean {
+  return verifiedBackendsFor(events).has(storage);
+}
+
+async function assertSinkCommittedLocally(
+  storage: Storage,
+  events: ApplicationMailboxEventSink,
+  probe: { readonly key: string; readonly value: Uint8Array },
+): Promise<void> {
+  const stored = await storage.get(probe.key);
+  if (stored === null || !bytesEqual(stored, probe.value)) {
     throw new Error(
       'The configured application mailbox event sink committed to a different storage backend than the mailbox. Build the fleet event feed over the same Storage instance the mailbox uses.',
     );
   }
-  verified.add(storage);
+  verifiedBackendsFor(events).add(storage);
+  // The probe has done its job; the batch that wrote it is durable either way.
+  await storage.delete(probe.key);
 }
 
 /**
@@ -362,7 +384,7 @@ export function planCommandTransition(
   },
 ): MailboxCommitPlan {
   return {
-    verifyKey: keys.command(options.next.commandId),
+    sinkProbeKey: keys.sinkProbe(crypto.randomUUID()),
     conditions: [
       { key: keys.command(options.next.commandId), expectedValue: options.expectedBytes },
       ...(options.extraConditions ?? []),

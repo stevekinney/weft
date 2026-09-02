@@ -111,12 +111,26 @@ export type AttemptRegistration = {
   readonly release: () => void;
 };
 
-const ATTEMPT_CONTROLLERS_BY_STORAGE = new WeakMap<
-  Storage,
-  Map<string, Map<string, AttemptRegistration>>
->();
+/**
+ * One mailbox scope's live attempts plus the number of handles currently
+ * holding it, so the scope can be dropped once nothing references it.
+ */
+type ScopeRegistry = {
+  readonly controllers: Map<string, AttemptRegistration>;
+  handles: number;
+};
 
-/** The shared attempt-controller registry for one mailbox scope in this process. */
+const ATTEMPT_CONTROLLERS_BY_STORAGE = new WeakMap<Storage, Map<string, ScopeRegistry>>();
+
+function scopeKey(namespace: string, resourceId: string): string {
+  return `${encodeURIComponent(namespace)}:${encodeURIComponent(resourceId)}`;
+}
+
+/**
+ * Acquire the shared attempt-controller registry for one mailbox scope in this
+ * process. Every acquisition is balanced by `releaseAttemptControllerRegistry`
+ * from the handle's `dispose()`.
+ */
 export function attemptControllerRegistry(
   storage: Storage,
   namespace: string,
@@ -127,13 +141,44 @@ export function attemptControllerRegistry(
     byScope = new Map();
     ATTEMPT_CONTROLLERS_BY_STORAGE.set(storage, byScope);
   }
-  const scope = `${encodeURIComponent(namespace)}:${encodeURIComponent(resourceId)}`;
-  let controllers = byScope.get(scope);
-  if (controllers === undefined) {
-    controllers = new Map();
-    byScope.set(scope, controllers);
+  const scope = scopeKey(namespace, resourceId);
+  let entry = byScope.get(scope);
+  if (entry === undefined) {
+    entry = { controllers: new Map(), handles: 0 };
+    byScope.set(scope, entry);
   }
-  return controllers;
+  entry.handles += 1;
+  return entry.controllers;
+}
+
+/**
+ * Release one handle's hold on a scope registry.
+ *
+ * The scope is forgotten once no handle holds it and no attempt is live in it.
+ * A service that creates short-lived mailboxes for many resource ids over one
+ * long-lived storage would otherwise retain a map per historical resource.
+ * A live attempt owned by a sibling handle keeps the scope until it settles.
+ */
+export function releaseAttemptControllerRegistry(
+  storage: Storage,
+  namespace: string,
+  resourceId: string,
+): void {
+  const byScope = ATTEMPT_CONTROLLERS_BY_STORAGE.get(storage);
+  const scope = scopeKey(namespace, resourceId);
+  const entry = byScope?.get(scope);
+  if (byScope === undefined || entry === undefined) return;
+  entry.handles = Math.max(0, entry.handles - 1);
+  if (entry.handles === 0 && entry.controllers.size === 0) byScope.delete(scope);
+}
+
+/** Whether this process still tracks a registry for the scope. Diagnostics and tests. */
+export function hasAttemptControllerScope(
+  storage: Storage,
+  namespace: string,
+  resourceId: string,
+): boolean {
+  return ATTEMPT_CONTROLLERS_BY_STORAGE.get(storage)?.has(scopeKey(namespace, resourceId)) === true;
 }
 
 /**

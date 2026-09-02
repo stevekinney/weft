@@ -325,3 +325,14 @@ export {
   validateDurableJSONValue,
   validateFailure,
 } from './application-mailbox-guards.ts';
+
+/**
+ * Validate a caller-supplied command id before it reaches key construction.
+ *
+ * Every command-scoped operation builds a storage key from this value, and
+ * `encodeURIComponent` throws a raw `URIError` on an unpaired surrogate; the
+ * contract says caller mistakes surface as `ApplicationCommandValidationError`.
+ */
+export function validateCommandIdentifier(commandId: unknown): string {
+  return requireIdentity(commandId, 'commandId', MAX_APPLICATION_IDENTITY_BYTES);
+}

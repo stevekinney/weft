@@ -431,6 +431,7 @@ export async function storageConditionalBatch(
 export {
   decodeStorageKeyComponent,
   encodeStorageKeyComponent,
+  formatSortableStorageTimestamp,
   tryDecodeStorageKeyComponent,
 } from './key-encoding.ts';
 

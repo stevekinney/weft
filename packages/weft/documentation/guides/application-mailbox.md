@@ -178,7 +178,7 @@ The four outcomes are distinct because they mean different things:
 - `already-terminal`: it had already settled. Nothing is rewritten.
 - `unknown`: no such command.
 
-An **in-process** claimant learns about cancellation through the attempt-scoped `AbortSignal` on its claim — including one holding a different `ApplicationMailbox` handle onto the same durable mailbox, since two handles onto the same mailbox are the same mailbox. A claimant in **another process** never sees that signal — it learns from `renew()`'s `cancellationRequested` flag, which is the cross-process channel.
+An **in-process** claimant learns about cancellation through the attempt-scoped `AbortSignal` on its claim — including one holding a different `ApplicationMailbox` handle built over the _same_ `Storage` instance, because the in-process registry that carries the signal is keyed by that instance. Two handles over separate `Storage` instances onto the same underlying store (two `BunSQLiteStorage` objects opened on one file, say) share durable state but not the signal; the second learns the same way a claimant in **another process** does — from `renew()`'s `cancellationRequested` flag, which is the cross-process channel.
 
 ```ts
 import { ApplicationMailbox, MemoryStorage } from '@lostgradient/weft';

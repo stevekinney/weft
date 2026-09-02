@@ -36,6 +36,7 @@ import type {
 import { claimNextCommand } from './application-mailbox-delivery.ts';
 import {
   attemptControllerRegistry,
+  releaseAttemptControllerRegistry,
   toApplicationCommandReceipt,
   type MailboxRuntime,
 } from './application-mailbox-internals.ts';
@@ -60,6 +61,7 @@ import {
   requireMaintenanceInstant,
   resolveMailboxPolicy,
   validateCancellationReason,
+  validateCommandIdentifier,
   validateDurableJSONValue,
   validateFailure,
 } from './application-mailbox-validation.ts';
@@ -207,7 +209,11 @@ export class ApplicationMailbox {
   /** Read one command's immutable receipt, or `null` when it is unknown or retired. */
   async receipt(commandId: string): Promise<ApplicationCommandReceipt | null> {
     this.#assertLive();
-    const loaded = await loadCommand(this.#runtime.storage, this.#runtime.keys, commandId);
+    const loaded = await loadCommand(
+      this.#runtime.storage,
+      this.#runtime.keys,
+      validateCommandIdentifier(commandId),
+    );
     return loaded === null ? null : toApplicationCommandReceipt(loaded.record);
   }
 
@@ -316,7 +322,7 @@ export class ApplicationMailbox {
   }): Promise<ApplicationCommandRenewalResult> {
     this.#assertLive();
     return renewClaim(this.#runtime, {
-      commandId: options.commandId,
+      commandId: validateCommandIdentifier(options.commandId),
       attemptToken: options.attemptToken,
       progress: validateDurableJSONValue(options.progress, 'progress'),
     });
@@ -330,7 +336,7 @@ export class ApplicationMailbox {
   }): Promise<ApplicationCommandSettleResult> {
     this.#assertLive();
     return acknowledgeClaim(this.#runtime, {
-      commandId: options.commandId,
+      commandId: validateCommandIdentifier(options.commandId),
       attemptToken: options.attemptToken,
       outcome: validateDurableJSONValue(options.outcome, 'outcome'),
     });
@@ -345,7 +351,7 @@ export class ApplicationMailbox {
   }): Promise<ApplicationCommandSettleResult> {
     this.#assertLive();
     return rejectClaim(this.#runtime, {
-      commandId: options.commandId,
+      commandId: validateCommandIdentifier(options.commandId),
       attemptToken: options.attemptToken,
       failure: validateFailure(options.failure),
       retry: options.retry ?? false,
@@ -359,7 +365,7 @@ export class ApplicationMailbox {
   }): Promise<ApplicationCommandCancellationResult> {
     this.#assertLive();
     return requestCancellation(this.#runtime, {
-      commandId: options.commandId,
+      commandId: validateCommandIdentifier(options.commandId),
       reason: validateCancellationReason(options.reason),
     });
   }
@@ -370,7 +376,7 @@ export class ApplicationMailbox {
    */
   async cleanupState(commandId: string): Promise<ApplicationCommandCleanupResult> {
     this.#assertLive();
-    return readCleanupState(this.#runtime, commandId);
+    return readCleanupState(this.#runtime, validateCommandIdentifier(commandId));
   }
 
   /**
@@ -386,7 +392,10 @@ export class ApplicationMailbox {
     readonly pollIntervalMs?: number | undefined;
   }): Promise<ApplicationCommandCleanupResult> {
     this.#assertLive();
-    return waitForCleanup(this.#runtime, this.#disposal.signal, options);
+    return waitForCleanup(this.#runtime, this.#disposal.signal, {
+      ...options,
+      commandId: validateCommandIdentifier(options.commandId),
+    });
   }
 
   /**
@@ -443,6 +452,11 @@ export class ApplicationMailbox {
     }
     this.#ownAttempts.clear();
     this.#disposal.abort(new Error('The application mailbox was disposed.'));
+    releaseAttemptControllerRegistry(
+      this.#runtime.storage,
+      this.#runtime.policy.namespace,
+      this.#runtime.policy.resourceId,
+    );
   }
 
   /** `using`-compatible disposal. */

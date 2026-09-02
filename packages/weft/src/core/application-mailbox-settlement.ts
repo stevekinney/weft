@@ -99,6 +99,19 @@ export async function renewClaim(
       }),
     });
     if (!committed) continue;
+    // The commit is asynchronous, so the lease can be extended after the
+    // deadline it was checked against. Reporting `renewed` then would tell the
+    // claimant to keep going on work the contract already calls expired.
+    if (runtime.now() >= transition.next.absoluteDeadlineAt) {
+      return {
+        status: 'deadline-exceeded',
+        receipt: await deadLetterRenewed(
+          runtime,
+          options.commandId,
+          toApplicationCommandReceipt(transition.next),
+        ),
+      };
+    }
     return {
       status: 'renewed',
       visibilityExpiresAt: transition.next.visibilityExpiresAt,
@@ -107,6 +120,22 @@ export async function renewClaim(
     };
   }
   throw new ApplicationMailboxContentionError('renew', options.commandId);
+}
+
+/**
+ * Dead-letter a lease whose renewal committed past the absolute deadline.
+ *
+ * A lost compare-and-swap means another actor already moved the record on; the
+ * renewed receipt is returned then so the caller still sees the lease it held.
+ */
+async function deadLetterRenewed(
+  runtime: MailboxRuntime,
+  commandId: string,
+  renewed: ApplicationCommandReceipt,
+): Promise<ApplicationCommandReceipt> {
+  const loaded = await loadCommand(runtime.storage, runtime.keys, commandId);
+  const receipt = loaded === null ? null : await deadLetterExpired(runtime, loaded, runtime.now());
+  return receipt ?? renewed;
 }
 
 /** Settle a claimed command successfully. */

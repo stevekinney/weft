@@ -72,7 +72,7 @@ export function tryDecodeStorageKeyComponent(value: string): string | null {
  *
  * @example
  * ```ts
- * import { formatSortableStorageTimestamp } from '@lostgradient/weft/storage';
+ * import { formatSortableStorageTimestamp } from '@lostgradient/weft/storage/interface';
  *
  * console.log(formatSortableStorageTimestamp(1700000000000)); // '0001700000000000'
  * ```
