@@ -7,6 +7,7 @@
 import { utf8ByteLength } from '../../worker/manifest/utf8.ts';
 import { contractHash } from './hash.ts';
 import { MAX_CONTRACT_IDENTIFIER_BYTES } from './limits.ts';
+import { parseWorkflowRevisionManifest } from './manifest-parse.ts';
 import { normalizeWorkflowContract } from './normalize.ts';
 import { deriveWorkflowRevision } from './revision.ts';
 import type { WorkflowContract, WorkflowRevisionManifest } from './types.ts';
@@ -45,6 +46,14 @@ export interface BuildWorkflowRevisionManifestOptions {
  * validated the same way any other contract identifier is, since it becomes
  * part of the manifest a consumer will trust.
  *
+ * **Round-trips through {@link parseWorkflowRevisionManifest} before
+ * returning.** A manifest this function builds but its own parser would
+ * reject (`identifier-too-long`, `too-many-entries`, `manifest-too-large`)
+ * is a build-time bug, not a runtime condition to defer to whoever later
+ * reads the manifest back — see WFT-5 PR #943 review thread
+ * PRRT_kwDORwthfM6eWFwv. Throws a plain `Error` describing the rejection
+ * reason when that happens.
+ *
  * @example
  * ```ts
  * import { buildWorkflowContract, buildWorkflowRevisionManifest } from '@lostgradient/weft';
@@ -79,7 +88,7 @@ export async function buildWorkflowRevisionManifest(
     revision = await deriveWorkflowRevision(normalized);
   }
 
-  return {
+  const manifest: WorkflowRevisionManifest = {
     manifestVersion: WORKFLOW_REVISION_MANIFEST_VERSION,
     name: normalized.name,
     workflowVersion: normalized.workflowVersion,
@@ -87,4 +96,14 @@ export async function buildWorkflowRevisionManifest(
     contractHash: hash,
     contract: normalized,
   };
+
+  const parsed = await parseWorkflowRevisionManifest(manifest);
+  if (!parsed.ok) {
+    throw new Error(
+      `buildWorkflowRevisionManifest: built manifest fails parseWorkflowRevisionManifest ` +
+        `validation (${parsed.reason}${parsed.path === undefined ? '' : ` at ${parsed.path}`}): ` +
+        parsed.message,
+    );
+  }
+  return parsed.manifest;
 }

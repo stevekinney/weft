@@ -137,6 +137,39 @@ describe('parseWorkflowRevisionManifest', () => {
     expect(result.reason).toBe('too-many-entries');
   });
 
+  it('rejects a tags array with too many entries — bounded (like signals/updates/queries/activities) before it is copied and sorted', async () => {
+    const manifest = await validManifest();
+    const tags: string[] = [];
+    for (let index = 0; index < MAX_CONTRACT_MESSAGE_COUNT + 1; index++) {
+      tags.push(`tag-${index}`);
+    }
+    const result = await parseWorkflowRevisionManifest({
+      ...manifest,
+      contract: { ...manifest.contract, tags },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected rejection');
+    expect(result.reason).toBe('too-many-entries');
+    expect(result.path).toBe('manifest.contract.tags');
+  });
+
+  it('rejects tags whose accumulated bytes exceed the maximum manifest size — bounded while walking, not only after normalization', async () => {
+    const manifest = await validManifest();
+    // A handful of tags, each individually well under any per-field limit,
+    // whose combined length alone exceeds MAX_NORMALIZED_CONTRACT_BYTES —
+    // this must be caught while walking `tags`, not only by the whole-contract
+    // canonical-size check `finalizeManifest` runs afterward.
+    const tags = ['a'.repeat(100_000), 'b'.repeat(100_000), 'c'.repeat(100_000)];
+    const result = await parseWorkflowRevisionManifest({
+      ...manifest,
+      contract: { ...manifest.contract, tags },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected rejection');
+    expect(result.reason).toBe('manifest-too-large');
+    expect(result.path).toBe('manifest.contract.tags');
+  });
+
   it('rejects a contract that normalizes past the maximum manifest size', async () => {
     const manifest = await validManifest();
     const hugeSchema = {

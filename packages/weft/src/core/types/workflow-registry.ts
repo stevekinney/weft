@@ -39,4 +39,16 @@ export interface RegisteredWorkflowDefinition<TInput = unknown, TOutput = unknow
   searchAttributes?: SearchAttributeSchema;
   /** Optional start admission policy for this workflow type. */
   concurrency?: WorkflowConcurrencyOptions<TInput>;
+  /**
+   * Schema-only metadata for the workflow's definition-level finalizer
+   * activity ({@link WorkflowDefinition.finalizer}), when registered. Carries
+   * only `name`/`inputSchema`/`outputSchema` — never the finalizer's
+   * `execute` handler — matching this interface's read-only introspection
+   * contract (the workflow's own handler is likewise never exposed here).
+   */
+  finalizer?: Readonly<{
+    name: string;
+    inputSchema?: DefinitionSchema;
+    outputSchema?: DefinitionSchema;
+  }>;
 }

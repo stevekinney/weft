@@ -10,7 +10,7 @@
  * | Field          | Question answered                                    | Stability                    |
  * | -------------- | ----------------------------------------------------- | ----------------------------- |
  * | `contractHash` | Which public payload contract does this revision use? | Deterministic, payload-only   |
- * | `revision`     | Which exact definition (name, version, docs) is this? | Deterministic or author-set   |
+ * | `revision`     | Which contract-metadata identity (name, version, docs) is this? | Deterministic or author-set   |
  *
  * `contractHash` deliberately excludes `name`, `workflowVersion`,
  * `description`, and `tags` — those identify *which* workflow and *how it is

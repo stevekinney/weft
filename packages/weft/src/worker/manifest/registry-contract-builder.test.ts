@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import {
   activityContractHash,
+  buildWorkflowContract,
   contractHash,
   deriveWorkflowRevision,
 } from '../../core/contract/index.ts';
@@ -353,6 +354,102 @@ describe('buildWorkerManifestFromRegistry', () => {
     expect(activityContract?.contractHash).toBe(
       await activityContractHash(equivalentContract.activities.charge),
     );
+  });
+
+  it('folds a registered definition-level finalizer into contractHash, agreeing with buildWorkflowContract(definition) (WFT-5)', async () => {
+    const cleanup = activity({
+      name: 'cleanup',
+      inputSchema: z.object({ sandboxId: z.string() }),
+      outputSchema: z.boolean(),
+      execute: async () => true,
+    });
+    const definition = workflow({ name: 'checkout', finalizer: cleanup }).execute(
+      async function* () {},
+    );
+
+    engine = createEngine();
+    engine.register(definition);
+
+    const manifest = await buildWorkerManifestFromRegistry(engine, {
+      workflows: { checkout: [] },
+      deployment: DEPLOYMENT,
+      runtime: RUNTIME,
+    });
+
+    const directHash = await contractHash(buildWorkflowContract(definition));
+    expect(manifest.workflows['checkout']?.contractHash).toBe(directHash);
+  });
+
+  it('gives a registered finalizer a different contractHash than an otherwise-identical registration with no finalizer (WFT-5)', async () => {
+    async function contractHashFor(withFinalizer: boolean): Promise<string> {
+      const localEngine = createEngine();
+      try {
+        const cleanup = activity({
+          name: 'cleanup',
+          inputSchema: z.object({ sandboxId: z.string() }),
+          execute: async () => {},
+        });
+        const definition = withFinalizer
+          ? workflow({ name: 'checkout', finalizer: cleanup }).execute(async function* () {})
+          : workflow({ name: 'checkout' }).execute(async function* () {});
+        localEngine.register(definition);
+        const manifest = await buildWorkerManifestFromRegistry(localEngine, {
+          workflows: { checkout: [] },
+          deployment: DEPLOYMENT,
+          runtime: RUNTIME,
+        });
+        return manifest.workflows['checkout']?.contractHash ?? '';
+      } finally {
+        localEngine[Symbol.dispose]();
+      }
+    }
+
+    expect(await contractHashFor(true)).not.toBe(await contractHashFor(false));
+  });
+
+  it('resolves a qualified activity through the workflow-scoped registry first, matching runtime dispatch (WFT-5)', async () => {
+    engine = createEngine();
+    // A global "charge" with one schema...
+    engine.register(
+      activity({
+        name: 'charge',
+        execute: async () => ({ ok: true }),
+        inputSchema: z.object({ amountCents: z.number() }),
+      }),
+    );
+    // ...and a workflow declaring its OWN "charge" activity (via
+    // `.activities({...})`, installed into the per-workflow registry) with a
+    // differently-shaped schema. Runtime dispatch resolves the workflow-scoped
+    // one first (see `activity-resolution.ts`), so the manifest builder must too.
+    const definition = workflow({ name: 'checkout' })
+      .activities({
+        charge: activity({
+          name: 'charge',
+          execute: async () => ({ ok: true }),
+          inputSchema: z.object({ amountUsd: z.string() }),
+        }),
+      })
+      .execute(async function* () {});
+    engine.register(definition);
+
+    const manifest = await buildWorkerManifestFromRegistry(engine, {
+      workflows: { checkout: ['charge'] },
+      deployment: DEPLOYMENT,
+      runtime: RUNTIME,
+    });
+
+    const scopedContract = {
+      inputSchema: definitionSchemaToJsonSchema(z.object({ amountUsd: z.string() }), 'input'),
+    };
+    const globalContract = {
+      inputSchema: definitionSchemaToJsonSchema(z.object({ amountCents: z.number() }), 'input'),
+    };
+
+    const scopedHash = await activityContractHash(scopedContract);
+    const globalHash = await activityContractHash(globalContract);
+    expect(scopedHash).not.toBe(globalHash);
+
+    expect(manifest.workflows['checkout']?.activities['charge']?.contractHash).toBe(scopedHash);
   });
 
   it('defaults sdkVersion and protocolVersion, and accepts explicit overrides', async () => {

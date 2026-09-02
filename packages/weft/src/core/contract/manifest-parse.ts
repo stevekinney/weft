@@ -18,7 +18,11 @@ import {
   type WorkflowRevisionManifestValidationFailure,
 } from './failure.ts';
 import { contractHash } from './hash.ts';
-import { MAX_CONTRACT_IDENTIFIER_BYTES, MAX_NORMALIZED_CONTRACT_BYTES } from './limits.ts';
+import {
+  MAX_CONTRACT_IDENTIFIER_BYTES,
+  MAX_CONTRACT_MESSAGE_COUNT,
+  MAX_NORMALIZED_CONTRACT_BYTES,
+} from './limits.ts';
 import { checkContractKey, parseContractRecord, parseSchemaPair } from './manifest-parse-schema.ts';
 import { canonicalWorkflowContractJson, normalizeWorkflowContract } from './normalize.ts';
 import type {
@@ -112,9 +116,10 @@ function parseDescription(value: unknown, path: string): Outcome<string> {
  * `ReadonlyArray<string>` and `buildWorkflowContract()` imposes no
  * length or non-emptiness constraint on individual tags, so routing tags
  * through `parseIdentifier()` (which enforces both) would reject
- * producer-emitted manifests the builder itself considers valid. Bounded
- * only by the overall `MAX_NORMALIZED_CONTRACT_BYTES` contract size
- * backstop, applied later in `finalizeManifest`.
+ * producer-emitted manifests the builder itself considers valid. The
+ * overall `tags` array is bounded by entry count and accumulated bytes in
+ * {@link parseTags}, and by the whole-contract `MAX_NORMALIZED_CONTRACT_BYTES`
+ * backstop in `finalizeManifest`.
  */
 function parseTag(value: unknown, path: string): Outcome<string> {
   if (typeof value !== 'string') {
@@ -123,15 +128,43 @@ function parseTag(value: unknown, path: string): Outcome<string> {
   return { ok: true, value };
 }
 
+/**
+ * Validate `tags`: bounded entry count (`MAX_CONTRACT_MESSAGE_COUNT`, the
+ * same cap `signals`/`updates`/`queries`/`activities` records enforce via
+ * `parseContractRecord`) and bounded accumulated UTF-8 bytes
+ * (`MAX_NORMALIZED_CONTRACT_BYTES`, the same overall contract-size ceiling
+ * `finalizeManifest` checks), both enforced while walking the array —
+ * before it is copied and sorted by `normalizeWorkflowContract` — so a
+ * hostile array of many or enormous tag strings is rejected without first
+ * paying the cost of that copy/sort. Individual tags remain otherwise
+ * unbounded in length (see {@link parseTag}); the accumulated-bytes check
+ * still catches one adversarially huge tag on its own.
+ */
 function parseTags(value: unknown, path: string): Outcome<ReadonlyArray<string> | undefined> {
   if (value === undefined) return { ok: true, value: undefined };
   if (!Array.isArray(value)) {
     return workflowRevisionManifestFailure('invalid-field', 'must be an array of strings', path);
   }
+  if (value.length > MAX_CONTRACT_MESSAGE_COUNT) {
+    return workflowRevisionManifestFailure(
+      'too-many-entries',
+      `declares ${value.length} entries, exceeding the maximum of ${MAX_CONTRACT_MESSAGE_COUNT}`,
+      path,
+    );
+  }
   const tags: string[] = [];
+  let accumulatedBytes = 0;
   for (const [index, entry] of value.entries()) {
     const tag = parseTag(entry, `${path}[${index}]`);
     if (!tag.ok) return tag;
+    accumulatedBytes += utf8ByteLength(tag.value);
+    if (accumulatedBytes > MAX_NORMALIZED_CONTRACT_BYTES) {
+      return workflowRevisionManifestFailure(
+        'manifest-too-large',
+        `accumulated tag bytes exceed the maximum of ${MAX_NORMALIZED_CONTRACT_BYTES}`,
+        path,
+      );
+    }
     tags.push(tag.value);
   }
   return { ok: true, value: tags.length === 0 ? undefined : tags };

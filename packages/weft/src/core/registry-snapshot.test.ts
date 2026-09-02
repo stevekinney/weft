@@ -193,6 +193,37 @@ describe('buildRegistrySnapshot', () => {
     expect(snapshot.workflows['untagged']).not.toHaveProperty('tags');
   });
 
+  it('includes a registered definition-level finalizer schema on the workflow entry (WFT-5)', () => {
+    engine = createEngine();
+    const cleanup = activity({
+      name: 'cleanup',
+      inputSchema: z.object({ sandboxId: z.string() }),
+      outputSchema: z.boolean(),
+      execute: async () => true,
+    });
+    engine.register(
+      workflow({ name: 'provisioned', finalizer: cleanup }).execute(async function* () {}),
+    );
+
+    const snapshot = buildRegistrySnapshot(engine);
+    const entry = snapshot.workflows['provisioned'];
+    expect(entry?.finalizer?.inputSchema).toEqual({
+      type: 'object',
+      properties: { sandboxId: { type: 'string' } },
+      required: ['sandboxId'],
+      additionalProperties: false,
+    });
+    expect(entry?.finalizer?.outputSchema).toEqual({ type: 'boolean' });
+  });
+
+  it('omits the finalizer field entirely when no finalizer is registered', () => {
+    engine = createEngine();
+    engine.register(workflow({ name: 'no-finalizer' }).execute(async function* () {}));
+
+    const snapshot = buildRegistrySnapshot(engine);
+    expect(snapshot.workflows['no-finalizer']).not.toHaveProperty('finalizer');
+  });
+
   it('includes activities with queue, schemas, description, retry policy, and timeout', () => {
     engine = createEngine();
     engine.register(
