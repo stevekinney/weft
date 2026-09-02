@@ -126,7 +126,11 @@ async function advanceCommand(
  * receipt. Retaining bindings forever would be the only alternative, and that
  * grows without bound.
  */
-async function retireOneReceipt(runtime: MailboxRuntime, indexKey: string): Promise<boolean> {
+async function retireOneReceipt(
+  runtime: MailboxRuntime,
+  indexKey: string,
+  indexBytes: Uint8Array,
+): Promise<boolean> {
   const commandId = commandIdFromTerminalKey(indexKey);
   const loaded =
     commandId === null ? null : await loadCommand(runtime.storage, runtime.keys, commandId);
@@ -137,16 +141,18 @@ async function retireOneReceipt(runtime: MailboxRuntime, indexKey: string): Prom
   // retention pass, and the record it points at is left alone rather than
   // deleted out from under the mailbox.
   if (commandId === null || (loaded !== null && !ownsTerminalEntry(runtime, indexKey, loaded))) {
-    await discardTerminalEntry(runtime, indexKey);
+    await discardTerminalEntry(runtime, indexKey, indexBytes);
     return false;
   }
   const operations: BatchOperation[] = [{ type: 'delete', key: indexKey }];
   // The record is already gone: the entry is the last trace of a retired
-  // receipt, and removing it completes that retirement.
+  // receipt, and removing it completes that retirement. The compare-and-swap is
+  // against the bytes the scan saw, so a concurrent pass that already removed
+  // the entry makes this one lose rather than count the same receipt twice.
   if (loaded === null) {
     return storageConditionalBatch(
       runtime.storage,
-      [{ key: indexKey, expectedValue: await runtime.storage.get(indexKey) }],
+      [{ key: indexKey, expectedValue: indexBytes }],
       operations,
     );
   }
@@ -180,10 +186,14 @@ function ownsTerminalEntry(
  * Remove an index entry that nothing owns, fenced on the bytes it was seen
  * with. Not a retirement: no receipt is retired, so it is not counted as one.
  */
-async function discardTerminalEntry(runtime: MailboxRuntime, indexKey: string): Promise<void> {
+async function discardTerminalEntry(
+  runtime: MailboxRuntime,
+  indexKey: string,
+  indexBytes: Uint8Array,
+): Promise<void> {
   await storageConditionalBatch(
     runtime.storage,
-    [{ key: indexKey, expectedValue: await runtime.storage.get(indexKey) }],
+    [{ key: indexKey, expectedValue: indexBytes }],
     [{ type: 'delete', key: indexKey }],
   );
 }
@@ -195,9 +205,9 @@ async function retireTerminalReceipts(
 ): Promise<void> {
   const horizon = now - runtime.policy.terminalRetentionMs;
   if (horizon < 0) return;
-  const expired: string[] = [];
-  const malformed: string[] = [];
-  for await (const [key] of runtime.storage.scan(runtime.keys.terminalPrefix, {
+  const expired: [string, Uint8Array][] = [];
+  const malformed: [string, Uint8Array][] = [];
+  for await (const [key, value] of runtime.storage.scan(runtime.keys.terminalPrefix, {
     limit: runtime.policy.maintenanceBatchSize,
   })) {
     const terminalAt = parseTerminalAt(key, runtime.keys.terminalPrefix);
@@ -205,15 +215,15 @@ async function retireTerminalReceipts(
     // stopping at it would leave every valid receipt behind it unretired on
     // every pass. It is discarded on its own and never counted as retired.
     if (terminalAt === null) {
-      malformed.push(key);
+      malformed.push([key, value]);
       continue;
     }
     if (terminalAt >= horizon) break;
-    expired.push(key);
+    expired.push([key, value]);
   }
-  for (const indexKey of malformed) await discardTerminalEntry(runtime, indexKey);
-  for (const indexKey of expired) {
-    if (await retireOneReceipt(runtime, indexKey)) counters.retired += 1;
+  for (const [indexKey, bytes] of malformed) await discardTerminalEntry(runtime, indexKey, bytes);
+  for (const [indexKey, bytes] of expired) {
+    if (await retireOneReceipt(runtime, indexKey, bytes)) counters.retired += 1;
   }
 }
 

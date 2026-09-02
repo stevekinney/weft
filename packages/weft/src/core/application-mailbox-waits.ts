@@ -78,6 +78,9 @@ export async function hasDueWork(runtime: MailboxRuntime): Promise<boolean> {
   // between, and a claimed or terminal record reached through a stale entry is
   // not claimable whatever its timestamps say.
   if (loaded === null || !isWaitingState(loaded.record)) return false;
+  // The same ownership rule `claim()` applies: an entry that is not the one the
+  // record's sequence names is one `claim()` will discard, not deliver.
+  if (head.key !== runtime.keys.ready(loaded.record.sequence)) return false;
   const now = runtime.now();
   return now >= loaded.record.availableAt && now < loaded.record.absoluteDeadlineAt;
 }
@@ -111,7 +114,7 @@ export async function waitForAvailableWork(
     // check rather than returning before looking at anything.
     const due = await hasDueWork(runtime);
     if (isAborted(disposal, options?.signal)) return false;
-    if (due) return true;
+    if (due) return observedInTime(timeoutMs, deadline, runtime.now());
     // Clamp each sleep to what is left of the budget. An interval longer than the
     // remaining time would otherwise put the next observation past the bound the
     // caller asked for, turning a timeout into a late success.
@@ -122,6 +125,17 @@ export async function waitForAvailableWork(
   );
   // The sleep was cut short by an abort or by disposal.
   return false;
+}
+
+/**
+ * Whether a due-work observation still counts, given when it finished.
+ *
+ * The observation itself takes time. Work that came due during a read that
+ * finished past the deadline is a late success the bound promised not to
+ * report; the zero-timeout default keeps its single unconditional look.
+ */
+function observedInTime(timeoutMs: number, deadline: number, now: number): boolean {
+  return timeoutMs === 0 || now <= deadline;
 }
 
 /** Whether either the mailbox's disposal signal or the caller's signal has fired. */

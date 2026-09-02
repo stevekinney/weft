@@ -12,6 +12,10 @@
  */
 
 import { KEYS } from '../storage/interface.ts';
+import {
+  MAX_APPLICATION_IDENTITY_BYTES,
+  isWellFormedString,
+} from './application-mailbox-guards.ts';
 import type {
   ApplicationCommandCausation,
   ApplicationCommandFailure,
@@ -105,6 +109,21 @@ function readVersion(source: Record<string, unknown>, key: string): void {
   if (source['recordVersion'] !== APPLICATION_MAILBOX_RECORD_VERSION) fail(key);
 }
 
+/** What admission accepts for a reference digest; anything else persisted is damage. */
+const PERSISTED_HEX_DIGEST = /^[0-9a-f]{64}$/;
+
+/**
+ * Admission writes a reference payload's digest to `payloadDigest` as well, and
+ * idempotency binds against the latter. A record where the two disagree would
+ * hand a claimant one digest while identity was bound to the other.
+ */
+function readPayloadFields(source: Record<string, unknown>, key: string) {
+  const payload = readPayload(source, key);
+  const payloadDigest = readString(source, 'payloadDigest', key);
+  if (payload.form === 'reference' && payload.digest !== payloadDigest) fail(key);
+  return { payload, payloadDigest } as const;
+}
+
 function readPayload(source: Record<string, unknown>, key: string): ApplicationCommandPayload {
   const payload = source['payload'];
   if (!isRecordObject(payload)) fail(key);
@@ -115,6 +134,7 @@ function readPayload(source: Record<string, unknown>, key: string): ApplicationC
   if (payload['form'] !== 'reference') fail(key);
   const reference = readString(payload, 'reference', key);
   const digest = readString(payload, 'digest', key);
+  if (!PERSISTED_HEX_DIGEST.test(digest)) fail(key);
   const byteLength = readOptionalInteger(payload, 'byteLength', key);
   return byteLength === undefined
     ? { form: 'reference', reference, digest }
@@ -162,8 +182,7 @@ function readBase(source: Record<string, unknown>, key: string) {
     caller: readString(source, 'caller', key),
     target: readString(source, 'target', key),
     kind: readString(source, 'kind', key),
-    payload: readPayload(source, key),
-    payloadDigest: readString(source, 'payloadDigest', key),
+    ...readPayloadFields(source, key),
     payloadMediaType: readOptionalString(source, 'payloadMediaType', key),
     payloadSchema: readOptionalString(source, 'payloadSchema', key),
     causation: readCausation(source, key),
@@ -188,6 +207,17 @@ function readOptionalJSONValue(
   if (value === undefined) return undefined;
   if (!isJSONValue(value)) fail(key);
   return value;
+}
+
+/**
+ * A leased record's attempt is the one the claim just started, so it is at
+ * least one and never beyond the budget; the transitions cannot produce
+ * anything else, and settlement trusts the decoded attempt without rechecking.
+ */
+function readLeasedBase(source: Record<string, unknown>, key: string) {
+  const base = readBase(source, key);
+  if (base.attempt < 1 || base.attempt > base.maxAttempts) fail(key);
+  return { ...base, ...readLease(source, key) } as const;
 }
 
 function readLease(source: Record<string, unknown>, key: string) {
@@ -288,12 +318,11 @@ export function decodeApplicationCommandRecord(
     return readWaitingRecord(decoded, key, state);
   }
   if (state === 'claimed') {
-    return { ...readBase(decoded, key), ...readLease(decoded, key), state };
+    return { ...readLeasedBase(decoded, key), state };
   }
   if (state === 'cancellation-requested') {
     return {
-      ...readBase(decoded, key),
-      ...readLease(decoded, key),
+      ...readLeasedBase(decoded, key),
       state,
       cancellationRequestedAt: readInteger(decoded, 'cancellationRequestedAt', key),
       cancellationReason: readOptionalString(decoded, 'cancellationReason', key),
@@ -333,13 +362,21 @@ export function decodeApplicationMailboxRecord(
   // sequence allocator to this mailbox and let the next admission overwrite an
   // existing index entry. It must name the scope it is stored under.
   if (ownKey(() => KEYS.applicationMailbox(namespace, resourceId), key) !== key) fail(key);
+  const nextSequence = readInteger(decoded, 'nextSequence', key);
+  const openCount = readInteger(decoded, 'openCount', key);
+  const admittedCount = readInteger(decoded, 'admittedCount', key);
+  // The allocator and the lifetime count start together and every admission
+  // moves both, and the open backlog is a subset of what was ever admitted. A
+  // header that breaks either relation is damage — a lowered allocator would
+  // let the next admission overwrite an index entry at a reused position.
+  if (nextSequence !== admittedCount || openCount > admittedCount) fail(key);
   return {
     recordVersion: APPLICATION_MAILBOX_RECORD_VERSION,
     namespace,
     resourceId,
-    nextSequence: readInteger(decoded, 'nextSequence', key),
-    openCount: readInteger(decoded, 'openCount', key),
-    admittedCount: readInteger(decoded, 'admittedCount', key),
+    nextSequence,
+    openCount,
+    admittedCount,
   };
 }
 
@@ -395,7 +432,17 @@ export function decodeApplicationReadyEntry(bytes: Uint8Array, key: string): str
   } catch {
     fail(key);
   }
-  if (typeof decoded !== 'string' || decoded.length === 0) fail(key);
+  // The id is handed straight to key construction by `claim()`, `list()`, and
+  // the waits; an unpaired surrogate or an oversized value there would escape
+  // as a raw `URIError` rather than the corruption it is.
+  if (
+    typeof decoded !== 'string' ||
+    decoded.length === 0 ||
+    !isWellFormedString(decoded) ||
+    new TextEncoder().encode(decoded).byteLength > MAX_APPLICATION_IDENTITY_BYTES
+  ) {
+    fail(key);
+  }
   return decoded;
 }
 

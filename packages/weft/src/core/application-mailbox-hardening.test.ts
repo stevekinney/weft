@@ -1537,3 +1537,189 @@ describe('eighth-round hardening', () => {
     mailbox.dispose();
   });
 });
+
+describe('ninth-round hardening', () => {
+  it('fails closed on an index entry whose command id is malformed', async () => {
+    const { mailbox, storage } = createMailboxFixture();
+    await admitOne(mailbox);
+    await storage.put(
+      KEYS.applicationCommandReady('bureau', 'agent-7', 0),
+      encodeApplicationReadyEntry('id-\ud800'),
+    );
+    await expect(mailbox.claim()).rejects.toThrow(PersistedDataCorruptError);
+    mailbox.dispose();
+  });
+
+  it('fails closed on a listing entry whose key disagrees with its record', async () => {
+    const { mailbox, storage } = createMailboxFixture({ generateId: createIdSource('c') });
+    const first = await admitOne(mailbox, { idempotencyKey: 'a' });
+    const second = await admitOne(mailbox, { idempotencyKey: 'b' });
+    // Sequence 0 belongs to the first command; point its listing entry at the second.
+    await storage.put(
+      KEYS.applicationCommandBySequence('bureau', 'agent-7', 0),
+      encodeApplicationReadyEntry(second),
+    );
+    await expect(mailbox.list()).rejects.toThrow(PersistedDataCorruptError);
+    expect(first).not.toBe(second);
+    mailbox.dispose();
+  });
+
+  it('does not report due work through a ready entry that is not the record own', async () => {
+    const { mailbox, storage } = createMailboxFixture({ generateId: createIdSource('c') });
+    await admitOne(mailbox, { idempotencyKey: 'a' });
+    const second = await admitOne(mailbox, { idempotencyKey: 'b' });
+    await claimOne(mailbox);
+    await storage.put(
+      KEYS.applicationCommandReady('bureau', 'agent-7', 0),
+      encodeApplicationReadyEntry(second),
+    );
+    expect(await mailbox.waitForAvailable({ timeoutMs: 0 })).toBe(false);
+    mailbox.dispose();
+  });
+
+  it.each([
+    ['zero', 0],
+    ['beyond the budget', 4],
+  ])('fails closed on a leased record whose attempt is %s', async (_name, attempt) => {
+    const { mailbox, storage } = createMailboxFixture({ maxAttempts: 3 });
+    const commandId = await admitOne(mailbox);
+    const claim = await claimOne(mailbox);
+    const key = KEYS.applicationCommand('bureau', 'agent-7', commandId);
+    const record = decode((await storage.get(key)) as Uint8Array) as Record<string, unknown>;
+    await storage.put(key, encode({ ...record, attempt }));
+    await expect(mailbox.renew({ commandId, attemptToken: claim.attemptToken })).rejects.toThrow(
+      PersistedDataCorruptError,
+    );
+    mailbox.dispose();
+  });
+
+  it('releases the provisional registration when the claim commit throws', async () => {
+    const storage = new MemoryStorage();
+    const { mailbox } = createMailboxFixture({ storage });
+    await admitOne(mailbox);
+    const original = storage.conditionalBatch.bind(storage);
+    let thrown = false;
+    storage.conditionalBatch = async (
+      ...args: Parameters<MemoryStorage['conditionalBatch']>
+    ): Promise<boolean> => {
+      if (!thrown) {
+        thrown = true;
+        throw new Error('transient');
+      }
+      return original(...args);
+    };
+    await expect(mailbox.claim()).rejects.toThrow('transient');
+    expect(attemptControllerRegistry(storage, 'bureau', 'agent-7').size).toBe(0);
+    // The handle is still usable and the command is still claimable.
+    const claim = await mailbox.claim();
+    expect(claim.status).toBe('claimed');
+    mailbox.dispose();
+  });
+
+  it('releases the local controller when renewal finds the lease no longer current', async () => {
+    const storage = new MemoryStorage();
+    const clock = createMailboxClock();
+    const { mailbox } = createMailboxFixture({ storage, clock, visibilityTimeoutMs: 500 });
+    const other = createMailboxFixture({ storage, clock }).mailbox;
+    const commandId = await admitOne(mailbox);
+    const claim = await claimOne(mailbox);
+    // Another handle (standing in for another process) reclaims the expired lease.
+    clock.advance(501);
+    await other.runMaintenance();
+
+    const renewal = await mailbox.renew({ commandId, attemptToken: claim.attemptToken });
+    expect(renewal.status).toBe('stale');
+    expect(claim.signal.aborted).toBe(true);
+    expect(attemptControllerRegistry(storage, 'bureau', 'agent-7').has(claim.attemptToken)).toBe(
+      false,
+    );
+    other.dispose();
+    mailbox.dispose();
+  });
+
+  it('does not report a late observation as a successful bounded wait', async () => {
+    const storage = new MemoryStorage();
+    const clock = createMailboxClock();
+    const { mailbox } = createMailboxFixture({ storage, clock });
+    await admitOne(mailbox);
+    // The record read finishes after the deadline; work is due, but late.
+    const originalGet = storage.get.bind(storage);
+    let slowed = false;
+    storage.get = async (key: string): Promise<Uint8Array | null> => {
+      const value = await originalGet(key);
+      if (!slowed && key.startsWith('appcmd:')) {
+        slowed = true;
+        clock.advance(1_001);
+      }
+      return value;
+    };
+    expect(await mailbox.waitForAvailable({ timeoutMs: 1_000 })).toBe(false);
+    mailbox.dispose();
+  });
+
+  it('fails closed on a mailbox header whose counters disagree', async () => {
+    const { mailbox, storage } = createMailboxFixture();
+    await admitOne(mailbox);
+    const key = KEYS.applicationMailbox('bureau', 'agent-7');
+    const header = decode((await storage.get(key)) as Uint8Array) as Record<string, unknown>;
+    await storage.put(key, encode({ ...header, nextSequence: 0 }));
+    await expect(mailbox.capacity()).rejects.toThrow(PersistedDataCorruptError);
+    await storage.put(key, encode({ ...header, openCount: 99 }));
+    await expect(mailbox.capacity()).rejects.toThrow(PersistedDataCorruptError);
+    mailbox.dispose();
+  });
+
+  it('fails closed on an idempotency binding that names an unrelated command', async () => {
+    const { mailbox, storage } = createMailboxFixture({ generateId: createIdSource('c') });
+    await admitOne(mailbox, { idempotencyKey: 'a' });
+    const unrelated = await admitOne(mailbox, { idempotencyKey: 'b' });
+    const key = KEYS.applicationCommandIdempotency('bureau', 'agent-7', 'a');
+    const binding = decode((await storage.get(key)) as Uint8Array) as Record<string, unknown>;
+    await storage.put(key, encode({ ...binding, commandId: unrelated }));
+    await expect(mailbox.admit(commandInput({ idempotencyKey: 'a' }))).rejects.toThrow(
+      PersistedDataCorruptError,
+    );
+    mailbox.dispose();
+  });
+
+  it('counts a receipt as retired by exactly one concurrent maintenance pass', async () => {
+    const storage = new MemoryStorage();
+    const clock = createMailboxClock();
+    const left = createMailboxFixture({ storage, clock, terminalRetentionMs: 1_000 }).mailbox;
+    const right = createMailboxFixture({ storage, clock, terminalRetentionMs: 1_000 }).mailbox;
+    const commandId = await admitOne(left);
+    const claim = await claimOne(left);
+    await left.acknowledge({ commandId, attemptToken: claim.attemptToken });
+    clock.advance(5_000);
+
+    const [a, b] = await Promise.all([left.runMaintenance(), right.runMaintenance()]);
+    expect(a.retired + b.retired).toBe(1);
+    expect(await left.receipt(commandId)).toBeNull();
+    left.dispose();
+    right.dispose();
+  });
+
+  it('fails closed on a reference payload whose digest disagrees with the record', async () => {
+    const { mailbox, storage } = createMailboxFixture();
+    const digest = 'a'.repeat(64);
+    const admission = await mailbox.admit(
+      commandInput({ payload: { form: 'reference', reference: 'blob:1', digest } }),
+    );
+    expect(admission.status).toBe('admitted');
+    if (admission.status !== 'admitted') return;
+    const key = KEYS.applicationCommand('bureau', 'agent-7', admission.receipt.commandId);
+    const record = decode((await storage.get(key)) as Uint8Array) as Record<string, unknown>;
+    await storage.put(key, encode({ ...record, payloadDigest: 'b'.repeat(64) }));
+    await expect(mailbox.receipt(admission.receipt.commandId)).rejects.toThrow(
+      PersistedDataCorruptError,
+    );
+    await storage.put(
+      key,
+      encode({ ...record, payload: { form: 'reference', reference: 'blob:1', digest: 'nope' } }),
+    );
+    await expect(mailbox.receipt(admission.receipt.commandId)).rejects.toThrow(
+      PersistedDataCorruptError,
+    );
+    mailbox.dispose();
+  });
+});

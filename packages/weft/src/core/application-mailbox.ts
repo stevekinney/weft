@@ -67,6 +67,7 @@ import {
 } from './application-mailbox-validation.ts';
 import { waitForAvailableWork, waitForCleanup } from './application-mailbox-waits.ts';
 import type { JSONValue } from './json.ts';
+import { PersistedDataCorruptError } from './persisted-data-incompatible-error.ts';
 
 /** How many listing-index entries one page of `list()` reads. */
 const MAILBOX_LIST_PAGE_SIZE = 200;
@@ -275,6 +276,12 @@ export class ApplicationMailbox {
       // corruption: the sweep deletes the record and the entry together, and a
       // concurrent listing can observe the moment between.
       if (loaded === null) continue;
+      // The entry must be the one the record's own sequence names; a stale or
+      // corrupted entry elsewhere would list the command at the wrong position
+      // and again at its real one.
+      if (indexKey !== this.#runtime.keys.bySequence(loaded.record.sequence)) {
+        throw new PersistedDataCorruptError(indexKey);
+      }
       if (states !== null && !states.has(loaded.record.state)) continue;
       receipts.push(toApplicationCommandReceipt(loaded.record));
       if (receipts.length >= remaining) break;

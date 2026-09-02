@@ -42,6 +42,7 @@ import {
   validateCommandInput,
 } from './application-mailbox-validation.ts';
 import { computeIdentityDigest } from './application-payload-digest.ts';
+import { PersistedDataCorruptError } from './persisted-data-incompatible-error.ts';
 
 /** Backlog accounting, shared by admission rejection and the public `capacity()`. */
 export function capacityOf(
@@ -183,6 +184,22 @@ async function resolveIdempotency(
   // admitted afresh over the stale binding rather than answered with a
   // receipt this mailbox cannot produce.
   if (loaded === null) return { admission: null, staleBindingBytes: binding.bytes };
+  // The binding must be the record's own: the record names this key, and the
+  // record's identity reproduces the binding's digest. A damaged binding
+  // pointing at an unrelated command with a matching digest would otherwise be
+  // answered with that command's receipt as a duplicate.
+  const ownDigest = await computeIdentityDigest([
+    loaded.record.caller,
+    loaded.record.target,
+    loaded.record.kind,
+    loaded.record.payloadDigest,
+  ]);
+  if (
+    loaded.record.idempotencyKey !== idempotencyKey ||
+    ownDigest !== binding.record.identityDigest
+  ) {
+    throw new PersistedDataCorruptError(runtime.keys.idempotency(idempotencyKey));
+  }
   const receipt = toApplicationCommandReceipt(loaded.record);
   if (binding.record.identityDigest !== identityDigest) {
     return {

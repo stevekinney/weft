@@ -327,12 +327,21 @@ async function leaseHead(
   // already durable. A registration for a lease that never commits, or that is
   // withheld below, is released again.
   const { controller, registration } = registerAttemptController(runtime, attemptToken);
-  const committed = await commitCommandTransition(runtime, {
-    previous: loaded.record,
-    expectedBytes: loaded.bytes,
-    next: transition.next,
-    now: committedAt,
-  });
+  let committed: boolean;
+  try {
+    committed = await commitCommandTransition(runtime, {
+      previous: loaded.record,
+      expectedBytes: loaded.bytes,
+      next: transition.next,
+      now: committedAt,
+    });
+  } catch (error) {
+    // Nothing was claimed, so nothing may stay registered: on a long-lived
+    // handle, transient commit failures would otherwise grow the registry and
+    // the handle's ownership set by one unique token each.
+    releaseOwnRegistration(runtime, attemptToken, registration, 'The claim commit failed.');
+    throw error;
+  }
   if (!committed) {
     releaseOwnRegistration(
       runtime,

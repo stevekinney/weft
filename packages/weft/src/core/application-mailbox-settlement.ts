@@ -84,6 +84,15 @@ export async function renewClaim(
       progress: options.progress,
     });
     if (!transition.ok) {
+      // The attempt cannot continue either way. Another process may have
+      // reclaimed or terminalized it and cannot reach this registry, so this is
+      // where its process-local controller is released; otherwise the signal
+      // stays live and the handle keeps the entry until disposal.
+      releaseAttemptController(
+        runtime,
+        options.attemptToken,
+        'This attempt is no longer current: its renewal was refused.',
+      );
       return {
         status: transition.reason === 'deadline-exceeded' ? 'deadline-exceeded' : 'stale',
         receipt: toApplicationCommandReceipt(loaded.record),
