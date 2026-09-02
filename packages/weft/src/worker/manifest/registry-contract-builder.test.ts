@@ -502,4 +502,26 @@ describe('buildWorkerManifestFromRegistry', () => {
     expect(manifest.protocolVersion).toBe(999);
     expect(manifest.sdkVersion).toBe('9.9.9');
   });
+
+  it('builds a manifest for the selected workflow even when the source engine has more than the registry snapshot aggregate limit registered (WFT-6)', async () => {
+    // `Engine.register()` enforces no aggregate ceiling, so an engine can
+    // carry more registrations than `GET /v1/registry`'s wire snapshot may
+    // ever report. This proves `buildWorkerManifestFromRegistry` still
+    // succeeds for the one workflow its own caller-declared `workflows`
+    // names — it must not inherit `buildRegistrySnapshot`'s full-snapshot
+    // `RegistryWorkflowCountLimitError` for registrations it never looks at.
+    engine = createEngine();
+    engine.register(workflow({ name: 'checkout' }).execute(async function* () {}));
+    for (let index = 0; index < 512; index += 1) {
+      engine.register(workflow({ name: `unrelated-${index}` }).execute(async function* () {}));
+    }
+
+    const manifest = await buildWorkerManifestFromRegistry(engine, {
+      workflows: { checkout: [] },
+      deployment: DEPLOYMENT,
+      runtime: RUNTIME,
+    });
+
+    expect(Object.keys(manifest.workflows)).toEqual(['checkout']);
+  });
 });

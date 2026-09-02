@@ -297,7 +297,14 @@ export async function buildWorkerManifestFromRegistry(
   engine: Engine,
   options: WorkerManifestFromRegistryOptions,
 ): Promise<WorkerManifest> {
-  const snapshot = await buildRegistrySnapshot(engine);
+  // `enforceWorkflowCountLimit: false` — this builder only looks up the
+  // handful of workflows `options.workflows` names below; it never
+  // publishes `snapshot.workflows` in full the way `GET /v1/registry` does.
+  // An engine with more than `MAX_REGISTRY_WORKFLOW_COUNT` registrations
+  // elsewhere (unrelated to this manifest) must not block it from
+  // producing an otherwise-valid, independently-bounded worker manifest —
+  // see `BuildRegistrySnapshotOptions.enforceWorkflowCountLimit`'s doc.
+  const snapshot = await buildRegistrySnapshot(engine, { enforceWorkflowCountLimit: false });
 
   const sortedWorkflowTypes = Object.keys(options.workflows).toSorted();
   const workflowContracts = await Promise.all(

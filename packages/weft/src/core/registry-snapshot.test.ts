@@ -519,6 +519,21 @@ describe('buildRegistrySnapshot', () => {
     expect(error.count).toBe(MAX_REGISTRY_WORKFLOW_COUNT + 1);
   });
 
+  it('skips the aggregate workflow-count check when enforceWorkflowCountLimit is false (WFT-6)', async () => {
+    // `buildWorkerManifestFromRegistry` (`worker/manifest/registry-contract-builder.ts`)
+    // relies on this escape hatch: it only looks up the handful of
+    // workflows its own caller names, never the full snapshot, so an
+    // engine with more than the ceiling's worth of unrelated registrations
+    // must not block it.
+    engine = createEngine();
+    for (let index = 0; index < MAX_REGISTRY_WORKFLOW_COUNT + 1; index += 1) {
+      engine.register(workflow({ name: `workflow-${index}` }).execute(async function* () {}));
+    }
+
+    const snapshot = await buildRegistrySnapshot(engine, { enforceWorkflowCountLimit: false });
+    expect(snapshot.workflows.length).toBe(MAX_REGISTRY_WORKFLOW_COUNT + 1);
+  });
+
   it('does not include remote-only activities (workers without local registrations are excluded)', async () => {
     engine = createEngine();
     // Locally register one activity. A "remote-only" activity is one that exists only

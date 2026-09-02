@@ -193,6 +193,19 @@ export interface BuildRegistrySnapshotOptions {
    * call sites never pass this.
    */
   now?: () => number;
+  /**
+   * When `false`, skip the {@link MAX_REGISTRY_WORKFLOW_COUNT} aggregate
+   * check below. Defaults to `true` (enforced) — the default call path,
+   * `GET /v1/registry`, publishes every registered workflow on the wire, so
+   * that response is exactly what the ceiling exists to bound.
+   * `buildWorkerManifestFromRegistry` (`worker/manifest/registry-contract-builder.ts`)
+   * passes `false`: it uses this function only to look up the handful of
+   * workflows its own caller-declared `options.workflows` names, not to
+   * publish the full snapshot, so an engine with more than the ceiling's
+   * worth of *unrelated* registrations must not block it from producing an
+   * otherwise-valid, independently-bounded worker manifest.
+   */
+  enforceWorkflowCountLimit?: boolean;
 }
 
 /**
@@ -209,19 +222,23 @@ export interface BuildRegistrySnapshotOptions {
  *
  * Throws {@link RegistrySchemaConversionError} if any registered schema
  * fails JSON Schema conversion, {@link RegistryManifestLimitError} if a
- * registered workflow's contract exceeds a WFT-5 hostile-input limit, or
- * {@link RegistryWorkflowCountLimitError} if the engine has more than
+ * registered workflow's contract exceeds a WFT-5 hostile-input limit, or,
+ * unless `options.enforceWorkflowCountLimit` is `false` (see that option's
+ * doc), {@link RegistryWorkflowCountLimitError} if the engine has more than
  * {@link MAX_REGISTRY_WORKFLOW_COUNT} workflows registered in total —
  * checked here, at the producer, so `weft codegen --server`'s matching
  * consumer-side ceiling in `cli/codegen-validate.ts` can never reject a
- * snapshot this function actually emits.
+ * `GET /v1/registry` response this function actually emits.
  */
 export async function buildRegistrySnapshot(
   engine: Engine,
   options?: BuildRegistrySnapshotOptions,
 ): Promise<RegistrySnapshot> {
   const workflowDefinitions = engine.listWorkflowDefinitions();
-  if (workflowDefinitions.length > MAX_REGISTRY_WORKFLOW_COUNT) {
+  if (
+    (options?.enforceWorkflowCountLimit ?? true) &&
+    workflowDefinitions.length > MAX_REGISTRY_WORKFLOW_COUNT
+  ) {
     throw new RegistryWorkflowCountLimitError(workflowDefinitions.length);
   }
   const activityDefinitions = engine.listActivityDefinitions();
