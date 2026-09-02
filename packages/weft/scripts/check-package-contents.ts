@@ -15,18 +15,20 @@ const maximumUnpackedBytes = 12 * 1024 * 1024;
 // `index.ts`) — 11 new source files, each shipping a `.js` and a `.d.ts` in
 // `dist/`, which legitimately grows the entry count by 22.
 //
-// WFT-6 added `src/cli/codegen-validate.ts` — 1 new source file, +2 entries
-// (1485 -> 1487 by that formula alone). The measured `npm pack --dry-run`
-// entry count on this change is 1489, 2 higher than the formula predicts;
-// confirmed via `npm pack --dry-run --json --ignore-scripts` that
-// `codegen-validate.ts` itself contributes exactly the expected 2 dist
-// entries (`codegen-validate.js`, `codegen-validate.d.ts`) and no other
-// source file was added or removed in this batch, so the remaining +2 is
-// baseline drift already present in `dist/` before this batch (not
-// reproduced/attributed further here) rather than something WFT-6 caused.
-// Bumped to the actual measured count rather than the unverified formula
-// value.
-const maximumEntryCount = 1489;
+// WFT-6 added 3 new source files — `src/cli/codegen-validate.ts`,
+// `src/core/registry-workflow-contract-draft.ts`, and
+// `src/core/registry-schema-conversion.ts` (both `core/` additions are
+// file-size-ceiling extractions from `core/registry-snapshot.ts`, split out
+// once WFT-6's own additions there — workflow-scoped activity folding —
+// pushed it over 500 lines) — each shipping a `.js` and a `.d.ts` in
+// `dist/`, +6 entries by that formula (1485 -> 1491). The measured
+// `npm pack --dry-run --json --ignore-scripts` entry count on this change
+// is 1493, 2 higher than the formula predicts; the same +2 unattributed
+// baseline drift the previous entry in this comment (2ac2e27e, WFT-6's
+// `codegen-validate.ts`-only revision) already found and left unattributed,
+// carried forward rather than re-caused. Bumped to the actual measured
+// count rather than the unverified formula value.
+const maximumEntryCount = 1493;
 
 type PackFile = {
   path: string;

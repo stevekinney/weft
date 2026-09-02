@@ -29,6 +29,8 @@ Two smaller, related behavior changes: a workflow's `tags` now come back alphabe
 
 No persisted-data schema change: `GET /v1/registry` is a derived, non-persisted introspection snapshot, not stored state.
 
+A related contract-identity change in this same release: a manifest's `contract.activities` now includes the workflow's own `.activities({...})`-scoped registrations (via the new `Engine.listWorkflowActivityDefinitions()`), which it previously omitted entirely. If you pin an expected `contractHash`/`revision` for a workflow that declares scoped activities, regenerate it — the identity now reflects those activities' schemas too. This also reaches `buildWorkerManifestFromRegistry()`: its workflow-level `contractHash`/`workflowRevision` for such a workflow changes even when you pass an empty `workflows: { <type>: [] }`, since the registry manifest it builds from now already carries those activities.
+
 ### `buildWorkerManifestFromRegistry()` digest values changed (WFT-5)
 
 `contractHash` and `workflowRevision` on `WorkerWorkflowContract`, and `contractHash` on `WorkerActivityContract`, now route through the canonical `contractHash()`/`deriveWorkflowRevision()`/`activityContractHash()` functions (`core/contract`) instead of `registry-contract-builder.ts`'s own ad hoc hashing. The formula folds in a `contractVersion` domain separator the old one never had, so the digest **strings** for an otherwise-unchanged registration differ from prior 0.23.x output.

@@ -18,12 +18,35 @@ import {
   parseWorkflowRevisionManifest,
   type WorkflowRevisionManifest,
 } from '../core/contract/index.ts';
+import { MAX_CONTRACT_IDENTIFIER_BYTES } from '../core/contract/limits.ts';
 import {
   REGISTRY_VERSION,
   type RegistryActivityEntry,
   type RegistryWorkflowEntry,
 } from '../core/registry-snapshot.ts';
 import { isRecord } from '../worker/manifest/is-record.ts';
+import { MAX_MANIFEST_WORKFLOW_COUNT } from '../worker/manifest/limits.ts';
+import { utf8ByteLength } from '../worker/manifest/utf8.ts';
+
+/**
+ * Ceiling on the raw `workflows` array's length, checked before a single
+ * element is parsed or cryptographically hashed. Reuses
+ * {@link MAX_MANIFEST_WORKFLOW_COUNT} (512) — the same per-manifest-count
+ * ceiling `worker/manifest/parse.ts` applies to an advertised worker
+ * manifest's `workflows`, and the value `core/contract/limits.ts`'s
+ * `MAX_CONTRACT_MESSAGE_COUNT` also uses — rather than defining a new,
+ * independently-tuned number for what is semantically the same kind of
+ * bound: how many manifest-shaped entries one untrusted payload may assert.
+ */
+const MAX_REGISTRY_WORKFLOW_MANIFEST_COUNT = MAX_MANIFEST_WORKFLOW_COUNT;
+
+/**
+ * Ceiling on the number of entries in `activeRevisions`, checked before a
+ * single key/value pair is read. Same value and rationale as
+ * {@link MAX_REGISTRY_WORKFLOW_MANIFEST_COUNT}: `activeRevisions` can never
+ * usefully point at more names than `workflows` could ever declare.
+ */
+const MAX_REGISTRY_ACTIVE_REVISION_COUNT = MAX_MANIFEST_WORKFLOW_COUNT;
 
 export type ValidateSnapshotResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -135,37 +158,41 @@ function readActiveRevisions(
       error: 'codegen: invalid registry snapshot: activeRevisions must be an object',
     };
   }
+  // Reject an oversized pointer map before the per-entry loop below ever
+  // touches a single key or value — a hostile `--server`/`--from` payload
+  // could otherwise supply millions of string-valued entries, all eagerly
+  // enumerated by `Object.entries()`, before resolution can reject even the
+  // first pointer for having no matching manifest.
+  const entryCount = Object.keys(value).length;
+  if (entryCount > MAX_REGISTRY_ACTIVE_REVISION_COUNT) {
+    return {
+      ok: false,
+      error: `codegen: invalid registry snapshot: activeRevisions has ${entryCount} entries, exceeding the maximum of ${MAX_REGISTRY_ACTIVE_REVISION_COUNT}`,
+    };
+  }
   for (const [name, revision] of Object.entries(value)) {
+    if (utf8ByteLength(name) > MAX_CONTRACT_IDENTIFIER_BYTES) {
+      return {
+        ok: false,
+        error: `codegen: invalid registry snapshot: activeRevisions key ${JSON.stringify(name)} exceeds the maximum identifier length of ${MAX_CONTRACT_IDENTIFIER_BYTES} bytes`,
+      };
+    }
     if (typeof revision !== 'string') {
       return {
         ok: false,
         error: `codegen: invalid registry snapshot: activeRevisions["${name}"] must be a string`,
       };
     }
+    if (utf8ByteLength(revision) > MAX_CONTRACT_IDENTIFIER_BYTES) {
+      return {
+        ok: false,
+        error: `codegen: invalid registry snapshot: activeRevisions[${JSON.stringify(name)}] exceeds the maximum identifier length of ${MAX_CONTRACT_IDENTIFIER_BYTES} bytes`,
+      };
+    }
   }
   return { ok: true, value: value as Readonly<Record<string, string>> };
 }
 
-/**
- * Parse every raw `workflows` array element as a {@link WorkflowRevisionManifest}
- * (hostile-input validated: bounded identifiers/entry counts/schema depth,
- * `contractHash` recomputed and compared — see `core/contract/manifest-parse.ts`),
- * then project the manifest named by each `activeRevisions` entry into the
- * `{ inputSchema?, outputSchema? }` shape {@link emitRegistryDeclaration}
- * consumes.
- *
- * A manifest in `workflows` with no matching `activeRevisions` entry
- * (a future installed-but-inactive revision) is silently excluded, not an
- * error — only the currently active manifest per name feeds codegen.
- *
- * Workflow schemas lose the boolean-root tolerance `RegistryActivityEntry`
- * keeps: `parseWorkflowRevisionManifest`'s schema-fragment parser requires a
- * JSON object at every `inputSchema`/`outputSchema` position, matching what
- * a real registry snapshot always produces (`definitionSchemaToJsonSchema`
- * never emits a boolean root). A hand-vendored `--from` file using a
- * boolean root schema is rejected with a clear diagnostic rather than
- * silently coarsened, a deliberate narrowing from v1 — see CHANGELOG.md.
- */
 /** Parse every raw `workflows` array element, short-circuiting with an indexed diagnostic on the first hostile-input rejection. */
 async function parseAllManifests(
   workflowsRaw: readonly unknown[],
@@ -185,6 +212,42 @@ async function parseAllManifests(
   return { ok: true, value: manifests };
 }
 
+/**
+ * Index every parsed manifest by its `(name, revision)` identity, rejecting
+ * the snapshot outright the moment a second manifest claims an identity
+ * already seen. A nested `Map` (`name -> revision -> manifest`) rather than
+ * a delimiter-joined composite key, since `name`/`revision` could themselves
+ * contain the delimiter and collide.
+ *
+ * A real `buildRegistrySnapshot()` output can never have two manifests
+ * share `(name, revision)` — `compareWorkflowManifests`'s module doc notes
+ * the revision tiebreak can never fire through the engine's own builder —
+ * but a hand-vendored `--from` file is untrusted, and letting a duplicate
+ * silently resolve to whichever manifest happens to come first (as a plain
+ * `.find()` would) means two callers reading the same snapshot could
+ * disagree about which contract is active.
+ */
+function indexManifestsByIdentity(
+  manifests: readonly WorkflowRevisionManifest[],
+): ValidateSnapshotResult<ReadonlyMap<string, ReadonlyMap<string, WorkflowRevisionManifest>>> {
+  const byName = new Map<string, Map<string, WorkflowRevisionManifest>>();
+  for (const manifest of manifests) {
+    let byRevision = byName.get(manifest.name);
+    if (byRevision === undefined) {
+      byRevision = new Map();
+      byName.set(manifest.name, byRevision);
+    }
+    if (byRevision.has(manifest.revision)) {
+      return {
+        ok: false,
+        error: `codegen: invalid registry snapshot: workflows contains more than one manifest for name ${JSON.stringify(manifest.name)}, revision ${JSON.stringify(manifest.revision)}`,
+      };
+    }
+    byRevision.set(manifest.revision, manifest);
+  }
+  return { ok: true, value: byName };
+}
+
 /** Project one manifest's contract into the `{ inputSchema?, outputSchema?, description?, tags? }` shape {@link emitRegistryDeclaration} consumes. */
 function toRegistryWorkflowEntry(manifest: WorkflowRevisionManifest): RegistryWorkflowEntry {
   const entry: RegistryWorkflowEntry = {};
@@ -200,22 +263,56 @@ function toRegistryWorkflowEntry(manifest: WorkflowRevisionManifest): RegistryWo
   return entry;
 }
 
+/**
+ * Parse every raw `workflows` array element as a {@link WorkflowRevisionManifest}
+ * (hostile-input validated: bounded identifiers/entry counts/schema depth,
+ * `contractHash` recomputed and compared — see `core/contract/manifest-parse.ts`),
+ * index them by `(name, revision)` identity (rejecting a duplicate — see
+ * {@link indexManifestsByIdentity}), then project the manifest named by each
+ * `activeRevisions` entry into the `{ inputSchema?, outputSchema? }` shape
+ * {@link emitRegistryDeclaration} consumes.
+ *
+ * A manifest in `workflows` with no matching `activeRevisions` entry
+ * (a future installed-but-inactive revision) is silently excluded, not an
+ * error — only the currently active manifest per name feeds codegen.
+ *
+ * Workflow schemas lose the boolean-root tolerance `RegistryActivityEntry`
+ * keeps: `parseWorkflowRevisionManifest`'s schema-fragment parser requires a
+ * JSON object at every `inputSchema`/`outputSchema` position, matching what
+ * a real registry snapshot always produces (`definitionSchemaToJsonSchema`
+ * never emits a boolean root). A hand-vendored `--from` file using a
+ * boolean root schema is rejected with a clear diagnostic rather than
+ * silently coarsened, a deliberate narrowing from v1 — see CHANGELOG.md.
+ */
 async function resolveActiveWorkflowEntries(
   workflowsRaw: readonly unknown[],
   activeRevisions: Readonly<Record<string, string>>,
 ): Promise<ValidateSnapshotResult<Record<string, RegistryWorkflowEntry>>> {
+  // Reject an oversized `workflows` array before a single element is parsed
+  // or cryptographically hashed — `parseAllManifests()` normalizes and
+  // recomputes a `contractHash` for every element, including inactive ones,
+  // so an unbounded array is an unbounded CPU/memory path for a hostile
+  // `--server`/`--from` payload.
+  if (workflowsRaw.length > MAX_REGISTRY_WORKFLOW_MANIFEST_COUNT) {
+    return {
+      ok: false,
+      error: `codegen: invalid registry snapshot: workflows has ${workflowsRaw.length} entries, exceeding the maximum of ${MAX_REGISTRY_WORKFLOW_MANIFEST_COUNT}`,
+    };
+  }
+
   const parsed = await parseAllManifests(workflowsRaw);
   if (!parsed.ok) return parsed;
-  const manifests = parsed.value;
+
+  const indexed = indexManifestsByIdentity(parsed.value);
+  if (!indexed.ok) return indexed;
+  const byName = indexed.value;
 
   const projected: Record<string, RegistryWorkflowEntry> = Object.create(null) as Record<
     string,
     RegistryWorkflowEntry
   >;
   for (const [name, revision] of Object.entries(activeRevisions)) {
-    const manifest = manifests.find(
-      (candidate) => candidate.name === name && candidate.revision === revision,
-    );
+    const manifest = byName.get(name)?.get(revision);
     if (manifest === undefined) {
       return {
         ok: false,

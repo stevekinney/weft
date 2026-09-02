@@ -503,6 +503,13 @@ must produce identical generated code regardless of when each was taken.
 `activities` is unchanged from `registryVersion: 1`: a flat
 `Record<name, entry>` of queue, schema, description, retry, and timeout
 metadata, since activities are not versioned contracts the way workflows are.
+A workflow's own `.activities({...})`-scoped registrations are separate from
+that flat catalog: when present, they appear under that workflow's own
+`contract.activities` (an `{ inputSchema?, outputSchema? }` pair per activity
+name), and factor into that workflow's `contractHash`/`revision` — a scoped
+activity's schema change moves the owning workflow's identity, the same way a
+change to its own input/output schema does. `contract.activities` is omitted
+entirely for a workflow with no `.activities({...})` step.
 
 Weft is pre-release, so `registryVersion: 1` is not accepted — see
 [`CHANGELOG.md`](../../CHANGELOG.md) for the migration note.

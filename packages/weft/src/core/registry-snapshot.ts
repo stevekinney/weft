@@ -33,14 +33,17 @@
 import type { ActivityMetadata } from './activity-registry.ts';
 import {
   buildWorkflowRevisionManifest,
-  type WorkflowContract,
+  type WorkflowActivityContract,
   type WorkflowRevisionManifest,
 } from './contract/index.ts';
 import type { Engine } from './engine.ts';
-import { definitionSchemaToJsonSchema } from './types/definition-schema-to-json.ts';
+import { convertSchema, RegistrySchemaConversionError } from './registry-schema-conversion.ts';
+import { toWorkflowContractDraft } from './registry-workflow-contract-draft.ts';
 import type { DefinitionSchema } from './types/definition-schema.ts';
 import type { RegisteredWorkflowDefinition } from './types/workflow-registry.ts';
 import { WeftError } from './weft-error.ts';
+
+export { RegistrySchemaConversionError };
 
 /**
  * Current registry contract version. Future incompatible changes to the
@@ -113,39 +116,6 @@ export type RegistrySnapshot = {
 };
 
 /**
- * Thrown when a registered workflow or activity schema cannot be converted
- * to JSON Schema. Carries the offending entity name and direction so
- * server-side observability (logs and telemetry) and non-HTTP callers
- * (the in-process MCP builder, programmatic users of `buildRegistrySnapshot`)
- * can identify which registration is broken. The HTTP REST binding
- * deliberately masks this on the wire as a generic `500 / Internal server
- * error` so a misbehaving registration cannot leak schema layout to clients
- * that only have `system:read`.
- */
-export class RegistrySchemaConversionError extends WeftError<'RegistrySchemaConversionError'> {
-  readonly entityKind: 'workflow' | 'activity';
-  readonly entityName: string;
-  readonly direction: 'inputSchema' | 'outputSchema';
-
-  constructor(
-    entityKind: 'workflow' | 'activity',
-    entityName: string,
-    direction: 'inputSchema' | 'outputSchema',
-    cause: unknown,
-  ) {
-    const causeMessage = cause instanceof Error ? cause.message : String(cause);
-    super(
-      'RegistrySchemaConversionError',
-      `Failed to convert ${direction} for ${entityKind} "${entityName}": ${causeMessage}`,
-      { cause },
-    );
-    this.entityKind = entityKind;
-    this.entityName = entityName;
-    this.direction = direction;
-  }
-}
-
-/**
  * Thrown when a registered workflow's contract cannot be published as a
  * {@link WorkflowRevisionManifest} because it exceeds one of the WFT-5
  * hostile-input limits (`core/contract/limits.ts`) — an identifier over
@@ -176,6 +146,21 @@ export class RegistryManifestLimitError extends WeftError<'RegistryManifestLimit
 }
 
 /**
+ * Order two strings by codepoint rather than `localeCompare` (project rule:
+ * deterministic comparisons in runtime logic). Shared by every codepoint
+ * sort in this module (`sortedWorkflows`, `sortedActivities`, a workflow's
+ * scoped-activity list) so the tie branch — unreachable through any one
+ * comparator alone, since the names it compares within one snapshot are
+ * always unique — has one shared implementation exercised across all of
+ * them, rather than a separately-uncovered copy per call site.
+ */
+function compareCodepoint(a: string, b: string): number {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+}
+
+/**
  * Order two workflow revision manifests by `(name, revision)`. `workflows`
  * is sorted with this comparator so registry output is deterministic
  * regardless of registration order.
@@ -197,64 +182,6 @@ export function compareWorkflowManifests(
   if (a.revision < b.revision) return -1;
   if (a.revision > b.revision) return 1;
   return 0;
-}
-
-/** Mutable draft of the {@link WorkflowContract} one registry workflow entry projects into. */
-type WorkflowContractDraft = {
-  name: string;
-  workflowVersion: string;
-  description?: string;
-  tags?: ReadonlyArray<string>;
-  inputSchema?: Record<string, unknown>;
-  outputSchema?: Record<string, unknown>;
-  signals?: Readonly<Record<string, RegistryMessageEntry>>;
-  updates?: Readonly<Record<string, RegistryMessageEntry>>;
-  queries?: Readonly<Record<string, RegistryMessageEntry>>;
-  finalizer?: RegistryMessageEntry;
-};
-
-function applyDraftSchemas(draft: WorkflowContractDraft, entry: RegistryWorkflowEntry): void {
-  if (entry.description !== undefined) draft.description = entry.description;
-  if (entry.tags !== undefined && entry.tags.length > 0) draft.tags = entry.tags;
-  if (entry.inputSchema !== undefined) draft.inputSchema = entry.inputSchema;
-  if (entry.outputSchema !== undefined) draft.outputSchema = entry.outputSchema;
-}
-
-function applyDraftMessages(draft: WorkflowContractDraft, entry: RegistryWorkflowEntry): void {
-  if (entry.signals !== undefined && Object.keys(entry.signals).length > 0) {
-    draft.signals = entry.signals;
-  }
-  if (entry.updates !== undefined && Object.keys(entry.updates).length > 0) {
-    draft.updates = entry.updates;
-  }
-  if (entry.queries !== undefined && Object.keys(entry.queries).length > 0) {
-    draft.queries = entry.queries;
-  }
-}
-
-/**
- * Project a converted {@link RegistryWorkflowEntry} (schemas already turned
- * into JSON Schema by {@link buildWorkflowEntry}) into the
- * `core/contract` {@link WorkflowContract} shape `buildWorkflowRevisionManifest`
- * consumes. Deliberately does not re-run schema conversion — `entry`'s
- * schemas are already `Record<string, unknown>` JSON Schema, structurally
- * identical to what `WorkflowContract` expects, so re-converting through
- * `buildWorkflowContract` (which expects raw `DefinitionSchema`) would
- * double-convert and risk a different error shape for the same failure.
- * Never sets `activities`: the registry's activity catalog is a flat,
- * workflow-independent map (`RegistrySnapshot.activities`), not scoped per
- * workflow, so there is nothing here to attach.
- */
-function toWorkflowContractDraft(
-  workflowType: string,
-  workflowVersion: string,
-  entry: RegistryWorkflowEntry,
-): WorkflowContract {
-  const draft: WorkflowContractDraft = { name: workflowType, workflowVersion };
-  applyDraftSchemas(draft, entry);
-  applyDraftMessages(draft, entry);
-  if (entry.finalizer !== undefined) draft.finalizer = entry.finalizer;
-  return draft;
 }
 
 /** Options accepted by {@link buildRegistrySnapshot}. */
@@ -292,34 +219,43 @@ export async function buildRegistrySnapshot(
 
   // Sort with explicit codepoint comparators rather than `localeCompare`
   // (project rule: deterministic comparisons in runtime logic).
-  const sortedWorkflows = workflowDefinitions.toSorted((a, b) => {
-    if (a.type < b.type) return -1;
-    if (a.type > b.type) return 1;
-    return 0;
-  });
-  const sortedActivities = activityDefinitions.toSorted((a, b) => {
-    if (a.name < b.name) return -1;
-    if (a.name > b.name) return 1;
-    return 0;
-  });
+  const sortedWorkflows = workflowDefinitions.toSorted((a, b) => compareCodepoint(a.type, b.type));
+  const sortedActivities = activityDefinitions.toSorted((a, b) => compareCodepoint(a.name, b.name));
 
-  const manifests: WorkflowRevisionManifest[] = [];
+  // Each workflow's manifest hashing (`crypto.subtle`-backed) is independent
+  // of every other's, so build them concurrently rather than one `await` at
+  // a time — the same tradeoff `buildWorkerManifestFromRegistry` makes for
+  // its own per-workflow work with `Promise.all`. Each mapped promise
+  // catches its own workflow's failure so `RegistryManifestLimitError`
+  // still names the one workflow whose contract exceeded a limit, not
+  // whichever one happened to reject first.
+  const manifests = await Promise.all(
+    sortedWorkflows.map(async (definition) => {
+      const entry = buildWorkflowEntry(definition);
+      const workflowScopedActivities = buildWorkflowScopedActivityContracts(
+        engine,
+        definition.type,
+      );
+      const contract = toWorkflowContractDraft(
+        definition.type,
+        definition.version,
+        entry,
+        workflowScopedActivities,
+      );
+      try {
+        return await buildWorkflowRevisionManifest(contract);
+      } catch (cause) {
+        throw new RegistryManifestLimitError(definition.type, cause);
+      }
+    }),
+  );
   // Null-prototype: a workflow literally named `__proto__` is grammar-valid
   // (see name-grammar.ts) and must be stored as an own property rather than
   // mutate the prototype chain, which would silently drop it from JSON
   // output — same rationale as `workflows`/`activities` below.
   const activeRevisions = Object.create(null) as Record<string, string>;
-  for (const definition of sortedWorkflows) {
-    const entry = buildWorkflowEntry(definition);
-    const contract = toWorkflowContractDraft(definition.type, definition.version, entry);
-    let manifest: WorkflowRevisionManifest;
-    try {
-      manifest = await buildWorkflowRevisionManifest(contract);
-    } catch (cause) {
-      throw new RegistryManifestLimitError(definition.type, cause);
-    }
-    manifests.push(manifest);
-    activeRevisions[definition.type] = manifest.revision;
+  for (const manifest of manifests) {
+    activeRevisions[manifest.name] = manifest.revision;
   }
   const sortedManifests = manifests.toSorted(compareWorkflowManifests);
 
@@ -337,6 +273,58 @@ export async function buildRegistrySnapshot(
     activeRevisions,
     activities,
   };
+}
+
+/**
+ * Convert one workflow's `.activities({...})`-scoped registrations
+ * (`Engine.listWorkflowActivityDefinitions`, WFT-6) into the
+ * `{ inputSchema?, outputSchema? }` pairs `WorkflowContract.activities`
+ * carries, sorted alphabetically by name for deterministic output. These
+ * are folded into the workflow's own manifest contract — not
+ * `RegistrySnapshot.activities`, the flat catalog `buildActivityEntry`
+ * below feeds — so a scoped activity's schema change moves the owning
+ * workflow's `contractHash`/`revision`, the same way it moves a worker
+ * manifest's contract in `worker/manifest/registry-contract-builder.ts`.
+ * An activity with neither schema declared still contributes an empty
+ * `{}` entry: its *presence* under this workflow, not just its schema, is
+ * part of the contract.
+ */
+function buildWorkflowScopedActivityContracts(
+  engine: Engine,
+  workflowType: string,
+): Record<string, WorkflowActivityContract> {
+  // Null-prototype: an activity literally named `__proto__` is
+  // grammar-valid (see name-grammar.ts) — same rationale as `activities`
+  // and `activeRevisions` elsewhere in this module.
+  const activities = Object.create(null) as Record<string, WorkflowActivityContract>;
+  const scoped = engine
+    .listWorkflowActivityDefinitions(workflowType)
+    .toSorted((a, b) => compareCodepoint(a.name, b.name));
+  for (const metadata of scoped) {
+    const entityName = `${workflowType}.activities.${metadata.name}`;
+    const contract: {
+      inputSchema?: Record<string, unknown>;
+      outputSchema?: Record<string, unknown>;
+    } = {};
+    if (metadata.inputSchema !== undefined) {
+      contract.inputSchema = convertSchema(
+        'activity',
+        entityName,
+        'inputSchema',
+        metadata.inputSchema,
+      );
+    }
+    if (metadata.outputSchema !== undefined) {
+      contract.outputSchema = convertSchema(
+        'activity',
+        entityName,
+        'outputSchema',
+        metadata.outputSchema,
+      );
+    }
+    activities[metadata.name] = contract;
+  }
+  return activities;
 }
 
 function buildWorkflowEntry(definition: RegisteredWorkflowDefinition): RegistryWorkflowEntry {
@@ -483,18 +471,4 @@ export function buildActivityEntry(metadata: ActivityMetadata): RegistryActivity
     entry.timeout = metadata.timeout;
   }
   return entry;
-}
-
-function convertSchema(
-  entityKind: 'workflow' | 'activity',
-  entityName: string,
-  field: 'inputSchema' | 'outputSchema',
-  schema: DefinitionSchema,
-): Record<string, unknown> {
-  try {
-    const direction = field === 'inputSchema' ? 'input' : 'output';
-    return definitionSchemaToJsonSchema(schema, direction);
-  } catch (cause) {
-    throw new RegistrySchemaConversionError(entityKind, entityName, field, cause);
-  }
 }

@@ -18,7 +18,9 @@ describe('ScheduleFormFields — create mode', () => {
     });
 
     expect(getByRole('combobox', { name: 'Workflow type' })).not.toBeNull();
-    expect(queryByText('Registry lookup unavailable — enter the workflow type name.')).toBeNull();
+    expect(
+      queryByText('No registered workflow types found — enter the workflow type name.'),
+    ).toBeNull();
   });
 
   test('degrades to a free-text field when registry options are unavailable', async () => {
@@ -28,7 +30,28 @@ describe('ScheduleFormFields — create mode', () => {
       props: { form, mode: 'create', workflowTypeOptions: undefined },
     });
 
-    expect(getByText('Registry lookup unavailable — enter the workflow type name.')).not.toBeNull();
+    expect(
+      getByText('No registered workflow types found — enter the workflow type name.'),
+    ).not.toBeNull();
+    expect(queryByRole('combobox', { name: 'Workflow type' })).toBeNull();
+  });
+
+  test('degrades to a free-text field when the registry resolves with zero registered workflow types', async () => {
+    // A resolved-but-empty `activeRevisions` (WFT-6) is a distinct state from
+    // still-loading/errored (both collapse to `undefined` upstream in
+    // `schedule-form-drawer.svelte`) — an empty array is `!== undefined`, so
+    // this must be handled explicitly rather than falling out of the same
+    // check, or a genuinely empty registry renders an unusable zero-option
+    // Select instead of the free-text fallback.
+    const form = new ScheduleFormState();
+
+    const { getByText, queryByRole } = render(ScheduleFormFields, {
+      props: { form, mode: 'create', workflowTypeOptions: [] },
+    });
+
+    expect(
+      getByText('No registered workflow types found — enter the workflow type name.'),
+    ).not.toBeNull();
     expect(queryByRole('combobox', { name: 'Workflow type' })).toBeNull();
   });
 

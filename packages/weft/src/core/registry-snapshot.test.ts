@@ -551,6 +551,70 @@ describe('buildRegistrySnapshot', () => {
     const snapshot = await buildRegistrySnapshot(engine);
     expect(snapshot.activities['tagged']).not.toHaveProperty('tags');
   });
+
+  it('folds a workflow-scoped activity schema into that workflow manifest’s contractHash and revision (WFT-6)', async () => {
+    async function snapshotFor(inputSchema: z.ZodTypeAny) {
+      const localEngine = createEngine();
+      try {
+        localEngine.register(
+          workflow({ name: 'checkout' })
+            .activities({
+              charge: activity({
+                name: 'charge',
+                execute: async () => ({ ok: true }),
+                inputSchema,
+              }),
+            })
+            .execute(async function* () {}),
+        );
+        const snapshot = await buildRegistrySnapshot(localEngine);
+        return findManifest(snapshot, 'checkout');
+      } finally {
+        localEngine[Symbol.dispose]();
+      }
+    }
+
+    const before = await snapshotFor(z.object({ amountCents: z.number() }));
+    const after = await snapshotFor(z.object({ amountUsd: z.string() }));
+
+    expect(before).toBeDefined();
+    expect(after).toBeDefined();
+    // The scoped activity is part of the contract at all: absent from a
+    // workflow with no `.activities({...})` step (asserted by the next
+    // case), present here.
+    expect(before?.contract.activities?.['charge']).toBeDefined();
+    // Same workflow, same version, only the scoped activity's input schema
+    // differs — contractHash and revision must both move, or a caller
+    // resolving "the same contract, redeployed" could miss a real change to
+    // what the workflow's own `.activities({...})` step accepts.
+    expect(after?.contractHash).not.toBe(before?.contractHash);
+    expect(after?.revision).not.toBe(before?.revision);
+  });
+
+  it('orders a workflow’s scoped activities alphabetically by name regardless of registration order', async () => {
+    engine = createEngine();
+    engine.register(
+      workflow({ name: 'checkout' })
+        .activities({
+          refund: activity({ name: 'refund', execute: async () => undefined }),
+          charge: activity({ name: 'charge', execute: async () => undefined }),
+        })
+        .execute(async function* () {}),
+    );
+
+    const snapshot = await buildRegistrySnapshot(engine);
+    const manifest = findManifest(snapshot, 'checkout');
+    expect(Object.keys(manifest?.contract.activities ?? {})).toEqual(['charge', 'refund']);
+  });
+
+  it('omits `contract.activities` for a workflow with no `.activities({...})` step', async () => {
+    engine = createEngine();
+    engine.register(workflow({ name: 'no-activities' }).execute(async function* () {}));
+
+    const snapshot = await buildRegistrySnapshot(engine);
+    const manifest = findManifest(snapshot, 'no-activities');
+    expect(manifest?.contract.activities).toBeUndefined();
+  });
 });
 
 describe('compareWorkflowManifests', () => {

@@ -452,6 +452,41 @@ describe('buildWorkerManifestFromRegistry', () => {
     expect(manifest.workflows['checkout']?.activities['charge']?.contractHash).toBe(scopedHash);
   });
 
+  it('folds a workflow-scoped activity into the workflow-level contractHash even when the caller declares no activities for it (WFT-6)', async () => {
+    // `buildRegistrySnapshot` (WFT-6) now folds a workflow's own
+    // `.activities({...})` registrations into that workflow's manifest
+    // `contract.activities` — see `core/registry-snapshot.ts`. This
+    // manifest is `baseContract` below; a caller-declared empty
+    // `workflows: { checkout: [] }` no longer means "no activities in the
+    // hashed contract" the way it did before that manifest carried its own
+    // activities, since `contractForHash` only overrides `baseContract`
+    // when the caller's own list is non-empty.
+    async function workflowContractHashFor(inputSchema: z.ZodTypeAny): Promise<string> {
+      const localEngine = createEngine();
+      try {
+        localEngine.register(
+          workflow({ name: 'checkout' })
+            .activities({
+              charge: activity({ name: 'charge', execute: async () => undefined, inputSchema }),
+            })
+            .execute(async function* () {}),
+        );
+        const manifest = await buildWorkerManifestFromRegistry(localEngine, {
+          workflows: { checkout: [] },
+          deployment: DEPLOYMENT,
+          runtime: RUNTIME,
+        });
+        return manifest.workflows['checkout']?.contractHash ?? '';
+      } finally {
+        localEngine[Symbol.dispose]();
+      }
+    }
+
+    const before = await workflowContractHashFor(z.object({ amountCents: z.number() }));
+    const after = await workflowContractHashFor(z.object({ amountUsd: z.string() }));
+    expect(after).not.toBe(before);
+  });
+
   it('defaults sdkVersion and protocolVersion, and accepts explicit overrides', async () => {
     engine = createEngine();
     engine.register(workflow({ name: 'checkout' }).execute(async function* () {}));
