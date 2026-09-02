@@ -10,7 +10,9 @@ import { ActivityRegistry } from './activity-registry.ts';
 import { Engine } from './engine.ts';
 import {
   buildRegistrySnapshot,
+  compareWorkflowManifests,
   REGISTRY_VERSION,
+  RegistryManifestLimitError,
   RegistrySchemaConversionError,
 } from './registry-snapshot.ts';
 import type { WorkflowDefinition } from './types.ts';
@@ -18,6 +20,12 @@ import { activity, query, signal, update, workflow } from './types.ts';
 
 function createEngine(): Engine {
   return new Engine({ storage: new MemoryStorage() });
+}
+
+/** Find the active manifest for `name` — every workflow entry in these tests has exactly one registered revision. */
+function findManifest(snapshot: Awaited<ReturnType<typeof buildRegistrySnapshot>>, name: string) {
+  const revision = snapshot.activeRevisions[name];
+  return snapshot.workflows.find((m) => m.name === name && m.revision === revision);
 }
 
 describe('buildRegistrySnapshot', () => {
@@ -28,14 +36,41 @@ describe('buildRegistrySnapshot', () => {
     engine = undefined;
   });
 
-  it('returns registryVersion 1', () => {
+  it('returns registryVersion 2', async () => {
     engine = createEngine();
-    const snapshot = buildRegistrySnapshot(engine);
+    const snapshot = await buildRegistrySnapshot(engine);
     expect(snapshot.registryVersion).toBe(REGISTRY_VERSION);
-    expect(snapshot.registryVersion).toBe(1);
+    expect(snapshot.registryVersion).toBe(2);
   });
 
-  it('includes workflows with their schema, description, and tags', () => {
+  it('generatedAt reflects the injected clock', async () => {
+    engine = createEngine();
+    const snapshot = await buildRegistrySnapshot(engine, { now: () => 0 });
+    expect(snapshot.generatedAt).toBe('1970-01-01T00:00:00.000Z');
+  });
+
+  it('two consecutive buildRegistrySnapshot calls produce identical output apart from generatedAt', async () => {
+    engine = createEngine();
+    engine.register(
+      workflow({
+        name: 'welcome',
+        inputSchema: z.object({ name: z.string() }),
+        description: 'Greets a person.',
+        tags: ['demo'],
+      }).execute(async function* () {}),
+    );
+    engine.register(activity({ name: 'ping', execute: async () => undefined }));
+
+    // Pin the same clock value on both calls so the only thing that could
+    // differ is non-determinism in the builder itself — `generatedAt`
+    // equality is asserted directly rather than excluded, since both calls
+    // share one fixed `now`.
+    const first = await buildRegistrySnapshot(engine, { now: () => 1_000 });
+    const second = await buildRegistrySnapshot(engine, { now: () => 1_000 });
+    expect(second).toEqual(first);
+  });
+
+  it('includes workflows with their schema, description, and tags', async () => {
     engine = createEngine();
     const welcomeWorkflow = workflow({
       name: 'welcome',
@@ -48,9 +83,16 @@ describe('buildRegistrySnapshot', () => {
     });
     engine.register(welcomeWorkflow);
 
-    const snapshot = buildRegistrySnapshot(engine);
+    const snapshot = await buildRegistrySnapshot(engine);
+    const manifest = findManifest(snapshot, 'welcome');
 
-    expect(snapshot.workflows['welcome']).toEqual({
+    expect(manifest?.contract).toEqual({
+      name: 'welcome',
+      workflowVersion: '0.0.0',
+      description: 'Greets a person.',
+      // Tags come back alphabetically sorted on the wire (normalizeWorkflowContract),
+      // not in registration order — a deliberate v2 behavior change (CHANGELOG.md).
+      tags: ['demo', 'greeting'],
       inputSchema: {
         type: 'object',
         properties: { name: { type: 'string' } },
@@ -63,12 +105,10 @@ describe('buildRegistrySnapshot', () => {
         required: ['greeting'],
         additionalProperties: false,
       },
-      description: 'Greets a person.',
-      tags: ['greeting', 'demo'],
     });
   });
 
-  it('includes registered signal, update, and query schemas', () => {
+  it('includes registered signal, update, and query schemas', async () => {
     engine = createEngine();
     const interactiveWorkflow = workflow({ name: 'interactive' })
       .signals({
@@ -91,9 +131,10 @@ describe('buildRegistrySnapshot', () => {
       .execute(async function* () {});
     engine.register(interactiveWorkflow);
 
-    const snapshot = buildRegistrySnapshot(engine);
+    const snapshot = await buildRegistrySnapshot(engine);
+    const manifest = findManifest(snapshot, 'interactive');
 
-    expect(snapshot.workflows['interactive']).toMatchObject({
+    expect(manifest?.contract).toMatchObject({
       signals: {
         approve: {
           inputSchema: {
@@ -132,13 +173,10 @@ describe('buildRegistrySnapshot', () => {
         },
       },
     });
-    expect(Object.keys(snapshot.workflows['interactive']?.signals ?? {})).toEqual([
-      'approve',
-      'ping',
-    ]);
+    expect(Object.keys(manifest?.contract.signals ?? {})).toEqual(['approve', 'ping']);
   });
 
-  it('keys message metadata by runtime definition names instead of builder aliases', () => {
+  it('keys message metadata by runtime definition names instead of builder aliases', async () => {
     engine = createEngine();
     const aliasedWorkflow = workflow({ name: 'aliased-messages' })
       .signals({ approveAlias: signal('approval') })
@@ -147,29 +185,28 @@ describe('buildRegistrySnapshot', () => {
       .execute(async function* () {});
     engine.register(aliasedWorkflow);
 
-    const snapshot = buildRegistrySnapshot(engine);
-    const entry = snapshot.workflows['aliased-messages'];
+    const snapshot = await buildRegistrySnapshot(engine);
+    const manifest = findManifest(snapshot, 'aliased-messages');
 
-    expect(Object.keys(entry?.signals ?? {})).toEqual(['approval']);
-    expect(Object.keys(entry?.updates ?? {})).toEqual(['rename']);
-    expect(Object.keys(entry?.queries ?? {})).toEqual(['status']);
+    expect(Object.keys(manifest?.contract.signals ?? {})).toEqual(['approval']);
+    expect(Object.keys(manifest?.contract.updates ?? {})).toEqual(['rename']);
+    expect(Object.keys(manifest?.contract.queries ?? {})).toEqual(['status']);
   });
 
-  it('omits schema fields that are absent on the workflow registration', () => {
+  it('omits schema fields that are absent on the workflow registration', async () => {
     engine = createEngine();
     const schemalessWorkflow = workflow({ name: 'schemaless' }).execute(async function* () {});
     engine.register(schemalessWorkflow);
 
-    const snapshot = buildRegistrySnapshot(engine);
-
-    const entry = snapshot.workflows['schemaless'];
-    expect(entry).toBeDefined();
-    expect(entry).not.toHaveProperty('inputSchema');
-    expect(entry).not.toHaveProperty('outputSchema');
-    expect(entry).not.toHaveProperty('description');
+    const snapshot = await buildRegistrySnapshot(engine);
+    const manifest = findManifest(snapshot, 'schemaless');
+    expect(manifest).toBeDefined();
+    expect(manifest?.contract).not.toHaveProperty('inputSchema');
+    expect(manifest?.contract).not.toHaveProperty('outputSchema');
+    expect(manifest?.contract).not.toHaveProperty('description');
   });
 
-  it('includes only one schema when only the input schema is registered', () => {
+  it('includes only one schema when only the input schema is registered', async () => {
     engine = createEngine();
     const partialWorkflow = workflow({
       name: 'partial',
@@ -177,23 +214,24 @@ describe('buildRegistrySnapshot', () => {
     }).execute(async function* () {});
     engine.register(partialWorkflow);
 
-    const snapshot = buildRegistrySnapshot(engine);
-    const entry = snapshot.workflows['partial'];
-    expect(entry).toBeDefined();
-    expect(entry?.inputSchema).toBeDefined();
-    expect(entry).not.toHaveProperty('outputSchema');
+    const snapshot = await buildRegistrySnapshot(engine);
+    const manifest = findManifest(snapshot, 'partial');
+    expect(manifest).toBeDefined();
+    expect(manifest?.contract.inputSchema).toBeDefined();
+    expect(manifest?.contract).not.toHaveProperty('outputSchema');
   });
 
-  it('does not emit empty tags arrays', () => {
+  it('does not emit empty tags arrays', async () => {
     engine = createEngine();
     const untaggedWorkflow = workflow({ name: 'untagged' }).execute(async function* () {});
     engine.register(untaggedWorkflow);
 
-    const snapshot = buildRegistrySnapshot(engine);
-    expect(snapshot.workflows['untagged']).not.toHaveProperty('tags');
+    const snapshot = await buildRegistrySnapshot(engine);
+    const manifest = findManifest(snapshot, 'untagged');
+    expect(manifest?.contract).not.toHaveProperty('tags');
   });
 
-  it('includes a registered definition-level finalizer schema on the workflow entry (WFT-5)', () => {
+  it('includes a registered definition-level finalizer schema on the workflow entry (WFT-5)', async () => {
     engine = createEngine();
     const cleanup = activity({
       name: 'cleanup',
@@ -205,26 +243,27 @@ describe('buildRegistrySnapshot', () => {
       workflow({ name: 'provisioned', finalizer: cleanup }).execute(async function* () {}),
     );
 
-    const snapshot = buildRegistrySnapshot(engine);
-    const entry = snapshot.workflows['provisioned'];
-    expect(entry?.finalizer?.inputSchema).toEqual({
+    const snapshot = await buildRegistrySnapshot(engine);
+    const manifest = findManifest(snapshot, 'provisioned');
+    expect(manifest?.contract.finalizer?.inputSchema).toEqual({
       type: 'object',
       properties: { sandboxId: { type: 'string' } },
       required: ['sandboxId'],
       additionalProperties: false,
     });
-    expect(entry?.finalizer?.outputSchema).toEqual({ type: 'boolean' });
+    expect(manifest?.contract.finalizer?.outputSchema).toEqual({ type: 'boolean' });
   });
 
-  it('omits the finalizer field entirely when no finalizer is registered', () => {
+  it('omits the finalizer field entirely when no finalizer is registered', async () => {
     engine = createEngine();
     engine.register(workflow({ name: 'no-finalizer' }).execute(async function* () {}));
 
-    const snapshot = buildRegistrySnapshot(engine);
-    expect(snapshot.workflows['no-finalizer']).not.toHaveProperty('finalizer');
+    const snapshot = await buildRegistrySnapshot(engine);
+    const manifest = findManifest(snapshot, 'no-finalizer');
+    expect(manifest?.contract).not.toHaveProperty('finalizer');
   });
 
-  it('includes activities with queue, schemas, description, retry policy, and timeout', () => {
+  it('includes activities with queue, schemas, description, retry policy, and timeout', async () => {
     engine = createEngine();
     engine.register(
       activity({
@@ -244,7 +283,7 @@ describe('buildRegistrySnapshot', () => {
       }),
     );
 
-    const snapshot = buildRegistrySnapshot(engine);
+    const snapshot = await buildRegistrySnapshot(engine);
     expect(snapshot.activities['sendEmail']).toEqual({
       queue: 'mail',
       inputSchema: {
@@ -273,11 +312,11 @@ describe('buildRegistrySnapshot', () => {
     });
   });
 
-  it('omits activity schema fields that are absent on registration', () => {
+  it('omits activity schema fields that are absent on registration', async () => {
     engine = createEngine();
     engine.register(activity({ name: 'noop', execute: async () => undefined }));
 
-    const snapshot = buildRegistrySnapshot(engine);
+    const snapshot = await buildRegistrySnapshot(engine);
     const entry = snapshot.activities['noop'];
     expect(entry).toBeDefined();
     expect(entry).not.toHaveProperty('inputSchema');
@@ -287,14 +326,15 @@ describe('buildRegistrySnapshot', () => {
     expect(typeof entry?.queue).toBe('string');
   });
 
-  it('returns an empty registry when no workflows or activities are registered', () => {
+  it('returns an empty registry when no workflows or activities are registered', async () => {
     engine = createEngine();
-    const snapshot = buildRegistrySnapshot(engine);
-    expect(snapshot.workflows).toEqual({});
+    const snapshot = await buildRegistrySnapshot(engine);
+    expect(snapshot.workflows).toEqual([]);
+    expect(snapshot.activeRevisions).toEqual({});
     expect(snapshot.activities).toEqual({});
   });
 
-  it('orders workflow keys alphabetically by codepoint', () => {
+  it('orders workflow manifests alphabetically by name', async () => {
     engine = createEngine();
     const charlieWorkflow = workflow({ name: 'charlie' }).execute(async function* () {});
     engine.register(charlieWorkflow);
@@ -303,21 +343,21 @@ describe('buildRegistrySnapshot', () => {
     const bravoWorkflow = workflow({ name: 'bravo' }).execute(async function* () {});
     engine.register(bravoWorkflow);
 
-    const snapshot = buildRegistrySnapshot(engine);
-    expect(Object.keys(snapshot.workflows)).toEqual(['alpha', 'bravo', 'charlie']);
+    const snapshot = await buildRegistrySnapshot(engine);
+    expect(snapshot.workflows.map((m) => m.name)).toEqual(['alpha', 'bravo', 'charlie']);
   });
 
-  it('orders activity keys alphabetically by codepoint', () => {
+  it('orders activity keys alphabetically by codepoint', async () => {
     engine = createEngine();
     engine.register(activity({ name: 'xyz', execute: async () => undefined }));
     engine.register(activity({ name: 'abc', execute: async () => undefined }));
     engine.register(activity({ name: 'mno', execute: async () => undefined }));
 
-    const snapshot = buildRegistrySnapshot(engine);
+    const snapshot = await buildRegistrySnapshot(engine);
     expect(Object.keys(snapshot.activities)).toEqual(['abc', 'mno', 'xyz']);
   });
 
-  it('rejects integer-like names before they can affect registry snapshot ordering', () => {
+  it('rejects integer-like names before they can affect registry snapshot ordering', async () => {
     engine = createEngine();
 
     expect(() => workflow({ name: '1' }).execute(async function* () {})).toThrow(
@@ -337,12 +377,12 @@ describe('buildRegistrySnapshot', () => {
       'activity name "1" is invalid',
     );
 
-    const snapshot = buildRegistrySnapshot(engine);
-    expect(Object.keys(snapshot.workflows)).toEqual([]);
+    const snapshot = await buildRegistrySnapshot(engine);
+    expect(snapshot.workflows).toEqual([]);
     expect(Object.keys(snapshot.activities)).toEqual([]);
   });
 
-  it('throws RegistrySchemaConversionError with workflow context when input schema conversion fails', () => {
+  it('throws RegistrySchemaConversionError with workflow context when input schema conversion fails', async () => {
     engine = createEngine();
     const brokenSchema = makeBrokenSchema('input');
     const brokenWorkflow = workflow({
@@ -351,9 +391,10 @@ describe('buildRegistrySnapshot', () => {
     }).execute(async function* () {});
     engine.register(brokenWorkflow);
 
+    await expect(buildRegistrySnapshot(engine)).rejects.toThrow(RegistrySchemaConversionError);
     let captured: unknown;
     try {
-      buildRegistrySnapshot(engine);
+      await buildRegistrySnapshot(engine);
     } catch (error) {
       captured = error;
     }
@@ -365,7 +406,7 @@ describe('buildRegistrySnapshot', () => {
     expect(error.message).toMatch(/Failed to convert inputSchema for workflow "broken"/);
   });
 
-  it('throws RegistrySchemaConversionError with workflow context when output schema conversion fails', () => {
+  it('throws RegistrySchemaConversionError with workflow context when output schema conversion fails', async () => {
     engine = createEngine();
     const brokenSchema = makeBrokenSchema('output');
     const brokenWorkflow2 = workflow({
@@ -376,7 +417,7 @@ describe('buildRegistrySnapshot', () => {
 
     let captured: unknown;
     try {
-      buildRegistrySnapshot(engine);
+      await buildRegistrySnapshot(engine);
     } catch (error) {
       captured = error;
     }
@@ -387,7 +428,7 @@ describe('buildRegistrySnapshot', () => {
     expect(error.direction).toBe('outputSchema');
   });
 
-  it('throws RegistrySchemaConversionError with activity context when input schema conversion fails', () => {
+  it('throws RegistrySchemaConversionError with activity context when input schema conversion fails', async () => {
     engine = createEngine();
     const brokenSchema = makeBrokenSchema('input');
     engine.register(
@@ -400,7 +441,7 @@ describe('buildRegistrySnapshot', () => {
 
     let captured: unknown;
     try {
-      buildRegistrySnapshot(engine);
+      await buildRegistrySnapshot(engine);
     } catch (error) {
       captured = error;
     }
@@ -411,7 +452,7 @@ describe('buildRegistrySnapshot', () => {
     expect(error.direction).toBe('inputSchema');
   });
 
-  it('throws RegistrySchemaConversionError with activity context when output schema conversion fails', () => {
+  it('throws RegistrySchemaConversionError with activity context when output schema conversion fails', async () => {
     engine = createEngine();
     const brokenSchema = makeBrokenSchema('output');
     engine.register(
@@ -424,7 +465,7 @@ describe('buildRegistrySnapshot', () => {
 
     let captured: unknown;
     try {
-      buildRegistrySnapshot(engine);
+      await buildRegistrySnapshot(engine);
     } catch (error) {
       captured = error;
     }
@@ -435,20 +476,39 @@ describe('buildRegistrySnapshot', () => {
     expect(error.direction).toBe('outputSchema');
   });
 
-  it('does not include remote-only activities (workers without local registrations are excluded)', () => {
+  it('throws RegistryManifestLimitError when a registered workflow contract exceeds a WFT-5 limit', async () => {
+    engine = createEngine();
+    // Nothing in engine registration bounds `version` length, unlike the
+    // manifest-building step this exercises — see MAX_CONTRACT_IDENTIFIER_BYTES.
+    engine.register(
+      workflow({ name: 'oversized', version: 'a'.repeat(600) }).execute(async function* () {}),
+    );
+
+    let captured: unknown;
+    try {
+      await buildRegistrySnapshot(engine);
+    } catch (error) {
+      captured = error;
+    }
+    expect(captured).toBeInstanceOf(RegistryManifestLimitError);
+    const error = captured as RegistryManifestLimitError;
+    expect(error.workflowType).toBe('oversized');
+  });
+
+  it('does not include remote-only activities (workers without local registrations are excluded)', async () => {
     engine = createEngine();
     // Locally register one activity. A "remote-only" activity is one that exists only
     // on a connected worker, not in the engine's activity registry. Since
     // buildRegistrySnapshot only reads from engine.listActivityDefinitions(), there is
     // no path through which a remote-only name could leak into the snapshot.
     engine.register(activity({ name: 'local', execute: async () => undefined }));
-    const snapshot = buildRegistrySnapshot(engine);
+    const snapshot = await buildRegistrySnapshot(engine);
     expect(Object.keys(snapshot.activities)).toEqual(['local']);
     // Sanity: a fictitious remote-only name must not appear.
     expect(snapshot.activities).not.toHaveProperty('remoteOnly');
   });
 
-  it('safely handles workflows and activities named "__proto__"', () => {
+  it('safely handles workflows and activities named "__proto__"', async () => {
     // Plain `{}` objects treat assignment to `__proto__` as a prototype mutation
     // rather than an own property, which would silently drop the entry from
     // JSON output. Null-prototype maps store it as a normal property.
@@ -457,21 +517,24 @@ describe('buildRegistrySnapshot', () => {
     engine.register(ProtoWorkflow);
     engine.register(activity({ name: '__proto__', execute: async () => undefined }));
 
-    const snapshot = buildRegistrySnapshot(engine);
-    expect(Object.keys(snapshot.workflows)).toContain('__proto__');
+    const snapshot = await buildRegistrySnapshot(engine);
+    expect(snapshot.workflows.map((m) => m.name)).toContain('__proto__');
     expect(Object.keys(snapshot.activities)).toContain('__proto__');
+    expect(Object.keys(snapshot.activeRevisions)).toContain('__proto__');
 
     // The serialized JSON must also include the entries — this is the
     // observable contract for HTTP consumers.
     const serialized = JSON.parse(JSON.stringify(snapshot)) as {
-      workflows: Record<string, unknown>;
+      workflows: Array<{ name: string }>;
+      activeRevisions: Record<string, unknown>;
       activities: Record<string, unknown>;
     };
-    expect(serialized.workflows['__proto__']).toBeDefined();
+    expect(serialized.workflows.some((m) => m.name === '__proto__')).toBe(true);
+    expect(serialized.activeRevisions['__proto__']).toBeDefined();
     expect(serialized.activities['__proto__']).toBeDefined();
   });
 
-  it('omits activity tags from the snapshot (tags do not surface in codegen function types)', () => {
+  it('omits activity tags from the snapshot (tags do not surface in codegen function types)', async () => {
     // Documented contract: activity entries do not include `tags`. The codegen
     // CLI (the primary consumer) emits activities as TypeScript function types,
     // which have no place for tags. If the contract changes, this test will
@@ -485,8 +548,43 @@ describe('buildRegistrySnapshot', () => {
       }),
     );
 
-    const snapshot = buildRegistrySnapshot(engine);
+    const snapshot = await buildRegistrySnapshot(engine);
     expect(snapshot.activities['tagged']).not.toHaveProperty('tags');
+  });
+});
+
+describe('compareWorkflowManifests', () => {
+  it('orders by name first', () => {
+    expect(
+      compareWorkflowManifests({ name: 'a', revision: 'z' }, { name: 'b', revision: 'a' }),
+    ).toBe(-1);
+    expect(
+      compareWorkflowManifests({ name: 'b', revision: 'a' }, { name: 'a', revision: 'z' }),
+    ).toBe(1);
+  });
+
+  it('breaks ties on revision when names are equal', () => {
+    // Unreachable through buildRegistrySnapshot itself (the engine registers
+    // at most one implementation per workflow name), so this exercises the
+    // comparator directly.
+    expect(
+      compareWorkflowManifests(
+        { name: 'same', revision: 'sha256:aaa' },
+        { name: 'same', revision: 'sha256:bbb' },
+      ),
+    ).toBe(-1);
+    expect(
+      compareWorkflowManifests(
+        { name: 'same', revision: 'sha256:bbb' },
+        { name: 'same', revision: 'sha256:aaa' },
+      ),
+    ).toBe(1);
+    expect(
+      compareWorkflowManifests(
+        { name: 'same', revision: 'sha256:aaa' },
+        { name: 'same', revision: 'sha256:aaa' },
+      ),
+    ).toBe(0);
   });
 });
 

@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
+import { buildWorkflowRevisionManifest, type WorkflowContract } from '../core/contract/index.ts';
 import { composeRegistryUrl, executeCodegen } from './codegen.ts';
 import { CODEGEN_HELP_TEXT } from './help-text.ts';
 import { parseCliArguments } from './parse-arguments.ts';
@@ -10,6 +11,11 @@ import { parseCliArguments } from './parse-arguments.ts';
 const FIXTURE_DIR = resolve(import.meta.dir, '__fixtures__/codegen');
 const REGISTRY_FIXTURE = join(FIXTURE_DIR, 'registry.json');
 const EXPECTED_DTS = join(FIXTURE_DIR, 'expected.d.ts');
+
+/** Real, hash-verifiable manifest for `--from`-mode fixtures — `parseWorkflowRevisionManifest` recomputes and checks `contractHash`, so a hand-written literal cannot satisfy it. */
+function fixtureManifest(contract: WorkflowContract) {
+  return buildWorkflowRevisionManifest(contract);
+}
 
 const tempDirs: string[] = [];
 function makeTempDir(): string {
@@ -191,15 +197,68 @@ describe('executeCodegen end-to-end', () => {
     expect(after).toBe(first);
   });
 
+  it('codegen output is identical for two snapshots differing only in generatedAt', async () => {
+    // generatedAt is informational only — it must not affect the generated
+    // declaration (acceptance criterion: "generatedAt must not affect
+    // generated declarations or drift checks").
+    const dir = makeTempDir();
+    const raw = await Bun.file(REGISTRY_FIXTURE).text();
+
+    const early = join(dir, 'early.json');
+    writeFileSync(
+      early,
+      raw.replace(
+        '"generatedAt": "2026-01-01T00:00:00.000Z"',
+        '"generatedAt": "2020-06-15T12:34:56.000Z"',
+      ),
+    );
+    const late = join(dir, 'late.json');
+    writeFileSync(
+      late,
+      raw.replace(
+        '"generatedAt": "2026-01-01T00:00:00.000Z"',
+        '"generatedAt": "2030-11-30T23:59:59.999Z"',
+      ),
+    );
+
+    const outEarly = join(dir, 'early.d.ts');
+    const outLate = join(dir, 'late.d.ts');
+    const resultEarly = await executeCodegen({ from: early, out: outEarly, timeoutMs: 30_000 });
+    const resultLate = await executeCodegen({ from: late, out: outLate, timeoutMs: 30_000 });
+    expect(resultEarly.exitCode).toBe(0);
+    expect(resultLate.exitCode).toBe(0);
+    expect(await Bun.file(outEarly).text()).toBe(await Bun.file(outLate).text());
+  });
+
   it('fails with a clear diagnostic on registry version mismatch and writes no output', async () => {
     const dir = makeTempDir();
     const bad = join(dir, 'bad.json');
     const out = join(dir, 'weft.d.ts');
     const raw = await Bun.file(REGISTRY_FIXTURE).text();
-    writeFileSync(bad, raw.replace('"registryVersion": 1', '"registryVersion": 2'));
+    writeFileSync(bad, raw.replace('"registryVersion": 2', '"registryVersion": 3'));
     const result = await executeCodegen({ from: bad, out, timeoutMs: 30_000 });
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('registryVersion 2');
+    expect(result.stderr).toContain('registryVersion 3');
+    expect(existsSync(out)).toBe(false);
+  });
+
+  it('rejects a v1 snapshot with a clear upgrade diagnostic (no compatibility layer)', async () => {
+    const dir = makeTempDir();
+    const out = join(dir, 'weft.d.ts');
+    const v1 = join(dir, 'v1.json');
+    writeFileSync(
+      v1,
+      JSON.stringify({
+        registryVersion: 1,
+        workflows: { welcome: { inputSchema: { type: 'string' } } },
+        activities: {},
+      }),
+    );
+    const result = await executeCodegen({ from: v1, out, timeoutMs: 30_000 });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe(
+      'codegen: registryVersion 1 is not supported (expected 2); upgrade or regenerate the snapshot',
+    );
     expect(existsSync(out)).toBe(false);
   });
 
@@ -255,8 +314,10 @@ describe('executeCodegen end-to-end', () => {
     writeFileSync(
       bad,
       JSON.stringify({
-        registryVersion: 1,
-        workflows: {},
+        registryVersion: 2,
+        generatedAt: new Date(0).toISOString(),
+        workflows: [],
+        activeRevisions: {},
         // Activity missing the required `queue` field.
         activities: { broken: { outputSchema: { type: 'string' } } },
       }),
@@ -267,13 +328,18 @@ describe('executeCodegen end-to-end', () => {
     expect(existsSync(out)).toBe(false);
   });
 
-  it('catches CodegenEmitError from a pathologically deep schema', async () => {
+  it('rejects a workflow manifest with a pathologically deep schema (WFT-5 hostile-input limit, before the emitter ever sees it)', async () => {
     const dir = makeTempDir();
     const bad = join(dir, 'deep.json');
     const out = join(dir, 'weft.d.ts');
-    // Build a 200-deep nested object schema. The emitter caps recursion
-    // at 64 and throws CodegenEmitError, which `executeCodegen` must
-    // translate to exitCode 1 — never reject.
+    // Build a 200-deep nested object schema — well past
+    // MAX_CONTRACT_SCHEMA_DEPTH (64). `parseWorkflowRevisionManifest`
+    // walks `contract.inputSchema` (inside `parseContract`) before it ever
+    // checks `contractHash`, so this is rejected at the manifest-parse
+    // stage — the emitter's own (still-present) 64-deep recursion cap is
+    // now unreachable through the `--from`/`--server` path, since nothing
+    // this deep can survive to reach it. Placeholder `revision`/`contractHash`
+    // values are fine: the depth check fires first.
     let deep: Record<string, unknown> = { type: 'string' };
     for (let i = 0; i < 200; i++) {
       deep = {
@@ -286,42 +352,142 @@ describe('executeCodegen end-to-end', () => {
     writeFileSync(
       bad,
       JSON.stringify({
-        registryVersion: 1,
-        workflows: { tooDeep: { inputSchema: deep } },
+        registryVersion: 2,
+        generatedAt: new Date(0).toISOString(),
+        workflows: [
+          {
+            manifestVersion: 1,
+            name: 'tooDeep',
+            workflowVersion: '0.0.0',
+            revision: 'sha256:placeholder',
+            contractHash: 'sha256:placeholder',
+            contract: { name: 'tooDeep', workflowVersion: '0.0.0', inputSchema: deep },
+          },
+        ],
+        activeRevisions: { tooDeep: 'sha256:placeholder' },
         activities: {},
       }),
     );
     const result = await executeCodegen({ from: bad, out, timeoutMs: 30_000 });
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toMatch(/nesting|recursion|levels of/i);
+    expect(result.stderr).toMatch(/schema depth|nests deeper/i);
     expect(existsSync(out)).toBe(false);
   });
 
-  it('accepts boolean root schemas (true/false) and emits valid TypeScript', async () => {
-    // JSON Schema permits a boolean at any schema position. Vendored
-    // snapshots may use this form; the validator should accept it and
-    // the emitter should produce a usable `.d.ts`.
+  it('accepts boolean root schemas for activities (activities keep v1 tolerance; workflows do not — see next test)', async () => {
+    // JSON Schema permits a boolean at any schema position. Activity
+    // entries are unversioned catalog metadata (unchanged from v1) and the
+    // emitter never reads activity schemas anyway, so this Zod-level
+    // tolerance is preserved.
     const dir = makeTempDir();
     const bool = join(dir, 'bool.json');
     const out = join(dir, 'weft.d.ts');
     writeFileSync(
       bool,
       JSON.stringify({
-        registryVersion: 1,
-        workflows: { permissive: { inputSchema: true, outputSchema: false } },
+        registryVersion: 2,
+        generatedAt: new Date(0).toISOString(),
+        workflows: [],
+        activeRevisions: {},
         activities: { wild: { queue: 'q', inputSchema: true, outputSchema: true } },
       }),
     );
     const result = await executeCodegen({ from: bool, out, timeoutMs: 30_000 });
     expect(result.exitCode).toBe(0);
     const written = await Bun.file(out).text();
-    // Boolean roots normalize to `{}` in projection, which the
-    // emitter resolves to `unknown`. The output should at least
-    // compile (we don't pin the exact type because the normalization
-    // is documented as a coarsening). Activity names are no longer
-    // emitted globally — they live on per-workflow builders.
-    expect(written).toContain('"permissive"');
+    // Activity names are never emitted globally — they live on
+    // per-workflow builders.
     expect(written).not.toContain('"wild"');
+  });
+
+  it('rejects a workflow manifest with a boolean root schema (deliberate v2 narrowing — see CHANGELOG.md)', async () => {
+    // v1 tolerated a boolean root schema on a *workflow* entry too
+    // (`normalizeRootSchema` coarsened it to `{}`). v2 validates every
+    // `workflows[]` element as a `WorkflowRevisionManifest` via
+    // `parseWorkflowRevisionManifest`, whose schema-fragment parser
+    // requires a JSON object at every `inputSchema`/`outputSchema`
+    // position — matching what a real registry snapshot always produces
+    // (`definitionSchemaToJsonSchema` never emits a boolean root). A
+    // hand-vendored file using one is now rejected with a clear
+    // diagnostic instead of silently coarsened.
+    const dir = makeTempDir();
+    const bad = join(dir, 'bool-workflow.json');
+    const out = join(dir, 'weft.d.ts');
+    writeFileSync(
+      bad,
+      JSON.stringify({
+        registryVersion: 2,
+        generatedAt: new Date(0).toISOString(),
+        workflows: [
+          {
+            manifestVersion: 1,
+            name: 'permissive',
+            workflowVersion: '0.0.0',
+            revision: 'sha256:placeholder',
+            contractHash: 'sha256:placeholder',
+            contract: { name: 'permissive', workflowVersion: '0.0.0', inputSchema: true },
+          },
+        ],
+        activeRevisions: { permissive: 'sha256:placeholder' },
+        activities: {},
+      }),
+    );
+    const result = await executeCodegen({ from: bad, out, timeoutMs: 30_000 });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('must be a JSON object');
+    expect(existsSync(out)).toBe(false);
+  });
+
+  it('emits only the active manifest when a workflow name has an installed-but-inactive revision', async () => {
+    // Two manifests for the same workflow name: same payload contract
+    // (same `contractHash`) but a different `description`, so `revision`
+    // (the broader, description-inclusive identity) differs between them —
+    // a live demonstration of the two identities `WorkflowRevisionManifest`
+    // carries. Only `activeRevisions["checkout"]` names which one codegen
+    // actually emits from; the other, present in `workflows` but not
+    // pointed at, is silently excluded (a future installed-but-inactive
+    // revision, not an error).
+    const dir = makeTempDir();
+    const file = join(dir, 'multi-revision.json');
+    const out = join(dir, 'weft.d.ts');
+
+    const inputSchema = {
+      type: 'object',
+      properties: { cartId: { type: 'string' } },
+      required: ['cartId'],
+      additionalProperties: false,
+    };
+    const activeManifest = await fixtureManifest({
+      name: 'checkout',
+      workflowVersion: '1.0.0',
+      inputSchema,
+    });
+    const inactiveManifest = await fixtureManifest({
+      name: 'checkout',
+      workflowVersion: '1.0.0',
+      description: 'An older documented revision.',
+      inputSchema,
+    });
+    expect(inactiveManifest.contractHash).toBe(activeManifest.contractHash);
+    expect(inactiveManifest.revision).not.toBe(activeManifest.revision);
+
+    writeFileSync(
+      file,
+      JSON.stringify({
+        registryVersion: 2,
+        generatedAt: new Date(0).toISOString(),
+        workflows: [activeManifest, inactiveManifest],
+        activeRevisions: { checkout: activeManifest.revision },
+        activities: {},
+      }),
+    );
+
+    const result = await executeCodegen({ from: file, out, timeoutMs: 30_000, json: true });
+    expect(result.exitCode).toBe(0);
+    const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
+    expect(parsed['workflows']).toBe(1);
+    const written = await Bun.file(out).text();
+    expect(written).toContain('"checkout"');
   });
 
   it('rejects passing both --server and --from to executeCodegen directly', async () => {

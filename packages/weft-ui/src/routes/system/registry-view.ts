@@ -2,8 +2,19 @@
  * Pure view-model mapping for the Registry tab (plan §9.7, T7.2; design
  * `Weft UI.dc.html` "System" § REGISTRY). Turns the wire
  * `GET /v1/registry` snapshot (`weft.system.registry`,
- * `@lostgradient/weft`'s `RegistrySnapshot`) into sorted, render-ready rows —
- * kept framework-free so it is unit-testable without a DOM.
+ * `@lostgradient/weft`'s `RegistrySnapshot`, v2 — WFT-6) into sorted,
+ * render-ready rows — kept framework-free so it is unit-testable without a
+ * DOM.
+ *
+ * ## v2: `workflows` is a manifest array, not a flat map
+ *
+ * `RegistrySnapshot.workflows` is now `WorkflowRevisionManifest[]`, sorted
+ * by `(name, revision)`, with `activeRevisions` pointing each workflow name
+ * at the manifest currently active. This module resolves the active set
+ * itself (`activeManifests`) the same way the engine-side
+ * `registry-contract-builder.ts` and `weft codegen`'s `codegen-validate.ts`
+ * do — one consistent resolution rule, not three independent inventions —
+ * then reads each active manifest's `.contract` for the fields below.
  *
  * ## A known gap this module works around honestly
  *
@@ -11,7 +22,7 @@
  * names" and "activity definitions + retry policy" on this tab. Verified
  * against `weft` v0.11.0 (`src/core/registry-snapshot.ts`,
  * `src/core/activity-registry.ts`, `src/core/types/workflow-builder-runtime.ts`):
- * `RegistrySnapshot.workflows[type]` never carries `.signals`/`.updates`/
+ * a workflow manifest's `.contract` never carries `.signals`/`.updates`/
  * `.queries` even though `workflow({name}).signals({...})` etc. register them
  * statically at build time (the data exists, `buildRegistrySnapshot` just
  * never copies it), and `RegistrySnapshot.activities[name]` drops
@@ -25,12 +36,24 @@
  * construction, not guessed at.
  */
 
-/** The subset of `RegistrySnapshot`'s workflow entry this module reads. Mirrors `RegistryWorkflowEntry` (`@lostgradient/weft`) structurally rather than importing it, so this module has no runtime dependency on the package. */
-export interface RegistryWorkflowEntrySource {
-  readonly inputSchema?: Record<string, unknown>;
-  readonly outputSchema?: Record<string, unknown>;
+/** The subset of a `WorkflowRevisionManifest.contract` this module reads. Mirrors `WorkflowContract` (`@lostgradient/weft`) structurally rather than importing it, so this module has no runtime dependency on the package. */
+export interface WorkflowContractSource {
+  readonly name: string;
+  readonly workflowVersion: string;
   readonly description?: string;
   readonly tags?: readonly string[];
+  readonly inputSchema?: Record<string, unknown>;
+  readonly outputSchema?: Record<string, unknown>;
+}
+
+/** Mirrors `WorkflowRevisionManifest` (`@lostgradient/weft`) structurally. */
+export interface WorkflowRevisionManifestSource {
+  readonly manifestVersion: number;
+  readonly name: string;
+  readonly workflowVersion: string;
+  readonly revision: string;
+  readonly contractHash: string;
+  readonly contract: WorkflowContractSource;
 }
 
 /** Mirrors `RegistryActivityEntry` (`@lostgradient/weft`) structurally. */
@@ -41,11 +64,22 @@ export interface RegistryActivityEntrySource {
   readonly description?: string;
 }
 
-/** Mirrors `RegistrySnapshot` (`@lostgradient/weft`) structurally. */
+/** Mirrors `RegistrySnapshot` (`@lostgradient/weft`, v2) structurally. */
 export interface RegistrySnapshotSource {
   readonly registryVersion: number;
-  readonly workflows: Readonly<Record<string, RegistryWorkflowEntrySource>>;
+  readonly generatedAt?: string;
+  readonly workflows: readonly WorkflowRevisionManifestSource[];
+  readonly activeRevisions: Readonly<Record<string, string>>;
   readonly activities: Readonly<Record<string, RegistryActivityEntrySource>>;
+}
+
+/** Resolve the currently active manifest for each workflow name — `activeRevisions[name] === manifest.revision`. */
+function activeManifests(
+  snapshot: RegistrySnapshotSource,
+): readonly WorkflowRevisionManifestSource[] {
+  return snapshot.workflows.filter(
+    (manifest) => snapshot.activeRevisions[manifest.name] === manifest.revision,
+  );
 }
 
 /** One field extracted from a JSON Schema `properties` map, for the Tree/list rendering. */
@@ -195,17 +229,18 @@ export function buildSchemaTree(
     .toSorted((a, b) => compareCodepoint(a.name, b.name));
 }
 
-function toWorkflowRow(type: string, entry: RegistryWorkflowEntrySource): RegistryWorkflowRow {
+function toWorkflowRow(manifest: WorkflowRevisionManifestSource): RegistryWorkflowRow {
+  const { name: type, contract } = manifest;
   return {
     type,
-    description: entry.description,
-    tags: entry.tags ?? [],
-    hasInputSchema: entry.inputSchema !== undefined,
-    inputFields: extractSchemaFields(entry.inputSchema),
-    inputSchemaTree: buildSchemaTree(entry.inputSchema, `${type}.input`),
-    hasOutputSchema: entry.outputSchema !== undefined,
-    outputFields: extractSchemaFields(entry.outputSchema),
-    outputSchemaTree: buildSchemaTree(entry.outputSchema, `${type}.output`),
+    description: contract.description,
+    tags: contract.tags ?? [],
+    hasInputSchema: contract.inputSchema !== undefined,
+    inputFields: extractSchemaFields(contract.inputSchema),
+    inputSchemaTree: buildSchemaTree(contract.inputSchema, `${type}.input`),
+    hasOutputSchema: contract.outputSchema !== undefined,
+    outputFields: extractSchemaFields(contract.outputSchema),
+    outputSchemaTree: buildSchemaTree(contract.outputSchema, `${type}.output`),
     handlers: undefined,
   };
 }
@@ -222,12 +257,12 @@ function toActivityRow(name: string, entry: RegistryActivityEntrySource): Regist
   };
 }
 
-/** Sorted (codepoint order) workflow rows ready for the definitions list. */
+/** Sorted (codepoint order) workflow rows ready for the definitions list, one per currently-active manifest. */
 export function registryWorkflowRows(
   snapshot: RegistrySnapshotSource,
 ): readonly RegistryWorkflowRow[] {
-  return Object.entries(snapshot.workflows)
-    .map(([type, entry]) => toWorkflowRow(type, entry))
+  return activeManifests(snapshot)
+    .map((manifest) => toWorkflowRow(manifest))
     .toSorted((a, b) => compareCodepoint(a.type, b.type));
 }
 
@@ -242,7 +277,5 @@ export function registryActivityRows(
 
 /** `true` when the registry has nothing registered at all — drives the 3-step onboarding empty state (plan §10.7, Appendix B). */
 export function isRegistryEmpty(snapshot: RegistrySnapshotSource): boolean {
-  return (
-    Object.keys(snapshot.workflows).length === 0 && Object.keys(snapshot.activities).length === 0
-  );
+  return snapshot.workflows.length === 0 && Object.keys(snapshot.activities).length === 0;
 }

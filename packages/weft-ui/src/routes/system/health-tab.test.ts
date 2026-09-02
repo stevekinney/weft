@@ -28,16 +28,27 @@ function routeBaseline(fetch: ScriptedFetch): void {
     workflowTypes: [],
   });
   fetch.routeJsonRpcMethod('weft.system.registry', {
-    registryVersion: 1,
-    workflows: {
-      'order-processing': {
-        inputSchema: {
-          type: 'object',
-          required: ['orderId'],
-          properties: { orderId: { type: 'string' } },
+    registryVersion: 2,
+    generatedAt: '2026-01-01T00:00:00.000Z',
+    workflows: [
+      {
+        manifestVersion: 1,
+        name: 'order-processing',
+        workflowVersion: '1.0.0',
+        revision: 'order-processing-rev',
+        contractHash: 'order-processing-hash',
+        contract: {
+          name: 'order-processing',
+          workflowVersion: '1.0.0',
+          inputSchema: {
+            type: 'object',
+            required: ['orderId'],
+            properties: { orderId: { type: 'string' } },
+          },
         },
       },
-    },
+    ],
+    activeRevisions: { 'order-processing': 'order-processing-rev' },
     activities: {},
   });
 }
@@ -142,8 +153,10 @@ describe('HealthTab', () => {
   test('a failing retention fetch shows the fault banner', async () => {
     scripted = new ScriptedFetch();
     scripted.routeJsonRpcMethod('weft.system.registry', {
-      registryVersion: 1,
-      workflows: {},
+      registryVersion: 2,
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      workflows: [],
+      activeRevisions: {},
       activities: {},
     });
     // 403, not 500: `shouldRetryQuery` (`query.ts`) retries a classified
@@ -183,8 +196,19 @@ describe('HealthTab', () => {
       workflowTypes: [],
     });
     scripted.routeJsonRpcMethod('weft.system.registry', {
-      registryVersion: 1,
-      workflows: { heartbeat: {} },
+      registryVersion: 2,
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      workflows: [
+        {
+          manifestVersion: 1,
+          name: 'heartbeat',
+          workflowVersion: '1.0.0',
+          revision: 'heartbeat-rev',
+          contractHash: 'heartbeat-hash',
+          contract: { name: 'heartbeat', workflowVersion: '1.0.0' },
+        },
+      ],
+      activeRevisions: { heartbeat: 'heartbeat-rev' },
       activities: {},
     });
     const { findByText, unmount } = await renderHealthTab();

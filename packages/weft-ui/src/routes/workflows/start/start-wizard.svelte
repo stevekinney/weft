@@ -43,7 +43,9 @@
     })),
   );
 
-  const registryWorkflows = $derived(narrowRegistryWorkflows($registryQuery.data?.workflows));
+  const registryWorkflows = $derived(
+    narrowRegistryWorkflows($registryQuery.data?.workflows, $registryQuery.data?.activeRevisions),
+  );
   const knownTypes = $derived(Object.keys(registryWorkflows));
 
   const STEPS: StepItem[] = [
