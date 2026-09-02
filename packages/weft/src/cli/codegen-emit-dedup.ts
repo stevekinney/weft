@@ -74,8 +74,14 @@ export const TRIVIAL_TYPESCRIPT_TYPES: ReadonlySet<string> = new Set([
 // string, an integer or decimal number, or `true`/`false`/`null`. These
 // are just as cheap to repeat inline as a bare primitive, so they are
 // treated as trivial too even though they aren't literal `ReadonlySet`
-// members.
-const LITERAL_TOKEN_PATTERN = /^(-?[0-9]+(\.[0-9]+)?|true|false|null|"[^"\\]*")$/;
+// members. The string-literal alternative matches any well-formed
+// double-quoted JSON string body — `([^"\\]|\\.)*`, "an unescaped
+// non-quote-non-backslash character, or a backslash followed by anything"
+// — not just one with no escapes, so a `const`/single-entry-`enum` value
+// containing a quote or backslash (emitted with `JSON.stringify`'s
+// escaping) is still classified as trivial and stays inline like every
+// other bare literal.
+const LITERAL_TOKEN_PATTERN = /^(-?[0-9]+(\.[0-9]+)?|true|false|null|"([^"\\]|\\.)*")$/;
 
 function isTrivialTsType(tsType: string): boolean {
   return TRIVIAL_TYPESCRIPT_TYPES.has(tsType) || LITERAL_TOKEN_PATTERN.test(tsType);

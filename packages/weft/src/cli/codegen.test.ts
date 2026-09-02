@@ -11,6 +11,7 @@ import { parseCliArguments } from './parse-arguments.ts';
 const FIXTURE_DIR = resolve(import.meta.dir, '__fixtures__/codegen');
 const REGISTRY_FIXTURE = join(FIXTURE_DIR, 'registry.json');
 const EXPECTED_DTS = join(FIXTURE_DIR, 'expected.d.ts');
+const TYPECHECK_GENERATED_DTS = join(FIXTURE_DIR, 'typecheck', 'weft.generated.d.ts');
 
 /** Real, hash-verifiable manifest for `--from`-mode fixtures — `parseWorkflowRevisionManifest` recomputes and checks `contractHash`, so a hand-written literal cannot satisfy it. */
 function fixtureManifest(contract: WorkflowContract) {
@@ -182,6 +183,21 @@ describe('executeCodegen end-to-end', () => {
     const written = await Bun.file(out).text();
     const expected = await Bun.file(EXPECTED_DTS).text();
     expect(written).toBe(expected);
+  });
+
+  it('keeps the tsc typecheck fixture (weft.generated.d.ts) in sync with expected.d.ts', async () => {
+    // `codegen-typecheck.test.ts` feeds `weft.generated.d.ts` to a real `tsc`
+    // subprocess as a structural proof that the generated `.d.ts` actually
+    // compiles (in particular the alias-hoisting this batch adds). That file
+    // is hand-maintained, independent of this test's `executeCodegen` ->
+    // `expected.d.ts` pipeline, so nothing previously tethered the two
+    // together: a future registry/schema change updated here without a
+    // matching manual edit there would leave the `tsc` proof silently
+    // compiling stale content while this file's string assertions still
+    // passed. Byte-comparing them here makes that drift fail loudly instead.
+    const expected = await Bun.file(EXPECTED_DTS).text();
+    const typecheckFixture = await Bun.file(TYPECHECK_GENERATED_DTS).text();
+    expect(typecheckFixture).toBe(expected);
   });
 
   it('reports "up to date" on the second run and does not rewrite content', async () => {

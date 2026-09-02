@@ -96,44 +96,64 @@ function sortedWorkflowEntries(
   return Object.entries(workflows).toSorted(([a], [b]) => compareCodepoint(a, b));
 }
 
+/** One active workflow paired with its already-emitted input/output TypeScript text, computed exactly once. */
+type WorkflowWithSchemaTypes = {
+  name: string;
+  entry: CodegenWorkflowEntry;
+  inputType: string;
+  outputType: string;
+};
+
 /**
  * Walk every active workflow's `inputSchema` then `outputSchema`, in that
- * fixed order, building the deterministic occurrence sequence
- * {@link buildSchemaAliasTable} groups. `workflows` is already sorted by
- * name (see {@link sortedWorkflowEntries}), so this sequence — and
- * therefore every alias assignment downstream — depends only on the set of
- * active workflows and their schemas, never on the caller's original
- * object insertion order.
+ * fixed order, computing each schema's emitted TypeScript text exactly
+ * once. `workflows` is already sorted by name (see
+ * {@link sortedWorkflowEntries}), so the resulting occurrence sequence —
+ * and therefore every alias assignment downstream — depends only on the
+ * set of active workflows and their schemas, never on the caller's
+ * original object insertion order.
+ *
+ * Returns both the flat occurrence sequence {@link buildSchemaAliasTable}
+ * groups AND `workflowsWithTypes`, each workflow paired with the text
+ * computed for it here, so {@link emitWorkflowEntry} can use that text
+ * directly instead of re-running `jsonSchemaToTypeScript` on the same
+ * schema a second time. Pairing the type text onto the workflow itself
+ * (rather than a separate name-keyed or index-keyed lookup) means there is
+ * no lookup that could fail to find an entry.
  */
 function collectSchemaOccurrences(
   workflows: ReadonlyArray<readonly [string, CodegenWorkflowEntry]>,
-): SchemaFragmentOccurrence[] {
+): {
+  occurrences: SchemaFragmentOccurrence[];
+  workflowsWithTypes: WorkflowWithSchemaTypes[];
+} {
   const occurrences: SchemaFragmentOccurrence[] = [];
-  for (const [, entry] of workflows) {
-    for (const schema of [entry.inputSchema, entry.outputSchema]) {
-      occurrences.push({ tsType: jsonSchemaToTypeScript(schema) });
-    }
+  const workflowsWithTypes: WorkflowWithSchemaTypes[] = [];
+  for (const [name, entry] of workflows) {
+    const inputType = jsonSchemaToTypeScript(entry.inputSchema);
+    const outputType = jsonSchemaToTypeScript(entry.outputSchema);
+    occurrences.push({ tsType: inputType }, { tsType: outputType });
+    workflowsWithTypes.push({ name, entry, inputType, outputType });
   }
-  return occurrences;
+  return { occurrences, workflowsWithTypes };
 }
 
-/** Resolve a schema field to its TypeScript type reference: the hoisted alias name when one exists for this emitted type, otherwise the inline emitted type. */
+/** Resolve an already-emitted schema type to its TypeScript type reference: the hoisted alias name when one exists for this emitted type, otherwise the emitted type itself. */
 function schemaTypeReference(
-  schema: Record<string, unknown> | undefined,
+  tsType: string,
   aliasTable: ReadonlyMap<string, SchemaAliasEntry>,
 ): string {
-  const tsType = jsonSchemaToTypeScript(schema);
   const aliasEntry = aliasTable.get(tsType);
   return aliasEntry !== undefined ? aliasEntry.alias : tsType;
 }
 
 function emitWorkflowEntry(
-  name: string,
-  entry: CodegenWorkflowEntry,
+  workflow: WorkflowWithSchemaTypes,
   aliasTable: ReadonlyMap<string, SchemaAliasEntry>,
 ): string {
-  const input = schemaTypeReference(entry.inputSchema, aliasTable);
-  const output = schemaTypeReference(entry.outputSchema, aliasTable);
+  const { name, entry, inputType, outputType } = workflow;
+  const input = schemaTypeReference(inputType, aliasTable);
+  const output = schemaTypeReference(outputType, aliasTable);
   const revision = emitStringLiteral(entry.revision);
   const workflowVersion = emitStringLiteral(entry.workflowVersion);
   return (
@@ -163,12 +183,12 @@ export function emitRegistryDeclaration(
   activeWorkflows: Record<string, CodegenWorkflowEntry>,
 ): string {
   const workflows = sortedWorkflowEntries(activeWorkflows);
-  const occurrences = collectSchemaOccurrences(workflows);
+  const { occurrences, workflowsWithTypes } = collectSchemaOccurrences(workflows);
   const aliasTable = buildSchemaAliasTable(occurrences);
   const aliasLines = emitAliasDeclarations(aliasTable);
 
-  const workflowLines = workflows.map(([name, entry]) =>
-    emitWorkflowEntry(name, entry, aliasTable),
+  const workflowLines = workflowsWithTypes.map((workflow) =>
+    emitWorkflowEntry(workflow, aliasTable),
   );
 
   const workflowBlock =
