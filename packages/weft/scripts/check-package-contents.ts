@@ -50,7 +50,14 @@ const maximumUnpackedBytes = 12 * 1024 * 1024;
 // `DEFAULT_WORKFLOW_COMPATIBILITY_POLICY`) — one new source file, one more
 // `.js`/`.d.ts` pair in `dist/`, +2 entries (1499 -> 1501), matching the
 // measured `npm pack --dry-run --json --ignore-scripts` count exactly.
-const maximumEntryCount = 1501;
+//
+// WFT-7 (merged as #946, landed on `main` after WFT-8's branch point) split
+// two new source files out of `codegen-emit.ts`: `src/cli/codegen-emit-dedup.ts`
+// (the shared-schema hoisting pass) and `src/cli/codegen-emit-registry.ts`
+// (the `WorkflowRegistry` interface emitter) — two more `.js`/`.d.ts` pairs,
+// +4 entries (1501 -> 1505), matching the measured count after rebasing
+// WFT-8 onto WFT-7.
+const maximumEntryCount = 1505;
 
 type PackFile = {
   path: string;
