@@ -407,6 +407,15 @@ export async function readCleanupState(
     );
     return { status: 'unknown' };
   }
+  // A record whose lease was reclaimed or terminalized in another process
+  // still has that process-local attempt registered here; nothing remote can
+  // release it. Any local attempt that is not the record's current lease is over.
+  releaseAttemptsForCommand(
+    runtime,
+    commandId,
+    'This attempt is no longer the current lease on its command.',
+    isApplicationCommandLeased(loaded.record) ? loaded.record.attemptToken : undefined,
+  );
   const receipt = toApplicationCommandReceipt(loaded.record);
   // `receipt.cleanupPending` is already the projected, narrowed view: it is
   // defined only on a terminal record, so reading it here needs no re-narrowing.

@@ -16,7 +16,7 @@
  * @module core/application-mailbox-waits
  */
 
-import { raceAbort } from './application-mailbox-abort.ts';
+import { WaitBudgetElapsedError, raceAbortWithin } from './application-mailbox-abort.ts';
 import type {
   ApplicationCommandCleanupResult,
   ApplicationMailboxWaitOptions,
@@ -112,7 +112,13 @@ export async function waitForAvailableWork(
     // storage. A shutdown caller must never be told to start new work. Observe
     // first, so the documented `timeoutMs: 0` default still performs one check
     // rather than returning before looking at anything.
-    const observed = await raceAbort(() => hasDueWork(runtime), disposal, options?.signal);
+    const observed = await raceAbortWithin(
+      () => hasDueWork(runtime),
+      budgetFor(timeoutMs, deadline, runtime.now()),
+      disposal,
+      options?.signal,
+    );
+    // An observation ended by abort, disposal, or the budget is `false`.
     if (observed.aborted || isAborted(disposal, options?.signal)) return false;
     if (observed.value) return observedInTime(timeoutMs, deadline, runtime.now());
     // Clamp each sleep to what is left of the budget. An interval longer than the
@@ -125,6 +131,18 @@ export async function waitForAvailableWork(
   );
   // The sleep was cut short by an abort or by disposal.
   return false;
+}
+
+/**
+ * How long an observation may take before the wait's own budget ends it.
+ *
+ * `null` for the zero-timeout default, which performs one unconditional look,
+ * and for a budget already spent, which the post-observation check reports.
+ */
+function budgetFor(timeoutMs: number, deadline: number, now: number): number | null {
+  if (timeoutMs === 0) return null;
+  const remaining = deadline - now;
+  return remaining > 0 ? remaining : null;
 }
 
 /**
@@ -172,7 +190,17 @@ export async function waitForCleanup(
   // DURING a stalled remote read must not stay pending until that read returns;
   // either way the abort surfaces as the signal's own reason, as `claim()` does
   // for its request signal.
-  let latest = await readUnlessAborted(runtime, options.commandId, disposal, options.signal);
+  const first = await readUnlessAborted(
+    runtime,
+    options.commandId,
+    disposal,
+    options.signal,
+    budgetFor(timeoutMs, deadline, runtime.now()),
+  );
+  // With no observation in hand, a budget spent on a stalled first read has
+  // nothing honest to report as `pending`; it is surfaced as the budget error.
+  if (first === null) throw new WaitBudgetElapsedError();
+  let latest = first;
   // A terminal record with `cleanupPending: true` is already final: the mailbox
   // recorded that it stopped waiting for an abandoned attempt. Polling it would
   // burn the whole timeout on a value that can never change again.
@@ -188,19 +216,38 @@ export async function waitForCleanup(
     ) {
       break;
     }
-    latest = await readUnlessAborted(runtime, options.commandId, disposal, options.signal);
+    const next = await readUnlessAborted(
+      runtime,
+      options.commandId,
+      disposal,
+      options.signal,
+      budgetFor(timeoutMs, deadline, runtime.now()),
+    );
+    // The budget ran out during this read: the last observation stands.
+    if (next === null) break;
+    latest = next;
   }
   return latest;
 }
 
-/** A cleanup-state read that rejects with the abort reason instead of outliving the wait. */
+/**
+ * A cleanup-state read that rejects with the abort reason instead of outliving
+ * the wait, and reports `null` when the wait's own budget ended it.
+ */
 async function readUnlessAborted(
   runtime: MailboxRuntime,
   commandId: string,
   disposal: AbortSignal,
   signal: AbortSignal | undefined,
-): Promise<ApplicationCommandCleanupResult> {
-  const raced = await raceAbort(() => readCleanupState(runtime, commandId), disposal, signal);
-  if (raced.aborted) throw raced.reason as Error;
-  return raced.value;
+  budgetMs: number | null,
+): Promise<ApplicationCommandCleanupResult | null> {
+  const raced = await raceAbortWithin(
+    () => readCleanupState(runtime, commandId),
+    budgetMs,
+    disposal,
+    signal,
+  );
+  if (!raced.aborted) return raced.value;
+  if (raced.reason instanceof WaitBudgetElapsedError) return null;
+  throw raced.reason as Error;
 }

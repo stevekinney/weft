@@ -18,7 +18,7 @@ import {
   encodeApplicationCommandIdempotencyRecord,
   encodeApplicationMailboxRecord,
   encodeApplicationReadyEntry,
-} from './application-mailbox-codec.ts';
+} from './application-mailbox-index-codec.ts';
 import {
   computeRetryBackoffMs,
   isTerminalCommandRecord,

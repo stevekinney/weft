@@ -17,7 +17,6 @@
 
 import type { Storage } from '../storage/interface.ts';
 import { admitCommand, capacityOf } from './application-mailbox-admission.ts';
-import { decodeApplicationReadyEntry } from './application-mailbox-codec.ts';
 import type {
   ApplicationCommandAdmission,
   ApplicationCommandCancellationResult,
@@ -34,6 +33,7 @@ import type {
   ApplicationMailboxWaitOptions,
 } from './application-mailbox-contract.ts';
 import { claimNextCommand } from './application-mailbox-delivery.ts';
+import { decodeApplicationReadyEntry } from './application-mailbox-index-codec.ts';
 import {
   attemptControllerRegistry,
   releaseAttemptControllerRegistry,
@@ -392,7 +392,11 @@ export class ApplicationMailbox {
    * A `pending` result means this mailbox stopped waiting — never that the
    * handler stopped. A signal that is already aborted, or that aborts while a
    * storage read is in flight, rejects the wait with that signal's reason;
-   * disposing the mailbox during a read rejects with the disposal error.
+   * disposing the mailbox during a read rejects with the disposal error. The
+   * budget bounds the reads themselves as well as the sleeps between them: a
+   * budget that runs out during a later read returns the last observation, and
+   * one that runs out during the first read, with nothing observed yet,
+   * rejects with `WaitBudgetElapsedError`.
    */
   async awaitCleanup(options: {
     readonly commandId: string;

@@ -20,18 +20,20 @@ import {
   type Storage,
 } from '../storage/interface.ts';
 import {
-  decodeApplicationCommandIdempotencyRecord,
   decodeApplicationCommandRecord,
-  decodeApplicationMailboxRecord,
-  decodeApplicationReadyEntry,
   encodeApplicationCommandRecord,
-  encodeApplicationMailboxRecord,
-  encodeApplicationReadyEntry,
 } from './application-mailbox-codec.ts';
 import type {
   ApplicationMailboxEventSink,
   LoadedCommandRecord,
 } from './application-mailbox-contract.ts';
+import {
+  decodeApplicationCommandIdempotencyRecord,
+  decodeApplicationMailboxRecord,
+  decodeApplicationReadyEntry,
+  encodeApplicationMailboxRecord,
+  encodeApplicationReadyEntry,
+} from './application-mailbox-index-codec.ts';
 import {
   APPLICATION_MAILBOX_RECORD_VERSION,
   type ApplicationCommandIdempotencyRecord,

@@ -19,15 +19,15 @@
 
 import type { BatchOperation, ConditionalBatchCondition } from '../storage/interface.ts';
 import { storageConditionalBatch } from '../storage/interface.ts';
-import {
-  decodeApplicationCommandIdempotencyRecord,
-  decodeApplicationCommandRecord,
-  decodeApplicationReadyEntry,
-} from './application-mailbox-codec.ts';
+import { decodeApplicationCommandRecord } from './application-mailbox-codec.ts';
 import type {
   ApplicationMailboxMaintenanceReport,
   LoadedCommandRecord,
 } from './application-mailbox-contract.ts';
+import {
+  decodeApplicationCommandIdempotencyRecord,
+  decodeApplicationReadyEntry,
+} from './application-mailbox-index-codec.ts';
 import {
   ApplicationMailboxContentionError,
   commitCommandTransition,

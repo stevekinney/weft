@@ -11,15 +11,15 @@
  * @module core/application-mailbox-admission
  */
 
-import {
-  encodeApplicationCommandIdempotencyRecord,
-  encodeApplicationReadyEntry,
-} from './application-mailbox-codec.ts';
 import type {
   ApplicationCommandAdmission,
   ApplicationCommandInput,
   ApplicationMailboxCapacity,
 } from './application-mailbox-contract.ts';
+import {
+  encodeApplicationCommandIdempotencyRecord,
+  encodeApplicationReadyEntry,
+} from './application-mailbox-index-codec.ts';
 import {
   ApplicationMailboxContentionError,
   MAX_MAILBOX_TRANSITION_ATTEMPTS,

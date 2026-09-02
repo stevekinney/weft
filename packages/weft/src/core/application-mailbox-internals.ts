@@ -375,9 +375,10 @@ export function releaseAttemptsForCommand(
   runtime: MailboxRuntime,
   commandId: string,
   reason: string,
+  currentToken?: string,
 ): void {
   for (const [attemptToken, registration] of runtime.attemptControllers) {
-    if (registration.commandId === commandId) {
+    if (registration.commandId === commandId && attemptToken !== currentToken) {
       releaseAttemptController(runtime, attemptToken, reason);
     }
   }

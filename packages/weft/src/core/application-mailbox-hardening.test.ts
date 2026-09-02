@@ -20,7 +20,9 @@ import {
   restoreRealTimers,
   useFakeTimers,
 } from '../testing/fake-timers.test-support.ts';
-import { encodeApplicationReadyEntry } from './application-mailbox-codec.ts';
+import { WaitBudgetElapsedError } from './application-mailbox-abort.ts';
+import type { ApplicationCommandCleanupResult } from './application-mailbox-contract.ts';
+import { encodeApplicationReadyEntry } from './application-mailbox-index-codec.ts';
 import {
   attemptControllerRegistry,
   hasAttemptControllerScope,
@@ -2250,6 +2252,140 @@ describe('fourteenth-round hardening', () => {
       return originalScan(...args);
     };
     await expect(mailbox.claim({ signal: controller.signal })).rejects.toThrow('late abort');
+    mailbox.dispose();
+  });
+});
+
+describe('fifteenth-round hardening', () => {
+  it('bounds a due-work wait even while its read is stalled', async () => {
+    useFakeTimers();
+    const storage = new MemoryStorage();
+    const { mailbox, clock } = createMailboxFixture({ storage });
+    await admitOne(mailbox);
+    let stalled = false;
+    const originalGet = storage.get.bind(storage);
+    storage.get = (key: string): Promise<Uint8Array | null> => {
+      if (!stalled && key.startsWith('appcmd:')) {
+        stalled = true;
+        return new Promise<Uint8Array | null>(() => {});
+      }
+      return originalGet(key);
+    };
+    const waiting = mailbox.waitForAvailable({ timeoutMs: 1_000 });
+    let settled: boolean | undefined;
+    void waiting.then((value) => {
+      settled = value;
+    });
+    await flushMicrotasks(16);
+    expect(settled).toBeUndefined();
+    clock.advance(1_000);
+    await advanceTimersByTime(1_000);
+    await flushMicrotasks();
+    expect(settled).toBe(false);
+    mailbox.dispose();
+  });
+
+  it('bounds a cleanup wait whose later read stalls, returning the last observation', async () => {
+    useFakeTimers();
+    const storage = new MemoryStorage();
+    const { mailbox, clock } = createMailboxFixture({ storage });
+    const commandId = await admitOne(mailbox);
+    const claim = await claimOne(mailbox);
+    await mailbox.requestCancellation({ commandId });
+    let reads = 0;
+    const originalGet = storage.get.bind(storage);
+    storage.get = (key: string): Promise<Uint8Array | null> => {
+      if (key.startsWith('appcmd:')) {
+        reads += 1;
+        if (reads >= 2) return new Promise<Uint8Array | null>(() => {});
+      }
+      return originalGet(key);
+    };
+    const waiting = mailbox.awaitCleanup({ commandId, timeoutMs: 500, pollIntervalMs: 100 });
+    let result: ApplicationCommandCleanupResult | undefined;
+    void waiting.then((value) => {
+      result = value;
+    });
+    await flushMicrotasks(16);
+    clock.advance(100);
+    await advanceTimersByTime(100);
+    await flushMicrotasks();
+    expect(result).toBeUndefined();
+    clock.advance(500);
+    await advanceTimersByTime(500);
+    await flushMicrotasks();
+    expect(result?.status).toBe('pending');
+    expect(claim.signal.aborted).toBe(true);
+    mailbox.dispose();
+  });
+
+  it('rejects a cleanup wait whose first read outlives the budget', async () => {
+    useFakeTimers();
+    const storage = new MemoryStorage();
+    const { mailbox, clock } = createMailboxFixture({ storage });
+    const commandId = await admitOne(mailbox);
+    const originalGet = storage.get.bind(storage);
+    storage.get = (key: string): Promise<Uint8Array | null> =>
+      key.startsWith('appcmd:') ? new Promise<Uint8Array | null>(() => {}) : originalGet(key);
+    const waiting = mailbox.awaitCleanup({ commandId, timeoutMs: 200 });
+    let failure: unknown;
+    waiting.catch((error: unknown) => {
+      failure = error;
+    });
+    await flushMicrotasks(16);
+    clock.advance(200);
+    await advanceTimersByTime(200);
+    await flushMicrotasks();
+    expect(failure).toBeInstanceOf(WaitBudgetElapsedError);
+    mailbox.dispose();
+  });
+
+  it('releases a local attempt when a cleanup read finds its lease reclaimed elsewhere', async () => {
+    const storage = new MemoryStorage();
+    const clock = createMailboxClock();
+    const local = createMailboxFixture({
+      storage,
+      clock,
+      visibilityTimeoutMs: 500,
+      generateId: createIdSource('l'),
+    }).mailbox;
+    const remote = new ApplicationMailbox({
+      storage: remoteView(storage),
+      namespace: 'bureau',
+      resourceId: 'agent-7',
+      now: clock.now,
+      generateId: createIdSource('r'),
+      visibilityTimeoutMs: 500,
+    });
+    const commandId = await admitOne(local);
+    const claim = await claimOne(local);
+    clock.advance(501);
+    await remote.runMaintenance();
+    expect(claim.signal.aborted).toBe(false);
+
+    const cleanup = await local.cleanupState(commandId);
+    expect(cleanup.status).toBe('pending');
+    expect(claim.signal.aborted).toBe(true);
+    expect(attemptControllerRegistry(storage, 'bureau', 'agent-7').has(claim.attemptToken)).toBe(
+      false,
+    );
+    remote.dispose();
+    local.dispose();
+  });
+
+  it('fails closed on a leased record whose expiry disagrees with its lease', async () => {
+    const { mailbox, storage } = createMailboxFixture({ visibilityTimeoutMs: 1_000 });
+    const commandId = await admitOne(mailbox);
+    await claimOne(mailbox);
+    const key = KEYS.applicationCommand('bureau', 'agent-7', commandId);
+    const record = decode((await storage.get(key)) as Uint8Array) as Record<string, unknown>;
+    await storage.put(key, encode({ ...record, visibilityExpiresAt: 1 }));
+    await expect(mailbox.receipt(commandId)).rejects.toThrow(PersistedDataCorruptError);
+    await storage.put(
+      key,
+      encode({ ...record, visibilityExpiresAt: (record['visibilityExpiresAt'] as number) + 1 }),
+    );
+    await expect(mailbox.receipt(commandId)).rejects.toThrow(PersistedDataCorruptError);
     mailbox.dispose();
   });
 });

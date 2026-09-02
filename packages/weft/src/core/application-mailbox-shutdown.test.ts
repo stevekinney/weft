@@ -30,11 +30,20 @@ afterEach(() => {
   restoreRealTimers();
 });
 
-/** Advance the fake timer wheel and the mailbox's injected clock in lockstep. */
+/**
+ * Advance the fake timer wheel and the mailbox's injected clock in lockstep.
+ *
+ * Continuations of promises that have already been fulfilled are drained first:
+ * in a real event loop they always run before any timer callback, whereas the
+ * fake wheel fires timers synchronously on advance. Without the drain, a wait
+ * whose storage read has already answered would be preempted by its own budget
+ * timer, which cannot happen in real time.
+ */
 async function tick(
   clock: { advance(milliseconds: number): void },
   milliseconds: number,
 ): Promise<void> {
+  await flushMicrotasks(16);
   clock.advance(milliseconds);
   await advanceTimersByTime(milliseconds);
 }
