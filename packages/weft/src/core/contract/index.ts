@@ -50,3 +50,13 @@ export type {
   WorkflowRevisionManifestParseResult,
   WorkflowRevisionManifestParseSuccess,
 } from './manifest-parse.ts';
+
+export {
+  DEFAULT_WORKFLOW_COMPATIBILITY_POLICY,
+  checkWorkflowCompatibility,
+} from './compatibility.ts';
+export type {
+  WorkflowCompatibilityPolicy,
+  WorkflowCompatibilityReason,
+  WorkflowCompatibilityVerdict,
+} from './compatibility.ts';
