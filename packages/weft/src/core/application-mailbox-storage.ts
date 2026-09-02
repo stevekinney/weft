@@ -360,8 +360,15 @@ async function assertSinkCommittedLocally(
     );
   }
   verifiedBackendsFor(events).add(storage);
-  // The probe has done its job; the batch that wrote it is durable either way.
-  await storage.delete(probe.key);
+  // The probe has done its job and the batch that wrote it is durable either
+  // way, so cleanup is best-effort: a transient delete failure must not turn a
+  // committed operation into a rejection the caller would retry — for a keyless
+  // admission that retry would create a second command.
+  try {
+    await storage.delete(probe.key);
+  } catch {
+    // Left behind. It is inert, unique to this plan, and never read again.
+  }
 }
 
 /**

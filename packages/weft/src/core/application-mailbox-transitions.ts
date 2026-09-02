@@ -228,7 +228,9 @@ export function renewCommandLease(
       options.now + leased.visibilityTimeoutMs,
       leased.absoluteDeadlineAt,
     ),
-    progress: options.progress ?? leased.progress,
+    // `undefined` means "no new marker"; an explicit `null` is a JSON value the
+    // public type promises and must be recorded as such.
+    progress: options.progress === undefined ? leased.progress : options.progress,
   };
   return succeededTransition(renewed);
 }

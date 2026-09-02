@@ -21,6 +21,7 @@ export const WEFT_RESERVED_KEY_PREFIXES = [
   'appcmd:',
   'appidem:',
   'appmbx:',
+  'appprobe:',
   'appready:',
   'appseq:',
   'appterm:',

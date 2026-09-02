@@ -11,6 +11,7 @@
  * @module core/application-mailbox-codec
  */
 
+import { KEYS } from '../storage/interface.ts';
 import type {
   ApplicationCommandCausation,
   ApplicationCommandFailure,
@@ -225,6 +226,21 @@ function decodeTerminalRecord(
   };
 }
 
+/**
+ * A record must live under the key its own identity names. Accepting a
+ * misplaced or corrupted record would return it as another command's receipt,
+ * and every later transition would build its compare-and-swap key from the
+ * embedded identity rather than the one the caller asked for.
+ */
+function assertIdentityMatchesKey(decoded: Record<string, unknown>, key: string): void {
+  const own = KEYS.applicationCommand(
+    readString(decoded, 'namespace', key),
+    readString(decoded, 'resourceId', key),
+    readString(decoded, 'commandId', key),
+  );
+  if (own !== key) fail(key);
+}
+
 export function decodeApplicationCommandRecord(
   bytes: Uint8Array,
   key: string,
@@ -237,6 +253,7 @@ export function decodeApplicationCommandRecord(
   }
   if (!isRecordObject(decoded)) fail(key);
   readVersion(decoded, key);
+  assertIdentityMatchesKey(decoded, key);
   const state = decoded['state'];
   if (typeof state !== 'string' || !COMMAND_STATES.has(state)) fail(key);
   if (state === 'accepted' || state === 'available') {

@@ -448,9 +448,9 @@ describe('disposal racing a claim commit', () => {
     const { mailbox } = createMailboxFixture({ storage });
     await admitOne(mailbox);
 
-    // Dispose in the window between the claim's compare-and-swap and the
-    // controller registration. Registering an un-aborted controller then would
-    // start work during shutdown, and no later `dispose()` could reach it.
+    // Dispose while the claim's compare-and-swap is in flight. The attempt is
+    // already registered by then, so `dispose()` itself aborts it; the claim
+    // must still come back with that aborted signal rather than a live one.
     const originalBatch = storage.conditionalBatch.bind(storage);
     let disposedDuringCommit = false;
     storage.conditionalBatch = async (conditions, operations): Promise<boolean> => {
@@ -466,6 +466,33 @@ describe('disposal racing a claim commit', () => {
     expect(result.status).toBe('claimed');
     if (result.status !== 'claimed') return;
     expect(result.claim.signal.aborted).toBe(true);
+  });
+
+  it('registers an already-aborted controller when disposed before the lease commits', async () => {
+    const storage = new MemoryStorage();
+    const { mailbox } = createMailboxFixture({ storage });
+    await admitOne(mailbox);
+
+    // Dispose during the record read, before the attempt is registered. The
+    // registration then finds a disposed handle and hands back an aborted
+    // controller instead of a live signal nothing could ever reach.
+    const originalGet = storage.get.bind(storage);
+    let disposedDuringRead = false;
+    storage.get = async (key: string): Promise<Uint8Array | null> => {
+      const value = await originalGet(key);
+      if (!disposedDuringRead && key.startsWith('appcmd:')) {
+        disposedDuringRead = true;
+        mailbox.dispose();
+      }
+      return value;
+    };
+
+    const result = await mailbox.claim();
+    expect(result.status).toBe('claimed');
+    if (result.status !== 'claimed') return;
+    expect(result.claim.signal.aborted).toBe(true);
+    expect(result.claim.signal.reason).toBeInstanceOf(Error);
+    expect((result.claim.signal.reason as Error).message).toContain('disposed');
   });
 });
 
@@ -1204,5 +1231,122 @@ describe('fifth-round hardening', () => {
     await first.acknowledge({ commandId: claim.commandId, attemptToken: claim.attemptToken });
     first.dispose();
     expect(hasAttemptControllerScope(storage, 'bureau', 'agent-7')).toBe(false);
+  });
+});
+
+describe('sixth-round hardening', () => {
+  it('keeps a committed sink-backed admission when probe cleanup fails', async () => {
+    const storage = new MemoryStorage();
+    const events = new RecordingEventSink(storage);
+    const { mailbox } = createMailboxFixture({ storage, events });
+    const originalDelete = storage.delete.bind(storage);
+    storage.delete = async (key: string): Promise<void> => {
+      if (key.startsWith('appprobe:')) throw new Error('transient');
+      return originalDelete(key);
+    };
+
+    // The transition and its event are durable before the probe is cleaned up;
+    // a cleanup failure must not turn that into a rejection the caller retries.
+    const admission = await mailbox.admit(commandInput());
+    expect(admission.status).toBe('admitted');
+    expect(await mailbox.list()).toHaveLength(1);
+    let probes = 0;
+    for await (const _entry of storage.scan('appprobe:')) probes += 1;
+    expect(probes).toBe(1);
+    mailbox.dispose();
+  });
+
+  it('accepts a generated identifier at the byte ceiling for attempt tokens', async () => {
+    const ceiling = 'a'.repeat(256);
+    const { mailbox } = createMailboxFixture({ generateId: () => ceiling });
+    await admitOne(mailbox);
+    const claim = await mailbox.claim();
+    expect(claim.status).toBe('claimed');
+    expect(claim.status === 'claimed' && claim.claim.attemptToken.endsWith(ceiling)).toBe(true);
+    mailbox.dispose();
+  });
+
+  it("fails closed on a record stored under another command's key", async () => {
+    const { mailbox, storage } = createMailboxFixture({ generateId: createIdSource('c') });
+    const first = await admitOne(mailbox, { idempotencyKey: 'a' });
+    const second = await admitOne(mailbox, { idempotencyKey: 'b' });
+    const bytes = await storage.get(KEYS.applicationCommand('bureau', 'agent-7', first));
+    await storage.put(KEYS.applicationCommand('bureau', 'agent-7', second), bytes as Uint8Array);
+    await expect(mailbox.receipt(second)).rejects.toThrow(PersistedDataCorruptError);
+    mailbox.dispose();
+  });
+
+  it('aborts a claim cancelled between its lease commit and its return', async () => {
+    const storage = new MemoryStorage();
+    const { mailbox } = createMailboxFixture({ storage, generateId: createIdSource('m') });
+    const sibling = createMailboxFixture({ storage, generateId: createIdSource('s') }).mailbox;
+    const commandId = await admitOne(mailbox);
+
+    const original = storage.conditionalBatch.bind(storage);
+    let raced = false;
+    storage.conditionalBatch = async (
+      ...args: Parameters<MemoryStorage['conditionalBatch']>
+    ): Promise<boolean> => {
+      const result = await original(...args);
+      if (!raced) {
+        raced = true;
+        // The lease is durable; the claim has not returned yet.
+        const cancelled = await sibling.requestCancellation({ commandId });
+        expect(cancelled.status).toBe('requested');
+      }
+      return result;
+    };
+
+    const claim = await mailbox.claim();
+    expect(claim.status).toBe('claimed');
+    expect(claim.status === 'claimed' && claim.claim.signal.aborted).toBe(true);
+    sibling.dispose();
+    mailbox.dispose();
+  });
+
+  it('stores an explicit null progress marker', async () => {
+    const { mailbox } = createMailboxFixture();
+    const commandId = await admitOne(mailbox);
+    const claim = await claimOne(mailbox);
+    await mailbox.renew({ commandId, attemptToken: claim.attemptToken, progress: { step: 1 } });
+    const withMarker = await mailbox.receipt(commandId);
+    expect(withMarker?.progress).toEqual({ step: 1 });
+    await mailbox.renew({ commandId, attemptToken: claim.attemptToken, progress: null });
+    const cleared = await mailbox.receipt(commandId);
+    expect(cleared?.progress).toBeNull();
+    // Omitting the marker keeps whatever was recorded last.
+    await mailbox.renew({ commandId, attemptToken: claim.attemptToken });
+    const kept = await mailbox.receipt(commandId);
+    expect(kept?.progress).toBeNull();
+    mailbox.dispose();
+  });
+
+  it('reports a held head as due at its deadline when the backoff lies beyond it', async () => {
+    const { mailbox, clock } = createMailboxFixture({
+      commandTimeoutMs: 5_000,
+      retryBackoffMs: 60_000,
+      maxRetryBackoffMs: 60_000,
+      maxAttempts: 3,
+    });
+    const commandId = await admitOne(mailbox);
+    const claim = await claimOne(mailbox);
+    await mailbox.reject({
+      commandId,
+      attemptToken: claim.attemptToken,
+      failure: { reason: 'application' },
+      retry: true,
+    });
+    const receipt = await mailbox.receipt(commandId);
+    const held = await mailbox.claim();
+    expect(held.status).toBe('held');
+    expect(held.status === 'held' ? held.availableAt : null).toBe(
+      receipt?.absoluteDeadlineAt ?? null,
+    );
+    clock.advance(5_000);
+    const afterDeadline = await mailbox.claim();
+    expect(afterDeadline.status).toBe('empty');
+    const terminal = await mailbox.receipt(commandId);
+    expect(terminal?.state).toBe('dead-lettered');
+    mailbox.dispose();
   });
 });

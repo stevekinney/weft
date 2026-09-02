@@ -21,6 +21,7 @@ import {
   ApplicationMailboxContentionError,
   MAX_MAILBOX_TRANSITION_ATTEMPTS,
   commitCommandTransition,
+  releaseAttemptController,
   toApplicationCommandReceipt,
   type MailboxRuntime,
 } from './application-mailbox-internals.ts';
@@ -162,7 +163,14 @@ async function resolveDeliverableHead(
     return { status: 'retry' };
   }
   if (now < loaded.record.availableAt) {
-    return { status: 'held', availableAt: loaded.record.availableAt };
+    // A head whose availability lies past its deadline becomes actionable AT
+    // the deadline — `claim()` dead-letters it then and exposes what follows —
+    // so a caller sleeping until `availableAt` would block the FIFO for longer
+    // than the command's whole lifetime.
+    return {
+      status: 'held',
+      availableAt: Math.min(loaded.record.availableAt, loaded.record.absoluteDeadlineAt),
+    };
   }
   return { status: 'claimable', loaded };
 }
@@ -175,23 +183,13 @@ async function resolveDeliverableHead(
  * `dispose()` sees no owned attempt and the caller still receives a live signal
  * nothing can ever reach.
  */
-function registerAttemptController(
-  runtime: MailboxRuntime,
-  attemptToken: string,
-  requestSignal: AbortSignal | undefined,
-): AbortController {
+function registerAttemptController(runtime: MailboxRuntime, attemptToken: string): AbortController {
   const controller = new AbortController();
   const release = runtime.adoptAttempt(attemptToken);
   if (release !== null) {
     runtime.attemptControllers.set(attemptToken, { controller, release });
   } else {
     controller.abort(new Error('The application mailbox was disposed while this claim committed.'));
-  }
-  // An abort that raced the commit still has to reach the caller. The lease is
-  // durable either way, but handing back a live signal for a request the caller
-  // already abandoned would hide that from them.
-  if (requestSignal?.aborted === true && !controller.signal.aborted) {
-    controller.abort(new Error('The claim request was aborted while this claim committed.'));
   }
   return controller;
 }
@@ -226,8 +224,7 @@ export async function claimNextCommand(
  *
  * Losing the compare-and-swap here is fine: whoever won has either settled or
  * dead-lettered the attempt, and maintenance covers anything left over. The
- * controller was never registered for this attempt, so there is nothing local
- * to release.
+ * caller releases the attempt's controller registration before calling this.
  */
 async function deadLetterCommittedLease(runtime: MailboxRuntime, commandId: string): Promise<void> {
   const loaded = await loadCommand(runtime.storage, runtime.keys, commandId);
@@ -272,28 +269,49 @@ async function leaseHead(
   // the generator's quality: a repeated token would let a superseded claimant
   // settle the newer attempt, and two first claims on different commands would
   // share one registry entry.
-  const attemptToken = requireGeneratedIdentifier(
-    `${loaded.record.sequence}.${loaded.record.attempt + 1}.${runtime.generateId()}`,
-    'attemptToken',
-  );
+  // The generated suffix is validated on its own, before the prefix is added, so
+  // a generator returning a well-formed identifier at the byte ceiling — which
+  // admission accepts — still yields a usable token rather than one every claim
+  // rejects.
+  const generated = requireGeneratedIdentifier(runtime.generateId(), 'attemptToken');
+  const attemptToken = `${loaded.record.sequence}.${loaded.record.attempt + 1}.${generated}`;
   const transition = claimWaitingCommand(loaded.record, { now: committedAt, attemptToken });
   if (!transition.ok) return null;
+  // Register BEFORE the commit. A sibling handle that cancels the command after
+  // the lease lands but before registration would find nothing to abort, and
+  // this claim would hand back a live signal for work whose cancellation is
+  // already durable. A registration for a lease that never commits, or that is
+  // withheld below, is released again.
+  const controller = registerAttemptController(runtime, attemptToken);
   const committed = await commitCommandTransition(runtime, {
     previous: loaded.record,
     expectedBytes: loaded.bytes,
     next: transition.next,
     now: committedAt,
   });
-  if (!committed) return null;
+  if (!committed) {
+    releaseAttemptController(runtime, attemptToken, 'The claim lost its compare-and-swap.');
+    return null;
+  }
   // The commit is itself asynchronous — a fleet-event sink may retry its
   // compare-and-swap — so the lease can land after the deadline it was checked
   // against. Handing that claim out would start work the contract already calls
   // expired; dead-letter it and let the caller look at the head again.
   if (runtime.now() >= transition.next.absoluteDeadlineAt) {
+    releaseAttemptController(
+      runtime,
+      attemptToken,
+      'The application mailbox dead-lettered this command at its absolute deadline.',
+    );
     await deadLetterCommittedLease(runtime, transition.next.commandId);
     return null;
   }
-  const controller = registerAttemptController(runtime, attemptToken, requestSignal);
+  // An abort that raced the commit still has to reach the caller. The lease is
+  // durable either way, but handing back a live signal for a request the caller
+  // already abandoned would hide that from them.
+  if (requestSignal?.aborted === true && !controller.signal.aborted) {
+    controller.abort(new Error('The claim request was aborted while this claim committed.'));
+  }
   return {
     status: 'claimed',
     claim: {
