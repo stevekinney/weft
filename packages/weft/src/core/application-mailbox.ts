@@ -130,6 +130,15 @@ export class ApplicationMailbox {
         'Application mailboxes require storage with snapshot scan consistency: strict FIFO delivery reads the index head, and a best-effort scan can return a later command ahead of an earlier one.',
       );
     }
+    // Strict FIFO also needs every consumer to see every admission as soon as it
+    // is durable. Session-consistent reads let a second process scan a snapshot
+    // that omits sequence 0 while it already contains sequence 1, and the
+    // compare-and-swap fences only the command it returned.
+    if (capabilities.readAfterWrite !== 'linearizable') {
+      throw new ApplicationCommandValidationError(
+        'Application mailboxes require storage with linearizable read-after-write: strict FIFO delivery across processes needs every consumer to see every durable admission.',
+      );
+    }
     this.#runtime = {
       storage: options.storage,
       events: options.events,

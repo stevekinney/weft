@@ -347,7 +347,11 @@ describe('ApplicationMailbox concurrency across storage backends', () => {
     it(`fences concurrent claims on ${backend.name}`, async () => {
       const created = backend.factory();
       const capabilities = created.storage.capabilities();
-      if (!capabilities.conditionalBatch || capabilities.scanConsistency !== 'snapshot') {
+      if (
+        !capabilities.conditionalBatch ||
+        capabilities.scanConsistency !== 'snapshot' ||
+        capabilities.readAfterWrite !== 'linearizable'
+      ) {
         await teardown(undefined, created.cleanup);
         return;
       }

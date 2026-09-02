@@ -116,11 +116,15 @@ export const MAX_DURABLE_METADATA_BYTES = 65_536;
 /** Maximum bytes in a caller-supplied failure message. */
 export const MAX_FAILURE_MESSAGE_BYTES = 2048;
 
-const FAILURE_REASONS: ReadonlySet<ApplicationCommandFailure['reason']> = new Set([
+/**
+ * The only failure reason a claimant may supply. `attempts-exhausted`,
+ * `deadline-exceeded`, and `cancelled` each name a mailbox-owned terminal
+ * mechanism and are synthesized by the transition that owns them; accepting one
+ * from `reject()` would persist a `rejected` record whose failure claims a
+ * different mechanism produced it.
+ */
+const CALLER_FAILURE_REASONS: ReadonlySet<ApplicationCommandFailure['reason']> = new Set([
   'application',
-  'attempts-exhausted',
-  'deadline-exceeded',
-  'cancelled',
 ]);
 
 /**
@@ -134,10 +138,7 @@ const FAILURE_REASONS: ReadonlySet<ApplicationCommandFailure['reason']> = new Se
  *
  * @throws {ApplicationCommandValidationError} When the value is not JSON-safe.
  */
-export function validateDurableJSONValue<TField extends string>(
-  value: unknown,
-  field: TField,
-): JSONValue | undefined {
+export function validateDurableJSONValue(value: unknown, field: string): JSONValue | undefined {
   if (value === undefined) return undefined;
   // Round-trip first, then check. Snapshotting defends against a caller mutating
   // the object after this returns, and checking the snapshot rather than the
@@ -179,9 +180,9 @@ export function validateFailure(failure: ApplicationCommandFailure): Application
   if (typeof failure !== 'object' || failure === null) {
     throw new ApplicationCommandValidationError('failure must be an object.');
   }
-  if (!FAILURE_REASONS.has(failure.reason)) {
+  if (!CALLER_FAILURE_REASONS.has(failure.reason)) {
     throw new ApplicationCommandValidationError(
-      `failure.reason must be one of ${[...FAILURE_REASONS].join(', ')}.`,
+      `failure.reason must be one of ${[...CALLER_FAILURE_REASONS].join(', ')}; attempts-exhausted, deadline-exceeded, and cancelled are assigned by the mailbox.`,
     );
   }
   const details = validateDurableJSONValue(failure.details, 'failure.details');

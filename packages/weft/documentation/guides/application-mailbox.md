@@ -34,7 +34,7 @@ if (admission.status === 'admitted') {
 }
 ```
 
-The mailbox requires storage that reports `conditionalBatch` support: every transition is a compare-and-swap against the exact bytes the record was read as, so an adapter without honest conditional batches cannot back one.
+The mailbox requires storage that reports `conditionalBatch` support, `scanConsistency: 'snapshot'`, and `readAfterWrite: 'linearizable'`. Every transition is a compare-and-swap against the exact bytes the record was read as, so an adapter without honest conditional batches cannot back one; and strict FIFO is decided by reading the lowest key in the delivery index, so a best-effort scan or a session-consistent read could return a later command ahead of an earlier one that another process has already made durable. `MemoryStorage`, `BunSQLiteStorage`, `LMDBStorage`, and the Postgres adapters qualify; `TursoStorage`, `HttpStorage`, and `IndexedDBStorage` are rejected at construction.
 
 ## Admission Returns a Receipt, Not a Void
 

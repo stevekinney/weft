@@ -274,14 +274,14 @@ const admission = await mailbox.admit({
 const claimed = await mailbox.claim();
 if (claimed.status === 'claimed' && admission.status === 'admitted') {
   await mailbox.acknowledge({
-    commandId: admission.receipt.commandId,
+    commandId: claimed.claim.receipt.commandId,
     attemptToken: claimed.claim.attemptToken,
     outcome: { applied: true },
   });
 }
 ```
 
-Admission returns a receipt that survives process restart. Idempotency binds to `(caller, target, kind, payloadDigest)`, so an exact retry returns the original receipt and a conflicting reuse of the key returns a stable conflict without touching the original. Claims are attempt-fenced, so two consumers sharing one durable store can never both hold a valid claim. Cancellation is durable before it reaches anyone, and reports honestly whether cleanup is still outstanding rather than claiming an uncooperative handler stopped.
+Admission returns a receipt that, on a persistent backend such as `BunSQLiteStorage`, survives process restart; `MemoryStorage` above keeps the example self-contained and is gone with the process. Idempotency binds to `(caller, target, kind, payloadDigest)`, so an exact retry returns the original receipt and a conflicting reuse of the key returns a stable conflict without touching the original. Claims are attempt-fenced, so two consumers sharing one durable store can never both hold a valid claim _on the same command_ — delivery is strictly FIFO, but a later command may be claimed while an earlier one is still in flight, so completion order is up to the consumers. Cancellation is durable before it reaches anyone, and reports honestly whether cleanup is still outstanding rather than claiming an uncooperative handler stopped.
 
 Delivery intent, ordering, ownership, and disposition are durable; external side effects are not made exactly-once. See [Application Mailbox](documentation/guides/application-mailbox.md).
 

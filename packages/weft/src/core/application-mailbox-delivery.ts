@@ -224,6 +224,32 @@ export async function claimNextCommand(
 }
 
 /**
+ * Dead-letter a lease whose commit completed past the absolute deadline.
+ *
+ * Losing the compare-and-swap here is fine: whoever won has either settled or
+ * dead-lettered the attempt, and maintenance covers anything left over. The
+ * controller was never registered for this attempt, so there is nothing local
+ * to release.
+ */
+async function deadLetterCommittedLease(runtime: MailboxRuntime, commandId: string): Promise<void> {
+  const loaded = await loadCommand(runtime.storage, runtime.keys, commandId);
+  if (loaded === null) return;
+  const now = runtime.now();
+  const transition = recoverExpiredCommand(loaded.record, {
+    now,
+    retryBackoffMs: runtime.policy.retryBackoffMs,
+    maxRetryBackoffMs: runtime.policy.maxRetryBackoffMs,
+  });
+  if (!transition.ok) return;
+  await commitCommandTransition(runtime, {
+    previous: loaded.record,
+    expectedBytes: loaded.bytes,
+    next: transition.next,
+    now,
+  });
+}
+
+/**
  * Verify the payload and commit the lease, or return `null` when the
  * compare-and-swap lost and the caller should look at the head again.
  */
@@ -242,12 +268,14 @@ async function leaseHead(
   // lease nobody is waiting for leaves durable work parked until maintenance
   // reclaims it.
   requestSignal?.throwIfAborted();
-  // Prefix with the attempt number so the token is unique per attempt on this
-  // command even if the injected generator repeats a value. Fencing must not
-  // depend on the generator's quality: a repeated token would let a superseded
-  // claimant settle the newer attempt.
+  // Prefix with the command's FIFO sequence and the attempt number so the token
+  // is unique across the whole mailbox even if the injected generator repeats a
+  // value. Fencing and the process-local controller registry must not depend on
+  // the generator's quality: a repeated token would let a superseded claimant
+  // settle the newer attempt, and two first claims on different commands would
+  // share one registry entry.
   const attemptToken = requireGeneratedIdentifier(
-    `${loaded.record.attempt + 1}.${runtime.generateId()}`,
+    `${loaded.record.sequence}.${loaded.record.attempt + 1}.${runtime.generateId()}`,
     'attemptToken',
   );
   const transition = claimWaitingCommand(loaded.record, { now: committedAt, attemptToken });
@@ -259,6 +287,14 @@ async function leaseHead(
     now: committedAt,
   });
   if (!committed) return null;
+  // The commit is itself asynchronous — a fleet-event sink may retry its
+  // compare-and-swap — so the lease can land after the deadline it was checked
+  // against. Handing that claim out would start work the contract already calls
+  // expired; dead-letter it and let the caller look at the head again.
+  if (runtime.now() >= transition.next.absoluteDeadlineAt) {
+    await deadLetterCommittedLease(runtime, transition.next.commandId);
+    return null;
+  }
   const controller = registerAttemptController(runtime, attemptToken, requestSignal);
   return {
     status: 'claimed',

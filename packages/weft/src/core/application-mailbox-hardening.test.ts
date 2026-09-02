@@ -36,6 +36,8 @@ import {
 } from './application-mailbox.test-support.ts';
 import { ApplicationMailbox } from './application-mailbox.ts';
 import { computePayloadDigest } from './application-payload-digest.ts';
+import { decode, encode } from './codec.ts';
+import { PersistedDataCorruptError } from './persisted-data-incompatible-error.ts';
 
 describe('claiming past the absolute deadline', () => {
   it('refuses to lease a command whose deadline passed, and dead-letters it instead', async () => {
@@ -953,4 +955,126 @@ describe('third-round hardening', () => {
     await expect(mailbox.admit(commandInput())).rejects.toThrow(ApplicationCommandValidationError);
     mailbox.dispose();
   });
+});
+
+describe('fourth-round hardening', () => {
+  it('rejects a storage backend without linearizable read-after-write', () => {
+    class SessionReads extends MemoryStorage {
+      override capabilities(): ReturnType<MemoryStorage['capabilities']> {
+        return { ...super.capabilities(), readAfterWrite: 'session' };
+      }
+    }
+    expect(
+      () =>
+        new ApplicationMailbox({
+          storage: new SessionReads(),
+          namespace: 'n',
+          resourceId: 'r',
+        }),
+    ).toThrow(/linearizable read-after-write/);
+  });
+
+  it('keeps attempt tokens unique across commands when the generator repeats', async () => {
+    // Unique ids for the two admissions (a repeated command id fails admission's
+    // own compare-and-swap, which is a different guarantee), then a generator
+    // that repeats forever for every claim.
+    let generated = 0;
+    const { mailbox } = createMailboxFixture({
+      generateId: () => {
+        generated += 1;
+        return generated <= 2 ? `command-${generated}` : 'repeat';
+      },
+    });
+    const first = await admitOne(mailbox, { idempotencyKey: 'a' });
+    const second = await admitOne(mailbox, { idempotencyKey: 'b' });
+    const firstClaim = await claimOne(mailbox);
+    const secondClaim = await claimOne(mailbox);
+    expect(firstClaim.commandId).toBe(first);
+    expect(secondClaim.commandId).toBe(second);
+    expect(firstClaim.attemptToken).not.toBe(secondClaim.attemptToken);
+
+    // The registry is mailbox-wide: with colliding tokens, cancelling the first
+    // command would abort the second claim's signal, and the first token could
+    // settle the second command.
+    const cancelled = await mailbox.requestCancellation({ commandId: first });
+    expect(cancelled.status).toBe('requested');
+    expect(firstClaim.signal.aborted).toBe(true);
+    expect(secondClaim.signal.aborted).toBe(false);
+    const settled = await mailbox.acknowledge({
+      commandId: second,
+      attemptToken: firstClaim.attemptToken,
+    });
+    expect(settled.status).toBe('stale');
+    mailbox.dispose();
+  });
+
+  it('withholds a claim whose commit completed past the deadline', async () => {
+    const storage = new MemoryStorage();
+    const clock = createMailboxClock();
+    const { mailbox } = createMailboxFixture({
+      storage,
+      clock,
+      commandTimeoutMs: 1_000,
+      visibilityTimeoutMs: 10_000,
+    });
+    const commandId = await admitOne(mailbox);
+
+    // The deadline passes while the lease commit is in flight (a fleet-event sink
+    // retrying its compare-and-swap, say). The claim was checked against the
+    // clock before the commit, so without a recheck the caller would receive
+    // live work the contract already calls expired.
+    const original = storage.conditionalBatch.bind(storage);
+    let crossed = false;
+    storage.conditionalBatch = async (
+      ...args: Parameters<MemoryStorage['conditionalBatch']>
+    ): Promise<boolean> => {
+      const result = await original(...args);
+      if (!crossed) {
+        crossed = true;
+        clock.advance(1_000);
+      }
+      return result;
+    };
+
+    const claim = await mailbox.claim();
+    expect(claim.status).toBe('empty');
+    const receipt = await mailbox.receipt(commandId);
+    expect(receipt?.state).toBe('dead-lettered');
+    expect(receipt?.failure?.reason).toBe('deadline-exceeded');
+    mailbox.dispose();
+  });
+
+  it('reserves mailbox-owned failure reasons for mailbox transitions', async () => {
+    const { mailbox } = createMailboxFixture();
+    const commandId = await admitOne(mailbox);
+    const claim = await claimOne(mailbox);
+    for (const reason of ['attempts-exhausted', 'deadline-exceeded', 'cancelled'] as const) {
+      await expect(
+        mailbox.reject({
+          commandId,
+          attemptToken: claim.attemptToken,
+          failure: { reason },
+          retry: false,
+        }),
+      ).rejects.toThrow(ApplicationCommandValidationError);
+    }
+    // The claim is still live: nothing above was persisted.
+    const receipt = await mailbox.receipt(commandId);
+    expect(receipt?.state).toBe('claimed');
+    mailbox.dispose();
+  });
+
+  it.each([['maxAttempts'], ['visibilityTimeoutMs']])(
+    'fails closed on a persisted record with %s of zero',
+    async (field) => {
+      const { mailbox, storage } = createMailboxFixture();
+      const commandId = await admitOne(mailbox);
+      const key = KEYS.applicationCommand('bureau', 'agent-7', commandId);
+      const bytes = await storage.get(key);
+      const record = decode(bytes as Uint8Array) as Record<string, unknown>;
+      await storage.put(key, encode({ ...record, [field]: 0 }));
+      await expect(mailbox.claim()).rejects.toThrow(PersistedDataCorruptError);
+      mailbox.dispose();
+    },
+  );
 });

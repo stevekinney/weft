@@ -79,6 +79,18 @@ function readInteger(source: Record<string, unknown>, field: string, key: string
   return value;
 }
 
+/**
+ * Admission requires these to be positive, so a persisted zero is corruption:
+ * a zero visibility timeout would hand out a lease that is reclaimable the
+ * instant it is granted, and zero attempts would deliver work that is already
+ * exhausted.
+ */
+function readPositiveInteger(source: Record<string, unknown>, field: string, key: string): number {
+  const value = readInteger(source, field, key);
+  if (value === 0) fail(key);
+  return value;
+}
+
 function readOptionalInteger(
   source: Record<string, unknown>,
   field: string,
@@ -157,8 +169,8 @@ function readBase(source: Record<string, unknown>, key: string) {
     acceptedAt: readInteger(source, 'acceptedAt', key),
     availableAt: readInteger(source, 'availableAt', key),
     absoluteDeadlineAt: readInteger(source, 'absoluteDeadlineAt', key),
-    maxAttempts: readInteger(source, 'maxAttempts', key),
-    visibilityTimeoutMs: readInteger(source, 'visibilityTimeoutMs', key),
+    maxAttempts: readPositiveInteger(source, 'maxAttempts', key),
+    visibilityTimeoutMs: readPositiveInteger(source, 'visibilityTimeoutMs', key),
     generation: readInteger(source, 'generation', key),
     attempt: readInteger(source, 'attempt', key),
     retryCount: readInteger(source, 'retryCount', key),
