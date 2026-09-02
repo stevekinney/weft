@@ -20,8 +20,10 @@
 import type {
   ApplicationCommandCancellationResult,
   ApplicationCommandCleanupResult,
+  ApplicationCommandReceipt,
   ApplicationCommandRenewalResult,
   ApplicationCommandSettleResult,
+  LoadedCommandRecord,
 } from './application-mailbox-contract.ts';
 import {
   ApplicationMailboxContentionError,
@@ -37,6 +39,7 @@ import {
   loadCommand,
   planCommandTransition,
 } from './application-mailbox-storage.ts';
+import { recoverExpiredCommand } from './application-mailbox-transitions-recovery.ts';
 import {
   acknowledgeCommand,
   rejectCommand,
@@ -66,15 +69,18 @@ export async function renewClaim(
     readonly commandId: string;
     readonly attemptToken: string;
     readonly progress?: JSONValue | undefined;
-    readonly now: number;
   },
 ): Promise<ApplicationCommandRenewalResult> {
   for (let attempt = 1; attempt <= MAX_MAILBOX_TRANSITION_ATTEMPTS; attempt += 1) {
     const loaded = await loadCommand(runtime.storage, runtime.keys, options.commandId);
     if (loaded === null) return { status: 'unknown' };
+    // Read the clock AFTER the load. The read is asynchronous, so a renewal that
+    // began just inside the deadline can cross it during the read; deciding on
+    // the earlier reading would extend a lease the contract says is over.
+    const now = runtime.now();
     const transition = renewCommandLease(loaded.record, {
       attemptToken: options.attemptToken,
-      now: options.now,
+      now,
       progress: options.progress,
     });
     if (!transition.ok) {
@@ -89,7 +95,7 @@ export async function renewClaim(
         expectedBytes: loaded.bytes,
         next: transition.next,
         event: null,
-        now: options.now,
+        now,
       }),
     });
     if (!committed) continue;
@@ -110,13 +116,12 @@ export async function acknowledgeClaim(
     readonly commandId: string;
     readonly attemptToken: string;
     readonly outcome?: JSONValue | undefined;
-    readonly now: number;
   },
 ): Promise<ApplicationCommandSettleResult> {
-  return settle(runtime, options.commandId, options.now, 'acknowledge', (record) =>
+  return settle(runtime, options.commandId, 'acknowledge', (record, now) =>
     acknowledgeCommand(record, {
       attemptToken: options.attemptToken,
-      now: options.now,
+      now,
       outcome: options.outcome,
     }),
   );
@@ -133,13 +138,12 @@ export async function rejectClaim(
     readonly attemptToken: string;
     readonly failure: ApplicationCommandFailure;
     readonly retry: boolean;
-    readonly now: number;
   },
 ): Promise<ApplicationCommandSettleResult> {
-  return settle(runtime, options.commandId, options.now, 'reject', (record) =>
+  return settle(runtime, options.commandId, 'reject', (record, now) =>
     rejectCommand(record, {
       attemptToken: options.attemptToken,
-      now: options.now,
+      now,
       retry: options.retry,
       failure: options.failure,
       retryBackoffMs: runtime.policy.retryBackoffMs,
@@ -154,19 +158,21 @@ export async function rejectClaim(
  */
 type SettlementDecision = (
   record: ApplicationCommandRecord,
+  now: number,
 ) => ApplicationMailboxTransition<ApplicationCommandAccepted | ApplicationCommandTerminalRecord>;
 
 async function settle(
   runtime: MailboxRuntime,
   commandId: string,
-  now: number,
   operation: string,
   decide: SettlementDecision,
 ): Promise<ApplicationCommandSettleResult> {
   for (let attempt = 1; attempt <= MAX_MAILBOX_TRANSITION_ATTEMPTS; attempt += 1) {
     const loaded = await loadCommand(runtime.storage, runtime.keys, commandId);
     if (loaded === null) return { status: 'unknown' };
-    const transition = decide(loaded.record);
+    // Fresh clock after the asynchronous load, for the same reason as renewal.
+    const now = runtime.now();
+    const transition = decide(loaded.record, now);
     if (!transition.ok) {
       return {
         status: transition.reason === 'deadline-exceeded' ? 'deadline-exceeded' : 'stale',
@@ -208,17 +214,23 @@ export async function requestCancellation(
   options: {
     readonly commandId: string;
     readonly reason?: string | undefined;
-    readonly now: number;
   },
 ): Promise<ApplicationCommandCancellationResult> {
   for (let attempt = 1; attempt <= MAX_MAILBOX_TRANSITION_ATTEMPTS; attempt += 1) {
     const loaded = await loadCommand(runtime.storage, runtime.keys, options.commandId);
     if (loaded === null) return { status: 'unknown' };
-    const transition = requestCommandCancellation(loaded.record, {
-      now: options.now,
-      reason: options.reason,
-    });
+    const now = runtime.now();
+    const transition = requestCommandCancellation(loaded.record, { now, reason: options.reason });
     if (!transition.ok) {
+      // Past the deadline the command must become terminal NOW, not whenever
+      // maintenance next runs. Reporting `already-terminal` while the record is
+      // still `claimed` would leave a live lease — and an un-aborted local signal
+      // — behind a receipt that claims the command is over.
+      if (transition.reason === 'deadline-exceeded') {
+        const expired = await deadLetterExpired(runtime, loaded, now);
+        if (expired === null) continue;
+        return { status: 'already-terminal', receipt: expired };
+      }
       // The transition is the single decision point, so both illegal edges are
       // classified here rather than pre-checked twice. `not-leased` against a
       // record already in `cancellation-requested` is the idempotent repeat: the
@@ -238,7 +250,7 @@ export async function requestCancellation(
       previous: loaded.record,
       expectedBytes: loaded.bytes,
       next: transition.next,
-      now: options.now,
+      now,
     });
     if (!committed) continue;
     if (transition.next.state === 'cancellation-requested') {
@@ -254,10 +266,43 @@ export async function requestCancellation(
   throw new ApplicationMailboxContentionError('cancel', options.commandId);
 }
 
+/**
+ * Dead-letter a command found past its absolute deadline, releasing any local
+ * attempt it still held. Returns `null` when the compare-and-swap lost, so the
+ * caller re-reads rather than reporting a disposition it did not observe.
+ */
+async function deadLetterExpired(
+  runtime: MailboxRuntime,
+  loaded: LoadedCommandRecord,
+  now: number,
+): Promise<ApplicationCommandReceipt | null> {
+  const transition = recoverExpiredCommand(loaded.record, {
+    now,
+    retryBackoffMs: runtime.policy.retryBackoffMs,
+    maxRetryBackoffMs: runtime.policy.maxRetryBackoffMs,
+  });
+  if (!transition.ok) return null;
+  const committed = await commitCommandTransition(runtime, {
+    previous: loaded.record,
+    expectedBytes: loaded.bytes,
+    next: transition.next,
+    now,
+  });
+  if (!committed) return null;
+  if (isApplicationCommandLeased(loaded.record)) {
+    releaseAttemptController(
+      runtime,
+      loaded.record.attemptToken,
+      'The application mailbox dead-lettered this command at its absolute deadline.',
+    );
+  }
+  return toApplicationCommandReceipt(transition.next);
+}
+
 function abortLocalClaimant(runtime: MailboxRuntime, attemptToken: string): void {
-  const controller = runtime.attemptControllers.get(attemptToken);
-  if (controller !== undefined && !controller.signal.aborted) {
-    controller.abort(new Error('The application mailbox cancelled this command.'));
+  const registration = runtime.attemptControllers.get(attemptToken);
+  if (registration !== undefined && !registration.controller.signal.aborted) {
+    registration.controller.abort(new Error('The application mailbox cancelled this command.'));
   }
 }
 

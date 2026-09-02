@@ -321,7 +321,20 @@ async function assertSinkCommittedLocally(
     VERIFIED_SINK_BACKENDS.set(events, verified);
   }
   if (verified.has(storage)) return;
-  if ((await storage.get(plan.verifyKey)) === null) {
+  // Compare the bytes this plan intended to write, not mere key presence. On any
+  // transition of an existing record the key is already present locally, so a
+  // presence check would pass against the PRE-transition bytes and cache a sink
+  // that committed somewhere else as verified.
+  const intended = plan.operations.find(
+    (operation): operation is Extract<BatchOperation, { type: 'put' }> =>
+      operation.type === 'put' && operation.key === plan.verifyKey,
+  );
+  const stored = await storage.get(plan.verifyKey);
+  const landed =
+    intended === undefined
+      ? stored !== null
+      : stored !== null && bytesEqual(stored, intended.value);
+  if (!landed) {
     throw new Error(
       'The configured application mailbox event sink committed to a different storage backend than the mailbox. Build the fleet event feed over the same Storage instance the mailbox uses.',
     );

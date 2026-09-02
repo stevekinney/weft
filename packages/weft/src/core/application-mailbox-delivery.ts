@@ -183,8 +183,9 @@ function registerAttemptController(
   requestSignal: AbortSignal | undefined,
 ): AbortController {
   const controller = new AbortController();
-  if (runtime.adoptAttempt(attemptToken)) {
-    runtime.attemptControllers.set(attemptToken, controller);
+  const release = runtime.adoptAttempt(attemptToken);
+  if (release !== null) {
+    runtime.attemptControllers.set(attemptToken, { controller, release });
   } else {
     controller.abort(new Error('The application mailbox was disposed while this claim committed.'));
   }
@@ -241,7 +242,14 @@ async function leaseHead(
   // lease nobody is waiting for leaves durable work parked until maintenance
   // reclaims it.
   requestSignal?.throwIfAborted();
-  const attemptToken = requireGeneratedIdentifier(runtime.generateId(), 'attemptToken');
+  // Prefix with the attempt number so the token is unique per attempt on this
+  // command even if the injected generator repeats a value. Fencing must not
+  // depend on the generator's quality: a repeated token would let a superseded
+  // claimant settle the newer attempt.
+  const attemptToken = requireGeneratedIdentifier(
+    `${loaded.record.attempt + 1}.${runtime.generateId()}`,
+    'attemptToken',
+  );
   const transition = claimWaitingCommand(loaded.record, { now: committedAt, attemptToken });
   if (!transition.ok) return null;
   const committed = await commitCommandTransition(runtime, {

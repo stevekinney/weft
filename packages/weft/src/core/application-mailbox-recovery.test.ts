@@ -445,7 +445,8 @@ describe('ApplicationMailbox recovery across storage backends', () => {
   for (const backend of storageBackends) {
     it(`preserves FIFO order through expiry on ${backend.name}`, async () => {
       const created = backend.factory();
-      if (!created.storage.capabilities().conditionalBatch) {
+      const capabilities = created.storage.capabilities();
+      if (!capabilities.conditionalBatch || capabilities.scanConsistency !== 'snapshot') {
         await teardown(undefined, created.cleanup);
         return;
       }

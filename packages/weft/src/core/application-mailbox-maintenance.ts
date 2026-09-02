@@ -8,10 +8,11 @@
  * host with `backgroundTasks: 'manual'` calls `runMaintenance()` and gets
  * exactly one deterministic pass.
  *
- * Every pass is bounded. It examines at most
- * {@link batchSize} command records and retires at most
- * that many terminal receipts, so a large mailbox drains across several calls
- * instead of one unbounded sweep.
+ * Every pass is bounded. It walks the command keyspace in pages of
+ * `maintenanceBatchSize` records, up to {@link MAILBOX_MAINTENANCE_MAX_PAGES}
+ * pages per call, carrying its cursor to the next call when the cap cuts it
+ * short; and it retires at most `maintenanceBatchSize` terminal receipts. A large
+ * mailbox drains across several calls instead of one unbounded sweep.
  *
  * @module core/application-mailbox-maintenance
  */

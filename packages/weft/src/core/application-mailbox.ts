@@ -114,9 +114,20 @@ export class ApplicationMailbox {
 
   constructor(options: ApplicationMailboxOptions) {
     const policy = resolveMailboxPolicy(options);
-    if (!options.storage.capabilities().conditionalBatch) {
+    const capabilities = options.storage.capabilities();
+    if (!capabilities.conditionalBatch) {
       throw new ApplicationCommandValidationError(
         'Application mailboxes require storage with conditional batch support: every transition is a compare-and-swap.',
+      );
+    }
+    // Strict FIFO is decided by reading the lowest key in the delivery index. A
+    // best-effort scan can miss an earlier entry that a concurrent write is still
+    // landing, and the compare-and-swap fences only the command actually
+    // returned — so a later command could commit ahead of an earlier one and the
+    // advertised ordering would be silently false.
+    if (capabilities.scanConsistency !== 'snapshot') {
+      throw new ApplicationCommandValidationError(
+        'Application mailboxes require storage with snapshot scan consistency: strict FIFO delivery reads the index head, and a best-effort scan can return a later command ahead of an earlier one.',
       );
     }
     this.#runtime = {
@@ -136,11 +147,12 @@ export class ApplicationMailbox {
         policy.resourceId,
       ),
       adoptAttempt: (attemptToken) => {
-        if (this.#disposed) return false;
+        if (this.#disposed) return null;
         this.#ownAttempts.add(attemptToken);
-        return true;
+        return () => {
+          this.#ownAttempts.delete(attemptToken);
+        };
       },
-      releaseAttempt: (attemptToken) => this.#ownAttempts.delete(attemptToken),
       readMaintenanceCursor: () => this.#maintenanceCursor,
       writeMaintenanceCursor: (cursor) => {
         this.#maintenanceCursor = cursor;
@@ -298,7 +310,6 @@ export class ApplicationMailbox {
       commandId: options.commandId,
       attemptToken: options.attemptToken,
       progress: validateDurableJSONValue(options.progress, 'progress'),
-      now: this.#runtime.now(),
     });
   }
 
@@ -313,7 +324,6 @@ export class ApplicationMailbox {
       commandId: options.commandId,
       attemptToken: options.attemptToken,
       outcome: validateDurableJSONValue(options.outcome, 'outcome'),
-      now: this.#runtime.now(),
     });
   }
 
@@ -330,7 +340,6 @@ export class ApplicationMailbox {
       attemptToken: options.attemptToken,
       failure: validateFailure(options.failure),
       retry: options.retry ?? false,
-      now: this.#runtime.now(),
     });
   }
 
@@ -343,7 +352,6 @@ export class ApplicationMailbox {
     return requestCancellation(this.#runtime, {
       commandId: options.commandId,
       reason: validateCancellationReason(options.reason),
-      now: this.#runtime.now(),
     });
   }
 
@@ -415,11 +423,11 @@ export class ApplicationMailbox {
     // handles onto the same mailbox, and disposing one handle must not abort a
     // claim another handle is still working.
     for (const attemptToken of this.#ownAttempts) {
-      const controller = this.#runtime.attemptControllers.get(attemptToken);
-      if (controller === undefined) continue;
+      const registration = this.#runtime.attemptControllers.get(attemptToken);
+      if (registration === undefined) continue;
       this.#runtime.attemptControllers.delete(attemptToken);
-      if (!controller.signal.aborted) {
-        controller.abort(
+      if (!registration.controller.signal.aborted) {
+        registration.controller.abort(
           new Error('The application mailbox was disposed while this attempt was open.'),
         );
       }

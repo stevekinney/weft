@@ -79,7 +79,7 @@ export function requireIdentity(value: unknown, field: string, maxBytes: number)
 }
 
 /** Whether a string contains no unpaired surrogate. */
-function isWellFormedString(value: string): boolean {
+export function isWellFormedString(value: string): boolean {
   return value.isWellFormed();
 }
 
@@ -109,6 +109,9 @@ export function requireNonNegativeInteger(value: unknown, field: string, maximum
   }
   return value;
 }
+
+/** Maximum encoded bytes for `outcome`, `progress`, or `failure.details`. */
+export const MAX_DURABLE_METADATA_BYTES = 65_536;
 
 /** Maximum bytes in a caller-supplied failure message. */
 export const MAX_FAILURE_MESSAGE_BYTES = 2048;
@@ -141,8 +144,10 @@ export function validateDurableJSONValue<TField extends string>(
   // input is what the decoder will actually see: a `Map` or `Date` encodes and
   // decodes cleanly as itself and only then fails the JSON contract.
   let snapshot: unknown;
+  let encoded: Uint8Array;
   try {
-    snapshot = decode(encode(value));
+    encoded = encode(value);
+    snapshot = decode(encoded);
   } catch (cause) {
     throw new ApplicationCommandValidationError(
       `${field} is not encodable by the structured-clone codec.`,
@@ -152,6 +157,14 @@ export function validateDurableJSONValue<TField extends string>(
   if (!isJSONValue(snapshot)) {
     throw new ApplicationCommandValidationError(
       `${field} must be a JSON-safe value: durable records reject anything the record decoder cannot read back.`,
+    );
+  }
+  // Bounded, like every other field on the record. An unbounded value here would
+  // let one settlement or a stream of renewals grow a command record without
+  // limit, and every later read pays for it.
+  if (encoded.byteLength > MAX_DURABLE_METADATA_BYTES) {
+    throw new ApplicationCommandValidationError(
+      `${field} encodes to ${encoded.byteLength} bytes, over the ${MAX_DURABLE_METADATA_BYTES}-byte durable metadata ceiling.`,
     );
   }
   return snapshot;
@@ -193,6 +206,13 @@ export function requireGeneratedIdentifier(value: string, field: string): string
   if (typeof value !== 'string' || value.length === 0) {
     throw new ApplicationCommandValidationError(
       `The configured generateId() returned an empty ${field}; durable keys require a non-empty identifier.`,
+    );
+  }
+  // The same Unicode rule as caller identities: a lone surrogate would pass the
+  // length check and then escape as a raw `URIError` from key construction.
+  if (!isWellFormedString(value)) {
+    throw new ApplicationCommandValidationError(
+      `The configured generateId() returned a ${field} containing an unpaired surrogate.`,
     );
   }
   if (byteLengthOf(value) > MAX_APPLICATION_IDENTITY_BYTES) {

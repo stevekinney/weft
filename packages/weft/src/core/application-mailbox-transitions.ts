@@ -322,9 +322,11 @@ export function rejectCommand(
     ...applicationCommandIdentityFields(leased),
     state: 'accepted',
     retryCount: leased.retryCount + 1,
-    availableAt:
+    availableAt: requireDerivedInstant(
       options.now +
-      computeRetryBackoffMs(leased.attempt, options.retryBackoffMs, options.maxRetryBackoffMs),
+        computeRetryBackoffMs(leased.attempt, options.retryBackoffMs, options.maxRetryBackoffMs),
+      'availableAt',
+    ),
   });
 }
 

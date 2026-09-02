@@ -64,7 +64,7 @@ export type MailboxRuntime = {
    * token — shared across every handle onto the same mailbox, so a cancellation
    * raised through one handle reaches a claimant holding another.
    */
-  readonly attemptControllers: Map<string, AbortController>;
+  readonly attemptControllers: Map<string, AttemptRegistration>;
   /**
    * Record an attempt this handle now owns, or report that disposal already won.
    *
@@ -73,9 +73,7 @@ export type MailboxRuntime = {
    * being recorded, see nothing to abort, and leave a live claim from a disposed
    * mailbox. Doing both under one synchronous call closes that window.
    */
-  readonly adoptAttempt: (attemptToken: string) => boolean;
-  /** Forget an attempt this handle owned once it is released. */
-  readonly releaseAttempt: (attemptToken: string) => void;
+  readonly adoptAttempt: (attemptToken: string) => (() => void) | null;
   /**
    * Where the previous maintenance pass stopped, when its page cap cut it short.
    *
@@ -99,9 +97,23 @@ export type MailboxRuntime = {
  * *cross-process* fallback. Keyed by `Storage` identity in a `WeakMap` so a
  * discarded backend takes its registries with it.
  */
+/**
+ * One live attempt in this process: its abort controller plus the callback that
+ * forgets it from the handle that claimed it.
+ *
+ * Carrying the release alongside the controller is what lets a *sibling* handle
+ * — one running maintenance, or settling with a token it was handed — release
+ * ownership from the handle that actually owns it. Without that, the claiming
+ * handle's ownership set leaks one entry per attempt settled elsewhere.
+ */
+export type AttemptRegistration = {
+  readonly controller: AbortController;
+  readonly release: () => void;
+};
+
 const ATTEMPT_CONTROLLERS_BY_STORAGE = new WeakMap<
   Storage,
-  Map<string, Map<string, AbortController>>
+  Map<string, Map<string, AttemptRegistration>>
 >();
 
 /** The shared attempt-controller registry for one mailbox scope in this process. */
@@ -109,7 +121,7 @@ export function attemptControllerRegistry(
   storage: Storage,
   namespace: string,
   resourceId: string,
-): Map<string, AbortController> {
+): Map<string, AttemptRegistration> {
   let byScope = ATTEMPT_CONTROLLERS_BY_STORAGE.get(storage);
   if (byScope === undefined) {
     byScope = new Map();
@@ -291,14 +303,13 @@ export function releaseAttemptController(
   attemptToken: string,
   reason: string,
 ): void {
-  // Drop the handle's ownership record too. Without this a long-lived handle
-  // accumulates one string per historical claim for its whole lifetime, which is
-  // unbounded process memory for a mailbox that keeps working.
-  runtime.releaseAttempt(attemptToken);
-  const controller = runtime.attemptControllers.get(attemptToken);
-  if (controller === undefined) return;
+  const registration = runtime.attemptControllers.get(attemptToken);
+  if (registration === undefined) return;
   runtime.attemptControllers.delete(attemptToken);
-  if (!controller.signal.aborted) controller.abort(new Error(reason));
+  // Release through the registration, so the handle that CLAIMED the attempt
+  // forgets it even when a sibling handle is the one settling or reclaiming.
+  registration.release();
+  if (!registration.controller.signal.aborted) registration.controller.abort(new Error(reason));
 }
 
 /**

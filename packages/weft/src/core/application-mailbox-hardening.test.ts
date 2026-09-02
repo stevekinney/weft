@@ -34,6 +34,7 @@ import {
   createMailboxFixture,
   RecordingEventSink,
 } from './application-mailbox.test-support.ts';
+import { ApplicationMailbox } from './application-mailbox.ts';
 import { computePayloadDigest } from './application-payload-digest.ts';
 
 describe('claiming past the absolute deadline', () => {
@@ -756,5 +757,200 @@ describe('second-round hardening', () => {
       [{}, 'first'],
     ]);
     expect(await computePayloadDigest(left)).toBe(await computePayloadDigest(right));
+  });
+});
+
+describe('third-round hardening', () => {
+  it('dead-letters an expired command when cancellation reaches it first', async () => {
+    const { mailbox, clock } = createMailboxFixture({
+      commandTimeoutMs: 1_000,
+      visibilityTimeoutMs: 10_000,
+    });
+    const commandId = await admitOne(mailbox);
+    const claim = await claimOne(mailbox);
+    clock.advance(1_000);
+
+    // Reporting `already-terminal` while the record was still `claimed` would
+    // leave a live lease and an un-aborted local signal behind a receipt that
+    // says the command is over.
+    const result = await mailbox.requestCancellation({ commandId });
+    expect(result.status).toBe('already-terminal');
+    expect(result.status === 'already-terminal' && result.receipt.state).toBe('dead-lettered');
+    expect(claim.signal.aborted).toBe(true);
+    const receipt = await mailbox.receipt(commandId);
+    expect(receipt?.state).toBe('dead-lettered');
+    mailbox.dispose();
+  });
+
+  it('refuses a settlement whose storage read crossed the deadline', async () => {
+    const storage = new MemoryStorage();
+    const clock = createMailboxClock();
+    const { mailbox } = createMailboxFixture({
+      storage,
+      clock,
+      commandTimeoutMs: 1_000,
+      visibilityTimeoutMs: 10_000,
+    });
+    const commandId = await admitOne(mailbox);
+    const claim = await claimOne(mailbox);
+
+    // The deadline passes DURING the settlement's own storage read. A decision
+    // made on the clock reading taken before the read would commit a success the
+    // contract says must be `deadline-exceeded`.
+    const originalGet = storage.get.bind(storage);
+    let crossed = false;
+    storage.get = async (key: string): Promise<Uint8Array | null> => {
+      const value = await originalGet(key);
+      if (!crossed && key.startsWith('appcmd:')) {
+        crossed = true;
+        clock.advance(1_000);
+      }
+      return value;
+    };
+
+    const settled = await mailbox.acknowledge({ commandId, attemptToken: claim.attemptToken });
+    expect(settled.status).toBe('deadline-exceeded');
+    mailbox.dispose();
+  });
+
+  it('keeps fencing intact even when the injected id generator repeats', async () => {
+    // A generator that returns the same value forever. Fencing must not depend
+    // on the generator: the attempt number makes each token unique per command.
+    const { mailbox, clock } = createMailboxFixture({
+      generateId: () => 'repeat',
+      visibilityTimeoutMs: 500,
+      retryBackoffMs: 1,
+      maxAttempts: 5,
+    });
+    const commandId = await admitOne(mailbox);
+    const stale = await claimOne(mailbox);
+
+    clock.advance(501);
+    await mailbox.runMaintenance();
+    clock.advance(10);
+    const current = await claimOne(mailbox);
+    expect(current.attemptToken).not.toBe(stale.attemptToken);
+
+    const settled = await mailbox.acknowledge({ commandId, attemptToken: stale.attemptToken });
+    expect(settled.status).toBe('stale');
+    mailbox.dispose();
+  });
+
+  it('rejects a storage backend without snapshot scans', () => {
+    class BestEffortScans extends MemoryStorage {
+      override capabilities(): ReturnType<MemoryStorage['capabilities']> {
+        return { ...super.capabilities(), scanConsistency: 'best-effort' };
+      }
+    }
+    expect(
+      () =>
+        new ApplicationMailbox({
+          storage: new BestEffortScans(),
+          namespace: 'n',
+          resourceId: 'r',
+        }),
+    ).toThrow(/snapshot scan consistency/);
+  });
+
+  it('verifies a sink by the bytes it committed, not by key presence', async () => {
+    const storage = new MemoryStorage();
+    const { mailbox } = createMailboxFixture({ storage });
+    const commandId = await admitOne(mailbox);
+    mailbox.dispose();
+
+    // A sink over a different backend that holds a byte-identical copy of the
+    // local records, first used for a TRANSITION on an existing record. The key
+    // already exists locally, so a presence check would pass against the
+    // pre-transition bytes and cache the bad sink as verified.
+    const elsewhere = new MemoryStorage();
+    for await (const [key, value] of storage.scan('')) {
+      await elsewhere.put(key, value);
+    }
+    const withBadSink = createMailboxFixture({
+      storage,
+      events: new RecordingEventSink(elsewhere),
+    }).mailbox;
+    await expect(withBadSink.requestCancellation({ commandId })).rejects.toThrow(
+      /different storage backend/,
+    );
+    // The local record is untouched.
+    const receipt = await withBadSink.receipt(commandId);
+    expect(receipt?.state).toBe('available');
+    withBadSink.dispose();
+  });
+
+  it('rejects a retry whose backoff would leave the safe-integer range', async () => {
+    const nearCeiling = Number.MAX_SAFE_INTEGER - 5_000;
+    const { mailbox } = createMailboxFixture({
+      now: () => nearCeiling,
+      commandTimeoutMs: 4_000,
+      retryBackoffMs: 60_000,
+      maxRetryBackoffMs: 60_000,
+      maxAttempts: 5,
+    });
+    const commandId = await admitOne(mailbox);
+    const claim = await claimOne(mailbox);
+    await expect(
+      mailbox.reject({
+        commandId,
+        attemptToken: claim.attemptToken,
+        failure: { reason: 'application' },
+        retry: true,
+      }),
+    ).rejects.toThrow(/safe-integer millisecond range/);
+    mailbox.dispose();
+  });
+
+  it('releases ownership from the claiming handle when a sibling settles', async () => {
+    const storage = new MemoryStorage();
+    const clock = createMailboxClock();
+    const claimant = createMailboxFixture({
+      storage,
+      clock,
+      generateId: createIdSource('c'),
+    }).mailbox;
+    const settler = createMailboxFixture({
+      storage,
+      clock,
+      generateId: createIdSource('s'),
+    }).mailbox;
+    for (let index = 0; index < 4; index += 1) {
+      const commandId = await admitOne(claimant, { idempotencyKey: `k-${index}` });
+      const claim = await claimOne(claimant);
+      await settler.acknowledge({ commandId, attemptToken: claim.attemptToken });
+    }
+    // Every attempt was settled by the OTHER handle. The claimant's own
+    // registry entries have to be gone all the same.
+    expect(attemptControllerRegistry(storage, 'bureau', 'agent-7').size).toBe(0);
+    claimant.dispose();
+    settler.dispose();
+  });
+
+  it('bounds durable JSON metadata', async () => {
+    const { mailbox } = createMailboxFixture();
+    const commandId = await admitOne(mailbox);
+    const claim = await claimOne(mailbox);
+    await expect(
+      mailbox.acknowledge({
+        commandId,
+        attemptToken: claim.attemptToken,
+        outcome: { blob: 'x'.repeat(70_000) },
+      }),
+    ).rejects.toThrow(/durable metadata ceiling/);
+    mailbox.dispose();
+  });
+
+  it('rejects a null causation with the public validation error', async () => {
+    const { mailbox } = createMailboxFixture();
+    await expect(mailbox.admit(commandInput({ causation: null as never }))).rejects.toThrow(
+      ApplicationCommandValidationError,
+    );
+    mailbox.dispose();
+  });
+
+  it('rejects a generated identifier containing an unpaired surrogate', async () => {
+    const { mailbox } = createMailboxFixture({ generateId: () => 'id-\ud800' });
+    await expect(mailbox.admit(commandInput())).rejects.toThrow(ApplicationCommandValidationError);
+    mailbox.dispose();
   });
 });

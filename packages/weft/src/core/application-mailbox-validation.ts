@@ -219,7 +219,9 @@ function validateCausation(
   causation: ApplicationCommandInput['causation'],
 ): ApplicationCommandInput['causation'] {
   if (causation === undefined) return undefined;
-  if (typeof causation !== 'object') {
+  // `typeof null === 'object'`, so the null case needs naming or it escapes as a
+  // raw TypeError from the field reads below.
+  if (typeof causation !== 'object' || causation === null) {
     throw new ApplicationCommandValidationError('causation must be an object when present.');
   }
   const correlationId = optionalIdentityOf(

@@ -26,6 +26,7 @@ import type {
   ApplicationCommandRecord,
   ApplicationCommandTerminalRecord,
 } from './application-mailbox-types.ts';
+import { requireDerivedInstant } from './application-mailbox-validation.ts';
 
 /**
  * Recover a command whose lease expired or whose absolute deadline passed.
@@ -78,9 +79,11 @@ export function recoverExpiredCommand(
     ...applicationCommandIdentityFields(live),
     state: 'accepted',
     retryCount: live.retryCount + 1,
-    availableAt:
+    availableAt: requireDerivedInstant(
       options.now +
-      computeRetryBackoffMs(live.attempt, options.retryBackoffMs, options.maxRetryBackoffMs),
+        computeRetryBackoffMs(live.attempt, options.retryBackoffMs, options.maxRetryBackoffMs),
+      'availableAt',
+    ),
   });
 }
 

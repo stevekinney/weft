@@ -184,7 +184,7 @@ export type ApplicationCommandCancellationResult =
 /**
  * The bounded outcome of waiting for a cancelled command's claimant to finish.
  *
- * `settled: false` means the mailbox stopped waiting — never that the handler
+ * A `pending` status means the mailbox stopped waiting — never that the handler
  * stopped.
  *
  * @example
