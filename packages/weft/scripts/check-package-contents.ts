@@ -44,7 +44,13 @@ const maximumUnpackedBytes = 12 * 1024 * 1024;
 // and the per-workflow entry/message/scoped-activity builders it and
 // `buildRegistrySnapshot` both call) — two more `.js`/`.d.ts` pairs, +4
 // entries (1495 -> 1499).
-const maximumEntryCount = 1499;
+//
+// WFT-8 added `src/core/contract/compatibility.ts` (`checkWorkflowCompatibility()`,
+// `WorkflowCompatibilityVerdict`/`WorkflowCompatibilityReason`/`WorkflowCompatibilityPolicy`,
+// `DEFAULT_WORKFLOW_COMPATIBILITY_POLICY`) — one new source file, one more
+// `.js`/`.d.ts` pair in `dist/`, +2 entries (1499 -> 1501), matching the
+// measured `npm pack --dry-run --json --ignore-scripts` count exactly.
+const maximumEntryCount = 1501;
 
 type PackFile = {
   path: string;
