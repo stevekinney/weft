@@ -144,11 +144,14 @@ async function deadLetterRenewed(
 ): Promise<ApplicationCommandReceipt> {
   const loaded = await loadCommand(runtime.storage, runtime.keys, commandId);
   if (loaded === null) return renewed;
-  // `null` here means no transition was needed or ours lost: another actor
-  // already terminalized the record, so its receipt — not the obsolete renewed
-  // one — is what the caller must see next to `deadline-exceeded`.
   const receipt = await deadLetterExpired(runtime, loaded, runtime.now());
-  return receipt ?? toApplicationCommandReceipt(loaded.record);
+  if (receipt !== null) return receipt;
+  // No transition was needed, or ours lost its compare-and-swap: another actor
+  // moved the record on between the load above and the commit. What is durable
+  // NOW — not the pre-race snapshot — is what the caller must see next to
+  // `deadline-exceeded`.
+  const current = await loadCommand(runtime.storage, runtime.keys, commandId);
+  return current === null ? renewed : toApplicationCommandReceipt(current.record);
 }
 
 /** Settle a claimed command successfully. */

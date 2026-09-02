@@ -38,6 +38,7 @@ import {
 import { createAdmittedCommandRecord } from './application-mailbox-transitions.ts';
 import { APPLICATION_MAILBOX_RECORD_VERSION } from './application-mailbox-types.ts';
 import {
+  ApplicationCommandValidationError,
   requireGeneratedIdentifier,
   validateCommandInput,
 } from './application-mailbox-validation.ts';
@@ -98,6 +99,14 @@ export async function admitCommand(
         reason: 'backlog-full',
         capacity: capacityOf(runtime, header.record.openCount, header.record.admittedCount),
       };
+    }
+    // A header at the safe-integer ceiling would be written back one past it
+    // and never decode again, taking every later `capacity()` and `admit()`
+    // down with it. Refuse before constructing anything.
+    if (header.record.nextSequence >= Number.MAX_SAFE_INTEGER) {
+      throw new ApplicationCommandValidationError(
+        'This mailbox has exhausted its FIFO sequence allocator; no further commands can be admitted under this namespace and resource id.',
+      );
     }
     const now = runtime.now();
     const record = createAdmittedCommandRecord(input, {

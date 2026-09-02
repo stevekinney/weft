@@ -1907,3 +1907,144 @@ describe('eleventh-round hardening', () => {
     mailbox.dispose();
   });
 });
+
+describe('twelfth-round hardening', () => {
+  it('re-reads durable state when the post-renewal dead-letter loses its race', async () => {
+    const storage = new MemoryStorage();
+    const clock = createMailboxClock();
+    const { mailbox } = createMailboxFixture({
+      storage,
+      clock,
+      commandTimeoutMs: 1_000,
+      visibilityTimeoutMs: 10_000,
+    });
+    const other = createMailboxFixture({ storage, clock }).mailbox;
+    const commandId = await admitOne(mailbox);
+    const claim = await claimOne(mailbox);
+
+    // Batch 1 is the renewal commit; the deadline passes right after it. Batch
+    // 2 is the renewal's own dead-letter attempt: maintenance from another
+    // handle dead-letters the command first, so that attempt loses.
+    const original = storage.conditionalBatch.bind(storage);
+    let batches = 0;
+    let racing = false;
+    storage.conditionalBatch = async (
+      ...args: Parameters<MemoryStorage['conditionalBatch']>
+    ): Promise<boolean> => {
+      if (racing) return original(...args);
+      batches += 1;
+      if (batches === 2) {
+        racing = true;
+        await other.runMaintenance();
+        racing = false;
+      }
+      const result = await original(...args);
+      if (batches === 1) clock.advance(1_000);
+      return result;
+    };
+
+    const renewal = await mailbox.renew({ commandId, attemptToken: claim.attemptToken });
+    expect(renewal.status).toBe('deadline-exceeded');
+    expect(renewal.status === 'deadline-exceeded' && renewal.receipt.state).toBe('dead-lettered');
+    other.dispose();
+    mailbox.dispose();
+  });
+
+  it('stops a cleanup wait aborted during a stalled storage read', async () => {
+    const storage = new MemoryStorage();
+    const { mailbox } = createMailboxFixture({ storage });
+    const commandId = await admitOne(mailbox);
+    const controller = new AbortController();
+    let stalled = false;
+    const originalGet = storage.get.bind(storage);
+    storage.get = (key: string): Promise<Uint8Array | null> => {
+      if (!stalled && key.startsWith('appcmd:')) {
+        stalled = true;
+        // A read that never returns; the abort arrives while it is in flight.
+        queueMicrotask(() => {
+          controller.abort(new Error('gone mid-read'));
+        });
+        return new Promise<Uint8Array | null>(() => {});
+      }
+      return originalGet(key);
+    };
+    await expect(
+      mailbox.awaitCleanup({ commandId, timeoutMs: 1_000, signal: controller.signal }),
+    ).rejects.toThrow('gone mid-read');
+    mailbox.dispose();
+  });
+
+  it('propagates a failing cleanup read', async () => {
+    const storage = new MemoryStorage();
+    const { mailbox } = createMailboxFixture({ storage });
+    const commandId = await admitOne(mailbox);
+    storage.get = async (): Promise<Uint8Array | null> => {
+      throw new Error('storage down');
+    };
+    await expect(
+      mailbox.awaitCleanup({ commandId, timeoutMs: 1_000, signal: new AbortController().signal }),
+    ).rejects.toThrow('storage down');
+    mailbox.dispose();
+  });
+
+  it('retires a record without deleting auxiliary entries it does not own', async () => {
+    const { mailbox, storage, clock } = createMailboxFixture({
+      terminalRetentionMs: 1_000,
+      generateId: createIdSource('c'),
+    });
+    const first = await admitOne(mailbox, { idempotencyKey: 'a' });
+    const second = await admitOne(mailbox, { idempotencyKey: 'b' });
+    const claim = await claimOne(mailbox);
+    await mailbox.acknowledge({ commandId: first, attemptToken: claim.attemptToken });
+    // Corrupt the terminal record so its auxiliary references name the live
+    // second command's binding and listing entry.
+    const key = KEYS.applicationCommand('bureau', 'agent-7', first);
+    const record = decode((await storage.get(key)) as Uint8Array) as Record<string, unknown>;
+    await storage.put(key, encode({ ...record, idempotencyKey: 'b', sequence: 1 }));
+    clock.advance(5_000);
+
+    await mailbox.runMaintenance();
+    expect(await mailbox.receipt(first)).toBeNull();
+    expect(
+      await storage.get(KEYS.applicationCommandIdempotency('bureau', 'agent-7', 'b')),
+    ).not.toBeNull();
+    expect(
+      await storage.get(KEYS.applicationCommandBySequence('bureau', 'agent-7', 1)),
+    ).not.toBeNull();
+    const listed = await mailbox.list();
+    expect(listed.map((receipt) => receipt.commandId)).toEqual([second]);
+    // A retry of key `b` still resolves the live command rather than admitting anew.
+    const retry = await mailbox.admit(commandInput({ idempotencyKey: 'b' }));
+    expect(retry.status).toBe('duplicate');
+    mailbox.dispose();
+  });
+
+  it('refuses admission once the sequence allocator is exhausted', async () => {
+    const { mailbox, storage } = createMailboxFixture();
+    const key = KEYS.applicationMailbox('bureau', 'agent-7');
+    await storage.put(
+      key,
+      encode({
+        recordVersion: 1,
+        namespace: 'bureau',
+        resourceId: 'agent-7',
+        nextSequence: Number.MAX_SAFE_INTEGER,
+        openCount: 0,
+        admittedCount: Number.MAX_SAFE_INTEGER,
+      }),
+    );
+    await expect(mailbox.admit(commandInput())).rejects.toThrow(/sequence allocator/);
+    // Nothing was written: the header still decodes.
+    const capacity = await mailbox.capacity();
+    expect(capacity.admitted).toBe(Number.MAX_SAFE_INTEGER);
+    mailbox.dispose();
+  });
+
+  it('rejects a poll interval beyond the timer range', async () => {
+    const { mailbox } = createMailboxFixture();
+    await expect(
+      mailbox.waitForAvailable({ timeoutMs: 0, pollIntervalMs: 2_147_483_648 }),
+    ).rejects.toThrow(/largest delay a timer can schedule/);
+    mailbox.dispose();
+  });
+});

@@ -331,9 +331,13 @@ export type ApplicationCommandCancelling = ApplicationCommandBase &
 /**
  * A command in a terminal disposition.
  *
- * `cleanupPending` is `true` only when the command was cancelled while an
- * attempt still held it and that attempt never settled — the mailbox records
- * that it stopped waiting, never that the handler stopped.
+ * `cleanupPending` is `true` when the command reached this disposition while an
+ * attempt still held it and that attempt never settled: a cancellation whose
+ * claimant never finished cleanup (`cancelled`), a final attempt whose lease
+ * expired (`dead-lettered`, `attempts-exhausted`), or a claimed command that
+ * crossed its absolute deadline (`dead-lettered`, `deadline-exceeded`).
+ * `abandonedAttemptToken` names that attempt. The mailbox records that it
+ * stopped waiting, never that the handler stopped.
  *
  * @example
  * ```ts

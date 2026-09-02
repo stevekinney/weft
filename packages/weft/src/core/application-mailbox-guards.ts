@@ -295,13 +295,24 @@ export function requireWaitBudget(options: {
     );
   }
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_WAIT_POLL_INTERVAL_MS;
-  if (!Number.isSafeInteger(pollIntervalMs) || pollIntervalMs < 1) {
+  if (
+    !Number.isSafeInteger(pollIntervalMs) ||
+    pollIntervalMs < 1 ||
+    pollIntervalMs > MAX_TIMER_DELAY_MS
+  ) {
     throw new ApplicationCommandValidationError(
-      'pollIntervalMs must be a positive safe integer in milliseconds.',
+      `pollIntervalMs must be a positive safe integer of at most ${MAX_TIMER_DELAY_MS} milliseconds, the largest delay a timer can schedule.`,
     );
   }
   return { timeoutMs, pollIntervalMs };
 }
+
+/**
+ * The largest delay `setTimeout` schedules faithfully (a signed 32-bit
+ * millisecond count). A larger value is clamped to a tick by the runtime, which
+ * would turn a rare poll into a tight loop against durable storage.
+ */
+export const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 /** Default gap between durable polls for the bounded waits. */
 export const DEFAULT_WAIT_POLL_INTERVAL_MS = 50;

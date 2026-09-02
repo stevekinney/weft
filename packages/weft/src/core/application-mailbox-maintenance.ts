@@ -17,9 +17,13 @@
  * @module core/application-mailbox-maintenance
  */
 
-import type { BatchOperation } from '../storage/interface.ts';
+import type { BatchOperation, ConditionalBatchCondition } from '../storage/interface.ts';
 import { storageConditionalBatch } from '../storage/interface.ts';
-import { decodeApplicationCommandRecord } from './application-mailbox-codec.ts';
+import {
+  decodeApplicationCommandIdempotencyRecord,
+  decodeApplicationCommandRecord,
+  decodeApplicationReadyEntry,
+} from './application-mailbox-codec.ts';
 import type {
   ApplicationMailboxMaintenanceReport,
   LoadedCommandRecord,
@@ -157,18 +161,52 @@ async function retireOneReceipt(
     );
   }
   operations.push({ type: 'delete', key: runtime.keys.command(commandId) });
-  operations.push({ type: 'delete', key: runtime.keys.bySequence(loaded.record.sequence) });
-  if (loaded.record.idempotencyKey !== undefined) {
-    operations.push({
-      type: 'delete',
-      key: runtime.keys.idempotency(loaded.record.idempotencyKey),
-    });
-  }
+  const auxiliary = await ownedAuxiliaryEntries(runtime, loaded);
+  operations.push(...auxiliary.operations);
   return storageConditionalBatch(
     runtime.storage,
-    [{ key: runtime.keys.command(commandId), expectedValue: loaded.bytes }],
+    [
+      { key: runtime.keys.command(commandId), expectedValue: loaded.bytes },
+      ...auxiliary.conditions,
+    ],
     operations,
   );
+}
+
+/**
+ * The sequence-index entry and idempotency binding a terminal record names are
+ * deleted with it only when they actually belong to it. A record whose
+ * persisted `sequence` or `idempotencyKey` is stale or corrupted would
+ * otherwise take another live command's listing entry or deduplication fence
+ * down with it. Each entry that is owned is fenced on the bytes observed here.
+ */
+async function ownedAuxiliaryEntries(
+  runtime: MailboxRuntime,
+  loaded: LoadedCommandRecord,
+): Promise<{ conditions: ConditionalBatchCondition[]; operations: BatchOperation[] }> {
+  const conditions: ConditionalBatchCondition[] = [];
+  const operations: BatchOperation[] = [];
+  const sequenceKey = runtime.keys.bySequence(loaded.record.sequence);
+  const sequenceBytes = await runtime.storage.get(sequenceKey);
+  if (
+    sequenceBytes !== null &&
+    decodeApplicationReadyEntry(sequenceBytes, sequenceKey) === loaded.record.commandId
+  ) {
+    conditions.push({ key: sequenceKey, expectedValue: sequenceBytes });
+    operations.push({ type: 'delete', key: sequenceKey });
+  }
+  if (loaded.record.idempotencyKey === undefined) return { conditions, operations };
+  const bindingKey = runtime.keys.idempotency(loaded.record.idempotencyKey);
+  const bindingBytes = await runtime.storage.get(bindingKey);
+  if (
+    bindingBytes !== null &&
+    decodeApplicationCommandIdempotencyRecord(bindingBytes, bindingKey).commandId ===
+      loaded.record.commandId
+  ) {
+    conditions.push({ key: bindingKey, expectedValue: bindingBytes });
+    operations.push({ type: 'delete', key: bindingKey });
+  }
+  return { conditions, operations };
 }
 
 function ownsTerminalEntry(

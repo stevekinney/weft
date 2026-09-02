@@ -167,13 +167,15 @@ export async function waitForCleanup(
     requireClockInstant(runtime.now()) + timeoutMs,
     'deadline',
   );
-  // An already-aborted wait must not begin a storage read it could never
-  // abandon: a stalled remote read would hold the "abortable" wait open. The
-  // abort surfaces as the signal's own reason, as `claim()` does for its
-  // request signal.
-  options.signal?.throwIfAborted();
   disposal.throwIfAborted();
-  let latest = await readCleanupState(runtime, options.commandId);
+  // Every read races the caller's signal. A wait that is already aborted must
+  // not begin a storage read, and one aborted DURING a stalled remote read must
+  // not stay pending until that read returns; either way the abort surfaces as
+  // the signal's own reason, as `claim()` does for its request signal.
+  let latest = await readUnlessAborted(
+    () => readCleanupState(runtime, options.commandId),
+    options.signal,
+  );
   // A terminal record with `cleanupPending: true` is already final: the mailbox
   // recorded that it stopped waiting for an abandoned attempt. Polling it would
   // burn the whole timeout on a value that can never change again.
@@ -189,7 +191,39 @@ export async function waitForCleanup(
     ) {
       break;
     }
-    latest = await readCleanupState(runtime, options.commandId);
+    latest = await readUnlessAborted(
+      () => readCleanupState(runtime, options.commandId),
+      options.signal,
+    );
   }
   return latest;
+}
+
+/**
+ * Run a storage read unless the caller's signal is, or becomes, aborted.
+ *
+ * Rejects with the signal's reason. The read itself is not cancelled — storage
+ * has no such contract — but the wait stops honouring it.
+ */
+async function readUnlessAborted<T>(
+  read: () => Promise<T>,
+  signal: AbortSignal | undefined,
+): Promise<T> {
+  if (signal === undefined) return read();
+  signal.throwIfAborted();
+  const cleanup = new AbortController();
+  const aborted = new Promise<never>((_resolve, reject) => {
+    signal.addEventListener(
+      'abort',
+      () => {
+        reject(signal.reason as Error);
+      },
+      { once: true, signal: cleanup.signal },
+    );
+  });
+  try {
+    return await Promise.race([read(), aborted]);
+  } finally {
+    cleanup.abort();
+  }
 }
