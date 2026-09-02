@@ -32,10 +32,42 @@
           "additionalProperties": false
         }
       }
+    },
+    {
+      "manifestVersion": 1,
+      "name": "farewell",
+      "workflowVersion": "0.0.0",
+      "revision": "sha256:c97ef278988bff8fab840890dd2d565a74590b16a50db9576b5cb195bb44d95a",
+      "contractHash": "sha256:d8c6ef410fb88c2dc258e4876d449bb1d56689c9ce671c533466f759a2074e82",
+      "contract": {
+        "name": "farewell",
+        "workflowVersion": "0.0.0",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": ["name"],
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": ["message"],
+          "additionalProperties": false
+        }
+      }
     }
   ],
   "activeRevisions": {
-    "welcome": "sha256:459490e35ec0c6cab26b944ac5d023f0d3a581f3ab8229cd2ac3b500f779f924"
+    "welcome": "sha256:459490e35ec0c6cab26b944ac5d023f0d3a581f3ab8229cd2ac3b500f779f924",
+    "farewell": "sha256:c97ef278988bff8fab840890dd2d565a74590b16a50db9576b5cb195bb44d95a"
   },
   "activities": {
     "formatGreeting": {

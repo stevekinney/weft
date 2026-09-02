@@ -57,7 +57,18 @@ declare module '../index.ts' {
     // engine that exercises this name is constructed at module scope below
     // — we use a name distinct from any `engine.register(...)` call so the
     // builder's `WorkflowAlreadyRegistered` brand does not intersect.
-    moduleAugmentedWelcome: { input: WelcomeInput; output: WelcomeOutput };
+    //
+    // `revision`/`workflowVersion` mirror what `weft codegen` now actually
+    // generates (string-literal fields alongside `input`/`output`) — their
+    // presence here proves `WorkflowInput`/`WorkflowOutput` still narrow
+    // correctly through extra fields on the registry entry, and that
+    // `engine.start`/`.result()` need no caller-supplied revision.
+    moduleAugmentedWelcome: {
+      input: WelcomeInput;
+      output: WelcomeOutput;
+      revision: 'sha256:module-augmented-welcome';
+      workflowVersion: '1.0.0';
+    };
   }
 }
 

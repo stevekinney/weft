@@ -211,3 +211,33 @@ full `contract`, `contractHash`, and `revision`. This is the same
 `WorkflowRevisionManifest` this guide describes — the registry snapshot is
 just its runtime-introspection surface, built fresh from the engine's
 current registrations on every request rather than persisted.
+
+### Discovering revisions at compile time
+
+`weft codegen` (see [the CLI reference](../reference/cli.md#codegen)) reads
+that same registry snapshot and surfaces each active workflow's `revision`
+and `workflowVersion` as string-literal types on its generated
+`WorkflowRegistry` entry, alongside the usual `input`/`output` fields:
+
+```typescript partial
+declare module '@lostgradient/weft' {
+  interface WorkflowRegistry {
+    checkout: {
+      input: CheckoutInput;
+      output: CheckoutOutput;
+      revision: 'sha256:459490e3…';
+      workflowVersion: '2.1.0';
+    };
+  }
+}
+```
+
+Neither field is required to call `engine.start`, `WeftClient.start`/
+`.schedule()`, or read `.result()` — an ordinary start needs no
+caller-supplied revision, since those call sites only ever read `input`/
+`output`. The literal types exist so a consumer's own tooling can assert an
+expected pinned revision at compile time, the same way the runtime
+discovery above lets it assert one at request time. When two or more
+workflows in the same snapshot share an identical, non-trivial input or
+output schema, the emitted `.d.ts` hoists that schema into one shared `type`
+alias rather than repeating it inline at every entry.

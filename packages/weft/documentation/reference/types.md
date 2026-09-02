@@ -351,6 +351,8 @@ declare module '@lostgradient/weft' {
 }
 ```
 
+`weft codegen`'s generated entries additionally carry `revision`/`workflowVersion` string-literal fields alongside `input`/`output`, for compile-time introspection — see the [generated declaration shape](./cli.md#codegen) in the CLI reference. Neither field is required to hand-author an augmentation like the one above; `WorkflowInput`/`WorkflowOutput` only ever read `input`/`output`.
+
 To type an activity name, build the workflow with the chained builder and add the activity in `.activities({...})`:
 
 ```ts
