@@ -135,7 +135,6 @@ export class ApplicationMailbox {
         policy.namespace,
         policy.resourceId,
       ),
-      isDisposed: () => this.#disposed,
       adoptAttempt: (attemptToken) => {
         if (this.#disposed) return false;
         this.#ownAttempts.add(attemptToken);

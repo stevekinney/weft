@@ -19,6 +19,7 @@ import {
   restoreRealTimers,
   useFakeTimers,
 } from '../testing/fake-timers.test-support.ts';
+import { encodeApplicationReadyEntry } from './application-mailbox-codec.ts';
 import {
   attemptControllerRegistry,
   MAILBOX_MAINTENANCE_MAX_PAGES,
@@ -115,6 +116,66 @@ describe('maintenance over a mailbox larger than one scan page', () => {
 
     const listed = await mailbox.list({ limit: 1_000, states: ['available'] });
     expect(listed.length).toBe(total);
+    mailbox.dispose();
+  });
+});
+
+describe('the delivery-index fence', () => {
+  it('discards a stale entry pointing at a command that is already claimed', async () => {
+    const { mailbox, storage } = createMailboxFixture();
+    const first = await admitOne(mailbox, { idempotencyKey: 'a' });
+    await admitOne(mailbox, { idempotencyKey: 'b' });
+    const claim = await claimOne(mailbox);
+    expect(claim.commandId).toBe(first);
+
+    // Re-add the entry the claim removed, standing in for a crash artifact or a
+    // reader holding a stale view of the index.
+    await storage.put(
+      KEYS.applicationCommandReady('bureau', 'agent-7', 0),
+      encodeApplicationReadyEntry(first),
+    );
+
+    const next = await mailbox.claim();
+    expect(next.status).toBe('claimed');
+    if (next.status !== 'claimed') return;
+    expect(next.claim.receipt.sequence).toBe(1);
+    expect(await storage.get(KEYS.applicationCommandReady('bureau', 'agent-7', 0))).toBeNull();
+    mailbox.dispose();
+  });
+
+  it('refuses to discard an entry when the command changed under the reader', async () => {
+    const { mailbox, storage, clock } = createMailboxFixture({
+      visibilityTimeoutMs: 1_000,
+      retryBackoffMs: 1,
+      maxAttempts: 5,
+    });
+    const commandId = await admitOne(mailbox);
+    await claimOne(mailbox);
+    const readyKey = KEYS.applicationCommandReady('bureau', 'agent-7', 0);
+    // A stale entry for the claimed record, as the ABA window would leave.
+    await storage.put(readyKey, encodeApplicationReadyEntry(commandId));
+
+    // Between this reader observing the claimed record and its delete landing,
+    // maintenance reclaims the lease and re-adds a byte-identical entry. Fencing
+    // on the entry alone would delete that newly valid entry and lose the command
+    // from the FIFO for good.
+    const memoryStorage = storage as MemoryStorage;
+    const originalBatch = memoryStorage.conditionalBatch.bind(memoryStorage);
+    let reclaimed = false;
+    memoryStorage.conditionalBatch = async (conditions, operations): Promise<boolean> => {
+      if (!reclaimed && operations.some((operation) => operation.key === readyKey)) {
+        reclaimed = true;
+        clock.advance(1_001);
+        await mailbox.runMaintenance();
+        await storage.put(readyKey, encodeApplicationReadyEntry(commandId));
+      }
+      return originalBatch(conditions, operations);
+    };
+
+    await mailbox.claim();
+    // The entry survived: the record's bytes changed, so the stale delete lost.
+    expect(await storage.get(readyKey)).not.toBeNull();
+    expect(await mailbox.receipt(commandId)).not.toBeNull();
     mailbox.dispose();
   });
 });

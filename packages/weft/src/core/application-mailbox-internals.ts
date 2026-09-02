@@ -65,8 +65,6 @@ export type MailboxRuntime = {
    * raised through one handle reaches a claimant holding another.
    */
   readonly attemptControllers: Map<string, AbortController>;
-  /** Whether the handle that owns this runtime has been disposed. */
-  readonly isDisposed: () => boolean;
   /**
    * Record an attempt this handle now owns, or report that disposal already won.
    *
