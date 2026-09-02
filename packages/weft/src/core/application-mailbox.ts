@@ -390,9 +390,10 @@ export class ApplicationMailbox {
    * Wait, bounded, for a cancelled command's claimant to settle.
    *
    * A `pending` result means this mailbox stopped waiting — never that the
-   * handler stopped. A signal that is already aborted, or that aborts while a
-   * storage read is in flight, rejects the wait with that signal's reason;
-   * disposing the mailbox during a read rejects with the disposal error. The
+   * handler stopped. A caller signal that aborts at any point — before a read,
+   * during one, or during the sleep between polls — rejects the wait with that
+   * signal's reason; disposing the mailbox during a read rejects with the
+   * disposal error, and during a sleep returns the last observation. The
    * budget bounds the reads themselves as well as the sleeps between them: a
    * budget that runs out during a later read returns the last observation, and
    * one that runs out during the first read, with nothing observed yet,

@@ -182,7 +182,7 @@ describe('ApplicationMailbox awaitCleanup', () => {
     mailbox.dispose();
   });
 
-  it('stops waiting when its signal aborts', async () => {
+  it('rejects with the abort reason when its signal aborts during a sleep', async () => {
     useFakeTimers();
     const { mailbox, clock } = createMailboxFixture();
     const commandId = await admitOne(mailbox);
@@ -196,10 +196,17 @@ describe('ApplicationMailbox awaitCleanup', () => {
       pollIntervalMs: 50,
       signal: controller.signal,
     });
+    let failure: unknown;
+    waiting.catch((error: unknown) => {
+      failure = error;
+    });
     await tick(clock, 50);
-    controller.abort();
-    const value = await waiting;
-    expect(value.status).toBe('pending');
+    // A caller abort means the same thing wherever it lands: before a read,
+    // during one, or during the sleep between polls.
+    controller.abort(new Error('caller gone'));
+    await flushMicrotasks(16);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe('caller gone');
     mailbox.dispose();
   });
 

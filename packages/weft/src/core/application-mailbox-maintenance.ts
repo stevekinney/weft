@@ -35,6 +35,7 @@ import {
   MAILBOX_MAINTENANCE_MAX_PAGES,
   MAX_MAILBOX_TRANSITION_ATTEMPTS,
   releaseAttemptController,
+  releaseAttemptsForCommand,
   type MailboxRuntime,
 } from './application-mailbox-internals.ts';
 import { loadCommand } from './application-mailbox-storage.ts';
@@ -73,6 +74,20 @@ function countTransition(
   else if (next.state === 'cancelled') counters.cancelled += 1;
 }
 
+/** Release every local attempt on a command that is not its current lease. */
+function reconcileLocalAttempts(
+  runtime: MailboxRuntime,
+  commandId: string,
+  record: ApplicationCommandRecord | undefined,
+): void {
+  releaseAttemptsForCommand(
+    runtime,
+    commandId,
+    'This attempt is no longer the current lease on its command.',
+    record !== undefined && isApplicationCommandLeased(record) ? record.attemptToken : undefined,
+  );
+}
+
 /**
  * Apply the one time-driven transition a command is due for, re-reading durable
  * state after a lost compare-and-swap.
@@ -88,9 +103,19 @@ async function advanceCommand(
 ): Promise<void> {
   for (let attempt = 1; attempt <= MAX_MAILBOX_TRANSITION_ATTEMPTS; attempt += 1) {
     const loaded = await loadCommand(runtime.storage, runtime.keys, commandId);
-    if (loaded === null) return;
+    if (loaded === null) {
+      reconcileLocalAttempts(runtime, commandId, undefined);
+      return;
+    }
     const due = classify(loaded.record, now);
-    if (due === null) return;
+    if (due === null) {
+      // Not due — possibly because another process already reclaimed or
+      // terminalized it between this pass's scan and this load. That process
+      // cannot reach the local registry, so any local attempt that is not the
+      // record's current lease is released here.
+      reconcileLocalAttempts(runtime, commandId, loaded.record);
+      return;
+    }
     const transition =
       due === 'release'
         ? releaseWaitingCommand(loaded.record, now)
@@ -99,6 +124,9 @@ async function advanceCommand(
             retryBackoffMs: runtime.policy.retryBackoffMs,
             maxRetryBackoffMs: runtime.policy.maxRetryBackoffMs,
           });
+    // `classify` and the transition decide on the same clock reading, so a
+    // record the former called due is never refused by the latter; this only
+    // narrows the type.
     if (!transition.ok) return;
     const committed = await commitCommandTransition(runtime, {
       previous: loaded.record,
@@ -310,6 +338,10 @@ async function collectDueCommands(
       seen += 1;
       cursor = key;
       const record = decodeApplicationCommandRecord(value, key);
+      // Every record the pass visits is also the truth about which local
+      // attempt, if any, still holds it. A lease reclaimed or terminalized in
+      // another process cannot release the registration here; this pass can.
+      reconcileLocalAttempts(runtime, record.commandId, record);
       if (classify(record, now) !== null) due.push(record.commandId);
     }
     // A short page means the keyspace is exhausted: start the next pass from the

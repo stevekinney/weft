@@ -2389,3 +2389,189 @@ describe('fifteenth-round hardening', () => {
     mailbox.dispose();
   });
 });
+
+describe('sixteenth-round hardening', () => {
+  it('does not start another read once a positive wait budget is spent', async () => {
+    useFakeTimers();
+    const storage = new MemoryStorage();
+    const { mailbox, clock } = createMailboxFixture({ storage });
+    await admitOne(mailbox, { availableAfterMs: 60_000 });
+    let recordReads = 0;
+    const originalGet = storage.get.bind(storage);
+    storage.get = (key: string): Promise<Uint8Array | null> => {
+      if (key.startsWith('appcmd:')) recordReads += 1;
+      return originalGet(key);
+    };
+    // The poll interval consumes the whole budget in one sleep.
+    const waiting = mailbox.waitForAvailable({ timeoutMs: 100, pollIntervalMs: 100 });
+    let settled: boolean | undefined;
+    void waiting.then((value) => {
+      settled = value;
+    });
+    await flushMicrotasks(16);
+    expect(recordReads).toBe(1);
+    clock.advance(100);
+    await advanceTimersByTime(100);
+    await flushMicrotasks(16);
+    expect(settled).toBe(false);
+    expect(recordReads).toBe(1);
+    mailbox.dispose();
+  });
+
+  it('does not start another cleanup read once the budget is spent', async () => {
+    useFakeTimers();
+    const storage = new MemoryStorage();
+    const { mailbox, clock } = createMailboxFixture({ storage });
+    const commandId = await admitOne(mailbox);
+    await claimOne(mailbox);
+    await mailbox.requestCancellation({ commandId });
+    let recordReads = 0;
+    const originalGet = storage.get.bind(storage);
+    storage.get = (key: string): Promise<Uint8Array | null> => {
+      if (key.startsWith('appcmd:')) recordReads += 1;
+      return originalGet(key);
+    };
+    const waiting = mailbox.awaitCleanup({ commandId, timeoutMs: 100, pollIntervalMs: 100 });
+    let result: ApplicationCommandCleanupResult | undefined;
+    void waiting.then((value) => {
+      result = value;
+    });
+    await flushMicrotasks(16);
+    expect(recordReads).toBe(1);
+    clock.advance(100);
+    await advanceTimersByTime(100);
+    await flushMicrotasks(16);
+    expect(result?.status).toBe('pending');
+    expect(recordReads).toBe(1);
+    mailbox.dispose();
+  });
+
+  it('releases a local attempt when maintenance finds the lease reclaimed elsewhere', async () => {
+    const storage = new MemoryStorage();
+    const clock = createMailboxClock();
+    const local = createMailboxFixture({
+      storage,
+      clock,
+      visibilityTimeoutMs: 500,
+      generateId: createIdSource('l'),
+    }).mailbox;
+    const remote = new ApplicationMailbox({
+      storage: remoteView(storage),
+      namespace: 'bureau',
+      resourceId: 'agent-7',
+      now: clock.now,
+      generateId: createIdSource('r'),
+      visibilityTimeoutMs: 500,
+    });
+    await admitOne(local);
+    const claim = await claimOne(local);
+    clock.advance(501);
+    // The other process wins the reclaim; this process's pass then finds a
+    // record that is no longer due and must still let go of its stale attempt.
+    await remote.runMaintenance();
+    expect(claim.signal.aborted).toBe(false);
+    await local.runMaintenance();
+    expect(claim.signal.aborted).toBe(true);
+    expect(attemptControllerRegistry(storage, 'bureau', 'agent-7').has(claim.attemptToken)).toBe(
+      false,
+    );
+    remote.dispose();
+    local.dispose();
+  });
+});
+
+describe('maintenance races between the scan and the advance', () => {
+  it('releases a local attempt when the reclaim loses its race to another process', async () => {
+    const storage = new MemoryStorage();
+    const clock = createMailboxClock();
+    const local = createMailboxFixture({
+      storage,
+      clock,
+      visibilityTimeoutMs: 500,
+      generateId: createIdSource('l'),
+    }).mailbox;
+    const remote = new ApplicationMailbox({
+      storage: remoteView(storage),
+      namespace: 'bureau',
+      resourceId: 'agent-7',
+      now: clock.now,
+      generateId: createIdSource('r'),
+      visibilityTimeoutMs: 500,
+    });
+    await admitOne(local);
+    const claim = await claimOne(local);
+    clock.advance(501);
+    // The other process reclaims between this pass's load and its commit, so
+    // the commit loses and the reload finds a record that is no longer due.
+    const original = storage.conditionalBatch.bind(storage);
+    let raced = false;
+    storage.conditionalBatch = async (
+      ...args: Parameters<MemoryStorage['conditionalBatch']>
+    ): Promise<boolean> => {
+      if (!raced) {
+        raced = true;
+        await remote.runMaintenance();
+      }
+      return original(...args);
+    };
+    await local.runMaintenance();
+    expect(raced).toBe(true);
+    expect(claim.signal.aborted).toBe(true);
+    expect(attemptControllerRegistry(storage, 'bureau', 'agent-7').has(claim.attemptToken)).toBe(
+      false,
+    );
+    remote.dispose();
+    local.dispose();
+  });
+
+  it('keeps a lease that was renewed between the scan and the advance', async () => {
+    const storage = new MemoryStorage();
+    const { mailbox, clock } = createMailboxFixture({ storage, visibilityTimeoutMs: 500 });
+    const commandId = await admitOne(mailbox);
+    const claim = await claimOne(mailbox);
+    clock.advance(501);
+    // The scan sees an expired lease; the claimant renews before the advance
+    // reloads it, so the recovery transition is refused as not due.
+    const originalGet = storage.get.bind(storage);
+    let renewing = false;
+    let renewed = false;
+    storage.get = async (key: string): Promise<Uint8Array | null> => {
+      if (!renewed && !renewing && key.startsWith('appcmd:')) {
+        renewing = true;
+        const renewal = await mailbox.renew({ commandId, attemptToken: claim.attemptToken });
+        expect(renewal.status).toBe('renewed');
+        renewed = true;
+      }
+      return originalGet(key);
+    };
+    const report = await mailbox.runMaintenance();
+    expect(renewed).toBe(true);
+    expect(report.reclaimed).toBe(0);
+    expect(claim.signal.aborted).toBe(false);
+    const receipt = await mailbox.receipt(commandId);
+    expect(receipt?.state).toBe('claimed');
+    mailbox.dispose();
+  });
+
+  it('releases a local attempt when the record vanishes between the scan and the advance', async () => {
+    const storage = new MemoryStorage();
+    const { mailbox, clock } = createMailboxFixture({ storage, visibilityTimeoutMs: 500 });
+    const commandId = await admitOne(mailbox);
+    const claim = await claimOne(mailbox);
+    clock.advance(501);
+    const key = KEYS.applicationCommand('bureau', 'agent-7', commandId);
+    const originalGet = storage.get.bind(storage);
+    let vanished = false;
+    storage.get = async (readKey: string): Promise<Uint8Array | null> => {
+      if (!vanished && readKey === key) {
+        vanished = true;
+        await storage.delete(key);
+      }
+      return originalGet(readKey);
+    };
+    await mailbox.runMaintenance();
+    expect(vanished).toBe(true);
+    expect(claim.signal.aborted).toBe(true);
+    mailbox.dispose();
+  });
+});

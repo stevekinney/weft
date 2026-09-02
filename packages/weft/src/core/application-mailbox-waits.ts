@@ -107,20 +107,13 @@ export async function waitForAvailableWork(
   );
   let remaining = 0;
   do {
-    // Aborting or disposal means `false`, and that outranks any observation —
-    // including one already in hand or one still in flight against stalled
-    // storage. A shutdown caller must never be told to start new work. Observe
-    // first, so the documented `timeoutMs: 0` default still performs one check
-    // rather than returning before looking at anything.
-    const observed = await raceAbortWithin(
-      () => hasDueWork(runtime),
-      budgetFor(timeoutMs, deadline, runtime.now()),
-      disposal,
-      options?.signal,
-    );
-    // An observation ended by abort, disposal, or the budget is `false`.
-    if (observed.aborted || isAborted(disposal, options?.signal)) return false;
-    if (observed.value) return observedInTime(timeoutMs, deadline, runtime.now());
+    // Aborting, disposal, or a spent budget means `false`, and that outranks
+    // any observation — including one already in hand or one still in flight
+    // against stalled storage. A shutdown caller must never be told to start
+    // new work.
+    const observed = await observeDueWork(runtime, disposal, options?.signal, timeoutMs, deadline);
+    if (observed === null || isAborted(disposal, options?.signal)) return false;
+    if (observed) return observedInTime(timeoutMs, deadline, runtime.now());
     // Clamp each sleep to what is left of the budget. An interval longer than the
     // remaining time would otherwise put the next observation past the bound the
     // caller asked for, turning a timeout into a late success.
@@ -131,6 +124,37 @@ export async function waitForAvailableWork(
   );
   // The sleep was cut short by an abort or by disposal.
   return false;
+}
+
+/**
+ * One bounded observation of due work, or `null` when the wait is over.
+ *
+ * A budget that the last sleep consumed exactly must not start one more read
+ * that nothing would bound; the first iteration of a positive budget always
+ * observes, since its deadline is strictly ahead. The documented `timeoutMs: 0`
+ * default performs one unconditional look. An observation ended by abort,
+ * disposal, or the budget is `null`.
+ */
+async function observeDueWork(
+  runtime: MailboxRuntime,
+  disposal: AbortSignal,
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
+  deadline: number,
+): Promise<boolean | null> {
+  if (budgetSpent(timeoutMs, deadline, runtime.now())) return null;
+  const observed = await raceAbortWithin(
+    () => hasDueWork(runtime),
+    budgetFor(timeoutMs, deadline, runtime.now()),
+    disposal,
+    signal,
+  );
+  return observed.aborted ? null : observed.value;
+}
+
+/** Whether a positive budget has already run out; the zero-timeout default never has. */
+function budgetSpent(timeoutMs: number, deadline: number, now: number): boolean {
+  return timeoutMs > 0 && now >= deadline;
 }
 
 /**
@@ -214,8 +238,16 @@ export async function waitForCleanup(
     if (
       !(await delayUnlessAborted(Math.min(pollIntervalMs, remaining), disposal, options.signal))
     ) {
+      // A caller abort rejects with its reason wherever it lands — before a
+      // read, during one, or during this sleep — so cancellation has one
+      // meaning. Disposal keeps the last observation: the handle is gone and
+      // the receipt it already holds is still true.
+      options.signal?.throwIfAborted();
       break;
     }
+    // The sleep may have consumed the budget exactly; a read nothing bounds
+    // must not follow it.
+    if (budgetSpent(timeoutMs, deadline, runtime.now())) break;
     const next = await readUnlessAborted(
       runtime,
       options.commandId,
