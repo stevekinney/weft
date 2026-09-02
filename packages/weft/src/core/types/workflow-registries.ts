@@ -10,6 +10,13 @@ import type {
  * `input` and `output` fields to make `engine.register`, `engine.start`, and
  * `WorkflowHandle.result()` type-safe for string workflow names.
  *
+ * `weft codegen`-generated entries additionally carry `revision`/
+ * `workflowVersion` string-literal fields for compile-time introspection —
+ * see `documentation/reference/cli.md#codegen` for the generated shape.
+ * Neither is required here: {@link WorkflowInput}/{@link WorkflowOutput}
+ * read only `input`/`output`, so a hand-authored entry (as below) never
+ * needs to supply them.
+ *
  * @example
  * ```ts
  * import type { WorkflowRegistry } from '@lostgradient/weft';

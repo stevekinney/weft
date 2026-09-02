@@ -17,7 +17,7 @@ import { promises as fs } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
 import { ConnectionConfigurationError, resolveConnection } from '../connection.ts';
-import { CodegenEmitError, emitRegistryDeclaration } from './codegen-emit.ts';
+import { CodegenEmitError, emitRegistryDeclaration } from './codegen-emit-registry.ts';
 import { validateRegistrySnapshot } from './codegen-validate.ts';
 import type { CommandOutput } from './types.ts';
 

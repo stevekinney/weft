@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'bun:test';
 
-import type { RegistryWorkflowEntry } from '../core/registry-snapshot.ts';
 import {
   CodegenEmitError,
   emitPropertyKey,
-  emitRegistryDeclaration,
+  emitStringLiteral,
   jsonSchemaToTypeScript,
 } from './codegen-emit.ts';
 
@@ -20,6 +19,25 @@ describe('emitPropertyKey', () => {
 
   it('escapes control characters', () => {
     expect(emitPropertyKey('line\nbreak')).toBe('"line\\nbreak"');
+  });
+});
+
+describe('emitStringLiteral', () => {
+  it('emits a double-quoted string literal', () => {
+    expect(emitStringLiteral('welcome')).toBe('"welcome"');
+  });
+
+  it('safely embeds hostile content that could otherwise break out of a string literal', () => {
+    expect(emitStringLiteral('with "quote"')).toBe('"with \\"quote\\""');
+    expect(emitStringLiteral('back\\slash')).toBe('"back\\\\slash"');
+    expect(emitStringLiteral('line\nbreak')).toBe('"line\\nbreak"');
+    expect(emitStringLiteral('back`tick')).toBe('"back`tick"');
+    expect(emitStringLiteral('*/ end comment')).toBe('"*/ end comment"');
+    expect(emitStringLiteral('</script>')).toBe('"</script>"');
+  });
+
+  it('emitPropertyKey delegates to emitStringLiteral (identical output)', () => {
+    expect(emitPropertyKey('shared')).toBe(emitStringLiteral('shared'));
   });
 });
 
@@ -548,95 +566,5 @@ describe('jsonSchemaToTypeScript $ref and ignored keywords', () => {
         maximum: 100,
       }),
     ).toBe('number');
-  });
-});
-
-describe('emitRegistryDeclaration', () => {
-  function buildWorkflows(
-    workflows: Record<string, RegistryWorkflowEntry> = {},
-  ): Record<string, RegistryWorkflowEntry> {
-    return workflows;
-  }
-
-  it('emits a valid empty file when there are no active workflows', () => {
-    const output = emitRegistryDeclaration(buildWorkflows());
-    expect(output).toContain("declare module '@lostgradient/weft' {");
-    expect(output).toContain('interface WorkflowRegistry {}');
-    // Activity names are typed per-workflow via the builder's
-    // `.activities({...})` step, not via a global module augmentation.
-    expect(output).not.toContain('ActivityTypes');
-    expect(output).toContain('export {};');
-    expect(output.endsWith('\n')).toBe(true);
-  });
-
-  it('documents in the banner that the augmentation types both engine and client call sites', () => {
-    // The emitted `WorkflowRegistry` augmentation is the single source of
-    // truth for `engine.start`, the client (`WeftClient.start`/`schedule`),
-    // and `result()` output narrowing. The banner records that intent so the
-    // generated file is self-explanatory and consumers know it is not
-    // engine-only.
-    const output = emitRegistryDeclaration(buildWorkflows());
-    expect(output).toContain('type engine and client call sites');
-  });
-
-  it('is byte-identical across two runs with the same input', () => {
-    const workflows = buildWorkflows({
-      welcome: {
-        inputSchema: {
-          type: 'object',
-          properties: { name: { type: 'string' } },
-          required: ['name'],
-          additionalProperties: false,
-        },
-        outputSchema: { type: 'string' },
-      },
-    });
-    expect(emitRegistryDeclaration(workflows)).toBe(emitRegistryDeclaration(workflows));
-  });
-
-  it('sorts keys deterministically regardless of insertion order', () => {
-    // Two records with explicitly reversed insertion order: V8
-    // preserves string-key insertion order, so this is the only way
-    // to prove the emitter sorts rather than relying on iteration
-    // luck.
-    const workflowsA = buildWorkflows({
-      zeta: { inputSchema: { type: 'string' } },
-      alpha: { inputSchema: { type: 'string' } },
-    });
-    const workflowsB = buildWorkflows({
-      alpha: { inputSchema: { type: 'string' } },
-      zeta: { inputSchema: { type: 'string' } },
-    });
-    const outputA = emitRegistryDeclaration(workflowsA);
-    const outputB = emitRegistryDeclaration(workflowsB);
-    expect(outputA).toBe(outputB);
-    expect(outputA.indexOf('"alpha"')).toBeLessThan(outputA.indexOf('"zeta"'));
-  });
-
-  it('uses null-prototype-safe key handling for names like __proto__', () => {
-    const workflows: Record<string, RegistryWorkflowEntry> = Object.create(null);
-    workflows['__proto__'] = { inputSchema: { type: 'string' } };
-    workflows['valid'] = { inputSchema: { type: 'string' } };
-    const output = emitRegistryDeclaration(workflows);
-    expect(output).toContain('"__proto__"');
-    expect(output).toContain('"valid"');
-  });
-
-  // The prior "does not emit activity entries" coverage no longer applies:
-  // `emitRegistryDeclaration`'s parameter type is `Record<string,
-  // RegistryWorkflowEntry>` — there is no `activities` field to pass, so the
-  // compiler enforces the same contract this test used to assert at runtime.
-
-  it('emits unknown for workflows with no schemas', () => {
-    const output = emitRegistryDeclaration(buildWorkflows({ bare: {} }));
-    expect(output).toContain('"bare": { input: unknown; output: unknown };');
-  });
-
-  it('quotes names with special characters', () => {
-    const output = emitRegistryDeclaration(
-      buildWorkflows({ 'kebab-name': {}, 'with "quote"': {} }),
-    );
-    expect(output).toContain('"kebab-name"');
-    expect(output).toContain('"with \\"quote\\""');
   });
 });

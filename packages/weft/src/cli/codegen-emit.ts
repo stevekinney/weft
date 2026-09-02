@@ -1,44 +1,26 @@
 /**
- * Deterministic JSON-Schema → TypeScript emitter for `weft codegen`.
+ * Deterministic JSON-Schema → TypeScript expression converter for
+ * `weft codegen`.
  *
- * Consumes the active workflow projection of a registry snapshot
- * (`Record<name, RegistryWorkflowEntry>`, the same data served by
- * `GET /v1/registry` and resolved from its v2 manifest array by
- * `codegen-validate.ts`'s `resolveActiveWorkflowEntries`) and produces a
- * single `.d.ts` string that augments the public `'@lostgradient/weft'`
- * module with typed `WorkflowRegistry` entries. The output is byte-stable
- * across runs with the same input:
- * keys are sorted with explicit codepoint comparators, property names
- * are uniformly double-quoted via `JSON.stringify`, and there are no
- * timestamps or environment-dependent paths.
+ * Converts a single JSON Schema fragment ({@link jsonSchemaToTypeScript})
+ * into a TypeScript type expression, and emits a safely-quoted TypeScript
+ * string literal or property key ({@link emitStringLiteral},
+ * {@link emitPropertyKey}). The JSON Schema subset supported here covers
+ * what `definitionSchemaToJsonSchema` actually produces today (Zod via
+ * `z.toJSONSchema` and Valibot via `@valibot/to-json-schema`). Anything
+ * outside that subset degrades to `unknown` so the converter never claims
+ * a type it cannot justify.
  *
- * The augmented `WorkflowRegistry` interface is the single source of
- * truth for per-workflow input/output typing across the whole public
- * surface: `engine.start`, `WorkflowHandle.result()`, AND the client
- * (`WeftClient.start`/`schedule` and `ClientHandle.result()`). The
- * client overloads key off this interface, so emitting one declaration
- * narrows both engine and client call sites — there is no separate
- * client-specific emission, and skipping codegen leaves both usable with
- * plain string names.
- *
- * Activity names are no longer emitted as a global `ActivityTypes`
- * module augmentation — that interface was removed when the chained
- * workflow builder made activity names a per-workflow concern (typed at
- * the builder's `.activities({...})` step). The snapshot still carries
- * activity schemas because the same registry feeds discovery and MCP tooling,
- * but the emitter intentionally drops them from the
- * generated `.d.ts`.
- *
- * The JSON Schema subset supported here covers what
- * `definitionSchemaToJsonSchema` actually produces today (Zod via
- * `z.toJSONSchema` and Valibot via `@valibot/to-json-schema`).
- * Anything outside that subset degrades to `unknown` so the emitter
- * never claims a type it cannot justify.
+ * `codegen-emit-registry.ts` is the module that actually assembles a full
+ * `.d.ts` file (the `WorkflowRegistry` module augmentation, revision/
+ * workflowVersion literals, and schema-alias hoisting) from these
+ * primitives — this module has no knowledge of the registry snapshot shape
+ * or the augmented module's structure, only of JSON Schema → TypeScript
+ * conversion.
  *
  * @module cli/codegen-emit
  */
 
-import type { RegistryWorkflowEntry } from '../core/registry-snapshot.ts';
 import {
   ARRAY_SUPPORTED_KEYS,
   CodegenEmitError,
@@ -48,8 +30,6 @@ import {
 } from './codegen-emit-keywords.ts';
 
 export { CodegenEmitError } from './codegen-emit-keywords.ts';
-
-const WEFT_PACKAGE_NAME = '@lostgradient/weft';
 
 // Deterministic, locale-independent compare via `<`/`>` (UTF-16
 // code-unit order). Registry keys are workflow/activity identifiers
@@ -61,9 +41,22 @@ function codepointCompare(a: string, b: string): number {
   return 0;
 }
 
+/**
+ * Emit a TypeScript string literal type for an arbitrary string value.
+ * Shared by {@link emitPropertyKey} (a literal used as a property key) and
+ * `codegen-emit-registry.ts`'s `revision`/`workflowVersion` emission (a
+ * literal used as a value type) — both need the same `JSON.stringify`
+ * safety property: quotes, backslashes, control characters, and any other
+ * hostile content are always safely embedded inside the double-quoted
+ * string, so neither call site can inject generated TypeScript.
+ */
+export function emitStringLiteral(value: string): string {
+  return JSON.stringify(value);
+}
+
 /** Emit a TypeScript property key as a double-quoted string literal. */
 export function emitPropertyKey(name: string): string {
-  return JSON.stringify(name);
+  return emitStringLiteral(name);
 }
 
 function primitiveTypeFor(typeKeyword: string): string | undefined {
@@ -442,53 +435,4 @@ function indexSignatureForObject(
   }
 
   return 'unknown';
-}
-
-function sortedWorkflowEntries(
-  workflows: Record<string, RegistryWorkflowEntry>,
-): Array<[string, RegistryWorkflowEntry]> {
-  return Object.entries(workflows).toSorted(([a], [b]) => codepointCompare(a, b));
-}
-
-function emitWorkflowEntry(name: string, entry: RegistryWorkflowEntry): string {
-  const input = jsonSchemaToTypeScript(entry.inputSchema);
-  const output = jsonSchemaToTypeScript(entry.outputSchema);
-  return `    ${emitPropertyKey(name)}: { input: ${input}; output: ${output} };`;
-}
-
-/**
- * Emit the full `.d.ts` declaration string for a registry's active workflow
- * projection.
- *
- * The output is deterministic: keys are sorted by codepoint, property
- * names go through {@link emitPropertyKey}, and unions/intersections
- * are always parenthesized so they compose correctly when nested.
- */
-export function emitRegistryDeclaration(
-  activeWorkflows: Record<string, RegistryWorkflowEntry>,
-): string {
-  const workflows = sortedWorkflowEntries(activeWorkflows);
-
-  const workflowLines = workflows.map(([name, entry]) => emitWorkflowEntry(name, entry));
-
-  const workflowBlock =
-    workflowLines.length === 0
-      ? '  interface WorkflowRegistry {}'
-      : ['  interface WorkflowRegistry {', ...workflowLines, '  }'].join('\n');
-
-  const lines = [
-    '// Generated by `weft codegen`. Do not edit by hand.',
-    '// Augments `WorkflowRegistry` to type engine and client call sites',
-    '// (start/schedule input and handle.result() output) per workflow.',
-    '/* eslint-disable */',
-    '',
-    `declare module '${WEFT_PACKAGE_NAME}' {`,
-    workflowBlock,
-    '}',
-    '',
-    'export {};',
-    '',
-  ];
-
-  return lines.join('\n');
 }

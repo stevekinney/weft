@@ -13,8 +13,14 @@
 // ~3s while exercising the exact same type machinery (verified: removing the
 // `@ts-expect-error` below reports TS2769, and breaking the output narrowing
 // reports TS2339 — the check is non-vacuous).
+//
+// `welcome` and `farewell` share the SAME generated input schema, so
+// `weft.generated.d.ts` hoists it into one `__WeftSchema_...` alias
+// referenced from both entries — this file is the only place that proves
+// the alias syntax actually type-checks and narrows both call sites, not
+// just that its string content looks right.
 
-import type { Engine } from '@lostgradient/weft';
+import type { Engine, WorkflowRegistry } from '@lostgradient/weft';
 import type { WeftClient } from '@lostgradient/weft/client';
 
 declare const engine: Engine;
@@ -29,6 +35,29 @@ void knownWorkflow;
 
 // @ts-expect-error workflow input must match the augmented input type.
 void engine.start('welcome', { wrongShape: true });
+
+// A second workflow sharing `welcome`'s exact input schema, through the
+// alias, still narrows correctly and independently from its own (distinct)
+// output schema.
+async function knownWorkflowViaAliasedInput(): Promise<void> {
+  const handle = await engine.start('farewell', { name: 'Steve' });
+  const output = await handle.result();
+  output.message.toUpperCase();
+}
+void knownWorkflowViaAliasedInput;
+
+// @ts-expect-error the aliased input type still rejects a mismatched shape.
+void engine.start('farewell', { wrongShape: true });
+
+// `welcome`'s output shape and `farewell`'s output shape are NOT aliased
+// together (distinct schemas) — a `farewell` result has no `greeting`
+// property.
+void (async () => {
+  const handle = await engine.start('farewell', { name: 'Steve' });
+  const output = await handle.result();
+  // @ts-expect-error a `farewell` result has no `greeting` property.
+  void output.greeting;
+})();
 
 // The same generated augmentation also types the CLIENT surface. A client
 // typed as `WeftClient` narrows `start`'s input to the registered workflow's
@@ -54,3 +83,19 @@ void scheduledWorkflowViaClient;
 
 // @ts-expect-error client schedule input must match the augmented input type.
 void client.schedule('welcome', { wrongShape: true }, '0 9 * * 1');
+
+// `revision`/`workflowVersion` are compile-time-introspectable literal
+// types on the augmented entry — never required by `start`/`schedule`
+// (proven above: every call site omits them), but available for a
+// consumer's own tooling to read.
+type WelcomeRevision = WorkflowRegistry['welcome']['revision'];
+type WelcomeWorkflowVersion = WorkflowRegistry['welcome']['workflowVersion'];
+const welcomeRevision: WelcomeRevision =
+  'sha256:459490e35ec0c6cab26b944ac5d023f0d3a581f3ab8229cd2ac3b500f779f924';
+const welcomeWorkflowVersion: WelcomeWorkflowVersion = '0.0.0';
+void welcomeRevision;
+void welcomeWorkflowVersion;
+
+// @ts-expect-error revision is a specific string-literal type, not plain `string`.
+const wrongRevision: WelcomeRevision = 'not-the-real-revision';
+void wrongRevision;
