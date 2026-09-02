@@ -574,6 +574,7 @@ export { WorkerPool } from './workers/pool';
 export type { WorkerPoolOptions } from './workers/pool';
 
 export {
+  DEFAULT_WORKFLOW_COMPATIBILITY_POLICY,
   MAX_CONTRACT_IDENTIFIER_BYTES,
   MAX_CONTRACT_MESSAGE_COUNT,
   MAX_CONTRACT_SCHEMA_DEPTH,
@@ -586,6 +587,7 @@ export {
   buildWorkflowContract,
   buildWorkflowRevisionManifest,
   canonicalWorkflowContractJson,
+  checkWorkflowCompatibility,
   contractHash,
   deriveWorkflowRevision,
   digestCanonicalWorkflowContract,
@@ -595,6 +597,9 @@ export {
 export type {
   BuildWorkflowRevisionManifestOptions,
   WorkflowActivityContract,
+  WorkflowCompatibilityPolicy,
+  WorkflowCompatibilityReason,
+  WorkflowCompatibilityVerdict,
   WorkflowContract,
   WorkflowContractActivitySource,
   WorkflowContractMessageSource,
