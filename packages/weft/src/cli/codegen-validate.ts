@@ -19,34 +19,27 @@ import {
   type WorkflowRevisionManifest,
 } from '../core/contract/index.ts';
 import { MAX_CONTRACT_IDENTIFIER_BYTES } from '../core/contract/limits.ts';
+import { MAX_REGISTRY_WORKFLOW_COUNT } from '../core/registry-limits.ts';
 import {
   REGISTRY_VERSION,
   type RegistryActivityEntry,
   type RegistryWorkflowEntry,
 } from '../core/registry-snapshot.ts';
 import { isRecord } from '../worker/manifest/is-record.ts';
-import { MAX_MANIFEST_WORKFLOW_COUNT } from '../worker/manifest/limits.ts';
 import { utf8ByteLength } from '../worker/manifest/utf8.ts';
 
 /**
  * Ceiling on the raw `workflows` array's length, checked before a single
- * element is parsed or cryptographically hashed. Reuses
- * {@link MAX_MANIFEST_WORKFLOW_COUNT} (512) — the same per-manifest-count
- * ceiling `worker/manifest/parse.ts` applies to an advertised worker
- * manifest's `workflows`, and the value `core/contract/limits.ts`'s
- * `MAX_CONTRACT_MESSAGE_COUNT` also uses — rather than defining a new,
- * independently-tuned number for what is semantically the same kind of
- * bound: how many manifest-shaped entries one untrusted payload may assert.
+ * element is parsed or cryptographically hashed, and on the number of
+ * entries in `activeRevisions`, checked before a single key/value pair is
+ * read (`activeRevisions` can never usefully point at more names than
+ * `workflows` could ever declare, so the same ceiling applies to both).
+ * Shared with `core/registry-snapshot.ts`'s producer-side enforcement via
+ * {@link MAX_REGISTRY_WORKFLOW_COUNT} rather than each defining its own
+ * number: a consumer ceiling looser than the producer's would be dead code,
+ * and one tighter would make `weft codegen --server` reject a
+ * legitimately-generated snapshot from a same-release server.
  */
-const MAX_REGISTRY_WORKFLOW_MANIFEST_COUNT = MAX_MANIFEST_WORKFLOW_COUNT;
-
-/**
- * Ceiling on the number of entries in `activeRevisions`, checked before a
- * single key/value pair is read. Same value and rationale as
- * {@link MAX_REGISTRY_WORKFLOW_MANIFEST_COUNT}: `activeRevisions` can never
- * usefully point at more names than `workflows` could ever declare.
- */
-const MAX_REGISTRY_ACTIVE_REVISION_COUNT = MAX_MANIFEST_WORKFLOW_COUNT;
 
 export type ValidateSnapshotResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -158,29 +151,33 @@ function readActiveRevisions(
       error: 'codegen: invalid registry snapshot: activeRevisions must be an object',
     };
   }
-  // Reject an oversized pointer map before the per-entry loop below ever
-  // touches a single key or value — a hostile `--server`/`--from` payload
-  // could otherwise supply millions of string-valued entries, all eagerly
-  // enumerated by `Object.entries()`, before resolution can reject even the
-  // first pointer for having no matching manifest.
-  const entryCount = Object.keys(value).length;
-  if (entryCount > MAX_REGISTRY_ACTIVE_REVISION_COUNT) {
-    return {
-      ok: false,
-      error: `codegen: invalid registry snapshot: activeRevisions has ${entryCount} entries, exceeding the maximum of ${MAX_REGISTRY_ACTIVE_REVISION_COUNT}`,
-    };
-  }
-  for (const [name, revision] of Object.entries(value)) {
+  // Reject an oversized pointer map before a single key or value is read —
+  // walk own-enumerable keys incrementally with `for...in` (`isRecord`
+  // already confirmed a plain object, so no prototype-chain keys leak in)
+  // and bail the moment the count is exceeded, rather than materializing
+  // every key first via `Object.keys()`/`Object.entries()`, which a hostile
+  // `--server`/`--from` payload with millions of entries would force to
+  // allocate in full before any check could reject it.
+  let entryCount = 0;
+  for (const name in value) {
+    entryCount += 1;
+    if (entryCount > MAX_REGISTRY_WORKFLOW_COUNT) {
+      return {
+        ok: false,
+        error: `codegen: invalid registry snapshot: activeRevisions has more than ${MAX_REGISTRY_WORKFLOW_COUNT} entries`,
+      };
+    }
     if (utf8ByteLength(name) > MAX_CONTRACT_IDENTIFIER_BYTES) {
       return {
         ok: false,
         error: `codegen: invalid registry snapshot: activeRevisions key ${JSON.stringify(name)} exceeds the maximum identifier length of ${MAX_CONTRACT_IDENTIFIER_BYTES} bytes`,
       };
     }
+    const revision = value[name];
     if (typeof revision !== 'string') {
       return {
         ok: false,
-        error: `codegen: invalid registry snapshot: activeRevisions["${name}"] must be a string`,
+        error: `codegen: invalid registry snapshot: activeRevisions[${JSON.stringify(name)}] must be a string`,
       };
     }
     if (utf8ByteLength(revision) > MAX_CONTRACT_IDENTIFIER_BYTES) {
@@ -288,18 +285,10 @@ async function resolveActiveWorkflowEntries(
   workflowsRaw: readonly unknown[],
   activeRevisions: Readonly<Record<string, string>>,
 ): Promise<ValidateSnapshotResult<Record<string, RegistryWorkflowEntry>>> {
-  // Reject an oversized `workflows` array before a single element is parsed
-  // or cryptographically hashed — `parseAllManifests()` normalizes and
-  // recomputes a `contractHash` for every element, including inactive ones,
-  // so an unbounded array is an unbounded CPU/memory path for a hostile
-  // `--server`/`--from` payload.
-  if (workflowsRaw.length > MAX_REGISTRY_WORKFLOW_MANIFEST_COUNT) {
-    return {
-      ok: false,
-      error: `codegen: invalid registry snapshot: workflows has ${workflowsRaw.length} entries, exceeding the maximum of ${MAX_REGISTRY_WORKFLOW_MANIFEST_COUNT}`,
-    };
-  }
-
+  // The `workflows` array-length ceiling is enforced by `validateRegistrySnapshot`
+  // on the raw value, before `registryEnvelopeSchema.safeParse()` ever runs
+  // Zod's `z.array(...)` over it — see that function's doc. By the time
+  // `workflowsRaw` reaches here it has already passed that bound.
   const parsed = await parseAllManifests(workflowsRaw);
   if (!parsed.ok) return parsed;
 
@@ -325,6 +314,35 @@ async function resolveActiveWorkflowEntries(
 }
 
 /**
+ * Reject an oversized `workflows` array on the raw value, before
+ * `registryEnvelopeSchema.safeParse()` ever runs — Zod's `z.array(...)`
+ * eagerly iterates and allocates parsed output for the entire array first,
+ * so checking only after `safeParse()` succeeds (as
+ * `resolveActiveWorkflowEntries` used to) would let a hostile
+ * `--server`/`--from` payload with millions of elements force that
+ * allocation before any bound could reject it. Reading `workflows` off
+ * `value` this way, before the schema has validated anything, is
+ * deliberately defensive: only an array long enough to exceed the ceiling
+ * triggers a rejection here, so a non-array/missing `workflows` (any other
+ * malformed shape) falls through to the schema's own diagnostic. Returns
+ * `undefined` (rather than a `ValidateSnapshotResult`) when the raw value is
+ * within bounds, so the caller's `if` reads as a single early-return guard.
+ */
+function checkRawWorkflowsCount(value: unknown): { ok: false; error: string } | undefined {
+  const rawWorkflows =
+    value !== null && typeof value === 'object'
+      ? (value as { workflows?: unknown }).workflows
+      : undefined;
+  if (Array.isArray(rawWorkflows) && rawWorkflows.length > MAX_REGISTRY_WORKFLOW_COUNT) {
+    return {
+      ok: false,
+      error: `codegen: invalid registry snapshot: workflows has ${rawWorkflows.length} entries, exceeding the maximum of ${MAX_REGISTRY_WORKFLOW_COUNT}`,
+    };
+  }
+  return undefined;
+}
+
+/**
  * Validate an untrusted registry snapshot end-to-end: the version/envelope
  * shape, every `workflows` manifest, and the `activeRevisions` pointer map,
  * projecting the result down to what `weft codegen` actually emits from.
@@ -345,6 +363,9 @@ export async function validateRegistrySnapshot(
       };
     }
   }
+
+  const oversizedWorkflows = checkRawWorkflowsCount(value);
+  if (oversizedWorkflows !== undefined) return oversizedWorkflows;
 
   const parsed = registryEnvelopeSchema.safeParse(value);
   if (!parsed.success) {

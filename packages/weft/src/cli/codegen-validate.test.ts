@@ -140,7 +140,7 @@ describe('validateRegistrySnapshot', () => {
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('expected rejection');
     expect(result.error).toBe(
-      'codegen: invalid registry snapshot: activeRevisions has 513 entries, exceeding the maximum of 512',
+      'codegen: invalid registry snapshot: activeRevisions has more than 512 entries',
     );
   });
 

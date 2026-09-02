@@ -471,6 +471,44 @@ describe('GET /v1/registry — error shaping', () => {
     }
   });
 
+  it('returns 500 with "Internal server error" and logs the count when more than the maximum workflows are registered (WFT-6)', async () => {
+    // `Engine.register()` enforces no aggregate ceiling (only per-contract
+    // limits at manifest-build time), so an engine can accumulate more
+    // workflows than the registry snapshot may ever report — this is the
+    // only test that exercises the `instanceof RegistryWorkflowCountLimitError`
+    // branch in `invoke`'s catch. Each registration is a trivial no-op
+    // workflow so the loop stays cheap; the count check fires before any
+    // manifest is built or hashed.
+    engine = createEngine();
+    for (let index = 0; index < 513; index += 1) {
+      engine.register(workflow({ name: `workflow-${index}` }).execute(async function* () {}));
+    }
+
+    const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const response = await handleRequest(
+        new Request('http://localhost/v1/registry', { method: 'GET' }),
+        engine,
+        {
+          operationRegistry: createOperationRegistry([getRegistryOperation]),
+          restBindings: [getRegistryRestBinding],
+          ...authContextWithSystemRead(),
+        },
+      );
+
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ error: 'Internal server error' });
+
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      const [message, detail] = errorSpy.mock.calls[0] as [string, { count: number }];
+      expect(message).toContain('[weft.system.registry]');
+      expect(message).toContain('513');
+      expect(detail.count).toBe(513);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it('returns 500 with "Internal server error" for unrelated EngineFailure faults', async () => {
     engine = createEngine();
     const failingOperation = {

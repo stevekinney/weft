@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { MemoryStorage } from '../storage/memory.ts';
 import { ActivityRegistry } from './activity-registry.ts';
 import { Engine } from './engine.ts';
+import { MAX_REGISTRY_WORKFLOW_COUNT, RegistryWorkflowCountLimitError } from './registry-limits.ts';
 import {
   buildRegistrySnapshot,
   compareWorkflowManifests,
@@ -493,6 +494,29 @@ describe('buildRegistrySnapshot', () => {
     expect(captured).toBeInstanceOf(RegistryManifestLimitError);
     const error = captured as RegistryManifestLimitError;
     expect(error.workflowType).toBe('oversized');
+  });
+
+  it('throws RegistryWorkflowCountLimitError before building any manifest when more than the maximum workflows are registered (WFT-6)', async () => {
+    // `Engine.register()` enforces no aggregate ceiling, so this proves the
+    // producer-side check fires: registering one more than
+    // `MAX_REGISTRY_WORKFLOW_COUNT` throws before a single manifest is
+    // built or hashed, so `weft codegen --server`'s matching consumer-side
+    // ceiling in `cli/codegen-validate.ts` can never reject a snapshot this
+    // function actually emits.
+    engine = createEngine();
+    for (let index = 0; index < MAX_REGISTRY_WORKFLOW_COUNT + 1; index += 1) {
+      engine.register(workflow({ name: `workflow-${index}` }).execute(async function* () {}));
+    }
+
+    let captured: unknown;
+    try {
+      await buildRegistrySnapshot(engine);
+    } catch (error) {
+      captured = error;
+    }
+    expect(captured).toBeInstanceOf(RegistryWorkflowCountLimitError);
+    const error = captured as RegistryWorkflowCountLimitError;
+    expect(error.count).toBe(MAX_REGISTRY_WORKFLOW_COUNT + 1);
   });
 
   it('does not include remote-only activities (workers without local registrations are excluded)', async () => {

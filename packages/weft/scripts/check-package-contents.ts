@@ -28,7 +28,14 @@ const maximumUnpackedBytes = 12 * 1024 * 1024;
 // `codegen-validate.ts`-only revision) already found and left unattributed,
 // carried forward rather than re-caused. Bumped to the actual measured
 // count rather than the unverified formula value.
-const maximumEntryCount = 1493;
+//
+// WFT-6's second review round added a 4th new source file,
+// `src/core/registry-limits.ts` (the `MAX_REGISTRY_WORKFLOW_COUNT`
+// constant and `RegistryWorkflowCountLimitError`, shared between the
+// producer in `registry-snapshot.ts` and the consumer in
+// `codegen-validate.ts` so the two ceilings can never drift apart) — one
+// more `.js`/`.d.ts` pair, +2 entries (1493 -> 1495).
+const maximumEntryCount = 1495;
 
 type PackFile = {
   path: string;

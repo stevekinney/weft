@@ -37,13 +37,14 @@ import {
   type WorkflowRevisionManifest,
 } from './contract/index.ts';
 import type { Engine } from './engine.ts';
+import { MAX_REGISTRY_WORKFLOW_COUNT, RegistryWorkflowCountLimitError } from './registry-limits.ts';
 import { convertSchema, RegistrySchemaConversionError } from './registry-schema-conversion.ts';
 import { toWorkflowContractDraft } from './registry-workflow-contract-draft.ts';
 import type { DefinitionSchema } from './types/definition-schema.ts';
 import type { RegisteredWorkflowDefinition } from './types/workflow-registry.ts';
 import { WeftError } from './weft-error.ts';
 
-export { RegistrySchemaConversionError };
+export { RegistrySchemaConversionError, RegistryWorkflowCountLimitError };
 
 /**
  * Current registry contract version. Future incompatible changes to the
@@ -207,14 +208,22 @@ export interface BuildRegistrySnapshotOptions {
  * builder had. No torn or partial manifest is possible.
  *
  * Throws {@link RegistrySchemaConversionError} if any registered schema
- * fails JSON Schema conversion, or {@link RegistryManifestLimitError} if a
- * registered workflow's contract exceeds a WFT-5 hostile-input limit.
+ * fails JSON Schema conversion, {@link RegistryManifestLimitError} if a
+ * registered workflow's contract exceeds a WFT-5 hostile-input limit, or
+ * {@link RegistryWorkflowCountLimitError} if the engine has more than
+ * {@link MAX_REGISTRY_WORKFLOW_COUNT} workflows registered in total —
+ * checked here, at the producer, so `weft codegen --server`'s matching
+ * consumer-side ceiling in `cli/codegen-validate.ts` can never reject a
+ * snapshot this function actually emits.
  */
 export async function buildRegistrySnapshot(
   engine: Engine,
   options?: BuildRegistrySnapshotOptions,
 ): Promise<RegistrySnapshot> {
   const workflowDefinitions = engine.listWorkflowDefinitions();
+  if (workflowDefinitions.length > MAX_REGISTRY_WORKFLOW_COUNT) {
+    throw new RegistryWorkflowCountLimitError(workflowDefinitions.length);
+  }
   const activityDefinitions = engine.listActivityDefinitions();
 
   // Sort with explicit codepoint comparators rather than `localeCompare`

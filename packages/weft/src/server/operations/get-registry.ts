@@ -25,6 +25,7 @@ import {
   RegistryManifestLimitError,
   RegistrySchemaConversionError,
   type RegistrySnapshot,
+  RegistryWorkflowCountLimitError,
 } from '../../core/registry-snapshot.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
@@ -94,6 +95,10 @@ export const getRegistryOperation = defineOperation<GetRegistryInput, GetRegistr
       } else if (error instanceof RegistryManifestLimitError) {
         console.error(`[weft.system.registry] ${error.message}`, {
           workflowType: error.workflowType,
+        });
+      } else if (error instanceof RegistryWorkflowCountLimitError) {
+        console.error(`[weft.system.registry] ${error.message}`, {
+          count: error.count,
         });
       }
       throw error;

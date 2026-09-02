@@ -511,6 +511,14 @@ activity's schema change moves the owning workflow's identity, the same way a
 change to its own input/output schema does. `contract.activities` is omitted
 entirely for a workflow with no `.activities({...})` step.
 
+The snapshot as a whole is capped at 512 registered workflows: an engine
+with more than that fails the whole snapshot with a masked `500`, the same
+way an individual workflow whose contract exceeds a WFT-5 hostile-input
+limit does (see above). `weft codegen --server`'s own consumer-side ceiling
+on the `workflows` array it reads from the wire uses the same 512-workflow
+limit, so a snapshot this operation actually returns can never be rejected
+by `weft codegen` for exceeding that count.
+
 Weft is pre-release, so `registryVersion: 1` is not accepted — see
 [`CHANGELOG.md`](../../CHANGELOG.md) for the migration note.
 
