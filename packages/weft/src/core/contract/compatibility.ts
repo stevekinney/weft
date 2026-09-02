@@ -198,7 +198,7 @@ function isWorkflowVersionIncompatible(
   candidate: WorkflowRevisionManifest,
 ): boolean {
   return (
-    checkVersionCompatibility(candidate.workflowVersion, current.workflowVersion) === 'incompatible'
+    checkVersionCompatibility(current.workflowVersion, candidate.workflowVersion) === 'incompatible'
   );
 }
 

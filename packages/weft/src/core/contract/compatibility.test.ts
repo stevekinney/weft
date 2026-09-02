@@ -126,10 +126,8 @@ describe('checkWorkflowCompatibility', () => {
         checkVersionCompatibility(differingCandidate.workflowVersion, current.workflowVersion),
       ).toBe('incompatible');
       const verdict = checkWorkflowCompatibility(current, differingCandidate);
-      expect(verdict.compatible).toBe(false);
-      expect((verdict as { reasons: readonly string[] }).reasons).toContain(
-        'workflow-version-incompatible',
-      );
+      if (verdict.compatible) throw new Error('expected incompatible verdict');
+      expect(verdict.reasons).toContain('workflow-version-incompatible');
     });
 
     it('reports workflow-version-incompatible plus artifact-revision-mismatch under the strict default policy', async () => {
