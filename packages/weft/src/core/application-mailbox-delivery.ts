@@ -22,6 +22,7 @@ import {
   ApplicationMailboxContentionError,
   MAX_MAILBOX_TRANSITION_ATTEMPTS,
   commitCommandTransition,
+  nextLeaseCommitSerial,
   toApplicationCommandReceipt,
   type AttemptRegistration,
   type MailboxRuntime,
@@ -209,7 +210,12 @@ function registerAttemptController(
     controller.abort(new Error('The application mailbox was disposed while this claim committed.'));
     return { controller, registration: null };
   }
-  const registration = { controller, release, commandId };
+  const registration: AttemptRegistration = {
+    controller,
+    release,
+    commandId,
+    committedSerial: null,
+  };
   runtime.attemptControllers.set(attemptToken, registration);
   return { controller, registration };
 }
@@ -247,7 +253,12 @@ export async function claimNextCommand(
   runtime: MailboxRuntime,
   options?: { readonly signal?: AbortSignal | undefined },
 ): Promise<ApplicationMailboxClaimResult> {
-  for (let attempt = 1; attempt <= MAX_MAILBOX_TRANSITION_ATTEMPTS; attempt += 1) {
+  // Only a lost compare-and-swap counts as contention. Housekeeping that
+  // succeeded — an orphaned entry discarded, an expired head dead-lettered — is
+  // durable progress on a backlog, and a long run of it (every head expired
+  // during downtime, say) must not surface as a contention error.
+  let losses = 0;
+  while (losses < MAX_MAILBOX_TRANSITION_ATTEMPTS) {
     options?.signal?.throwIfAborted();
     const now = runtime.now();
     const head = await observeHead(runtime, now, options?.signal);
@@ -256,6 +267,7 @@ export async function claimNextCommand(
     if (head.status === 'retry') continue;
     const claim = await leaseHead(runtime, head.loaded, options?.signal);
     if (claim !== null) return claim;
+    losses += 1;
   }
   throw new ApplicationMailboxContentionError('claim', null);
 }
@@ -376,6 +388,7 @@ async function leaseHead(
     );
     return null;
   }
+  if (registration !== null) registration.committedSerial = nextLeaseCommitSerial();
   // The commit is itself asynchronous — a fleet-event sink may retry its
   // compare-and-swap — so the lease can land after the deadline it was checked
   // against. Handing that claim out would start work the contract already calls

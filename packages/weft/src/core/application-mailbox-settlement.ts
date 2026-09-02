@@ -29,6 +29,7 @@ import {
   ApplicationMailboxContentionError,
   commitCommandTransition,
   isTerminalRecord,
+  leaseCommitSerial,
   MAX_MAILBOX_TRANSITION_ATTEMPTS,
   releaseAttemptController,
   releaseAttemptsForCommand,
@@ -395,6 +396,9 @@ export async function readCleanupState(
   runtime: MailboxRuntime,
   commandId: string,
 ): Promise<ApplicationCommandCleanupResult> {
+  // Read the fence before the snapshot: a lease this process commits after
+  // the read is not something the snapshot can speak for.
+  const observedAt = leaseCommitSerial();
   const loaded = await loadCommand(runtime.storage, runtime.keys, commandId);
   if (loaded === null) {
     // Retired elsewhere while a local claimant may still hold it: that
@@ -404,6 +408,8 @@ export async function readCleanupState(
       runtime,
       commandId,
       'This command no longer exists; its receipt was retired.',
+      undefined,
+      observedAt,
     );
     return { status: 'unknown' };
   }
@@ -415,6 +421,7 @@ export async function readCleanupState(
     commandId,
     'This attempt is no longer the current lease on its command.',
     isApplicationCommandLeased(loaded.record) ? loaded.record.attemptToken : undefined,
+    observedAt,
   );
   const receipt = toApplicationCommandReceipt(loaded.record);
   // `receipt.cleanupPending` is already the projected, narrowed view: it is

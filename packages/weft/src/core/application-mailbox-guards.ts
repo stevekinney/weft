@@ -289,9 +289,9 @@ export function requireWaitBudget(options: {
   readonly pollIntervalMs?: number | undefined;
 }): { readonly timeoutMs: number; readonly pollIntervalMs: number } {
   const timeoutMs = options.timeoutMs ?? 0;
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0) {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > MAX_TIMER_DELAY_MS) {
     throw new ApplicationCommandValidationError(
-      'timeoutMs must be a non-negative safe integer in milliseconds.',
+      `timeoutMs must be a non-negative safe integer of at most ${MAX_TIMER_DELAY_MS} milliseconds, the largest delay a timer can schedule; the in-flight budget is scheduled as one timer.`,
     );
   }
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_WAIT_POLL_INTERVAL_MS;

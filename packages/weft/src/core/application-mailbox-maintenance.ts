@@ -18,7 +18,7 @@
  */
 
 import type { BatchOperation, ConditionalBatchCondition } from '../storage/interface.ts';
-import { storageConditionalBatch } from '../storage/interface.ts';
+import { formatSortableStorageTimestamp, storageConditionalBatch } from '../storage/interface.ts';
 import { decodeApplicationCommandRecord } from './application-mailbox-codec.ts';
 import type {
   ApplicationMailboxMaintenanceReport,
@@ -32,6 +32,7 @@ import {
   ApplicationMailboxContentionError,
   commitCommandTransition,
   isTerminalRecord,
+  leaseCommitSerial,
   MAILBOX_MAINTENANCE_MAX_PAGES,
   MAX_MAILBOX_TRANSITION_ATTEMPTS,
   releaseAttemptController,
@@ -79,12 +80,14 @@ function reconcileLocalAttempts(
   runtime: MailboxRuntime,
   commandId: string,
   record: ApplicationCommandRecord | undefined,
+  observedAt: number,
 ): void {
   releaseAttemptsForCommand(
     runtime,
     commandId,
     'This attempt is no longer the current lease on its command.',
     record !== undefined && isApplicationCommandLeased(record) ? record.attemptToken : undefined,
+    observedAt,
   );
 }
 
@@ -102,9 +105,10 @@ async function advanceCommand(
   counters: MaintenanceCounters,
 ): Promise<void> {
   for (let attempt = 1; attempt <= MAX_MAILBOX_TRANSITION_ATTEMPTS; attempt += 1) {
+    const observedAt = leaseCommitSerial();
     const loaded = await loadCommand(runtime.storage, runtime.keys, commandId);
     if (loaded === null) {
-      reconcileLocalAttempts(runtime, commandId, undefined);
+      reconcileLocalAttempts(runtime, commandId, undefined, observedAt);
       return;
     }
     const due = classify(loaded.record, now);
@@ -113,7 +117,7 @@ async function advanceCommand(
       // terminalized it between this pass's scan and this load. That process
       // cannot reach the local registry, so any local attempt that is not the
       // record's current lease is released here.
-      reconcileLocalAttempts(runtime, commandId, loaded.record);
+      reconcileLocalAttempts(runtime, commandId, loaded.record, observedAt);
       return;
     }
     const transition =
@@ -298,8 +302,15 @@ function parseTerminalAt(key: string, prefix: string): number | null {
   const suffix = key.slice(prefix.length);
   const separator = suffix.indexOf(':');
   if (separator === -1) return null;
-  const parsed = Number(suffix.slice(0, separator));
-  return Number.isSafeInteger(parsed) ? parsed : null;
+  const segment = suffix.slice(0, separator);
+  const parsed = Number(segment);
+  // Only the canonical fixed-width encoding sorts chronologically. A value
+  // that parses but is not what the encoder writes (over-padded, say) could
+  // sort ahead of every expired receipt while naming a future instant, and
+  // stop the sweep there on every pass; it is malformed.
+  return Number.isSafeInteger(parsed) && formatSortableStorageTimestamp(parsed) === segment
+    ? parsed
+    : null;
 }
 
 function commandIdFromTerminalKey(key: string): string | null {
@@ -334,14 +345,18 @@ async function collectDueCommands(
   for (let page = 0; page < MAILBOX_MAINTENANCE_MAX_PAGES; page += 1) {
     let seen = 0;
     const options = cursor === undefined ? { limit: batchSize } : { limit: batchSize, gt: cursor };
+    // Fence before the page is read: a lease this process commits while the
+    // page is in flight is newer than anything the page can say about it.
+    const observedAt = leaseCommitSerial();
     for await (const [key, value] of runtime.storage.scan(runtime.keys.commandPrefix, options)) {
       seen += 1;
       cursor = key;
       const record = decodeApplicationCommandRecord(value, key);
       // Every record the pass visits is also the truth about which local
-      // attempt, if any, still holds it. A lease reclaimed or terminalized in
-      // another process cannot release the registration here; this pass can.
-      reconcileLocalAttempts(runtime, record.commandId, record);
+      // attempt, if any, still held it as of the page read. A lease reclaimed
+      // or terminalized in another process cannot release the registration
+      // here; this pass can.
+      reconcileLocalAttempts(runtime, record.commandId, record, observedAt);
       if (classify(record, now) !== null) due.push(record.commandId);
     }
     // A short page means the keyspace is exhausted: start the next pass from the
@@ -373,12 +388,21 @@ export async function runMailboxMaintenance(
     cancelled: 0,
     retired: 0,
   };
-  const scan = await collectDueCommands(runtime, now, runtime.readMaintenanceCursor());
-  runtime.writeMaintenanceCursor(scan.nextCursor);
-  const due = scan.due;
-  for (const commandId of due) {
-    await advanceCommand(runtime, commandId, now, counters);
+  const previousCursor = runtime.readMaintenanceCursor();
+  const scan = await collectDueCommands(runtime, now, previousCursor);
+  // The cursor moves only once the collected work is done. A pass that fails
+  // part-way keeps its starting point, so the retry revisits the command it
+  // failed on instead of resuming past it — in a mailbox larger than the page
+  // cap, that could otherwise leave an expired lease untouched for many passes.
+  try {
+    for (const commandId of scan.due) {
+      await advanceCommand(runtime, commandId, now, counters);
+    }
+  } catch (error) {
+    runtime.writeMaintenanceCursor(previousCursor);
+    throw error;
   }
+  runtime.writeMaintenanceCursor(scan.nextCursor);
   await retireTerminalReceipts(runtime, now, counters);
   return Object.freeze({ ...counters });
 }

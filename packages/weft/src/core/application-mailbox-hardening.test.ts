@@ -2575,3 +2575,120 @@ describe('maintenance races between the scan and the advance', () => {
     mailbox.dispose();
   });
 });
+
+describe('seventeenth-round hardening', () => {
+  it('does not abort a claim that committed after the maintenance scan read its record', async () => {
+    const storage = new MemoryStorage();
+    const { mailbox } = createMailboxFixture({ storage });
+    await admitOne(mailbox);
+    // The scan reads the record while it is still waiting; a local claim then
+    // registers and commits before the pass reconciles. The stale snapshot must
+    // not take that new lease's registration down.
+    const originalScan = storage.scan.bind(storage);
+    let raced = false;
+    let claim: Awaited<ReturnType<typeof claimOne>> | undefined;
+    storage.scan = (
+      ...args: Parameters<MemoryStorage['scan']>
+    ): ReturnType<MemoryStorage['scan']> => {
+      const inner = originalScan(...args);
+      return (async function* interleaved(): AsyncGenerator<[string, Uint8Array]> {
+        for await (const entry of inner) {
+          if (!raced && entry[0].startsWith('appcmd:')) {
+            raced = true;
+            claim = await claimOne(mailbox);
+          }
+          yield entry;
+        }
+      })();
+    };
+    await mailbox.runMaintenance();
+    expect(raced).toBe(true);
+    expect(claim?.signal.aborted).toBe(false);
+    expect(
+      attemptControllerRegistry(storage, 'bureau', 'agent-7').has(claim?.attemptToken ?? ''),
+    ).toBe(true);
+    const receipt = await mailbox.receipt(claim?.commandId ?? '');
+    expect(receipt?.state).toBe('claimed');
+    mailbox.dispose();
+  });
+
+  it('rejects a wait budget beyond the timer range', async () => {
+    const { mailbox } = createMailboxFixture();
+    await expect(mailbox.waitForAvailable({ timeoutMs: 2_147_483_648 })).rejects.toThrow(
+      /largest delay a timer can schedule/,
+    );
+    mailbox.dispose();
+  });
+
+  it('clears a long run of expired heads without reporting contention', async () => {
+    const { mailbox, clock } = createMailboxFixture({
+      commandTimeoutMs: 100,
+      generateId: createIdSource('c'),
+    });
+    for (let index = 0; index < 30; index += 1) {
+      await admitOne(mailbox, { idempotencyKey: `k-${index}` });
+    }
+    clock.advance(200);
+    const claim = await mailbox.claim();
+    expect(claim.status).toBe('empty');
+    const listed = await mailbox.list({ limit: 100, states: ['dead-lettered'] });
+    expect(listed).toHaveLength(30);
+    mailbox.dispose();
+  });
+
+  it('keeps the maintenance cursor when a pass fails part-way', async () => {
+    const storage = new MemoryStorage();
+    const { mailbox, clock } = createMailboxFixture({
+      storage,
+      maintenanceBatchSize: 1,
+      visibilityTimeoutMs: 500,
+      generateId: createIdSource('c'),
+    });
+    // More records than the page cap, so the pass has a cursor to store.
+    const first = await admitOne(mailbox, { idempotencyKey: 'k-0' });
+    for (let index = 1; index <= 201; index += 1) {
+      await admitOne(mailbox, { idempotencyKey: `k-${index}` });
+    }
+    const claim = await claimOne(mailbox);
+    expect(claim.commandId).toBe(first);
+    clock.advance(501);
+    // The reclaim's commit fails transiently on the first pass.
+    const original = storage.conditionalBatch.bind(storage);
+    let failed = false;
+    storage.conditionalBatch = async (
+      ...args: Parameters<MemoryStorage['conditionalBatch']>
+    ): Promise<boolean> => {
+      if (!failed) {
+        failed = true;
+        throw new Error('transient');
+      }
+      return original(...args);
+    };
+    await expect(mailbox.runMaintenance()).rejects.toThrow('transient');
+    // The retry must revisit the command it failed on rather than resume past it.
+    const report = await mailbox.runMaintenance();
+    expect(report.reclaimed).toBe(1);
+    const receipt = await mailbox.receipt(first);
+    expect(receipt?.state).toBe('accepted');
+    mailbox.dispose();
+  });
+
+  it('discards a terminal entry with a noncanonical timestamp instead of stalling retention', async () => {
+    const { mailbox, storage, clock } = createMailboxFixture({ terminalRetentionMs: 1_000 });
+    const commandId = await admitOne(mailbox);
+    const claim = await claimOne(mailbox);
+    clock.advance(100);
+    await mailbox.acknowledge({ commandId, attemptToken: claim.attemptToken });
+    // Over-padded: sorts before the canonical expired entry, parses as a far
+    // future instant, and would stop the sweep on every pass.
+    const prefix = KEYS.applicationCommandTerminalPrefix('bureau', 'agent-7');
+    const noncanonical = `${prefix}0000000000000099999:nope`;
+    await storage.put(noncanonical, encodeApplicationReadyEntry('nope'));
+    clock.advance(5_000);
+    const report = await mailbox.runMaintenance();
+    expect(report.retired).toBe(1);
+    expect(await storage.get(noncanonical)).toBeNull();
+    expect(await mailbox.receipt(commandId)).toBeNull();
+    mailbox.dispose();
+  });
+});
