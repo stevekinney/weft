@@ -53,6 +53,17 @@ describe('buildSchemaAliasTable', () => {
     }
   });
 
+  it('never aliases a recurring bare literal whose string content is JSON.stringify-escaped (quote or backslash)', () => {
+    // `JSON.stringify('a"b')` -> `"a\"b"`; `JSON.stringify('a\\b')` -> `"a\\\\b"`. Both are
+    // still just as cheap to repeat inline as an unescaped literal, so they must classify as
+    // trivial too, not get hoisted into a `__WeftSchema_...` alias.
+    for (const literal of [JSON.stringify('a"b'), JSON.stringify('a\\b')]) {
+      const occurrences: SchemaFragmentOccurrence[] = [{ tsType: literal }, { tsType: literal }];
+      const table = buildSchemaAliasTable(occurrences);
+      expect(table.size).toBe(0);
+    }
+  });
+
   it('produces a stable, deterministic alias name for the same emitted type across two calls (real hashString)', () => {
     const occurrences: SchemaFragmentOccurrence[] = [
       { tsType: '{ "x": number; }' },
