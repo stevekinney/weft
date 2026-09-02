@@ -2048,3 +2048,107 @@ describe('twelfth-round hardening', () => {
     mailbox.dispose();
   });
 });
+
+describe('thirteenth-round hardening', () => {
+  it('releases the attempt when the post-renewal dead-letter was done elsewhere', async () => {
+    const storage = new MemoryStorage();
+    const clock = createMailboxClock();
+    const { mailbox } = createMailboxFixture({
+      storage,
+      clock,
+      commandTimeoutMs: 1_000,
+      visibilityTimeoutMs: 10_000,
+    });
+    const other = createMailboxFixture({ storage, clock }).mailbox;
+    const commandId = await admitOne(mailbox);
+    const claim = await claimOne(mailbox);
+    const original = storage.conditionalBatch.bind(storage);
+    let batches = 0;
+    let racing = false;
+    storage.conditionalBatch = async (
+      ...args: Parameters<MemoryStorage['conditionalBatch']>
+    ): Promise<boolean> => {
+      if (racing) return original(...args);
+      batches += 1;
+      if (batches === 2) {
+        racing = true;
+        await other.runMaintenance();
+        racing = false;
+      }
+      const result = await original(...args);
+      if (batches === 1) clock.advance(1_000);
+      return result;
+    };
+
+    const renewal = await mailbox.renew({ commandId, attemptToken: claim.attemptToken });
+    expect(renewal.status).toBe('deadline-exceeded');
+    expect(claim.signal.aborted).toBe(true);
+    expect(attemptControllerRegistry(storage, 'bureau', 'agent-7').has(claim.attemptToken)).toBe(
+      false,
+    );
+    other.dispose();
+    mailbox.dispose();
+  });
+
+  it('returns false when a due-work read stalls and the wait is aborted', async () => {
+    const storage = new MemoryStorage();
+    const { mailbox } = createMailboxFixture({ storage });
+    await admitOne(mailbox);
+    const controller = new AbortController();
+    let stalled = false;
+    const originalGet = storage.get.bind(storage);
+    storage.get = (key: string): Promise<Uint8Array | null> => {
+      if (!stalled && key.startsWith('appcmd:')) {
+        stalled = true;
+        queueMicrotask(() => {
+          controller.abort();
+        });
+        return new Promise<Uint8Array | null>(() => {});
+      }
+      return originalGet(key);
+    };
+    expect(await mailbox.waitForAvailable({ timeoutMs: 10_000, signal: controller.signal })).toBe(
+      false,
+    );
+  });
+
+  it('returns false when a due-work read stalls and the mailbox is disposed', async () => {
+    const storage = new MemoryStorage();
+    const { mailbox } = createMailboxFixture({ storage });
+    await admitOne(mailbox);
+    let stalled = false;
+    const originalGet = storage.get.bind(storage);
+    storage.get = (key: string): Promise<Uint8Array | null> => {
+      if (!stalled && key.startsWith('appcmd:')) {
+        stalled = true;
+        queueMicrotask(() => {
+          mailbox.dispose();
+        });
+        return new Promise<Uint8Array | null>(() => {});
+      }
+      return originalGet(key);
+    };
+    expect(await mailbox.waitForAvailable({ timeoutMs: 10_000 })).toBe(false);
+  });
+
+  it('stops a cleanup wait when the mailbox is disposed during a stalled read', async () => {
+    const storage = new MemoryStorage();
+    const { mailbox } = createMailboxFixture({ storage });
+    const commandId = await admitOne(mailbox);
+    let stalled = false;
+    const originalGet = storage.get.bind(storage);
+    storage.get = (key: string): Promise<Uint8Array | null> => {
+      if (!stalled && key.startsWith('appcmd:')) {
+        stalled = true;
+        queueMicrotask(() => {
+          mailbox.dispose();
+        });
+        return new Promise<Uint8Array | null>(() => {});
+      }
+      return originalGet(key);
+    };
+    await expect(mailbox.awaitCleanup({ commandId, timeoutMs: 10_000 })).rejects.toThrow(
+      /disposed/,
+    );
+  });
+});

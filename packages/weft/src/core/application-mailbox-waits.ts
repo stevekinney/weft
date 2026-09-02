@@ -107,14 +107,13 @@ export async function waitForAvailableWork(
   let remaining = 0;
   do {
     // Aborting or disposal means `false`, and that outranks any observation —
-    // including one already in hand. A shutdown caller must never be told to
-    // start new work.
-    if (isAborted(disposal, options?.signal)) return false;
-    // Observe first, so the documented `timeoutMs: 0` default still performs one
-    // check rather than returning before looking at anything.
-    const due = await hasDueWork(runtime);
-    if (isAborted(disposal, options?.signal)) return false;
-    if (due) return observedInTime(timeoutMs, deadline, runtime.now());
+    // including one already in hand or one still in flight against stalled
+    // storage. A shutdown caller must never be told to start new work. Observe
+    // first, so the documented `timeoutMs: 0` default still performs one check
+    // rather than returning before looking at anything.
+    const observed = await raceAbort(() => hasDueWork(runtime), disposal, options?.signal);
+    if (observed.aborted || isAborted(disposal, options?.signal)) return false;
+    if (observed.value) return observedInTime(timeoutMs, deadline, runtime.now());
     // Clamp each sleep to what is left of the budget. An interval longer than the
     // remaining time would otherwise put the next observation past the bound the
     // caller asked for, turning a timeout into a late success.
@@ -167,15 +166,12 @@ export async function waitForCleanup(
     requireClockInstant(runtime.now()) + timeoutMs,
     'deadline',
   );
-  disposal.throwIfAborted();
-  // Every read races the caller's signal. A wait that is already aborted must
-  // not begin a storage read, and one aborted DURING a stalled remote read must
-  // not stay pending until that read returns; either way the abort surfaces as
-  // the signal's own reason, as `claim()` does for its request signal.
-  let latest = await readUnlessAborted(
-    () => readCleanupState(runtime, options.commandId),
-    options.signal,
-  );
+  // Every read races the caller's signal and the mailbox's disposal. A wait
+  // that is already aborted must not begin a storage read, and one aborted
+  // DURING a stalled remote read must not stay pending until that read returns;
+  // either way the abort surfaces as the signal's own reason, as `claim()` does
+  // for its request signal.
+  let latest = await readUnlessAborted(runtime, options.commandId, disposal, options.signal);
   // A terminal record with `cleanupPending: true` is already final: the mailbox
   // recorded that it stopped waiting for an abandoned attempt. Polling it would
   // burn the whole timeout on a value that can never change again.
@@ -191,39 +187,66 @@ export async function waitForCleanup(
     ) {
       break;
     }
-    latest = await readUnlessAborted(
-      () => readCleanupState(runtime, options.commandId),
-      options.signal,
-    );
+    latest = await readUnlessAborted(runtime, options.commandId, disposal, options.signal);
   }
   return latest;
 }
 
+/** The outcome of racing an in-flight observation against the abort signals. */
+type Raced<T> =
+  | { readonly aborted: false; readonly value: T }
+  | { readonly aborted: true; readonly reason: unknown };
+
 /**
- * Run a storage read unless the caller's signal is, or becomes, aborted.
+ * Run an observation unless the caller's signal or the mailbox's disposal is,
+ * or becomes, aborted while it is in flight.
  *
- * Rejects with the signal's reason. The read itself is not cancelled — storage
- * has no such contract — but the wait stops honouring it.
+ * A stalled remote read would otherwise hold an "abortable" wait open until
+ * storage answered. The read itself is not cancelled — storage has no such
+ * contract — but the wait stops honouring it.
  */
-async function readUnlessAborted<T>(
-  read: () => Promise<T>,
+function raceAbort<T>(
+  run: () => Promise<T>,
+  disposal: AbortSignal,
   signal: AbortSignal | undefined,
-): Promise<T> {
-  if (signal === undefined) return read();
-  signal.throwIfAborted();
-  const cleanup = new AbortController();
-  const aborted = new Promise<never>((_resolve, reject) => {
-    signal.addEventListener(
-      'abort',
-      () => {
-        reject(signal.reason as Error);
-      },
-      { once: true, signal: cleanup.signal },
-    );
-  });
-  try {
-    return await Promise.race([read(), aborted]);
-  } finally {
-    cleanup.abort();
+): Promise<Raced<T>> {
+  if (isAborted(disposal, signal)) {
+    return Promise.resolve({ aborted: true, reason: abortReason(disposal, signal) });
   }
+  // Kept to the fewest promise hops: the deterministic fake-timer tests drain a
+  // fixed number of microtask turns between ticks.
+  return new Promise<Raced<T>>((resolve, reject) => {
+    const cleanup = new AbortController();
+    const settle = (): void => {
+      cleanup.abort();
+      resolve({ aborted: true, reason: abortReason(disposal, signal) });
+    };
+    disposal.addEventListener('abort', settle, { once: true, signal: cleanup.signal });
+    signal?.addEventListener('abort', settle, { once: true, signal: cleanup.signal });
+    run()
+      .then((value) => {
+        cleanup.abort();
+        resolve({ aborted: false, value });
+      })
+      .catch((error: unknown) => {
+        cleanup.abort();
+        reject(error as Error);
+      });
+  });
+}
+
+function abortReason(disposal: AbortSignal, signal: AbortSignal | undefined): unknown {
+  return signal?.aborted === true ? (signal.reason as unknown) : (disposal.reason as unknown);
+}
+
+/** A cleanup-state read that rejects with the abort reason instead of outliving the wait. */
+async function readUnlessAborted(
+  runtime: MailboxRuntime,
+  commandId: string,
+  disposal: AbortSignal,
+  signal: AbortSignal | undefined,
+): Promise<ApplicationCommandCleanupResult> {
+  const raced = await raceAbort(() => readCleanupState(runtime, commandId), disposal, signal);
+  if (raced.aborted) throw raced.reason as Error;
+  return raced.value;
 }

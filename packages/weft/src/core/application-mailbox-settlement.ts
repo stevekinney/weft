@@ -113,14 +113,21 @@ export async function renewClaim(
     // deadline it was checked against. Reporting `renewed` then would tell the
     // claimant to keep going on work the contract already calls expired.
     if (runtime.now() >= transition.next.absoluteDeadlineAt) {
-      return {
-        status: 'deadline-exceeded',
-        receipt: await deadLetterRenewed(
-          runtime,
-          options.commandId,
-          toApplicationCommandReceipt(transition.next),
-        ),
-      };
+      const receipt = await deadLetterRenewed(
+        runtime,
+        options.commandId,
+        toApplicationCommandReceipt(transition.next),
+      );
+      // Whether this call dead-lettered the command or another actor got there
+      // first, the attempt is over: release its process-local registration on
+      // every exit from this path, not only the one that committed.
+      releaseAttemptController(
+        runtime,
+        options.attemptToken,
+        'The application mailbox dead-lettered this command at its absolute deadline.',
+        options.commandId,
+      );
+      return { status: 'deadline-exceeded', receipt };
     }
     return {
       status: 'renewed',
