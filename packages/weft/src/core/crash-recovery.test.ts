@@ -21,6 +21,7 @@ import {
 import type { WorkflowState, WorkflowStatus } from './types.ts';
 import { activity } from './types.ts';
 import { workflow } from './types/workflow-function.ts';
+import { DEFAULT_WORKFLOW_VERSION, VersionMismatchError } from './versioning.ts';
 
 /** Drain microtasks so fire-and-forget work completes. */
 async function flush(): Promise<void> {
@@ -37,7 +38,12 @@ function createStoredWorkflowState(
     type: workflowType,
     status,
     input: null,
-    versionTuple: { workflowVersion: '1' },
+    // Matches the default an unversioned `workflow({ name })` registration now
+    // records (WFT-5 fixed `registration.ts` to use `DEFAULT_WORKFLOW_VERSION`
+    // instead of the literal `'1'` it previously defaulted to), so a seeded
+    // fixture recovers against an unversioned re-registration without a
+    // spurious version mismatch.
+    versionTuple: { workflowVersion: DEFAULT_WORKFLOW_VERSION },
     createdAt: 1,
     updatedAt: 1,
   };
@@ -345,6 +351,54 @@ describe('crash recovery', () => {
     }
 
     engine[Symbol.dispose]();
+  });
+
+  // documentation/guides/migration.md ("Unreleased" -> "Unversioned workflow
+  // registration now defaults to '0.0.0'") documents the exact hazard this
+  // pins: a workflow started unversioned under a pre-WFT-5 release stores the
+  // old literal `'1'` default. Recovering it against a still-unversioned
+  // re-registration on this release now compares stored `'1'` against
+  // registered `DEFAULT_WORKFLOW_VERSION` ('0.0.0') and must reject as a
+  // version mismatch rather than silently resuming — this is the case
+  // `createStoredWorkflowState`'s own default (now `DEFAULT_WORKFLOW_VERSION`)
+  // no longer exercises now that it matches the current default instead of
+  // the pre-upgrade literal.
+  it('rejects recovery of a pre-WFT-5 unversioned workflow (stored version "1") against a still-unversioned re-registration', async () => {
+    const storage = new MemoryStorage();
+    const workflowId = 'pre-wft5-unversioned';
+    const workflowType = 'pre-wft5-unversioned-workflow';
+
+    // An explicit `version: '1'` registration produces exactly the stored
+    // state a pre-WFT-5 *unversioned* registration would have produced (the
+    // stored `versionTuple.workflowVersion` value is what matters to
+    // recovery, not which registration option produced it) — so parking a
+    // workflow against it, with a real checkpoint on disk, stands in for "a
+    // workflow started unversioned under an older release".
+    const engine1 = new Engine({ storage });
+    engine1.register(
+      workflow({ name: workflowType, version: '1' }).execute(async function* (ctx) {
+        yield* ctx.waitForSignal<string>('go');
+        return 'should-not-resume';
+      }),
+    );
+    await engine1.start(workflowType, null, { id: workflowId });
+    await flush();
+    engine1[Symbol.dispose]();
+
+    const engine2 = new Engine({ storage });
+    // Still unversioned on this release -> registers under DEFAULT_WORKFLOW_VERSION.
+    engine2.register(
+      workflow({ name: workflowType }).execute(async function* (ctx) {
+        yield* ctx.waitForSignal<string>('go');
+        return 'should-not-resume';
+      }),
+    );
+
+    await expect(engine2.recoverAll({ versionMismatchPolicy: 'throw' })).rejects.toBeInstanceOf(
+      VersionMismatchError,
+    );
+
+    engine2[Symbol.dispose]();
   });
 
   it('resumes a multi-step workflow without re-executing completed steps', async () => {
@@ -1175,7 +1229,7 @@ describe('crash recovery', () => {
     await storage.put(
       KEYS.checkpoint('wf-old-accum'),
       serializeCheckpoint({
-        ...createCheckpoint('wf-old-accum', '1'),
+        ...createCheckpoint('wf-old-accum', DEFAULT_WORKFLOW_VERSION),
         step: 2,
         accumulatedResults: [[0, 'old-result']],
       }),

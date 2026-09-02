@@ -5,6 +5,25 @@ This is the canonical location for per-release migration guidance. When a releas
 > [!NOTE]
 > Weft is pre-1.0, so breaking changes can land between releases without the stability guarantees a 1.0 line would carry. Each release that ships one documents its migration steps here, organized by release.
 
+## Unreleased
+
+### `buildWorkerManifestFromRegistry()` digest values changed (WFT-5)
+
+`contractHash` and `workflowRevision` on `WorkerWorkflowContract`, and `contractHash` on `WorkerActivityContract`, now route through the canonical `contractHash()`/`deriveWorkflowRevision()`/`activityContractHash()` functions (`core/contract`) instead of `registry-contract-builder.ts`'s own ad hoc hashing. The formula folds in a `contractVersion` domain separator the old one never had, so the digest **strings** for an otherwise-unchanged registration differ from prior 0.23.x output.
+
+No action required unless you pin literal digest strings in your own tests or fixtures — regenerate them against the new output. Nothing decodes or replays by recomputing an old digest and comparing it to a stored value using this formula (`WorkerExecutionIdentity`/task-ledger provenance records store already-computed digest strings as immutable history), so this is not a persisted-data schema change and does not require a fresh store.
+
+### Unversioned workflow registration now defaults to `'0.0.0'`
+
+`engine.register()` previously defaulted an unversioned workflow's stored `version` to the literal `'1'`. It now defaults to `DEFAULT_WORKFLOW_VERSION` (`'0.0.0'`), matching what `weft version:check`, the internal worker realm, and `RemoteWorkerOptions` already assumed the unversioned default was.
+
+If you have a workflow still running (or parked, pending recovery) that was started unversioned under an older release, its stored version is `'1'`. Recovering it against a still-unversioned re-registration on this release now compares stored `'1'` against registered `'0.0.0'` and is rejected as a version mismatch (`VersionMismatchError`). Before upgrading, either:
+
+- let those in-flight runs drain (complete or terminate) on the prior release first, or
+- pin an explicit `version: '1'` on the affected `workflow({ ... })` registration until they have drained, then remove the pin.
+
+New, freshly started unversioned workflows are unaffected — they simply record `'0.0.0'` instead of `'1'`.
+
 ## Migrating from 0.2.x or 0.1.x to 0.3.0
 
 ### Remove built-in multi-tenancy

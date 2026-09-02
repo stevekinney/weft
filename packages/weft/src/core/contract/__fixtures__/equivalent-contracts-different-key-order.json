@@ -1,0 +1,88 @@
+{
+  "a": {
+    "name": "checkout",
+    "workflowVersion": "2.1.0",
+    "description": "Runs the checkout flow.",
+    "tags": ["commerce", "billing"],
+    "inputSchema": {
+      "type": "object",
+      "properties": { "cartId": { "type": "string" } },
+      "required": ["cartId"]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": { "orderId": { "type": "string" } },
+      "required": ["orderId"]
+    },
+    "signals": {
+      "cancel": {
+        "inputSchema": { "type": "object", "properties": { "reason": { "type": "string" } } }
+      },
+      "approve": {}
+    },
+    "updates": {
+      "applyDiscount": {
+        "inputSchema": { "type": "object", "properties": { "code": { "type": "string" } } },
+        "outputSchema": { "type": "object", "properties": { "applied": { "type": "boolean" } } }
+      }
+    },
+    "queries": {
+      "status": { "outputSchema": { "type": "string" } }
+    },
+    "activities": {
+      "charge": {
+        "inputSchema": { "type": "object", "properties": { "amount": { "type": "number" } } },
+        "outputSchema": { "type": "object", "properties": { "id": { "type": "string" } } }
+      },
+      "notify": {
+        "inputSchema": { "type": "object", "properties": { "to": { "type": "string" } } }
+      }
+    },
+    "finalizer": {
+      "inputSchema": { "type": "object", "properties": { "orderId": { "type": "string" } } }
+    }
+  },
+  "b": {
+    "finalizer": {
+      "inputSchema": { "type": "object", "properties": { "orderId": { "type": "string" } } }
+    },
+    "activities": {
+      "notify": {
+        "inputSchema": { "type": "object", "properties": { "to": { "type": "string" } } }
+      },
+      "charge": {
+        "outputSchema": { "type": "object", "properties": { "id": { "type": "string" } } },
+        "inputSchema": { "type": "object", "properties": { "amount": { "type": "number" } } }
+      }
+    },
+    "queries": {
+      "status": { "outputSchema": { "type": "string" } }
+    },
+    "updates": {
+      "applyDiscount": {
+        "outputSchema": { "type": "object", "properties": { "applied": { "type": "boolean" } } },
+        "inputSchema": { "type": "object", "properties": { "code": { "type": "string" } } }
+      }
+    },
+    "signals": {
+      "approve": {},
+      "cancel": {
+        "inputSchema": { "type": "object", "properties": { "reason": { "type": "string" } } }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": { "orderId": { "type": "string" } },
+      "required": ["orderId"]
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": { "cartId": { "type": "string" } },
+      "required": ["cartId"]
+    },
+    "tags": ["billing", "commerce"],
+    "description": "Runs the checkout flow.",
+    "workflowVersion": "2.1.0",
+    "name": "checkout"
+  }
+}

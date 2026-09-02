@@ -1,8 +1,15 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
+import {
+  activityContractHash,
+  buildWorkflowContract,
+  contractHash,
+  deriveWorkflowRevision,
+} from '../../core/contract/index.ts';
 import { Engine } from '../../core/engine.ts';
-import { activity, workflow } from '../../core/types.ts';
+import { activity, query, signal, update, workflow } from '../../core/types.ts';
+import { definitionSchemaToJsonSchema } from '../../core/types/definition-schema-to-json.ts';
 import { REMOTE_WORKER_PROTOCOL_VERSION } from '../protocol.ts';
 import {
   buildWorkerManifestFromRegistry,
@@ -224,6 +231,225 @@ describe('buildWorkerManifestFromRegistry', () => {
     });
 
     expect(Object.keys(manifest.workflows['checkout']?.activities ?? {})).toEqual(['charge']);
+  });
+
+  it('preserves an activity literally named __proto__ as an own property, not a prototype mutation (WFT-5)', async () => {
+    engine = createEngine();
+    engine.register(workflow({ name: 'checkout' }).execute(async function* () {}));
+    engine.register(activity({ name: '__proto__', execute: async () => true }));
+
+    // Computed-key syntax, not `{ checkout: ['__proto__'] }` object-literal
+    // syntax for the OUTER key below — that part is a plain "checkout" key,
+    // so literal syntax is fine there. The activity NAME is just a string
+    // list entry, not a property key, so no special-casing applies to it.
+    const manifest = await buildWorkerManifestFromRegistry(engine, {
+      workflows: { checkout: ['__proto__'] },
+      deployment: DEPLOYMENT,
+      runtime: RUNTIME,
+    });
+
+    const activities = manifest.workflows['checkout']?.activities;
+    expect(Object.prototype.hasOwnProperty.call(activities, '__proto__')).toBe(true);
+    expect(Object.keys(activities ?? {})).toEqual(['__proto__']);
+    expect(activities?.['__proto__']?.contractHash).toMatch(/^sha256:[0-9a-f]{64}$/);
+  });
+
+  it('preserves a workflow literally named __proto__ as an own property in the manifest.workflows map (WFT-5)', async () => {
+    engine = createEngine();
+    engine.register(workflow({ name: '__proto__' }).execute(async function* () {}));
+
+    // `{ __proto__: [] }` object-literal syntax would set the PROTOTYPE of
+    // this options object rather than create an own property — computed-key
+    // syntax is required to actually exercise a workflow type named
+    // `__proto__` here.
+    const workflows: Record<string, readonly string[]> = { ['__proto__']: [] };
+    const manifest = await buildWorkerManifestFromRegistry(engine, {
+      workflows,
+      deployment: DEPLOYMENT,
+      runtime: RUNTIME,
+    });
+
+    expect(Object.prototype.hasOwnProperty.call(manifest.workflows, '__proto__')).toBe(true);
+    expect(Object.keys(manifest.workflows)).toEqual(['__proto__']);
+  });
+
+  it('folds registered signals, updates, and queries into contractHash (WFT-5)', async () => {
+    async function contractHashFor(withMessages: boolean): Promise<string> {
+      const localEngine = createEngine();
+      try {
+        const definition = withMessages
+          ? workflow({ name: 'checkout' })
+              .signals({ cancel: signal('cancel') })
+              .updates({
+                rename: update('rename', { inputSchema: z.object({ name: z.string() }) }),
+              })
+              .queries({
+                status: query('status', { outputSchema: z.object({ state: z.string() }) }),
+              })
+              .execute(async function* () {})
+          : workflow({ name: 'checkout' }).execute(async function* () {});
+        localEngine.register(definition);
+        const manifest = await buildWorkerManifestFromRegistry(localEngine, {
+          workflows: { checkout: [] },
+          deployment: DEPLOYMENT,
+          runtime: RUNTIME,
+        });
+        return manifest.workflows['checkout']?.contractHash ?? '';
+      } finally {
+        localEngine[Symbol.dispose]();
+      }
+    }
+
+    expect(await contractHashFor(true)).not.toBe(await contractHashFor(false));
+  });
+
+  it('routes contractHash/workflowRevision/activity contractHash through the core/contract functions directly (unification)', async () => {
+    const chargeInputSchema = z.object({ amount: z.number() });
+    const chargeOutputSchema = z.object({ charged: z.boolean() });
+
+    engine = createEngine();
+    engine.register(
+      workflow({ name: 'checkout', version: '2.1.0' })
+        .signals({ cancel: signal('cancel') })
+        .execute(async function* () {}),
+    );
+    engine.register(
+      activity({
+        name: 'charge',
+        execute: async () => ({ charged: true }),
+        inputSchema: chargeInputSchema,
+        outputSchema: chargeOutputSchema,
+      }),
+    );
+
+    const manifest = await buildWorkerManifestFromRegistry(engine, {
+      workflows: { checkout: ['charge'] },
+      deployment: DEPLOYMENT,
+      runtime: RUNTIME,
+    });
+
+    const workflowContract = manifest.workflows['checkout'];
+    const activityContract = workflowContract?.activities['charge'];
+
+    // Built independently from the same schemas, via the same JSON Schema
+    // converter the registry uses — not by reading back the manifest's own
+    // output — so this proves the manifest's digests equal an equivalent
+    // hand-built WorkflowContract's, not merely that some hash came out.
+    const equivalentContract = {
+      name: 'checkout',
+      workflowVersion: '2.1.0',
+      signals: { cancel: {} },
+      activities: {
+        charge: {
+          inputSchema: definitionSchemaToJsonSchema(chargeInputSchema, 'input'),
+          outputSchema: definitionSchemaToJsonSchema(chargeOutputSchema, 'output'),
+        },
+      },
+    };
+
+    expect(workflowContract?.contractHash).toBe(await contractHash(equivalentContract));
+    expect(workflowContract?.workflowRevision).toBe(
+      await deriveWorkflowRevision(equivalentContract),
+    );
+    expect(activityContract?.contractHash).toBe(
+      await activityContractHash(equivalentContract.activities.charge),
+    );
+  });
+
+  it('folds a registered definition-level finalizer into contractHash, agreeing with buildWorkflowContract(definition) (WFT-5)', async () => {
+    const cleanup = activity({
+      name: 'cleanup',
+      inputSchema: z.object({ sandboxId: z.string() }),
+      outputSchema: z.boolean(),
+      execute: async () => true,
+    });
+    const definition = workflow({ name: 'checkout', finalizer: cleanup }).execute(
+      async function* () {},
+    );
+
+    engine = createEngine();
+    engine.register(definition);
+
+    const manifest = await buildWorkerManifestFromRegistry(engine, {
+      workflows: { checkout: [] },
+      deployment: DEPLOYMENT,
+      runtime: RUNTIME,
+    });
+
+    const directHash = await contractHash(buildWorkflowContract(definition));
+    expect(manifest.workflows['checkout']?.contractHash).toBe(directHash);
+  });
+
+  it('gives a registered finalizer a different contractHash than an otherwise-identical registration with no finalizer (WFT-5)', async () => {
+    async function contractHashFor(withFinalizer: boolean): Promise<string> {
+      const localEngine = createEngine();
+      try {
+        const cleanup = activity({
+          name: 'cleanup',
+          inputSchema: z.object({ sandboxId: z.string() }),
+          execute: async () => {},
+        });
+        const definition = withFinalizer
+          ? workflow({ name: 'checkout', finalizer: cleanup }).execute(async function* () {})
+          : workflow({ name: 'checkout' }).execute(async function* () {});
+        localEngine.register(definition);
+        const manifest = await buildWorkerManifestFromRegistry(localEngine, {
+          workflows: { checkout: [] },
+          deployment: DEPLOYMENT,
+          runtime: RUNTIME,
+        });
+        return manifest.workflows['checkout']?.contractHash ?? '';
+      } finally {
+        localEngine[Symbol.dispose]();
+      }
+    }
+
+    expect(await contractHashFor(true)).not.toBe(await contractHashFor(false));
+  });
+
+  it('resolves a qualified activity through the workflow-scoped registry first, matching runtime dispatch (WFT-5)', async () => {
+    engine = createEngine();
+    // A global "charge" with one schema...
+    engine.register(
+      activity({
+        name: 'charge',
+        execute: async () => ({ ok: true }),
+        inputSchema: z.object({ amountCents: z.number() }),
+      }),
+    );
+    // ...and a workflow declaring its OWN "charge" activity (via
+    // `.activities({...})`, installed into the per-workflow registry) with a
+    // differently-shaped schema. Runtime dispatch resolves the workflow-scoped
+    // one first (see `activity-resolution.ts`), so the manifest builder must too.
+    const definition = workflow({ name: 'checkout' })
+      .activities({
+        charge: activity({
+          name: 'charge',
+          execute: async () => ({ ok: true }),
+          inputSchema: z.object({ amountUsd: z.string() }),
+        }),
+      })
+      .execute(async function* () {});
+    engine.register(definition);
+
+    const manifest = await buildWorkerManifestFromRegistry(engine, {
+      workflows: { checkout: ['charge'] },
+      deployment: DEPLOYMENT,
+      runtime: RUNTIME,
+    });
+
+    const scopedContract = {
+      inputSchema: definitionSchemaToJsonSchema(z.object({ amountUsd: z.string() }), 'input'),
+    };
+    const globalContract = {
+      inputSchema: definitionSchemaToJsonSchema(z.object({ amountCents: z.number() }), 'input'),
+    };
+
+    const scopedHash = await activityContractHash(scopedContract);
+    const globalHash = await activityContractHash(globalContract);
+    expect(scopedHash).not.toBe(globalHash);
+
+    expect(manifest.workflows['checkout']?.activities['charge']?.contractHash).toBe(scopedHash);
   });
 
   it('defaults sdkVersion and protocolVersion, and accepts explicit overrides', async () => {

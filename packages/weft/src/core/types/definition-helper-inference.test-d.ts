@@ -9,6 +9,7 @@
 
 import { z } from 'zod';
 
+import { Engine } from '../engine/index.ts';
 import { activity, type ActivityCallable } from './activity.ts';
 import {
   query,
@@ -231,3 +232,31 @@ const _check_activity_transform_output: Equals<
   ActivityCallable<{ x: number }, number, 'project'>
 > = true;
 void _check_activity_transform_output;
+
+// ---------------------------------------------------------------------------
+// Literal-import inference through `engine.register()` / `engine.start()` /
+// `WorkflowHandle.result()` (WFT-5 regression pin — no new functionality;
+// proves `core/contract`'s changes do not narrow or widen this inference).
+// ---------------------------------------------------------------------------
+
+const literalImportWorkflow = workflow({ name: 'literalImportRegressionCheck' }).execute(
+  async function* (_ctx, input: { orderId: string }) {
+    return { total: input.orderId.length };
+  },
+);
+
+declare const literalImportEngine: Engine;
+const literalImportRegistered = literalImportEngine.register(literalImportWorkflow);
+const literalImportHandlePromise = literalImportRegistered.start('literalImportRegressionCheck', {
+  orderId: 'ord_123',
+});
+const _check_literal_import_result: Equals<
+  Awaited<ReturnType<Awaited<typeof literalImportHandlePromise>['result']>>,
+  { total: number }
+> = true;
+void _check_literal_import_result;
+
+// Input inference flows from the same literally-imported definition: a wrong
+// input shape is a type error, not a silent `unknown` widening.
+// @ts-expect-error: { orderId: string } expected, { total: number } given.
+void literalImportRegistered.start('literalImportRegressionCheck', { total: 1 });

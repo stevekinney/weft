@@ -58,6 +58,8 @@ void checkout;
 
 See [the workflows guide](../guides/workflows.md) for usage patterns and motivation.
 
+For build tooling that needs a workflow's normalized public contract — the same representation `weft codegen` emits types from — see `buildWorkflowContract()`, `normalizeWorkflowContract()`, and `contractHash()` in [the types reference](./types.md#workflowcontract), and [Revision Identity](../guides/workflow-versioning.md#revision-identity) for how `contractHash` and `revision` differ.
+
 ## Messages
 
 ```ts
