@@ -60,7 +60,10 @@ import {
   APPLICATION_MAILBOX_RECORD_VERSION,
   isApplicationCommandTerminalState,
 } from './application-mailbox-types.ts';
-import type { ValidatedCommandInput } from './application-mailbox-validation.ts';
+import {
+  requireDerivedInstant,
+  type ValidatedCommandInput,
+} from './application-mailbox-validation.ts';
 import type { JSONValue } from './json.ts';
 
 export {
@@ -89,7 +92,11 @@ export function createAdmittedCommandRecord(
     readonly now: number;
   },
 ): ApplicationCommandAccepted | ApplicationCommandAvailable {
-  const availableAt = context.now + input.availableAfterMs;
+  const availableAt = requireDerivedInstant(context.now + input.availableAfterMs, 'availableAt');
+  const absoluteDeadlineAt = requireDerivedInstant(
+    context.now + input.commandTimeoutMs,
+    'absoluteDeadlineAt',
+  );
   const base = {
     recordVersion: APPLICATION_MAILBOX_RECORD_VERSION,
     namespace: context.namespace,
@@ -107,7 +114,7 @@ export function createAdmittedCommandRecord(
     causation: input.causation,
     acceptedAt: context.now,
     availableAt,
-    absoluteDeadlineAt: context.now + input.commandTimeoutMs,
+    absoluteDeadlineAt,
     maxAttempts: input.maxAttempts,
     visibilityTimeoutMs: input.visibilityTimeoutMs,
     generation: 0,
@@ -336,6 +343,12 @@ export function requestCommandCancellation(
 ): ApplicationMailboxTransition<ApplicationCommandCancelling | ApplicationCommandTerminalRecord> {
   const live = nonTerminalCommandRecord(record);
   if (live === null) return rejectedTransition('already-terminal');
+  // The deadline outranks cancellation. Otherwise the same expired command gets a
+  // different terminal disposition depending only on whether a cancellation or a
+  // maintenance pass happened to win the race, which contradicts the state
+  // machine's rule that any non-terminal command past its deadline is
+  // dead-lettered.
+  if (options.now >= live.absoluteDeadlineAt) return rejectedTransition('deadline-exceeded');
   if (live.state === 'cancellation-requested') return rejectedTransition('not-leased');
   if (live.state === 'claimed') {
     return succeededTransition({

@@ -8,8 +8,8 @@
  * ordinary control flow a caller must branch on. Exceptions are reserved for
  * caller mistakes (`ApplicationCommandValidationError`) and corrupt persisted
  * state (`PersistedDataCorruptError`). Second, every read is non-consuming:
- * `receipt`, `list`, `capacity`, and `observe` never claim, start, or advance
- * work.
+ * `receipt`, `list`, `capacity`, and `cleanupState` never claim, start, or
+ * advance work.
  *
  * @module core/application-mailbox-contract
  */
@@ -110,6 +110,14 @@ export type ApplicationMailboxOptions = {
   readonly terminalRetentionMs?: number | undefined;
   /** Maximum bytes an inline payload may encode to. Default 262144. */
   readonly maxInlinePayloadBytes?: number | undefined;
+  /**
+   * How many command records one maintenance scan page reads. Default 500.
+   *
+   * A pass walks the whole keyspace in pages of this size, up to a bounded page
+   * count, then hands its cursor to the next pass. Lower it on a constrained
+   * runtime that cannot afford a large scan per call.
+   */
+  readonly maintenanceBatchSize?: number | undefined;
   /** Injected clock. Defaults to `Date.now`. */
   readonly now?: (() => number) | undefined;
   /** Injected identifier source, for deterministic tests. Defaults to `crypto.randomUUID`. */

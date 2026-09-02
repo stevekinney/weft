@@ -28,7 +28,10 @@ import { loadCommand, loadDeliveryHead } from './application-mailbox-storage.ts'
 import { recoverExpiredCommand } from './application-mailbox-transitions-recovery.ts';
 import { claimWaitingCommand } from './application-mailbox-transitions.ts';
 import type { ApplicationCommandRecord } from './application-mailbox-types.ts';
-import { requireGeneratedIdentifier } from './application-mailbox-validation.ts';
+import {
+  requireClockInstant,
+  requireGeneratedIdentifier,
+} from './application-mailbox-validation.ts';
 import { computePayloadDigest } from './application-payload-digest.ts';
 import { PersistedDataCorruptError } from './persisted-data-incompatible-error.ts';
 
@@ -77,11 +80,26 @@ function isUndeliverable(loaded: LoadedCommandRecord | null): boolean {
  */
 async function discardOrphanedEntry(
   runtime: MailboxRuntime,
-  head: { readonly key: string; readonly bytes: Uint8Array },
+  head: { readonly key: string; readonly bytes: Uint8Array; readonly commandId: string },
+  observed: LoadedCommandRecord | null,
 ): Promise<void> {
+  // Fence on the COMMAND record as well as the index entry. The entry's value is
+  // just the command id and never changes, so a compare-and-swap on it alone is
+  // an ABA hazard: this reader sees the entry, another consumer claims the
+  // command, maintenance reclaims the lease and re-adds a byte-identical entry,
+  // and this stale delete then removes a newly valid one. The record would stay
+  // `accepted`/`available` with no index entry, and because maintenance treats
+  // both as waiting it would never restore it — the command would be lost from
+  // the FIFO permanently.
   await storageConditionalBatch(
     runtime.storage,
-    [{ key: head.key, expectedValue: head.bytes }],
+    [
+      { key: head.key, expectedValue: head.bytes },
+      {
+        key: runtime.keys.command(head.commandId),
+        expectedValue: observed === null ? null : observed.bytes,
+      },
+    ],
     [{ type: 'delete', key: head.key }],
   );
 }
@@ -133,7 +151,7 @@ async function resolveDeliverableHead(
   if (head === null) return { status: 'empty' };
   const loaded = await loadCommand(runtime.storage, runtime.keys, head.commandId);
   if (loaded === null || isUndeliverable(loaded)) {
-    await discardOrphanedEntry(runtime, head);
+    await discardOrphanedEntry(runtime, head, loaded);
     return { status: 'retry' };
   }
   // The deadline outranks availability, and the order matters. A head in retry
@@ -149,6 +167,34 @@ async function resolveDeliverableHead(
     return { status: 'held', availableAt: loaded.record.availableAt };
   }
   return { status: 'claimable', loaded };
+}
+
+/**
+ * Take ownership of a freshly committed attempt and return its abort signal.
+ *
+ * Ownership and the disposal check happen in one synchronous step. Doing this in
+ * the caller's `await` continuation instead would leave a window where
+ * `dispose()` sees no owned attempt and the caller still receives a live signal
+ * nothing can ever reach.
+ */
+function registerAttemptController(
+  runtime: MailboxRuntime,
+  attemptToken: string,
+  requestSignal: AbortSignal | undefined,
+): AbortController {
+  const controller = new AbortController();
+  if (runtime.adoptAttempt(attemptToken)) {
+    runtime.attemptControllers.set(attemptToken, controller);
+  } else {
+    controller.abort(new Error('The application mailbox was disposed while this claim committed.'));
+  }
+  // An abort that raced the commit still has to reach the caller. The lease is
+  // durable either way, but handing back a live signal for a request the caller
+  // already abandoned would hide that from them.
+  if (requestSignal?.aborted === true && !controller.signal.aborted) {
+    controller.abort(new Error('The claim request was aborted while this claim committed.'));
+  }
+  return controller;
 }
 
 /**
@@ -170,41 +216,52 @@ export async function claimNextCommand(
     if (head.status === 'empty') return { status: 'empty' };
     if (head.status === 'held') return { status: 'held', availableAt: head.availableAt };
     if (head.status === 'retry') continue;
-    const loaded = head.loaded;
-    const payload = await verifyClaimedPayload(runtime, loaded.record);
-    const attemptToken = requireGeneratedIdentifier(runtime.generateId(), 'attemptToken');
-    const transition = claimWaitingCommand(loaded.record, { now, attemptToken });
-    if (!transition.ok) continue;
-    const committed = await commitCommandTransition(runtime, {
-      previous: loaded.record,
-      expectedBytes: loaded.bytes,
-      next: transition.next,
-      now,
-    });
-    if (!committed) continue;
-    const controller = new AbortController();
-    // Disposal may have run while the commit was in flight. Registering an
-    // un-aborted controller now would hand back a live claim from a disposed
-    // mailbox that no later `dispose()` could ever reach.
-    if (runtime.isDisposed()) {
-      controller.abort(
-        new Error('The application mailbox was disposed while this claim committed.'),
-      );
-    } else {
-      runtime.attemptControllers.set(attemptToken, controller);
-    }
-    return {
-      status: 'claimed',
-      claim: {
-        receipt: toApplicationCommandReceipt(transition.next),
-        payload,
-        attemptToken,
-        attempt: transition.next.attempt,
-        visibilityExpiresAt: transition.next.visibilityExpiresAt,
-        absoluteDeadlineAt: transition.next.absoluteDeadlineAt,
-        signal: controller.signal,
-      },
-    };
+    const claim = await leaseHead(runtime, head.loaded, options?.signal);
+    if (claim !== null) return claim;
   }
   throw new ApplicationMailboxContentionError('claim', null);
+}
+
+/**
+ * Verify the payload and commit the lease, or return `null` when the
+ * compare-and-swap lost and the caller should look at the head again.
+ */
+async function leaseHead(
+  runtime: MailboxRuntime,
+  loaded: LoadedCommandRecord,
+  requestSignal: AbortSignal | undefined,
+): Promise<ApplicationMailboxClaimResult | null> {
+  const payload = await verifyClaimedPayload(runtime, loaded.record);
+  // Digest verification and the reads before it are asynchronous, so re-read the
+  // clock: a claim that began just inside the deadline can cross it while the
+  // payload is being verified, and committing on the stale reading would hand out
+  // exactly the expired work the deadline check exists to prevent.
+  const committedAt = requireClockInstant(runtime.now());
+  // The caller may have abandoned the request during those awaits. Committing a
+  // lease nobody is waiting for leaves durable work parked until maintenance
+  // reclaims it.
+  requestSignal?.throwIfAborted();
+  const attemptToken = requireGeneratedIdentifier(runtime.generateId(), 'attemptToken');
+  const transition = claimWaitingCommand(loaded.record, { now: committedAt, attemptToken });
+  if (!transition.ok) return null;
+  const committed = await commitCommandTransition(runtime, {
+    previous: loaded.record,
+    expectedBytes: loaded.bytes,
+    next: transition.next,
+    now: committedAt,
+  });
+  if (!committed) return null;
+  const controller = registerAttemptController(runtime, attemptToken, requestSignal);
+  return {
+    status: 'claimed',
+    claim: {
+      receipt: toApplicationCommandReceipt(transition.next),
+      payload,
+      attemptToken,
+      attempt: transition.next.attempt,
+      visibilityExpiresAt: transition.next.visibilityExpiresAt,
+      absoluteDeadlineAt: transition.next.absoluteDeadlineAt,
+      signal: controller.signal,
+    },
+  };
 }

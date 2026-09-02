@@ -285,7 +285,7 @@ export async function commitMailboxTransition(
     // report success, so `admit()` would hand back a durable-looking receipt
     // that never existed here. Verify the first commit landed where it belongs;
     // one read per mailbox catches the misconfiguration at its first use.
-    await assertSinkCommittedLocally(storage, plan);
+    await assertSinkCommittedLocally(storage, events, plan);
     return true;
   } catch (error) {
     // The feed retries its own sequence allocation internally and only throws
@@ -304,19 +304,29 @@ export async function commitMailboxTransition(
  * commits to the right place once will keep doing so, and a misconfiguration is
  * a construction-time mistake that shows up on the very first commit.
  */
-const VERIFIED_SINK_BACKENDS = new WeakSet<Storage>();
+const VERIFIED_SINK_BACKENDS = new WeakMap<ApplicationMailboxEventSink, WeakSet<Storage>>();
 
 async function assertSinkCommittedLocally(
   storage: Storage,
+  events: ApplicationMailboxEventSink,
   plan: MailboxCommitPlan,
 ): Promise<void> {
-  if (VERIFIED_SINK_BACKENDS.has(storage)) return;
+  // Keyed by the sink AND the backend. Keying by backend alone would let one
+  // correctly configured mailbox mark a store verified, after which a second
+  // mailbox on the same store with a feed over a DIFFERENT store would skip the
+  // check entirely and report durable-looking admissions that never landed here.
+  let verified = VERIFIED_SINK_BACKENDS.get(events);
+  if (verified === undefined) {
+    verified = new WeakSet();
+    VERIFIED_SINK_BACKENDS.set(events, verified);
+  }
+  if (verified.has(storage)) return;
   if ((await storage.get(plan.verifyKey)) === null) {
     throw new Error(
       'The configured application mailbox event sink committed to a different storage backend than the mailbox. Build the fleet event feed over the same Storage instance the mailbox uses.',
     );
   }
-  VERIFIED_SINK_BACKENDS.add(storage);
+  verified.add(storage);
 }
 
 /**

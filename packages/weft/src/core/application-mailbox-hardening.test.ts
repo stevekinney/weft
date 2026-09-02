@@ -15,10 +15,14 @@ import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import {
   advanceTimersByTime,
+  flushMicrotasks,
   restoreRealTimers,
   useFakeTimers,
 } from '../testing/fake-timers.test-support.ts';
-import { MAILBOX_MAINTENANCE_SCAN_LIMIT } from './application-mailbox-internals.ts';
+import {
+  attemptControllerRegistry,
+  MAILBOX_MAINTENANCE_MAX_PAGES,
+} from './application-mailbox-internals.ts';
 import { ApplicationCommandValidationError } from './application-mailbox-validation.ts';
 import {
   admitOne,
@@ -29,6 +33,7 @@ import {
   createMailboxFixture,
   RecordingEventSink,
 } from './application-mailbox.test-support.ts';
+import { computePayloadDigest } from './application-payload-digest.ts';
 
 describe('claiming past the absolute deadline', () => {
   it('refuses to lease a command whose deadline passed, and dead-letters it instead', async () => {
@@ -89,9 +94,11 @@ describe('claiming past the absolute deadline', () => {
 
 describe('maintenance over a mailbox larger than one scan page', () => {
   it('reaches due work beyond the first page', async () => {
-    const total = MAILBOX_MAINTENANCE_SCAN_LIMIT + 25;
+    const total = 120;
     const { mailbox, clock } = createMailboxFixture({
       maxBacklog: total + 10,
+      // Small pages, so the mailbox spans many of them.
+      maintenanceBatchSize: 10,
       // Deterministic ids that sort in a different order than admission, so the
       // due records really are spread across pages rather than clustered.
       generateId: createIdSource('cmd'),
@@ -446,5 +453,247 @@ describe('waiting inside the caller budget', () => {
     await admitOne(mailbox);
     expect(await mailbox.waitForAvailable()).toBe(true);
     mailbox.dispose();
+  });
+});
+
+describe('second-round hardening', () => {
+  it('digests the snapshot, so a mutation during the digest await cannot diverge', async () => {
+    const { mailbox } = createMailboxFixture();
+    const value: { text: string } = { text: 'stop' };
+    const admission = mailbox.admit(commandInput({ payload: { form: 'inline', value } }));
+    // Mutate while Web Crypto is still pending. Snapshotting after the digest
+    // would persist these bytes under the earlier digest.
+    value.text = 'mutated-during-await';
+    const admitted = await admission;
+    expect(admitted.status).toBe('admitted');
+
+    const claimed = await mailbox.claim();
+    expect(claimed.status).toBe('claimed');
+    if (claimed.status !== 'claimed' || claimed.claim.payload.form !== 'inline') return;
+    expect(claimed.claim.payload.value).toEqual({ text: 'stop' });
+    mailbox.dispose();
+  });
+
+  it('resumes past the page cap instead of re-reading the same prefix', async () => {
+    // One record per page, so the mailbox is larger than the page cap and a
+    // single pass cannot reach the end.
+    const total = MAILBOX_MAINTENANCE_MAX_PAGES + 20;
+    const { mailbox, clock } = createMailboxFixture({
+      maxBacklog: total + 10,
+      maintenanceBatchSize: 1,
+    });
+    for (let index = 0; index < total; index += 1) {
+      await admitOne(mailbox, { idempotencyKey: `k-${index}`, availableAfterMs: 1_000 });
+    }
+    clock.advance(1_000);
+
+    const first = await mailbox.runMaintenance();
+    expect(first.released).toBe(MAILBOX_MAINTENANCE_MAX_PAGES);
+    // Without a carried cursor the second pass would re-read the same first
+    // pages and never reach the tail.
+    const second = await mailbox.runMaintenance();
+    expect(first.released + second.released).toBe(total);
+    expect(await mailbox.list({ limit: 1_000, states: ['accepted'] })).toEqual([]);
+    mailbox.dispose();
+  });
+
+  it('verifies each sink separately, not just each backend', async () => {
+    const storage = new MemoryStorage();
+    const good = createMailboxFixture({ storage, events: new RecordingEventSink(storage) }).mailbox;
+    await admitOne(good);
+
+    // The backend is now "verified" for the first sink. A second mailbox on the
+    // same backend with a sink over a different store must still be caught.
+    const bad = createMailboxFixture({
+      storage,
+      resourceId: 'agent-8',
+      events: new RecordingEventSink(new MemoryStorage()),
+    }).mailbox;
+    await expect(bad.admit(commandInput())).rejects.toThrow(/different storage backend/);
+    good.dispose();
+    bad.dispose();
+  });
+
+  it('rejects an injected clock that cannot produce a durable timestamp', async () => {
+    for (const instant of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+      const { mailbox } = createMailboxFixture({ now: () => instant });
+      await expect(mailbox.admit(commandInput())).rejects.toThrow(
+        ApplicationCommandValidationError,
+      );
+      mailbox.dispose();
+    }
+  });
+
+  it('rejects a derived timestamp that leaves the safe-integer range', async () => {
+    // Both the clock reading and the timeout are individually valid; their sum is
+    // not, and the record decoder would reject the result.
+    const nearCeiling = Number.MAX_SAFE_INTEGER - 1_000;
+    const { mailbox } = createMailboxFixture({ now: () => nearCeiling });
+    await expect(mailbox.admit(commandInput({ commandTimeoutMs: 60_000 }))).rejects.toThrow(
+      /safe-integer millisecond range/,
+    );
+    mailbox.dispose();
+  });
+
+  it('reflects a request abort that races the claim commit', async () => {
+    const storage = new MemoryStorage();
+    const { mailbox } = createMailboxFixture({ storage });
+    await admitOne(mailbox);
+    const controller = new AbortController();
+
+    // Abort after the compare-and-swap has already committed. The lease is
+    // durable either way, but returning a live signal would hide the abort from
+    // the caller that raised it.
+    const originalBatch = storage.conditionalBatch.bind(storage);
+    let abortedDuringCommit = false;
+    storage.conditionalBatch = async (conditions, operations): Promise<boolean> => {
+      const committed = await originalBatch(conditions, operations);
+      if (!abortedDuringCommit) {
+        abortedDuringCommit = true;
+        controller.abort();
+      }
+      return committed;
+    };
+
+    const result = await mailbox.claim({ signal: controller.signal });
+    expect(result.status).toBe('claimed');
+    if (result.status !== 'claimed') return;
+    expect(result.claim.signal.aborted).toBe(true);
+    mailbox.dispose();
+  });
+
+  it('rejects identity components containing an unpaired surrogate', async () => {
+    const { mailbox } = createMailboxFixture();
+    // A lone surrogate passes a byte-length check but makes `encodeURIComponent`
+    // throw a raw URIError when the storage key is built.
+    await expect(mailbox.admit(commandInput({ caller: 'user:\ud800' }))).rejects.toThrow(
+      /well-formed Unicode/,
+    );
+    expect(() => createMailboxFixture({ namespace: 'bureau\udfff' })).toThrow(
+      /well-formed Unicode/,
+    );
+    mailbox.dispose();
+  });
+
+  it('bounds the cancellation reason', async () => {
+    const { mailbox } = createMailboxFixture();
+    const commandId = await admitOne(mailbox);
+    await expect(
+      mailbox.requestCancellation({ commandId, reason: 'x'.repeat(4_096) }),
+    ).rejects.toThrow(ApplicationCommandValidationError);
+    mailbox.dispose();
+  });
+
+  it.each([
+    ['a NaN timeout', { timeoutMs: Number.NaN }],
+    ['an infinite timeout', { timeoutMs: Number.POSITIVE_INFINITY }],
+    ['a zero poll interval', { timeoutMs: 10, pollIntervalMs: 0 }],
+  ])('rejects %s rather than waiting forever', async (_name, options) => {
+    const { mailbox } = createMailboxFixture();
+    await expect(mailbox.waitForAvailable(options)).rejects.toThrow(
+      ApplicationCommandValidationError,
+    );
+    mailbox.dispose();
+  });
+
+  it('does not advertise a due head that is already past its deadline', async () => {
+    const { mailbox, clock } = createMailboxFixture({ commandTimeoutMs: 1_000 });
+    await admitOne(mailbox);
+    expect(await mailbox.waitForAvailable()).toBe(true);
+
+    clock.advance(1_000);
+    // `claim()` would terminalize this head and report `empty`, so reporting it
+    // as available would advertise work that does not exist.
+    expect(await mailbox.waitForAvailable()).toBe(false);
+    mailbox.dispose();
+  });
+
+  it('stops mid-sleep when the wait is aborted between polls', async () => {
+    useFakeTimers();
+    const { mailbox } = createMailboxFixture();
+    await admitOne(mailbox, { availableAfterMs: 10_000 });
+    const controller = new AbortController();
+
+    // Schedule the abort on the same fake clock so it lands strictly inside the
+    // poll sleep rather than between iterations: the sleep itself has to unwind,
+    // not run to completion and be caught by the next loop check.
+    setTimeout(() => {
+      controller.abort();
+    }, 20);
+    const waiting = mailbox.waitForAvailable({
+      timeoutMs: 60_000,
+      pollIntervalMs: 50,
+      signal: controller.signal,
+    });
+    // Enough turns for the wait to get past its first observation and actually
+    // be sitting in the poll sleep when the abort timer fires.
+    await flushMicrotasks(50);
+    await advanceTimersByTime(25);
+    expect(await waiting).toBe(false);
+    mailbox.dispose();
+    restoreRealTimers();
+  });
+
+  it('reports false from waitForAvailable when the signal is already aborted', async () => {
+    const { mailbox } = createMailboxFixture();
+    await admitOne(mailbox);
+    // Work IS due; the abort still outranks it, or a shutdown caller would be
+    // told to start new work.
+    expect(await mailbox.waitForAvailable({ signal: AbortSignal.abort() })).toBe(false);
+    mailbox.dispose();
+  });
+
+  it('dead-letters rather than cancelling a command past its deadline', async () => {
+    const { mailbox, clock } = createMailboxFixture({ commandTimeoutMs: 1_000 });
+    const commandId = await admitOne(mailbox);
+    clock.advance(1_000);
+
+    // The disposition must not depend on whether cancellation or maintenance
+    // happened to win the race.
+    const cancelled = await mailbox.requestCancellation({ commandId });
+    expect(cancelled.status).toBe('already-terminal');
+    await mailbox.runMaintenance();
+    const receipt = await mailbox.receipt(commandId);
+    expect(receipt?.state).toBe('dead-lettered');
+    expect(receipt?.failure?.reason).toBe('deadline-exceeded');
+    mailbox.dispose();
+  });
+
+  it('forgets an attempt once it settles, so ownership cannot grow without bound', async () => {
+    const { mailbox } = createMailboxFixture({ maxBacklog: 10 });
+    for (let index = 0; index < 5; index += 1) {
+      const commandId = await admitOne(mailbox, { idempotencyKey: `k-${index}` });
+      const claim = await claimOne(mailbox);
+      await mailbox.acknowledge({ commandId, attemptToken: claim.attemptToken });
+    }
+    // Every attempt settled, so nothing should remain registered for this scope.
+    const registry = attemptControllerRegistry(mailbox.storage, 'bureau', 'agent-7');
+    expect(registry.size).toBe(0);
+    mailbox.dispose();
+  });
+
+  it('freezes nested receipt metadata, not just the receipt', async () => {
+    const { mailbox } = createMailboxFixture();
+    const commandId = await admitOne(mailbox, {
+      causation: { correlationId: 'conv-7' },
+    });
+    const receipt = await mailbox.receipt(commandId);
+    expect(Object.isFrozen(receipt)).toBe(true);
+    expect(Object.isFrozen(receipt?.causation)).toBe(true);
+    mailbox.dispose();
+  });
+
+  it('digests a Map identically regardless of insertion order when keys tie', async () => {
+    // Two distinct keys that encode identically: a stable sort on key bytes alone
+    // would leave insertion order observable in the digest.
+    const left = new Map<unknown, unknown>([
+      [{}, 'first'],
+      [{}, 'second'],
+    ]);
+    const right = new Map<unknown, unknown>([
+      [{}, 'second'],
+      [{}, 'first'],
+    ]);
+    expect(await computePayloadDigest(left)).toBe(await computePayloadDigest(right));
   });
 });

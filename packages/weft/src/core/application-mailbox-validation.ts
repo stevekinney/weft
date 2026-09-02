@@ -14,100 +14,23 @@ import type {
   ApplicationCommandInput,
   ApplicationMailboxOptions,
 } from './application-mailbox-contract.ts';
-import type {
-  ApplicationCommandFailure,
-  ApplicationCommandPayload,
-} from './application-mailbox-types.ts';
+import {
+  ApplicationCommandValidationError,
+  MAX_APPLICATION_COMMAND_ATTEMPTS,
+  MAX_APPLICATION_IDEMPOTENCY_KEY_BYTES,
+  MAX_APPLICATION_IDENTITY_BYTES,
+  MAX_APPLICATION_MAILBOX_BACKLOG,
+  MAX_APPLICATION_PAYLOAD_REFERENCE_BYTES,
+  optionalIdentityOf,
+  requireIdentity,
+  requireNonNegativeInteger,
+  requirePositiveInteger,
+} from './application-mailbox-guards.ts';
+import type { ApplicationCommandPayload } from './application-mailbox-types.ts';
 import { computePayloadDigest, PayloadDigestError } from './application-payload-digest.ts';
 import { decode, encode } from './codec.ts';
-import { isJSONValue, type JSONValue } from './json.ts';
-import { WeftError } from './weft-error.ts';
-
-/** Maximum bytes in any opaque identity component (namespace, resource, caller, target, kind). */
-export const MAX_APPLICATION_IDENTITY_BYTES = 256;
-/** Maximum bytes in an idempotency key. */
-export const MAX_APPLICATION_IDEMPOTENCY_KEY_BYTES = 256;
-/** Maximum bytes in a content-addressed payload reference. */
-export const MAX_APPLICATION_PAYLOAD_REFERENCE_BYTES = 2048;
-/** Maximum claims allowed for one command. */
-export const MAX_APPLICATION_COMMAND_ATTEMPTS = 100;
-/** Maximum open commands a mailbox may be configured to hold. */
-export const MAX_APPLICATION_MAILBOX_BACKLOG = 1_000_000;
-/** Maximum receipts one `list()` call may return. */
-export const MAX_APPLICATION_MAILBOX_LIST_LIMIT = 1000;
 
 const HEX_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
-
-/** Maximum bytes in a caller-supplied failure message. */
-export const MAX_FAILURE_MESSAGE_BYTES = 2048;
-
-const FAILURE_REASONS: ReadonlySet<ApplicationCommandFailure['reason']> = new Set([
-  'application',
-  'attempts-exhausted',
-  'deadline-exceeded',
-  'cancelled',
-]);
-
-/**
- * Thrown when a caller hands the mailbox something it cannot admit: a missing
- * or oversized identity component, an unusable payload, or an out-of-range
- * policy value.
- *
- * This is a caller mistake, not an expected outcome — a full backlog and an
- * idempotency conflict are returned as discriminated results instead.
- *
- * @example
- * ```ts
- * import { ApplicationCommandValidationError } from '@lostgradient/weft';
- *
- * const error = new ApplicationCommandValidationError('caller must be a non-empty string.');
- * console.log(error.code); // 'ApplicationCommandValidationError'
- * ```
- */
-export class ApplicationCommandValidationError extends WeftError<'ApplicationCommandValidationError'> {
-  constructor(message: string, options?: ErrorOptions) {
-    super('ApplicationCommandValidationError', message, options);
-  }
-}
-
-function byteLength(value: string): number {
-  return new TextEncoder().encode(value).byteLength;
-}
-
-function requireIdentity(value: unknown, field: string, maxBytes: number): string {
-  if (typeof value !== 'string' || value.length === 0) {
-    throw new ApplicationCommandValidationError(`${field} must be a non-empty string.`);
-  }
-  if (byteLength(value) > maxBytes) {
-    throw new ApplicationCommandValidationError(
-      `${field} must encode to at most ${maxBytes} bytes.`,
-    );
-  }
-  return value;
-}
-
-function optionalIdentity(value: unknown, field: string, maxBytes: number): string | undefined {
-  if (value === undefined) return undefined;
-  return requireIdentity(value, field, maxBytes);
-}
-
-function requirePositiveInteger(value: unknown, field: string, maximum: number): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1 || value > maximum) {
-    throw new ApplicationCommandValidationError(
-      `${field} must be a safe integer between 1 and ${maximum}.`,
-    );
-  }
-  return value;
-}
-
-function requireNonNegativeInteger(value: unknown, field: string, maximum: number): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value > maximum) {
-    throw new ApplicationCommandValidationError(
-      `${field} must be a safe integer between 0 and ${maximum}.`,
-    );
-  }
-  return value;
-}
 
 /** Mailbox defaults resolved once at construction. */
 export type ResolvedMailboxPolicy = Readonly<{
@@ -121,6 +44,7 @@ export type ResolvedMailboxPolicy = Readonly<{
   maxRetryBackoffMs: number;
   terminalRetentionMs: number;
   maxInlinePayloadBytes: number;
+  maintenanceBatchSize: number;
 }>;
 
 const ONE_HOUR_MS = 3_600_000;
@@ -177,6 +101,11 @@ export function resolveMailboxPolicy(options: ApplicationMailboxOptions): Resolv
       'maxInlinePayloadBytes',
       64 * 1024 * 1024,
     ),
+    maintenanceBatchSize: requirePositiveInteger(
+      options.maintenanceBatchSize ?? 500,
+      'maintenanceBatchSize',
+      10_000,
+    ),
   };
 }
 
@@ -202,28 +131,32 @@ async function validateInlinePayload(
   maxInlinePayloadBytes: number,
 ): Promise<{ payload: ApplicationCommandPayload; digest: string }> {
   const value: unknown = Reflect.get(payload, 'value');
-  let encodedByteLength: number;
+  // Snapshot BEFORE anything is awaited, then size-check and digest the snapshot.
+  // Digesting awaits Web Crypto, so a caller mutating its object during that await
+  // would otherwise have the new bytes persisted under the old digest — and the
+  // resulting command fails verification at the FIFO head, blocking every command
+  // behind it. Taking the snapshot first makes the digested bytes and the stored
+  // bytes the same bytes by construction.
+  let encoded: Uint8Array;
   try {
-    encodedByteLength = encode(value).byteLength;
+    encoded = encode(value);
   } catch (cause) {
     throw new ApplicationCommandValidationError(
       'payload.value is not encodable by the structured-clone codec.',
       { cause },
     );
   }
-  if (encodedByteLength > maxInlinePayloadBytes) {
+  if (encoded.byteLength > maxInlinePayloadBytes) {
     throw new ApplicationCommandValidationError(
-      `payload.value encodes to ${encodedByteLength} bytes, over the ${maxInlinePayloadBytes}-byte inline ceiling. Store it behind a content-addressed reference instead.`,
+      `payload.value encodes to ${encoded.byteLength} bytes, over the ${maxInlinePayloadBytes}-byte inline ceiling. Store it behind a content-addressed reference instead.`,
     );
   }
+  const snapshot: unknown = decode(encoded);
   try {
-    const digest = await computePayloadDigest(value);
-    // Snapshot rather than retaining the caller's reference. Digesting awaits
-    // Web Crypto and admission then awaits storage, so a caller could mutate the
-    // object in between and have the mutated bytes persisted under the earlier
-    // digest — which would fail digest verification at the FIFO head and block
-    // the whole mailbox behind a command nobody can claim.
-    return { payload: { form: 'inline', value: decode(encode(value)) }, digest };
+    return {
+      payload: { form: 'inline', value: snapshot },
+      digest: await computePayloadDigest(snapshot),
+    };
   } catch (cause) {
     if (cause instanceof PayloadDigestError) {
       throw new ApplicationCommandValidationError(
@@ -289,17 +222,17 @@ function validateCausation(
   if (typeof causation !== 'object') {
     throw new ApplicationCommandValidationError('causation must be an object when present.');
   }
-  const correlationId = optionalIdentity(
+  const correlationId = optionalIdentityOf(
     causation.correlationId,
     'causation.correlationId',
     MAX_APPLICATION_IDENTITY_BYTES,
   );
-  const causationId = optionalIdentity(
+  const causationId = optionalIdentityOf(
     causation.causationId,
     'causation.causationId',
     MAX_APPLICATION_IDENTITY_BYTES,
   );
-  const traceparent = optionalIdentity(
+  const traceparent = optionalIdentityOf(
     causation.traceparent,
     'causation.traceparent',
     MAX_APPLICATION_IDENTITY_BYTES,
@@ -330,17 +263,17 @@ export async function validateCommandInput(
     kind: requireIdentity(input.kind, 'kind', MAX_APPLICATION_IDENTITY_BYTES),
     payload,
     payloadDigest: digest,
-    payloadMediaType: optionalIdentity(
+    payloadMediaType: optionalIdentityOf(
       input.payloadMediaType,
       'payloadMediaType',
       MAX_APPLICATION_IDENTITY_BYTES,
     ),
-    payloadSchema: optionalIdentity(
+    payloadSchema: optionalIdentityOf(
       input.payloadSchema,
       'payloadSchema',
       MAX_APPLICATION_IDENTITY_BYTES,
     ),
-    idempotencyKey: optionalIdentity(
+    idempotencyKey: optionalIdentityOf(
       input.idempotencyKey,
       'idempotencyKey',
       MAX_APPLICATION_IDEMPOTENCY_KEY_BYTES,
@@ -369,116 +302,24 @@ export async function validateCommandInput(
   };
 }
 
-/**
- * Validate and snapshot a caller-supplied JSON value bound for a durable record.
- *
- * The record decoder requires `isJSONValue`, so a structured-clone value such as
- * a `Map` or a `Date` would encode cleanly here and then make every later
- * `receipt()`, `list()`, and maintenance read fail as corrupt persisted data.
- * Rejecting it at the boundary that owns the contract keeps that failure where
- * the caller can act on it.
- *
- * @throws {ApplicationCommandValidationError} When the value is not JSON-safe.
- */
-export function validateDurableJSONValue<TField extends string>(
-  value: unknown,
-  field: TField,
-): JSONValue | undefined {
-  if (value === undefined) return undefined;
-  // Round-trip first, then check. Snapshotting defends against a caller mutating
-  // the object after this returns, and checking the snapshot rather than the
-  // input is what the decoder will actually see: a `Map` or `Date` encodes and
-  // decodes cleanly as itself and only then fails the JSON contract.
-  let snapshot: unknown;
-  try {
-    snapshot = decode(encode(value));
-  } catch (cause) {
-    throw new ApplicationCommandValidationError(
-      `${field} is not encodable by the structured-clone codec.`,
-      { cause },
-    );
-  }
-  if (!isJSONValue(snapshot)) {
-    throw new ApplicationCommandValidationError(
-      `${field} must be a JSON-safe value: durable records reject anything the record decoder cannot read back.`,
-    );
-  }
-  return snapshot;
-}
-
-/**
- * Validate a caller-supplied failure record before it becomes terminal evidence.
- *
- * @throws {ApplicationCommandValidationError} When `details` is not JSON-safe.
- */
-export function validateFailure(failure: ApplicationCommandFailure): ApplicationCommandFailure {
-  if (typeof failure !== 'object' || failure === null) {
-    throw new ApplicationCommandValidationError('failure must be an object.');
-  }
-  if (!FAILURE_REASONS.has(failure.reason)) {
-    throw new ApplicationCommandValidationError(
-      `failure.reason must be one of ${[...FAILURE_REASONS].join(', ')}.`,
-    );
-  }
-  const details = validateDurableJSONValue(failure.details, 'failure.details');
-  return {
-    reason: failure.reason,
-    message: optionalIdentity(failure.message, 'failure.message', MAX_FAILURE_MESSAGE_BYTES),
-    details,
-  };
-}
-
-/**
- * Validate an injected identifier source's output before it reaches a durable key.
- *
- * `generateId` is caller-supplied. An empty result would write a delivery-index
- * entry the decoder later rejects as corrupt, and an unbounded one would build an
- * unbounded storage key.
- *
- * @throws {ApplicationCommandValidationError} When the generator returns an
- * empty or oversized identifier.
- */
-export function requireGeneratedIdentifier(value: string, field: string): string {
-  if (typeof value !== 'string' || value.length === 0) {
-    throw new ApplicationCommandValidationError(
-      `The configured generateId() returned an empty ${field}; durable keys require a non-empty identifier.`,
-    );
-  }
-  if (byteLength(value) > MAX_APPLICATION_IDENTITY_BYTES) {
-    throw new ApplicationCommandValidationError(
-      `The configured generateId() returned a ${field} over ${MAX_APPLICATION_IDENTITY_BYTES} bytes.`,
-    );
-  }
-  return value;
-}
-
-/**
- * Validate an explicit maintenance instant.
- *
- * A malformed scheduler value is destructive rather than merely wrong: `NaN`
- * makes every comparison false so the retention sweep treats every receipt as
- * expired, and `Infinity` terminalizes open commands with an undecodable
- * `terminalAt`. Reject it before maintenance reads or writes anything.
- *
- * @throws {ApplicationCommandValidationError} When the instant is not a
- * non-negative safe integer.
- */
-export function requireMaintenanceInstant(now: number): number {
-  if (typeof now !== 'number' || !Number.isSafeInteger(now) || now < 0) {
-    throw new ApplicationCommandValidationError(
-      'runMaintenance() requires a non-negative safe-integer timestamp in milliseconds.',
-    );
-  }
-  return now;
-}
-
-/**
- * Clamp a caller-supplied listing limit into the bounded range.
- */
-export function clampListLimit(limit: number | undefined): number {
-  if (limit === undefined) return 100;
-  if (!Number.isSafeInteger(limit) || limit < 1) {
-    throw new ApplicationCommandValidationError('limit must be a positive safe integer.');
-  }
-  return Math.min(limit, MAX_APPLICATION_MAILBOX_LIST_LIMIT);
-}
+export {
+  ApplicationCommandValidationError,
+  clampListLimit,
+  DEFAULT_WAIT_POLL_INTERVAL_MS,
+  MAX_APPLICATION_COMMAND_ATTEMPTS,
+  MAX_APPLICATION_IDEMPOTENCY_KEY_BYTES,
+  MAX_APPLICATION_IDENTITY_BYTES,
+  MAX_APPLICATION_MAILBOX_BACKLOG,
+  MAX_APPLICATION_MAILBOX_LIST_LIMIT,
+  MAX_APPLICATION_PAYLOAD_REFERENCE_BYTES,
+  MAX_CANCELLATION_REASON_BYTES,
+  MAX_FAILURE_MESSAGE_BYTES,
+  requireClockInstant,
+  requireDerivedInstant,
+  requireGeneratedIdentifier,
+  requireMaintenanceInstant,
+  requireWaitBudget,
+  validateCancellationReason,
+  validateDurableJSONValue,
+  validateFailure,
+} from './application-mailbox-guards.ts';

@@ -9,7 +9,7 @@
  * exactly one deterministic pass.
  *
  * Every pass is bounded. It examines at most
- * {@link MAILBOX_MAINTENANCE_SCAN_LIMIT} command records and retires at most
+ * {@link batchSize} command records and retires at most
  * that many terminal receipts, so a large mailbox drains across several calls
  * instead of one unbounded sweep.
  *
@@ -25,7 +25,6 @@ import {
   commitCommandTransition,
   isTerminalRecord,
   MAILBOX_MAINTENANCE_MAX_PAGES,
-  MAILBOX_MAINTENANCE_SCAN_LIMIT,
   MAX_MAILBOX_TRANSITION_ATTEMPTS,
   releaseAttemptController,
   type MailboxRuntime,
@@ -159,7 +158,7 @@ async function retireTerminalReceipts(
   if (horizon < 0) return;
   const expired: string[] = [];
   for await (const [key] of runtime.storage.scan(runtime.keys.terminalPrefix, {
-    limit: MAILBOX_MAINTENANCE_SCAN_LIMIT,
+    limit: runtime.policy.maintenanceBatchSize,
   })) {
     const terminalAt = parseTerminalAt(key, runtime.keys.terminalPrefix);
     if (terminalAt === null || terminalAt >= horizon) break;
@@ -200,24 +199,31 @@ function commandIdFromTerminalKey(key: string): string | null {
  * and {@link MAILBOX_MAINTENANCE_MAX_PAGES} keeps one pass from running away on
  * a very large mailbox — the next pass resumes the work.
  */
-async function collectDueCommands(runtime: MailboxRuntime, now: number): Promise<string[]> {
+async function collectDueCommands(
+  runtime: MailboxRuntime,
+  now: number,
+  startAfter: string | undefined,
+): Promise<{ due: string[]; nextCursor: string | undefined }> {
+  const batchSize = runtime.policy.maintenanceBatchSize;
   const due: string[] = [];
-  let cursor: string | undefined;
+  let cursor = startAfter;
   for (let page = 0; page < MAILBOX_MAINTENANCE_MAX_PAGES; page += 1) {
     let seen = 0;
-    const options =
-      cursor === undefined
-        ? { limit: MAILBOX_MAINTENANCE_SCAN_LIMIT }
-        : { limit: MAILBOX_MAINTENANCE_SCAN_LIMIT, gt: cursor };
+    const options = cursor === undefined ? { limit: batchSize } : { limit: batchSize, gt: cursor };
     for await (const [key, value] of runtime.storage.scan(runtime.keys.commandPrefix, options)) {
       seen += 1;
       cursor = key;
       const record = decodeApplicationCommandRecord(value, key);
       if (classify(record, now) !== null) due.push(record.commandId);
     }
-    if (seen < MAILBOX_MAINTENANCE_SCAN_LIMIT) break;
+    // A short page means the keyspace is exhausted: start the next pass from the
+    // beginning so newly admitted work is seen.
+    if (seen < batchSize) return { due, nextCursor: undefined };
   }
-  return due;
+  // The page cap stopped this pass mid-keyspace. Hand the cursor back so the next
+  // call continues from here instead of re-reading the same prefix forever — a
+  // mailbox larger than the cap would otherwise never examine records past it.
+  return { due, nextCursor: cursor };
 }
 
 /**
@@ -239,7 +245,9 @@ export async function runMailboxMaintenance(
     cancelled: 0,
     retired: 0,
   };
-  const due = await collectDueCommands(runtime, now);
+  const scan = await collectDueCommands(runtime, now, runtime.readMaintenanceCursor());
+  runtime.writeMaintenanceCursor(scan.nextCursor);
+  const due = scan.due;
   for (const commandId of due) {
     await advanceCommand(runtime, commandId, now, counters);
   }

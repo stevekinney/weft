@@ -105,7 +105,7 @@ Commands are delivered in the order they were admitted, and the delivery index i
 
 A redelivered command re-enters at its _original_ position, not at the back of the queue. If sequence 0's lease expires while 5 is waiting, the next claim gets 0.
 
-And the head of the queue blocks. When the head is not due yet — because it was admitted with a delay, or because it is in retry backoff — `claim()` returns `held` rather than skipping to a later command. Head-of-line blocking is the intended semantic for a per-resource command queue: a command that must be applied before the next one should not be overtaken by it.
+And the head of the queue blocks _delivery_. When the head is not due yet — because it was admitted with a delay, or because it is in retry backoff — `claim()` returns `held` rather than skipping to a later command. Head-of-line blocking is the intended semantic for a per-resource command queue: an undelivered command is not overtaken by a later one. Once both have been handed out, though, their execution is concurrent and unordered.
 
 ```ts
 import { ApplicationMailbox, MemoryStorage } from '@lostgradient/weft';
@@ -125,7 +125,10 @@ if (result.status === 'held') {
 
 A claim is only ever issued inside the command's absolute deadline. Past it the head is dead-lettered rather than handed out, so a consumer is never given work it is no longer allowed to apply.
 
-A claim leases one command to one attempt and hands back an **attempt token**. Every later mutation from that claimant must present it. Two consumers sharing one durable store can never both hold a valid claim, and a superseded attempt cannot acknowledge, reject, cancel, extend, or heartbeat a newer one — it gets `stale` back, carrying the authoritative receipt.
+A claim leases one command to one attempt and hands back an **attempt token**. Every later mutation from that claimant must present it. Two consumers sharing one durable store can never both hold a valid claim _on the same command_, and a superseded attempt cannot acknowledge, reject, cancel, extend, or heartbeat a newer one — it gets `stale` back, carrying the authoritative receipt.
+
+> [!IMPORTANT] FIFO is delivery order, not execution order
+> Commands are _handed out_ in sequence order, but nothing serializes the work itself. Two consumers can hold claims on sequence 0 and sequence 1 at the same time and settle them in either order. If command B must not be applied until command A has been, one consumer has to enforce that — the mailbox guarantees the order you receive them in, not the order they finish.
 
 The token is a fencing credential, so it appears only on `ApplicationCommandClaim`. It is deliberately absent from `ApplicationCommandReceipt`, which any observer can read: publishing it there would let a bystander settle work it never claimed.
 
@@ -210,7 +213,7 @@ const capacity = await mailbox.capacity();
 console.log(capacity.open, capacity.remaining, capacity.limit);
 ```
 
-Reading is bounded too. `list()` walks a sequence-ordered index rather than the command records themselves — records are keyed by minted id, so scanning them would mean reading and sorting the whole mailbox to answer even `limit: 1`. The limit bounds the storage reads, not just the returned slice.
+Reading is bounded too. `list()` walks a sequence-ordered index rather than the command records themselves — records are keyed by minted id, so scanning them would mean reading and sorting the whole mailbox to answer even `limit: 1`. The limit bounds the storage reads, not just the returned slice. A `states` filter is a bounded query rather than an exhaustive one: listing stops after examining a fixed ceiling of index entries and returns what it found, so a narrow filter over a large mailbox never turns into mailbox-sized work.
 
 ## Maintenance Is Explicit
 

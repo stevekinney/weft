@@ -111,8 +111,7 @@ export type MessagePackValue =
  * ```
  */
 export type TypedBatchOperation<Value> =
-  | { type: 'put'; key: string; value: Value }
-  | { type: 'delete'; key: string };
+  { type: 'put'; key: string; value: Value } | { type: 'delete'; key: string };
 
 /**
  * Typed compare-and-swap precondition used by

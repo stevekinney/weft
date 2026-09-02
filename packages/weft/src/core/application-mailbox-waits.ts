@@ -23,9 +23,9 @@ import type {
 import type { MailboxRuntime } from './application-mailbox-internals.ts';
 import { readCleanupState } from './application-mailbox-settlement.ts';
 import { loadCommand, loadDeliveryHead } from './application-mailbox-storage.ts';
+import { requireClockInstant, requireWaitBudget } from './application-mailbox-validation.ts';
 
-/** Default gap between durable polls. Overridable so tests can drive a fake clock. */
-export const DEFAULT_MAILBOX_POLL_INTERVAL_MS = 50;
+export { DEFAULT_WAIT_POLL_INTERVAL_MS as DEFAULT_MAILBOX_POLL_INTERVAL_MS } from './application-mailbox-validation.ts';
 
 /**
  * Sleep, resolving `false` when the wait was aborted or the mailbox disposed
@@ -58,13 +58,21 @@ export function delayUnlessAborted(
   });
 }
 
-/** Whether the FIFO head exists and is due for delivery right now. */
+/**
+ * Whether the FIFO head exists and is claimable right now.
+ *
+ * The absolute deadline counts as well as availability. A head that is due but
+ * already expired is not deliverable — `claim()` would terminalize it and report
+ * `empty` — so reporting it as available would advertise work that does not
+ * exist.
+ */
 export async function hasDueWork(runtime: MailboxRuntime): Promise<boolean> {
   const head = await loadDeliveryHead(runtime.storage, runtime.keys);
   if (head === null) return false;
   const loaded = await loadCommand(runtime.storage, runtime.keys, head.commandId);
   if (loaded === null) return false;
-  return runtime.now() >= loaded.record.availableAt;
+  const now = runtime.now();
+  return now >= loaded.record.availableAt && now < loaded.record.absoluteDeadlineAt;
 }
 
 /**
@@ -78,21 +86,34 @@ export async function waitForAvailableWork(
   disposal: AbortSignal,
   options?: ApplicationMailboxWaitOptions,
 ): Promise<boolean> {
-  const interval = options?.pollIntervalMs ?? DEFAULT_MAILBOX_POLL_INTERVAL_MS;
-  const deadline = runtime.now() + (options?.timeoutMs ?? 0);
-  while (true) {
+  const { timeoutMs, pollIntervalMs } = requireWaitBudget(options ?? {});
+  const deadline = requireClockInstant(runtime.now()) + timeoutMs;
+  let remaining = 0;
+  do {
+    // Aborting or disposal means `false`, and that outranks any observation —
+    // including one already in hand. A shutdown caller must never be told to
+    // start new work.
+    if (isAborted(disposal, options?.signal)) return false;
     // Observe first, so the documented `timeoutMs: 0` default still performs one
     // check rather than returning before looking at anything.
-    if (await hasDueWork(runtime)) return true;
+    const due = await hasDueWork(runtime);
+    if (isAborted(disposal, options?.signal)) return false;
+    if (due) return true;
     // Clamp each sleep to what is left of the budget. An interval longer than the
     // remaining time would otherwise put the next observation past the bound the
     // caller asked for, turning a timeout into a late success.
-    const remaining = deadline - runtime.now();
+    remaining = deadline - runtime.now();
     if (remaining <= 0) return false;
-    if (!(await delayUnlessAborted(Math.min(interval, remaining), disposal, options?.signal))) {
-      return false;
-    }
-  }
+  } while (
+    await delayUnlessAborted(Math.min(pollIntervalMs, remaining), disposal, options?.signal)
+  );
+  // The sleep was cut short by an abort or by disposal.
+  return false;
+}
+
+/** Whether either the mailbox's disposal signal or the caller's signal has fired. */
+function isAborted(disposal: AbortSignal, signal?: AbortSignal): boolean {
+  return disposal.aborted || signal?.aborted === true;
 }
 
 /**
@@ -111,15 +132,24 @@ export async function waitForCleanup(
     readonly pollIntervalMs?: number | undefined;
   },
 ): Promise<ApplicationCommandCleanupResult> {
-  const interval = options.pollIntervalMs ?? DEFAULT_MAILBOX_POLL_INTERVAL_MS;
-  const deadline = runtime.now() + options.timeoutMs;
+  const { timeoutMs, pollIntervalMs } = requireWaitBudget(options);
+  const deadline = requireClockInstant(runtime.now()) + timeoutMs;
   let latest = await readCleanupState(runtime, options.commandId);
   // A terminal record with `cleanupPending: true` is already final: the mailbox
   // recorded that it stopped waiting for an abandoned attempt. Polling it would
   // burn the whole timeout on a value that can never change again.
   if (latest.status === 'pending' && latest.receipt.terminalAt !== undefined) return latest;
-  while (latest.status === 'pending' && runtime.now() < deadline) {
-    if (!(await delayUnlessAborted(interval, disposal, options.signal))) break;
+  while (latest.status === 'pending') {
+    // Clamp to the remaining budget for the same reason the available-work wait
+    // does: a poll interval longer than what is left would block well past the
+    // bound this method promises.
+    const remaining = deadline - runtime.now();
+    if (remaining <= 0) break;
+    if (
+      !(await delayUnlessAborted(Math.min(pollIntervalMs, remaining), disposal, options.signal))
+    ) {
+      break;
+    }
     latest = await readCleanupState(runtime, options.commandId);
   }
   return latest;

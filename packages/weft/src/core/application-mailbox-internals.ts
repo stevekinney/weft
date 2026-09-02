@@ -42,9 +42,6 @@ import { WeftError } from './weft-error.ts';
  */
 export const MAX_MAILBOX_TRANSITION_ATTEMPTS = 25;
 
-/** How many command records one maintenance scan page reads at a time. */
-export const MAILBOX_MAINTENANCE_SCAN_LIMIT = 500;
-
 /**
  * How many scan pages one maintenance pass may walk.
  *
@@ -70,6 +67,26 @@ export type MailboxRuntime = {
   readonly attemptControllers: Map<string, AbortController>;
   /** Whether the handle that owns this runtime has been disposed. */
   readonly isDisposed: () => boolean;
+  /**
+   * Record an attempt this handle now owns, or report that disposal already won.
+   *
+   * Registering ownership in the caller's `await` continuation would race
+   * disposal: `dispose()` could run between the claim resolving and the token
+   * being recorded, see nothing to abort, and leave a live claim from a disposed
+   * mailbox. Doing both under one synchronous call closes that window.
+   */
+  readonly adoptAttempt: (attemptToken: string) => boolean;
+  /** Forget an attempt this handle owned once it is released. */
+  readonly releaseAttempt: (attemptToken: string) => void;
+  /**
+   * Where the previous maintenance pass stopped, when its page cap cut it short.
+   *
+   * Process-local rather than durable: it is an optimisation for walking a very
+   * large keyspace across successive calls, and losing it on restart only means
+   * the next pass starts from the beginning, which is always correct.
+   */
+  readonly readMaintenanceCursor: () => string | undefined;
+  readonly writeMaintenanceCursor: (cursor: string | undefined) => void;
 };
 
 /**
@@ -177,10 +194,25 @@ function receiptTerminalFields(record: ApplicationCommandRecord) {
   };
 }
 
+/**
+ * Recursively freeze a value reached from a receipt.
+ *
+ * `Object.freeze` is shallow, so freezing only the receipt would leave
+ * `causation`, `progress`, `outcome`, and `failure.details` mutable — and every
+ * observer shares those references. One consumer could then change what another
+ * sees through a receipt documented as immutable.
+ */
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== 'object' || value === null || Object.isFrozen(value)) return value;
+  Object.freeze(value);
+  for (const nested of Object.values(value)) deepFreeze(nested);
+  return value;
+}
+
 export function toApplicationCommandReceipt(
   record: ApplicationCommandRecord,
 ): ApplicationCommandReceipt {
-  return Object.freeze({
+  return deepFreeze({
     commandId: record.commandId,
     namespace: record.namespace,
     resourceId: record.resourceId,
@@ -261,6 +293,10 @@ export function releaseAttemptController(
   attemptToken: string,
   reason: string,
 ): void {
+  // Drop the handle's ownership record too. Without this a long-lived handle
+  // accumulates one string per historical claim for its whole lifetime, which is
+  // unbounded process memory for a mailbox that keeps working.
+  runtime.releaseAttempt(attemptToken);
   const controller = runtime.attemptControllers.get(attemptToken);
   if (controller === undefined) return;
   runtime.attemptControllers.delete(attemptToken);

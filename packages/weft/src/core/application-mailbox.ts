@@ -56,8 +56,10 @@ import { type ApplicationCommandFailure } from './application-mailbox-types.ts';
 import {
   ApplicationCommandValidationError,
   clampListLimit,
+  requireClockInstant,
   requireMaintenanceInstant,
   resolveMailboxPolicy,
+  validateCancellationReason,
   validateDurableJSONValue,
   validateFailure,
 } from './application-mailbox-validation.ts';
@@ -66,6 +68,17 @@ import type { JSONValue } from './json.ts';
 
 /** How many listing-index entries one page of `list()` reads. */
 const MAILBOX_LIST_PAGE_SIZE = 200;
+
+/**
+ * How many index entries one `list()` call may examine before giving up.
+ *
+ * `limit` bounds the work only when enough records match. A narrow filter such as
+ * `{ limit: 1, states: ['claimed'] }` against a mailbox full of terminal records
+ * would otherwise walk every entry and load every record to return an empty
+ * array. Listing is documented as a bounded query, not an exhaustive one: it
+ * returns what it found within this ceiling.
+ */
+const MAILBOX_LIST_SCAN_CEILING = 5_000;
 
 /**
  * A durable, strictly FIFO application command mailbox.
@@ -95,6 +108,8 @@ export class ApplicationMailbox {
   readonly #disposal = new AbortController();
   /** Attempt tokens this handle claimed, so disposal aborts only its own work. */
   readonly #ownAttempts = new Set<string>();
+  /** Where the last capped maintenance pass stopped, so the next one resumes there. */
+  #maintenanceCursor: string | undefined;
   #disposed = false;
 
   constructor(options: ApplicationMailboxOptions) {
@@ -109,7 +124,11 @@ export class ApplicationMailbox {
       events: options.events,
       policy,
       keys: createMailboxKeys(policy.namespace, policy.resourceId),
-      now: options.now ?? Date.now,
+      // Validate at the source rather than at each call site: every transition
+      // derives durable timestamps from this, and a clock returning `NaN` or
+      // `Infinity` would write records the decoder rejects — an `admitted`
+      // receipt naming a command that blocks the FIFO as corrupt.
+      now: () => requireClockInstant((options.now ?? Date.now)()),
       generateId: options.generateId ?? (() => crypto.randomUUID()),
       attemptControllers: attemptControllerRegistry(
         options.storage,
@@ -117,6 +136,16 @@ export class ApplicationMailbox {
         policy.resourceId,
       ),
       isDisposed: () => this.#disposed,
+      adoptAttempt: (attemptToken) => {
+        if (this.#disposed) return false;
+        this.#ownAttempts.add(attemptToken);
+        return true;
+      },
+      releaseAttempt: (attemptToken) => this.#ownAttempts.delete(attemptToken),
+      readMaintenanceCursor: () => this.#maintenanceCursor,
+      writeMaintenanceCursor: (cursor) => {
+        this.#maintenanceCursor = cursor;
+      },
     };
   }
 
@@ -179,9 +208,11 @@ export class ApplicationMailbox {
     // in FIFO order, so `limit` bounds the storage reads and the allocation
     // rather than only the returned slice.
     let cursor: string | undefined;
-    while (receipts.length < limit) {
+    let examined = 0;
+    while (receipts.length < limit && examined < MAILBOX_LIST_SCAN_CEILING) {
       const page = await this.#readListingPage(cursor, limit - receipts.length, states);
       receipts.push(...page.receipts);
+      examined += page.examined;
       cursor = page.cursor;
       if (page.exhausted) break;
     }
@@ -197,6 +228,7 @@ export class ApplicationMailbox {
     receipts: ApplicationCommandReceipt[];
     cursor: string | undefined;
     exhausted: boolean;
+    examined: number;
   }> {
     const receipts: ApplicationCommandReceipt[] = [];
     const scanOptions =
@@ -221,7 +253,12 @@ export class ApplicationMailbox {
       receipts.push(toApplicationCommandReceipt(loaded.record));
       if (receipts.length >= remaining) break;
     }
-    return { receipts, cursor: nextCursor, exhausted: seen < MAILBOX_LIST_PAGE_SIZE };
+    return {
+      receipts,
+      cursor: nextCursor,
+      exhausted: seen < MAILBOX_LIST_PAGE_SIZE,
+      examined: seen,
+    };
   }
 
   /** Current backlog accounting. Deliberately low-cardinality: counts only. */
@@ -248,9 +285,7 @@ export class ApplicationMailbox {
     readonly signal?: AbortSignal | undefined;
   }): Promise<ApplicationMailboxClaimResult> {
     this.#assertLive();
-    const result = await claimNextCommand(this.#runtime, options);
-    if (result.status === 'claimed') this.#ownAttempts.add(result.claim.attemptToken);
-    return result;
+    return claimNextCommand(this.#runtime, options);
   }
 
   /** Extend a lease and report liveness for the current attempt. */
@@ -306,7 +341,11 @@ export class ApplicationMailbox {
     readonly reason?: string | undefined;
   }): Promise<ApplicationCommandCancellationResult> {
     this.#assertLive();
-    return requestCancellation(this.#runtime, { ...options, now: this.#runtime.now() });
+    return requestCancellation(this.#runtime, {
+      commandId: options.commandId,
+      reason: validateCancellationReason(options.reason),
+      now: this.#runtime.now(),
+    });
   }
 
   /**

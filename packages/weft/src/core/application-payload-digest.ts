@@ -100,8 +100,12 @@ function canonicalizeObject(value: object, seen: Set<object>, depth: number): un
       ([key, entryValue]) =>
         [canonicalize(key, seen, depth + 1), canonicalize(entryValue, seen, depth + 1)] as const,
     );
+    // Tie-break on the WHOLE entry, not just the key. Distinct keys can encode
+    // identically (two empty objects, say), and a stable sort would then preserve
+    // insertion order — so the same Map built in a different order would digest
+    // differently and an idempotent retry would report a spurious conflict.
     const sorted = entries
-      .map((entry) => ({ entry, bytes: encode(entry[0]) }))
+      .map((entry) => ({ entry, bytes: encode(entry) }))
       .toSorted((left, right) => compareBytes(left.bytes, right.bytes))
       .map(({ entry }) => entry);
     return new Map(sorted);
