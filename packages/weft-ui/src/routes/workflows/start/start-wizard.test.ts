@@ -28,8 +28,10 @@ afterEach(() => {
 describe('StartWizard', () => {
   test('shows the denied message without workflows:write', async () => {
     fetchScript.routeJsonRpcMethod('weft.system.registry', {
-      registryVersion: 1,
-      workflows: {},
+      registryVersion: 2,
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      workflows: [],
+      activeRevisions: {},
       activities: {},
     });
 
@@ -46,8 +48,10 @@ describe('StartWizard', () => {
 
   test('falls back to a free-text type field when the registry has no entries', async () => {
     fetchScript.routeJsonRpcMethod('weft.system.registry', {
-      registryVersion: 1,
-      workflows: {},
+      registryVersion: 2,
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      workflows: [],
+      activeRevisions: {},
       activities: {},
     });
 
@@ -60,8 +64,19 @@ describe('StartWizard', () => {
 
   test('completes the full flow: type → raw JSON configure → review → start', async () => {
     fetchScript.routeJsonRpcMethod('weft.system.registry', {
-      registryVersion: 1,
-      workflows: { 'order-processing': {} },
+      registryVersion: 2,
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      workflows: [
+        {
+          manifestVersion: 1,
+          name: 'order-processing',
+          workflowVersion: '1.0.0',
+          revision: 'order-processing-rev',
+          contractHash: 'order-processing-hash',
+          contract: { name: 'order-processing', workflowVersion: '1.0.0' },
+        },
+      ],
+      activeRevisions: { 'order-processing': 'order-processing-rev' },
       activities: {},
     });
     fetchScript.routeUrl('/v1/workflows', { id: 'wf_started_1234567890' });

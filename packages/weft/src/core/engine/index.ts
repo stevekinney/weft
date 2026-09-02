@@ -1598,6 +1598,28 @@ export class Engine<
       ?.getDefinition(activityName);
     return perWorkflow ?? internals.activityRegistry.getDefinition(activityName);
   }
+  /**
+   * List every activity definition registered on this workflow's own
+   * per-workflow `.activities({...})` registry — name, schema, description,
+   * tags, retry/timeout metadata, never a handler function. Returns an
+   * empty array for a workflow with no `.activities({...})` step (including
+   * an unknown `workflowType`), never `undefined`, so a caller can fold the
+   * result straight into a contract without an existence check first.
+   *
+   * Companion to {@link getWorkflowActivityDefinition}: that resolves one
+   * activity by name with the per-workflow-first, global-fallback dispatch
+   * order; this enumerates only the names the per-workflow registry itself
+   * declares — activities a workflow reaches solely through the global
+   * registry are deliberately excluded, since those are not part of what
+   * `.activities({...})` scoped to this workflow. Build tooling that needs a
+   * workflow's full scoped-activity contract set (`buildRegistrySnapshot`,
+   * `worker/manifest/registry-contract-builder.ts`) uses this instead of
+   * reaching into engine internals directly.
+   */
+  listWorkflowActivityDefinitions(workflowType: string): ActivityMetadata[] {
+    const internals = getInternals(this);
+    return internals.activityRegistriesByWorkflow.get(workflowType)?.listDefinitions() ?? [];
+  }
   async start<TName extends KnownWorkflowNames<TWorkflows>>(
     type: TName,
     input: WorkflowInput<TWorkflows, TName>,

@@ -21,8 +21,11 @@ import { z } from 'zod';
 import type { Engine } from '../../core/engine.ts';
 import {
   buildRegistrySnapshot,
+  REGISTRY_VERSION,
+  RegistryManifestLimitError,
   RegistrySchemaConversionError,
   type RegistrySnapshot,
+  RegistryWorkflowCountLimitError,
 } from '../../core/registry-snapshot.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
@@ -47,8 +50,10 @@ const objectValue = z
 
 const getRegistryOutput = z
   .object({
-    registryVersion: z.literal(1),
-    workflows: objectValue,
+    registryVersion: z.literal(REGISTRY_VERSION),
+    generatedAt: z.string(),
+    workflows: z.array(objectValue),
+    activeRevisions: objectValue,
     activities: objectValue,
   })
   .strict();
@@ -73,19 +78,27 @@ export const getRegistryOperation = defineOperation<GetRegistryInput, GetRegistr
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ engine }): Promise<GetRegistryOutput> => {
     try {
-      return buildRegistrySnapshot(engine as Engine);
+      return await buildRegistrySnapshot(engine as Engine);
     } catch (error) {
-      // Log the typed conversion error to the server console before the
-      // operation pipeline reduces it to a generic `EngineFailure`. The
+      // Log the typed conversion/limit error to the server console before
+      // the operation pipeline reduces it to a generic `EngineFailure`. The
       // pipeline doesn't capture `error.message`, so without this explicit
-      // log the offending entity name and direction would never reach
-      // operator-visible output. Re-throw so the pipeline still produces
-      // the masked wire response.
+      // log the offending entity name and direction (or workflow type and
+      // limit reason) would never reach operator-visible output. Re-throw
+      // so the pipeline still produces the masked wire response.
       if (error instanceof RegistrySchemaConversionError) {
         console.error(`[weft.system.registry] ${error.message}`, {
           entityKind: error.entityKind,
           entityName: error.entityName,
           direction: error.direction,
+        });
+      } else if (error instanceof RegistryManifestLimitError) {
+        console.error(`[weft.system.registry] ${error.message}`, {
+          workflowType: error.workflowType,
+        });
+      } else if (error instanceof RegistryWorkflowCountLimitError) {
+        console.error(`[weft.system.registry] ${error.message}`, {
+          count: error.count,
         });
       }
       throw error;

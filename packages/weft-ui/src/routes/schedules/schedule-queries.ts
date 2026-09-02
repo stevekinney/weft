@@ -78,16 +78,20 @@ export function fetchScheduleDetail(
  * structural stub, which defeats testing this in isolation. A real
  * `HttpClient` satisfies this narrower interface structurally.
  *
- * `workflows` is typed `unknown` (matching the generated catalog's own
- * output type for this operation — its free-form registry snapshot isn't
- * deeply typed there either), so `fetchRegisteredWorkflowTypes` narrows it
- * with a runtime guard before reading keys off it.
+ * `activeRevisions` is typed `unknown` (matching the generated catalog's
+ * own output type for this operation — its free-form registry snapshot
+ * isn't deeply typed there either), so `fetchRegisteredWorkflowTypes`
+ * narrows it with a runtime guard before reading keys off it. Reading
+ * `activeRevisions` (a `name -> revision` map, v2 — WFT-6) rather than
+ * `workflows` (now a `WorkflowRevisionManifest[]`) is deliberate: it is
+ * exactly the currently-active workflow-name set the picker wants, with no
+ * need to filter the manifest array by revision itself.
  */
 export interface RegistryProbeClient {
   readonly operations: {
     'weft.system.registry': (
       input: Record<string, never>,
-    ) => Promise<{ readonly workflows: unknown }>;
+    ) => Promise<{ readonly activeRevisions: unknown }>;
   };
 }
 
@@ -100,8 +104,8 @@ export async function fetchRegisteredWorkflowTypes(
   client: RegistryProbeClient,
 ): Promise<readonly string[]> {
   const snapshot = await client.operations['weft.system.registry']({});
-  const workflows = isPlainObject(snapshot.workflows) ? snapshot.workflows : {};
-  return Object.keys(workflows).toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const activeRevisions = isPlainObject(snapshot.activeRevisions) ? snapshot.activeRevisions : {};
+  return Object.keys(activeRevisions).toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
 export interface CreateScheduleArgs {

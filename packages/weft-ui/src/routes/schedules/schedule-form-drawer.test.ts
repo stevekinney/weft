@@ -14,6 +14,14 @@
  * covered against a fake `RegistryProbeClient` in
  * `schedule-form-fields.test.ts` instead. These tests still confirm the
  * free-text fallback works end-to-end, which is real coverage on its own.
+ *
+ * The free-text fallback here is deterministic regardless of when the real
+ * registry HTTP round-trip settles relative to a test's assertions: this
+ * harness's `Engine` registers no workflows, so `fetchRegisteredWorkflowTypes`
+ * always resolves to `[]`, and `schedule-form-fields.svelte` treats a
+ * resolved-but-empty array the same as still-loading/errored (WFT-6) — the
+ * workflow-type field never switches to a zero-option `Select` no matter how
+ * slow or fast the round-trip is on a given test run.
  */
 import { fireEvent, render, waitFor } from '@testing-library/svelte';
 import { describe, expect, test } from 'bun:test';

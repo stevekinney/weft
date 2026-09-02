@@ -7,6 +7,30 @@ This is the canonical location for per-release migration guidance. When a releas
 
 ## Unreleased
 
+### `GET /v1/registry` advances to `registryVersion: 2` (WFT-6)
+
+`weft.system.registry` / `GET /v1/registry`'s response shape changed. `workflows` was a flat `Record<name, entry>`; it is now an array of `WorkflowRevisionManifest` (WFT-5's canonical vocabulary), sorted by `(name, revision)`, and a new `activeRevisions: Record<name, revision>` field points each workflow name at its currently active manifest in that array. A new `generatedAt` field reports an informational ISO-8601 timestamp. `activities` is unchanged.
+
+If you consume this endpoint directly (rather than through `weft codegen` or the separately-installed `@lostgradient/weft-ui` operator Console — packaged apart from `@lostgradient/weft` and updated in step with it, not bundled with this package), resolve a workflow's active entry as:
+
+```ts partial
+const snapshot = await fetch('/v1/registry').then((response) => response.json());
+const activeRevision = snapshot.activeRevisions['checkout'];
+const manifest = snapshot.workflows.find(
+  (candidate: { name: string; revision: string }) =>
+    candidate.name === 'checkout' && candidate.revision === activeRevision,
+);
+const contract = manifest?.contract; // { name, workflowVersion, inputSchema, outputSchema, ... }
+```
+
+`registryVersion: 1` is rejected outright — there is no compatibility layer. A vendored `--from` snapshot for `weft codegen` must be regenerated against a `registryVersion: 2` server; `weft codegen --from old-snapshot.json ...` now fails with `codegen: registryVersion 1 is not supported (expected 2); upgrade or regenerate the snapshot`.
+
+Two smaller, related behavior changes: a workflow's `tags` now come back alphabetically sorted rather than in registration order, and a registered workflow whose contract exceeds a WFT-5 hostile-input limit (an identifier over 512 bytes, more than 512 signal/update/query/activity entries, schema nesting past 64 levels, or a normalized contract over 256 KiB) now fails the entire registry snapshot with a masked `500` — none of those bounds are enforced at registration time, so a registration the engine previously accepted without incident can now break `GET /v1/registry` until the offending field is shortened. A related aggregate bound: an engine with more than 512 registered workflows in total now fails the whole snapshot the same masked way, since `Engine.register()` itself enforces no ceiling either.
+
+No persisted-data schema change: `GET /v1/registry` is a derived, non-persisted introspection snapshot, not stored state.
+
+A related contract-identity change in this same release: a manifest's `contract.activities` now includes the workflow's own `.activities({...})`-scoped registrations (via the new `Engine.listWorkflowActivityDefinitions()`), which it previously omitted entirely. If you pin an expected `contractHash`/`revision` for a workflow that declares scoped activities, regenerate it — the identity now reflects those activities' schemas too. This also reaches `buildWorkerManifestFromRegistry()`: its workflow-level `contractHash`/`workflowRevision` for such a workflow changes even when you pass an empty `workflows: { <type>: [] }`, since the registry manifest it builds from now already carries those activities.
+
 ### `buildWorkerManifestFromRegistry()` digest values changed (WFT-5)
 
 `contractHash` and `workflowRevision` on `WorkerWorkflowContract`, and `contractHash` on `WorkerActivityContract`, now route through the canonical `contractHash()`/`deriveWorkflowRevision()`/`activityContractHash()` functions (`core/contract`) instead of `registry-contract-builder.ts`'s own ad hoc hashing. The formula folds in a `contractVersion` domain separator the old one never had, so the digest **strings** for an otherwise-unchanged registration differ from prior 0.23.x output.

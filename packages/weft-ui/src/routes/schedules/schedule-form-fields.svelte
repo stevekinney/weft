@@ -32,7 +32,7 @@
   interface Props {
     form: ScheduleFormState;
     mode: 'create' | 'edit';
-    /** Registry-driven workflow type options, or `undefined` to fall back to a free-text field (plan §9.3: workflow picker degrades when `system:read` is unavailable — the create action itself doesn't require it). */
+    /** Registry-driven workflow type options. `undefined` (still loading, errored, or `system:read` unavailable — the create action itself doesn't require it, plan §9.3) or an empty array (the registry resolved successfully but has no registered workflows) both fall back to a free-text field, but with distinct descriptions — "unavailable" vs "no registered workflow types found" — so an authorized schedule creator is never told the server is empty when the lookup merely hasn't settled yet. Only a non-empty array renders the Select. */
     workflowTypeOptions: readonly string[] | undefined;
   }
 
@@ -79,7 +79,7 @@
         error={form.errors.id ?? ''}
       />
     {/if}
-    {#if mode === 'create' && workflowTypeOptions !== undefined}
+    {#if mode === 'create' && workflowTypeOptions !== undefined && workflowTypeOptions.length > 0}
       <Select
         id="weft-schedule-form-workflow-type"
         label="Workflow type"
@@ -91,7 +91,9 @@
       <Input
         id="weft-schedule-form-workflow-type"
         label="Workflow type"
-        description="Registry lookup unavailable — enter the workflow type name."
+        description={workflowTypeOptions === undefined
+          ? 'Registry lookup unavailable — enter the workflow type name.'
+          : 'No registered workflow types found — enter the workflow type name.'}
         bind:value={form.workflowType}
         error={form.errors.workflowType ?? ''}
       />

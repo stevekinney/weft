@@ -452,6 +452,41 @@ describe('buildWorkerManifestFromRegistry', () => {
     expect(manifest.workflows['checkout']?.activities['charge']?.contractHash).toBe(scopedHash);
   });
 
+  it('folds a workflow-scoped activity into the workflow-level contractHash even when the caller declares no activities for it (WFT-6)', async () => {
+    // `buildRegistrySnapshot` (WFT-6) now folds a workflow's own
+    // `.activities({...})` registrations into that workflow's manifest
+    // `contract.activities` — see `core/registry-snapshot.ts`. This
+    // manifest is `baseContract` below; a caller-declared empty
+    // `workflows: { checkout: [] }` no longer means "no activities in the
+    // hashed contract" the way it did before that manifest carried its own
+    // activities, since `contractForHash` only overrides `baseContract`
+    // when the caller's own list is non-empty.
+    async function workflowContractHashFor(inputSchema: z.ZodTypeAny): Promise<string> {
+      const localEngine = createEngine();
+      try {
+        localEngine.register(
+          workflow({ name: 'checkout' })
+            .activities({
+              charge: activity({ name: 'charge', execute: async () => undefined, inputSchema }),
+            })
+            .execute(async function* () {}),
+        );
+        const manifest = await buildWorkerManifestFromRegistry(localEngine, {
+          workflows: { checkout: [] },
+          deployment: DEPLOYMENT,
+          runtime: RUNTIME,
+        });
+        return manifest.workflows['checkout']?.contractHash ?? '';
+      } finally {
+        localEngine[Symbol.dispose]();
+      }
+    }
+
+    const before = await workflowContractHashFor(z.object({ amountCents: z.number() }));
+    const after = await workflowContractHashFor(z.object({ amountUsd: z.string() }));
+    expect(after).not.toBe(before);
+  });
+
   it('defaults sdkVersion and protocolVersion, and accepts explicit overrides', async () => {
     engine = createEngine();
     engine.register(workflow({ name: 'checkout' }).execute(async function* () {}));
@@ -466,5 +501,51 @@ describe('buildWorkerManifestFromRegistry', () => {
 
     expect(manifest.protocolVersion).toBe(999);
     expect(manifest.sdkVersion).toBe('9.9.9');
+  });
+
+  it('builds a manifest for the selected workflow even when the source engine has more than the registry snapshot aggregate limit registered (WFT-6)', async () => {
+    // `Engine.register()` enforces no aggregate ceiling, so an engine can
+    // carry more registrations than `GET /v1/registry`'s wire snapshot may
+    // ever report. This proves `buildWorkerManifestFromRegistry` still
+    // succeeds for the one workflow its own caller-declared `workflows`
+    // names — it must not inherit `buildRegistrySnapshot`'s full-snapshot
+    // `RegistryWorkflowCountLimitError` for registrations it never looks at.
+    engine = createEngine();
+    engine.register(workflow({ name: 'checkout' }).execute(async function* () {}));
+    for (let index = 0; index < 512; index += 1) {
+      engine.register(workflow({ name: `unrelated-${index}` }).execute(async function* () {}));
+    }
+
+    const manifest = await buildWorkerManifestFromRegistry(engine, {
+      workflows: { checkout: [] },
+      deployment: DEPLOYMENT,
+      runtime: RUNTIME,
+    });
+
+    expect(Object.keys(manifest.workflows)).toEqual(['checkout']);
+  });
+
+  it('builds a manifest for the selected workflow even when an unrelated registered workflow individually exceeds a WFT-5 contract limit (WFT-6)', async () => {
+    // Fresh Codex finding on the prior fix: `enforceWorkflowCountLimit: false`
+    // (the previous attempt) disabled only the aggregate-count check —
+    // `buildRegistrySnapshot()` still built and hashed every registered
+    // workflow's manifest, so an unrelated workflow whose contract
+    // individually exceeds a WFT-5 limit (`RegistryManifestLimitError`)
+    // still aborted the whole call. The actual fix resolves only the
+    // requested workflow's manifest directly (`buildWorkflowManifestForType`),
+    // never touching the unrelated one's contract at all.
+    engine = createEngine();
+    engine.register(workflow({ name: 'checkout' }).execute(async function* () {}));
+    engine.register(
+      workflow({ name: 'oversized', version: 'a'.repeat(600) }).execute(async function* () {}),
+    );
+
+    const manifest = await buildWorkerManifestFromRegistry(engine, {
+      workflows: { checkout: [] },
+      deployment: DEPLOYMENT,
+      runtime: RUNTIME,
+    });
+
+    expect(Object.keys(manifest.workflows)).toEqual(['checkout']);
   });
 });

@@ -108,9 +108,12 @@ describe('fetchRegisteredWorkflowTypes', () => {
     const client = {
       operations: {
         'weft.system.registry': async () => ({
-          registryVersion: 1 as const,
-          workflows: { 'report-gen': {}, 'cache-warm': {}, 'invoice-batch': {} },
-          activities: {},
+          registryVersion: 2 as const,
+          activeRevisions: {
+            'report-gen': 'report-gen-rev',
+            'cache-warm': 'cache-warm-rev',
+            'invoice-batch': 'invoice-batch-rev',
+          },
         }),
       },
     };

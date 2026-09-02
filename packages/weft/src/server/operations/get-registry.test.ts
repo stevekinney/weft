@@ -4,18 +4,19 @@
  * Covers:
  * - Snapshot of the response body for a fixture engine with workflows and
  *   activities, with both schema-present and schema-absent cases.
- * - registryVersion: 1 in the response.
+ * - registryVersion: 2 in the response, `generatedAt`, `activeRevisions`.
  * - Authorization: 401 unauthenticated, 403 missing scope, 200 with system:read.
  * - Masked 500 (`{ error: 'Internal server error' }`) when an unsupported
- *   validator throws; the offending entity name and direction reach
- *   server-side logs only, never the wire.
- * - Workflows registered out of alphabetical order produce sorted keys.
+ *   validator throws, or when a registered contract exceeds a WFT-5 limit;
+ *   the offending detail reaches server-side logs only, never the wire.
+ * - Workflows registered out of alphabetical order produce sorted output.
  * - Remote-only activities are excluded by construction (engine never sees them).
  */
 
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 import { z } from 'zod';
 
+import { MAX_CONTRACT_IDENTIFIER_BYTES } from '../../core/contract/index.ts';
 import { Engine } from '../../core/engine.ts';
 import { activity, query, signal, update, workflow } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
@@ -24,6 +25,17 @@ import { createOperationRegistry, executeOperation } from '../operation-catalog.
 import { principalFromApiKey, principalFromJwtClaims } from '../principal.ts';
 import { createLiveOperationRegistry } from '../rest-bindings.ts';
 import { getRegistryOperation, getRegistryRestBinding } from './get-registry.ts';
+
+const ISO_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const REVISION_PATTERN = /^sha256:[0-9a-f]{64}$/;
+
+interface RegistryBody {
+  registryVersion: number;
+  generatedAt: string;
+  workflows: Array<{ name: string; revision: string; contract: Record<string, unknown> }>;
+  activeRevisions: Record<string, string>;
+  activities: Record<string, unknown>;
+}
 
 function createEngine(): Engine {
   return new Engine({ storage: new MemoryStorage() });
@@ -102,12 +114,45 @@ describe('GET /v1/registry — successful responses', () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toBe('application/json');
-    const body = await response.json();
-    expect(body).toEqual({
-      registryVersion: 1,
-      workflows: {
-        schemaless: {},
-        welcome: {
+    const body = (await response.json()) as RegistryBody;
+
+    expect(body.registryVersion).toBe(2);
+    expect(body.generatedAt).toMatch(ISO_TIMESTAMP_PATTERN);
+    expect(body.activeRevisions['welcome']).toMatch(REVISION_PATTERN);
+    expect(body.activeRevisions['schemaless']).toMatch(REVISION_PATTERN);
+    expect(body.workflows).toHaveLength(2);
+
+    const welcome = body.workflows.find((m) => m.name === 'welcome');
+    expect(welcome?.revision).toBe(body.activeRevisions['welcome']);
+    expect(welcome?.contract).toEqual({
+      name: 'welcome',
+      workflowVersion: '0.0.0',
+      description: 'Greets a person.',
+      tags: ['greeting'],
+      inputSchema: {
+        type: 'object',
+        properties: { name: { type: 'string' } },
+        required: ['name'],
+        additionalProperties: false,
+      },
+      outputSchema: {
+        type: 'object',
+        properties: { greeting: { type: 'string' } },
+        required: ['greeting'],
+        additionalProperties: false,
+      },
+      signals: {
+        wave: {
+          inputSchema: {
+            type: 'object',
+            properties: { times: { type: 'number' } },
+            required: ['times'],
+            additionalProperties: false,
+          },
+        },
+      },
+      updates: {
+        rename: {
           inputSchema: {
             type: 'object',
             properties: { name: { type: 'string' } },
@@ -116,78 +161,54 @@ describe('GET /v1/registry — successful responses', () => {
           },
           outputSchema: {
             type: 'object',
-            properties: { greeting: { type: 'string' } },
-            required: ['greeting'],
+            properties: { accepted: { type: 'boolean' } },
+            required: ['accepted'],
             additionalProperties: false,
-          },
-          description: 'Greets a person.',
-          tags: ['greeting'],
-          signals: {
-            wave: {
-              inputSchema: {
-                type: 'object',
-                properties: { times: { type: 'number' } },
-                required: ['times'],
-                additionalProperties: false,
-              },
-            },
-          },
-          updates: {
-            rename: {
-              inputSchema: {
-                type: 'object',
-                properties: { name: { type: 'string' } },
-                required: ['name'],
-                additionalProperties: false,
-              },
-              outputSchema: {
-                type: 'object',
-                properties: { accepted: { type: 'boolean' } },
-                required: ['accepted'],
-                additionalProperties: false,
-              },
-            },
-          },
-          queries: {
-            status: {
-              outputSchema: {
-                type: 'object',
-                properties: { state: { type: 'string' } },
-                required: ['state'],
-                additionalProperties: false,
-              },
-            },
           },
         },
       },
-      activities: {
-        noop: { queue: 'default' },
-        sendEmail: {
-          queue: 'mail',
-          inputSchema: {
-            type: 'object',
-            properties: { to: { type: 'string' } },
-            required: ['to'],
-            additionalProperties: false,
-          },
+      queries: {
+        status: {
           outputSchema: {
             type: 'object',
-            properties: {
-              delivered: { type: 'boolean' },
-              recipient: { type: 'string' },
-            },
-            required: ['delivered', 'recipient'],
+            properties: { state: { type: 'string' } },
+            required: ['state'],
             additionalProperties: false,
           },
-          description: 'Sends an email.',
-          retry: {
-            maxAttempts: 3,
-            initialBackoff: '200ms',
-            backoffMultiplier: 2,
-            maxBackoff: '5s',
-          },
-          timeout: '30s',
         },
+      },
+    });
+
+    const schemaless = body.workflows.find((m) => m.name === 'schemaless');
+    expect(schemaless?.contract).toEqual({ name: 'schemaless', workflowVersion: '0.0.0' });
+
+    expect(body.activities).toEqual({
+      noop: { queue: 'default' },
+      sendEmail: {
+        queue: 'mail',
+        inputSchema: {
+          type: 'object',
+          properties: { to: { type: 'string' } },
+          required: ['to'],
+          additionalProperties: false,
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            delivered: { type: 'boolean' },
+            recipient: { type: 'string' },
+          },
+          required: ['delivered', 'recipient'],
+          additionalProperties: false,
+        },
+        description: 'Sends an email.',
+        retry: {
+          maxAttempts: 3,
+          initialBackoff: '200ms',
+          backoffMultiplier: 2,
+          maxBackoff: '5s',
+        },
+        timeout: '30s',
       },
     });
   });
@@ -206,14 +227,15 @@ describe('GET /v1/registry — successful responses', () => {
     );
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({
-      registryVersion: 1,
-      workflows: {},
-      activities: {},
-    });
+    const body = (await response.json()) as RegistryBody;
+    expect(body.registryVersion).toBe(2);
+    expect(body.generatedAt).toMatch(ISO_TIMESTAMP_PATTERN);
+    expect(body.workflows).toEqual([]);
+    expect(body.activeRevisions).toEqual({});
+    expect(body.activities).toEqual({});
   });
 
-  it('produces alphabetically sorted workflow and activity keys', async () => {
+  it('produces alphabetically sorted workflow and activity output', async () => {
     engine = createEngine();
     engine.register(workflow({ name: 'charlie' }).execute(async function* () {}));
     engine.register(workflow({ name: 'alpha' }).execute(async function* () {}));
@@ -232,11 +254,8 @@ describe('GET /v1/registry — successful responses', () => {
     );
 
     expect(response.status).toBe(200);
-    const body = (await response.json()) as {
-      workflows: Record<string, unknown>;
-      activities: Record<string, unknown>;
-    };
-    expect(Object.keys(body.workflows)).toEqual(['alpha', 'bravo', 'charlie']);
+    const body = (await response.json()) as RegistryBody;
+    expect(body.workflows.map((m) => m.name)).toEqual(['alpha', 'bravo', 'charlie']);
     expect(Object.keys(body.activities)).toEqual(['alpha', 'zulu']);
   });
 
@@ -262,16 +281,14 @@ describe('GET /v1/registry — successful responses', () => {
     );
 
     expect(response.status).toBe(200);
-    const body = (await response.json()) as {
-      workflows: Record<string, unknown>;
-      activities: Record<string, unknown>;
-    };
-    expect(Object.keys(body.workflows)).toContain('__proto__');
+    const body = (await response.json()) as RegistryBody;
+    expect(body.workflows.some((m) => m.name === '__proto__')).toBe(true);
     expect(Object.keys(body.activities)).toContain('__proto__');
+    expect(Object.keys(body.activeRevisions)).toContain('__proto__');
     // Sanity: the keys are own properties on the parsed JSON, not prototype
     // entries inherited from `Object.prototype`.
-    expect(Object.prototype.hasOwnProperty.call(body.workflows, '__proto__')).toBe(true);
     expect(Object.prototype.hasOwnProperty.call(body.activities, '__proto__')).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(body.activeRevisions, '__proto__')).toBe(true);
   });
 
   it('excludes remote-only activities (engine never registers them)', async () => {
@@ -366,9 +383,9 @@ describe('GET /v1/registry — authorization', () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error('expected success');
-    const value = result.value as { registryVersion: number; workflows: Record<string, unknown> };
-    expect(value.registryVersion).toBe(1);
-    expect(value.workflows).toHaveProperty('demo');
+    const value = result.value as RegistryBody;
+    expect(value.registryVersion).toBe(2);
+    expect(value.workflows.some((m) => m.name === 'demo')).toBe(true);
   });
 });
 
@@ -412,6 +429,84 @@ describe('GET /v1/registry — error shaping', () => {
 
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ error: 'Internal server error' });
+  });
+
+  it('returns 500 with "Internal server error" and logs workflowType/reason when a contract exceeds a WFT-5 limit', async () => {
+    // A `version` this long is grammar-valid at registration (nothing in
+    // engine registration bounds it) but exceeds `MAX_CONTRACT_IDENTIFIER_BYTES`
+    // at manifest-build time — the new v2 failure mode this operation must
+    // mask on the wire while still logging enough for an operator to find
+    // the bad registration. This is the only test that exercises the
+    // `instanceof RegistryManifestLimitError` branch in `invoke`'s catch.
+    engine = createEngine();
+    engine.register(
+      workflow({
+        name: 'oversized',
+        version: 'a'.repeat(MAX_CONTRACT_IDENTIFIER_BYTES + 1),
+      }).execute(async function* () {}),
+    );
+
+    const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const response = await handleRequest(
+        new Request('http://localhost/v1/registry', { method: 'GET' }),
+        engine,
+        {
+          operationRegistry: createOperationRegistry([getRegistryOperation]),
+          restBindings: [getRegistryRestBinding],
+          ...authContextWithSystemRead(),
+        },
+      );
+
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ error: 'Internal server error' });
+
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      const [message, detail] = errorSpy.mock.calls[0] as [string, { workflowType: string }];
+      expect(message).toContain('[weft.system.registry]');
+      expect(message).toContain('oversized');
+      expect(detail.workflowType).toBe('oversized');
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('returns 500 with "Internal server error" and logs the count when more than the maximum workflows are registered (WFT-6)', async () => {
+    // `Engine.register()` enforces no aggregate ceiling (only per-contract
+    // limits at manifest-build time), so an engine can accumulate more
+    // workflows than the registry snapshot may ever report — this is the
+    // only test that exercises the `instanceof RegistryWorkflowCountLimitError`
+    // branch in `invoke`'s catch. Each registration is a trivial no-op
+    // workflow so the loop stays cheap; the count check fires before any
+    // manifest is built or hashed.
+    engine = createEngine();
+    for (let index = 0; index < 513; index += 1) {
+      engine.register(workflow({ name: `workflow-${index}` }).execute(async function* () {}));
+    }
+
+    const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const response = await handleRequest(
+        new Request('http://localhost/v1/registry', { method: 'GET' }),
+        engine,
+        {
+          operationRegistry: createOperationRegistry([getRegistryOperation]),
+          restBindings: [getRegistryRestBinding],
+          ...authContextWithSystemRead(),
+        },
+      );
+
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ error: 'Internal server error' });
+
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      const [message, detail] = errorSpy.mock.calls[0] as [string, { count: number }];
+      expect(message).toContain('[weft.system.registry]');
+      expect(message).toContain('513');
+      expect(detail.count).toBe(513);
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it('returns 500 with "Internal server error" for unrelated EngineFailure faults', async () => {

@@ -158,6 +158,14 @@ listActivityDefinitions(): ActivityMetadata[]
 
 Return read-only metadata for all registered activity names. Activity definition introspection is name-based, so aliases are reported separately even when they point at the same function.
 
+### `listWorkflowActivityDefinitions()`
+
+```ts partial
+listWorkflowActivityDefinitions(workflowType: string): ActivityMetadata[]
+```
+
+Return read-only metadata for every activity registered on `workflowType`'s own `.activities({...})` step — never a same-named global activity, and never a handler function. Returns an empty array for a workflow with no `.activities({...})` step, including an unknown `workflowType`. `buildRegistrySnapshot()` (`GET /v1/registry`) uses this to fold a workflow's scoped activity schemas into its manifest contract, so a scoped activity's schema change moves that workflow's `contractHash` and `revision`.
+
 ### `start()`
 
 ```ts partial
@@ -748,13 +756,7 @@ interface WorkflowSummary {
 
 ```ts partial
 type WorkflowStatus =
-  | 'pending'
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'cancelled'
-  | 'timed-out'
-  | 'suspended';
+  'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'suspended';
 ```
 
 ### `WorkflowFunction`

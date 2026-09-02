@@ -487,9 +487,11 @@ export type ClientOperationTypes = {
   'weft.system.registry': {
     readonly input: {};
     readonly output: {
+      readonly activeRevisions: unknown;
       readonly activities: unknown;
-      readonly registryVersion: 1;
-      readonly workflows: unknown;
+      readonly generatedAt: string;
+      readonly registryVersion: 2;
+      readonly workflows: ReadonlyArray<unknown>;
     };
     readonly faults: never;
   };
