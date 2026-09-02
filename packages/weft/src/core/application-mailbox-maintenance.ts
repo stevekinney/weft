@@ -128,7 +128,16 @@ async function retireOneReceipt(runtime: MailboxRuntime, indexKey: string): Prom
   if (commandId === null) return false;
   const loaded = await loadCommand(runtime.storage, runtime.keys, commandId);
   const operations: BatchOperation[] = [{ type: 'delete', key: indexKey }];
-  if (loaded === null) {
+  // Only a terminal record whose own `terminalAt` rebuilds this exact index key
+  // is retired through it. A stale or corrupted entry naming a live command, or
+  // a terminal one under a different timestamp, is an orphaned index entry: it
+  // is removed on its own, and the record it points at is left alone rather
+  // than deleted out from under the mailbox.
+  const owned =
+    loaded !== null &&
+    isTerminalRecord(loaded.record) &&
+    runtime.keys.terminal(loaded.record.terminalAt, commandId) === indexKey;
+  if (loaded === null || !owned) {
     return storageConditionalBatch(
       runtime.storage,
       [{ key: indexKey, expectedValue: await runtime.storage.get(indexKey) }],

@@ -233,12 +233,25 @@ function decodeTerminalRecord(
  * embedded identity rather than the one the caller asked for.
  */
 function assertIdentityMatchesKey(decoded: Record<string, unknown>, key: string): void {
-  const own = KEYS.applicationCommand(
-    readString(decoded, 'namespace', key),
-    readString(decoded, 'resourceId', key),
-    readString(decoded, 'commandId', key),
-  );
-  if (own !== key) fail(key);
+  const namespace = readString(decoded, 'namespace', key);
+  const resourceId = readString(decoded, 'resourceId', key);
+  const commandId = readString(decoded, 'commandId', key);
+  if (ownKey(() => KEYS.applicationCommand(namespace, resourceId, commandId), key) !== key) {
+    fail(key);
+  }
+}
+
+/**
+ * Rebuild the key a record's own identity names. Key construction percent-encodes
+ * each component and throws a raw `URIError` on an unpaired surrogate; a
+ * persisted identity that malformed is corruption and must surface as such.
+ */
+function ownKey(build: () => string, key: string): string {
+  try {
+    return build();
+  } catch {
+    return fail(key);
+  }
 }
 
 export function decodeApplicationCommandRecord(
@@ -299,10 +312,16 @@ export function decodeApplicationMailboxRecord(
   }
   if (!isRecordObject(decoded)) fail(key);
   readVersion(decoded, key);
+  const namespace = readString(decoded, 'namespace', key);
+  const resourceId = readString(decoded, 'resourceId', key);
+  // A header copied from another scope, or corrupted into one, would hand its
+  // sequence allocator to this mailbox and let the next admission overwrite an
+  // existing index entry. It must name the scope it is stored under.
+  if (ownKey(() => KEYS.applicationMailbox(namespace, resourceId), key) !== key) fail(key);
   return {
     recordVersion: APPLICATION_MAILBOX_RECORD_VERSION,
-    namespace: readString(decoded, 'namespace', key),
-    resourceId: readString(decoded, 'resourceId', key),
+    namespace,
+    resourceId,
     nextSequence: readInteger(decoded, 'nextSequence', key),
     openCount: readInteger(decoded, 'openCount', key),
     admittedCount: readInteger(decoded, 'admittedCount', key),

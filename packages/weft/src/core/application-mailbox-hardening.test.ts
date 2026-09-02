@@ -1350,3 +1350,97 @@ describe('sixth-round hardening', () => {
     mailbox.dispose();
   });
 });
+
+describe('seventh-round hardening', () => {
+  it('keeps the winning registration when concurrent claims share a token', async () => {
+    const storage = new MemoryStorage();
+    let generated = 0;
+    const generateId = (): string => {
+      generated += 1;
+      return generated <= 1 ? 'command-1' : 'repeat';
+    };
+    const left = createMailboxFixture({ storage, generateId }).mailbox;
+    const right = createMailboxFixture({ storage, generateId }).mailbox;
+    const commandId = await admitOne(left);
+
+    // Both handles derive the same token and register before either
+    // compare-and-swap settles. The loser must not remove or abort the winner's
+    // registration, and cancellation must still reach the winner.
+    const [first, second] = await Promise.all([left.claim(), right.claim()]);
+    const winner = first.status === 'claimed' ? first : second;
+    const loser = first.status === 'claimed' ? second : first;
+    expect(winner.status).toBe('claimed');
+    expect(loser.status).toBe('empty');
+    if (winner.status !== 'claimed') return;
+    expect(winner.claim.signal.aborted).toBe(false);
+
+    const cancelled = await right.requestCancellation({ commandId });
+    expect(cancelled.status).toBe('requested');
+    expect(winner.claim.signal.aborted).toBe(true);
+    left.dispose();
+    right.dispose();
+  });
+
+  it('keeps a committed sink-backed admission when the probe read fails', async () => {
+    const storage = new MemoryStorage();
+    const events = new RecordingEventSink(storage);
+    const { mailbox } = createMailboxFixture({ storage, events });
+    const originalGet = storage.get.bind(storage);
+    let failed = false;
+    storage.get = async (key: string): Promise<Uint8Array | null> => {
+      if (!failed && key.startsWith('appprobe:')) {
+        failed = true;
+        throw new Error('transient');
+      }
+      return originalGet(key);
+    };
+
+    const admission = await mailbox.admit(commandInput({ idempotencyKey: 'a' }));
+    expect(admission.status).toBe('admitted');
+    expect(failed).toBe(true);
+    // Still unverified, so the next commit probes again — and succeeds.
+    const again = await mailbox.admit(commandInput({ idempotencyKey: 'b' }));
+    expect(again.status).toBe('admitted');
+    expect(await mailbox.list()).toHaveLength(2);
+    mailbox.dispose();
+  });
+
+  it('fails closed on a persisted identity with an unpaired surrogate', async () => {
+    const { mailbox, storage } = createMailboxFixture();
+    const commandId = await admitOne(mailbox);
+    const key = KEYS.applicationCommand('bureau', 'agent-7', commandId);
+    const record = decode((await storage.get(key)) as Uint8Array) as Record<string, unknown>;
+    await storage.put(key, encode({ ...record, namespace: 'bureau\ud800' }));
+    await expect(mailbox.receipt(commandId)).rejects.toThrow(PersistedDataCorruptError);
+    mailbox.dispose();
+  });
+
+  it('fails closed on a mailbox header stored under another scope', async () => {
+    const { mailbox, storage } = createMailboxFixture();
+    await admitOne(mailbox);
+    const header = await storage.get(KEYS.applicationMailbox('bureau', 'agent-7'));
+    await storage.put(KEYS.applicationMailbox('bureau', 'agent-8'), header as Uint8Array);
+    const other = new ApplicationMailbox({ storage, namespace: 'bureau', resourceId: 'agent-8' });
+    await expect(other.capacity()).rejects.toThrow(PersistedDataCorruptError);
+    await expect(other.admit(commandInput())).rejects.toThrow(PersistedDataCorruptError);
+    other.dispose();
+    mailbox.dispose();
+  });
+
+  it('does not retire a live command through a stale terminal-index entry', async () => {
+    const { mailbox, storage, clock } = createMailboxFixture({ terminalRetentionMs: 1_000 });
+    const commandId = await admitOne(mailbox);
+    // A corrupt index entry claims this open command reached a terminal state
+    // long ago.
+    const stale = KEYS.applicationCommandTerminal('bureau', 'agent-7', 0, commandId);
+    await storage.put(stale, encodeApplicationReadyEntry(commandId));
+    clock.advance(5_000);
+
+    await mailbox.runMaintenance();
+    const receipt = await mailbox.receipt(commandId);
+    expect(receipt?.state).toBe('available');
+    expect(await storage.get(stale)).toBeNull();
+    expect(await mailbox.list()).toHaveLength(1);
+    mailbox.dispose();
+  });
+});

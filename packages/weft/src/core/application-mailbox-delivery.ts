@@ -21,8 +21,8 @@ import {
   ApplicationMailboxContentionError,
   MAX_MAILBOX_TRANSITION_ATTEMPTS,
   commitCommandTransition,
-  releaseAttemptController,
   toApplicationCommandReceipt,
+  type AttemptRegistration,
   type MailboxRuntime,
 } from './application-mailbox-internals.ts';
 import { isWaitingState, loadCommand, loadDeliveryHead } from './application-mailbox-storage.ts';
@@ -35,6 +35,9 @@ import {
 } from './application-mailbox-validation.ts';
 import { computePayloadDigest } from './application-payload-digest.ts';
 import { PersistedDataCorruptError } from './persisted-data-incompatible-error.ts';
+
+/** Process-local claim serial folded into every attempt token; see `leaseHead`. */
+let localClaimSerial = 0;
 
 /**
  * Recompute an inline payload's digest and fail closed on a mismatch.
@@ -183,15 +186,40 @@ async function resolveDeliverableHead(
  * `dispose()` sees no owned attempt and the caller still receives a live signal
  * nothing can ever reach.
  */
-function registerAttemptController(runtime: MailboxRuntime, attemptToken: string): AbortController {
+function registerAttemptController(
+  runtime: MailboxRuntime,
+  attemptToken: string,
+): { readonly controller: AbortController; readonly registration: AttemptRegistration | null } {
   const controller = new AbortController();
   const release = runtime.adoptAttempt(attemptToken);
-  if (release !== null) {
-    runtime.attemptControllers.set(attemptToken, { controller, release });
-  } else {
+  if (release === null) {
     controller.abort(new Error('The application mailbox was disposed while this claim committed.'));
+    return { controller, registration: null };
   }
-  return controller;
+  const registration = { controller, release };
+  runtime.attemptControllers.set(attemptToken, registration);
+  return { controller, registration };
+}
+
+/**
+ * Release a claim's own registration.
+ *
+ * Tokens are unique per claim invocation, so the published registration is
+ * always this claim's; the identity check is a guard, not a branch anyone
+ * relies on.
+ */
+function releaseOwnRegistration(
+  runtime: MailboxRuntime,
+  attemptToken: string,
+  registration: AttemptRegistration | null,
+  reason: string,
+): void {
+  if (registration === null) return;
+  if (runtime.attemptControllers.get(attemptToken) === registration) {
+    runtime.attemptControllers.delete(attemptToken);
+  }
+  registration.release();
+  if (!registration.controller.signal.aborted) registration.controller.abort(new Error(reason));
 }
 
 /**
@@ -274,7 +302,12 @@ async function leaseHead(
   // admission accepts — still yields a usable token rather than one every claim
   // rejects.
   const generated = requireGeneratedIdentifier(runtime.generateId(), 'attemptToken');
-  const attemptToken = `${loaded.record.sequence}.${loaded.record.attempt + 1}.${generated}`;
+  // A process-local serial makes two concurrent claims of the SAME attempt in
+  // this process distinct as well, so their controller registrations can never
+  // collide however the generator behaves. The compare-and-swap decides which
+  // of them commits; cross-process uniqueness is irrelevant to the registry.
+  localClaimSerial += 1;
+  const attemptToken = `${loaded.record.sequence}.${loaded.record.attempt + 1}.${localClaimSerial}.${generated}`;
   const transition = claimWaitingCommand(loaded.record, { now: committedAt, attemptToken });
   if (!transition.ok) return null;
   // Register BEFORE the commit. A sibling handle that cancels the command after
@@ -282,7 +315,7 @@ async function leaseHead(
   // this claim would hand back a live signal for work whose cancellation is
   // already durable. A registration for a lease that never commits, or that is
   // withheld below, is released again.
-  const controller = registerAttemptController(runtime, attemptToken);
+  const { controller, registration } = registerAttemptController(runtime, attemptToken);
   const committed = await commitCommandTransition(runtime, {
     previous: loaded.record,
     expectedBytes: loaded.bytes,
@@ -290,7 +323,12 @@ async function leaseHead(
     now: committedAt,
   });
   if (!committed) {
-    releaseAttemptController(runtime, attemptToken, 'The claim lost its compare-and-swap.');
+    releaseOwnRegistration(
+      runtime,
+      attemptToken,
+      registration,
+      'The claim lost its compare-and-swap.',
+    );
     return null;
   }
   // The commit is itself asynchronous — a fleet-event sink may retry its
@@ -298,9 +336,10 @@ async function leaseHead(
   // against. Handing that claim out would start work the contract already calls
   // expired; dead-letter it and let the caller look at the head again.
   if (runtime.now() >= transition.next.absoluteDeadlineAt) {
-    releaseAttemptController(
+    releaseOwnRegistration(
       runtime,
       attemptToken,
+      registration,
       'The application mailbox dead-lettered this command at its absolute deadline.',
     );
     await deadLetterCommittedLease(runtime, transition.next.commandId);

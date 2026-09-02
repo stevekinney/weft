@@ -353,7 +353,17 @@ async function assertSinkCommittedLocally(
   events: ApplicationMailboxEventSink,
   probe: { readonly key: string; readonly value: Uint8Array },
 ): Promise<void> {
-  const stored = await storage.get(probe.key);
+  let stored: Uint8Array | null;
+  try {
+    stored = await storage.get(probe.key);
+  } catch {
+    // The transition and its event are already durable. A read that cannot
+    // determine the probe's fate is not evidence of a misconfigured sink, and
+    // surfacing it would invite the caller to retry a committed operation —
+    // for a keyless admission, into a second command. Stay unverified; the
+    // next commit through this sink checks again.
+    return;
+  }
   if (stored === null || !bytesEqual(stored, probe.value)) {
     throw new Error(
       'The configured application mailbox event sink committed to a different storage backend than the mailbox. Build the fleet event feed over the same Storage instance the mailbox uses.',

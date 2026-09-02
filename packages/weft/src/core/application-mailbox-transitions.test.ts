@@ -9,6 +9,7 @@
  */
 
 import { describe, expect, it } from 'bun:test';
+import { KEYS } from '../storage/interface.ts';
 
 import {
   decodeApplicationCommandIdempotencyRecord,
@@ -338,9 +339,12 @@ describe('mailbox record codec', () => {
       openCount: 2,
       admittedCount: 4,
     };
-    expect(decodeApplicationMailboxRecord(encodeApplicationMailboxRecord(header), 'k')).toEqual(
-      header,
-    );
+    expect(
+      decodeApplicationMailboxRecord(
+        encodeApplicationMailboxRecord(header),
+        KEYS.applicationMailbox('bureau', 'agent-7'),
+      ),
+    ).toEqual(header);
 
     const binding = {
       recordVersion: 1 as const,
