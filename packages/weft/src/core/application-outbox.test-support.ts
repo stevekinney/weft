@@ -47,6 +47,12 @@ export class ScriptedAdapter implements ApplicationDeliveryAdapter {
   /** The outcome used once the script runs dry. */
   fallback: ApplicationDeliveryOutcome = { status: 'acknowledged' };
 
+  // Explicit so Bun's LCOV function counting does not report the synthesized
+  // constructor as a function no test can reach.
+  constructor() {
+    this.fallback = { status: 'acknowledged' };
+  }
+
   reply(outcome: unknown): this {
     this.#script.push({ kind: 'outcome', outcome });
     return this;

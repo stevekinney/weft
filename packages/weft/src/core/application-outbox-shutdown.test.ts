@@ -166,6 +166,35 @@ describe('ApplicationOutbox disposal', () => {
     }
     await expect(captured.receipt('x')).rejects.toThrow(/disposed/);
     captured.dispose();
+    // The default id source mints usable delivery ids.
+    using fresh = new ApplicationOutbox({ storage, namespace: 'n', ownerId: 'o' });
+    const admission = await fresh.enqueue({
+      destinationRef: 'd',
+      kind: 'k',
+      payload: { form: 'inline', value: 1 },
+    });
+    expect(admission.status).toBe('enqueued');
+  });
+
+  it('withholds a live signal from a claim whose handle was disposed before it registered', async () => {
+    let calls = 0;
+    let disposeOnToken: (() => void) | null = null;
+    const { outbox } = createOutboxFixture({
+      generateId: () => {
+        calls += 1;
+        // The first id is the enqueue's delivery id; the second is the attempt
+        // token, minted just before the attempt registers with the handle.
+        if (calls === 2) disposeOnToken?.();
+        return `id-${calls}`;
+      },
+    });
+    await enqueueOne(outbox);
+    disposeOnToken = () => {
+      outbox.dispose();
+    };
+    const result = await outbox.claim();
+    expect(result.status).toBe('claimed');
+    expect(result.status === 'claimed' && result.claim.signal.aborted).toBe(true);
   });
 
   it('hands back an already-aborted signal when disposal lands while the claim commits', async () => {
