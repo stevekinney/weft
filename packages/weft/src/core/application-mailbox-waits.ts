@@ -1,0 +1,301 @@
+/**
+ * The abortable, bounded waits the application command mailbox exposes
+ * (WFT-84): waiting for work to become due, and waiting for a cancelled
+ * command's claimant to settle.
+ *
+ * Both are polling waits. Cross-process wakeup has no push channel — another
+ * process's admission is only visible in durable storage — so a poll is the
+ * honest mechanism rather than a subscription that would silently miss remote
+ * work. Every wait is bounded by a caller-supplied deadline, respects a
+ * caller-supplied `AbortSignal`, and unwinds cleanly when the mailbox is
+ * disposed mid-wait: the timer is cleared and both abort listeners are removed
+ * on every settlement path, so no wait can outlive its mailbox.
+ *
+ * Waiting never claims, starts, or advances durable work.
+ *
+ * @module core/application-mailbox-waits
+ */
+
+import { WaitBudgetElapsedError, raceAbortWithin } from './application-mailbox-abort.ts';
+import type {
+  ApplicationCommandCleanupResult,
+  ApplicationMailboxWaitOptions,
+} from './application-mailbox-contract.ts';
+import { decodeApplicationReadyEntry } from './application-mailbox-index-codec.ts';
+import type { MailboxRuntime } from './application-mailbox-internals.ts';
+import { readCleanupState } from './application-mailbox-settlement.ts';
+import { isWaitingState, loadCommand } from './application-mailbox-storage.ts';
+import {
+  requireClockInstant,
+  requireDerivedInstant,
+  requireWaitBudget,
+} from './application-mailbox-validation.ts';
+
+export { DEFAULT_WAIT_POLL_INTERVAL_MS as DEFAULT_MAILBOX_POLL_INTERVAL_MS } from './application-mailbox-validation.ts';
+
+/**
+ * Sleep, resolving `false` when the wait was aborted or the mailbox disposed
+ * and `true` when the interval actually elapsed.
+ *
+ * The listeners are removed on every path, including the timer path, so a
+ * long-lived mailbox does not accumulate abort listeners once per poll.
+ */
+export function delayUnlessAborted(
+  milliseconds: number,
+  disposal: AbortSignal,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (signal?.aborted === true || disposal.aborted) return Promise.resolve(false);
+  return new Promise<boolean>((resolve) => {
+    const settle = (elapsed: boolean): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      disposal.removeEventListener('abort', onAbort);
+      resolve(elapsed);
+    };
+    const onAbort = (): void => {
+      settle(false);
+    };
+    const timer = setTimeout(() => {
+      settle(true);
+    }, milliseconds);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    disposal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/**
+ * Whether the FIFO head exists and is claimable right now.
+ *
+ * The absolute deadline counts as well as availability. A head that is due but
+ * already expired is not deliverable — `claim()` would terminalize it and report
+ * `empty` — so reporting it as available would advertise work that does not
+ * exist.
+ */
+export async function hasDueWork(runtime: MailboxRuntime): Promise<boolean> {
+  // The index is read before the records. An entry whose record moved on in
+  // between — claimed or settled by another consumer — or that is not the one
+  // its record's sequence names, or whose command is past its deadline, is one
+  // `claim()` would discard or dead-letter and then look past; look past it
+  // here too, so a consumer is not told there is nothing to do while the next
+  // entry is the claimable head. The look-ahead is bounded because a wait
+  // mutates nothing and so cannot make progress through a long run of them.
+  for await (const [key, value] of runtime.storage.scan(runtime.keys.readyPrefix, {
+    limit: DUE_WORK_LOOKAHEAD,
+  })) {
+    const loaded = await loadCommand(
+      runtime.storage,
+      runtime.keys,
+      decodeApplicationReadyEntry(value, key),
+    );
+    if (loaded === null || !isWaitingState(loaded.record)) continue;
+    if (key !== runtime.keys.ready(loaded.record.sequence)) continue;
+    const now = runtime.now();
+    if (now >= loaded.record.absoluteDeadlineAt) continue;
+    // The first genuine head decides: due, or held — strict FIFO never skips a
+    // held head to a later one.
+    return now >= loaded.record.availableAt;
+  }
+  return false;
+}
+
+/** How many delivery-index entries a due-work observation looks past before giving up. */
+const DUE_WORK_LOOKAHEAD = 8;
+
+/**
+ * Wait, bounded and abortably, until this mailbox has work due for delivery.
+ *
+ * Returns `true` when the FIFO head is claimable and `false` when the wait was
+ * aborted, the mailbox was disposed, or the timeout elapsed first.
+ */
+export async function waitForAvailableWork(
+  runtime: MailboxRuntime,
+  disposal: AbortSignal,
+  options?: ApplicationMailboxWaitOptions,
+): Promise<boolean> {
+  const { timeoutMs, pollIntervalMs } = requireWaitBudget(options ?? {});
+  // Both operands are valid on their own; the sum can still leave the range no
+  // later clock reading can reach, which would turn a bounded wait into polling
+  // until aborted.
+  const deadline = requireDerivedInstant(
+    requireClockInstant(runtime.now()) + timeoutMs,
+    'deadline',
+  );
+  let remaining = 0;
+  do {
+    // Aborting, disposal, or a spent budget means `false`, and that outranks
+    // any observation — including one already in hand or one still in flight
+    // against stalled storage. A shutdown caller must never be told to start
+    // new work.
+    const observed = await observeDueWork(runtime, disposal, options?.signal, timeoutMs, deadline);
+    if (observed === null || isAborted(disposal, options?.signal)) return false;
+    if (observed) return observedInTime(timeoutMs, deadline, runtime.now());
+    // Clamp each sleep to what is left of the budget. An interval longer than the
+    // remaining time would otherwise put the next observation past the bound the
+    // caller asked for, turning a timeout into a late success.
+    remaining = deadline - runtime.now();
+    if (remaining <= 0) return false;
+  } while (
+    await delayUnlessAborted(Math.min(pollIntervalMs, remaining), disposal, options?.signal)
+  );
+  // The sleep was cut short by an abort or by disposal.
+  return false;
+}
+
+/**
+ * One bounded observation of due work, or `null` when the wait is over.
+ *
+ * A budget that the last sleep consumed exactly must not start one more read
+ * that nothing would bound; the first iteration of a positive budget always
+ * observes, since its deadline is strictly ahead. The documented `timeoutMs: 0`
+ * default performs one unconditional look. An observation ended by abort,
+ * disposal, or the budget is `null`.
+ */
+async function observeDueWork(
+  runtime: MailboxRuntime,
+  disposal: AbortSignal,
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
+  deadline: number,
+): Promise<boolean | null> {
+  if (budgetSpent(timeoutMs, deadline, runtime.now())) return null;
+  const observed = await raceAbortWithin(
+    () => hasDueWork(runtime),
+    budgetFor(timeoutMs, deadline, runtime.now()),
+    disposal,
+    signal,
+  );
+  return observed.aborted ? null : observed.value;
+}
+
+/** Whether a positive budget has already run out; the zero-timeout default never has. */
+function budgetSpent(timeoutMs: number, deadline: number, now: number): boolean {
+  return timeoutMs > 0 && now >= deadline;
+}
+
+/**
+ * How long an observation may take before the wait's own budget ends it.
+ *
+ * `null` for the zero-timeout default, which performs one unconditional look,
+ * and for a budget already spent, which the post-observation check reports.
+ */
+function budgetFor(timeoutMs: number, deadline: number, now: number): number | null {
+  if (timeoutMs === 0) return null;
+  const remaining = deadline - now;
+  return remaining > 0 ? remaining : null;
+}
+
+/**
+ * Whether a due-work observation still counts, given when it finished.
+ *
+ * The observation itself takes time. Work that came due during a read that
+ * finished past the deadline is a late success the bound promised not to
+ * report; the zero-timeout default keeps its single unconditional look.
+ */
+function observedInTime(timeoutMs: number, deadline: number, now: number): boolean {
+  return timeoutMs === 0 || now <= deadline;
+}
+
+/** Whether either the mailbox's disposal signal or the caller's signal has fired. */
+function isAborted(disposal: AbortSignal, signal?: AbortSignal): boolean {
+  return disposal.aborted || signal?.aborted === true;
+}
+
+/**
+ * Wait, bounded, for a cancelled command's claimant to settle.
+ *
+ * A `pending` result means this mailbox stopped waiting — never that the
+ * handler stopped.
+ */
+export async function waitForCleanup(
+  runtime: MailboxRuntime,
+  disposal: AbortSignal,
+  options: {
+    readonly commandId: string;
+    readonly timeoutMs: number;
+    readonly signal?: AbortSignal | undefined;
+    readonly pollIntervalMs?: number | undefined;
+  },
+): Promise<ApplicationCommandCleanupResult> {
+  const { timeoutMs, pollIntervalMs } = requireWaitBudget(options);
+  // Both operands are valid on their own; the sum can still leave the range no
+  // later clock reading can reach, which would turn a bounded wait into polling
+  // until aborted.
+  const deadline = requireDerivedInstant(
+    requireClockInstant(runtime.now()) + timeoutMs,
+    'deadline',
+  );
+  // Every read races the caller's signal and the mailbox's disposal. A wait
+  // that is already aborted must not begin a storage read, and one aborted
+  // DURING a stalled remote read must not stay pending until that read returns;
+  // either way the abort surfaces as the signal's own reason, as `claim()` does
+  // for its request signal.
+  const first = await readUnlessAborted(
+    runtime,
+    options.commandId,
+    disposal,
+    options.signal,
+    budgetFor(timeoutMs, deadline, runtime.now()),
+  );
+  // With no observation in hand, a budget spent on a stalled first read has
+  // nothing honest to report as `pending`; it is surfaced as the budget error.
+  if (first === null) throw new WaitBudgetElapsedError();
+  let latest = first;
+  // A terminal record with `cleanupPending: true` is already final: the mailbox
+  // recorded that it stopped waiting for an abandoned attempt. Polling it would
+  // burn the whole timeout on a value that can never change again.
+  if (latest.status === 'pending' && latest.receipt.terminalAt !== undefined) return latest;
+  while (latest.status === 'pending') {
+    // Clamp to the remaining budget for the same reason the available-work wait
+    // does: a poll interval longer than what is left would block well past the
+    // bound this method promises.
+    const remaining = deadline - runtime.now();
+    if (remaining <= 0) break;
+    if (
+      !(await delayUnlessAborted(Math.min(pollIntervalMs, remaining), disposal, options.signal))
+    ) {
+      // A caller abort rejects with its reason wherever it lands — before a
+      // read, during one, or during this sleep — so cancellation has one
+      // meaning. Disposal keeps the last observation: the handle is gone and
+      // the receipt it already holds is still true.
+      options.signal?.throwIfAborted();
+      break;
+    }
+    // The sleep may have consumed the budget exactly; a read nothing bounds
+    // must not follow it.
+    if (budgetSpent(timeoutMs, deadline, runtime.now())) break;
+    const next = await readUnlessAborted(
+      runtime,
+      options.commandId,
+      disposal,
+      options.signal,
+      budgetFor(timeoutMs, deadline, runtime.now()),
+    );
+    // The budget ran out during this read: the last observation stands.
+    if (next === null) break;
+    latest = next;
+  }
+  return latest;
+}
+
+/**
+ * A cleanup-state read that rejects with the abort reason instead of outliving
+ * the wait, and reports `null` when the wait's own budget ended it.
+ */
+async function readUnlessAborted(
+  runtime: MailboxRuntime,
+  commandId: string,
+  disposal: AbortSignal,
+  signal: AbortSignal | undefined,
+  budgetMs: number | null,
+): Promise<ApplicationCommandCleanupResult | null> {
+  const raced = await raceAbortWithin(
+    () => readCleanupState(runtime, commandId),
+    budgetMs,
+    disposal,
+    signal,
+  );
+  if (!raced.aborted) return raced.value;
+  if (raced.reason instanceof WaitBudgetElapsedError) return null;
+  throw raced.reason as Error;
+}

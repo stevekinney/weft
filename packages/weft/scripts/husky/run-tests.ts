@@ -527,6 +527,12 @@ export function createRealDependencies(): RunTestSuiteDependencies {
         detached: true,
         stdout: 'pipe',
         stderr: 'pipe',
+        // Match CI (WFT-82): Bun 1.3.x/1.4.0 can crash in JSC's parallel marker
+        // during full-suite teardown, and locally it surfaces as a different
+        // timing-sensitive test timing out on every run. CI already serializes
+        // marking for the full suite; the hook runs the same suite and needs the
+        // same configuration or it rejects commits CI would accept.
+        env: { ...process.env, BUN_JSC_numberOfGCMarkers: '1' },
       });
       const stdoutReader = subprocess.stdout.getReader();
       const stderrReader = subprocess.stderr.getReader();

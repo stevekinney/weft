@@ -370,8 +370,7 @@ let baseUrl: string;
     try {
       const result = await page.evaluate(async (databaseName) => {
         type BatchOperation =
-          | { type: 'put'; key: string; value: Uint8Array }
-          | { type: 'delete'; key: string };
+          { type: 'put'; key: string; value: Uint8Array } | { type: 'delete'; key: string };
         type IDBStorageCtor = new (name: string) => {
           put(key: string, value: Uint8Array): Promise<void>;
           get(key: string): Promise<Uint8Array | null>;
