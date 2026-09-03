@@ -14,18 +14,6 @@
  */
 
 import { KEYS } from '../storage/interface.ts';
-import {
-  fail,
-  isRecordObject,
-  ownKey,
-  readCommandIdentifier,
-  readInteger,
-  readOptionalInteger,
-  readOptionalString,
-  readPositiveInteger,
-  readString,
-  readVersion,
-} from './application-mailbox-codec-primitives.ts';
 import type {
   ApplicationCommandCausation,
   ApplicationCommandFailure,
@@ -39,6 +27,18 @@ import {
   isApplicationCommandLeased,
   isApplicationCommandTerminalState,
 } from './application-mailbox-types.ts';
+import {
+  fail,
+  isRecordObject,
+  ownKey,
+  readIdentifier,
+  readInteger,
+  readOptionalInteger,
+  readOptionalString,
+  readPositiveInteger,
+  readString,
+  readVersion,
+} from './application-primitive-codec.ts';
 import { decode, encode } from './codec.ts';
 import { isJSONValue, type JSONValue } from './json.ts';
 
@@ -133,7 +133,7 @@ function readBase(source: Record<string, unknown>, key: string) {
     idempotencyKey:
       source['idempotencyKey'] === undefined
         ? undefined
-        : readCommandIdentifier(source['idempotencyKey'], key),
+        : readIdentifier(source['idempotencyKey'], key),
     caller: readString(source, 'caller', key),
     target: readString(source, 'target', key),
     kind: readString(source, 'kind', key),

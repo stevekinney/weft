@@ -17,7 +17,6 @@
  * @module core/application-mailbox-settlement
  */
 
-import { leaseCommitSerial } from './application-mailbox-attempt-registry.ts';
 import type {
   ApplicationCommandCancellationResult,
   ApplicationCommandCleanupResult,
@@ -56,6 +55,7 @@ import type {
   ApplicationCommandTerminalRecord,
 } from './application-mailbox-types.ts';
 import { isApplicationCommandLeased } from './application-mailbox-types.ts';
+import { leaseCommitSerial } from './application-primitive-attempt-registry.ts';
 import type { JSONValue } from './json.ts';
 
 /**

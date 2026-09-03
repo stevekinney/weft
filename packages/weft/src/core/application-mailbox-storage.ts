@@ -2,7 +2,8 @@
  * Durable reads, index maintenance, and the atomic state-plus-event commit for
  * the application command mailbox (WFT-84).
  *
- * Every mutation goes through {@link commitMailboxTransition}. When the mailbox
+ * Every mutation goes through {@link commitMailboxTransition}, the mailbox's binding
+ * of the shared `commitApplicationTransition`. When the mailbox
  * was built with an event sink, the caller's state operations and the sink's own
  * event write land in one `conditionalBatch`, so no restart can expose the state
  * transition without its event or the other way round. Without a sink the same
@@ -14,7 +15,6 @@
 
 import {
   KEYS,
-  storageConditionalBatch,
   type BatchOperation,
   type ConditionalBatchCondition,
   type Storage,
@@ -23,10 +23,7 @@ import {
   decodeApplicationCommandRecord,
   encodeApplicationCommandRecord,
 } from './application-mailbox-codec.ts';
-import type {
-  ApplicationMailboxEventSink,
-  LoadedCommandRecord,
-} from './application-mailbox-contract.ts';
+import type { LoadedCommandRecord } from './application-mailbox-contract.ts';
 import {
   decodeApplicationCommandIdempotencyRecord,
   decodeApplicationMailboxRecord,
@@ -41,6 +38,11 @@ import {
   type ApplicationCommandTerminalRecord,
   type ApplicationMailboxRecord,
 } from './application-mailbox-types.ts';
+import {
+  commitApplicationTransition,
+  type ApplicationCommitPlan,
+  type ApplicationEventSink,
+} from './application-primitive-commit.ts';
 
 /** Every key builder for one `(namespace, resourceId)` mailbox, bound once. */
 export type MailboxKeys = Readonly<{
@@ -225,162 +227,17 @@ function isTerminalState(
 }
 
 /**
- * Whether every compare-and-swap condition still matches durable state.
- *
- * Used to classify a failed event-sink append: if the caller's own conditions
- * still hold, the append failed for the feed's own reasons and the error must
- * propagate; if one moved, another actor won the race and the caller retries.
+ * Commit one mailbox transition, atomically with its fleet event when a sink is
+ * configured. The mailbox's binding of the shared commit: see
+ * `application-primitive-commit.ts` for the compare-and-swap classification and
+ * the sink probe.
  */
-export async function conditionsStillHold(
+export function commitMailboxTransition(
   storage: Storage,
-  conditions: readonly ConditionalBatchCondition[],
+  events: ApplicationEventSink | undefined,
+  plan: ApplicationCommitPlan,
 ): Promise<boolean> {
-  for (const condition of conditions) {
-    const current = await storage.get(condition.key);
-    if (condition.expectedValue === null) {
-      if (current !== null) return false;
-      continue;
-    }
-    if (current === null || !bytesEqual(current, condition.expectedValue)) return false;
-  }
-  return true;
-}
-
-function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
-  if (left.byteLength !== right.byteLength) return false;
-  for (let index = 0; index < left.byteLength; index += 1) {
-    if (left[index] !== right[index]) return false;
-  }
-  return true;
-}
-
-/** One durable state transition, optionally paired with the fleet event that describes it. */
-export type MailboxCommitPlan = {
-  readonly conditions: readonly ConditionalBatchCondition[];
-  readonly operations: readonly BatchOperation[];
-  readonly event: { readonly kind: string; readonly payload: unknown } | null;
-  readonly now: number;
-  /**
-   * Where the first commit through an event sink writes its verification
-   * probe. Unique per plan, so a concurrent transition on the record can never
-   * be mistaken for a sink that committed somewhere else.
-   */
-  readonly sinkProbeKey: string;
-};
-
-/**
- * Commit one transition, atomically with its fleet event when a sink is
- * configured.
- *
- * Returns `false` when a compare-and-swap condition was lost, which means
- * another actor transitioned the record first and the caller should re-read and
- * re-decide. Any other failure throws.
- */
-export async function commitMailboxTransition(
-  storage: Storage,
-  events: ApplicationMailboxEventSink | undefined,
-  plan: MailboxCommitPlan,
-): Promise<boolean> {
-  if (events === undefined || plan.event === null) {
-    return storageConditionalBatch(storage, [...plan.conditions], [...plan.operations]);
-  }
-  // A sink is only allowed to commit against THIS mailbox's storage. A feed
-  // built over a different backend would apply these operations there and
-  // report success, so `admit()` would hand back a durable-looking receipt that
-  // never existed here. The first commit through a sink carries a single-use
-  // probe key that is read back afterwards: unlike the record itself, nothing
-  // else ever writes that key, so a concurrent transition on the record between
-  // the commit and the read cannot be mistaken for a sink that committed
-  // elsewhere — which would otherwise fail a keyless admission into a retry
-  // that creates a second command.
-  const probe = isSinkVerified(storage, events)
-    ? null
-    : { key: plan.sinkProbeKey, value: new TextEncoder().encode(plan.sinkProbeKey) };
-  try {
-    await events.append(
-      { kind: plan.event.kind, emittedAtMs: plan.now, payload: plan.event.payload },
-      {
-        conditions: plan.conditions,
-        operations:
-          probe === null
-            ? plan.operations
-            : [...plan.operations, { type: 'put', key: probe.key, value: probe.value }],
-      },
-    );
-  } catch (error) {
-    // The feed retries its own sequence allocation internally and only throws
-    // once it has exhausted those attempts. That exhaustion is indistinguishable
-    // from our record condition being lost, so re-read the conditions we own: if
-    // they still hold, the failure was genuinely the feed's and must propagate.
-    if (await conditionsStillHold(storage, plan.conditions)) throw error;
-    return false;
-  }
-  // Outside the catch above on purpose. A missing probe after a successful
-  // append is unambiguous — the batch did not land here — and must never be
-  // reported as a lost compare-and-swap for the caller to retry.
-  if (probe !== null) await assertSinkCommittedLocally(storage, events, probe);
-  return true;
-}
-
-/**
- * Storage backends already proven to receive an event sink's committed writes.
- *
- * The check runs once per backend rather than per transition: a sink that
- * commits to the right place once will keep doing so, and a misconfiguration is
- * a construction-time mistake that shows up on the very first commit.
- */
-const VERIFIED_SINK_BACKENDS = new WeakMap<ApplicationMailboxEventSink, WeakSet<Storage>>();
-
-/**
- * Keyed by the sink AND the backend. Keying by backend alone would let one
- * correctly configured mailbox mark a store verified, after which a second
- * mailbox on the same store with a feed over a DIFFERENT store would skip the
- * check entirely and report durable-looking admissions that never landed here.
- */
-function verifiedBackendsFor(events: ApplicationMailboxEventSink): WeakSet<Storage> {
-  let verified = VERIFIED_SINK_BACKENDS.get(events);
-  if (verified === undefined) {
-    verified = new WeakSet();
-    VERIFIED_SINK_BACKENDS.set(events, verified);
-  }
-  return verified;
-}
-
-function isSinkVerified(storage: Storage, events: ApplicationMailboxEventSink): boolean {
-  return verifiedBackendsFor(events).has(storage);
-}
-
-async function assertSinkCommittedLocally(
-  storage: Storage,
-  events: ApplicationMailboxEventSink,
-  probe: { readonly key: string; readonly value: Uint8Array },
-): Promise<void> {
-  let stored: Uint8Array | null;
-  try {
-    stored = await storage.get(probe.key);
-  } catch {
-    // The transition and its event are already durable. A read that cannot
-    // determine the probe's fate is not evidence of a misconfigured sink, and
-    // surfacing it would invite the caller to retry a committed operation —
-    // for a keyless admission, into a second command. Stay unverified; the
-    // next commit through this sink checks again.
-    return;
-  }
-  if (stored === null || !bytesEqual(stored, probe.value)) {
-    throw new Error(
-      'The configured application mailbox event sink committed to a different storage backend than the mailbox. Build the fleet event feed over the same Storage instance the mailbox uses.',
-    );
-  }
-  verifiedBackendsFor(events).add(storage);
-  // The probe has done its job and the batch that wrote it is durable either
-  // way, so cleanup is best-effort: a transient delete failure must not turn a
-  // committed operation into a rejection the caller would retry — for a keyless
-  // admission that retry would create a second command.
-  try {
-    await storage.delete(probe.key);
-  } catch {
-    // Left behind. It is inert, unique to this plan, and never read again.
-  }
+  return commitApplicationTransition(storage, events, plan, 'application mailbox');
 }
 
 /**
@@ -401,7 +258,7 @@ export function planCommandTransition(
     readonly extraConditions?: readonly ConditionalBatchCondition[] | undefined;
     readonly extraOperations?: readonly BatchOperation[] | undefined;
   },
-): MailboxCommitPlan {
+): ApplicationCommitPlan {
   return {
     sinkProbeKey: keys.sinkProbe(crypto.randomUUID()),
     conditions: [

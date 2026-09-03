@@ -10,20 +10,20 @@
  */
 
 import { KEYS } from '../storage/interface.ts';
-import {
-  fail,
-  isRecordObject,
-  ownKey,
-  readCommandIdentifier,
-  readInteger,
-  readString,
-  readVersion,
-} from './application-mailbox-codec-primitives.ts';
 import type {
   ApplicationCommandIdempotencyRecord,
   ApplicationMailboxRecord,
 } from './application-mailbox-types.ts';
 import { APPLICATION_MAILBOX_RECORD_VERSION } from './application-mailbox-types.ts';
+import {
+  fail,
+  isRecordObject,
+  ownKey,
+  readIdentifier,
+  readInteger,
+  readString,
+  readVersion,
+} from './application-primitive-codec.ts';
 import { decode, encode } from './codec.ts';
 
 /**
@@ -93,7 +93,7 @@ export function decodeApplicationCommandIdempotencyRecord(
   readVersion(decoded, key);
   return {
     recordVersion: APPLICATION_MAILBOX_RECORD_VERSION,
-    commandId: readCommandIdentifier(decoded['commandId'], key),
+    commandId: readIdentifier(decoded['commandId'], key),
     identityDigest: readString(decoded, 'identityDigest', key),
   };
 }
@@ -120,7 +120,7 @@ export function decodeApplicationReadyEntry(bytes: Uint8Array, key: string): str
   } catch {
     fail(key);
   }
-  return readCommandIdentifier(decoded, key);
+  return readIdentifier(decoded, key);
 }
 
 /**

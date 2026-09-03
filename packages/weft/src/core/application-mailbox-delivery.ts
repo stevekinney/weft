@@ -12,11 +12,6 @@
  */
 
 import { storageConditionalBatch } from '../storage/interface.ts';
-import { raceAbort } from './application-mailbox-abort.ts';
-import {
-  nextLeaseCommitSerial,
-  type AttemptRegistration,
-} from './application-mailbox-attempt-registry.ts';
 import type {
   ApplicationCommandClaimedPayload,
   ApplicationMailboxClaimResult,
@@ -38,6 +33,11 @@ import {
   requireGeneratedIdentifier,
 } from './application-mailbox-validation.ts';
 import { computePayloadDigest } from './application-payload-digest.ts';
+import { raceAbort } from './application-primitive-abort.ts';
+import {
+  nextLeaseCommitSerial,
+  type AttemptRegistration,
+} from './application-primitive-attempt-registry.ts';
 import { PersistedDataCorruptError } from './persisted-data-incompatible-error.ts';
 
 /** Process-local claim serial folded into every attempt token; see `leaseHead`. */
@@ -218,7 +218,7 @@ function registerAttemptController(
   const registration: AttemptRegistration = {
     controller,
     release,
-    commandId,
+    subjectId: commandId,
     committedSerial: null,
   };
   runtime.attemptControllers.set(attemptToken, registration);

@@ -1,11 +1,11 @@
 /**
- * Fail-closed readers shared by the application mailbox codecs (WFT-84).
+ * Fail-closed readers shared by the application primitives' codecs (WFT-84, WFT-85).
  *
  * Every reader raises `PersistedDataCorruptError` for the key being decoded
  * rather than coercing a damaged value into something plausible. The record
  * codec and the index codec are built from these.
  *
- * @module core/application-mailbox-codec-primitives
+ * @module core/application-primitive-codec
  */
 
 import {
@@ -94,7 +94,7 @@ export function ownKey(build: () => string, key: string): string {
  * oversized value there would escape as a raw `URIError` rather than the
  * corruption it is.
  */
-export function readCommandIdentifier(value: unknown, key: string): string {
+export function readIdentifier(value: unknown, key: string): string {
   if (
     typeof value !== 'string' ||
     value.length === 0 ||

@@ -19,7 +19,6 @@
 
 import type { BatchOperation, ConditionalBatchCondition } from '../storage/interface.ts';
 import { formatSortableStorageTimestamp, storageConditionalBatch } from '../storage/interface.ts';
-import { leaseCommitSerial } from './application-mailbox-attempt-registry.ts';
 import { decodeApplicationCommandRecord } from './application-mailbox-codec.ts';
 import type {
   ApplicationMailboxMaintenanceReport,
@@ -46,6 +45,7 @@ import {
   isApplicationCommandLeased,
   type ApplicationCommandRecord,
 } from './application-mailbox-types.ts';
+import { leaseCommitSerial } from './application-primitive-attempt-registry.ts';
 
 type MaintenanceCounters = {
   released: number;

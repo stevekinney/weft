@@ -514,7 +514,6 @@ export type {
 // Durable application command mailbox — storage-backed FIFO commands with
 // receipts, attempt-fenced claims, and durable cancellation (WFT-84).
 export { ApplicationMailbox } from './core/application-mailbox';
-export { WaitBudgetElapsedError } from './core/application-mailbox-abort';
 export type {
   ApplicationCommandAdmission,
   ApplicationCommandCancellationResult,
@@ -560,6 +559,7 @@ export type {
   ApplicationMailboxRecord,
 } from './core/application-mailbox-types';
 export { ApplicationCommandValidationError } from './core/application-mailbox-validation';
+export { WaitBudgetElapsedError } from './core/application-primitive-abort';
 // Durable concurrency primitives — mutex/semaphore built on AtomicState CAS.
 export { DurableMutex, DurableSemaphore, initialLockRecord } from './core/concurrency';
 export type {
