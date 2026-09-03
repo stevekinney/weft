@@ -48,7 +48,13 @@ export async function activateCatalogRevisionCandidate(
   const catalog = getWorkflowCatalog(engine);
 
   const preExisting = await catalog.hasInstalled(name, candidateManifest.revision);
-  const pointerBefore = catalog.resolveActive(name) ?? null;
+  // Storage-aware, not `catalog.resolveActive()`'s synchronous in-memory
+  // read: a second process can durably move `name`'s active pointer
+  // without ever touching this process's cache, and the dispatched
+  // `catalog:revision-draining`/`catalog:revision-activated` events must
+  // name the actual previously-active revision, not this process's stale
+  // boot-time view of it.
+  const pointerBefore = (await catalog.resolveActiveDurable(name)) ?? null;
 
   const result = await catalog.activateCandidate(name, candidateManifest, options);
 

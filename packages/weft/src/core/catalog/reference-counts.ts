@@ -44,9 +44,16 @@ export type WorkflowRevisionReferenceCounts = Readonly<{
   /**
    * Count of this process's own in-flight `startWorkflow` calls reserved
    * against this revision (from `EngineInternals.inFlightStartsByRevision`).
-   * Wired now; scoped to the single `lifecycle/start.ts` choke point used by
-   * `engine.start()`/`engine.startOrSignal()`'s create path — `ctx.startChild()`
-   * and bulk `startBatch()` do not funnel through it yet.
+   * Wired now; the reservation lives inside `lifecycle/start.ts`'s single
+   * `startWorkflow` choke point itself, so every caller that funnels through
+   * it is already counted — `engine.start()`/`engine.startOrSignal()`'s
+   * create path, and `ctx.startChild()` too, since
+   * `createChildWorkflowOperationCallbacks` (`callback-creators-bundles.ts`)
+   * calls the very same `startWorkflow`. There is no separate bulk
+   * `startBatch()` entry point to funnel — `buildStartBatchOperations` is
+   * internal plumbing already inside this same `startWorkflow` call,
+   * building one start's own storage-write batch, not a distinct
+   * multi-start API.
    */
   inFlightStarts: number;
   /**

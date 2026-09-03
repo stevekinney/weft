@@ -391,10 +391,15 @@ Two fields are wired to real in-process signals now:
   pointer moved elsewhere.
 - **`inFlightStarts`**: the count of this process's own in-flight
   `startWorkflow` calls reserved against this revision, incremented and
-  decremented around the same `pendingStarts` reservation `engine.start()`
-  and `engine.startOrSignal()`'s create path already hold. Scoped to that
-  one choke point—`ctx.startChild()` and bulk `startBatch()` do not
-  currently feed this counter.
+  decremented inside `lifecycle/start.ts`'s single `startWorkflow` choke
+  point itself, alongside the `pendingStarts` reservation it already holds.
+  Every caller that funnels through that one function is already
+  counted—not just `engine.start()`/`engine.startOrSignal()`'s create path,
+  but `ctx.startChild()` too, since it calls the very same `startWorkflow`
+  internally. There is no separate bulk `startBatch()` entry point to
+  feed—`buildStartBatchOperations` is internal plumbing already inside this
+  same `startWorkflow` call, building one start's own storage-write batch,
+  not a distinct multi-start API.
 
 The remaining five fields—`nonTerminalRuns`, `pinnedSchedules`,
 `pendingDispatches`, `activeExecutionRealms`, and `retainedRecoveryRecords`—

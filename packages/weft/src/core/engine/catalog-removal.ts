@@ -5,10 +5,10 @@
  * dispatching `WorkflowRevisionRemovedEvent` on success.
  *
  * Also owns the two `EngineInternals.inFlightStartsByRevision` accessors
- * ({@link reserveInFlightStart}/{@link releaseInFlightStart}) `lifecycle/start.ts`
- * rides its existing `pendingStarts` reservation try/finally alongside,
- * kept here rather than inline in `start.ts` to stay well under that file's
- * line-count ceiling.
+ * ({@link reserveInFlightStart}/{@link releaseInFlightStart}) that
+ * `lifecycle/start.ts` rides alongside its existing `pendingStarts`
+ * reservation try/finally, kept here rather than inline in `start.ts` to
+ * stay well under that file's line-count ceiling.
  *
  * @module core/engine/catalog-removal
  */
@@ -128,11 +128,11 @@ export async function removeWorkflowRevision(
   await ensureWorkflowCatalogReady(engine);
   const catalog = getWorkflowCatalog(engine);
 
-  if (catalog.getEntry(name, revision) === undefined) {
+  if (!(await catalog.hasInstalled(name, revision))) {
     return { removed: false, reason: 'not-found' };
   }
 
-  const active = catalog.resolveActive(name);
+  const active = await catalog.resolveActiveDurable(name);
   if (active !== undefined && active.revision === revision) {
     return { removed: false, reason: 'active', activeRevision: active.revision };
   }
@@ -209,8 +209,8 @@ export async function getWorkflowRevisionDiagnostics(
   await ensureWorkflowCatalogReady(engine);
   const catalog = getWorkflowCatalog(engine);
 
-  const installed = catalog.getEntry(name, revision) !== undefined;
-  const activePointer = catalog.resolveActive(name);
+  const installed = await catalog.hasInstalled(name, revision);
+  const activePointer = await catalog.resolveActiveDurable(name);
   const active = activePointer !== undefined && activePointer.revision === revision;
   const references = await countWorkflowRevisionReferences(engine, name, revision);
   const removable = installed && !active && totalWorkflowRevisionReferences(references) === 0;

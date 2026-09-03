@@ -117,6 +117,29 @@ export class WorkflowCatalog {
   }
 
   /**
+   * Durably resolve `name`'s active pointer — always reads through to
+   * durable storage rather than trusting the in-memory `#active` cache.
+   * Deliberately NOT cache-first like {@link hasInstalled}: `hasInstalled`'s
+   * cache-hit short-circuit can only go stale in the SAFE direction (a
+   * different process's `remove()` durably deleting an entry this
+   * process's `#entries` still holds still lets `catalog.remove()`'s own
+   * durable re-read refuse with `'not-found'` rather than double-deleting),
+   * whereas a name's active pointer has no such one-directional guarantee —
+   * a second engine/process can durably move it (e.g. via
+   * `activateCandidate`, or a second engine holding the ADR&nbsp;0002
+   * workflow-lease) to a revision this process never installed at all, so a
+   * stale cache HIT here can misreport a durably-active revision as
+   * inactive. Used by removal and diagnostics
+   * (`core/engine/catalog-removal.ts`) so a durably-active revision is
+   * never misreported as inactive/removable; `resolveActive` stays the
+   * cheap, synchronous, best-effort accessor for in-process callers (e.g.
+   * `reserveInFlightStart`) that only care about this process's own view.
+   */
+  async resolveActiveDurable(name: string): Promise<WorkflowCatalogActivePointer | undefined> {
+    return (await readActivePointer(this.#storage, name)) ?? undefined;
+  }
+
+  /**
    * Durably remove the installed `(name, revision)` entry — delegates the
    * CAS mechanics to {@link removeCatalogEntry}. On success, evicts the
    * entry from this process's in-memory `#entries` cache too, so a

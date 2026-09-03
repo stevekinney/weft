@@ -68,9 +68,14 @@ async function drainPendingCatalogInstalls(engine: Engine): Promise<void> {
       const definition = engine.getWorkflowDefinition(name);
       if (definition === undefined) continue;
       // Read BEFORE activating: `preExisting`/`pointerBefore` must reflect
-      // catalog state prior to this call, not after.
+      // catalog state prior to this call, not after. `resolveActiveDurable`
+      // (not `resolveActive`'s in-memory-only read) so a late `register()`
+      // drain — which can run long after this process's boot-time
+      // restore — reports the actual previously-active revision even when
+      // a second process durably moved it in between, matching the same
+      // fix in `catalog-activation.ts`.
       const preExisting = await catalog.hasInstalled(name, manifest.revision);
-      const pointerBefore = catalog.resolveActive(name) ?? null;
+      const pointerBefore = (await catalog.resolveActiveDurable(name)) ?? null;
       const pointerAfter = await catalog.activateRegistered(name, manifest, definition);
       internals.registeredCatalogRevisions.set(name, manifest.revision);
       dispatchCatalogInstallAndActivatedEvents(

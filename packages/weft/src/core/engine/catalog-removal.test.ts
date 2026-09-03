@@ -171,6 +171,71 @@ describe('removeWorkflowRevision', () => {
     expect(diagnosticsAfter.references.inFlightStarts).toBe(0);
   });
 
+  it('is also reserved/released for a real child-workflow start via ctx.startChild(), not just a top-level engine.start()', async () => {
+    // Regression for the documented (but previously untested) claim: a
+    // direct child start funnels through the same `lifecycle/start.ts`
+    // `startWorkflow` choke point as a top-level start, since
+    // `createChildWorkflowOperationCallbacks` calls it directly — so
+    // `ctx.startChild()` must feed `inFlightStarts` exactly like the
+    // in-flight top-level start above does.
+    await using storage = new MemoryStorage();
+    await using engine = new Engine({ storage, backgroundTasks: 'manual' });
+    engine.register(noopWorkflow('checkout'));
+    engine.register(
+      workflow({ name: 'checkout-parent' }).execute(async function* (
+        ctx: WorkflowContext,
+        input: { startChild: boolean },
+      ) {
+        if (!input.startChild) return 'primed';
+        return yield* ctx.startChild('checkout', null, { id: 'checkout-parent-child' });
+      }),
+    );
+
+    // Prime both catalog entries (install + activate for 'checkout' and
+    // 'checkout-parent') before delaying storage.batch, and prime the
+    // parent WITHOUT starting a child, so the delay below only affects the
+    // child's own CREATE write.
+    await engine.start('checkout', 'priming').then((h) => h.result());
+    await engine
+      .start('checkout-parent', { startChild: false }, { id: 'priming-parent' })
+      .then((h) => h.result());
+    const revision = getWorkflowCatalog(engine).resolveActive('checkout')!.revision;
+
+    const gate = Promise.withResolvers<void>();
+    const entered = Promise.withResolvers<void>();
+    const originalBatch = storage.batch.bind(storage);
+    let batchCalls = 0;
+    let paused = false;
+    storage.batch = async (operations) => {
+      batchCalls += 1;
+      const internals = getInternals(engine);
+      const alreadyReserved =
+        (internals.inFlightStartsByRevision.get('checkout')?.get(revision) ?? 0) > 0;
+      if (!paused && alreadyReserved) {
+        paused = true;
+        entered.resolve();
+        await gate.promise;
+      }
+      return originalBatch(operations);
+    };
+
+    const parentPromise = engine.start('checkout-parent', { startChild: true });
+    await entered.promise;
+
+    const diagnosticsWhileParked = await getWorkflowRevisionDiagnostics(
+      engine,
+      'checkout',
+      revision,
+    );
+    expect(diagnosticsWhileParked.references.inFlightStarts).toBeGreaterThanOrEqual(1);
+
+    gate.resolve();
+    await parentPromise.then((h) => h.result());
+
+    const diagnosticsAfter = await getWorkflowRevisionDiagnostics(engine, 'checkout', revision);
+    expect(diagnosticsAfter.references.inFlightStarts).toBe(0);
+  });
+
   it('succeeds removing a non-active revision once no reference remains (in a second process/engine that never registered it)', async () => {
     await using storage = new MemoryStorage();
     await using engineA = new Engine({ storage, backgroundTasks: 'manual' });
@@ -199,6 +264,59 @@ describe('removeWorkflowRevision', () => {
 
     expect(result).toEqual({ removed: true });
     expect(events).toHaveLength(1);
+  });
+
+  it('refuses removal of a revision a SECOND process durably activated after this process cached it as installed-but-inactive', async () => {
+    await using storage = new MemoryStorage();
+    await using engineA = new Engine({ storage, backgroundTasks: 'manual' });
+    engineA.register(noopWorkflow('checkout'));
+    await engineA.start('checkout', null);
+    const revA = getWorkflowCatalog(engineA).resolveActive('checkout')!.revision;
+
+    // engineA learns about revB (installs it into ITS OWN in-memory cache)
+    // but never activates it itself, so engineA's cached active pointer for
+    // 'checkout' stays revA.
+    const manifestB = await manifestFor('checkout', '1.0.0', { description: 'a later revision' });
+    await getWorkflowCatalog(engineA).install(manifestB);
+    expect(getWorkflowCatalog(engineA).resolveActive('checkout')?.revision).toBe(revA);
+
+    // A SECOND process (engineB, same durable store) durably activates
+    // revB — moving the durable active pointer to revB WITHOUT ever
+    // touching engineA's in-memory `#active` cache, which stays stale at
+    // revA. This is the ADR 0002 workflow-lease scenario: a second engine
+    // durably activating a revision this process only knows as installed.
+    await using engineB = new Engine({ storage, backgroundTasks: 'manual' });
+    await activateCatalogRevisionCandidate(engineB, 'checkout', manifestB, {
+      expectedGeneration: 1,
+      policy: { requireExactRevision: false },
+    });
+
+    // engineA's OWN stale cache still says revA is active — proving this
+    // regression genuinely exercises the cache/durable-truth divergence,
+    // not just a fresh, never-populated cache.
+    expect(getWorkflowCatalog(engineA).resolveActive('checkout')?.revision).toBe(revA);
+
+    // Diagnostics and removal, both issued against engineA, MUST consult
+    // durable truth rather than engineA's stale cache: revB is durably
+    // active, so it must never be reported removable, and removal must be
+    // refused with 'active' rather than silently deleting a durably-active
+    // revision.
+    const diagnostics = await getWorkflowRevisionDiagnostics(
+      engineA,
+      'checkout',
+      manifestB.revision,
+    );
+    expect(diagnostics.installed).toBe(true);
+    expect(diagnostics.active).toBe(true);
+    expect(diagnostics.activeRevision).toBe(manifestB.revision);
+    expect(diagnostics.removable).toBe(false);
+
+    const result = await removeWorkflowRevision(engineA, 'checkout', manifestB.revision);
+    expect(result).toEqual({
+      removed: false,
+      reason: 'active',
+      activeRevision: manifestB.revision,
+    });
   });
 
   it('reports "conflict" when the durable delete loses its CAS', async () => {
