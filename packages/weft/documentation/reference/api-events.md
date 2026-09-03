@@ -334,6 +334,94 @@ class ReviewCompletedEvent extends Event {
 
 ---
 
+## Catalog Events
+
+Fired alongside activity on the durable workflow catalog. See [Reference
+Accounting and Removal](../guides/workflow-versioning.md#reference-accounting-and-removal)
+for firing-condition prose; these definitions are the field-level
+reference. Every field is a primitive or a bounded array—never a full
+manifest or compatibility verdict.
+
+### `WorkflowRevisionInstalledEvent`
+
+Emitted when a `(name, revision)` is durably installed into the workflow
+catalog for the first time. Never fired for a byte-identical reinstall.
+
+```ts partial
+class WorkflowRevisionInstalledEvent extends Event {
+  static readonly type = 'catalog:revision-installed';
+  readonly workflowType: string;
+  readonly revision: string;
+}
+```
+
+### `WorkflowRevisionActivatedEvent`
+
+Emitted when a `(name, revision)` becomes the active revision for its
+name. `previousRevision` is `undefined` on a name's first-ever activation
+and whenever only the generation changed (the revision itself did not);
+otherwise it names the revision this activation displaced.
+
+```ts partial
+class WorkflowRevisionActivatedEvent extends Event {
+  static readonly type = 'catalog:revision-activated';
+  readonly workflowType: string;
+  readonly revision: string;
+  readonly generation: number;
+  readonly previousRevision: string | undefined;
+}
+```
+
+### `WorkflowRevisionActivationRejectedEvent`
+
+Emitted when the guarded candidate-activation primitive refuses a
+revision. `reason` is a closed, low-cardinality union safe to use as a
+metric label — the same four reasons `WorkflowCatalogActivationResult`'s
+`applied: false` variants report (see
+[`workflows` (getter)](./api-engine.md#workflows-getter)).
+`incompatibilityReasons` is populated only when `reason` is
+`'incompatible'`, carrying every applicable `WorkflowCompatibilityReason`.
+
+```ts partial
+class WorkflowRevisionActivationRejectedEvent extends Event {
+  static readonly type = 'catalog:activation-rejected';
+  readonly workflowType: string;
+  readonly candidateRevision: string;
+  readonly reason:
+    'incompatible' | 'stale-generation' | 'conflict' | 'expected-generation-required';
+  readonly incompatibilityReasons: readonly WorkflowCompatibilityReason[] | undefined;
+}
+```
+
+### `WorkflowRevisionDrainingEvent`
+
+Emitted alongside `WorkflowRevisionActivatedEvent` when activating a new
+revision displaces a previously active one for the same name. Never fired
+on a name's first-ever activation or when reactivating the same revision.
+
+```ts partial
+class WorkflowRevisionDrainingEvent extends Event {
+  static readonly type = 'catalog:revision-draining';
+  readonly workflowType: string;
+  readonly revision: string;
+}
+```
+
+### `WorkflowRevisionRemovedEvent`
+
+Emitted when a `(name, revision)` is durably removed from the workflow
+catalog via `removeWorkflowRevision`.
+
+```ts partial
+class WorkflowRevisionRemovedEvent extends Event {
+  static readonly type = 'catalog:revision-removed';
+  readonly workflowType: string;
+  readonly revision: string;
+}
+```
+
+---
+
 ## Event Map Types
 
 ### `WeftEventMap`
@@ -366,6 +454,14 @@ interface WeftEventMap extends WeftReviewEventMap {
   'constraint:violated': ConstraintViolatedEvent;
 }
 ```
+
+`WeftEventMap` also carries the five [Catalog Events](#catalog-events) keys
+(`'catalog:revision-installed'`, `'catalog:revision-activated'`,
+`'catalog:activation-rejected'`, `'catalog:revision-draining'`,
+`'catalog:revision-removed'`), omitted from the example above for brevity
+along with several other existing keys (`'schedule:fired'`,
+`'worker:connected'`, and others)—see the full type for the authoritative
+list.
 
 ### `WeftReviewEventMap`
 

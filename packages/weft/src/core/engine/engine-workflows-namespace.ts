@@ -38,6 +38,7 @@ import {
 } from '../catalog/index.ts';
 import type { WorkflowCompatibilityPolicy } from '../contract/compatibility.ts';
 import type { WorkflowRevisionManifest } from '../contract/types.ts';
+import { activateCatalogRevisionCandidate } from './catalog-activation.ts';
 import {
   ensureWorkflowCatalogReady,
   getWorkflowCatalog,
@@ -175,7 +176,12 @@ async function activateWorkflowRevision(
   if (entry === undefined) {
     throw new WorkflowRevisionNotInstalledError(name, revision);
   }
-  return catalog.activateCandidate(name, entry.manifest, options);
+  // Routed through `activateCatalogRevisionCandidate` (WFT-12) rather than
+  // `catalog.activateCandidate()` directly, so a manual activation through
+  // this public surface dispatches the same `catalog:*` events
+  // `engine.register()`'s drain path already does — see that wrapper's own
+  // JSDoc.
+  return activateCatalogRevisionCandidate(engine, name, entry.manifest, options);
 }
 
 async function getActiveWorkflowRevision(

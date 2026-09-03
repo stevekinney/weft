@@ -1162,6 +1162,26 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       },
     ],
     [
+      'src/core/engine/catalog-removal.ts',
+      // The closed WorkflowCatalogRemovalOutcome union (from
+      // core/catalog/removal.ts) makes this default branch (removeWorkflowRevision's
+      // switch) unreachable at runtime without an unsafe cast; it exists
+      // solely as a compile-time exhaustiveness guard, matching the
+      // identical pattern already allowed for
+      // `server/runtime/task-ledger-recovery.ts`'s switch. `requireUncoveredLines`
+      // is intentionally omitted for the same reason it is omitted there:
+      // the case-label/brace lines around it flip between hit and unhit
+      // run to run with byte-identical source — a coverage-attribution
+      // artifact, not a real reachability signal — so the whole
+      // `default: { ... }` block (156-159) is allowed, not just the two
+      // dead statements inside it.
+      {
+        reason:
+          'Compile-time exhaustiveness guard for a closed discriminated union has no reachable runtime path to test without an unsafe cast.',
+        lines: new Set([156, 157, 158, 159]),
+      },
+    ],
+    [
       'src/core/engine/checkpoint-replay.ts',
       {
         reason:

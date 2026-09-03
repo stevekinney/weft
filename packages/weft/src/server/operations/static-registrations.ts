@@ -53,6 +53,10 @@ import {
   getActiveWorkflowRevisionOperation,
   getActiveWorkflowRevisionRestBinding,
 } from './get-active-workflow-revision.ts';
+import {
+  getCatalogDiagnosticsOperation,
+  getCatalogDiagnosticsRestBinding,
+} from './get-catalog-diagnostics.ts';
 import { getCheckpointAtOperation, getCheckpointAtRestBinding } from './get-checkpoint-at.ts';
 import { getPrincipalOperation, getPrincipalRestBinding } from './get-principal.ts';
 import { getRegistryOperation, getRegistryRestBinding } from './get-registry.ts';
@@ -171,6 +175,7 @@ export const STATIC_REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = [
   bulkRetryFailedWorkflowsRestBinding,
   bulkDeleteWorkflowsRestBinding,
   bulkMutateWorkflowTagsRestBinding,
+  getCatalogDiagnosticsRestBinding,
   getWorkflowRestBinding,
   cancelWorkflowRestBinding,
   getWorkflowResultRestBinding,
@@ -255,6 +260,7 @@ export const STATIC_OPERATIONS: ReadonlyArray<RegistrableOperation> = [
   bulkRetryFailedWorkflowsOperation,
   bulkDeleteWorkflowsOperation,
   bulkMutateWorkflowTagsOperation,
+  getCatalogDiagnosticsOperation,
   getWorkflowOperation,
   cancelWorkflowOperation,
   getWorkflowResultOperation,

@@ -457,3 +457,138 @@ has the full table): `weft.workflows.revisions.install`,
 lowercase-segmented, so `getActive` is only the TypeScript method name).
 `install` and `activate` require the `workflows:admin` scope; the three
 read operations require `workflows:read`.
+
+## Reference Accounting and Removal
+
+A revision cannot simply be deleted once installed—something might still be
+relying on it. `WorkflowRevisionReferenceCounts` is the bounded accounting
+interface a removal decision is gated on: seven fields, always present, so
+a caller never special-cases an "unknown" reference kind.
+
+Two fields are wired to real in-process signals now:
+
+- **`registeredDefinitions`**: `1` when this process's own
+  `engine.register()`-drain path most recently activated exactly this
+  revision for this name, `0` otherwise. Distinct from "is this revision
+  active"—a process can register a workflow, then activate a different
+  revision through the guarded primitive (`activateCandidate`), leaving its
+  own registration still naming the first revision even though the active
+  pointer moved elsewhere.
+- **`inFlightStarts`**: the count of this process's own in-flight
+  `startWorkflow` calls reserved against this revision, incremented and
+  decremented inside `lifecycle/start.ts`'s single `startWorkflow` choke
+  point itself, alongside the `pendingStarts` reservation it already holds.
+  Every caller that funnels through that one function is already
+  counted—not just `engine.start()`/`engine.startOrSignal()`'s create path,
+  but `ctx.startChild()` too, since it calls the very same `startWorkflow`
+  internally. There is no separate bulk `startBatch()` entry point to
+  feed—`buildStartBatchOperations` is internal plumbing already inside this
+  same `startWorkflow` call, building one start's own storage-write batch,
+  not a distinct multi-start API.
+
+The remaining five fields—`nonTerminalRuns`, `pinnedSchedules`,
+`pendingDispatches`, `activeExecutionRealms`, and `retainedRecoveryRecords`—
+stay structurally present but always `0`. Each depends on run-level
+revision pinning, which does not exist yet: a `WorkflowState` does not
+currently record which catalog revision it was started against, so there
+is nothing yet to count a non-terminal run, a pinned schedule, a queued
+dispatch, an active execution realm, or a retained recovery record
+against. That dependency lands with run-level revision pinning; until
+then, these fields exist as forward-compatible plumbing rather than a
+promise the engine cannot keep.
+
+Removal itself is a plain, root-exported async function—not an
+`engine.workflows.*` method, and not (yet) a wire operation:
+
+```ts
+import { Engine, removeWorkflowRevision, workflow } from '@lostgradient/weft';
+
+const engine = new Engine();
+engine.register(
+  workflow({ name: 'checkout', version: '1.0.0' }).execute(async function* () {
+    return 'ok';
+  }),
+);
+const result = await removeWorkflowRevision(engine, 'checkout', 'some-old-revision');
+if (!result.removed) {
+  console.log('kept:', result.reason);
+}
+```
+
+`removeWorkflowRevision` refuses for one of two distinct reasons, checked
+in order:
+
+- **`'active'`**: `revision` is currently the active pointer for `name`. A
+  structural invariant, independent of any reference count—every future or
+  resuming run resolves the active pointer, so an active revision is never
+  removable no matter what else references it.
+- **`'referenced'`**: `revision` is installed and not active, but the sum
+  of every field in `WorkflowRevisionReferenceCounts` is nonzero. The
+  refusal carries the full breakdown so a caller can report exactly what is
+  still holding the revision.
+
+A `'not-found'` outcome means the `(name, revision)` pair was never
+installed (a no-op, not an error), and `'conflict'` means the durable
+delete's own compare-and-swap lost to a concurrent writer—the caller may
+re-read and retry. On success, the entry is durably deleted (fenced on
+both the exact entry bytes read and the exact active-pointer bytes read,
+so a concurrent activation that makes the target revision active between
+the read and the delete loses the race rather than being silently
+overwritten) and `catalog:revision-removed` fires.
+
+`getWorkflowRevisionDiagnostics(engine, name, revision)` projects the same
+accounting into a read-only shape—`installed`, `active`, `activeRevision`,
+`references`, and a derived `removable` boolean—without attempting the
+removal, useful for an operator checking whether a cleanup would succeed
+before running it. It backs the `weft.catalog.diagnostics` operation; see
+[api-observability.md](../reference/api-observability.md).
+
+Reference accounting in this batch is **in-process only**: under
+`ownership: 'workflow-lease'` (ADR 0002), a second engine process sharing
+the same durable store has its own, empty `registeredDefinitions`/
+`inFlightStarts` signals and can remove a revision the first process still
+has registered and is actively running against. This is a known, deliberate
+scope limit—durable, cross-process reference tracking depends on the same
+run-level revision pinning the five always-zero fields above are waiting
+on.
+
+### Catalog Events
+
+Five events fire on the `Engine` alongside catalog activity, all bounded
+(primitive fields only, never a full manifest or compatibility verdict):
+
+- **`catalog:revision-installed`** (`WorkflowRevisionInstalledEvent`):
+  fires only when a `(name, revision)` is durably installed for the first
+  time—never for a byte-identical reinstall, and never for a cross-process
+  durable adoption of content another process already installed.
+- **`catalog:revision-activated`** (`WorkflowRevisionActivatedEvent`):
+  fires whenever the active pointer record for a name actually changes
+  (either its revision or its `generation`). `previousRevision` is
+  `undefined` on a name's first-ever activation and whenever the revision
+  itself did not change (only the generation bumped, as `activateCandidate`
+  does even when reactivating the currently active revision); otherwise it
+  names the revision this activation displaced.
+- **`catalog:activation-rejected`** (`WorkflowRevisionActivationRejectedEvent`):
+  fires when the guarded activation primitive refuses a candidate, with a
+  bounded `reason` of `'incompatible'`, `'stale-generation'`, or
+  `'conflict'`. Only `'incompatible'` carries `incompatibilityReasons`, the
+  bounded array of every applicable `WorkflowCompatibilityReason`—never the
+  full `WorkflowCompatibilityVerdict`.
+- **`catalog:revision-draining`** (`WorkflowRevisionDrainingEvent`): fires
+  alongside `catalog:revision-activated` only when a new activation
+  actually displaces a different, previously active revision—never on a
+  first-ever activation, and never when reactivating the same revision.
+- **`catalog:revision-removed`** (`WorkflowRevisionRemovedEvent`): fires
+  when `removeWorkflowRevision` durably deletes an entry.
+
+`engine.register()`'s drain path (`activateRegistered`, unconditional) and
+the guarded candidate primitive (`activateCandidate`, exercised through
+the package-internal `activateCatalogRevisionCandidate` wrapper—`engine.workflows.activate()`'s
+production caller, per the [`engine.workflows`](#engineworkflows-public-catalog-control)
+section above) both dispatch through the same shared
+installed/activated/draining logic, so the two producers can never
+disagree about when an event fires. `WorkflowRevisionActivationRejectedEvent`'s
+`reason` carries all four `activateCandidate` refusal reasons, including
+`'expected-generation-required'`. See
+[api-events.md](../reference/api-events.md#catalog-events) for the full
+field-level reference.

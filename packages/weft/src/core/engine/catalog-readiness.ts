@@ -22,6 +22,7 @@
 
 import { restoreWorkflowCatalog, WorkflowCatalog } from '../catalog/index.ts';
 import { buildWorkflowManifestForType } from '../registry-workflow-manifest.ts';
+import { dispatchCatalogInstallAndActivatedEvents } from './catalog-events.ts';
 import { EngineDisposedError } from './errors.ts';
 import type { Engine } from './index.ts';
 import { getInternals } from './internals.ts';
@@ -66,7 +67,25 @@ async function drainPendingCatalogInstalls(engine: Engine): Promise<void> {
       }
       const definition = engine.getWorkflowDefinition(name);
       if (definition === undefined) continue;
-      await catalog.activateRegistered(name, manifest, definition);
+      // Read BEFORE activating: `preExisting`/`pointerBefore` must reflect
+      // catalog state prior to this call, not after. `resolveActiveDurable`
+      // (not `resolveActive`'s in-memory-only read) so a late `register()`
+      // drain — which can run long after this process's boot-time
+      // restore — reports the actual previously-active revision even when
+      // a second process durably moved it in between, matching the same
+      // fix in `catalog-activation.ts`.
+      const preExisting = await catalog.hasInstalled(name, manifest.revision);
+      const pointerBefore = (await catalog.resolveActiveDurable(name)) ?? null;
+      const pointerAfter = await catalog.activateRegistered(name, manifest, definition);
+      internals.registeredCatalogRevisions.set(name, manifest.revision);
+      dispatchCatalogInstallAndActivatedEvents(
+        engine,
+        name,
+        manifest.revision,
+        preExisting,
+        pointerBefore,
+        pointerAfter,
+      );
     } catch (error) {
       // A transient/partial failure (e.g. `WorkflowCatalogActivationConflictError`
       // once the CAS retry budget is exhausted under sustained concurrent
