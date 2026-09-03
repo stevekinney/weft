@@ -170,6 +170,115 @@
       }
     },
     {
+      "name": "weft.catalog.diagnostics",
+      "kind": "unary",
+      "summary": "Get bounded reference-count and removability diagnostics for one workflow revision",
+      "description": "Report whether a `(name, revision)` workflow catalog entry is installed, whether it is currently the active revision, its full reference-count breakdown, and whether it's currently removable. Never returns manifest or contract content.",
+      "tags": ["Observability"],
+      "destructive": false,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["system:read"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "revision": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["name", "revision"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "activeRevision": {
+            "type": "string"
+          },
+          "installed": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "references": {
+            "additionalProperties": false,
+            "properties": {
+              "activeExecutionRealms": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "inFlightStarts": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "nonTerminalRuns": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "pendingDispatches": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "pinnedSchedules": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "registeredDefinitions": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "retainedRecoveryRecords": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "registeredDefinitions",
+              "inFlightStarts",
+              "nonTerminalRuns",
+              "pinnedSchedules",
+              "pendingDispatches",
+              "activeExecutionRealms",
+              "retainedRecoveryRecords"
+            ],
+            "type": "object"
+          },
+          "removable": {
+            "type": "boolean"
+          },
+          "revision": {
+            "type": "string"
+          }
+        },
+        "required": ["name", "revision", "installed", "active", "references", "removable"],
+        "type": "object"
+      }
+    },
+    {
       "name": "weft.events.sse",
       "kind": "stream",
       "summary": "Stream fleet events as Server-Sent Events",

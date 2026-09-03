@@ -25,12 +25,15 @@ import { encodeStorageKeyComponent } from './key-encoding.ts';
  */
 export const WORKFLOW_CATALOG_KEYS = {
   /**
-   * One immutable installed-revision record for `name`. Written once via a
-   * plain durable `put` — racing writers writing IDENTICAL bytes to this key
-   * is safe (content-addressed by `(name, revision)`); the in-memory
-   * conflict check in `WorkflowCatalog.install()` catches the
-   * differing-content case before any write is attempted, so this key never
-   * needs CAS protection.
+   * One immutable installed-revision record for `name`. The initial write
+   * IS `conditionalBatch` CAS-guarded ({@link import('../core/catalog/storage-io.ts').writeCatalogEntry}),
+   * not a plain `put` — a caller-supplied, non-content-derived `revision`
+   * (`buildWorkflowRevisionManifest`'s `options.revision` escape hatch)
+   * means two racing writers are not guaranteed to agree on this key's
+   * content, so the write must fail closed on a genuine conflict rather than
+   * last-write-win. This key is also deleted, CAS-guarded on its own exact
+   * bytes, by `removeCatalogEntry` (WFT-12) once a revision is no longer
+   * active and no longer referenced.
    */
   catalogEntry: (name: string, revision: string): string =>
     `catalog-entry:${encodeStorageKeyComponent(name)}:${encodeStorageKeyComponent(revision)}`,

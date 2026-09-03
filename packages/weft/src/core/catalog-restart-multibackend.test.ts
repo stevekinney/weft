@@ -6,7 +6,7 @@ import {
   waitForWorkflowStatus,
 } from '../testing/storage-backends.test-support.ts';
 import { Engine } from './engine.ts';
-import { getWorkflowCatalog } from './engine/index.ts';
+import { getWorkflowCatalog, removeWorkflowRevision } from './engine/index.ts';
 import { buildRegistrySnapshot } from './registry-snapshot.ts';
 import { workflow, type WorkflowContext } from './types.ts';
 
@@ -150,6 +150,50 @@ for (const backend of storageBackends) {
 
       await engineA.signal(runningId, 'go', 'ok');
       engineA[Symbol.dispose]();
+    });
+
+    it('a removed revision does not rehydrate on restart, while the active revision/generation still resolve identically (WFT-12)', async () => {
+      const result = backend.factory();
+      cleanup = result.cleanup;
+
+      // Deploy v1, then v2 as a second engine over the same durable store
+      // (the rolling-deploy shape the sibling tests above already use).
+      // register()'s own drain path is the ONLY reference this batch wires
+      // durably in-process, so v1 is unreferenced from engine B's
+      // perspective the moment engine A is gone.
+      const engineA = (await Engine.create({
+        storage: result.storage,
+        workflows: { alpha: makeWorkflow('alpha', '1.0.0') },
+      })) as unknown as Engine;
+      const v1 = getWorkflowCatalog(engineA).resolveActive('alpha')?.revision;
+      expect(v1).toBeDefined();
+      engineA[Symbol.dispose]();
+
+      const engineB = (await Engine.create({
+        storage: result.storage,
+        workflows: { alpha: makeWorkflow('alpha', '2.0.0') },
+      })) as unknown as Engine;
+      const removal = await removeWorkflowRevision(engineB, 'alpha', v1!);
+      expect(removal).toEqual({ removed: true });
+      const pointerB = getWorkflowCatalog(engineB).resolveActive('alpha');
+      expect(pointerB?.revision).not.toBe(v1);
+      engineB[Symbol.dispose]();
+
+      // Restart resolves the same active revision/generation the earlier
+      // "restart resolves the same active revision and generation" test
+      // proves in general — the invariant must survive a removal
+      // happening earlier in the same durable store's lifetime.
+      const engineC = (await Engine.create({
+        storage: result.storage,
+        workflows: { alpha: makeWorkflow('alpha', '2.0.0') },
+      })) as unknown as Engine;
+      engine = engineC;
+      const catalogC = getWorkflowCatalog(engineC);
+
+      expect(catalogC.getEntry('alpha', v1!)).toBeUndefined();
+      const pointerC = catalogC.resolveActive('alpha');
+      expect(pointerC?.revision).toBe(pointerB?.revision);
+      expect(pointerC?.generation).toBe(pointerB?.generation);
     });
   });
 }

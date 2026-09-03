@@ -45,6 +45,10 @@ import { createScheduleOperation, createScheduleRestBinding } from './create-sch
 import { fleetEventsSseOperation, fleetEventsSseRestBinding } from './fleet-events-sse.ts';
 import { fleetEventsSubscriptionOperation } from './fleet-events-subscription.ts';
 import { forkWorkflowOperation, forkWorkflowRestBinding } from './fork-workflow.ts';
+import {
+  getCatalogDiagnosticsOperation,
+  getCatalogDiagnosticsRestBinding,
+} from './get-catalog-diagnostics.ts';
 import { getCheckpointAtOperation, getCheckpointAtRestBinding } from './get-checkpoint-at.ts';
 import { getPrincipalOperation, getPrincipalRestBinding } from './get-principal.ts';
 import { getRegistryOperation, getRegistryRestBinding } from './get-registry.ts';
@@ -151,6 +155,7 @@ export const STATIC_REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = [
   bulkRetryFailedWorkflowsRestBinding,
   bulkDeleteWorkflowsRestBinding,
   bulkMutateWorkflowTagsRestBinding,
+  getCatalogDiagnosticsRestBinding,
   getWorkflowRestBinding,
   cancelWorkflowRestBinding,
   getWorkflowResultRestBinding,
@@ -230,6 +235,7 @@ export const STATIC_OPERATIONS: ReadonlyArray<RegistrableOperation> = [
   bulkRetryFailedWorkflowsOperation,
   bulkDeleteWorkflowsOperation,
   bulkMutateWorkflowTagsOperation,
+  getCatalogDiagnosticsOperation,
   getWorkflowOperation,
   cancelWorkflowOperation,
   getWorkflowResultOperation,

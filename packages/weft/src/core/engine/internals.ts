@@ -437,6 +437,10 @@ export interface EngineInternals {
    * promise rather than racing a second restore/drain.
    */
   catalogDrainPromise: Promise<void> | null;
+  /** Name -> revision this process's own register()-drain most recently activated (WFT-12, `catalog-readiness.ts`). Process-local, never persisted. */
+  registeredCatalogRevisions: Map<string, string>;
+  /** Name -> revision -> in-flight `startWorkflow` count (WFT-12, `lifecycle/start.ts`). Process-local, never persisted. */
+  inFlightStartsByRevision: Map<string, Map<string, number>>;
 }
 
 const INTERNALS = new WeakMap<object, EngineInternals>();

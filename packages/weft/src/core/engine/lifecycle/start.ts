@@ -19,6 +19,7 @@ import type {
   WorkflowState,
 } from '../../types.ts';
 import { type WorkflowVersionTuple } from '../../workflow-version-tuple.ts';
+import { releaseInFlightStart, reserveInFlightStart } from '../catalog-removal.ts';
 import { forgetCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
 import { WorkflowAlreadyExistsError, WorkflowNotRegisteredError } from '../errors.ts';
 import { type WorkflowHandle } from '../handles.ts';
@@ -179,6 +180,7 @@ export async function startWorkflow(
   }
   internals.pendingStarts.add(workflowId);
   let startSucceeded = false;
+  const inFlightRevision = reserveInFlightStart(internals, type);
 
   try {
     // Only caller-supplied ids can collide; a generated UUID skips the read.
@@ -320,6 +322,7 @@ export async function startWorkflow(
     return handle;
   } finally {
     internals.pendingStarts.delete(workflowId);
+    releaseInFlightStart(internals, type, inFlightRevision);
     if (!startSucceeded) {
       rollbackTransientStartState(internals, workflowId);
     }

@@ -81,6 +81,8 @@ const ENGINE_INTERNALS_FIELDS = [
   'pendingCatalogInstalls',
   'catalogRestored',
   'catalogDrainPromise',
+  'registeredCatalogRevisions',
+  'inFlightStartsByRevision',
 ];
 
 interface Violation {
