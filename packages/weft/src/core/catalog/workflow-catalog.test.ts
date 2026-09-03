@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'bun:test';
 
+import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { buildWorkflowContract } from '../contract/build.ts';
 import { buildWorkflowRevisionManifest } from '../contract/manifest.ts';
 import type { WorkflowRevisionManifest } from '../contract/types.ts';
 import type { RegisteredWorkflowDefinition } from '../types/workflow-registry.ts';
-import { WorkflowCatalogActivationConflictError, WorkflowCatalogConflictError } from './errors.ts';
+import {
+  WorkflowCatalogActivationConflictError,
+  WorkflowCatalogActiveEntryMissingError,
+  WorkflowCatalogConflictError,
+} from './errors.ts';
 import { WorkflowCatalog } from './workflow-catalog.ts';
 
 function fakeDefinition(type: string): RegisteredWorkflowDefinition {
@@ -288,6 +293,53 @@ describe('WorkflowCatalog.activateCandidate', () => {
     if (!result.applied) {
       expect(result.reason).toBe('conflict');
     }
+  });
+
+  it('enforces compatibility against a cross-process active revision this instance never cached (durable read-through, not a silent skip)', async () => {
+    const storage = new MemoryStorage();
+    const writer = new WorkflowCatalog(storage);
+    const v1 = await manifestFor('checkout', '1.0.0');
+    await writer.activateCandidate('checkout', v1);
+
+    // A second instance sharing the same storage — e.g. a second process —
+    // never called `install`/`activateCandidate` for `checkout` itself, so
+    // its in-memory `#entries` cache has no entry for v1 even though v1 is
+    // durably active. Before this fix, `getEntry`'s cache-only lookup would
+    // return `undefined` here and `#refuseIncompatibleCandidate` would
+    // treat the comparison as vacuously compatible, silently skipping the
+    // check entirely.
+    const reader = new WorkflowCatalog(storage);
+    const incompatible = await manifestFor('other-workflow', '1.0.0');
+
+    const result = await reader.activateCandidate('checkout', incompatible, {
+      expectedGeneration: 1,
+    });
+
+    expect(result.applied).toBe(false);
+    if (!result.applied && result.reason === 'incompatible') {
+      expect(result.verdict.compatible).toBe(false);
+    } else {
+      throw new Error('expected an incompatible refusal from the durable read-through');
+    }
+    expect(await reader.resolveActiveDurable('checkout')).toMatchObject({ revision: v1.revision });
+  });
+
+  it('fails closed with WorkflowCatalogActiveEntryMissingError when the durably-active revision has no resolvable entry at all', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const v1 = await manifestFor('checkout', '1.0.0');
+    await catalog.activateCandidate('checkout', v1);
+
+    // Simulate storage-level corruption: the active pointer survives but
+    // its own entry does not, so neither the in-memory cache nor a durable
+    // read-through can resolve it.
+    await storage.delete(KEYS.catalogEntry('checkout', v1.revision));
+    const v2 = await manifestFor('checkout', '2.0.0');
+    const fresh = new WorkflowCatalog(storage);
+
+    await expect(
+      fresh.activateCandidate('checkout', v2, { expectedGeneration: 1 }),
+    ).rejects.toThrow(WorkflowCatalogActiveEntryMissingError);
   });
 
   it('refuses an omitted expectedGeneration on a 2nd-or-later activation: two refreshers cannot silently last-write-win', async () => {

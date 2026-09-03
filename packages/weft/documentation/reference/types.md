@@ -558,7 +558,11 @@ current durable generation so a caller can retry with the correct value
 without a second read. `'incompatible'` carries the full
 `WorkflowCompatibilityVerdict` (see above). `'conflict'` means the CAS write
 itself lost a race against a concurrent activation — `activate()` does not
-retry; re-read `getActive()` and decide whether to try again.
+retry; use the `currentGeneration` a prior `'stale-generation'` or
+`'expected-generation-required'` refusal named (that value came from a
+durable read) to retry with the correct `expectedGeneration`, or re-read
+`getActive()` — noting that `getActive()` is in-memory-only and can itself
+be stale on a process that just lost the race.
 
 ### `ReviewStatus`
 

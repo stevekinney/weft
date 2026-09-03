@@ -113,3 +113,37 @@ export class WorkflowRevisionNotInstalledError extends WeftError<'WorkflowRevisi
     this.revision = revision;
   }
 }
+
+/**
+ * Thrown by
+ * {@link import('./workflow-catalog.ts').WorkflowCatalog.activateCandidate}
+ * when the durable active pointer for `name` names a revision whose catalog
+ * entry cannot be resolved — neither this process's in-memory cache nor a
+ * durable read-through finds it. This should be unreachable in practice:
+ * both activation entry points (`install()`-then-activate) always durably
+ * install a revision before ever pointing the active pointer at it, so a
+ * durably-active revision missing its own entry is a genuine storage
+ * inconsistency, not a race any caller can retry past. Fail-closed rather
+ * than silently skipping the compatibility check `activateCandidate`
+ * exists to enforce — see `#refuseIncompatibleCandidate`'s JSDoc. Stays
+ * internal (not re-exported from `src/index.ts`) like
+ * {@link WorkflowCatalogActivationConflictError}: no code path lets a public
+ * caller observe it as a typed error to catch, only as a generic
+ * `EngineFailure`-wrapped operation fault.
+ */
+export class WorkflowCatalogActiveEntryMissingError extends WeftError<'WorkflowCatalogActiveEntryMissingError'> {
+  readonly workflowName: string;
+  readonly revision: string;
+
+  constructor(workflowName: string, revision: string) {
+    super(
+      'WorkflowCatalogActiveEntryMissingError',
+      `Workflow catalog inconsistency: "${workflowName}" is durably active at revision ` +
+        `"${revision}", but that revision's catalog entry cannot be resolved (neither ` +
+        'in-memory nor durably). Refusing to activate a candidate without being able to check ' +
+        'compatibility against the currently active revision.',
+    );
+    this.workflowName = workflowName;
+    this.revision = revision;
+  }
+}

@@ -28,8 +28,12 @@
  * - {@link WorkflowCatalog.activateCandidate} — the guarded primitive:
  *   `checkWorkflowCompatibility`-gated, single-shot CAS (no retry — the
  *   caller decides whether to re-read and retry), refuses on incompatibility
- *   or a stale expected generation. Exercised by direct unit tests now;
- *   reused by later dynamic-loading work (WFT-13+).
+ *   or a stale expected generation. As of WFT-11, reachable by external
+ *   callers via `engine.workflows.activate()` — the first production
+ *   caller. Because a multi-writer caller can activate a revision this
+ *   process's `#entries` cache never observed, the compatibility check
+ *   reads through to durable storage rather than trusting the cache.
+ *   Reused as-is by later dynamic-loading work (WFT-13+).
  *
  * @module core/catalog/workflow-catalog
  */
@@ -50,7 +54,11 @@ import type { WorkflowRevisionManifest } from '../contract/types.ts';
 import { validateWorkflowOrActivityName } from '../types/name-grammar.ts';
 import type { RegisteredWorkflowDefinition } from '../types/workflow-registry.ts';
 import { encodeActivePointer, manifestsAreByteIdentical } from './codec.ts';
-import { WorkflowCatalogActivationConflictError, WorkflowCatalogConflictError } from './errors.ts';
+import {
+  WorkflowCatalogActivationConflictError,
+  WorkflowCatalogActiveEntryMissingError,
+  WorkflowCatalogConflictError,
+} from './errors.ts';
 import { removeCatalogEntry, type WorkflowCatalogRemovalOutcome } from './removal.ts';
 import {
   readActivePointer,
@@ -363,7 +371,7 @@ export class WorkflowCatalog {
     await this.install(candidateManifest);
     const currentPointer = await readActivePointer(this.#storage, name);
 
-    const refusal = this.#refuseIncompatibleOrStaleCandidate(
+    const refusal = await this.#refuseIncompatibleOrStaleCandidate(
       name,
       candidateManifest,
       currentPointer,
@@ -403,12 +411,12 @@ export class WorkflowCatalog {
    * complexity low. Returns the refusal result when the candidate should be
    * rejected, or `undefined` when it may proceed to the CAS write.
    */
-  #refuseIncompatibleOrStaleCandidate(
+  async #refuseIncompatibleOrStaleCandidate(
     name: string,
     candidateManifest: WorkflowRevisionManifest,
     currentPointer: WorkflowCatalogActivePointer | null,
     options?: ActivateCandidateOptions,
-  ): WorkflowCatalogActivationResult | undefined {
+  ): Promise<WorkflowCatalogActivationResult | undefined> {
     if (currentPointer === null) {
       return this.#refuseStaleFirstActivation(options);
     }
@@ -464,15 +472,23 @@ export class WorkflowCatalog {
     return undefined;
   }
 
-  /** The compatibility check itself, run only once the generation fence has already passed. */
-  #refuseIncompatibleCandidate(
+  /**
+   * The compatibility check itself, run once the generation fence has
+   * passed. Resolves the active entry via {@link resolveEntry} (cache then
+   * durable read-through), never `getEntry` alone — a second process can
+   * durably activate a revision this cache never saw. A durable miss too
+   * fails closed with {@link WorkflowCatalogActiveEntryMissingError}.
+   */
+  async #refuseIncompatibleCandidate(
     name: string,
     candidateManifest: WorkflowRevisionManifest,
     currentPointer: WorkflowCatalogActivePointer,
     options?: ActivateCandidateOptions,
-  ): WorkflowCatalogActivationResult | undefined {
-    const currentEntry = this.getEntry(name, currentPointer.revision);
-    if (currentEntry === undefined) return undefined;
+  ): Promise<WorkflowCatalogActivationResult | undefined> {
+    const currentEntry = await this.resolveEntry(name, currentPointer.revision);
+    if (currentEntry === undefined) {
+      throw new WorkflowCatalogActiveEntryMissingError(name, currentPointer.revision);
+    }
 
     const verdict = checkWorkflowCompatibility(
       currentEntry.manifest,

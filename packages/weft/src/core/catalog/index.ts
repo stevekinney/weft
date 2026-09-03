@@ -20,6 +20,7 @@
 
 export {
   WorkflowCatalogActivationConflictError,
+  WorkflowCatalogActiveEntryMissingError,
   WorkflowCatalogConflictError,
   WorkflowRevisionNotInstalledError,
 } from './errors.ts';
