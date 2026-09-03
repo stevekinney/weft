@@ -168,15 +168,29 @@ describe('ApplicationOutbox disposal', () => {
     captured.dispose();
   });
 
-  it('refuses to adopt an attempt that commits after disposal', async () => {
-    const { outbox } = createOutboxFixture();
+  it('hands back an already-aborted signal when disposal lands while the claim commits', async () => {
+    let ordinal = 0;
+    let disposeDuringCommit: (() => void) | null = null;
+    class DisposingStorage extends MemoryStorage {
+      override async conditionalBatch(
+        ...arguments_: Parameters<MemoryStorage['conditionalBatch']>
+      ): Promise<boolean> {
+        ordinal += 1;
+        // Ordinal 1 is the enqueue; the claim commit is next.
+        if (ordinal === 2) disposeDuringCommit?.();
+        return super.conditionalBatch(...arguments_);
+      }
+    }
+    const { outbox } = createOutboxFixture({ storage: new DisposingStorage() });
     await enqueueOne(outbox);
-    const claiming = outbox.claim();
-    outbox.dispose();
-    const result = await claiming;
-    // Either the claim raced disposal and was aborted, or it committed with a
-    // signal that is already aborted; it never hands back live work.
-    if (result.status === 'claimed') expect(result.claim.signal.aborted).toBe(true);
+    disposeDuringCommit = () => {
+      outbox.dispose();
+    };
+    const result = await outbox.claim();
+    // The lease is durable either way; what the caller must never receive is
+    // live work from a disposed handle.
+    expect(result.status).toBe('claimed');
+    expect(result.status === 'claimed' && result.claim.signal.aborted).toBe(true);
   });
 });
 

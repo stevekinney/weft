@@ -10,7 +10,6 @@
  * @module core/application-outbox-transition-helpers
  */
 
-import { computeRetryBackoffMs } from './application-mailbox-transition-helpers.ts';
 import { requireDerivedInstant } from './application-outbox-guards.ts';
 import type {
   ApplicationDeliveryFailure,
@@ -24,6 +23,7 @@ import {
   APPLICATION_OUTBOX_RECORD_VERSION,
   isApplicationDeliveryTerminalState,
 } from './application-outbox-types.ts';
+import { computeRetryBackoffMs } from './application-primitive-timing.ts';
 
 export { computeRetryBackoffMs };
 

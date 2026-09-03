@@ -45,8 +45,13 @@ export type ApplicationDeliveryClaimedPayload =
 /**
  * An open lease on one delivery.
  *
- * `signal` aborts on the attempt deadline, on cancellation requested in this
- * process, when the lease is released, or when the outbox is disposed.
+ * `signal` aborts when cancellation is requested in this process, when the
+ * attempt is released or refused, and when the outbox is disposed. It is
+ * process-local. The attempt deadline does not arm a timer on it: a host that
+ * drives claims itself learns the deadline has passed from `heartbeat()` or
+ * `settle()` returning `deadline-exceeded`, and `deliverNext()` stops waiting
+ * for the adapter at the deadline and aborts the signal as it releases the
+ * attempt.
  *
  * @example
  * ```ts

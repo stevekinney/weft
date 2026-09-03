@@ -85,8 +85,10 @@ export type ApplicationDeliveryOutcome =
  * One send request handed to a transport adapter.
  *
  * `attemptToken` is the fence the adapter should present to the remote system
- * where it can (as an idempotency or request id), and `signal` aborts at the
- * attempt deadline, on cancellation, or on outbox disposal. `credentialRef`
+ * where it can (as an idempotency or request id), and `signal` aborts when
+ * cancellation is requested in this process, when the runner stops waiting
+ * at the attempt deadline and releases the attempt, or when the outbox is
+ * disposed. `credentialRef`
  * is the opaque credential reference the delivery was enqueued with; only the
  * adapter ever sees it.
  *

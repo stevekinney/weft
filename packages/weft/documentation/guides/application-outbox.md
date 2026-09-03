@@ -107,7 +107,7 @@ console.log(typeof adapter.send); // 'function'
 | `rejected`     | The remote system refused permanently.                      | `rejected`, terminal.                                          |
 | `unknown`      | The adapter cannot say whether the effect happened.         | The unknown-outcome policy.                                    |
 
-Three things the runner does that an adapter never has to think about. A thrown error is treated as `unknown`, because the request may already have left. An attempt deadline that elapses while `send()` is still pending aborts the signal and is likewise `unknown`. And a malformed outcome — not an object, an unrecognised status, `NaN` for `retryAfterMs`, a `Map` as evidence — is mapped to `unknown` with a diagnostic message rather than thrown, since by then the send may have happened and the delivery must not be retried on the strength of nothing.
+Three things the runner does that an adapter never has to think about. A thrown error is treated as `unknown`, because the request may already have left. An attempt deadline that elapses while `send()` is still pending makes the runner stop waiting, treat the result as `unknown`, and abort the signal as it releases the attempt. And a malformed outcome — not an object, an unrecognised status, `NaN` for `retryAfterMs`, a `Map` as evidence — is mapped to `unknown` with a diagnostic message rather than thrown, since by then the send may have happened and the delivery must not be retried on the strength of nothing.
 
 Returning from `send()` **never** settles a delivery by itself. The outbox validates the outcome and commits the matching transition, fenced on the attempt token and the `attempting` bytes. Only that commit moves the record.
 
@@ -158,7 +158,7 @@ A claim leases one delivery to one attempt and hands back an **attempt token**. 
 Each attempt has two clocks:
 
 - `visibilityExpiresAt` is the lease. `heartbeat()` extends it by `visibilityTimeoutMs` and records `lastActivityAt` plus an optional bounded `transportActivity` marker — bytes written, a request id — as liveness evidence that is distinct from acknowledgement and never used for fencing.
-- `attemptDeadlineAt` is the ceiling, fixed at the claim as `claimedAt + attemptTimeoutMs`. Heartbeat clamps to it and can never move it. The adapter's signal aborts at it. Past it, heartbeat and settlement both return `deadline-exceeded`, and maintenance recovers the delivery by the state it is in.
+- `attemptDeadlineAt` is the ceiling, fixed at the claim as `claimedAt + attemptTimeoutMs`. Heartbeat clamps to it and can never move it. Past it, heartbeat and settlement both return `deadline-exceeded`, and maintenance recovers the delivery by the state it is in. The deadline arms no timer on the claim's signal: `deliverNext()` stops waiting for the adapter at the deadline and aborts the signal as it releases the attempt, while a host driving `claim()` itself learns the deadline has passed from those `deadline-exceeded` results.
 
 A delivery has no deadline of its own; it has `maxAttempts`. That is the deliberate difference from the mailbox's absolute command deadline: a notification that could not be delivered today may well be deliverable tomorrow, and an operator retry can always grant one more attempt.
 

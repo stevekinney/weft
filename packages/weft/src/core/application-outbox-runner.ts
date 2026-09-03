@@ -8,8 +8,9 @@
  * validates the outcome, then commits the matching transition fenced on the
  * attempt token and the `attempting` bytes; only that commit moves the record.
  * A thrown adapter error is an unknown outcome, because the request may have
- * left the process. An attempt deadline that elapses while the send is in
- * flight aborts the adapter's signal and is likewise unknown.
+ * left the process. When the attempt deadline elapses while the send is in
+ * flight the runner stops waiting, treats the result as unknown, and aborts
+ * the adapter's signal as it releases the attempt.
  *
  * @module core/application-outbox-runner
  */
@@ -35,8 +36,8 @@ import { runOutboxMaintenance } from './application-outbox-maintenance.ts';
 import { beginAttempt, settleAttempt } from './application-outbox-settlement.ts';
 import { loadDelivery, loadOutboxHeader } from './application-outbox-storage.ts';
 import { validateOutcome, type ValidatedOutcome } from './application-outbox-validation.ts';
-import { delayUnlessAborted } from './application-outbox-waits.ts';
 import { raceAbortWithin, WaitBudgetElapsedError } from './application-primitive-abort.ts';
+import { delayUnlessAborted } from './application-primitive-timing.ts';
 
 /**
  * Call the adapter once, bounded by the attempt deadline and the attempt's

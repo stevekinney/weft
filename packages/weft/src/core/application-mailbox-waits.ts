@@ -30,39 +30,10 @@ import {
   requireWaitBudget,
 } from './application-mailbox-validation.ts';
 import { WaitBudgetElapsedError, raceAbortWithin } from './application-primitive-abort.ts';
+import { delayUnlessAborted } from './application-primitive-timing.ts';
 
 export { DEFAULT_WAIT_POLL_INTERVAL_MS as DEFAULT_MAILBOX_POLL_INTERVAL_MS } from './application-mailbox-validation.ts';
-
-/**
- * Sleep, resolving `false` when the wait was aborted or the mailbox disposed
- * and `true` when the interval actually elapsed.
- *
- * The listeners are removed on every path, including the timer path, so a
- * long-lived mailbox does not accumulate abort listeners once per poll.
- */
-export function delayUnlessAborted(
-  milliseconds: number,
-  disposal: AbortSignal,
-  signal?: AbortSignal,
-): Promise<boolean> {
-  if (signal?.aborted === true || disposal.aborted) return Promise.resolve(false);
-  return new Promise<boolean>((resolve) => {
-    const settle = (elapsed: boolean): void => {
-      clearTimeout(timer);
-      signal?.removeEventListener('abort', onAbort);
-      disposal.removeEventListener('abort', onAbort);
-      resolve(elapsed);
-    };
-    const onAbort = (): void => {
-      settle(false);
-    };
-    const timer = setTimeout(() => {
-      settle(true);
-    }, milliseconds);
-    signal?.addEventListener('abort', onAbort, { once: true });
-    disposal.addEventListener('abort', onAbort, { once: true });
-  });
-}
+export { delayUnlessAborted };
 
 /**
  * Whether the FIFO head exists and is claimable right now.

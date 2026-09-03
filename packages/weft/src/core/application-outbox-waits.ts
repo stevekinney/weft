@@ -11,7 +11,6 @@
  * @module core/application-outbox-waits
  */
 
-import { delayUnlessAborted } from './application-mailbox-waits.ts';
 import type {
   ApplicationDeliveryCleanupResult,
   ApplicationOutboxWaitOptions,
@@ -27,6 +26,7 @@ import { readCleanupState } from './application-outbox-settlement.ts';
 import { loadDelivery, loadDueHead } from './application-outbox-storage.ts';
 import { isApplicationDeliveryWaiting } from './application-outbox-types.ts';
 import { WaitBudgetElapsedError, raceAbortWithin } from './application-primitive-abort.ts';
+import { delayUnlessAborted } from './application-primitive-timing.ts';
 
 export { delayUnlessAborted };
 
