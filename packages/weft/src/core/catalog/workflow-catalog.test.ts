@@ -290,3 +290,65 @@ describe('WorkflowCatalog.activateCandidate', () => {
     }
   });
 });
+
+describe('WorkflowCatalog.hasInstalled', () => {
+  it('is false for a never-installed (name, revision)', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    expect(await catalog.hasInstalled('checkout', 'unknown')).toBe(false);
+  });
+
+  it('is true from the in-memory cache after this instance installs', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const manifest = await manifestFor('checkout', '1.0.0');
+    await catalog.install(manifest, fakeDefinition('checkout'));
+    expect(await catalog.hasInstalled('checkout', manifest.revision)).toBe(true);
+  });
+
+  it('is true via a durable read-through when a DIFFERENT instance installed it', async () => {
+    const storage = new MemoryStorage();
+    const writer = new WorkflowCatalog(storage);
+    const reader = new WorkflowCatalog(storage);
+    const manifest = await manifestFor('checkout', '1.0.0');
+    await writer.install(manifest, fakeDefinition('checkout'));
+
+    expect(await reader.hasInstalled('checkout', manifest.revision)).toBe(true);
+  });
+});
+
+describe('WorkflowCatalog.remove', () => {
+  it('delegates to removeCatalogEntry and evicts the entry from the in-memory cache on success', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const v1 = await manifestFor('checkout', '1.0.0');
+    const v2 = await manifestFor('checkout', '2.0.0');
+    await catalog.activateRegistered('checkout', v1, fakeDefinition('checkout'));
+    await catalog.activateRegistered('checkout', v2, fakeDefinition('checkout'));
+
+    const result = await catalog.remove('checkout', v1.revision);
+
+    expect(result).toEqual({ outcome: 'removed' });
+    expect(catalog.getEntry('checkout', v1.revision)).toBeUndefined();
+    expect(catalog.listRevisions('checkout')).toHaveLength(1);
+  });
+
+  it('refuses to remove the active revision', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const manifest = await manifestFor('checkout', '1.0.0');
+    await catalog.activateRegistered('checkout', manifest, fakeDefinition('checkout'));
+
+    const result = await catalog.remove('checkout', manifest.revision);
+
+    expect(result).toEqual({ outcome: 'active', activeRevision: manifest.revision });
+    expect(catalog.getEntry('checkout', manifest.revision)).toBeDefined();
+  });
+
+  it('is a no-op "not-found" outcome for an unknown (name, revision)', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const result = await catalog.remove('checkout', 'unknown');
+    expect(result).toEqual({ outcome: 'not-found' });
+  });
+});

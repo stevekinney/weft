@@ -311,6 +311,18 @@ The generated client keeps the operation's REST method, path parameter, and
 success shape in catalog metadata; callers do not need to construct the route
 or reproduce `HttpClientError` parsing.
 
+### `GET /v1/catalog/:name/revisions/:revision/diagnostics`
+
+Returns bounded reference-count and removability diagnostics for one workflow catalog revision. The REST endpoint is backed by the `weft.catalog.diagnostics` operation and requires `system:read`.
+
+```http
+GET /v1/catalog/checkout/revisions/sha256%3Arevision/diagnostics
+```
+
+The query is per-`(name, revision)` with a required, bounded path-parameter pair—there is no wildcard or listing form, so the response can never grow with the size of the catalog. The response reports `installed`, `active`, `activeRevision` (present only when the name has ever been activated), a `references` breakdown (`registeredDefinitions`, `inFlightStarts`, `nonTerminalRuns`, `pinnedSchedules`, `pendingDispatches`, `activeExecutionRealms`, `retainedRecoveryRecords`—all non-negative integers), and a derived `removable` boolean.
+
+`removable` is `true` only when the revision is installed, not the active revision, and every field of `references` is `0`. See [Reference Accounting and Removal](../guides/workflow-versioning.md#reference-accounting-and-removal) for what each reference field counts and why five of the seven stay `0` until run-level revision pinning lands. This endpoint never returns manifest or contract content—only identity, active-pointer state, and reference counts—and, being a bounded per-request REST/JSON-RPC response rather than a `METRICS` entry, adding it introduces no new Prometheus label; metrics remain low-cardinality.
+
 ---
 
 ## Trace Propagation

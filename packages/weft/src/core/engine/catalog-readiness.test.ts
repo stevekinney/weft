@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import { MemoryStorage } from '../../storage/memory.ts';
+import { WorkflowRevisionInstalledEvent } from '../events/catalog-events.ts';
 import { RegistryManifestLimitError } from '../registry-workflow-manifest.ts';
 import { workflow, type WorkflowContext } from '../types.ts';
 import { ensureWorkflowCatalogReady } from './catalog-readiness.ts';
@@ -123,5 +124,38 @@ describe('ensureWorkflowCatalogReady', () => {
 
     await expect(ensureWorkflowCatalogReady(engine)).rejects.toBeInstanceOf(EngineDisposedError);
     storage[Symbol.dispose]();
+  });
+
+  it('records the activated revision in registeredCatalogRevisions and dispatches WorkflowRevisionInstalledEvent (WFT-12)', async () => {
+    await using storage = new MemoryStorage();
+    await using engine = new Engine({ storage, backgroundTasks: 'manual' });
+    const installed: WorkflowRevisionInstalledEvent[] = [];
+    engine.addEventListener(WorkflowRevisionInstalledEvent.type, (e) => installed.push(e));
+    engine.register(noopWorkflow('alpha'));
+
+    await ensureWorkflowCatalogReady(engine);
+
+    const revision = getWorkflowCatalog(engine).resolveActive('alpha')?.revision;
+    expect(revision).toBeDefined();
+    expect(getInternals(engine).registeredCatalogRevisions.get('alpha')).toBe(revision);
+    expect(installed).toHaveLength(1);
+    expect(installed[0]?.workflowType).toBe('alpha');
+    expect(installed[0]?.revision).toBe(revision);
+  });
+
+  it('does not dispatch WorkflowRevisionInstalledEvent again on a byte-identical re-drain (restart-shaped)', async () => {
+    await using storage = new MemoryStorage();
+    await using engineA = new Engine({ storage, backgroundTasks: 'manual' });
+    engineA.register(noopWorkflow('alpha'));
+    await ensureWorkflowCatalogReady(engineA);
+
+    await using engineB = new Engine({ storage, backgroundTasks: 'manual' });
+    const installed: WorkflowRevisionInstalledEvent[] = [];
+    engineB.addEventListener(WorkflowRevisionInstalledEvent.type, (e) => installed.push(e));
+    engineB.register(noopWorkflow('alpha'));
+
+    await ensureWorkflowCatalogReady(engineB);
+
+    expect(installed).toHaveLength(0);
   });
 });

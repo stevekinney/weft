@@ -13,6 +13,7 @@ export const CATALOG_OPERATION_NAMES = [
   'weft.activities.complete',
   'weft.activities.fail',
   'weft.alerts.list',
+  'weft.catalog.diagnostics',
   'weft.recover.all',
   'weft.retention.get',
   'weft.reviews.decision.submit',
@@ -82,6 +83,7 @@ export const CLIENT_OPERATION_NAMES = [
   'weft.activities.complete',
   'weft.activities.fail',
   'weft.alerts.list',
+  'weft.catalog.diagnostics',
   'weft.recover.all',
   'weft.retention.get',
   'weft.reviews.decision.submit',
@@ -292,6 +294,27 @@ export type ClientOperationTypes = {
         readonly threshold: number;
         readonly window: string | null;
       }>;
+    };
+    readonly faults: never;
+  };
+  'weft.catalog.diagnostics': {
+    readonly input: { readonly name: string; readonly revision: string };
+    readonly output: {
+      readonly active: boolean;
+      readonly activeRevision?: string;
+      readonly installed: boolean;
+      readonly name: string;
+      readonly references: {
+        readonly activeExecutionRealms: number;
+        readonly inFlightStarts: number;
+        readonly nonTerminalRuns: number;
+        readonly pendingDispatches: number;
+        readonly pinnedSchedules: number;
+        readonly registeredDefinitions: number;
+        readonly retainedRecoveryRecords: number;
+      };
+      readonly removable: boolean;
+      readonly revision: string;
     };
     readonly faults: never;
   };
