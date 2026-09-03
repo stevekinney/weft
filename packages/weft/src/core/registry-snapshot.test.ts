@@ -7,7 +7,10 @@ import { z } from 'zod';
 
 import { MemoryStorage } from '../storage/memory.ts';
 import { ActivityRegistry } from './activity-registry.ts';
+import { buildWorkflowContract } from './contract/build.ts';
+import { buildWorkflowRevisionManifest } from './contract/manifest.ts';
 import { Engine } from './engine.ts';
+import { getWorkflowCatalog } from './engine/index.ts';
 import { MAX_REGISTRY_WORKFLOW_COUNT, RegistryWorkflowCountLimitError } from './registry-limits.ts';
 import {
   buildRegistrySnapshot,
@@ -661,6 +664,50 @@ describe('buildRegistrySnapshot', () => {
     const snapshot = await buildRegistrySnapshot(engine);
     const manifest = findManifest(snapshot, 'no-activities');
     expect(manifest?.contract.activities).toBeUndefined();
+  });
+
+  it('reads activeRevisions from the durable workflow catalog, not a recomputation off the manifest', async () => {
+    engine = createEngine();
+    engine.register(workflow({ name: 'catalog-backed' }).execute(async function* () {}));
+
+    const snapshot = await buildRegistrySnapshot(engine);
+    const catalog = getWorkflowCatalog(engine);
+    const activePointer = catalog.resolveActive('catalog-backed');
+
+    expect(activePointer).toBeDefined();
+    expect(snapshot.activeRevisions['catalog-backed']).toBe(activePointer?.revision);
+    // The catalog's own active pointer agrees exactly with what the builder's
+    // agree-or-throw invariant assumes for the normal single-registration path.
+    const manifest = findManifest(snapshot, 'catalog-backed');
+    expect(manifest?.revision).toBe(activePointer?.revision);
+  });
+
+  it('throws the agree-or-throw invariant error when the catalog and the freshly built manifest disagree', async () => {
+    engine = createEngine();
+    engine.register(workflow({ name: 'diverged' }).execute(async function* () {}));
+    // Drive one drain so the catalog activates the current ('1.0.0') revision.
+    await buildRegistrySnapshot(engine);
+
+    // Simulate a future dynamic-loading producer activating a DIFFERENT
+    // revision directly on the catalog, without re-registering the engine's
+    // own definition — this is exactly the divergence the invariant guards
+    // against (see the JSDoc on the `activeRevisions` loop).
+    // `activateRegistered` (unconditional, never compatibility-gated) is used
+    // rather than `activateCandidate` specifically so an incompatible version
+    // bump cannot be refused — this test needs the catalog to durably diverge.
+    const catalog = getWorkflowCatalog(engine);
+    const divergentManifest = await buildWorkflowRevisionManifest(
+      buildWorkflowContract({ name: 'diverged', version: '2.0.0' }),
+    );
+    await catalog.activateRegistered('diverged', divergentManifest, {
+      type: 'diverged',
+      version: '2.0.0',
+      tags: [],
+    });
+
+    await expect(buildRegistrySnapshot(engine)).rejects.toThrow(
+      /Registry snapshot invariant violated/,
+    );
   });
 });
 

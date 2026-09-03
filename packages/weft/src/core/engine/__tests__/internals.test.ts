@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import { Engine } from '../../engine.ts';
-import { getInternals, initializeInternals } from '../internals.ts';
+import { getInternals, getWorkflowCatalog, initializeInternals } from '../internals.ts';
 
 describe('engine internals', () => {
   it('throws when internals are not initialized', () => {
@@ -27,5 +27,13 @@ describe('engine internals', () => {
     initializeInternals(engine2);
 
     expect(getInternals(engine1)).not.toBe(getInternals(engine2));
+  });
+
+  it('getWorkflowCatalog throws a clear diagnostic when the catalog was never drained', () => {
+    const fake = Object.create(Engine.prototype) as Engine;
+    initializeInternals(fake);
+    getInternals(fake).workflowCatalog = null;
+
+    expect(() => getWorkflowCatalog(fake)).toThrow(/Workflow catalog not restored/);
   });
 });

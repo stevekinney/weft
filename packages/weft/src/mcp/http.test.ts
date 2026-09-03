@@ -439,7 +439,12 @@ describe('MCP Streamable HTTP transport', () => {
     expect(parseToolText(called.result)).toMatchObject({
       result: { message: 'Hello, Ada!' },
     });
-    expect(inputConversions).toBe(1);
+    // `engine.start()` is the first `await` boundary reached for
+    // 'counted-tool' since registration, so it also drains the workflow
+    // catalog (WFT-9/WFT-10) — building the workflow's manifest once, which
+    // converts its inputSchema once more, independent of the MCP tool
+    // registry's own conversion cache above.
+    expect(inputConversions).toBe(2);
 
     const lateTool = workflow({
       name: 'late-tool',
@@ -461,7 +466,10 @@ describe('MCP Streamable HTTP transport', () => {
       (afterRegistration.result as { tools: Array<{ name: string }> }).tools ?? []
     ).map((tool) => tool.name);
     expect(names).toContain('late_tool');
-    expect(inputConversions).toBe(3);
+    // +1 more than the pre-catalog baseline of 3 (the +2 definitions-changed
+    // rebuild reconverting both tools, on top of the +2 already reached
+    // above) — see the comment at the `tools/call` assertion above.
+    expect(inputConversions).toBe(4);
   });
 
   it('does not let broken activity schemas break MCP workflow tools', async () => {

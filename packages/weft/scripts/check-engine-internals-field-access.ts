@@ -77,6 +77,10 @@ const ENGINE_INTERNALS_FIELDS = [
   'workflowFeedListeners',
   'workflowVersionTuples',
   'pendingTimelineEntries',
+  'workflowCatalog',
+  'pendingCatalogInstalls',
+  'catalogRestored',
+  'catalogDrainPromise',
 ];
 
 interface Violation {

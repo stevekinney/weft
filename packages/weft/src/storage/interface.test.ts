@@ -225,6 +225,8 @@ describe('WEFT_RESERVED_KEY_PREFIXES', () => {
       KEYS.workflowOwnerEpoch('workflow-id'),
       KEYS.workflowOwnerHolder('workflow-id'),
       KEYS.ownershipModeMarker(),
+      KEYS.catalogEntry('workflow-type', 'revision'),
+      KEYS.catalogActive('workflow-type'),
     ];
 
     for (const key of representativeKeys) {

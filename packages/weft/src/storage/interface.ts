@@ -1,4 +1,5 @@
 import { requireStorageCapability, type StorageCapabilities } from './capabilities.ts';
+import { WORKFLOW_CATALOG_KEYS } from './catalog-keys.ts';
 import { DEFAULT_SCOPE } from './default-scope.ts';
 import type { DeleteRangeOptions } from './delete-range.ts';
 import {
@@ -625,6 +626,7 @@ export const KEYS = {
    */
   leaseHolder: () => 'lease:holder',
   ...OWNERSHIP_CLAIM_KEYS,
+  ...WORKFLOW_CATALOG_KEYS,
   budget: (namespace: string, period: string, date: string) =>
     `budget:${namespace}:${period}:${date}`,
   review: (workflowId: string, reviewId: string) =>
