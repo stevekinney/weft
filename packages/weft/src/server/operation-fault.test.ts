@@ -138,6 +138,29 @@ describe('OperationFault discriminated union', () => {
     expect(fault.data.missingWorkflowCount).toBe(3);
   });
 
+  it('Conflict fault may additionally carry currentGeneration and compatibilityReasons (WFT-11)', () => {
+    const fault: OperationFault = {
+      code: 'Conflict',
+      message: 'candidate is incompatible',
+      data: {
+        reason: 'incompatible',
+        compatibilityReasons: ['contract-hash-mismatch', 'workflow-version-incompatible'],
+      },
+    };
+    expect(fault.data.compatibilityReasons).toEqual([
+      'contract-hash-mismatch',
+      'workflow-version-incompatible',
+    ]);
+    expect(fault.data.currentGeneration).toBeUndefined();
+
+    const staleFault: OperationFault = {
+      code: 'Conflict',
+      message: 'stale generation',
+      data: { reason: 'stale-generation', currentGeneration: 3 },
+    };
+    expect(staleFault.data.currentGeneration).toBe(3);
+  });
+
   it('UnsupportedTransport fault names the rejected transport and the supported list', () => {
     const fault: OperationFault = {
       code: 'UnsupportedTransport',

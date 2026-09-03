@@ -31,7 +31,8 @@ engine.addEventListener('catalog:revision-activated', (event) => {
 
 engine.addEventListener('catalog:activation-rejected', (event) => {
   const narrowed: WorkflowRevisionActivationRejectedEvent = event;
-  const reason: 'incompatible' | 'stale-generation' | 'conflict' = narrowed.reason;
+  const reason: 'incompatible' | 'stale-generation' | 'conflict' | 'expected-generation-required' =
+    narrowed.reason;
   void reason;
 });
 

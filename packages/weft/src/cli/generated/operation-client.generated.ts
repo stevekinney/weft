@@ -42,6 +42,7 @@ export const CATALOG_OPERATION_NAMES = [
   'weft.workers.list',
   'weft.workers.rejections',
   'weft.workers.resume',
+  'weft.workflows.active.get',
   'weft.workflows.activities.pending.list',
   'weft.workflows.aggregate',
   'weft.workflows.attributes.get',
@@ -64,6 +65,10 @@ export const CATALOG_OPERATION_NAMES = [
   'weft.workflows.replay',
   'weft.workflows.result.get',
   'weft.workflows.resume',
+  'weft.workflows.revisions.activate',
+  'weft.workflows.revisions.get',
+  'weft.workflows.revisions.install',
+  'weft.workflows.revisions.list',
   'weft.workflows.scheduleprovenance.get',
   'weft.workflows.signal',
   'weft.workflows.start',
@@ -113,6 +118,7 @@ export const CLIENT_OPERATION_NAMES = [
   'weft.workers.list',
   'weft.workers.rejections',
   'weft.workers.resume',
+  'weft.workflows.active.get',
   'weft.workflows.activities.pending.list',
   'weft.workflows.aggregate',
   'weft.workflows.attributes.get',
@@ -135,6 +141,10 @@ export const CLIENT_OPERATION_NAMES = [
   'weft.workflows.replay',
   'weft.workflows.result.get',
   'weft.workflows.resume',
+  'weft.workflows.revisions.activate',
+  'weft.workflows.revisions.get',
+  'weft.workflows.revisions.install',
+  'weft.workflows.revisions.list',
   'weft.workflows.scheduleprovenance.get',
   'weft.workflows.signal',
   'weft.workflows.start',
@@ -945,6 +955,11 @@ export type ClientOperationTypes = {
       SharedAffectedWorkersHealthInF_c3f6ebcc | SharedAffectedWorkersDeploymen_e4c61ae8;
     readonly faults: 'NotFound';
   };
+  'weft.workflows.active.get': {
+    readonly input: { readonly name: unknown };
+    readonly output: unknown;
+    readonly faults: 'InvalidParams' | 'NotFound';
+  };
   'weft.workflows.activities.pending.list': {
     readonly input: {
       readonly cursor?: string;
@@ -1178,6 +1193,31 @@ export type ClientOperationTypes = {
     readonly input: { readonly workflowId: string };
     readonly output: { readonly id: string };
     readonly faults: 'Conflict' | 'NotFound';
+  };
+  'weft.workflows.revisions.activate': {
+    readonly input: {
+      readonly expectedGeneration?: unknown;
+      readonly name: unknown;
+      readonly policy?: unknown;
+      readonly revision: unknown;
+    };
+    readonly output: unknown;
+    readonly faults: 'Conflict' | 'InvalidParams' | 'NotFound';
+  };
+  'weft.workflows.revisions.get': {
+    readonly input: { readonly name: unknown; readonly revision: unknown };
+    readonly output: unknown;
+    readonly faults: 'InvalidParams' | 'NotFound';
+  };
+  'weft.workflows.revisions.install': {
+    readonly input: { readonly manifest: unknown };
+    readonly output: unknown;
+    readonly faults: 'Conflict' | 'InvalidParams';
+  };
+  'weft.workflows.revisions.list': {
+    readonly input: { readonly name: unknown };
+    readonly output: unknown;
+    readonly faults: 'InvalidParams';
   };
   'weft.workflows.scheduleprovenance.get': {
     readonly input: { readonly workflowId: string };

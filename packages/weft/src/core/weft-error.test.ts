@@ -36,9 +36,11 @@ import {
   WorkerProtocolIncompatibleError,
   WorkflowAlreadyExistsError,
   WorkflowBuilderError,
+  WorkflowCatalogConflictError,
   WorkflowConcurrencyLimitExceededError,
   WorkflowNotFoundError,
   WorkflowNotRegisteredError,
+  WorkflowRevisionNotInstalledError,
   WorkflowSuspendNotSupportedError,
   WorkflowTeardownPendingError,
   WorkflowTerminalError,
@@ -145,6 +147,8 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
     new ApplicationCommandValidationError('caller must be a non-empty string.'),
   ApplicationMailboxContentionError: () => new ApplicationMailboxContentionError('admit', null),
   WaitBudgetElapsedError: () => new WaitBudgetElapsedError(),
+  WorkflowCatalogConflictError: () => new WorkflowCatalogConflictError('checkout', 'r1'),
+  WorkflowRevisionNotInstalledError: () => new WorkflowRevisionNotInstalledError('checkout', 'r1'),
 };
 
 describe('WeftError', () => {

@@ -399,7 +399,7 @@ await using server = serve({ engine, port: 7233 });
 // server.url is e.g. "http://0.0.0.0:7233"
 ```
 
-Endpoints under `/api/v1/` cover the full lifecycle: start workflows, list, signal, update, query, cancel, fork, and stream events. JSON-RPC over WebSocket also exposes workflow and fleet event subscriptions for operator UIs that need live state without polling. Content negotiation supports JSON and MessagePack. The server can also mount an externally supplied dashboard shell at known page routes; see the [server guide](documentation/guides/server.md#external-dashboard-mounting) for the hosting contract.
+Endpoints under `/api/v1/` cover the full lifecycle: start workflows, list, signal, update, query, cancel, fork, and stream events. JSON-RPC over WebSocket also exposes workflow and fleet event subscriptions for operator UIs that need live state without polling. Content negotiation supports JSON and MessagePack. `engine.workflows` and the matching `/v1/registry/` operations expose the durable workflow catalog for admin tooling — install a revision's manifest and activate it as the advertised active revision — bookkeeping only, never workflow execution routing; see [`workflow-versioning.md`](documentation/guides/workflow-versioning.md#engineworkflows-public-catalog-control). The server can also mount an externally supplied dashboard shell at known page routes; see the [server guide](documentation/guides/server.md#external-dashboard-mounting) for the hosting contract.
 
 ### Remote Workers
 

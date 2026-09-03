@@ -200,6 +200,33 @@ describe('faultToJsonRpcError', () => {
     expect('missingWorkflowSamples' in error.data).toBe(false);
   });
 
+  it('Conflict serializes currentGeneration and compatibilityReasons when present (WFT-11)', () => {
+    const error = faultToJsonRpcError({
+      code: 'Conflict',
+      message: 'stale expectedGeneration',
+      data: { reason: 'stale-generation', currentGeneration: 4 },
+    });
+
+    expect(error.data).toMatchObject({
+      weftCode: 'Conflict',
+      httpStatus: 409,
+      reason: 'stale-generation',
+      currentGeneration: 4,
+    });
+    expect('compatibilityReasons' in error.data).toBe(false);
+  });
+
+  it('Conflict omits currentGeneration and compatibilityReasons entirely when absent (filterDefined)', () => {
+    const error = faultToJsonRpcError({
+      code: 'Conflict',
+      message: 'conflict',
+      data: { reason: 'duplicate id' },
+    });
+
+    expect('currentGeneration' in error.data).toBe(false);
+    expect('compatibilityReasons' in error.data).toBe(false);
+  });
+
   it('Unprocessable -> -32022', () => {
     const error = faultToJsonRpcError({
       code: 'Unprocessable',

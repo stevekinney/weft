@@ -60,7 +60,12 @@ describe('validateRegistrySnapshot', () => {
     );
   });
 
-  it('rejects an activeRevisions entry with no matching workflows manifest', async () => {
+  it('omits (never rejects) an activeRevisions entry with no matching workflows manifest — WFT-11 divergence', async () => {
+    // Post-WFT-11, `engine.workflows.activate()` can legitimately activate
+    // an installed revision this process has no in-process manifest for
+    // (see `core/registry-snapshot.ts`'s relaxed invariant). Codegen has no
+    // schema to generate types from in that case, so it omits the name
+    // rather than failing the whole run.
     const manifest = await fixtureManifest({ name: 'welcome', workflowVersion: '1.0.0' });
     const result = await validateRegistrySnapshot({
       registryVersion: 2,
@@ -70,11 +75,27 @@ describe('validateRegistrySnapshot', () => {
       activeRevisions: { welcome: 'sha256:does-not-exist' },
       activities: {},
     });
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error('expected rejection');
-    expect(result.error).toBe(
-      'codegen: invalid registry snapshot: activeRevisions["welcome"] = "sha256:does-not-exist" has no matching entry in workflows',
-    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected success');
+    expect(result.value.workflows).toEqual({});
+  });
+
+  it('projects every OTHER name normally when only one activeRevisions entry diverges', async () => {
+    const welcome = await fixtureManifest({ name: 'welcome', workflowVersion: '1.0.0' });
+    const checkout = await fixtureManifest({ name: 'checkout', workflowVersion: '1.0.0' });
+    const result = await validateRegistrySnapshot({
+      registryVersion: 2,
+      generatedAt: new Date(0).toISOString(),
+      workflows: [welcome, checkout],
+      activeRevisions: {
+        welcome: 'sha256:does-not-exist',
+        checkout: checkout.revision,
+      },
+      activities: {},
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected success');
+    expect(Object.keys(result.value.workflows)).toEqual(['checkout']);
   });
 
   it('accepts a well-formed snapshot and projects the active manifest plus activity count', async () => {
