@@ -94,6 +94,18 @@ export type {
   RegistryAgnosticEngine,
   WorkflowWakeKind,
 } from './core/engine';
+// Workflow Catalog — reference accounting and removal (WFT-12). Sourced
+// from `core/engine/catalog-removal.ts`, NOT `core/catalog/index.ts` —
+// `core/catalog/**` itself stays package-internal (see that module's own
+// barrel header). No `engine.workflows.*` method namespace here: removal
+// and diagnostics are plain root-exported functions, and the only wire
+// surface is the read-only `weft.catalog.diagnostics` operation.
+export { getWorkflowRevisionDiagnostics, removeWorkflowRevision } from './core/engine';
+export type {
+  WorkflowCatalogRemovalResult,
+  WorkflowRevisionDiagnostics,
+  WorkflowRevisionReferenceCounts,
+} from './core/engine';
 export {
   DEFAULT_CHECKPOINT_SIZE_WARNING_THRESHOLD,
   DEFAULT_MAX_NESTING_DEPTH,
@@ -290,6 +302,11 @@ export {
   WorkflowFailedEvent,
   WorkflowRecoverySkippedEvent,
   WorkflowResumedEvent,
+  WorkflowRevisionActivatedEvent,
+  WorkflowRevisionActivationRejectedEvent,
+  WorkflowRevisionDrainingEvent,
+  WorkflowRevisionInstalledEvent,
+  WorkflowRevisionRemovedEvent,
   WorkflowStartedEvent,
   WorkflowSuspendedEvent,
   WorkflowTeardownEvent,

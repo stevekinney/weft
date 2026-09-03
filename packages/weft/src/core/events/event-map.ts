@@ -7,6 +7,13 @@ import type {
   TaskResultDeadLetteredEvent,
 } from './activity-events.ts';
 import type { AttributesChangedEvent } from './attribute-events.ts';
+import type {
+  WorkflowRevisionActivatedEvent,
+  WorkflowRevisionActivationRejectedEvent,
+  WorkflowRevisionDrainingEvent,
+  WorkflowRevisionInstalledEvent,
+  WorkflowRevisionRemovedEvent,
+} from './catalog-events.ts';
 import type { ScheduleFiredEvent, ScheduleMissedFireEvent } from './schedule-events.ts';
 import type { SignalDeliveredEvent, SignalReceivedEvent } from './signal-events.ts';
 import type {
@@ -85,6 +92,11 @@ export type WeftEventMap = {
   'alert:fired': AlertFiredEvent;
   'alert:resolved': AlertResolvedEvent;
   'constraint:violated': ConstraintViolatedEvent;
+  'catalog:revision-installed': WorkflowRevisionInstalledEvent;
+  'catalog:revision-activated': WorkflowRevisionActivatedEvent;
+  'catalog:activation-rejected': WorkflowRevisionActivationRejectedEvent;
+  'catalog:revision-draining': WorkflowRevisionDrainingEvent;
+  'catalog:revision-removed': WorkflowRevisionRemovedEvent;
 };
 
 /**

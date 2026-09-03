@@ -306,6 +306,7 @@ import {
   type WorkflowFeedSelector,
 } from './workflow-feed.ts';
 
+export type { WorkflowRevisionReferenceCounts } from '../catalog/index.ts';
 export {
   ActivityReconciliationCapabilityError,
   ActivityReconciliationConflictError,
@@ -313,6 +314,12 @@ export {
 } from './activity-reconciliation.ts';
 export { AsyncActivityTokenNotFoundError } from './async-activity-completion.ts';
 export type { PendingAsyncActivity } from './async-activity-records.ts';
+export {
+  getWorkflowRevisionDiagnostics,
+  removeWorkflowRevision,
+  type WorkflowCatalogRemovalResult,
+  type WorkflowRevisionDiagnostics,
+} from './catalog-removal.ts';
 export type {
   PendingTimelineEntry,
   RegistrationEntry,
@@ -832,6 +839,8 @@ export class Engine<
     getInternals(this).pendingCatalogInstalls = [];
     getInternals(this).catalogRestored = false;
     getInternals(this).catalogDrainPromise = null;
+    getInternals(this).registeredCatalogRevisions = new Map();
+    getInternals(this).inFlightStartsByRevision = new Map();
     this.#ensureRetentionSweepInterval();
     this.#startSecondInstanceDetection();
   }

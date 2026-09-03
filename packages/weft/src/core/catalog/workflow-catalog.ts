@@ -50,6 +50,7 @@ import { validateWorkflowOrActivityName } from '../types/name-grammar.ts';
 import type { RegisteredWorkflowDefinition } from '../types/workflow-registry.ts';
 import { encodeActivePointer, manifestsAreByteIdentical } from './codec.ts';
 import { WorkflowCatalogActivationConflictError, WorkflowCatalogConflictError } from './errors.ts';
+import { removeCatalogEntry, type WorkflowCatalogRemovalOutcome } from './removal.ts';
 import {
   readActivePointer,
   readCatalogEntry,
@@ -98,6 +99,40 @@ export class WorkflowCatalog {
   /** The current active pointer for `name`, or `undefined` when never activated. */
   resolveActive(name: string): WorkflowCatalogActivePointer | undefined {
     return this.#active.get(name);
+  }
+
+  /**
+   * Whether `(name, revision)` is already durably installed — checked
+   * against this process's in-memory cache first, then, on a cache miss,
+   * durable storage itself (a different process may have installed it).
+   * Used by `catalog-events.ts`'s installed/activated/draining dispatch
+   * helper to decide whether an activation call is installing genuinely
+   * new content, since `install()`'s own cache-hit branch does not
+   * distinguish "already known to this process" from "just installed a
+   * moment ago by this same call."
+   */
+  async hasInstalled(name: string, revision: string): Promise<boolean> {
+    if (this.getEntry(name, revision) !== undefined) return true;
+    return (await readCatalogEntry(this.#storage, name, revision)) !== null;
+  }
+
+  /**
+   * Durably remove the installed `(name, revision)` entry — delegates the
+   * CAS mechanics to {@link removeCatalogEntry}. On success, evicts the
+   * entry from this process's in-memory `#entries` cache too, so a
+   * subsequent `getEntry`/`listRevisions` call in this same process never
+   * observes a removed revision. Refuses (`'active'`) when `revision` is
+   * currently the active pointer for `name` — a structural invariant this
+   * method itself enforces, independent of any reference-count decision a
+   * caller layers on top (see `core/engine/catalog-removal.ts`).
+   */
+  async remove(name: string, revision: string): Promise<WorkflowCatalogRemovalOutcome> {
+    requireStorageCapability(this.#storage, 'conditionalBatch', 'workflow catalog removal');
+    const result = await removeCatalogEntry(this.#storage, name, revision);
+    if (result.outcome === 'removed') {
+      this.#entries.get(name)?.delete(revision);
+    }
+    return result;
   }
 
   /**
