@@ -12,7 +12,6 @@
  */
 
 import type { BatchOperation, ConditionalBatchCondition, Storage } from '../storage/interface.ts';
-import { AttemptRegistry } from './application-mailbox-attempt-registry.ts';
 import type {
   ApplicationCommandReceipt,
   ApplicationMailboxEventSink,
@@ -30,6 +29,7 @@ import type {
 } from './application-mailbox-types.ts';
 import { isApplicationCommandLeased } from './application-mailbox-types.ts';
 import type { ResolvedMailboxPolicy } from './application-mailbox-validation.ts';
+import { AttemptRegistry } from './application-primitive-attempt-registry.ts';
 import { WeftError } from './weft-error.ts';
 
 /**
@@ -99,75 +99,8 @@ export type MailboxRuntime = {
  * discarded backend takes its registries with it.
  */
 
-/**
- * One mailbox scope's live attempts plus the number of handles currently
- * holding it, so the scope can be dropped once nothing references it.
- */
-type ScopeRegistry = {
-  readonly controllers: AttemptRegistry;
-  handles: number;
-};
-
-const ATTEMPT_CONTROLLERS_BY_STORAGE = new WeakMap<Storage, Map<string, ScopeRegistry>>();
-
-function scopeKey(namespace: string, resourceId: string): string {
-  return `${encodeURIComponent(namespace)}:${encodeURIComponent(resourceId)}`;
-}
-
-/**
- * Acquire the shared attempt-controller registry for one mailbox scope in this
- * process. Every acquisition is balanced by `releaseAttemptControllerRegistry`
- * from the handle's `dispose()`.
- */
-export function attemptControllerRegistry(
-  storage: Storage,
-  namespace: string,
-  resourceId: string,
-): AttemptRegistry {
-  let byScope = ATTEMPT_CONTROLLERS_BY_STORAGE.get(storage);
-  if (byScope === undefined) {
-    byScope = new Map();
-    ATTEMPT_CONTROLLERS_BY_STORAGE.set(storage, byScope);
-  }
-  const scope = scopeKey(namespace, resourceId);
-  let entry = byScope.get(scope);
-  if (entry === undefined) {
-    entry = { controllers: new AttemptRegistry(), handles: 0 };
-    byScope.set(scope, entry);
-  }
-  entry.handles += 1;
-  return entry.controllers;
-}
-
-/**
- * Release one handle's hold on a scope registry.
- *
- * The scope is forgotten once no handle holds it and no attempt is live in it.
- * A service that creates short-lived mailboxes for many resource ids over one
- * long-lived storage would otherwise retain a map per historical resource.
- * A live attempt owned by a sibling handle keeps the scope until it settles.
- */
-export function releaseAttemptControllerRegistry(
-  storage: Storage,
-  namespace: string,
-  resourceId: string,
-): void {
-  const byScope = ATTEMPT_CONTROLLERS_BY_STORAGE.get(storage);
-  const scope = scopeKey(namespace, resourceId);
-  const entry = byScope?.get(scope);
-  if (byScope === undefined || entry === undefined) return;
-  entry.handles = Math.max(0, entry.handles - 1);
-  if (entry.handles === 0 && entry.controllers.size === 0) byScope.delete(scope);
-}
-
-/** Whether this process still tracks a registry for the scope. Diagnostics and tests. */
-export function hasAttemptControllerScope(
-  storage: Storage,
-  namespace: string,
-  resourceId: string,
-): boolean {
-  return ATTEMPT_CONTROLLERS_BY_STORAGE.get(storage)?.has(scopeKey(namespace, resourceId)) === true;
-}
+/** The registry-scope tag for the mailbox, so it never shares a registry with another primitive. */
+export const MAILBOX_PRIMITIVE = 'mailbox';
 
 /**
  * Thrown when a transition keeps losing its compare-and-swap.
@@ -342,7 +275,7 @@ export function releaseAttemptController(
   // A caller that paired command A's id with command B's token must not take
   // B's live attempt down with A's refusal. Callers passing a token read from
   // the record itself omit `commandId`; the token is the record's own.
-  if (commandId !== undefined && registration.commandId !== commandId) return;
+  if (commandId !== undefined && registration.subjectId !== commandId) return;
   runtime.attemptControllers.delete(attemptToken);
   // Release through the registration, so the handle that CLAIMED the attempt
   // forgets it even when a sibling handle is the one settling or reclaiming.

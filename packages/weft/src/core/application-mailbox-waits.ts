@@ -16,7 +16,6 @@
  * @module core/application-mailbox-waits
  */
 
-import { WaitBudgetElapsedError, raceAbortWithin } from './application-mailbox-abort.ts';
 import type {
   ApplicationCommandCleanupResult,
   ApplicationMailboxWaitOptions,
@@ -30,6 +29,7 @@ import {
   requireDerivedInstant,
   requireWaitBudget,
 } from './application-mailbox-validation.ts';
+import { WaitBudgetElapsedError, raceAbortWithin } from './application-primitive-abort.ts';
 
 export { DEFAULT_WAIT_POLL_INTERVAL_MS as DEFAULT_MAILBOX_POLL_INTERVAL_MS } from './application-mailbox-validation.ts';
 

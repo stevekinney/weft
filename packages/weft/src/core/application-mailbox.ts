@@ -36,8 +36,7 @@ import type {
 import { claimNextCommand } from './application-mailbox-delivery.ts';
 import { decodeApplicationReadyEntry } from './application-mailbox-index-codec.ts';
 import {
-  attemptControllerRegistry,
-  releaseAttemptControllerRegistry,
+  MAILBOX_PRIMITIVE,
   toApplicationCommandReceipt,
   type MailboxRuntime,
 } from './application-mailbox-internals.ts';
@@ -66,6 +65,10 @@ import {
   validateFailure,
 } from './application-mailbox-validation.ts';
 import { waitForAvailableWork, waitForCleanup } from './application-mailbox-waits.ts';
+import {
+  attemptControllerRegistry,
+  releaseAttemptControllerRegistry,
+} from './application-primitive-attempt-registry.ts';
 import type { JSONValue } from './json.ts';
 import { PersistedDataCorruptError } from './persisted-data-incompatible-error.ts';
 
@@ -155,6 +158,7 @@ export class ApplicationMailbox {
       generateId: options.generateId ?? (() => crypto.randomUUID()),
       attemptControllers: attemptControllerRegistry(
         options.storage,
+        MAILBOX_PRIMITIVE,
         policy.namespace,
         policy.resourceId,
       ),
@@ -468,6 +472,7 @@ export class ApplicationMailbox {
     this.#disposal.abort(new Error('The application mailbox was disposed.'));
     releaseAttemptControllerRegistry(
       this.#runtime.storage,
+      MAILBOX_PRIMITIVE,
       this.#runtime.policy.namespace,
       this.#runtime.policy.resourceId,
     );

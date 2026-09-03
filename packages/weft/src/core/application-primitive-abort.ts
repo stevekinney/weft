@@ -1,5 +1,5 @@
 /**
- * Racing an in-flight storage observation against abort signals (WFT-84).
+ * Racing an in-flight storage observation against abort signals (WFT-84, WFT-85).
  *
  * Storage has no cancellation contract, so a stalled remote read cannot be
  * cut short. What can be cut short is the caller's wait: the moment any of the
@@ -8,7 +8,7 @@
  * fewest promise hops, because the deterministic fake-timer tests drain a
  * fixed number of microtask turns between ticks.
  *
- * @module core/application-mailbox-abort
+ * @module core/application-primitive-abort
  */
 
 import { WeftError } from './weft-error.ts';

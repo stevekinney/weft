@@ -20,11 +20,6 @@ import {
   restoreRealTimers,
   useFakeTimers,
 } from '../testing/fake-timers.test-support.ts';
-import { WaitBudgetElapsedError } from './application-mailbox-abort.ts';
-import {
-  AttemptRegistry,
-  type AttemptRegistration,
-} from './application-mailbox-attempt-registry.ts';
 import type {
   ApplicationCommandCleanupResult,
   ApplicationCommandRejection,
@@ -32,9 +27,8 @@ import type {
 import { encodeApplicationReadyEntry } from './application-mailbox-index-codec.ts';
 import {
   ApplicationMailboxContentionError,
-  attemptControllerRegistry,
-  hasAttemptControllerScope,
   MAILBOX_MAINTENANCE_MAX_PAGES,
+  MAILBOX_PRIMITIVE,
 } from './application-mailbox-internals.ts';
 import { ApplicationCommandValidationError } from './application-mailbox-validation.ts';
 import {
@@ -48,6 +42,13 @@ import {
 } from './application-mailbox.test-support.ts';
 import { ApplicationMailbox } from './application-mailbox.ts';
 import { computePayloadDigest } from './application-payload-digest.ts';
+import { WaitBudgetElapsedError } from './application-primitive-abort.ts';
+import {
+  attemptControllerRegistry,
+  AttemptRegistry,
+  hasAttemptControllerScope,
+  type AttemptRegistration,
+} from './application-primitive-attempt-registry.ts';
 import { decode, encode } from './codec.ts';
 import { PersistedDataCorruptError } from './persisted-data-incompatible-error.ts';
 
@@ -770,7 +771,12 @@ describe('second-round hardening', () => {
       await mailbox.acknowledge({ commandId, attemptToken: claim.attemptToken });
     }
     // Every attempt settled, so nothing should remain registered for this scope.
-    const registry = attemptControllerRegistry(mailbox.storage, 'bureau', 'agent-7');
+    const registry = attemptControllerRegistry(
+      mailbox.storage,
+      MAILBOX_PRIMITIVE,
+      'bureau',
+      'agent-7',
+    );
     expect(registry.size).toBe(0);
     mailbox.dispose();
   });
@@ -963,7 +969,7 @@ describe('third-round hardening', () => {
     }
     // Every attempt was settled by the OTHER handle. The claimant's own
     // registry entries have to be gone all the same.
-    expect(attemptControllerRegistry(storage, 'bureau', 'agent-7').size).toBe(0);
+    expect(attemptControllerRegistry(storage, MAILBOX_PRIMITIVE, 'bureau', 'agent-7').size).toBe(0);
     claimant.dispose();
     settler.dispose();
   });
@@ -1235,13 +1241,13 @@ describe('fifth-round hardening', () => {
     const second = createMailboxFixture({ storage }).mailbox;
     await admitOne(first);
     const claim = await claimOne(first);
-    expect(hasAttemptControllerScope(storage, 'bureau', 'agent-7')).toBe(true);
+    expect(hasAttemptControllerScope(storage, MAILBOX_PRIMITIVE, 'bureau', 'agent-7')).toBe(true);
     second.dispose();
     // One handle and one live attempt remain.
-    expect(hasAttemptControllerScope(storage, 'bureau', 'agent-7')).toBe(true);
+    expect(hasAttemptControllerScope(storage, MAILBOX_PRIMITIVE, 'bureau', 'agent-7')).toBe(true);
     await first.acknowledge({ commandId: claim.commandId, attemptToken: claim.attemptToken });
     first.dispose();
-    expect(hasAttemptControllerScope(storage, 'bureau', 'agent-7')).toBe(false);
+    expect(hasAttemptControllerScope(storage, MAILBOX_PRIMITIVE, 'bureau', 'agent-7')).toBe(false);
   });
 });
 
@@ -1622,7 +1628,7 @@ describe('ninth-round hardening', () => {
       return original(...args);
     };
     await expect(mailbox.claim()).rejects.toThrow('transient');
-    expect(attemptControllerRegistry(storage, 'bureau', 'agent-7').size).toBe(0);
+    expect(attemptControllerRegistry(storage, MAILBOX_PRIMITIVE, 'bureau', 'agent-7').size).toBe(0);
     // The handle is still usable and the command is still claimable.
     const claim = await mailbox.claim();
     expect(claim.status).toBe('claimed');
@@ -1643,9 +1649,11 @@ describe('ninth-round hardening', () => {
     const renewal = await mailbox.renew({ commandId, attemptToken: claim.attemptToken });
     expect(renewal.status).toBe('stale');
     expect(claim.signal.aborted).toBe(true);
-    expect(attemptControllerRegistry(storage, 'bureau', 'agent-7').has(claim.attemptToken)).toBe(
-      false,
-    );
+    expect(
+      attemptControllerRegistry(storage, MAILBOX_PRIMITIVE, 'bureau', 'agent-7').has(
+        claim.attemptToken,
+      ),
+    ).toBe(false);
     other.dispose();
     mailbox.dispose();
   });
@@ -1756,7 +1764,9 @@ describe('tenth-round hardening', () => {
     expect(mismatched.status).toBe('stale');
     expect(secondClaim.signal.aborted).toBe(false);
     expect(
-      attemptControllerRegistry(storage, 'bureau', 'agent-7').has(secondClaim.attemptToken),
+      attemptControllerRegistry(storage, MAILBOX_PRIMITIVE, 'bureau', 'agent-7').has(
+        secondClaim.attemptToken,
+      ),
     ).toBe(true);
     const genuine = await mailbox.renew({
       commandId: second,
@@ -1841,9 +1851,11 @@ describe('eleventh-round hardening', () => {
     const settled = await mailbox.acknowledge({ commandId, attemptToken: claim.attemptToken });
     expect(settled.status).toBe('stale');
     expect(claim.signal.aborted).toBe(true);
-    expect(attemptControllerRegistry(storage, 'bureau', 'agent-7').has(claim.attemptToken)).toBe(
-      false,
-    );
+    expect(
+      attemptControllerRegistry(storage, MAILBOX_PRIMITIVE, 'bureau', 'agent-7').has(
+        claim.attemptToken,
+      ),
+    ).toBe(false);
     other.dispose();
     mailbox.dispose();
   });
@@ -1862,7 +1874,9 @@ describe('eleventh-round hardening', () => {
     expect(mismatched.status).toBe('stale');
     expect(secondClaim.signal.aborted).toBe(false);
     expect(
-      attemptControllerRegistry(storage, 'bureau', 'agent-7').has(secondClaim.attemptToken),
+      attemptControllerRegistry(storage, MAILBOX_PRIMITIVE, 'bureau', 'agent-7').has(
+        secondClaim.attemptToken,
+      ),
     ).toBe(true);
     mailbox.dispose();
   });
@@ -2095,9 +2109,11 @@ describe('thirteenth-round hardening', () => {
     const renewal = await mailbox.renew({ commandId, attemptToken: claim.attemptToken });
     expect(renewal.status).toBe('deadline-exceeded');
     expect(claim.signal.aborted).toBe(true);
-    expect(attemptControllerRegistry(storage, 'bureau', 'agent-7').has(claim.attemptToken)).toBe(
-      false,
-    );
+    expect(
+      attemptControllerRegistry(storage, MAILBOX_PRIMITIVE, 'bureau', 'agent-7').has(
+        claim.attemptToken,
+      ),
+    ).toBe(false);
     other.dispose();
     mailbox.dispose();
   });
@@ -2220,9 +2236,11 @@ describe('fourteenth-round hardening', () => {
     const cleanup = await local.cleanupState(commandId);
     expect(cleanup.status).toBe('unknown');
     expect(claim.signal.aborted).toBe(true);
-    expect(attemptControllerRegistry(storage, 'bureau', 'agent-7').has(claim.attemptToken)).toBe(
-      false,
-    );
+    expect(
+      attemptControllerRegistry(storage, MAILBOX_PRIMITIVE, 'bureau', 'agent-7').has(
+        claim.attemptToken,
+      ),
+    ).toBe(false);
     remote.dispose();
     local.dispose();
   });
@@ -2375,9 +2393,11 @@ describe('fifteenth-round hardening', () => {
     const cleanup = await local.cleanupState(commandId);
     expect(cleanup.status).toBe('pending');
     expect(claim.signal.aborted).toBe(true);
-    expect(attemptControllerRegistry(storage, 'bureau', 'agent-7').has(claim.attemptToken)).toBe(
-      false,
-    );
+    expect(
+      attemptControllerRegistry(storage, MAILBOX_PRIMITIVE, 'bureau', 'agent-7').has(
+        claim.attemptToken,
+      ),
+    ).toBe(false);
     remote.dispose();
     local.dispose();
   });
@@ -2481,9 +2501,11 @@ describe('sixteenth-round hardening', () => {
     expect(claim.signal.aborted).toBe(false);
     await local.runMaintenance();
     expect(claim.signal.aborted).toBe(true);
-    expect(attemptControllerRegistry(storage, 'bureau', 'agent-7').has(claim.attemptToken)).toBe(
-      false,
-    );
+    expect(
+      attemptControllerRegistry(storage, MAILBOX_PRIMITIVE, 'bureau', 'agent-7').has(
+        claim.attemptToken,
+      ),
+    ).toBe(false);
     remote.dispose();
     local.dispose();
   });
@@ -2526,9 +2548,11 @@ describe('maintenance races between the scan and the advance', () => {
     await local.runMaintenance();
     expect(raced).toBe(true);
     expect(claim.signal.aborted).toBe(true);
-    expect(attemptControllerRegistry(storage, 'bureau', 'agent-7').has(claim.attemptToken)).toBe(
-      false,
-    );
+    expect(
+      attemptControllerRegistry(storage, MAILBOX_PRIMITIVE, 'bureau', 'agent-7').has(
+        claim.attemptToken,
+      ),
+    ).toBe(false);
     remote.dispose();
     local.dispose();
   });
@@ -2614,7 +2638,9 @@ describe('seventeenth-round hardening', () => {
     expect(raced).toBe(true);
     expect(claim?.signal.aborted).toBe(false);
     expect(
-      attemptControllerRegistry(storage, 'bureau', 'agent-7').has(claim?.attemptToken ?? ''),
+      attemptControllerRegistry(storage, MAILBOX_PRIMITIVE, 'bureau', 'agent-7').has(
+        claim?.attemptToken ?? '',
+      ),
     ).toBe(true);
     const receipt = await mailbox.receipt(claim?.commandId ?? '');
     expect(receipt?.state).toBe('claimed');
@@ -2812,7 +2838,7 @@ describe('attempt registry index', () => {
     const registration = (commandId: string): AttemptRegistration => ({
       controller: new AbortController(),
       release: () => {},
-      commandId,
+      subjectId: commandId,
       committedSerial: null,
     });
     registry.set('a1', registration('a'));
@@ -2866,9 +2892,11 @@ describe('eighteenth-round hardening, continued', () => {
     const cancelled = await local.requestCancellation({ commandId });
     expect(cancelled.status).toBe('already-terminal');
     expect(claim.signal.aborted).toBe(true);
-    expect(attemptControllerRegistry(storage, 'bureau', 'agent-7').has(claim.attemptToken)).toBe(
-      false,
-    );
+    expect(
+      attemptControllerRegistry(storage, MAILBOX_PRIMITIVE, 'bureau', 'agent-7').has(
+        claim.attemptToken,
+      ),
+    ).toBe(false);
     remote.dispose();
     local.dispose();
   });
