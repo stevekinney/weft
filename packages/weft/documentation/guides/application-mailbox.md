@@ -196,7 +196,7 @@ if (renewal.status === 'renewed' && renewal.cancellationRequested) {
 
 A claimant that finished the work _before_ it observed the cancellation still records its `outcome` on the resulting `cancelled` receipt. That is deliberate: the effect really did happen, and discarding the result would lose evidence a reader needs to decide whether to compensate.
 
-`awaitCleanup()` waits, bounded, for the claimant to settle. A `pending` result means the mailbox stopped waiting. It never claims the handler stopped — a distinction that matters when you are deciding whether it is safe to start replacement work.
+`awaitCleanup()` waits, bounded, for the claimant to settle. A `pending` result means the mailbox stopped waiting. It never claims the handler stopped — a distinction that matters when you are deciding whether it is safe to start replacement work. The budget bounds the storage reads as well as the sleeps between them; if it runs out while the very first read is still in flight there is nothing to report, and the wait rejects with `WaitBudgetElapsedError`. A caller signal that aborts at any point rejects with that signal's reason.
 
 ## Backpressure
 

@@ -11,16 +11,33 @@
  * @module core/application-mailbox-abort
  */
 
+import { WeftError } from './weft-error.ts';
+
 /** The outcome of racing an in-flight observation against abort signals. */
 export type Raced<T> =
   | { readonly aborted: false; readonly value: T }
   | { readonly aborted: true; readonly reason: unknown };
 
-/** The reason an observation reports when its budget elapsed before storage answered. */
-export class WaitBudgetElapsedError extends Error {
+/**
+ * Thrown by `ApplicationMailbox.awaitCleanup()` when a positive budget runs out
+ * while the FIRST cleanup-state read is still in flight — there is no
+ * observation yet to report as `pending`. Nothing durable changed; the wait is
+ * simply over.
+ *
+ * @example
+ * ```ts
+ * import { WaitBudgetElapsedError } from '@lostgradient/weft';
+ *
+ * const error = new WaitBudgetElapsedError();
+ * console.log(error.code); // 'WaitBudgetElapsedError'
+ * ```
+ */
+export class WaitBudgetElapsedError extends WeftError<'WaitBudgetElapsedError'> {
   constructor() {
-    super('The wait budget elapsed while a storage observation was still in flight.');
-    this.name = 'WaitBudgetElapsedError';
+    super(
+      'WaitBudgetElapsedError',
+      'The wait budget elapsed while a storage observation was still in flight.',
+    );
   }
 }
 

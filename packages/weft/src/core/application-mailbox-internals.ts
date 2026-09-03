@@ -12,6 +12,7 @@
  */
 
 import type { BatchOperation, ConditionalBatchCondition, Storage } from '../storage/interface.ts';
+import { AttemptRegistry } from './application-mailbox-attempt-registry.ts';
 import type {
   ApplicationCommandReceipt,
   ApplicationMailboxEventSink,
@@ -64,7 +65,7 @@ export type MailboxRuntime = {
    * token — shared across every handle onto the same mailbox, so a cancellation
    * raised through one handle reaches a claimant holding another.
    */
-  readonly attemptControllers: Map<string, AttemptRegistration>;
+  readonly attemptControllers: AttemptRegistry;
   /**
    * Record an attempt this handle now owns, or report that disposal already won.
    *
@@ -97,48 +98,13 @@ export type MailboxRuntime = {
  * *cross-process* fallback. Keyed by `Storage` identity in a `WeakMap` so a
  * discarded backend takes its registries with it.
  */
-/**
- * One live attempt in this process: its abort controller plus the callback that
- * forgets it from the handle that claimed it.
- *
- * Carrying the release alongside the controller is what lets a *sibling* handle
- * — one running maintenance, or settling with a token it was handed — release
- * ownership from the handle that actually owns it. Without that, the claiming
- * handle's ownership set leaks one entry per attempt settled elsewhere.
- */
-export type AttemptRegistration = {
-  readonly controller: AbortController;
-  readonly release: () => void;
-  /** The command the attempt belongs to, so a caller-supplied token cannot release another command's attempt. */
-  readonly commandId: string;
-  /**
-   * The process-local lease-commit serial this attempt's lease landed under, or
-   * `null` while its compare-and-swap is still in flight. A reconciliation from
-   * a durable snapshot releases only attempts that committed BEFORE the
-   * snapshot was read: a snapshot cannot speak for a lease that landed after it.
-   */
-  committedSerial: number | null;
-};
-
-let localLeaseCommits = 0;
-
-/** Record one more lease committed by this process and return its serial. */
-export function nextLeaseCommitSerial(): number {
-  localLeaseCommits += 1;
-  return localLeaseCommits;
-}
-
-/** The serial of the latest lease this process committed; read before a snapshot to fence reconciliation. */
-export function leaseCommitSerial(): number {
-  return localLeaseCommits;
-}
 
 /**
  * One mailbox scope's live attempts plus the number of handles currently
  * holding it, so the scope can be dropped once nothing references it.
  */
 type ScopeRegistry = {
-  readonly controllers: Map<string, AttemptRegistration>;
+  readonly controllers: AttemptRegistry;
   handles: number;
 };
 
@@ -157,7 +123,7 @@ export function attemptControllerRegistry(
   storage: Storage,
   namespace: string,
   resourceId: string,
-): Map<string, AttemptRegistration> {
+): AttemptRegistry {
   let byScope = ATTEMPT_CONTROLLERS_BY_STORAGE.get(storage);
   if (byScope === undefined) {
     byScope = new Map();
@@ -166,7 +132,7 @@ export function attemptControllerRegistry(
   const scope = scopeKey(namespace, resourceId);
   let entry = byScope.get(scope);
   if (entry === undefined) {
-    entry = { controllers: new Map(), handles: 0 };
+    entry = { controllers: new AttemptRegistry(), handles: 0 };
     byScope.set(scope, entry);
   }
   entry.handles += 1;
@@ -398,8 +364,9 @@ export function releaseAttemptsForCommand(
   currentToken?: string,
   observedAt?: number,
 ): void {
-  for (const [attemptToken, registration] of runtime.attemptControllers) {
-    if (registration.commandId !== commandId || attemptToken === currentToken) continue;
+  for (const attemptToken of runtime.attemptControllers.tokensFor(commandId)) {
+    const registration = runtime.attemptControllers.get(attemptToken);
+    if (registration === undefined || attemptToken === currentToken) continue;
     // An attempt whose lease has not committed yet belongs to the claim path,
     // and one that committed after the snapshot was read is exactly what a
     // stale snapshot would wrongly call gone; neither is this caller's to end.

@@ -17,6 +17,7 @@
  * @module core/application-mailbox-settlement
  */
 
+import { leaseCommitSerial } from './application-mailbox-attempt-registry.ts';
 import type {
   ApplicationCommandCancellationResult,
   ApplicationCommandCleanupResult,
@@ -29,7 +30,6 @@ import {
   ApplicationMailboxContentionError,
   commitCommandTransition,
   isTerminalRecord,
-  leaseCommitSerial,
   MAX_MAILBOX_TRANSITION_ATTEMPTS,
   releaseAttemptController,
   releaseAttemptsForCommand,
@@ -260,6 +260,21 @@ async function settle(
   throw new ApplicationMailboxContentionError(operation, commandId);
 }
 
+/** Release every local attempt on a command observed terminal or gone, fenced by the snapshot's serial. */
+function releaseTerminalAttempts(
+  runtime: MailboxRuntime,
+  commandId: string,
+  observedAt: number,
+): void {
+  releaseAttemptsForCommand(
+    runtime,
+    commandId,
+    'This command is terminal; its attempt is over.',
+    undefined,
+    observedAt,
+  );
+}
+
 /**
  * Release the caller's process-local registration when its attempt is refused.
  *
@@ -297,8 +312,12 @@ export async function requestCancellation(
   },
 ): Promise<ApplicationCommandCancellationResult> {
   for (let attempt = 1; attempt <= MAX_MAILBOX_TRANSITION_ATTEMPTS; attempt += 1) {
+    const observedAt = leaseCommitSerial();
     const loaded = await loadCommand(runtime.storage, runtime.keys, options.commandId);
-    if (loaded === null) return { status: 'unknown' };
+    if (loaded === null) {
+      releaseTerminalAttempts(runtime, options.commandId, observedAt);
+      return { status: 'unknown' };
+    }
     const now = runtime.now();
     const transition = requestCommandCancellation(loaded.record, { now, reason: options.reason });
     if (!transition.ok) {
@@ -309,6 +328,7 @@ export async function requestCancellation(
       if (transition.reason === 'deadline-exceeded') {
         const expired = await deadLetterExpired(runtime, loaded, now);
         if (expired === null) continue;
+        releaseTerminalAttempts(runtime, options.commandId, observedAt);
         return { status: 'already-terminal', receipt: expired };
       }
       // The transition is the single decision point, so both illegal edges are
@@ -324,6 +344,10 @@ export async function requestCancellation(
           cleanupPending: true,
         };
       }
+      // Terminalized in another process while a local claimant may still hold
+      // it: that process cannot abort the local signal, and this explicit
+      // request is where the caller expects it to happen.
+      releaseTerminalAttempts(runtime, options.commandId, observedAt);
       return { status: 'already-terminal', receipt: toApplicationCommandReceipt(loaded.record) };
     }
     const committed = await commitCommandTransition(runtime, {

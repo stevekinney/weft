@@ -19,6 +19,7 @@
 
 import type { BatchOperation, ConditionalBatchCondition } from '../storage/interface.ts';
 import { formatSortableStorageTimestamp, storageConditionalBatch } from '../storage/interface.ts';
+import { leaseCommitSerial } from './application-mailbox-attempt-registry.ts';
 import { decodeApplicationCommandRecord } from './application-mailbox-codec.ts';
 import type {
   ApplicationMailboxMaintenanceReport,
@@ -32,7 +33,6 @@ import {
   ApplicationMailboxContentionError,
   commitCommandTransition,
   isTerminalRecord,
-  leaseCommitSerial,
   MAILBOX_MAINTENANCE_MAX_PAGES,
   MAX_MAILBOX_TRANSITION_ATTEMPTS,
   releaseAttemptController,
@@ -168,6 +168,7 @@ async function retireOneReceipt(
   indexBytes: Uint8Array,
 ): Promise<boolean> {
   const commandId = commandIdFromTerminalKey(indexKey);
+  const observedAt = leaseCommitSerial();
   const loaded =
     commandId === null ? null : await loadCommand(runtime.storage, runtime.keys, commandId);
   // Only a terminal record whose own `terminalAt` rebuilds this exact index key
@@ -195,7 +196,7 @@ async function retireOneReceipt(
   operations.push({ type: 'delete', key: runtime.keys.command(commandId) });
   const auxiliary = await ownedAuxiliaryEntries(runtime, loaded);
   operations.push(...auxiliary.operations);
-  return storageConditionalBatch(
+  const retired = await storageConditionalBatch(
     runtime.storage,
     [
       { key: runtime.keys.command(commandId), expectedValue: loaded.bytes },
@@ -203,6 +204,19 @@ async function retireOneReceipt(
     ],
     operations,
   );
+  // The record is gone for good. A local claimant that still held it —
+  // terminalized in another process, and skipped by a command scan whose
+  // cursor started past it — has nothing left to reconcile against later.
+  if (retired) {
+    releaseAttemptsForCommand(
+      runtime,
+      commandId,
+      'This command was retired; its attempt is over.',
+      undefined,
+      observedAt,
+    );
+  }
+  return retired;
 }
 
 /**

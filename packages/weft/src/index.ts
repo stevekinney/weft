@@ -497,6 +497,7 @@ export type {
 // Durable application command mailbox — storage-backed FIFO commands with
 // receipts, attempt-fenced claims, and durable cancellation (WFT-84).
 export { ApplicationMailbox } from './core/application-mailbox';
+export { WaitBudgetElapsedError } from './core/application-mailbox-abort';
 export type {
   ApplicationCommandAdmission,
   ApplicationCommandCancellationResult,
@@ -505,6 +506,7 @@ export type {
   ApplicationCommandCleanupResult,
   ApplicationCommandInput,
   ApplicationCommandReceipt,
+  ApplicationCommandRejection,
   ApplicationCommandRenewalResult,
   ApplicationCommandSettleResult,
   ApplicationMailboxCapacity,

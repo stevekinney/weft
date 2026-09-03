@@ -21,9 +21,10 @@ import type {
   ApplicationCommandCleanupResult,
   ApplicationMailboxWaitOptions,
 } from './application-mailbox-contract.ts';
+import { decodeApplicationReadyEntry } from './application-mailbox-index-codec.ts';
 import type { MailboxRuntime } from './application-mailbox-internals.ts';
 import { readCleanupState } from './application-mailbox-settlement.ts';
-import { isWaitingState, loadCommand, loadDeliveryHead } from './application-mailbox-storage.ts';
+import { isWaitingState, loadCommand } from './application-mailbox-storage.ts';
 import {
   requireClockInstant,
   requireDerivedInstant,
@@ -72,19 +73,34 @@ export function delayUnlessAborted(
  * exist.
  */
 export async function hasDueWork(runtime: MailboxRuntime): Promise<boolean> {
-  const head = await loadDeliveryHead(runtime.storage, runtime.keys);
-  if (head === null) return false;
-  const loaded = await loadCommand(runtime.storage, runtime.keys, head.commandId);
-  // The record is read after the index. Another consumer can claim the head in
-  // between, and a claimed or terminal record reached through a stale entry is
-  // not claimable whatever its timestamps say.
-  if (loaded === null || !isWaitingState(loaded.record)) return false;
-  // The same ownership rule `claim()` applies: an entry that is not the one the
-  // record's sequence names is one `claim()` will discard, not deliver.
-  if (head.key !== runtime.keys.ready(loaded.record.sequence)) return false;
-  const now = runtime.now();
-  return now >= loaded.record.availableAt && now < loaded.record.absoluteDeadlineAt;
+  // The index is read before the records. An entry whose record moved on in
+  // between — claimed or settled by another consumer — or that is not the one
+  // its record's sequence names, or whose command is past its deadline, is one
+  // `claim()` would discard or dead-letter and then look past; look past it
+  // here too, so a consumer is not told there is nothing to do while the next
+  // entry is the claimable head. The look-ahead is bounded because a wait
+  // mutates nothing and so cannot make progress through a long run of them.
+  for await (const [key, value] of runtime.storage.scan(runtime.keys.readyPrefix, {
+    limit: DUE_WORK_LOOKAHEAD,
+  })) {
+    const loaded = await loadCommand(
+      runtime.storage,
+      runtime.keys,
+      decodeApplicationReadyEntry(value, key),
+    );
+    if (loaded === null || !isWaitingState(loaded.record)) continue;
+    if (key !== runtime.keys.ready(loaded.record.sequence)) continue;
+    const now = runtime.now();
+    if (now >= loaded.record.absoluteDeadlineAt) continue;
+    // The first genuine head decides: due, or held — strict FIFO never skips a
+    // held head to a later one.
+    return now >= loaded.record.availableAt;
+  }
+  return false;
 }
+
+/** How many delivery-index entries a due-work observation looks past before giving up. */
+const DUE_WORK_LOOKAHEAD = 8;
 
 /**
  * Wait, bounded and abortably, until this mailbox has work due for delivery.

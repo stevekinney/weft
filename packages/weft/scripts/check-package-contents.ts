@@ -47,8 +47,9 @@ const maximumUnpackedBytes = 12 * 1024 * 1024;
 //
 // WFT-84 added the application mailbox modules (22 source files, each a
 // `.js`/`.d.ts` pair, +44 by the formula); the merged surface measured 1543,
-// and 1547 after merging WFT-7 (#946), which added two more pairs of its own.
-const maximumEntryCount = 1547;
+// and 1547 after merging WFT-7 (#946), which added two more pairs of its own;
+// the attempt registry moving to its own module makes it 1549.
+const maximumEntryCount = 1549;
 
 type PackFile = {
   path: string;

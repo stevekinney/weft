@@ -61,6 +61,26 @@ export type ApplicationMailboxEventSink = {
   ): Promise<unknown>;
 };
 
+/**
+ * What a claimant may supply when rejecting a command: only the `application`
+ * reason. `attempts-exhausted`, `deadline-exceeded`, and `cancelled` each name
+ * a mailbox-owned terminal mechanism and are written by the transition that
+ * owns it; the broader `ApplicationCommandFailure` is what receipts carry.
+ *
+ * @example
+ * ```ts
+ * import type { ApplicationCommandRejection } from '@lostgradient/weft';
+ *
+ * const rejection: ApplicationCommandRejection = { reason: 'application', message: 'unsupported kind' };
+ * console.log(rejection.reason); // 'application'
+ * ```
+ */
+export type ApplicationCommandRejection = Readonly<{
+  reason: 'application';
+  message?: string | undefined;
+  details?: JSONValue | undefined;
+}>;
+
 // ---------------------------------------------------------------------------
 // Construction
 // ---------------------------------------------------------------------------

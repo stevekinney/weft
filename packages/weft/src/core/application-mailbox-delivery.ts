@@ -13,6 +13,10 @@
 
 import { storageConditionalBatch } from '../storage/interface.ts';
 import { raceAbort } from './application-mailbox-abort.ts';
+import {
+  nextLeaseCommitSerial,
+  type AttemptRegistration,
+} from './application-mailbox-attempt-registry.ts';
 import type {
   ApplicationCommandClaimedPayload,
   ApplicationMailboxClaimResult,
@@ -22,9 +26,7 @@ import {
   ApplicationMailboxContentionError,
   MAX_MAILBOX_TRANSITION_ATTEMPTS,
   commitCommandTransition,
-  nextLeaseCommitSerial,
   toApplicationCommandReceipt,
-  type AttemptRegistration,
   type MailboxRuntime,
 } from './application-mailbox-internals.ts';
 import { isWaitingState, loadCommand, loadDeliveryHead } from './application-mailbox-storage.ts';
@@ -97,7 +99,7 @@ async function discardOrphanedEntry(
   runtime: MailboxRuntime,
   head: { readonly key: string; readonly bytes: Uint8Array; readonly commandId: string },
   observed: LoadedCommandRecord | null,
-): Promise<void> {
+): Promise<boolean> {
   // Fence on the COMMAND record as well as the index entry. The entry's value is
   // just the command id and never changes, so a compare-and-swap on it alone is
   // an ABA hazard: this reader sees the entry, another consumer claims the
@@ -106,7 +108,7 @@ async function discardOrphanedEntry(
   // `accepted`/`available` with no index entry, and because maintenance treats
   // both as waiting it would never restore it — the command would be lost from
   // the FIFO permanently.
-  await storageConditionalBatch(
+  return storageConditionalBatch(
     runtime.storage,
     [
       { key: head.key, expectedValue: head.bytes },
@@ -129,14 +131,15 @@ async function terminalizeExpiredHead(
   runtime: MailboxRuntime,
   loaded: LoadedCommandRecord,
   now: number,
-): Promise<void> {
+): Promise<boolean> {
   const transition = recoverExpiredCommand(loaded.record, {
     now,
     retryBackoffMs: runtime.policy.retryBackoffMs,
     maxRetryBackoffMs: runtime.policy.maxRetryBackoffMs,
   });
-  if (!transition.ok) return;
-  await commitCommandTransition(runtime, {
+  // Already terminal: someone else moved it, which is progress all the same.
+  if (!transition.ok) return true;
+  return commitCommandTransition(runtime, {
     previous: loaded.record,
     expectedBytes: loaded.bytes,
     next: transition.next,
@@ -155,8 +158,12 @@ type DeliverableHead =
   | { readonly status: 'claimable'; readonly loaded: LoadedCommandRecord }
   | { readonly status: 'empty' }
   | { readonly status: 'held'; readonly availableAt: number }
-  /** The head could not be used and the caller should look again. */
-  | { readonly status: 'retry' };
+  /**
+   * The head could not be used and the caller should look again. `progressed`
+   * is whether durable state moved — by this housekeeping or by someone else's
+   * — as opposed to a housekeeping compare-and-swap that simply lost.
+   */
+  | { readonly status: 'retry'; readonly progressed: boolean };
 
 async function resolveDeliverableHead(
   runtime: MailboxRuntime,
@@ -166,8 +173,7 @@ async function resolveDeliverableHead(
   if (head === null) return { status: 'empty' };
   const loaded = await loadCommand(runtime.storage, runtime.keys, head.commandId);
   if (loaded === null || isOrphanedEntry(runtime, head, loaded)) {
-    await discardOrphanedEntry(runtime, head, loaded);
-    return { status: 'retry' };
+    return { status: 'retry', progressed: await discardOrphanedEntry(runtime, head, loaded) };
   }
   // The deadline outranks availability, and the order matters. A head in retry
   // backoff whose deadline already passed can never come due, so checking
@@ -175,8 +181,7 @@ async function resolveDeliverableHead(
   // `backgroundTasks: 'manual'`, where nothing else runs — block the mailbox on
   // a command no maintenance pass was scheduled to clear.
   if (now >= loaded.record.absoluteDeadlineAt) {
-    await terminalizeExpiredHead(runtime, loaded, now);
-    return { status: 'retry' };
+    return { status: 'retry', progressed: await terminalizeExpiredHead(runtime, loaded, now) };
   }
   if (now < loaded.record.availableAt) {
     // A head whose availability lies past its deadline becomes actionable AT
@@ -260,14 +265,9 @@ export async function claimNextCommand(
   let losses = 0;
   while (losses < MAX_MAILBOX_TRANSITION_ATTEMPTS) {
     options?.signal?.throwIfAborted();
-    const now = runtime.now();
-    const head = await observeHead(runtime, now, options?.signal);
-    if (head.status === 'empty') return { status: 'empty' };
-    if (head.status === 'held') return { status: 'held', availableAt: head.availableAt };
-    if (head.status === 'retry') continue;
-    const claim = await leaseHead(runtime, head.loaded, options?.signal);
-    if (claim !== null) return claim;
-    losses += 1;
+    const outcome = await attemptClaim(runtime, options?.signal);
+    if ('status' in outcome) return outcome;
+    if (outcome.lost) losses += 1;
   }
   throw new ApplicationMailboxContentionError('claim', null);
 }
@@ -295,6 +295,23 @@ async function deadLetterCommittedLease(runtime: MailboxRuntime, commandId: stri
     next: transition.next,
     now,
   });
+}
+
+/**
+ * One pass at the head: a claim result, or whether the pass lost a
+ * compare-and-swap (as opposed to housekeeping that moved durable state).
+ */
+async function attemptClaim(
+  runtime: MailboxRuntime,
+  signal: AbortSignal | undefined,
+): Promise<ApplicationMailboxClaimResult | { readonly lost: boolean }> {
+  const now = runtime.now();
+  const head = await observeHead(runtime, now, signal);
+  if (head.status === 'empty') return { status: 'empty' };
+  if (head.status === 'held') return { status: 'held', availableAt: head.availableAt };
+  if (head.status === 'retry') return { lost: !head.progressed };
+  const claim = await leaseHead(runtime, head.loaded, signal);
+  return claim ?? { lost: true };
 }
 
 /**

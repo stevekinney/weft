@@ -14,6 +14,7 @@
  * @module core/application-mailbox-guards
  */
 
+import type { ApplicationCommandRejection } from './application-mailbox-contract.ts';
 import type { ApplicationCommandFailure } from './application-mailbox-types.ts';
 import { decode, encode } from './codec.ts';
 import { isJSONValue, type JSONValue } from './json.ts';
@@ -176,7 +177,7 @@ export function validateDurableJSONValue(value: unknown, field: string): JSONVal
  *
  * @throws {ApplicationCommandValidationError} When `details` is not JSON-safe.
  */
-export function validateFailure(failure: ApplicationCommandFailure): ApplicationCommandFailure {
+export function validateFailure(failure: ApplicationCommandRejection): ApplicationCommandFailure {
   if (typeof failure !== 'object' || failure === null) {
     throw new ApplicationCommandValidationError('failure must be an object.');
   }

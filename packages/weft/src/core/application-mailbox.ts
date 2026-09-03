@@ -23,6 +23,7 @@ import type {
   ApplicationCommandCleanupResult,
   ApplicationCommandInput,
   ApplicationCommandReceipt,
+  ApplicationCommandRejection,
   ApplicationCommandRenewalResult,
   ApplicationCommandSettleResult,
   ApplicationMailboxCapacity,
@@ -53,7 +54,6 @@ import {
   loadCommand,
   loadMailboxHeader,
 } from './application-mailbox-storage.ts';
-import { type ApplicationCommandFailure } from './application-mailbox-types.ts';
 import {
   ApplicationCommandValidationError,
   clampListLimit,
@@ -353,7 +353,7 @@ export class ApplicationMailbox {
   async reject(options: {
     readonly commandId: string;
     readonly attemptToken: string;
-    readonly failure: ApplicationCommandFailure;
+    readonly failure: ApplicationCommandRejection;
     readonly retry?: boolean | undefined;
   }): Promise<ApplicationCommandSettleResult> {
     this.#assertLive();

@@ -227,6 +227,8 @@ function decodeTerminalRecord(
   if (cleanupPending !== undefined && typeof cleanupPending !== 'boolean') fail(key);
   const failure = readFailure(decoded, key);
   if (!failureMatchesState(state, failure?.reason)) fail(key);
+  const abandoned = readOptionalString(decoded, 'abandonedAttemptToken', key);
+  if (!cleanupFieldsMatchState(state, cleanupPending === true, abandoned)) fail(key);
   return {
     ...readBase(decoded, key),
     state,
@@ -236,8 +238,24 @@ function decodeTerminalRecord(
     cancellationRequestedAt: readOptionalInteger(decoded, 'cancellationRequestedAt', key),
     cancellationReason: readOptionalString(decoded, 'cancellationReason', key),
     cleanupPending,
-    abandonedAttemptToken: readOptionalString(decoded, 'abandonedAttemptToken', key),
+    abandonedAttemptToken: abandoned,
   };
+}
+
+/**
+ * Only the transitions that abandon a lease — cancellation expiry and the two
+ * dead-letter paths — write `cleanupPending: true`, and they always name the
+ * abandoned attempt. A record with one without the other, or with either on an
+ * `applied` or `rejected` disposition, is damage; accepting it could report an
+ * abandoned handler as settled.
+ */
+function cleanupFieldsMatchState(
+  state: ApplicationCommandTerminalState,
+  cleanupPending: boolean,
+  abandonedAttemptToken: string | undefined,
+): boolean {
+  if (cleanupPending !== (abandonedAttemptToken !== undefined)) return false;
+  return !cleanupPending || state === 'cancelled' || state === 'dead-lettered';
 }
 
 /**

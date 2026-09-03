@@ -21,14 +21,21 @@ import {
   useFakeTimers,
 } from '../testing/fake-timers.test-support.ts';
 import { WaitBudgetElapsedError } from './application-mailbox-abort.ts';
-import type { ApplicationCommandCleanupResult } from './application-mailbox-contract.ts';
+import {
+  AttemptRegistry,
+  type AttemptRegistration,
+} from './application-mailbox-attempt-registry.ts';
+import type {
+  ApplicationCommandCleanupResult,
+  ApplicationCommandRejection,
+} from './application-mailbox-contract.ts';
 import { encodeApplicationReadyEntry } from './application-mailbox-index-codec.ts';
 import {
+  ApplicationMailboxContentionError,
   attemptControllerRegistry,
   hasAttemptControllerScope,
   MAILBOX_MAINTENANCE_MAX_PAGES,
 } from './application-mailbox-internals.ts';
-import type { ApplicationCommandFailure } from './application-mailbox-types.ts';
 import { ApplicationCommandValidationError } from './application-mailbox-validation.ts';
 import {
   admitOne,
@@ -1086,7 +1093,7 @@ describe('fourth-round hardening', () => {
         mailbox.reject({
           commandId,
           attemptToken: claim.attemptToken,
-          failure: { reason },
+          failure: { reason } as unknown as ApplicationCommandRejection,
           retry: false,
         }),
       ).rejects.toThrow(ApplicationCommandValidationError);
@@ -1568,7 +1575,7 @@ describe('ninth-round hardening', () => {
     mailbox.dispose();
   });
 
-  it('does not report due work through a ready entry that is not the record own', async () => {
+  it('looks past a ready entry that is not the record own to the genuine head', async () => {
     const { mailbox, storage } = createMailboxFixture({ generateId: createIdSource('c') });
     await admitOne(mailbox, { idempotencyKey: 'a' });
     const second = await admitOne(mailbox, { idempotencyKey: 'b' });
@@ -1577,7 +1584,9 @@ describe('ninth-round hardening', () => {
       KEYS.applicationCommandReady('bureau', 'agent-7', 0),
       encodeApplicationReadyEntry(second),
     );
-    expect(await mailbox.waitForAvailable({ timeoutMs: 0 })).toBe(false);
+    // The stale entry is one `claim()` would discard; the second command's own
+    // entry behind it is the claimable head, so there IS due work.
+    expect(await mailbox.waitForAvailable({ timeoutMs: 0 })).toBe(true);
     mailbox.dispose();
   });
 
@@ -1882,7 +1891,7 @@ describe('eleventh-round hardening', () => {
     const settled = await mailbox.reject({
       commandId,
       attemptToken: claim.attemptToken,
-      failure: failure as unknown as ApplicationCommandFailure,
+      failure: failure as unknown as ApplicationCommandRejection,
     });
     expect(settled.status).toBe('settled');
     const receipt = await mailbox.receipt(commandId);
@@ -2690,5 +2699,226 @@ describe('seventeenth-round hardening', () => {
     expect(await storage.get(noncanonical)).toBeNull();
     expect(await mailbox.receipt(commandId)).toBeNull();
     mailbox.dispose();
+  });
+});
+
+describe('eighteenth-round hardening', () => {
+  it('reports due work behind a head that another consumer claimed between the reads', async () => {
+    const storage = new MemoryStorage();
+    const { mailbox } = createMailboxFixture({ storage, generateId: createIdSource('w') });
+    const other = createMailboxFixture({ storage, generateId: createIdSource('o') }).mailbox;
+    await admitOne(mailbox, { idempotencyKey: 'a' });
+    await admitOne(mailbox, { idempotencyKey: 'b' });
+    // The first entry's record is claimed between the index read and the
+    // record read; the second command is the claimable head the whole time.
+    const originalGet = storage.get.bind(storage);
+    let raced = false;
+    storage.get = async (key: string): Promise<Uint8Array | null> => {
+      if (!raced && key.startsWith('appcmd:')) {
+        raced = true;
+        await other.claim();
+      }
+      return originalGet(key);
+    };
+    expect(await mailbox.waitForAvailable({ timeoutMs: 0 })).toBe(true);
+    expect(raced).toBe(true);
+    other.dispose();
+    mailbox.dispose();
+  });
+
+  it('reports held, not due, when the first genuine head is not yet available', async () => {
+    const { mailbox } = createMailboxFixture({ generateId: createIdSource('c') });
+    await admitOne(mailbox, { idempotencyKey: 'a', availableAfterMs: 60_000 });
+    await admitOne(mailbox, { idempotencyKey: 'b' });
+    // Strict FIFO never skips a held head to a later due command.
+    expect(await mailbox.waitForAvailable({ timeoutMs: 0 })).toBe(false);
+    mailbox.dispose();
+  });
+
+  it('fails closed on terminal cleanup fields no transition writes', async () => {
+    const { mailbox, storage } = createMailboxFixture();
+    const commandId = await admitOne(mailbox);
+    const claim = await claimOne(mailbox);
+    await mailbox.acknowledge({ commandId, attemptToken: claim.attemptToken });
+    const key = KEYS.applicationCommand('bureau', 'agent-7', commandId);
+    const applied = decode((await storage.get(key)) as Uint8Array) as Record<string, unknown>;
+    // An abandoned attempt without the cleanup flag, on a disposition that
+    // cannot abandon one.
+    await storage.put(key, encode({ ...applied, abandonedAttemptToken: 't' }));
+    await expect(mailbox.receipt(commandId)).rejects.toThrow(PersistedDataCorruptError);
+    // The flag without the attempt it would name.
+    await storage.put(
+      key,
+      encode({
+        ...applied,
+        state: 'dead-lettered',
+        failure: { reason: 'deadline-exceeded' },
+        cleanupPending: true,
+      }),
+    );
+    await expect(mailbox.receipt(commandId)).rejects.toThrow(PersistedDataCorruptError);
+    // Both, on a disposition that abandons a lease: legal.
+    await storage.put(
+      key,
+      encode({
+        ...applied,
+        state: 'dead-lettered',
+        failure: { reason: 'deadline-exceeded' },
+        cleanupPending: true,
+        abandonedAttemptToken: 't',
+      }),
+    );
+    const receipt = await mailbox.receipt(commandId);
+    expect(receipt?.cleanupPending).toBe(true);
+    mailbox.dispose();
+  });
+
+  it('exposes the wait budget error as a public coded error', () => {
+    const error = new WaitBudgetElapsedError();
+    expect(error.code).toBe('WaitBudgetElapsedError');
+    expect(error).toBeInstanceOf(Error);
+  });
+
+  it('counts lost housekeeping compare-and-swaps as contention', async () => {
+    const storage = new MemoryStorage();
+    const { mailbox } = createMailboxFixture({ storage });
+    // An orphaned delivery-index entry whose record does not exist.
+    await storage.put(
+      KEYS.applicationCommandReady('bureau', 'agent-7', 0),
+      encodeApplicationReadyEntry('ghost'),
+    );
+    // Every attempt to discard it loses its compare-and-swap.
+    const original = storage.conditionalBatch.bind(storage);
+    let losses = 0;
+    storage.conditionalBatch = async (
+      ...args: Parameters<MemoryStorage['conditionalBatch']>
+    ): Promise<boolean> => {
+      const [, operations] = args;
+      if (operations.length === 1 && operations[0]?.type === 'delete') {
+        losses += 1;
+        return false;
+      }
+      return original(...args);
+    };
+    await expect(mailbox.claim()).rejects.toThrow(ApplicationMailboxContentionError);
+    expect(losses).toBe(25);
+    mailbox.dispose();
+  });
+});
+
+describe('attempt registry index', () => {
+  it('indexes registrations by command and keeps the index in step with the map', () => {
+    const registry = new AttemptRegistry();
+    const registration = (commandId: string): AttemptRegistration => ({
+      controller: new AbortController(),
+      release: () => {},
+      commandId,
+      committedSerial: null,
+    });
+    registry.set('a1', registration('a'));
+    registry.set('a2', registration('a'));
+    registry.set('b1', registration('b'));
+    expect(registry.tokensFor('a').sort()).toEqual(['a1', 'a2']);
+    expect(registry.tokensFor('b')).toEqual(['b1']);
+    expect(registry.tokensFor('c')).toEqual([]);
+    expect(registry.delete('a1')).toBe(true);
+    expect(registry.delete('a1')).toBe(false);
+    expect(registry.tokensFor('a')).toEqual(['a2']);
+    registry.delete('a2');
+    expect(registry.tokensFor('a')).toEqual([]);
+    registry.clear();
+    expect(registry.size).toBe(0);
+    expect(registry.tokensFor('b')).toEqual([]);
+  });
+});
+
+describe('eighteenth-round hardening, continued', () => {
+  it('releases local attempts when cancellation finds the command terminalized elsewhere', async () => {
+    const storage = new MemoryStorage();
+    const clock = createMailboxClock();
+    const local = createMailboxFixture({
+      storage,
+      clock,
+      visibilityTimeoutMs: 500,
+      retryBackoffMs: 1,
+      generateId: createIdSource('l'),
+    }).mailbox;
+    const remote = new ApplicationMailbox({
+      storage: remoteView(storage),
+      namespace: 'bureau',
+      resourceId: 'agent-7',
+      now: clock.now,
+      generateId: createIdSource('r'),
+      visibilityTimeoutMs: 500,
+      retryBackoffMs: 1,
+    });
+    const commandId = await admitOne(local);
+    const claim = await claimOne(local);
+    clock.advance(501);
+    await remote.runMaintenance();
+    clock.advance(10);
+    const reclaimed = await remote.claim();
+    expect(reclaimed.status).toBe('claimed');
+    if (reclaimed.status !== 'claimed') return;
+    await remote.acknowledge({ commandId, attemptToken: reclaimed.claim.attemptToken });
+    expect(claim.signal.aborted).toBe(false);
+
+    const cancelled = await local.requestCancellation({ commandId });
+    expect(cancelled.status).toBe('already-terminal');
+    expect(claim.signal.aborted).toBe(true);
+    expect(attemptControllerRegistry(storage, 'bureau', 'agent-7').has(claim.attemptToken)).toBe(
+      false,
+    );
+    remote.dispose();
+    local.dispose();
+  });
+
+  it('releases local attempts when retention retires a command the scan cursor skipped', async () => {
+    const storage = new MemoryStorage();
+    const clock = createMailboxClock();
+    const local = createMailboxFixture({
+      storage,
+      clock,
+      maintenanceBatchSize: 1,
+      visibilityTimeoutMs: 500,
+      retryBackoffMs: 1,
+      terminalRetentionMs: 1_000,
+      generateId: createIdSource('c'),
+    }).mailbox;
+    const remote = new ApplicationMailbox({
+      storage: remoteView(storage),
+      namespace: 'bureau',
+      resourceId: 'agent-7',
+      now: clock.now,
+      generateId: createIdSource('r'),
+      visibilityTimeoutMs: 500,
+      retryBackoffMs: 1,
+      terminalRetentionMs: 1_000,
+    });
+    // More records than the page cap, so the local pass leaves a cursor past
+    // the first command.
+    const first = await admitOne(local, { idempotencyKey: 'k-0' });
+    for (let index = 1; index <= 201; index += 1) {
+      await admitOne(local, { idempotencyKey: `k-${index}` });
+    }
+    const claim = await claimOne(local);
+    expect(claim.commandId).toBe(first);
+    await local.runMaintenance();
+    // Another process reclaims, re-delivers, and settles the first command.
+    clock.advance(501);
+    await remote.runMaintenance();
+    clock.advance(10);
+    const reclaimed = await remote.claim();
+    expect(reclaimed.status === 'claimed' && reclaimed.claim.receipt.commandId).toBe(first);
+    if (reclaimed.status !== 'claimed') return;
+    await remote.acknowledge({ commandId: first, attemptToken: reclaimed.claim.attemptToken });
+    clock.advance(5_000);
+    expect(claim.signal.aborted).toBe(false);
+    // The local scan resumes past the first command; retention still retires it.
+    const report = await local.runMaintenance();
+    expect(report.retired).toBe(1);
+    expect(claim.signal.aborted).toBe(true);
+    remote.dispose();
+    local.dispose();
   });
 });
