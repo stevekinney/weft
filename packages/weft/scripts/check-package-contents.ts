@@ -45,11 +45,22 @@ const maximumUnpackedBytes = 12 * 1024 * 1024;
 // `buildRegistrySnapshot` both call) — two more `.js`/`.d.ts` pairs, +4
 // entries (1495 -> 1499).
 //
-// WFT-84 added the application mailbox modules (22 source files, each a
-// `.js`/`.d.ts` pair, +44 by the formula); the merged surface measured 1543,
-// and 1547 after merging WFT-7 (#946), which added two more pairs of its own;
-// the attempt registry moving to its own module makes it 1549.
-const maximumEntryCount = 1549;
+// WFT-8 added `src/core/contract/compatibility.ts` (`checkWorkflowCompatibility()`,
+// `WorkflowCompatibilityVerdict`/`WorkflowCompatibilityReason`/`WorkflowCompatibilityPolicy`,
+// `DEFAULT_WORKFLOW_COMPATIBILITY_POLICY`) — one new source file, one more
+// `.js`/`.d.ts` pair in `dist/`, +2 entries (1499 -> 1501), matching the
+// measured `npm pack --dry-run --json --ignore-scripts` count exactly.
+//
+// WFT-7 (merged as #946, landed on `main` after WFT-8's branch point) split
+// two new source files out of `codegen-emit.ts`: `src/cli/codegen-emit-dedup.ts`
+// (the shared-schema hoisting pass) and `src/cli/codegen-emit-registry.ts`
+// (the `WorkflowRegistry` interface emitter) — two more `.js`/`.d.ts` pairs,
+// +4 entries (1501 -> 1505), matching the measured count after rebasing
+// WFT-8 onto WFT-7.
+// WFT-84 added the application mailbox modules (24 source files, each a
+// `.js`/`.d.ts` pair); the surface merged with WFT-6, WFT-7, and WFT-8
+// measures 1551 by `npm pack --dry-run`.
+const maximumEntryCount = 1551;
 
 type PackFile = {
   path: string;

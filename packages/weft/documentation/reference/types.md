@@ -444,6 +444,56 @@ import { WORKFLOW_CONTRACT_VERSION, WORKFLOW_REVISION_MANIFEST_VERSION } from '@
 console.log(WORKFLOW_CONTRACT_VERSION, WORKFLOW_REVISION_MANIFEST_VERSION);
 ```
 
+### `WorkflowCompatibilityReason` and `WorkflowCompatibilityVerdict`
+
+`checkWorkflowCompatibility()` compares two `WorkflowRevisionManifest` values
+and reports a `WorkflowCompatibilityVerdict`: either fully compatible, or
+incompatible with every applicable `WorkflowCompatibilityReason`, in this
+fixed order, never short-circuited. See the [Activation
+Compatibility](../guides/workflow-versioning.md#activation-compatibility)
+guide for what each reason means and how it relates to `workflowVersion`
+recovery checks.
+
+```ts partial
+type WorkflowCompatibilityReason =
+  | 'name-mismatch'
+  | 'manifest-version-unsupported'
+  | 'contract-hash-mismatch'
+  | 'workflow-version-incompatible'
+  | 'artifact-revision-mismatch';
+
+type WorkflowCompatibilityVerdict =
+  { compatible: true } | { compatible: false; reasons: readonly WorkflowCompatibilityReason[] };
+
+interface WorkflowCompatibilityPolicy {
+  requireExactRevision?: boolean;
+}
+```
+
+```ts
+import {
+  buildWorkflowContract,
+  buildWorkflowRevisionManifest,
+  checkWorkflowCompatibility,
+} from '@lostgradient/weft';
+
+const current = await buildWorkflowRevisionManifest(
+  buildWorkflowContract({ name: 'checkout', version: '1.0.0' }),
+);
+const candidate = await buildWorkflowRevisionManifest(
+  buildWorkflowContract({ name: 'checkout', version: '1.0.0' }),
+);
+const verdict = checkWorkflowCompatibility(current, candidate);
+console.log(verdict.compatible); // true
+```
+
+`requireExactRevision` (`WorkflowCompatibilityPolicy`'s only tunable field,
+default `true` via `DEFAULT_WORKFLOW_COMPATIBILITY_POLICY`) is the sole axis
+a caller may relax: it governs whether an `artifact-revision-mismatch`-only
+difference blocks compatibility. `name-mismatch`, `manifest-version-unsupported`,
+`contract-hash-mismatch`, and `workflow-version-incompatible` are never
+policy-tunable.
+
 ### `ReviewStatus`
 
 ```ts partial

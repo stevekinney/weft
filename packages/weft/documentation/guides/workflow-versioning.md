@@ -241,3 +241,84 @@ discovery above lets it assert one at request time. When two or more
 workflows in the same snapshot share an identical, non-trivial input or
 output schema, the emitted `.d.ts` hoists that schema into one shared `type`
 alias rather than repeating it inline at every entry.
+
+## Activation Compatibility
+
+`checkWorkflowCompatibility(current, candidate, policy?)` is the structured
+comparison behind automatic activation: given two `WorkflowRevisionManifest`
+values, it answers whether `candidate` may replace `current` as a
+`WorkflowCompatibilityVerdict`—`{ compatible: true }`, or `{ compatible:
+false, reasons }` naming every applicable
+[`WorkflowCompatibilityReason`](../reference/types.md#workflowcompatibilityreason-and-workflowcompatibilityverdict),
+never just the first one found. A catalog or refresh orchestrator may report
+every reason this function returns; it may never treat an incompatible
+verdict as compatible during automatic activation—that is the whole point
+of a bounded, machine-readable reason list instead of a thrown error.
+
+The five reasons relate to the two version axes already covered above, but
+answer a narrower question than either:
+
+- **`workflow-version-incompatible`** is the _same_ check
+  `derivePreparedExecutionState()` already applies during recovery—this
+  function calls `checkVersionCompatibility()` from `core/versioning.ts`
+  directly, so the verdict's answer for this reason can never drift from
+  what recovery enforces.
+- **`artifact-revision-mismatch`** is new: it compares the broader
+  `revision` identity, not `workflowVersion`. A `workflowVersion` bump is an
+  author's explicit signal that replay compatibility changed; a `revision`
+  change can happen from something as small as an edited description, with
+  `workflowVersion` untouched.
+- **`contract-hash-mismatch`**, **`name-mismatch`**, and
+  **`manifest-version-unsupported`** have no existing recovery-side
+  counterpart—`derivePreparedExecutionState()` has never had two full
+  manifests to compare, only a bare stored `workflowVersion` string. These
+  three reasons are the part of activation compatibility that manifests
+  make possible for the first time.
+
+Only one axis is policy-tunable. `requireExactRevision` (default `true`,
+see `DEFAULT_WORKFLOW_COMPATIBILITY_POLICY`, frozen) controls whether a
+`revision`-only difference—same `name`, same `workflowVersion`, same
+`contractHash`, only `revision` differing—still blocks activation. What that
+`revision`-only difference _means_ depends on how `revision` was produced:
+under the default content-derived revision it is always
+`contract.description`/`contract.tags` differing, but under a caller-supplied
+revision (`buildWorkflowRevisionManifest(contract, { revision })`) it can be
+any artifact-identity change the caller encoded there—this module has no way
+to tell an opaque supplied revision from a derived one by inspecting the
+manifest alone, so do not set `requireExactRevision: false` for manifests
+using explicit revisions unless you intend to tolerate any `revision` change.
+Setting `requireExactRevision: false` never suppresses `contract-hash-mismatch`,
+since the two reasons are independent checks: under the default content-derived
+revision a payload difference always implies a `revision` difference too, but
+under a caller-supplied revision two manifests can share the same `revision`
+string despite different `contractHash` values, so the independent hash check
+is what still blocks activation there. The other four reasons can never be
+loosened by policy at all—that is the concrete mechanism behind "the refresh
+system may report these reasons but may not override them during automatic
+activation."
+
+```ts
+import {
+  buildWorkflowContract,
+  buildWorkflowRevisionManifest,
+  checkWorkflowCompatibility,
+} from '@lostgradient/weft';
+
+const current = await buildWorkflowRevisionManifest(
+  buildWorkflowContract({ name: 'checkout', version: '1.0.0' }),
+);
+const candidate = await buildWorkflowRevisionManifest(
+  buildWorkflowContract({ name: 'checkout', version: '2.0.0' }),
+);
+
+const verdict = checkWorkflowCompatibility(current, candidate);
+console.log(verdict.compatible); // false
+```
+
+`checkWorkflowCompatibility()` is pure and synchronous—both manifests
+already carry their computed `contractHash`/`revision`, so no hashing
+happens inside it—and symmetric: `checkWorkflowCompatibility(a, b,
+policy)` and `checkWorkflowCompatibility(b, a, policy)` always agree. No
+catalog exists yet to call it automatically; it is exported today so a
+future catalog (and the console) can consume the same verdict rather than
+each re-deriving their own compatibility rules.
