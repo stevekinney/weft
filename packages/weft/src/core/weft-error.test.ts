@@ -31,6 +31,7 @@ import {
   UpdateTimeoutError,
   UpdateValidationError,
   VersionMismatchError,
+  WaitBudgetElapsedError,
   WorkerManifestBuildError,
   WorkerProtocolIncompatibleError,
   WorkflowAlreadyExistsError,
@@ -143,6 +144,7 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
   ApplicationCommandValidationError: () =>
     new ApplicationCommandValidationError('caller must be a non-empty string.'),
   ApplicationMailboxContentionError: () => new ApplicationMailboxContentionError('admit', null),
+  WaitBudgetElapsedError: () => new WaitBudgetElapsedError(),
 };
 
 describe('WeftError', () => {

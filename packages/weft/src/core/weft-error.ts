@@ -68,7 +68,8 @@ export type WeftErrorCode =
   | 'WorkerManifestBuildError'
   | 'OwnershipModeMismatchError'
   | 'ApplicationCommandValidationError'
-  | 'ApplicationMailboxContentionError';
+  | 'ApplicationMailboxContentionError'
+  | 'WaitBudgetElapsedError';
 
 /**
  * Generic abstract base for all Weft library errors. The `TCode` parameter
@@ -147,6 +148,7 @@ const publicWeftErrorCodeMap = {
   OwnershipModeMismatchError: true,
   ApplicationCommandValidationError: true,
   ApplicationMailboxContentionError: true,
+  WaitBudgetElapsedError: true,
 } satisfies Record<WeftErrorCode, true>;
 
 const PUBLIC_WEFT_ERROR_CODES = new Set<string>(Object.keys(publicWeftErrorCodeMap));
