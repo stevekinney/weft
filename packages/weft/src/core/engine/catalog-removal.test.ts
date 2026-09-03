@@ -319,6 +319,37 @@ describe('removeWorkflowRevision', () => {
     });
   });
 
+  it('succeeds removing a revision a SECOND process durably installed that this process never cached at all', async () => {
+    // Distinct from the "installed-but-inactive" regression above: here
+    // engineA's `#entries` cache has NEVER heard of revC — this is
+    // `hasInstalled()`'s own storage-read-through fallback branch (a cache
+    // MISS, not a stale cache HIT), exercised through `removeWorkflowRevision`'s
+    // precheck rather than `hasInstalled()`'s own unit tests.
+    await using storage = new MemoryStorage();
+    await using engineA = new Engine({ storage, backgroundTasks: 'manual' });
+    engineA.register(noopWorkflow('checkout'));
+    await engineA.start('checkout', null);
+
+    const manifestC = await manifestFor('checkout', '1.0.0', {
+      description: 'installed elsewhere',
+    });
+    await using engineB = new Engine({ storage, backgroundTasks: 'manual' });
+    // Force engineB's own catalog readiness (restore) before reaching for
+    // its `WorkflowCatalog` directly — `getWorkflowCatalog()` throws if
+    // `ensureWorkflowCatalogReady()` was never awaited first.
+    await getWorkflowRevisionDiagnostics(engineB, 'checkout', 'priming-read');
+    // Install only — never activated, so it stays non-active and
+    // unreferenced, and engineA's own catalog restore (already completed
+    // above, before this write) never picks it up either.
+    await getWorkflowCatalog(engineB).install(manifestC);
+
+    expect(getWorkflowCatalog(engineA).getEntry('checkout', manifestC.revision)).toBeUndefined();
+
+    const result = await removeWorkflowRevision(engineA, 'checkout', manifestC.revision);
+
+    expect(result).toEqual({ removed: true });
+  });
+
   it('reports "conflict" when the durable delete loses its CAS', async () => {
     await using storage = new MemoryStorage();
     await using engine = new Engine({ storage, backgroundTasks: 'manual' });
