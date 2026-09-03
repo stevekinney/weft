@@ -281,6 +281,18 @@ function toCodegenWorkflowEntry(manifest: WorkflowRevisionManifest): CodegenWork
  * (a future installed-but-inactive revision) is silently excluded, not an
  * error — only the currently active manifest per name feeds codegen.
  *
+ * The reverse direction (an `activeRevisions` entry naming a revision
+ * absent from `workflows`) is ALSO silently excluded, not an error, as of
+ * WFT-11: `engine.workflows.activate()` can legitimately activate an
+ * installed revision this process has no in-process manifest for — see
+ * `core/registry-snapshot.ts`'s `buildRegistrySnapshot()` doc, which
+ * relaxed its own agree-or-throw invariant for the same reason. There is
+ * no schema to generate types from for a name in that state, so codegen
+ * omits it from the emitted registry rather than failing the whole run —
+ * mirroring the console's own `activeRevisions[name] === manifest.revision`
+ * resolution, which already drops a non-matching entry by omission.
+ *
+
  * Workflow schemas lose the boolean-root tolerance `RegistryActivityEntry`
  * keeps: `parseWorkflowRevisionManifest`'s schema-fragment parser requires a
  * JSON object at every `inputSchema`/`outputSchema` position, matching what
@@ -310,12 +322,10 @@ async function resolveActiveWorkflowEntries(
   >;
   for (const [name, revision] of Object.entries(activeRevisions)) {
     const manifest = byName.get(name)?.get(revision);
-    if (manifest === undefined) {
-      return {
-        ok: false,
-        error: `codegen: invalid registry snapshot: activeRevisions[${JSON.stringify(name)}] = ${JSON.stringify(revision)} has no matching entry in workflows`,
-      };
-    }
+    // No matching manifest: as of WFT-11 this is an expected divergence
+    // (see this function's own doc), not a corrupt snapshot — omit `name`
+    // from the projection rather than failing the whole codegen run.
+    if (manifest === undefined) continue;
     projected[name] = toCodegenWorkflowEntry(manifest);
   }
   return { ok: true, value: projected };
