@@ -18,7 +18,13 @@
  *   retry loop. Registering a different version of an already-registered
  *   workflow must never hard-fail construction or registration (the
  *   `version-mismatch-recovery.test.ts` precedent), which is why this path
- *   is unconditional.
+ *   is unconditional. "Unconditional" is about bypassing
+ *   `checkWorkflowCompatibility`, not immunity to failure in general: under
+ *   sustained contention the bounded 5-attempt CAS retry can still exhaust
+ *   and throw {@link WorkflowCatalogActivationConflictError}, which
+ *   propagates out of `ensureWorkflowCatalogReady` and fails
+ *   `Engine.create()` itself (safely — `Engine.create()`'s `try`/`catch`
+ *   disposes the half-booted engine before rethrowing).
  * - {@link WorkflowCatalog.activateCandidate} — the guarded primitive:
  *   `checkWorkflowCompatibility`-gated, single-shot CAS (no retry — the
  *   caller decides whether to re-read and retry), refuses on incompatibility
@@ -46,6 +52,7 @@ import { encodeActivePointer, manifestsAreByteIdentical } from './codec.ts';
 import { WorkflowCatalogActivationConflictError, WorkflowCatalogConflictError } from './errors.ts';
 import {
   readActivePointer,
+  readCatalogEntry,
   writeCatalogEntry,
   type RestoredWorkflowCatalogState,
 } from './storage-io.ts';
@@ -97,7 +104,16 @@ export class WorkflowCatalog {
    * Install `manifest` (paired with `definition`, when this process holds
    * one). Idempotent on a byte-identical reinstall for the same
    * `(name, revision)` key; throws {@link WorkflowCatalogConflictError} when
-   * an existing entry for that key has different manifest content.
+   * an existing entry for that key has different manifest content —
+   * checked against BOTH this process's in-memory cache and, on a cache
+   * miss, durable storage itself (a different `WorkflowCatalog`
+   * instance/process may already have installed this exact key). The
+   * durable write is CAS-guarded ({@link writeCatalogEntry}) rather than a
+   * plain `put`, so two processes racing to install genuinely different
+   * content under the same key — possible whenever `revision` is an
+   * explicit, non-content-derived caller value rather than the default
+   * content hash — cannot silently last-write-win each other; the loser
+   * re-reads and resolves through the same idempotent/conflict check.
    *
    * Defensively re-validates `name` against the wire-safe name grammar even
    * though `engine.register()`'s existing `validateWorkflowOrActivityName`
@@ -118,20 +134,65 @@ export class WorkflowCatalog {
       return existing;
     }
 
-    const installedAt = Date.now();
-    await writeCatalogEntry(this.#storage, manifest, installedAt);
+    // Not in this process's local cache. Durable storage is authoritative —
+    // read through before writing rather than trusting cache absence alone.
+    const durable = await readCatalogEntry(this.#storage, manifest.name, manifest.revision);
+    if (durable !== null) {
+      return this.#adoptDurableEntry(manifest, durable, definition);
+    }
 
-    const entry: WorkflowCatalogEntry = {
+    const installedAt = Date.now();
+    const applied = await writeCatalogEntry(this.#storage, manifest, installedAt);
+    if (!applied) {
+      // Lost the CAS race: another process durably installed this exact key
+      // between our read above and this write. Re-read and resolve exactly
+      // as the pre-write check above would have.
+      const raced = await readCatalogEntry(this.#storage, manifest.name, manifest.revision);
+      if (raced === null) {
+        // The key existed a moment ago to lose the CAS race; storage
+        // disagreeing now is itself an inconsistency. Fail closed rather
+        // than silently proceeding to write over it.
+        throw new WorkflowCatalogConflictError(manifest.name, manifest.revision);
+      }
+      return this.#adoptDurableEntry(manifest, raced, definition);
+    }
+
+    return this.#cacheEntry(manifest.name, manifest.revision, {
       manifest,
       installedAt,
       ...(definition === undefined ? {} : { definition }),
-    };
-    let byName = this.#entries.get(manifest.name);
+    });
+  }
+
+  /**
+   * Resolve a durable read (either the initial read-through, or the re-read
+   * after losing the write's CAS race) against the manifest this call is
+   * trying to install: byte-identical content adopts the durable record
+   * into the local cache (idempotent), differing content is a conflict.
+   */
+  #adoptDurableEntry(
+    manifest: WorkflowRevisionManifest,
+    durable: { manifest: WorkflowRevisionManifest; installedAt: number },
+    definition: RegisteredWorkflowDefinition | undefined,
+  ): WorkflowCatalogEntry {
+    if (!manifestsAreByteIdentical(durable.manifest, manifest)) {
+      throw new WorkflowCatalogConflictError(manifest.name, manifest.revision);
+    }
+    return this.#cacheEntry(manifest.name, manifest.revision, {
+      manifest: durable.manifest,
+      installedAt: durable.installedAt,
+      ...(definition === undefined ? {} : { definition }),
+    });
+  }
+
+  /** Insert (or overwrite) one entry in the local `#entries` cache and return it. */
+  #cacheEntry(name: string, revision: string, entry: WorkflowCatalogEntry): WorkflowCatalogEntry {
+    let byName = this.#entries.get(name);
     if (byName === undefined) {
       byName = new Map();
-      this.#entries.set(manifest.name, byName);
+      this.#entries.set(name, byName);
     }
-    byName.set(manifest.revision, entry);
+    byName.set(revision, entry);
     return entry;
   }
 

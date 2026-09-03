@@ -68,6 +68,47 @@ describe('WorkflowCatalog.install', () => {
     );
   });
 
+  it('rejects conflicting metadata for an existing key even when the conflict is only visible durably, from a DIFFERENT WorkflowCatalog instance sharing storage', async () => {
+    const storage = new MemoryStorage();
+    // Two independently-seeded instances sharing one durable store — the
+    // cross-process shape: neither instance's in-memory `#entries` cache
+    // knows what the other has installed.
+    const writer = new WorkflowCatalog(storage);
+    const reader = new WorkflowCatalog(storage);
+    const manifest = await manifestFor('checkout', '1.0.0', { revision: 'pinned-1' });
+    const conflicting = await manifestFor('checkout', '2.0.0', { revision: 'pinned-1' });
+
+    await writer.install(manifest, fakeDefinition('checkout'));
+
+    // `reader` has never seen `pinned-1` in its own cache, but durable
+    // storage already holds different content under that exact key —
+    // `install()` must read through and reject, not silently last-write-win.
+    await expect(reader.install(conflicting, fakeDefinition('checkout'))).rejects.toThrow(
+      WorkflowCatalogConflictError,
+    );
+
+    // The durable record is untouched by the rejected write.
+    const third = new WorkflowCatalog(storage);
+    const adopted = await third.install(manifest, fakeDefinition('checkout'));
+    expect(adopted.manifest.workflowVersion).toBe(manifest.workflowVersion);
+  });
+
+  it('adopts a byte-identical durable entry installed by a DIFFERENT WorkflowCatalog instance as an idempotent no-op', async () => {
+    const storage = new MemoryStorage();
+    const writer = new WorkflowCatalog(storage);
+    const reader = new WorkflowCatalog(storage);
+    const manifest = await manifestFor('checkout', '1.0.0', { revision: 'pinned-1' });
+    const sameContentDifferentObject = await manifestFor('checkout', '1.0.0', {
+      revision: 'pinned-1',
+    });
+
+    const original = await writer.install(manifest, fakeDefinition('checkout'));
+    const adopted = await reader.install(sameContentDifferentObject, fakeDefinition('checkout'));
+
+    expect(adopted.installedAt).toBe(original.installedAt);
+    expect(reader.getEntry('checkout', 'pinned-1')).toBeDefined();
+  });
+
   it('defensively rejects an invalid workflow name even for a hand-built manifest', async () => {
     const storage = new MemoryStorage();
     const catalog = new WorkflowCatalog(storage);
@@ -155,6 +196,11 @@ describe('WorkflowCatalog.activateRegistered', () => {
     const storage = new MemoryStorage();
     const catalog = new WorkflowCatalog(storage);
     const manifest = await manifestFor('checkout', '1.0.0');
+    // Install (a real, unstubbed conditionalBatch write) before stubbing —
+    // this test exercises exhaustion of `activateRegistered`'s OWN
+    // active-pointer CAS retry loop, not `install()`'s CAS-guarded entry
+    // write, so the entry must already be durably installed first.
+    await catalog.install(manifest, fakeDefinition('checkout'));
     storage.conditionalBatch = async () => false;
 
     await expect(

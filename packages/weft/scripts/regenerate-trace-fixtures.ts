@@ -3,7 +3,12 @@
  * execution engine.
  *
  * Contract: These fixtures freeze observable behavior. Engine PRs must not
- * change them; if a fixture changes, that is a regression.
+ * change any EXISTING record inside a fixture; that is a regression. Adding
+ * records under a genuinely new, independent durable key namespace (see the
+ * fixture test files' headers for the exact bar this must clear) is the one
+ * narrow exception — after running this script for that reason, diff the
+ * result against the prior fixture and confirm every change is a new key,
+ * not an edit to an existing one.
  */
 
 import { Engine } from '../src/core/engine.ts';

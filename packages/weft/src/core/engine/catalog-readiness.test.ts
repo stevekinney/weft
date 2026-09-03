@@ -86,6 +86,35 @@ describe('ensureWorkflowCatalogReady', () => {
     await expect(ensureWorkflowCatalogReady(engine)).resolves.toBeUndefined();
   });
 
+  it('re-queues the failing name AND every name behind it in the drain order, rather than dropping them, when one manifest build fails mid-drain', async () => {
+    await using storage = new MemoryStorage();
+    await using engine = new Engine({ storage, backgroundTasks: 'manual' });
+    // `oversized` is registered first so it is drained before `good` — a
+    // manifest-build failure on `oversized` must not silently drop `good`,
+    // which is still queued behind it, from `pendingCatalogInstalls`.
+    engine.register(noopWorkflow('oversized', 'v'.repeat(600)));
+    engine.register(noopWorkflow('good'));
+
+    await expect(ensureWorkflowCatalogReady(engine)).rejects.toThrow(RegistryManifestLimitError);
+
+    // Neither name was dropped: both are still queued for the next attempt,
+    // and `isWorkflowCatalogReady` must not report a false "ready" with
+    // `good` silently lost.
+    expect(getInternals(engine).pendingCatalogInstalls).toEqual(['oversized', 'good']);
+    expect(getWorkflowCatalog(engine).resolveActive('good')).toBeUndefined();
+
+    // Simulate `oversized` being unregistered before the retry (the
+    // documented "unregistered between being queued and this drain running"
+    // path already handled inside the drain loop) so the next drain can
+    // make it past `oversized` and reach `good`.
+    getInternals(engine).registrations.delete('oversized');
+
+    await ensureWorkflowCatalogReady(engine);
+
+    expect(getWorkflowCatalog(engine).resolveActive('good')?.generation).toBe(1);
+    expect(getInternals(engine).pendingCatalogInstalls).toHaveLength(0);
+  });
+
   it('rejects with EngineDisposedError when the engine was disposed before a pending drain runs', async () => {
     const storage = new MemoryStorage();
     const engine = new Engine({ storage, backgroundTasks: 'manual' });

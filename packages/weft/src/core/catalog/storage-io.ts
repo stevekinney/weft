@@ -12,8 +12,8 @@
  * @module core/catalog/storage-io
  */
 
-import { KEYS, type Storage } from '../../storage/interface.ts';
-import { decodeStorageKeyComponent } from '../../storage/key-encoding.ts';
+import { KEYS, storageConditionalBatch, type Storage } from '../../storage/interface.ts';
+import { tryDecodeStorageKeyComponent } from '../../storage/key-encoding.ts';
 import { parseWorkflowRevisionManifest } from '../contract/manifest-parse.ts';
 import type { WorkflowRevisionManifest } from '../contract/types.ts';
 import { decodeActivePointer } from './codec.ts';
@@ -25,19 +25,24 @@ export type RestoredWorkflowCatalogState = {
   active: Map<string, WorkflowCatalogActivePointer>;
 };
 
+// Both split functions use the non-throwing `tryDecodeStorageKeyComponent`
+// (not `decodeStorageKeyComponent`) and return `null` on malformed
+// percent-encoding, exactly like an unexpected part count — so every
+// caller's existing `null` check routes uniformly into `failClosed()`'s
+// operator-repair message rather than a raw `URIError` escaping instead.
 function splitCatalogEntryKey(key: string): { name: string; revision: string } | null {
   const parts = key.split(':');
   if (parts.length !== 3) return null;
-  return {
-    name: decodeStorageKeyComponent(parts[1] ?? ''),
-    revision: decodeStorageKeyComponent(parts[2] ?? ''),
-  };
+  const name = tryDecodeStorageKeyComponent(parts[1] ?? '');
+  const revision = tryDecodeStorageKeyComponent(parts[2] ?? '');
+  if (name === null || revision === null) return null;
+  return { name, revision };
 }
 
 function splitCatalogActiveKey(key: string): string | null {
   const parts = key.split(':');
   if (parts.length !== 2) return null;
-  return decodeStorageKeyComponent(parts[1] ?? '');
+  return tryDecodeStorageKeyComponent(parts[1] ?? '');
 }
 
 function parseCatalogEntryRecord(
@@ -160,6 +165,49 @@ function restoreOneActivePointer(
   active.set(name, pointer);
 }
 
+/**
+ * Read one durable installed-revision record for `(name, revision)`, or
+ * `null` when absent. Fails closed on corruption, exactly matching
+ * {@link restoreWorkflowCatalog}'s per-entry validation — used by
+ * `WorkflowCatalog.install()` to read through the local in-memory cache to
+ * durable storage, which may already hold this `(name, revision)` key
+ * courtesy of a different `WorkflowCatalog` instance/process.
+ */
+export async function readCatalogEntry(
+  storage: Storage,
+  name: string,
+  revision: string,
+): Promise<{ manifest: WorkflowRevisionManifest; installedAt: number } | null> {
+  const key = KEYS.catalogEntry(name, revision);
+  const bytes = await storage.get(key);
+  if (bytes === null) return null;
+
+  const parsedRecord = parseCatalogEntryRecord(bytes);
+  if (parsedRecord === null) {
+    failClosed('workflow catalog entry', key, 'could not be parsed as JSON');
+  }
+
+  const parsed = await parseWorkflowRevisionManifest(parsedRecord.manifest);
+  if (!parsed.ok) {
+    failClosed(
+      'workflow catalog entry',
+      key,
+      'does not decode as a valid installed-revision record',
+    );
+  }
+
+  const manifest = parsed.manifest;
+  if (manifest.name !== name || manifest.revision !== revision) {
+    failClosed(
+      'workflow catalog entry',
+      key,
+      'contains a manifest whose (name, revision) disagrees with its storage key',
+    );
+  }
+
+  return { manifest, installedAt: parsedRecord.installedAt };
+}
+
 /** Read one name's durable active pointer, or `null` when absent. */
 export async function readActivePointer(
   storage: Storage,
@@ -179,16 +227,33 @@ export async function readActivePointer(
 }
 
 /**
- * Durably write one installed-revision entry via a plain `put` — safe
- * without CAS protection because entries are content-addressed by
- * `(name, revision)` and `WorkflowCatalog.install()` already resolved
- * idempotency/conflict against in-memory state before calling this.
+ * Durably write one installed-revision entry, CAS-guarded on the key being
+ * absent (`expectedValue: null`). Returns `true` when this write won the
+ * race, `false` when another writer had already durably installed this
+ * exact `(name, revision)` key first — `WorkflowCatalog.install()` re-reads
+ * via {@link readCatalogEntry} on `false` to decide whether that concurrent
+ * write was byte-identical (idempotent) or a genuine conflict.
+ *
+ * CAS-protected rather than a plain `put`: "content-addressed by
+ * `(name, revision)`, so racing writers always agree" only holds when
+ * `revision` is content-derived. `buildWorkflowRevisionManifest`'s public
+ * `options.revision` escape hatch lets a caller supply a non-content-derived
+ * revision (e.g. a deploy tag), so two different `WorkflowCatalog`
+ * instances/processes — each with their own, independently-seeded
+ * in-memory cache — could otherwise race a differing-content write to the
+ * same key past each other's in-memory-only conflict check with a plain
+ * `put` (last write wins, silently).
  */
 export async function writeCatalogEntry(
   storage: Storage,
   manifest: WorkflowRevisionManifest,
   installedAt: number,
-): Promise<void> {
+): Promise<boolean> {
   const bytes = new TextEncoder().encode(JSON.stringify({ manifest, installedAt }));
-  await storage.put(KEYS.catalogEntry(manifest.name, manifest.revision), bytes);
+  const key = KEYS.catalogEntry(manifest.name, manifest.revision);
+  return storageConditionalBatch(
+    storage,
+    [{ key, expectedValue: null }],
+    [{ type: 'put', key, value: bytes }],
+  );
 }

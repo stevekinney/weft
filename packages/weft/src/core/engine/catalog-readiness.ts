@@ -55,16 +55,34 @@ async function drainPendingCatalogInstalls(engine: Engine): Promise<void> {
   const pending = internals.pendingCatalogInstalls;
   internals.pendingCatalogInstalls = [];
 
-  for (const name of pending) {
-    const manifest = await buildWorkflowManifestForType(engine, name);
-    if (manifest === undefined) {
-      // The workflow was unregistered from `internals.registrations`
-      // between being queued and this drain running. Nothing to install.
-      continue;
+  for (let index = 0; index < pending.length; index += 1) {
+    const name = pending[index]!;
+    try {
+      const manifest = await buildWorkflowManifestForType(engine, name);
+      if (manifest === undefined) {
+        // The workflow was unregistered from `internals.registrations`
+        // between being queued and this drain running. Nothing to install.
+        continue;
+      }
+      const definition = engine.getWorkflowDefinition(name);
+      if (definition === undefined) continue;
+      await catalog.activateRegistered(name, manifest, definition);
+    } catch (error) {
+      // A transient/partial failure (e.g. `WorkflowCatalogActivationConflictError`
+      // once the CAS retry budget is exhausted under sustained concurrent
+      // writers, or a storage error mid-drain) must not silently drop the
+      // name that failed, or any name still unprocessed behind it, from the
+      // queue. Re-queue the failing name and everything after it — ahead of
+      // any name a concurrent `register()` call queued into the fresh array
+      // while this drain was in flight — so the next `ensureWorkflowCatalogReady`
+      // call retries them instead of `isWorkflowCatalogReady` reporting a
+      // false "ready" once the (now-empty) queue and `catalogRestored` line up.
+      internals.pendingCatalogInstalls = [
+        ...pending.slice(index),
+        ...internals.pendingCatalogInstalls,
+      ];
+      throw error;
     }
-    const definition = engine.getWorkflowDefinition(name);
-    if (definition === undefined) continue;
-    await catalog.activateRegistered(name, manifest, definition);
   }
 }
 
