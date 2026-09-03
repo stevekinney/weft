@@ -47,6 +47,13 @@ const UNCURATED_CATALOG_OPERATIONS = [
   'weft.tasks.diagnostics',
   'weft.workflows.checkpoints.list',
   'weft.workflows.checkpoints.get',
+  // WFT-11: workflow catalog promotion — operator/tooling actions, left
+  // uncurated like every other admin/introspection operation above.
+  'weft.workflows.revisions.install',
+  'weft.workflows.revisions.activate',
+  'weft.workflows.revisions.get',
+  'weft.workflows.revisions.list',
+  'weft.workflows.active.get',
 ] as const;
 
 const REST_ONLY_OPERATION = 'weft.tasks.diagnostics.deadletters.clear' as const;

@@ -85,15 +85,29 @@ export {
   WorkflowClaimUnavailableError,
 } from './core/engine';
 export type {
+  ActivateWorkflowRevisionOptions,
   EngineCreateOptions,
   EngineLeaseHealth,
   EngineStateNamespace,
+  EngineWorkflowsNamespace,
   LeaseLostReason,
   RecoverAllOptions,
   RecoveredWorkflowInfo,
   RegistryAgnosticEngine,
   WorkflowWakeKind,
 } from './core/engine';
+// The durable workflow catalog's public promotion (WFT-11): `engine.workflows`
+// throws/returns these directly. `WorkflowCatalog` itself and
+// `WorkflowCatalogEntry` stay package-internal — see `core/catalog/index.ts`.
+export {
+  WorkflowCatalogConflictError,
+  WorkflowRevisionNotInstalledError,
+} from './core/catalog/index.ts';
+export type {
+  WorkflowCatalogActivationResult,
+  WorkflowCatalogActivePointer,
+  WorkflowRevisionRecord,
+} from './core/catalog/index.ts';
 export {
   DEFAULT_CHECKPOINT_SIZE_WARNING_THRESHOLD,
   DEFAULT_MAX_NESTING_DEPTH,

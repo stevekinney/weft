@@ -682,16 +682,17 @@ describe('buildRegistrySnapshot', () => {
     expect(manifest?.revision).toBe(activePointer?.revision);
   });
 
-  it('throws the agree-or-throw invariant error when the catalog and the freshly built manifest disagree', async () => {
+  it('reports the catalog active pointer verbatim even when it diverges from the freshly built manifest (WFT-11: engine.workflows.activate can legitimately cause this)', async () => {
     engine = createEngine();
     engine.register(workflow({ name: 'diverged' }).execute(async function* () {}));
     // Drive one drain so the catalog activates the current ('1.0.0') revision.
     await buildRegistrySnapshot(engine);
 
-    // Simulate a future dynamic-loading producer activating a DIFFERENT
-    // revision directly on the catalog, without re-registering the engine's
-    // own definition — this is exactly the divergence the invariant guards
-    // against (see the JSDoc on the `activeRevisions` loop).
+    // Simulate `engine.workflows.activate()` activating a DIFFERENT
+    // installed revision directly on the catalog, without re-registering the
+    // engine's own in-process definition — exactly what that method's own
+    // JSDoc says it does: move the advertised active pointer, never which
+    // in-process handler `engine.start()` dispatches to.
     // `activateRegistered` (unconditional, never compatibility-gated) is used
     // rather than `activateCandidate` specifically so an incompatible version
     // bump cannot be refused — this test needs the catalog to durably diverge.
@@ -704,6 +705,38 @@ describe('buildRegistrySnapshot', () => {
       version: '2.0.0',
       tags: [],
     });
+
+    const snapshot = await buildRegistrySnapshot(engine);
+    // `activeRevisions` reflects the catalog's pointer (the divergent
+    // revision), while `workflows[]` still describes the live in-process
+    // registration (the original '1.0.0' revision) — the two are allowed to
+    // disagree post-WFT-11; the console's own registry-view resolution
+    // already handles "no manifest matches the active revision" by omission.
+    expect(snapshot.activeRevisions['diverged']).toBe(divergentManifest.revision);
+    // `workflows[]` is rebuilt fresh from the live in-process registration
+    // every call, so it still names the ORIGINAL ('1.0.0') revision — proof
+    // that activation moved only the advertised pointer, never what
+    // `engine.start()` would actually execute.
+    const registeredManifest = snapshot.workflows.find((m) => m.name === 'diverged');
+    expect(registeredManifest?.revision).toBeDefined();
+    expect(registeredManifest?.revision).not.toBe(divergentManifest.revision);
+  });
+
+  it('throws the invariant error when a registered workflow has no active catalog pointer at all', async () => {
+    engine = createEngine();
+    engine.register(workflow({ name: 'unpointed' }).execute(async function* () {}));
+    // Drive one drain so the catalog restores/activates normally first.
+    await buildRegistrySnapshot(engine);
+
+    // This state is otherwise unreachable through the public API — `register()`
+    // always installs and activates, so `resolveActive` is always defined for
+    // a workflow that appears in `manifests`. Stubbing it directly is the only
+    // way to exercise the "genuinely absent pointer" branch, which remains a
+    // real Weft-bug guard rather than an expected WFT-11 divergence.
+    const catalog = getWorkflowCatalog(engine);
+    const originalResolveActive = catalog.resolveActive.bind(catalog);
+    catalog.resolveActive = (name: string) =>
+      name === 'unpointed' ? undefined : originalResolveActive(name);
 
     await expect(buildRegistrySnapshot(engine)).rejects.toThrow(
       /Registry snapshot invariant violated/,

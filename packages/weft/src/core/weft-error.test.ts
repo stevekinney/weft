@@ -33,9 +33,11 @@ import {
   WorkerProtocolIncompatibleError,
   WorkflowAlreadyExistsError,
   WorkflowBuilderError,
+  WorkflowCatalogConflictError,
   WorkflowConcurrencyLimitExceededError,
   WorkflowNotFoundError,
   WorkflowNotRegisteredError,
+  WorkflowRevisionNotInstalledError,
   WorkflowSuspendNotSupportedError,
   WorkflowTeardownPendingError,
   WorkflowTerminalError,
@@ -138,6 +140,8 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
     new WorkerManifestBuildError('workflow "checkout" not registered'),
   OwnershipModeMismatchError: () =>
     new OwnershipModeMismatchError('workflow-lease', 'lease', 1_700_000_000_000),
+  WorkflowCatalogConflictError: () => new WorkflowCatalogConflictError('checkout', 'r1'),
+  WorkflowRevisionNotInstalledError: () => new WorkflowRevisionNotInstalledError('checkout', 'r1'),
 };
 
 describe('WeftError', () => {

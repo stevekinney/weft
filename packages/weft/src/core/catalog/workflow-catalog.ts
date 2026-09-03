@@ -40,6 +40,7 @@ import {
   storageConditionalBatch,
   type Storage,
 } from '../../storage/interface.ts';
+import { compareCodepoint } from '../compare-codepoint.ts';
 import {
   checkWorkflowCompatibility,
   DEFAULT_WORKFLOW_COMPATIBILITY_POLICY,
@@ -53,6 +54,7 @@ import { WorkflowCatalogActivationConflictError, WorkflowCatalogConflictError } 
 import {
   readActivePointer,
   readCatalogEntry,
+  scanCatalogEntriesForName,
   writeCatalogEntry,
   type RestoredWorkflowCatalogState,
 } from './storage-io.ts';
@@ -60,6 +62,7 @@ import type {
   WorkflowCatalogActivationResult,
   WorkflowCatalogActivePointer,
   WorkflowCatalogEntry,
+  WorkflowRevisionRecord,
 } from './types.ts';
 
 /** Bounded CAS retry budget for {@link WorkflowCatalog.activateRegistered} — the repo-wide "cap at five" rule. */
@@ -98,6 +101,42 @@ export class WorkflowCatalog {
   /** The current active pointer for `name`, or `undefined` when never activated. */
   resolveActive(name: string): WorkflowCatalogActivePointer | undefined {
     return this.#active.get(name);
+  }
+
+  /**
+   * Resolve one installed `(name, revision)` entry as a public
+   * {@link WorkflowRevisionRecord} — cache hit first, else a durable
+   * read-through via {@link readCatalogEntry} (adopted into the local cache
+   * on hit, exactly like `install()`'s own read-through), else `undefined`
+   * when truly absent. No TOCTOU gap against a concurrent `install()` on
+   * this same instance: JS is single-threaded and neither this method nor
+   * `install()`'s fast (already-cached) path yields between the cache read
+   * and its use.
+   */
+  async resolveEntry(name: string, revision: string): Promise<WorkflowRevisionRecord | undefined> {
+    const cached = this.getEntry(name, revision);
+    if (cached !== undefined) {
+      return { manifest: cached.manifest, installedAt: cached.installedAt };
+    }
+
+    const durable = await readCatalogEntry(this.#storage, name, revision);
+    if (durable === null) return undefined;
+
+    this.#cacheEntry(name, revision, durable);
+    return durable;
+  }
+
+  /**
+   * Every durably installed revision of `name`, sorted by {@link compareCodepoint}
+   * on `revision` for a deterministic order — never `localeCompare`, per
+   * this codebase's determinism rule. Durable scan via
+   * {@link scanCatalogEntriesForName}, validated the same fail-closed way
+   * {@link restoreWorkflowCatalog} validates every entry it restores.
+   * Returns an empty array for an unknown name rather than throwing.
+   */
+  async listInstalledRevisions(name: string): Promise<readonly WorkflowRevisionRecord[]> {
+    const durable = await scanCatalogEntriesForName(this.#storage, name);
+    return durable.toSorted((a, b) => compareCodepoint(a.manifest.revision, b.manifest.revision));
   }
 
   /**
@@ -312,19 +351,68 @@ export class WorkflowCatalog {
     currentPointer: WorkflowCatalogActivePointer | null,
     options?: ActivateCandidateOptions,
   ): WorkflowCatalogActivationResult | undefined {
-    if (currentPointer === null) return undefined;
+    if (currentPointer === null) {
+      return this.#refuseStaleFirstActivation(options);
+    }
 
-    if (
-      options?.expectedGeneration !== undefined &&
-      options.expectedGeneration !== currentPointer.generation
-    ) {
+    const generationRefusal = this.#refuseMissingOrStaleGeneration(currentPointer, options);
+    if (generationRefusal !== undefined) return generationRefusal;
+
+    return this.#refuseIncompatibleCandidate(name, candidateManifest, currentPointer, options);
+  }
+
+  /**
+   * First-ever activation of a name (no active pointer yet): omitting
+   * `expectedGeneration` (or supplying exactly 0, the "no prior generation"
+   * value) bypasses the fence entirely — there is nothing to be stale
+   * against yet, and the one existing test that calls `activateCandidate`
+   * with no options at all must keep applying. Any OTHER explicit value is
+   * a caller assertion about a generation that does not exist.
+   */
+  #refuseStaleFirstActivation(
+    options?: ActivateCandidateOptions,
+  ): WorkflowCatalogActivationResult | undefined {
+    if (options?.expectedGeneration !== undefined && options.expectedGeneration !== 0) {
+      return { applied: false, reason: 'stale-generation', currentGeneration: 0 };
+    }
+    return undefined;
+  }
+
+  /**
+   * The generation fence for an existing active pointer: an omitted
+   * `expectedGeneration` is exactly the "two refreshers silently
+   * last-write-win" hazard this gate exists to close, so it is refused
+   * rather than falling through to the compatibility check alone; a
+   * supplied-but-wrong generation is refused as stale.
+   */
+  #refuseMissingOrStaleGeneration(
+    currentPointer: WorkflowCatalogActivePointer,
+    options?: ActivateCandidateOptions,
+  ): WorkflowCatalogActivationResult | undefined {
+    if (options?.expectedGeneration === undefined) {
+      return {
+        applied: false,
+        reason: 'expected-generation-required',
+        currentGeneration: currentPointer.generation,
+      };
+    }
+    if (options.expectedGeneration !== currentPointer.generation) {
       return {
         applied: false,
         reason: 'stale-generation',
         currentGeneration: currentPointer.generation,
       };
     }
+    return undefined;
+  }
 
+  /** The compatibility check itself, run only once the generation fence has already passed. */
+  #refuseIncompatibleCandidate(
+    name: string,
+    candidateManifest: WorkflowRevisionManifest,
+    currentPointer: WorkflowCatalogActivePointer,
+    options?: ActivateCandidateOptions,
+  ): WorkflowCatalogActivationResult | undefined {
     const currentEntry = this.getEntry(name, currentPointer.revision);
     if (currentEntry === undefined) return undefined;
 

@@ -364,11 +364,96 @@ full list of affected call sites—and `engine.register()`'s own activation is
 always unconditional, never gated by `checkWorkflowCompatibility()`, exactly
 matching the version-mismatch behavior described above. The compatibility
 check is real and exercised, but on the catalog's separate guarded
-activation primitive—the one a future dynamic-loading system will call, not
-`engine.register()`.
+activation primitive—`engine.workflows.activate()` (below), the public
+caller this primitive was built for.
 
 Activating a new revision never alters an already-started run: a workflow
 instance's own recorded `workflowVersion` and checkpoint state are
 unaffected by a later `engine.register()`/activation call for the same
 name—only new starts and recovery resolve against the catalog's current
 active pointer.
+
+## `engine.workflows`: public catalog control
+
+`engine.workflows` promotes the catalog above to a public surface—`install`,
+`activate`, `getActive`, `getRevision`, and `listRevisions`—plus five
+matching server operations under `/v1/registry/`. This is catalog
+bookkeeping and promotion control ONLY. It never changes which in-process
+handler `engine.start()` dispatches to; that always resolves through
+whatever `engine.register()` most recently registered. Activation moves
+`RegistrySnapshot.activeRevisions` (what `weft.system.registry`, the
+console's registry page, and `weft codegen` read)—it does not move
+execution. Connecting the two is dynamic module loading, a later batch's
+job.
+
+```ts
+import {
+  Engine,
+  buildWorkflowContract,
+  buildWorkflowRevisionManifest,
+  workflow,
+  type WorkflowContext,
+} from '@lostgradient/weft';
+
+const checkout = workflow({ name: 'checkout', version: '1.0.0' }).execute(async function* (
+  _ctx: WorkflowContext,
+  input: string,
+) {
+  return input;
+});
+
+const engine = new Engine();
+engine.register(checkout); // already in-process
+
+const contract = buildWorkflowContract({ name: 'checkout', version: '1.0.0' });
+const manifest = await buildWorkflowRevisionManifest(contract);
+
+const record = await engine.workflows.install(manifest);
+const active = await engine.workflows.getActive('checkout');
+const result = await engine.workflows.activate('checkout', record.manifest.revision, {
+  expectedGeneration: active!.generation,
+});
+```
+
+`install(manifest)` requires `engine.getWorkflowDefinition(manifest.name)` to
+already resolve in-process—it durably records a manifest for a definition
+the engine already has, it does not load code (that is a later batch's
+job). It deliberately does not check `manifest.workflowVersion` against the
+in-process definition's own version: a version mismatch is a normal
+activation-time `incompatible` refusal, not an install-time error.
+
+`activate(name, revision, options)` requires `options.expectedGeneration`
+once `name` has an active pointer—an omitted value there refuses with
+`{ applied: false, reason: 'expected-generation-required' }` rather than
+silently activating, which is exactly what stops two concurrent refreshers
+from last-write-winning each other. Omit it (or pass `0`) only for the very
+first activation of a name, which has no prior generation to name. Every
+other refusal reason (`stale-generation`, `incompatible`, `conflict`) is
+returned in the same structured result rather than thrown.
+
+Under the **default** compatibility policy (`requireExactRevision: true`),
+`activate()` can only re-stamp the revision that is already active—the
+candidate's `revision` must match exactly, so a successful call bumps the
+generation without changing what is active. Promoting a documentation-only
+variant (same `contractHash`, different `revision`) requires
+`policy: { requireExactRevision: false }`. Promoting a revision whose
+contract genuinely differs is impossible through `activate()` by design—
+`contract-hash-mismatch` and `workflow-version-incompatible` are never
+tunable by policy (see [Activation Compatibility](#activation-compatibility)
+above); that is `engine.register()`'s job.
+
+**Sharp edge:** a later `engine.register()` call for the same name—including
+a process restart that re-registers against the same durable store—reverts
+a prior manual `activate()` back to the in-process registration's own
+revision. `activateRegistered` is unconditional by design (see the
+Activation Compatibility section above); it does not know about, and does
+not preserve, a manual `activate()` call. Reconciling loader-driven and
+registration-driven activation is out of scope here.
+
+The five server operations mirror the namespace 1:1 (`reference/api-server.md`
+has the full table): `weft.workflows.revisions.install`,
+`.activate`, `.get`, `.list`, and `weft.workflows.active.get` (named
+`active.get` rather than `revisions.getActive`—operation names must be
+lowercase-segmented, so `getActive` is only the TypeScript method name).
+`install` and `activate` require the `workflows:admin` scope; the three
+read operations require `workflows:read`.

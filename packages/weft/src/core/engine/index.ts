@@ -169,6 +169,10 @@ import {
 } from './engine-runtime-helpers.ts';
 import type { EngineStateNamespace } from './engine-state-namespace.ts';
 import {
+  createEngineWorkflowsNamespace,
+  type EngineWorkflowsNamespace,
+} from './engine-workflows-namespace.ts';
+import {
   EngineCreateNameMismatchError,
   EngineDisposalError,
   EngineDisposedError,
@@ -377,6 +381,10 @@ export {
   shouldEmitEngineLeakWarningForTesting,
 } from './engine-leak-warnings.ts';
 export type { EngineStateNamespace } from './engine-state-namespace.ts';
+export type {
+  ActivateWorkflowRevisionOptions,
+  EngineWorkflowsNamespace,
+} from './engine-workflows-namespace.ts';
 export { assertCompatiblePersistedDataVersion };
 
 export const ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING = Symbol(
@@ -1422,6 +1430,9 @@ export class Engine<
       ): AtomicState<T> =>
         new AtomicState<T>(storage, KEYS.stateWorkflow(workflowType, key), options),
     };
+  }
+  get workflows(): EngineWorkflowsNamespace {
+    return createEngineWorkflowsNamespace(this as unknown as Engine);
   }
 
   /** Return detached snapshots of the alert rules that are currently firing. */

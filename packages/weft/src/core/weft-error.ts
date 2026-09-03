@@ -66,7 +66,9 @@ export type WeftErrorCode =
   | 'WorkflowTeardownPendingError'
   | 'IdempotencyKeyPurgedError'
   | 'WorkerManifestBuildError'
-  | 'OwnershipModeMismatchError';
+  | 'OwnershipModeMismatchError'
+  | 'WorkflowCatalogConflictError'
+  | 'WorkflowRevisionNotInstalledError';
 
 /**
  * Generic abstract base for all Weft library errors. The `TCode` parameter
@@ -143,6 +145,8 @@ const publicWeftErrorCodeMap = {
   IdempotencyKeyPurgedError: true,
   WorkerManifestBuildError: true,
   OwnershipModeMismatchError: true,
+  WorkflowCatalogConflictError: true,
+  WorkflowRevisionNotInstalledError: true,
 } satisfies Record<WeftErrorCode, true>;
 
 const PUBLIC_WEFT_ERROR_CODES = new Set<string>(Object.keys(publicWeftErrorCodeMap));

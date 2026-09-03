@@ -4255,6 +4255,36 @@
       }
     },
     {
+      "name": "weft.workflows.active.get",
+      "kind": "unary",
+      "summary": "Get the currently active revision pointer for a workflow",
+      "description": "Read the current `{ revision, generation, activatedAt }` active pointer for `name`. Read-only, in-memory (matches `RegistrySnapshot.activeRevisions`' staleness contract exactly). Faults with NotFound when `name` has never been activated.",
+      "tags": ["Workflow Catalog"],
+      "destructive": false,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["workflows:read"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["InvalidParams", "NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "Workflow name. Runtime validation requires a wire-safe identifier."
+          }
+        },
+        "required": ["name"],
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
       "name": "weft.workflows.activities.pending.list",
       "kind": "unary",
       "summary": "List pending async activities for a workflow",
@@ -7478,6 +7508,138 @@
         "required": ["id"],
         "type": "object"
       }
+    },
+    {
+      "name": "weft.workflows.revisions.activate",
+      "kind": "unary",
+      "summary": "Activate an installed workflow revision",
+      "description": "Activate an already-installed `(name, revision)` as the durably advertised active revision for `name`. Returns the structured result verbatim: `{ applied: true, pointer }` on success, or `{ applied: false, reason, ... }` on refusal — surfaced as a Conflict fault with `reason` one of `incompatible`, `stale-generation`, `expected-generation-required`, or `conflict`. Faults with NotFound when the revision was never installed. Never changes which in-process handler `engine.start()` dispatches to — see the workflow-versioning guide.",
+      "tags": ["Workflow Catalog"],
+      "destructive": true,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["workflows:admin"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["Conflict", "InvalidParams", "NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expectedGeneration": {
+            "description": "The durable generation this caller last observed. Required once the workflow has an active revision — omitting it there refuses with expected-generation-required."
+          },
+          "name": {
+            "description": "Workflow name. Runtime validation requires a wire-safe identifier."
+          },
+          "policy": {
+            "description": "Optional compatibility policy override."
+          },
+          "revision": {
+            "description": "Installed revision to activate. Runtime validation requires a non-empty string."
+          }
+        },
+        "required": ["name", "revision"],
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.workflows.revisions.get",
+      "kind": "unary",
+      "summary": "Get one installed workflow revision",
+      "description": "Read one durably installed `(name, revision)` workflow catalog record. Read-only. Faults with NotFound when no such revision was installed.",
+      "tags": ["Workflow Catalog"],
+      "destructive": false,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["workflows:read"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["InvalidParams", "NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "Workflow name. Runtime validation requires a wire-safe identifier."
+          },
+          "revision": {
+            "description": "Installed revision. Runtime validation requires a non-empty string."
+          }
+        },
+        "required": ["name", "revision"],
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.workflows.revisions.install",
+      "kind": "unary",
+      "summary": "Durably install a workflow revision manifest",
+      "description": "Validate and durably install a `WorkflowRevisionManifest` for a workflow the engine already has an in-process definition for. Idempotent on a byte-identical reinstall of the same (name, revision). Faults with InvalidParams when the manifest fails validation or names a workflow with no in-process definition, and Conflict when (name, revision) is already installed with different contract content. Does not check `manifest.workflowVersion` against the in-process definition's own version — that mismatch is a normal activation-time `incompatible` refusal, not an install-time error. Never changes which in-process handler `engine.start()` dispatches to.",
+      "tags": ["Workflow Catalog"],
+      "destructive": false,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["workflows:admin"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["Conflict", "InvalidParams"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "manifest": {
+            "description": "An untrusted WorkflowRevisionManifest, validated at invoke time."
+          }
+        },
+        "required": ["manifest"],
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.workflows.revisions.list",
+      "kind": "unary",
+      "summary": "List every installed revision of a workflow",
+      "description": "Read every durably installed revision of `name`, sorted deterministically by revision. Read-only. Returns an empty array for a name with no installed revisions, rather than a NotFound fault — an empty catalog is not an error.",
+      "tags": ["Workflow Catalog"],
+      "destructive": false,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["workflows:read"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["InvalidParams"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "Workflow name. Runtime validation requires a wire-safe identifier."
+          }
+        },
+        "required": ["name"],
+        "type": "object"
+      },
+      "outputSchema": {}
     },
     {
       "name": "weft.workflows.scheduleprovenance.get",

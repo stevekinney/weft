@@ -13,6 +13,10 @@
 
 import type { RegistrableOperation } from '../operation-catalog.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
+import {
+  activateWorkflowRevisionOperation,
+  activateWorkflowRevisionRestBinding,
+} from './activate-workflow-revision.ts';
 import { addWorkflowTagsOperation, addWorkflowTagsRestBinding } from './add-workflow-tags.ts';
 import {
   aggregateWorkflowsOperation,
@@ -45,6 +49,10 @@ import { createScheduleOperation, createScheduleRestBinding } from './create-sch
 import { fleetEventsSseOperation, fleetEventsSseRestBinding } from './fleet-events-sse.ts';
 import { fleetEventsSubscriptionOperation } from './fleet-events-subscription.ts';
 import { forkWorkflowOperation, forkWorkflowRestBinding } from './fork-workflow.ts';
+import {
+  getActiveWorkflowRevisionOperation,
+  getActiveWorkflowRevisionRestBinding,
+} from './get-active-workflow-revision.ts';
 import { getCheckpointAtOperation, getCheckpointAtRestBinding } from './get-checkpoint-at.ts';
 import { getPrincipalOperation, getPrincipalRestBinding } from './get-principal.ts';
 import { getRegistryOperation, getRegistryRestBinding } from './get-registry.ts';
@@ -71,14 +79,26 @@ import { getWorkflowEventsOperation, getWorkflowEventsRestBinding } from './get-
 import * as workflowObservability from './get-workflow-observability.ts';
 import { getWorkflowResultOperation, getWorkflowResultRestBinding } from './get-workflow-result.ts';
 import {
+  getWorkflowRevisionOperation,
+  getWorkflowRevisionRestBinding,
+} from './get-workflow-revision.ts';
+import {
   getWorkflowTimelineOperation,
   getWorkflowTimelineRestBinding,
 } from './get-workflow-timeline.ts';
 import { getWorkflowOperation, getWorkflowRestBinding } from './get-workflow.ts';
+import {
+  installWorkflowRevisionOperation,
+  installWorkflowRevisionRestBinding,
+} from './install-workflow-revision.ts';
 import { listAlertsOperation, listAlertsRestBinding } from './list-alerts.ts';
 import { listCheckpointsOperation, listCheckpointsRestBinding } from './list-checkpoints.ts';
 import { listReviewsOperation, listReviewsRestBinding } from './list-reviews.ts';
 import { listSchedulesOperation, listSchedulesRestBinding } from './list-schedules.ts';
+import {
+  listWorkflowRevisionsOperation,
+  listWorkflowRevisionsRestBinding,
+} from './list-workflow-revisions.ts';
 import { listWorkflowsOperation, listWorkflowsRestBinding } from './list-workflows.ts';
 import { pauseScheduleOperation, pauseScheduleRestBinding } from './pause-schedule.ts';
 import { purgeWorkflowsOperation, purgeWorkflowsRestBinding } from './purge-workflows.ts';
@@ -172,6 +192,11 @@ export const STATIC_REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = [
   createScheduleRestBinding,
   updateScheduleRestBinding,
   getRegistryRestBinding,
+  installWorkflowRevisionRestBinding,
+  activateWorkflowRevisionRestBinding,
+  getWorkflowRevisionRestBinding,
+  listWorkflowRevisionsRestBinding,
+  getActiveWorkflowRevisionRestBinding,
   getSystemLeaseRestBinding,
   getRetentionOverviewRestBinding,
   getUpdateResultRestBinding,
@@ -250,6 +275,11 @@ export const STATIC_OPERATIONS: ReadonlyArray<RegistrableOperation> = [
   createScheduleOperation,
   updateScheduleOperation,
   getRegistryOperation,
+  installWorkflowRevisionOperation,
+  activateWorkflowRevisionOperation,
+  getWorkflowRevisionOperation,
+  listWorkflowRevisionsOperation,
+  getActiveWorkflowRevisionOperation,
   getSystemLeaseOperation,
   getRetentionOverviewOperation,
   getUpdateResultOperation,

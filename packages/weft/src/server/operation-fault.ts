@@ -35,6 +35,7 @@
  * serialized consistently across REST and JSON-RPC transports.
  */
 
+import type { WorkflowCompatibilityReason } from '../core/contract/compatibility.ts';
 import type { FaultCode } from '../core/fault-code.ts';
 import { isWeftErrorCode, type WeftErrorCode } from '../core/weft-error.ts';
 
@@ -78,6 +79,14 @@ export type OperationFault =
         missingTypes?: readonly string[] | undefined;
         missingWorkflowCount?: number | undefined;
         samplesTruncated?: boolean | undefined;
+        // WFT-11: `engine.workflows.activate()`'s `applied: false` refusal
+        // variants (`stale-generation`, `expected-generation-required`)
+        // report the durable generation the caller should have supplied.
+        currentGeneration?: number | undefined;
+        // WFT-11: the `incompatible` refusal variant's full, ordered list of
+        // `WorkflowCompatibilityReason`s — a caller branching on why
+        // activation was refused needs every reason, not just the first.
+        compatibilityReasons?: readonly WorkflowCompatibilityReason[] | undefined;
       };
     }
   | { code: 'Unprocessable'; message: string; data: { reason: string } }
@@ -191,6 +200,16 @@ const REST_FAULT_DATA_EXTRACTORS: RestFaultDataExtractors = {
       missingTypes: data.missingTypes === undefined ? undefined : [...data.missingTypes],
       missingWorkflowCount: data.missingWorkflowCount,
       samplesTruncated: data.samplesTruncated,
+      // WFT-11: intentionally NOT `reason` — REST has never disclosed the
+      // internal `Conflict.data.reason` string (see this table's own
+      // "deny-by-default" doc comment); these two fields are additive and
+      // narrower. A REST caller that must branch on WHICH of
+      // `engine.workflows.activate()`'s four refusal reasons occurred
+      // should use JSON-RPC, which gets full fidelity via `dataForConflict`
+      // in `fault-to-json-rpc.ts`.
+      currentGeneration: data.currentGeneration,
+      compatibilityReasons:
+        data.compatibilityReasons === undefined ? undefined : [...data.compatibilityReasons],
     }),
   Unprocessable: () => NO_REST_FAULT_DATA,
   PayloadTooLarge: (data) => ({ maxBytes: data.maxBytes }),
