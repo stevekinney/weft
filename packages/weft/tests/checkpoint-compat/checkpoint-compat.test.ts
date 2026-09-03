@@ -2,7 +2,16 @@
  * Verifies binary storage snapshots remain readable by the engine.
  *
  * Contract: These fixtures freeze observable behavior. Engine PRs must not
- * change them; if a fixture changes, that is a regression.
+ * change any EXISTING record — key, value, or ordering — inside a fixture;
+ * that is a regression. The one narrow exception: a PR that adds a new,
+ * independent durable key namespace (e.g. WFT-9/WFT-10's `catalog-entry:`/
+ * `catalog-active:` prefixes) may regenerate fixtures to add records under
+ * that new namespace, PROVIDED the diff is purely additive — every existing
+ * key's value and every existing key's presence is byte-for-byte unchanged.
+ * Verify with a line-by-line diff against the prior fixture, not by
+ * inspection of the regeneration script's intent; any change beyond new
+ * keys is still a regression and must be reverted or justified as a real
+ * semantic change instead.
  */
 
 import { afterEach, describe, expect, it } from 'bun:test';

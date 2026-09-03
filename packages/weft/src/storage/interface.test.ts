@@ -232,6 +232,8 @@ describe('WEFT_RESERVED_KEY_PREFIXES', () => {
       KEYS.applicationCommandIdempotency('bureau', 'agent-7', 'key'),
       KEYS.applicationCommandTerminal('bureau', 'agent-7', 1, 'command-id'),
       KEYS.applicationMailboxSinkProbe('bureau', 'agent-7', 'nonce'),
+      KEYS.catalogEntry('workflow-type', 'revision'),
+      KEYS.catalogActive('workflow-type'),
     ];
 
     for (const key of representativeKeys) {

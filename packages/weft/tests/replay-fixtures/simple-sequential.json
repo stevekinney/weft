@@ -41,6 +41,8 @@
     "result": "processed:hello"
   },
   "storage": {
+    "catalog-active:simple-sequential": "g6hyZXZpc2lvbtlHc2hhMjU2OjAyZGQxMGFlYjM5ODFlY2I2NmU0YTY3MzgwZmU4YmVmNWY0MzJkNDkwZjc2ZTM0NGExNDQ0NDgwZGI1ODY5NWKqZ2VuZXJhdGlvbgGrYWN0aXZhdGVkQXQA",
+    "catalog-entry:simple-sequential:sha256%3A02dd10aeb3981ecb66e4a67380fe8bef5f432d490f76e344a1444480db58695b": "eyJtYW5pZmVzdCI6eyJtYW5pZmVzdFZlcnNpb24iOjEsIm5hbWUiOiJzaW1wbGUtc2VxdWVudGlhbCIsIndvcmtmbG93VmVyc2lvbiI6IjEiLCJyZXZpc2lvbiI6InNoYTI1NjowMmRkMTBhZWIzOTgxZWNiNjZlNGE2NzM4MGZlOGJlZjVmNDMyZDQ5MGY3NmUzNDRhMTQ0NDQ4MGRiNTg2OTViIiwiY29udHJhY3RIYXNoIjoic2hhMjU2OmFmY2VjMDc2NmVmYzM1NDkyOWRhY2VmMjQ0MDk2YTY0MGY4NmMxZjBiZjU4ZjJmMWQ0MDcyYWZjZTc0ZmVhZDkiLCJjb250cmFjdCI6eyJuYW1lIjoic2ltcGxlLXNlcXVlbnRpYWwiLCJ3b3JrZmxvd1ZlcnNpb24iOiIxIn19LCJpbnN0YWxsZWRBdCI6MH0=",
     "ev:wf-simple-sequential:0000000000": "h6R0eXBls3dvcmtmbG93OmNoZWNrcG9pbnSqd29ya2Zsb3dJZLR3Zi1zaW1wbGUtc2VxdWVudGlhbKhzZXF1ZW5jZQCocHJldkhhc2iwMDAwMDAwMDAwMDAwMDAwMKdwYXlsb2FkgaRzdGVwAal0aW1lc3RhbXAArHZlcnNpb25UdXBsZYGvd29ya2Zsb3dWZXJzaW9uoTE=",
     "ev:wf-simple-sequential:head": "gqhzZXF1ZW5jZQCobGFzdEhhc2iwZjU1OTAxNjgzNTU1YzI0OQ==",
     "wf-idx-created:0000000000000000:wf-simple-sequential": "",

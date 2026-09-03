@@ -122,6 +122,7 @@ import {
   createUpdateCallbacks as createUpdateCallbacksForEngine,
 } from './callback-creators.ts';
 import { registerCancelHandler } from './cancel-handlers.ts';
+import { ensureWorkflowCatalogReady, isWorkflowCatalogReady } from './catalog-readiness.ts';
 import {
   getCheckpointAt as getCheckpointStateAt,
   getEvents as getWorkflowEvents,
@@ -339,6 +340,7 @@ export {
   WorkflowTypeNotRegisteredForRecoveryError,
 } from './errors.ts';
 export { HANDLE_RESULT_PROMISE, WorkflowHandle } from './handles.ts';
+export { getWorkflowCatalog } from './internals.ts';
 export {
   WeftWorkflowClaimLostWarning,
   WeftWorkflowWakeDiscardedWarning,
@@ -592,6 +594,17 @@ export class Engine<
       // EngineLeaseAcquisitionTimeoutError if the lease cannot be acquired in time.
       await engine.#acquireLeaseIfConfigured();
 
+      // Restore the durable workflow catalog and drain every registration
+      // above into it BEFORE recovery or any new start — but only after the
+      // ownership gates and lease acquisition above, so a Gate 1/Gate 2
+      // failure (or a lost lease-acquisition race) still rejects construction
+      // before ANY storage scan, catalog included — see
+      // `workflow-lease-ownership.test.ts`'s "recovery never scans storage"
+      // invariant, which this ordering preserves.
+      if (!isWorkflowCatalogReady(engine as Engine)) {
+        await ensureWorkflowCatalogReady(engine as Engine);
+      }
+
       if (options.recover !== false) {
         await engine.recoverAll(
           options.acknowledgeUnknownWorkflowTypes !== undefined
@@ -815,6 +828,10 @@ export class Engine<
           resolvedOptions.backgroundTaskMode === 'automatic',
         )
       : null;
+    getInternals(this).workflowCatalog = null;
+    getInternals(this).pendingCatalogInstalls = [];
+    getInternals(this).catalogRestored = false;
+    getInternals(this).catalogDrainPromise = null;
     this.#ensureRetentionSweepInterval();
     this.#startSecondInstanceDetection();
   }
@@ -1640,6 +1657,16 @@ export class Engine<
     // fenced-write throw, which the inline strategy swallows. No-op when
     // ownership is 'none'.
     assertLeaseHeldForEngineWork(getInternals(this));
+    // `this` is `Engine<TWorkflows, TActivities>`, a proper generic
+    // instantiation TypeScript refuses to narrow directly to the bare
+    // `Engine` type `ensureWorkflowCatalogReady` is typed against — the same
+    // generic-registry variance every `server/**` `engine as Engine` call
+    // site already works around, but `this` specifically needs the
+    // `unknown` bridge TS's own diagnostic suggests. Repeated at every other
+    // `ensureWorkflowCatalogReady(this as unknown as Engine)` call site below.
+    if (!isWorkflowCatalogReady(this as unknown as Engine)) {
+      await ensureWorkflowCatalogReady(this as unknown as Engine);
+    }
     if (options?.idempotencyKey !== undefined) {
       return startWithIdempotencyFromLifecycle(
         getInternals(this),
@@ -1700,6 +1727,9 @@ export class Engine<
     // Lease-ownership precondition (same as `start`): startOrSignal may durably
     // create a fresh run, so it must hold the lease first. No-op for 'none'.
     assertLeaseHeldForEngineWork(getInternals(this));
+    if (!isWorkflowCatalogReady(this as unknown as Engine)) {
+      await ensureWorkflowCatalogReady(this as unknown as Engine);
+    }
     return startOrSignalFromLifecycle(
       getInternals(this),
       type,
@@ -1957,6 +1987,9 @@ export class Engine<
   ): Promise<ScheduleHandle> {
     const internals = getInternals(this);
     assertLeaseHeldForEngineWork(internals);
+    if (!isWorkflowCatalogReady(this as unknown as Engine)) {
+      await ensureWorkflowCatalogReady(this as unknown as Engine);
+    }
     if (typeof typeOrDefinition === 'object') {
       return scheduleDefinitionFromInternals(internals, typeOrDefinition);
     }
@@ -1978,16 +2011,25 @@ export class Engine<
   async pauseSchedule(scheduleId: string): Promise<void> {
     const internals = getInternals(this);
     assertLeaseHeldForEngineWork(internals);
+    if (!isWorkflowCatalogReady(this as unknown as Engine)) {
+      await ensureWorkflowCatalogReady(this as unknown as Engine);
+    }
     return pauseScheduleFromInternals(internals, scheduleId);
   }
   async resumeSchedule(scheduleId: string): Promise<void> {
     const internals = getInternals(this);
     assertLeaseHeldForEngineWork(internals);
+    if (!isWorkflowCatalogReady(this as unknown as Engine)) {
+      await ensureWorkflowCatalogReady(this as unknown as Engine);
+    }
     return resumeScheduleFromInternals(internals, scheduleId);
   }
   async cancelSchedule(scheduleId: string): Promise<void> {
     const internals = getInternals(this);
     assertLeaseHeldForEngineWork(internals);
+    if (!isWorkflowCatalogReady(this as unknown as Engine)) {
+      await ensureWorkflowCatalogReady(this as unknown as Engine);
+    }
     return cancelScheduleFromInternals(internals, scheduleId);
   }
   async updateSchedule(
@@ -1997,6 +2039,9 @@ export class Engine<
   ): Promise<void> {
     const internals = getInternals(this);
     assertLeaseHeldForEngineWork(internals);
+    if (!isWorkflowCatalogReady(this as unknown as Engine)) {
+      await ensureWorkflowCatalogReady(this as unknown as Engine);
+    }
     return updateScheduleFromInternals(internals, scheduleId, newSpec, options);
   }
   [HANDLE_RESULT_PROMISE](workflowId: string): Promise<unknown> {
@@ -2183,6 +2228,9 @@ export class Engine<
     // pre-recovery fork surfaces EngineLeaseNotHeldError rather than being
     // misreported as a deposition by the fenced commit. No-op for 'none'.
     assertLeaseHeldForEngineWork(getInternals(this));
+    if (!isWorkflowCatalogReady(this as unknown as Engine)) {
+      await ensureWorkflowCatalogReady(this as unknown as Engine);
+    }
     return forkFromLifecycle(
       getInternals(this),
       sourceWorkflowId,
@@ -2202,6 +2250,9 @@ export class Engine<
     // first so a pre-recovery resume surfaces EngineLeaseNotHeldError rather than
     // a deposition misreport from the fenced commit. No-op for 'none'.
     assertLeaseHeldForEngineWork(getInternals(this));
+    if (!isWorkflowCatalogReady(this as unknown as Engine)) {
+      await ensureWorkflowCatalogReady(this as unknown as Engine);
+    }
     return resumeFromLifecycle(getInternals(this), workflowId, this.#createLifecycleCallbacks());
   }
   /**
@@ -2243,6 +2294,12 @@ export class Engine<
     // correctness backstop — but running recovery against disposed engine machinery
     // is a real defect regardless of the lease, so it is gated here at the entry.)
     if (getInternals(this).disposed) throw new EngineDisposedError();
+    // Restore the durable workflow catalog (and drain any registrations
+    // queued since the last drain) before recovery reads any workflow's
+    // active revision.
+    if (!isWorkflowCatalogReady(this as unknown as Engine)) {
+      await ensureWorkflowCatalogReady(this as unknown as Engine);
+    }
     // Reload durable async-activity tokens first so a callback that arrives
     // before (or during) workflow replay still resolves a parked activity.
     await recoverPendingAsyncActivities(getInternals(this));

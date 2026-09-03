@@ -59,8 +59,9 @@ const maximumUnpackedBytes = 12 * 1024 * 1024;
 // WFT-8 onto WFT-7.
 // WFT-84 added the application mailbox modules (24 source files, each a
 // `.js`/`.d.ts` pair); the surface merged with WFT-6, WFT-7, and WFT-8
-// measures 1551 by `npm pack --dry-run`.
-const maximumEntryCount = 1551;
+// measured 1551 by `npm pack --dry-run`, and 1567 after merging WFT-9/WFT-10
+// (#947, the durable workflow catalog).
+const maximumEntryCount = 1567;
 
 type PackFile = {
   path: string;

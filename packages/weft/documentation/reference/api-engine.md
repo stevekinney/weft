@@ -126,6 +126,19 @@ engine.register(
 );
 ```
 
+`register()` itself returns synchronously and never touches storage. Since
+WFT-9/WFT-10, it also durably installs and activates the workflow's revision
+in the internal workflow catalog — but only on the _next_ `await` boundary
+inside the engine, not inline: `Engine.create()`, `start()`,
+`startOrSignal()`, `schedule()` and the other schedule operations, `fork()`,
+`resume()`, and `recoverAll()` all await this before doing anything else.
+This is a genuine, testable behavior change worth knowing about: a
+`RegistryManifestLimitError` from an oversized contract (a WFT-5
+hostile-input limit) can now surface at one of those call sites instead of
+only when a registry snapshot or `weft codegen` run is later requested. See
+[Revisions and the Catalog](../guides/workflow-versioning.md#revisions-and-the-catalog)
+for the full model.
+
 ### `getWorkflowDefinition()`
 
 ```ts partial
