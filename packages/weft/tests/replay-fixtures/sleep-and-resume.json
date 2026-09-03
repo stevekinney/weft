@@ -41,6 +41,8 @@
     "result": "awake"
   },
   "storage": {
+    "catalog-active:sleep-and-resume": "g6hyZXZpc2lvbtlHc2hhMjU2OmEyOGQ4MzQxZjc2N2JjNzFkYzQxMzk3ZWJiMGIxODE0MjFlNDE5YmM0ZjJjZjRhZGIzZTNhNjY3NGQwYTFmYmaqZ2VuZXJhdGlvbgGrYWN0aXZhdGVkQXQA",
+    "catalog-entry:sleep-and-resume:sha256%3Aa28d8341f767bc71dc41397ebb0b181421e419bc4f2cf4adb3e3a6674d0a1fbf": "eyJtYW5pZmVzdCI6eyJtYW5pZmVzdFZlcnNpb24iOjEsIm5hbWUiOiJzbGVlcC1hbmQtcmVzdW1lIiwid29ya2Zsb3dWZXJzaW9uIjoiMSIsInJldmlzaW9uIjoic2hhMjU2OmEyOGQ4MzQxZjc2N2JjNzFkYzQxMzk3ZWJiMGIxODE0MjFlNDE5YmM0ZjJjZjRhZGIzZTNhNjY3NGQwYTFmYmYiLCJjb250cmFjdEhhc2giOiJzaGEyNTY6YWZjZWMwNzY2ZWZjMzU0OTI5ZGFjZWYyNDQwOTZhNjQwZjg2YzFmMGJmNThmMmYxZDQwNzJhZmNlNzRmZWFkOSIsImNvbnRyYWN0Ijp7Im5hbWUiOiJzbGVlcC1hbmQtcmVzdW1lIiwid29ya2Zsb3dWZXJzaW9uIjoiMSJ9fSwiaW5zdGFsbGVkQXQiOjB9",
     "ev:wf-sleep-and-resume:0000000000": "h6R0eXBls3dvcmtmbG93OmNoZWNrcG9pbnSqd29ya2Zsb3dJZLN3Zi1zbGVlcC1hbmQtcmVzdW1lqHNlcXVlbmNlAKhwcmV2SGFzaLAwMDAwMDAwMDAwMDAwMDAwp3BheWxvYWSBpHN0ZXABqXRpbWVzdGFtcACsdmVyc2lvblR1cGxlga93b3JrZmxvd1ZlcnNpb26hMQ==",
     "ev:wf-sleep-and-resume:head": "gqhzZXF1ZW5jZQCobGFzdEhhc2iwMzAwYjM5ZTk1MjlmMDllZA==",
     "wf-idx-created:0000000000000000:wf-sleep-and-resume": "",

@@ -72,6 +72,11 @@ describe('Engine dispatches CleanupWarningEvent on cleanup errors', () => {
       put: realStorage.put.bind(realStorage),
       delete: realStorage.delete.bind(realStorage),
       batch: realStorage.batch.bind(realStorage),
+      // The engine now durably installs/activates the workflow catalog on
+      // `start()` (WFT-9/WFT-10), which requires `conditionalBatch` — this
+      // double's declared capability already claims it, so it must actually
+      // implement the method or `requireStorageCapability` rejects it.
+      conditionalBatch: realStorage.conditionalBatch?.bind(realStorage),
       async *scan(prefix: string) {
         // Let workflow state and checkpoint writes succeed, but fail on update scan
         if (prefix.startsWith('upd:')) {
@@ -137,6 +142,7 @@ describe('Engine dispatches CleanupWarningEvent on cleanup errors', () => {
         return originalBatch(operations);
       },
       scan: realStorage.scan.bind(realStorage),
+      conditionalBatch: realStorage.conditionalBatch?.bind(realStorage),
       [Symbol.dispose]() {
         realStorage[Symbol.dispose]();
       },

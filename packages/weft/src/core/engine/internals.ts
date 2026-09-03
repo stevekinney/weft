@@ -414,6 +414,29 @@ export interface EngineInternals {
     string,
     import('./checkpoint-side-effects.ts').AtomicWorkflowCommitSideEffects
   >;
+  /**
+   * The durable workflow catalog (WFT-9/WFT-10), `null` until
+   * {@link import('./catalog-readiness.ts').ensureWorkflowCatalogReady} first
+   * restores it from storage. Read via {@link getWorkflowCatalog}, never
+   * directly.
+   */
+  workflowCatalog: import('../catalog/index.ts').WorkflowCatalog | null;
+  /**
+   * Workflow names `commitWorkflowDefinition` (`registration.ts`) has queued
+   * for catalog install+activate since the last drain. `engine.register()`
+   * stays synchronous — it cannot itself build a manifest (that requires
+   * `crypto.subtle`) — so it defers the actual durable install/activation to
+   * the next `ensureWorkflowCatalogReady` call instead.
+   */
+  pendingCatalogInstalls: string[];
+  /** Whether {@link workflowCatalog} has been restored from storage at least once. */
+  catalogRestored: boolean;
+  /**
+   * The in-flight catalog restore-and-drain, or `null` when none is
+   * running. Concurrent `ensureWorkflowCatalogReady` callers await this same
+   * promise rather than racing a second restore/drain.
+   */
+  catalogDrainPromise: Promise<void> | null;
 }
 
 const INTERNALS = new WeakMap<object, EngineInternals>();
@@ -448,4 +471,26 @@ export function getInternals(engine: object): EngineInternals {
     );
   }
   return internals;
+}
+
+/**
+ * Read an engine's durable workflow catalog. Throws when it has not been
+ * restored yet — every public entry point that can observe catalog state
+ * (`start`, `startOrSignal`, `schedule`/`pauseSchedule`/`resumeSchedule`/
+ * `cancelSchedule`/`updateSchedule`, `fork`, `resume`, `recoverAll`,
+ * `Engine.create`, and `buildRegistrySnapshot`) awaits
+ * `ensureWorkflowCatalogReady(engine)` first, which restores it. Calling
+ * this before that await boundary — for example from a pathological
+ * direct-internals test — is a programming error, not a recoverable runtime
+ * condition, so it fails loud rather than returning a placeholder catalog.
+ */
+export function getWorkflowCatalog(engine: object): import('../catalog/index.ts').WorkflowCatalog {
+  const internals = getInternals(engine);
+  if (internals.workflowCatalog === null) {
+    throw new Error(
+      'Workflow catalog not restored — ensureWorkflowCatalogReady(engine) was not awaited before ' +
+        'getWorkflowCatalog(engine) was called.',
+    );
+  }
+  return internals.workflowCatalog;
 }

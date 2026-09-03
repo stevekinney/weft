@@ -182,6 +182,13 @@ function commitWorkflowDefinition(
   internals.registrations.set(name, entry);
   callbacks.ensureRetentionSweepInterval();
   internals.workflowTypesByHandler.set(definition.handler, name);
+  // `engine.register()` stays synchronous — it cannot itself build a
+  // manifest (that requires `crypto.subtle`) — so it defers the actual
+  // durable catalog install/activation to the next
+  // `ensureWorkflowCatalogReady` call instead of touching storage here.
+  if (!internals.pendingCatalogInstalls.includes(name)) {
+    internals.pendingCatalogInstalls.push(name);
+  }
   callbacks.dispatchEvent(new WorkflowDefinitionRegisteredEvent(name));
 }
 

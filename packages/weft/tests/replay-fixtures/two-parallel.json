@@ -60,6 +60,8 @@
     }
   },
   "storage": {
+    "catalog-active:two-parallel": "g6hyZXZpc2lvbtlHc2hhMjU2OjExYzA1OWU0NjMxNjZjNWFhMDE3OWYwMWJkYWU3YTZkNDFlMDJiYmQxZDE5NjFiNTcwMjA5ZDhiYzE2NWEyZTOqZ2VuZXJhdGlvbgGrYWN0aXZhdGVkQXQA",
+    "catalog-entry:two-parallel:sha256%3A11c059e463166c5aa0179f01bdae7a6d41e02bbd1d1961b570209d8bc165a2e3": "eyJtYW5pZmVzdCI6eyJtYW5pZmVzdFZlcnNpb24iOjEsIm5hbWUiOiJ0d28tcGFyYWxsZWwiLCJ3b3JrZmxvd1ZlcnNpb24iOiIxIiwicmV2aXNpb24iOiJzaGEyNTY6MTFjMDU5ZTQ2MzE2NmM1YWEwMTc5ZjAxYmRhZTdhNmQ0MWUwMmJiZDFkMTk2MWI1NzAyMDlkOGJjMTY1YTJlMyIsImNvbnRyYWN0SGFzaCI6InNoYTI1NjphZmNlYzA3NjZlZmMzNTQ5MjlkYWNlZjI0NDA5NmE2NDBmODZjMWYwYmY1OGYyZjFkNDA3MmFmY2U3NGZlYWQ5IiwiY29udHJhY3QiOnsibmFtZSI6InR3by1wYXJhbGxlbCIsIndvcmtmbG93VmVyc2lvbiI6IjEifX0sImluc3RhbGxlZEF0IjowfQ==",
     "ev:wf-two-parallel:0000000000": "h6R0eXBls3dvcmtmbG93OmNoZWNrcG9pbnSqd29ya2Zsb3dJZK93Zi10d28tcGFyYWxsZWyoc2VxdWVuY2UAqHByZXZIYXNosDAwMDAwMDAwMDAwMDAwMDCncGF5bG9hZIGkc3RlcAGpdGltZXN0YW1wAKx2ZXJzaW9uVHVwbGWBr3dvcmtmbG93VmVyc2lvbqEx",
     "ev:wf-two-parallel:head": "gqhzZXF1ZW5jZQCobGFzdEhhc2iwMjI1ODRkNGIwMzdkM2Q2Ng==",
     "wf-idx-created:0000000000000000:wf-two-parallel": "",

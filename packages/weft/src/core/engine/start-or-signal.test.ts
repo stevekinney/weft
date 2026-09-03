@@ -11,6 +11,7 @@ import { Engine } from '../engine.ts';
 import { WorkflowCompletedEvent } from '../events.ts';
 import type { WorkflowContext, WorkflowState } from '../types.ts';
 import { workflow } from '../types.ts';
+import { ensureWorkflowCatalogReady } from './catalog-readiness.ts';
 import { drainQueuedInlineWorkflowStartsForEngine } from './engine-runtime-helpers.ts';
 import { IdempotencyKeyPurgedError, StartOrSignalConflictError } from './errors.ts';
 import { getInternals } from './internals.ts';
@@ -1503,6 +1504,22 @@ describe('engine.startOrSignal', () => {
     const releaseWinner = Promise.withResolvers<void>();
     const loserCollided = Promise.withResolvers<void>();
     const inner = new MemoryStorage();
+
+    // Prime the workflow catalog against the UNWRAPPED storage first, using
+    // the same `waitForRelease` definition, so the wrapped engine below finds
+    // it already durably active on its own first catalog drain (a plain
+    // `storage.get` read, no `conditionalBatch` call — see
+    // `WorkflowCatalog.activateRegistered`'s already-active no-op branch).
+    // Without this, the deferred catalog install/activate
+    // `ensureWorkflowCatalogReady` now performs on `startOrSignal()`
+    // (WFT-9/WFT-10) would consume the wrapper's intercepted "first
+    // conditionalBatch call" instead of the workflow-create CAS this test
+    // targets.
+    const primer = new Engine({ storage: inner });
+    primer.register(waitForRelease);
+    await ensureWorkflowCatalogReady(primer);
+    primer[Symbol.dispose]();
+
     const engine = new Engine({
       storage: storageWithAbortingFirstConditionalBatch(
         inner,
@@ -1592,6 +1609,11 @@ describe('engine.startOrSignal', () => {
 
   it('resolves the committed caller-id winner when buffered-signal plain create collides', async () => {
     const engine = createEngine();
+    // Drain the workflow catalog up front so the timing-sensitive `.has()`
+    // interception below races only the intended `pendingStarts` reservation,
+    // not the deferred catalog install/activate `ensureWorkflowCatalogReady`
+    // now performs on the first `start()`/`startOrSignal()` call (WFT-9/WFT-10).
+    await ensureWorkflowCatalogReady(engine);
     const pendingStarts = getInternals(engine).pendingStarts;
     const originalHas = pendingStarts.has.bind(pendingStarts);
     let competingStartPromise: Promise<ReturnType<Engine['getHandle']>> | undefined;

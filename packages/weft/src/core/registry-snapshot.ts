@@ -38,6 +38,7 @@ import type { ActivityMetadata } from './activity-registry.ts';
 import { compareCodepoint } from './compare-codepoint.ts';
 import type { WorkflowRevisionManifest } from './contract/index.ts';
 import type { Engine } from './engine.ts';
+import { ensureWorkflowCatalogReady, getWorkflowCatalog } from './engine/catalog-readiness.ts';
 import { MAX_REGISTRY_WORKFLOW_COUNT, RegistryWorkflowCountLimitError } from './registry-limits.ts';
 import { convertSchema, RegistrySchemaConversionError } from './registry-schema-conversion.ts';
 import { buildOneWorkflowManifest } from './registry-workflow-manifest.ts';
@@ -164,6 +165,7 @@ export async function buildRegistrySnapshot(
   engine: Engine,
   options?: BuildRegistrySnapshotOptions,
 ): Promise<RegistrySnapshot> {
+  await ensureWorkflowCatalogReady(engine);
   const workflowDefinitions = engine.listWorkflowDefinitions();
   if (workflowDefinitions.length > MAX_REGISTRY_WORKFLOW_COUNT) {
     throw new RegistryWorkflowCountLimitError(workflowDefinitions.length);
@@ -189,9 +191,26 @@ export async function buildRegistrySnapshot(
   // (see name-grammar.ts) and must be stored as an own property rather than
   // mutate the prototype chain, which would silently drop it from JSON
   // output — same rationale as `workflows`/`activities` below.
+  //
+  // `activeRevisions` is read from the durable catalog (WFT-10), not
+  // recomputed from the manifest each registered workflow just built. Under
+  // `engine.register()`'s "always activate on install" rule the two must
+  // always agree for this batch's single-producer case — divergence here is
+  // a Weft bug, not hostile input, so it throws an internal `Error` rather
+  // than silently trusting either source.
+  const catalog = getWorkflowCatalog(engine);
   const activeRevisions = Object.create(null) as Record<string, string>;
   for (const manifest of manifests) {
-    activeRevisions[manifest.name] = manifest.revision;
+    const activePointer = catalog.resolveActive(manifest.name);
+    if (activePointer === undefined || activePointer.revision !== manifest.revision) {
+      throw new Error(
+        `Registry snapshot invariant violated: workflow "${manifest.name}" built manifest revision ` +
+          `"${manifest.revision}" but the workflow catalog's active pointer is ` +
+          `${activePointer === undefined ? 'absent' : `"${activePointer.revision}"`}. This is a Weft ` +
+          'bug — engine.register() always installs and activates on registration, so the two must agree.',
+      );
+    }
+    activeRevisions[manifest.name] = activePointer.revision;
   }
   const sortedManifests = manifests.toSorted(compareWorkflowManifests);
 

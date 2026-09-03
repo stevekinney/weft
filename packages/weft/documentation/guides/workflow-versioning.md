@@ -318,7 +318,57 @@ console.log(verdict.compatible); // false
 `checkWorkflowCompatibility()` is pure and synchronous—both manifests
 already carry their computed `contractHash`/`revision`, so no hashing
 happens inside it—and symmetric: `checkWorkflowCompatibility(a, b,
-policy)` and `checkWorkflowCompatibility(b, a, policy)` always agree. No
-catalog exists yet to call it automatically; it is exported today so a
-future catalog (and the console) can consume the same verdict rather than
-each re-deriving their own compatibility rules.
+policy)` and `checkWorkflowCompatibility(b, a, policy)` always agree. The
+internal workflow catalog (below) wires this in on its guarded activation
+primitive; `engine.register()`'s own activation path is deliberately
+unconditional and never calls it, so a re-registered workflow whose version
+drifted still boots—only that one run fails at recovery time, not
+registration.
+
+## Revisions and the Catalog
+
+Three identity concepts sit at different layers, and it is easy to conflate
+them:
+
+- **`workflowVersion`** is the existing semantic replay-compatibility
+  boundary described above—an author-declared string, checked by
+  `checkVersionCompatibility()` at recovery time against a workflow's own
+  prior runs.
+- **`revision`** (WFT-5) is a contract-metadata identity: content-derived by
+  default, or explicitly supplied. It changes on a documentation-only edit
+  even when the payload contract (`contractHash`) does not.
+- **`generation`** is new: a per-name activation counter maintained by the
+  internal workflow catalog. It has nothing to do with replay compatibility
+  or contract identity—it counts how many times a name's active pointer has
+  been written, and exists purely as the catalog's compare-and-swap fencing
+  token (the literal "which revision did I last observe" a caller supplies
+  back as `expectedGeneration`).
+
+Every `engine.register(definition)` call durably installs the workflow's
+current `WorkflowRevisionManifest` into the catalog and activates it,
+keyed by `(name, revision)`—immutable once installed, so two revisions of
+the same workflow name coexist without one overwriting the other. The
+catalog's per-name active pointer (`{ revision, generation }`) is what
+`RegistrySnapshot.activeRevisions` reads from, restored from durable
+storage before recovery or any new start on every boot.
+
+`engine.register()` itself stays synchronous—building a manifest requires
+hashing (`crypto.subtle`), which is async—so the actual durable
+install/activation is deferred to the next `await` boundary inside the
+engine (`start()`, `Engine.create()`, `recoverAll()`, and similar entry
+points). Two consequences follow: a `RegistryManifestLimitError` from an
+oversized contract (a WFT-5 hostile-input limit) can now surface at one of
+those await points rather than only when a registry snapshot or codegen run
+is later requested—see [`register()`](../reference/api-engine.md) for the
+full list of affected call sites—and `engine.register()`'s own activation is
+always unconditional, never gated by `checkWorkflowCompatibility()`, exactly
+matching the version-mismatch behavior described above. The compatibility
+check is real and exercised, but on the catalog's separate guarded
+activation primitive—the one a future dynamic-loading system will call, not
+`engine.register()`.
+
+Activating a new revision never alters an already-started run: a workflow
+instance's own recorded `workflowVersion` and checkpoint state are
+unaffected by a later `engine.register()`/activation call for the same
+name—only new starts and recovery resolve against the catalog's current
+active pointer.

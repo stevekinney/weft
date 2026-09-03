@@ -57,6 +57,8 @@
     "result": "fast"
   },
   "storage": {
+    "catalog-active:race-takes-first": "g6hyZXZpc2lvbtlHc2hhMjU2OjIwNDQ5YmNmYzFkOWY4YzEwYzJjNjc5YjgzMTk3MzEwZjYxMGY2NzgyMDEyMjM3ODM5ZjI2NjU0YjgyYTMwYjaqZ2VuZXJhdGlvbgGrYWN0aXZhdGVkQXQA",
+    "catalog-entry:race-takes-first:sha256%3A20449bcfc1d9f8c10c2c679b83197310f610f6782012237839f26654b82a30b6": "eyJtYW5pZmVzdCI6eyJtYW5pZmVzdFZlcnNpb24iOjEsIm5hbWUiOiJyYWNlLXRha2VzLWZpcnN0Iiwid29ya2Zsb3dWZXJzaW9uIjoiMSIsInJldmlzaW9uIjoic2hhMjU2OjIwNDQ5YmNmYzFkOWY4YzEwYzJjNjc5YjgzMTk3MzEwZjYxMGY2NzgyMDEyMjM3ODM5ZjI2NjU0YjgyYTMwYjYiLCJjb250cmFjdEhhc2giOiJzaGEyNTY6YWZjZWMwNzY2ZWZjMzU0OTI5ZGFjZWYyNDQwOTZhNjQwZjg2YzFmMGJmNThmMmYxZDQwNzJhZmNlNzRmZWFkOSIsImNvbnRyYWN0Ijp7Im5hbWUiOiJyYWNlLXRha2VzLWZpcnN0Iiwid29ya2Zsb3dWZXJzaW9uIjoiMSJ9fSwiaW5zdGFsbGVkQXQiOjB9",
     "ev:wf-race-takes-first:0000000000": "h6R0eXBls3dvcmtmbG93OmNoZWNrcG9pbnSqd29ya2Zsb3dJZLN3Zi1yYWNlLXRha2VzLWZpcnN0qHNlcXVlbmNlAKhwcmV2SGFzaLAwMDAwMDAwMDAwMDAwMDAwp3BheWxvYWSBpHN0ZXABqXRpbWVzdGFtcACsdmVyc2lvblR1cGxlga93b3JrZmxvd1ZlcnNpb26hMQ==",
     "ev:wf-race-takes-first:head": "gqhzZXF1ZW5jZQCobGFzdEhhc2iwOTAxODNlOWJhMjljMWRlMw==",
     "wf-idx-created:0000000000000000:wf-race-takes-first": "",

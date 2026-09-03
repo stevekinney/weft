@@ -197,3 +197,34 @@ describe('unversioned workflow default (WFT-5 registration.ts fix)', () => {
     engine[Symbol.dispose]();
   });
 });
+
+describe('register() and the deferred workflow catalog', () => {
+  it('returns synchronously and does not itself touch storage', async () => {
+    const engine = new Engine();
+    const internals = getInternals(engine);
+    let putCalls = 0;
+    const originalPut = internals.storage.put.bind(internals.storage);
+    internals.storage.put = (key: string, value: Uint8Array) => {
+      putCalls += 1;
+      return originalPut(key, value);
+    };
+
+    engine.register(workflow({ name: 'deferred-install' }).execute(async function* () {}));
+
+    expect(putCalls).toBe(0);
+    expect(internals.pendingCatalogInstalls).toContain('deferred-install');
+    expect(internals.catalogRestored).toBe(false);
+
+    engine[Symbol.dispose]();
+  });
+
+  it('queues the workflow name in pendingCatalogInstalls exactly once per registration', () => {
+    const engine = new Engine();
+    engine.register(workflow({ name: 'once' }).execute(async function* () {}));
+
+    const internals = getInternals(engine);
+    expect(internals.pendingCatalogInstalls.filter((name) => name === 'once')).toHaveLength(1);
+
+    engine[Symbol.dispose]();
+  });
+});
