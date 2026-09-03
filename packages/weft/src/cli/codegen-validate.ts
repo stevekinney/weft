@@ -292,7 +292,6 @@ function toCodegenWorkflowEntry(manifest: WorkflowRevisionManifest): CodegenWork
  * mirroring the console's own `activeRevisions[name] === manifest.revision`
  * resolution, which already drops a non-matching entry by omission.
  *
-
  * Workflow schemas lose the boolean-root tolerance `RegistryActivityEntry`
  * keeps: `parseWorkflowRevisionManifest`'s schema-fragment parser requires a
  * JSON object at every `inputSchema`/`outputSchema` position, matching what
