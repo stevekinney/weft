@@ -1,0 +1,254 @@
+/**
+ * The adapter runner for the application delivery outbox (WFT-85): one due
+ * delivery claimed, durably marked `attempting`, handed to the configured
+ * transport, and settled on what the transport reported — and the bounded
+ * drain that repeats it.
+ *
+ * The runner never trusts the adapter's completion as a disposition. It
+ * validates the outcome, then commits the matching transition fenced on the
+ * attempt token and the `attempting` bytes; only that commit moves the record.
+ * A thrown adapter error is an unknown outcome, because the request may have
+ * left the process. An attempt deadline that elapses while the send is in
+ * flight aborts the adapter's signal and is likewise unknown.
+ *
+ * @module core/application-outbox-runner
+ */
+
+import type {
+  ApplicationDeliveryAdapter,
+  ApplicationDeliveryClaim,
+  ApplicationDeliveryReceipt,
+  ApplicationOutboxDeliverResult,
+  ApplicationOutboxDrainReport,
+} from './application-outbox-contract.ts';
+import { claimNextDelivery } from './application-outbox-delivery.ts';
+import {
+  ApplicationDeliveryValidationError,
+  requireWaitBudget,
+} from './application-outbox-guards.ts';
+import {
+  releaseAttemptController,
+  toApplicationDeliveryReceipt,
+  type OutboxRuntime,
+} from './application-outbox-internals.ts';
+import { runOutboxMaintenance } from './application-outbox-maintenance.ts';
+import { beginAttempt, settleAttempt } from './application-outbox-settlement.ts';
+import { loadDelivery, loadOutboxHeader } from './application-outbox-storage.ts';
+import { validateOutcome, type ValidatedOutcome } from './application-outbox-validation.ts';
+import { delayUnlessAborted } from './application-outbox-waits.ts';
+import { raceAbortWithin, WaitBudgetElapsedError } from './application-primitive-abort.ts';
+
+/**
+ * Call the adapter once, bounded by the attempt deadline and the attempt's
+ * abort signal, and return a validated outcome. Never throws for anything the
+ * adapter did: an error or a lost race is an unknown outcome.
+ */
+async function sendOnce(
+  runtime: OutboxRuntime,
+  adapter: ApplicationDeliveryAdapter,
+  claim: ApplicationDeliveryClaim,
+): Promise<ValidatedOutcome> {
+  const budget = claim.attemptDeadlineAt - runtime.now();
+  if (budget <= 0) {
+    return {
+      status: 'unknown',
+      failure: {
+        reason: 'unknown-outcome',
+        message: 'The attempt deadline passed before the transport was called.',
+      },
+    };
+  }
+  const raced = await raceAbortWithin(
+    async () => {
+      try {
+        return {
+          ok: true as const,
+          outcome: validateOutcome(
+            await adapter.send({
+              delivery: claim.receipt,
+              payload: claim.payload,
+              credentialRef: claim.credentialRef,
+              attemptToken: claim.attemptToken,
+              signal: claim.signal,
+            }),
+          ),
+        };
+      } catch (error) {
+        return { ok: false as const, error };
+      }
+    },
+    budget,
+    claim.signal,
+  );
+  if (raced.aborted) {
+    return {
+      status: 'unknown',
+      failure: {
+        reason: 'unknown-outcome',
+        message:
+          raced.reason instanceof WaitBudgetElapsedError
+            ? 'The attempt deadline passed while the transport call was in flight.'
+            : 'The attempt was aborted while the transport call was in flight.',
+      },
+    };
+  }
+  if (raced.value.ok) return raced.value.outcome;
+  return {
+    status: 'unknown',
+    failure: {
+      reason: 'unknown-outcome',
+      message: `The transport adapter threw: ${describeError(raced.value.error)}`,
+    },
+  };
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Claim the earliest due delivery, run it through the adapter, and settle it.
+ *
+ * The `attempting` commit happens before the adapter is called; a claim whose
+ * begin is refused (cancelled or reclaimed between the two) is released
+ * without calling the transport.
+ */
+export async function deliverNext(
+  runtime: OutboxRuntime,
+  options?: { readonly signal?: AbortSignal | undefined },
+): Promise<ApplicationOutboxDeliverResult> {
+  const adapter = runtime.adapter;
+  if (adapter === undefined) {
+    throw new ApplicationDeliveryValidationError(
+      'deliverNext() and drain() require an adapter; construct the outbox with one or drive claims directly.',
+    );
+  }
+  const claimed = await claimNextDelivery(runtime, options);
+  if (claimed.status !== 'claimed') return claimed;
+  const { claim } = claimed;
+  const deliveryId = claim.receipt.deliveryId;
+  const begun = await beginAttempt(runtime, { deliveryId, attemptToken: claim.attemptToken });
+  if (begun.status !== 'settled') {
+    return { status: 'settled', receipt: await currentReceipt(runtime, deliveryId, begun) };
+  }
+  const outcome = await sendOnce(runtime, adapter, { ...claim, receipt: begun.receipt });
+  const settled = await settleAttempt(runtime, {
+    deliveryId,
+    attemptToken: claim.attemptToken,
+    outcome,
+  });
+  releaseAttemptController(
+    runtime,
+    claim.attemptToken,
+    'The application outbox finished this attempt.',
+    deliveryId,
+  );
+  return { status: 'settled', receipt: await currentReceipt(runtime, deliveryId, settled) };
+}
+
+/** The receipt a refused or settled step reports, re-read when the step carried none. */
+async function currentReceipt(
+  runtime: OutboxRuntime,
+  deliveryId: string,
+  result: { readonly status: string; readonly receipt?: ApplicationDeliveryReceipt },
+): Promise<ApplicationDeliveryReceipt> {
+  if (result.receipt !== undefined) return result.receipt;
+  const loaded = await loadDelivery(runtime.storage, runtime.keys, deliveryId);
+  if (loaded !== null) return toApplicationDeliveryReceipt(loaded.record);
+  throw new ApplicationDeliveryValidationError(
+    `Delivery "${deliveryId}" was retired while its attempt was in flight.`,
+  );
+}
+
+type DrainCounters = {
+  acknowledged: number;
+  rejected: number;
+  retryScheduled: number;
+  deadLettered: number;
+  cancelled: number;
+  unknown: number;
+};
+
+function count(counters: DrainCounters, receipt: ApplicationDeliveryReceipt): void {
+  switch (receipt.state) {
+    case 'acknowledged':
+      counters.acknowledged += 1;
+      break;
+    case 'rejected':
+      counters.rejected += 1;
+      break;
+    case 'retry-scheduled':
+      counters.retryScheduled += 1;
+      break;
+    case 'dead-lettered':
+      counters.deadLettered += 1;
+      break;
+    case 'cancelled':
+      counters.cancelled += 1;
+      break;
+    case 'unknown-outcome':
+      counters.unknown += 1;
+      break;
+    default:
+      break;
+  }
+}
+
+/**
+ * Deliver everything that is due, then everything that becomes due within the
+ * budget, running a maintenance pass between rounds so lapsed leases are
+ * recovered. Reports counts only, and `pending` from the durable header, so
+ * a forced stop never claims anything it did not commit.
+ */
+export async function drainOutbox(
+  runtime: OutboxRuntime,
+  options: {
+    readonly timeoutMs: number;
+    readonly signal?: AbortSignal | undefined;
+    readonly pollIntervalMs?: number | undefined;
+  },
+): Promise<ApplicationOutboxDrainReport> {
+  const { timeoutMs, pollIntervalMs } = requireWaitBudget(options);
+  const deadline = runtime.now() + timeoutMs;
+  const counters: DrainCounters = {
+    acknowledged: 0,
+    rejected: 0,
+    retryScheduled: 0,
+    deadLettered: 0,
+    cancelled: 0,
+    unknown: 0,
+  };
+  let drained = false;
+  while (!runtime.disposal.aborted && options.signal?.aborted !== true) {
+    await runOutboxMaintenance(runtime, runtime.now());
+    const result = await deliverNext(runtime, options);
+    if (result.status === 'settled') {
+      count(counters, result.receipt);
+      continue;
+    }
+    const header = await loadOutboxHeader(
+      runtime.storage,
+      runtime.keys,
+      runtime.policy.namespace,
+      runtime.policy.ownerId,
+    );
+    if (header.record.openCount === 0) {
+      drained = true;
+      break;
+    }
+    const remaining = deadline - runtime.now();
+    if (remaining <= 0) break;
+    const wait =
+      result.status === 'held'
+        ? Math.min(remaining, Math.max(1, result.availableAt - runtime.now()))
+        : Math.min(remaining, pollIntervalMs);
+    if (!(await delayUnlessAborted(wait, runtime.disposal, options.signal))) break;
+  }
+  const header = await loadOutboxHeader(
+    runtime.storage,
+    runtime.keys,
+    runtime.policy.namespace,
+    runtime.policy.ownerId,
+  );
+  return Object.freeze({ ...counters, pending: header.record.openCount, drained });
+}

@@ -69,6 +69,8 @@ export type WeftErrorCode =
   | 'OwnershipModeMismatchError'
   | 'ApplicationCommandValidationError'
   | 'ApplicationMailboxContentionError'
+  | 'ApplicationDeliveryValidationError'
+  | 'ApplicationOutboxContentionError'
   | 'WaitBudgetElapsedError';
 
 /**
@@ -148,6 +150,8 @@ const publicWeftErrorCodeMap = {
   OwnershipModeMismatchError: true,
   ApplicationCommandValidationError: true,
   ApplicationMailboxContentionError: true,
+  ApplicationDeliveryValidationError: true,
+  ApplicationOutboxContentionError: true,
   WaitBudgetElapsedError: true,
 } satisfies Record<WeftErrorCode, true>;
 
