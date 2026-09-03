@@ -361,9 +361,7 @@ export class PostgresKeyValueStorage implements Storage {
    */
   async #withTransaction<T>(
     beginStatement:
-      | typeof PG_BEGIN_SERIALIZABLE
-      | typeof PG_BEGIN_READ_COMMITTED
-      | typeof PG_BEGIN_READ_ONLY,
+      typeof PG_BEGIN_SERIALIZABLE | typeof PG_BEGIN_READ_COMMITTED | typeof PG_BEGIN_READ_ONLY,
     runner: (client: PostgresPoolClient) => Promise<T>,
     shouldCommit: (result: T) => boolean = () => true,
   ): Promise<T> {

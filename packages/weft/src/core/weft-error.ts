@@ -67,6 +67,9 @@ export type WeftErrorCode =
   | 'IdempotencyKeyPurgedError'
   | 'WorkerManifestBuildError'
   | 'OwnershipModeMismatchError'
+  | 'ApplicationCommandValidationError'
+  | 'ApplicationMailboxContentionError'
+  | 'WaitBudgetElapsedError'
   | 'WorkflowCatalogConflictError'
   | 'WorkflowRevisionNotInstalledError';
 
@@ -145,6 +148,9 @@ const publicWeftErrorCodeMap = {
   IdempotencyKeyPurgedError: true,
   WorkerManifestBuildError: true,
   OwnershipModeMismatchError: true,
+  ApplicationCommandValidationError: true,
+  ApplicationMailboxContentionError: true,
+  WaitBudgetElapsedError: true,
   WorkflowCatalogConflictError: true,
   WorkflowRevisionNotInstalledError: true,
 } satisfies Record<WeftErrorCode, true>;

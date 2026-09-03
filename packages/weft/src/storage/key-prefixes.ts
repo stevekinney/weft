@@ -18,6 +18,13 @@
  */
 export const WEFT_RESERVED_KEY_PREFIXES = [
   'actrec:',
+  'appcmd:',
+  'appidem:',
+  'appmbx:',
+  'appprobe:',
+  'appready:',
+  'appseq:',
+  'appterm:',
   'archive:',
   'async-act:',
   'attr:',

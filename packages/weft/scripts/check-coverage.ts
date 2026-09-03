@@ -864,7 +864,7 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
         reason:
           'Signal forwarding and descendant termination run in child processes outside parent LCOV; Windows and process-group fallbacks are platform-specific.',
         functions: 9,
-        lines: new Set([478, 483, 484, 485, 538, 539, 540, 542, 543, 547, 556, 585, 586, 587, 624]),
+        lines: new Set([478, 483, 484, 485, 544, 545, 546, 548, 549, 553, 562, 591, 592, 593, 630]),
         requireUncoveredLines: true,
       },
     ],

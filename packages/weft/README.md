@@ -253,6 +253,38 @@ For stable-id re-sync flows, `engine.startOrSignal()` can replace a terminal pri
 
 When a workflow drains signals with `ctx.race([ctx.waitForSignal(name), ctx.sleep(0)])` and then returns, use that stable `id`, a deterministic per-event `signalId`, and `onTerminalConflict: 'start-new'` for the corresponding `startOrSignal` calls. Delivery is serialized against terminal completion, so a signal arriving across the completion boundary is consumed by the current run or handed to its successor; a positive drain window is not needed for correctness.
 
+### Durable Application Command Mailbox
+
+Signals are workflow control. When the thing receiving a command is an application _resource_ rather than a workflow run — an agent taking steering input, a resource fielding requests from a peer service — `ApplicationMailbox` gives it a durable, strictly FIFO command queue with real receipts.
+
+```typescript
+import { ApplicationMailbox, MemoryStorage } from '@lostgradient/weft';
+
+await using storage = new MemoryStorage();
+using mailbox = new ApplicationMailbox({ storage, namespace: 'bureau', resourceId: 'agent-7' });
+
+const admission = await mailbox.admit({
+  caller: 'user:42',
+  target: 'agent:7',
+  kind: 'steer',
+  payload: { form: 'inline', value: { text: 'stop and summarize' } },
+  idempotencyKey: 'steer-1',
+});
+
+const claimed = await mailbox.claim();
+if (claimed.status === 'claimed' && admission.status === 'admitted') {
+  await mailbox.acknowledge({
+    commandId: claimed.claim.receipt.commandId,
+    attemptToken: claimed.claim.attemptToken,
+    outcome: { applied: true },
+  });
+}
+```
+
+Admission returns a receipt that, on a persistent backend such as `BunSQLiteStorage`, survives process restart; `MemoryStorage` above keeps the example self-contained and is gone with the process. Idempotency binds to `(caller, target, kind, payloadDigest)`, so an exact retry returns the original receipt and a conflicting reuse of the key returns a stable conflict without touching the original. Claims are attempt-fenced, so two consumers sharing one durable store can never both hold a valid claim _on the same command_ — delivery is strictly FIFO, but a later command may be claimed while an earlier one is still in flight, so completion order is up to the consumers. Cancellation is durable before it reaches anyone, and reports honestly whether cleanup is still outstanding rather than claiming an uncooperative handler stopped.
+
+Delivery intent, ordering, ownership, and disposition are durable; external side effects are not made exactly-once. See [Application Mailbox](documentation/guides/application-mailbox.md).
+
 ### Search Attributes
 
 Attach indexed metadata to a workflow at runtime, then list and filter on it.
@@ -565,7 +597,7 @@ Guides:
 - [Durable Timers](documentation/guides/durable-timers.md), [Timeouts](documentation/guides/timeouts.md), [Parallel Execution](documentation/guides/parallel-execution.md)
 - [Search Attributes](documentation/guides/search-attributes.md), [Workflow Visibility Backfill](documentation/guides/workflow-visibility-backfill.md), [State](documentation/guides/state.md), [Session State](documentation/guides/session-state.md), [Events](documentation/guides/events.md)
 - [Interceptors](documentation/guides/interceptors.md), [Observability](documentation/guides/observability.md), [Testing](documentation/guides/testing.md)
-- [Workflow Versioning](documentation/guides/workflow-versioning.md), [Remote Workers](documentation/guides/remote-workers.md), [Service Worker](documentation/guides/service-worker.md), [Resource Management](documentation/guides/resource-management.md), [Concurrency: Mutex and Semaphore](documentation/guides/concurrency.md)
+- [Workflow Versioning](documentation/guides/workflow-versioning.md), [Remote Workers](documentation/guides/remote-workers.md), [Service Worker](documentation/guides/service-worker.md), [Resource Management](documentation/guides/resource-management.md), [Concurrency: Mutex and Semaphore](documentation/guides/concurrency.md), [Application Mailbox](documentation/guides/application-mailbox.md)
 
 Architecture and reference:
 
