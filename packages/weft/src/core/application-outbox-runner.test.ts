@@ -614,6 +614,48 @@ describe('runner: third review round', () => {
   });
 });
 
+describe('runner: fourth review round', () => {
+  it('ends a drain disposed during its maintenance pass without claiming', async () => {
+    const gate = createDeferred();
+    let scans = 0;
+    class GatedStorage extends MemoryStorage {
+      override async *scan(
+        ...arguments_: Parameters<MemoryStorage['scan']>
+      ): ReturnType<MemoryStorage['scan']> {
+        scans += 1;
+        // The drain's first maintenance pass scans the delivery keyspace; hold
+        // it open until the test has disposed the outbox.
+        if (scans === 1) await gate.promise;
+        yield* super.scan(...arguments_);
+      }
+    }
+    const { outbox, adapter } = createOutboxFixture({ storage: new GatedStorage() });
+    await enqueueOne(outbox);
+    const draining = outbox.drain({ timeoutMs: 0 });
+    await flushMicrotasks(16);
+    outbox.dispose();
+    gate.resolve();
+    const report = await draining;
+    expect(report).toMatchObject({ pending: 1, drained: false, acknowledged: 0 });
+    expect(adapter.requests).toHaveLength(0);
+  });
+
+  it('turns an Error whose message getter throws into a bounded unknown outcome', async () => {
+    class HostileError extends Error {
+      override get message(): string {
+        throw new Error('no message for you');
+      }
+    }
+    const { outbox, adapter } = createOutboxFixture();
+    adapter.fail(new HostileError());
+    const deliveryId = await enqueueOne(outbox);
+    expect(await deliverOne(outbox)).toBe('unknown-outcome');
+    const failure = await fieldOf(outbox.receipt(deliveryId), 'failure');
+    expect(failure?.message).toContain('could not be converted to a string');
+    outbox.dispose();
+  });
+});
+
 describe('same-attempt refusals keep the lease', () => {
   it('treats a repeated begin as idempotent without aborting the live attempt', async () => {
     const { outbox } = createOutboxFixture();

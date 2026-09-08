@@ -84,12 +84,12 @@ export async function drainOutbox(
   // disposal reports this rather than touching storage the caller may already
   // have released with the handle.
   let lastKnownPending = await readOpenCount(runtime);
-  while (!runtime.disposal.aborted && options.signal?.aborted !== true) {
+  while (drainActive(runtime, options.signal)) {
     // Dispositions the maintenance pass commits are the drain's work too: a
     // lease that lapsed after its send began is parked or dead-lettered here,
     // and the report must say so rather than counting only what the adapter
     // settled.
-    absorbMaintenance(counters, await runOutboxMaintenance(runtime, runtime.now()));
+    if (!(await maintainBetweenRounds(runtime, counters))) break;
     const result = await deliverNext(runtime, options);
     if (result.status === 'settled') {
       // Only what this drain committed is this drain's to report; a disposition
@@ -104,15 +104,17 @@ export async function drainOutbox(
       pollIntervalMs,
       options.signal,
     );
-    if (round.pending !== null) lastKnownPending = round.pending;
-    if (round.status === 'drained') {
-      drained = true;
-      break;
-    }
-    if (round.status === 'stop') break;
+    lastKnownPending = round.pending ?? lastKnownPending;
+    drained = round.status === 'drained';
+    if (round.status !== 'again') break;
   }
   const pending = runtime.disposal.aborted ? lastKnownPending : await readOpenCount(runtime);
   return Object.freeze({ ...counters, pending, drained });
+}
+
+/** Whether the drain may start another round: neither disposed nor aborted by the caller. */
+function drainActive(runtime: OutboxRuntime, signal: AbortSignal | undefined): boolean {
+  return !runtime.disposal.aborted && signal?.aborted !== true;
 }
 
 async function readOpenCount(runtime: OutboxRuntime): Promise<number> {
@@ -123,6 +125,20 @@ async function readOpenCount(runtime: OutboxRuntime): Promise<number> {
     runtime.policy.ownerId,
   );
   return header.record.openCount;
+}
+
+/**
+ * Run one maintenance pass and fold its dispositions into the counters.
+ * Returns `false` when the outbox was disposed during the pass: the claim path
+ * does not watch the disposal signal, and must not start against a backend
+ * the caller may already have released.
+ */
+async function maintainBetweenRounds(
+  runtime: OutboxRuntime,
+  counters: DrainCounters,
+): Promise<boolean> {
+  absorbMaintenance(counters, await runOutboxMaintenance(runtime, runtime.now()));
+  return !runtime.disposal.aborted;
 }
 
 /** Fold a maintenance pass's dispositions into the drain's counters. */

@@ -109,9 +109,8 @@ async function sendOnce(
 }
 
 function describeError(error: unknown): string {
-  if (error instanceof Error) return error.message;
   try {
-    return String(error);
+    return error instanceof Error ? error.message : String(error);
   } catch {
     // A thrown value whose own stringification throws still has to become a
     // bounded diagnostic rather than a second exception out of the runner.
