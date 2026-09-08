@@ -62,7 +62,10 @@ const maximumUnpackedBytes = 12 * 1024 * 1024;
 // measured 1551 by `npm pack --dry-run`, and 1567 after merging WFT-9/WFT-10
 // (#947, the durable workflow catalog). WFT-85's extraction of the shared
 // application primitives (three new modules, one retired) reports 1571.
-const maximumEntryCount = 1571;
+// WFT-85's outbox adds its modules, the shared payload validators, and the
+// shared timing helpers, plus WFT-12 (#948) merged in between; `prepack`
+// reports 1633.
+const maximumEntryCount = 1633;
 
 type PackFile = {
   path: string;
