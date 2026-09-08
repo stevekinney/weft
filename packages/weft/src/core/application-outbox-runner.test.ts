@@ -29,6 +29,34 @@ import {
   statusOf,
 } from './application-outbox.test-support.ts';
 
+/**
+ * A second storage identity over the same instance: the durable state is
+ * shared, the process-local attempt registry (keyed by storage identity) is
+ * not, which is how a separate process looks from inside one test.
+ */
+function remoteView(storage: MemoryStorage): MemoryStorage {
+  return new Proxy(storage, {
+    get(target, property, receiver) {
+      const value: unknown = Reflect.get(target, property, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
+/** A storage whose conditional batches can be observed per call. */
+class HookedStorage extends MemoryStorage {
+  beforeBatch: ((ordinal: number) => void) | null = null;
+  #ordinal = 0;
+
+  override async conditionalBatch(
+    ...arguments_: Parameters<MemoryStorage['conditionalBatch']>
+  ): Promise<boolean> {
+    this.#ordinal += 1;
+    this.beforeBatch?.(this.#ordinal);
+    return super.conditionalBatch(...arguments_);
+  }
+}
+
 /** Await the adapter's first call; a genuine await, so it works under fake timers too. */
 async function untilRequested(adapter: ScriptedAdapter): Promise<void> {
   await adapter.nextRequest();
@@ -62,6 +90,41 @@ describe('runner: caller abort during a send', () => {
     controller.abort();
     const report = await draining;
     expect(report).toMatchObject({ unknown: 1, pending: 0, drained: false });
+    outbox.dispose();
+  });
+});
+
+describe('runner: abort before the send', () => {
+  it('leaves a claim to lapse when the caller aborted while it was committing', async () => {
+    const storage = new HookedStorage();
+    const { outbox, adapter, clock } = createOutboxFixture({ storage, attemptTimeoutMs: 100 });
+    const deliveryId = await enqueueOne(outbox);
+    const controller = new AbortController();
+    storage.beforeBatch = (ordinal) => {
+      if (ordinal === 2) controller.abort(new Error('gone'));
+    };
+    const result = await outbox.deliverNext({ signal: controller.signal });
+    expect(result.status === 'settled' && result.receipt.state).toBe('claimed');
+    expect(adapter.requests).toHaveLength(0);
+    clock.advance(100);
+    expect(await outbox.runMaintenance()).toMatchObject({ rescheduled: 1 });
+    expect(await fieldOf(outbox.receipt(deliveryId), 'state')).toBe('retry-scheduled');
+    outbox.dispose();
+  });
+
+  it('reschedules an attempt whose caller aborted while the begin was committing', async () => {
+    const storage = new HookedStorage();
+    const { outbox, adapter } = createOutboxFixture({ storage });
+    const deliveryId = await enqueueOne(outbox);
+    const controller = new AbortController();
+    storage.beforeBatch = (ordinal) => {
+      if (ordinal === 3) controller.abort(new Error('gone'));
+    };
+    const result = await outbox.deliverNext({ signal: controller.signal });
+    expect(result.status === 'settled' && result.receipt.state).toBe('retry-scheduled');
+    expect(adapter.requests).toHaveLength(0);
+    const failure = await fieldOf(outbox.receipt(deliveryId), 'lastFailure');
+    expect(failure?.message).toContain('before the transport was called');
     outbox.dispose();
   });
 });
@@ -127,6 +190,40 @@ describe('runner: lease renewal while the adapter runs', () => {
     expect(result.status === 'settled' && result.receipt.state).toBe('unknown-outcome');
     expect(await fieldOf(outbox.receipt(deliveryId), 'cleanupPending')).toBe(true);
     sibling.dispose();
+    outbox.dispose();
+  });
+
+  it('aborts the adapter when a process that shares no registry recovers the lease', async () => {
+    useFakeTimers();
+    const storage = new MemoryStorage();
+    const clock = createOutboxClock();
+    const { outbox, adapter } = createOutboxFixture({
+      storage,
+      clock,
+      visibilityTimeoutMs: 100,
+      attemptTimeoutMs: 10_000,
+    });
+    await enqueueOne(outbox);
+    const release = adapter.block();
+    const pending = outbox.deliverNext();
+    await untilRequested(adapter);
+    clock.advance(100);
+    // A distinct storage identity stands in for another process: it shares the
+    // durable state but not the process-local attempt registry, so only the
+    // refused renewal can tell this runner that its lease is gone.
+    const remote = createOutboxFixture({ storage: remoteView(storage), clock }).outbox;
+    expect(await remote.runMaintenance()).toMatchObject({ parked: 1 });
+    expect(adapter.requests[0]!.signal.aborted).toBe(false);
+    await advanceTimersByTime(50);
+    await flushMicrotasks(32);
+    expect(adapter.requests[0]!.signal.aborted).toBe(true);
+    expect(adapter.requests[0]!.signal.reason).toMatchObject({
+      message: 'This attempt is no longer current: its request was refused.',
+    });
+    release({ status: 'acknowledged' });
+    const result = await pending;
+    expect(result.status === 'settled' && result.receipt.state).toBe('unknown-outcome');
+    remote.dispose();
     outbox.dispose();
   });
 

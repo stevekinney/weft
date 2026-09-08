@@ -51,6 +51,18 @@ async function sendOnce(
   claim: ApplicationDeliveryClaim,
   requestSignal: AbortSignal | undefined,
 ): Promise<ValidatedOutcome> {
+  // An abort that landed while the begin was committing means nothing was
+  // sent: the attempt is over, but the delivery is safe to try again.
+  if (claim.signal.aborted || requestSignal?.aborted === true) {
+    return {
+      status: 'retryable',
+      failure: {
+        reason: 'retryable',
+        message: 'The attempt was aborted before the transport was called.',
+      },
+      retryAfterMs: undefined,
+    };
+  }
   const budget = claim.attemptDeadlineAt - runtime.now();
   if (budget <= 0) {
     return {
@@ -133,6 +145,18 @@ export async function deliverNext(
   if (claimed.status !== 'claimed') return claimed;
   const { claim } = claimed;
   const deliveryId = claim.receipt.deliveryId;
+  // A caller that aborted while the claim was committing gets no send at all:
+  // the lease is left to lapse in `claimed`, which maintenance reschedules as
+  // a provably unsent attempt.
+  if (options?.signal?.aborted === true) {
+    releaseAttemptController(
+      runtime,
+      claim.attemptToken,
+      'The delivery request was aborted before the send began.',
+      deliveryId,
+    );
+    return { status: 'settled', receipt: claim.receipt };
+  }
   const begun = await beginAttempt(runtime, { deliveryId, attemptToken: claim.attemptToken });
   if (begun.status !== 'settled') {
     return { status: 'settled', receipt: await currentReceipt(runtime, deliveryId, begun) };
@@ -198,8 +222,9 @@ function forwardAbort(
  * inside the attempt deadline is not reclaimed underneath the transport.
  *
  * A refused renewal — the lease was recovered elsewhere, the deadline passed,
- * or the record is gone — aborts the attempt's signal: the transport is told
- * to stop, and whatever it returns afterwards settles as `stale`.
+ * or the record is gone — releases the attempt's controller, so the transport
+ * is told to stop through its signal and whatever it returns afterwards
+ * settles as `stale`.
  */
 function keepLeaseAlive(runtime: OutboxRuntime, claim: ApplicationDeliveryClaim): () => void {
   const deliveryId = claim.receipt.deliveryId;
@@ -226,17 +251,10 @@ function keepLeaseAlive(runtime: OutboxRuntime, claim: ApplicationDeliveryClaim)
       void error;
       return;
     }
-    if (stopped) return;
-    if (result.status === 'renewed') {
-      arm(result.visibilityExpiresAt);
-      return;
-    }
-    const registration = runtime.attemptControllers.get(claim.attemptToken);
-    if (registration !== undefined && !registration.controller.signal.aborted) {
-      registration.controller.abort(
-        new Error(`The attempt lease could not be renewed (${result.status}).`),
-      );
-    }
+    // A refused renewal has already released the attempt's controller — the
+    // settlement path aborts the signal as it refuses — so there is nothing
+    // left to do here but stop renewing.
+    if (!stopped && result.status === 'renewed') arm(result.visibilityExpiresAt);
   };
   arm(claim.visibilityExpiresAt);
   return () => {
