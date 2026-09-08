@@ -99,6 +99,24 @@ describe('claim commit failures', () => {
 });
 
 describe('enqueue edge cases', () => {
+  it('admits idempotency keys only up to the ceiling the record decoder accepts', async () => {
+    const { outbox } = createOutboxFixture();
+    for (const field of ['idempotencyKey', 'externalIdempotencyKey'] as const) {
+      await expect(outbox.enqueue(deliveryInput({ [field]: 'k'.repeat(257) }))).rejects.toThrow(
+        ApplicationDeliveryValidationError,
+      );
+      const admitted = await outbox.enqueue(
+        deliveryInput({ [field]: `${field}-`.padEnd(256, 'k'), kind: field }),
+      );
+      expect(admitted.status).toBe('enqueued');
+      if (admitted.status !== 'enqueued') return;
+      // Every later read decodes what admission accepted.
+      expect(await fieldOf(outbox.receipt(admitted.receipt.deliveryId), 'state')).toBe('queued');
+    }
+    expect(await outbox.list()).toHaveLength(2);
+    outbox.dispose();
+  });
+
   it('refuses to enqueue once the sequence allocator is exhausted', async () => {
     const { outbox, storage } = createOutboxFixture();
     await storage.put(

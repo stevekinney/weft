@@ -9,7 +9,11 @@
  */
 
 import type { ApplicationDeliveryFailure } from './application-outbox-types.ts';
-import { byteLengthOf, createApplicationGuards } from './application-primitive-guards.ts';
+import {
+  byteLengthOf,
+  createApplicationGuards,
+  MAX_APPLICATION_IDENTITY_BYTES,
+} from './application-primitive-guards.ts';
 import { WeftError } from './weft-error.ts';
 
 export {
@@ -20,8 +24,12 @@ export {
 } from './application-primitive-guards.ts';
 export { MAX_APPLICATION_PAYLOAD_REFERENCE_BYTES } from './application-primitive-payload.ts';
 
-/** Maximum bytes in an idempotency key or an external idempotency key. */
-export const MAX_APPLICATION_DELIVERY_IDEMPOTENCY_KEY_BYTES = 512;
+/**
+ * Maximum bytes in an idempotency key or an external idempotency key. Matches
+ * the persisted-identifier ceiling the record decoder enforces, so a key
+ * admission accepts can never be one every later read rejects as corrupt.
+ */
+export const MAX_APPLICATION_DELIVERY_IDEMPOTENCY_KEY_BYTES = MAX_APPLICATION_IDENTITY_BYTES;
 
 /** Maximum attempts any one delivery may be configured for. */
 export const MAX_APPLICATION_DELIVERY_ATTEMPTS = 100;

@@ -46,7 +46,13 @@ function remoteView(storage: MemoryStorage): MemoryStorage {
 /** A storage whose conditional batches can be observed per call. */
 class HookedStorage extends MemoryStorage {
   beforeBatch: ((ordinal: number) => void) | null = null;
+  beforeGet: ((key: string) => void) | null = null;
   #ordinal = 0;
+
+  override async get(key: string): Promise<Uint8Array | null> {
+    this.beforeGet?.(key);
+    return super.get(key);
+  }
 
   override async conditionalBatch(
     ...arguments_: Parameters<MemoryStorage['conditionalBatch']>
@@ -217,8 +223,9 @@ describe('runner: lease renewal while the adapter runs', () => {
     await advanceTimersByTime(50);
     await flushMicrotasks(32);
     expect(adapter.requests[0]!.signal.aborted).toBe(true);
+    // The confirmed window was already gone when the renewal timer fired.
     expect(adapter.requests[0]!.signal.reason).toMatchObject({
-      message: 'This attempt is no longer current: its request was refused.',
+      message: 'The attempt lease expired before its renewal could be confirmed.',
     });
     release({ status: 'acknowledged' });
     const result = await pending;
@@ -501,6 +508,109 @@ describe('runner: second review round', () => {
     const result = await outbox.deliverNext();
     expect(result).toMatchObject({ status: 'settled', committed: true });
     outbox.dispose();
+  });
+});
+
+describe('runner: third review round', () => {
+  afterEach(() => {
+    restoreRealTimers();
+  });
+
+  it('aborts the adapter when a renewal hangs past the confirmed lease window', async () => {
+    useFakeTimers();
+    let hanging = false;
+    class HangingStorage extends MemoryStorage {
+      override async get(key: string): Promise<Uint8Array | null> {
+        if (hanging) return new Promise(() => undefined);
+        return super.get(key);
+      }
+    }
+    const { outbox, adapter, clock } = createOutboxFixture({
+      storage: new HangingStorage(),
+      visibilityTimeoutMs: 100,
+      attemptTimeoutMs: 10_000,
+    });
+    await enqueueOne(outbox);
+    adapter.block();
+    const pending = outbox.deliverNext();
+    await untilRequested(adapter);
+    hanging = true;
+    // The first renewal fires at half the window and never returns; the race
+    // that bounds it ends at the confirmed expiry.
+    clock.advance(50);
+    await advanceTimersByTime(50);
+    await flushMicrotasks(16);
+    expect(adapter.requests[0]!.signal.aborted).toBe(false);
+    clock.advance(50);
+    await advanceTimersByTime(50);
+    await flushMicrotasks(16);
+    expect(adapter.requests[0]!.signal.aborted).toBe(true);
+    expect(adapter.requests[0]!.signal.reason).toMatchObject({
+      message: 'The attempt lease expired before its renewal could be confirmed.',
+    });
+    hanging = false;
+    void pending;
+    outbox.dispose();
+  });
+
+  it('starts renewal from the visibility the begin commit granted', async () => {
+    const storage = new HookedStorage();
+    const { outbox, adapter, clock } = createOutboxFixture({
+      storage,
+      visibilityTimeoutMs: 100,
+      attemptTimeoutMs: 10_000,
+    });
+    await enqueueOne(outbox);
+    let recordReads = 0;
+    storage.beforeGet = (key) => {
+      // The claim reads the record once; the begin's own read is the second,
+      // and it lands after the claim's original visibility window.
+      if (key.startsWith('appdlv:') && (recordReads += 1) === 2) clock.advance(150);
+    };
+    expect(await deliverOne(outbox)).toBe('acknowledged');
+    expect(adapter.requests).toHaveLength(1);
+    outbox.dispose();
+  });
+
+  it('polls at the poll interval while every open delivery is leased elsewhere', async () => {
+    useFakeTimers();
+    const storage = new MemoryStorage();
+    const clock = createOutboxClock();
+    const holder = createOutboxFixture({ storage, clock }).outbox;
+    await enqueueOne(holder);
+    await claimOne(holder);
+    const { outbox, adapter } = createOutboxFixture({ storage, clock });
+    const draining = outbox.drain({ timeoutMs: 100, pollIntervalMs: 40 });
+    await flushMicrotasks(32);
+    for (let step = 0; step < 3; step += 1) {
+      clock.advance(40);
+      await advanceTimersByTime(40);
+      await flushMicrotasks(32);
+    }
+    const report = await draining;
+    expect(report).toMatchObject({ pending: 1, drained: false });
+    expect(adapter.requests).toHaveLength(0);
+    holder.dispose();
+    outbox.dispose();
+  });
+
+  it('finishes a drain cut short by disposal without reading storage again', async () => {
+    let released = false;
+    class ReleasedStorage extends MemoryStorage {
+      override async get(key: string): Promise<Uint8Array | null> {
+        if (released) throw new Error('storage released');
+        return super.get(key);
+      }
+    }
+    const { outbox, adapter } = createOutboxFixture({ storage: new ReleasedStorage() });
+    await enqueueOne(outbox);
+    adapter.block();
+    const draining = outbox.drain({ timeoutMs: 100_000 });
+    await untilRequested(adapter);
+    outbox.dispose();
+    released = true;
+    const report = await draining;
+    expect(report).toMatchObject({ pending: 1, drained: false, acknowledged: 0 });
   });
 });
 

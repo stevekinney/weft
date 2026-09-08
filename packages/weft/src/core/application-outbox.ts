@@ -39,6 +39,7 @@ import type {
   ApplicationOutboxWaitOptions,
 } from './application-outbox-contract.ts';
 import { claimNextDelivery } from './application-outbox-delivery.ts';
+import { drainOutbox } from './application-outbox-drain.ts';
 import { capacityOf, enqueueDelivery } from './application-outbox-enqueue.ts';
 import {
   ApplicationDeliveryValidationError,
@@ -56,7 +57,7 @@ import {
 import { listDeliveries } from './application-outbox-listing.ts';
 import { runOutboxMaintenance } from './application-outbox-maintenance.ts';
 import { deadLetterDelivery, retryDelivery } from './application-outbox-operations.ts';
-import { deliverNext, drainOutbox } from './application-outbox-runner.ts';
+import { deliverNext } from './application-outbox-runner.ts';
 import {
   beginAttempt,
   heartbeatAttempt,

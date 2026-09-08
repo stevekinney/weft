@@ -1,8 +1,8 @@
 /**
  * The adapter runner for the application delivery outbox (WFT-85): one due
  * delivery claimed, durably marked `attempting`, handed to the configured
- * transport, and settled on what the transport reported — and the bounded
- * drain that repeats it.
+ * transport, and settled on what the transport reported. The bounded drain
+ * that repeats it lives in `application-outbox-drain.ts`.
  *
  * The runner never trusts the adapter's completion as a disposition. It
  * validates the outcome, then commits the matching transition fenced on the
@@ -20,25 +20,21 @@ import type {
   ApplicationDeliveryClaim,
   ApplicationDeliveryReceipt,
   ApplicationOutboxDeliverResult,
-  ApplicationOutboxDrainReport,
 } from './application-outbox-contract.ts';
 import { claimNextDelivery } from './application-outbox-delivery.ts';
 import {
   ApplicationDeliveryValidationError,
   boundFailureMessage,
-  requireWaitBudget,
 } from './application-outbox-guards.ts';
 import {
   releaseAttemptController,
   toApplicationDeliveryReceipt,
   type OutboxRuntime,
 } from './application-outbox-internals.ts';
-import { runOutboxMaintenance } from './application-outbox-maintenance.ts';
 import { beginAttempt, heartbeatAttempt, settleAttempt } from './application-outbox-settlement.ts';
-import { loadDelivery, loadOutboxHeader } from './application-outbox-storage.ts';
+import { loadDelivery } from './application-outbox-storage.ts';
 import { validateOutcome, type ValidatedOutcome } from './application-outbox-validation.ts';
 import { raceAbortWithin, WaitBudgetElapsedError } from './application-primitive-abort.ts';
-import { delayUnlessAborted } from './application-primitive-timing.ts';
 
 /**
  * Call the adapter once, bounded by the attempt deadline and the attempt's
@@ -159,16 +155,34 @@ export async function deliverNext(
       committed: false,
     };
   }
-  const stopRenewing = keepLeaseAlive(runtime, claim);
-  const stopForwarding = forwardAbort(runtime, claim.attemptToken, options?.signal);
+  // The begin commit granted a fresh visibility window; renewal and the send
+  // start from that, not from the claim's original expiry, which a slow begin
+  // may already have outrun.
+  const attempting: ApplicationDeliveryClaim = {
+    ...claim,
+    receipt: begun.receipt,
+    visibilityExpiresAt: begun.receipt.visibilityExpiresAt ?? claim.visibilityExpiresAt,
+  };
+  return sendAndSettle(runtime, adapter, attempting, options?.signal);
+}
+
+/**
+ * Run the adapter for a begun attempt — renewing the lease and forwarding
+ * the caller's abort while it runs — then settle on what it reported, unless
+ * the outbox was disposed mid-send.
+ */
+async function sendAndSettle(
+  runtime: OutboxRuntime,
+  adapter: ApplicationDeliveryAdapter,
+  attempting: ApplicationDeliveryClaim,
+  requestSignal: AbortSignal | undefined,
+): Promise<ApplicationOutboxDeliverResult> {
+  const deliveryId = attempting.receipt.deliveryId;
+  const stopRenewing = keepLeaseAlive(runtime, attempting);
+  const stopForwarding = forwardAbort(runtime, attempting.attemptToken, requestSignal);
   let outcome: ValidatedOutcome;
   try {
-    outcome = await sendOnce(
-      runtime,
-      adapter,
-      { ...claim, receipt: begun.receipt },
-      options?.signal,
-    );
+    outcome = await sendOnce(runtime, adapter, attempting, requestSignal);
   } finally {
     stopRenewing();
     stopForwarding();
@@ -178,16 +192,16 @@ export async function deliverNext(
   // written. The lease stays `attempting` for a maintenance pass to recover
   // as an unknown outcome, which is exactly what it is.
   if (runtime.disposal.aborted) {
-    return { status: 'settled', receipt: begun.receipt, committed: false };
+    return { status: 'settled', receipt: attempting.receipt, committed: false };
   }
   const settled = await settleAttempt(runtime, {
     deliveryId,
-    attemptToken: claim.attemptToken,
+    attemptToken: attempting.attemptToken,
     outcome,
   });
   releaseAttemptController(
     runtime,
-    claim.attemptToken,
+    attempting.attemptToken,
     'The application outbox finished this attempt.',
     deliveryId,
   );
@@ -275,17 +289,31 @@ function keepLeaseAlive(runtime: OutboxRuntime, claim: ApplicationDeliveryClaim)
   };
   const renew = async (): Promise<void> => {
     if (stopped) return;
-    let result: Awaited<ReturnType<typeof heartbeatAttempt>>;
-    try {
-      result = await heartbeatAttempt(runtime, { deliveryId, attemptToken: claim.attemptToken });
-    } catch {
+    // The renewal itself is bounded by the confirmed window: a storage call
+    // that hangs rather than rejects must not leave the adapter's signal live
+    // past the expiry another process may already have recovered.
+    const remaining = confirmedExpiresAt - runtime.now();
+    if (remaining <= 0) {
+      abort('The attempt lease expired before its renewal could be confirmed.');
+      return;
+    }
+    const raced = await raceAbortWithin(
+      () => heartbeatAttempt(runtime, { deliveryId, attemptToken: claim.attemptToken }),
+      remaining,
+    ).catch(() => null);
+    if (stopped) return;
+    if (raced === null) {
       // A storage failure during renewal is not a verdict on the lease; try
       // again while the last confirmed window still holds, and abort once it
       // cannot be confirmed before expiry.
       arm();
       return;
     }
-    if (stopped) return;
+    if (raced.aborted) {
+      abort('The attempt lease expired before its renewal could be confirmed.');
+      return;
+    }
+    const result = raced.value;
     // A refused renewal has already released the attempt's controller — the
     // settlement path aborts the signal as it refuses — so there is nothing
     // left to do here but stop renewing.
@@ -319,106 +347,4 @@ async function currentReceipt(
   throw new ApplicationDeliveryValidationError(
     `Delivery "${deliveryId}" was retired while its attempt was in flight.`,
   );
-}
-
-type DrainCounters = {
-  acknowledged: number;
-  rejected: number;
-  retryScheduled: number;
-  deadLettered: number;
-  cancelled: number;
-  unknown: number;
-};
-
-function count(counters: DrainCounters, receipt: ApplicationDeliveryReceipt): void {
-  switch (receipt.state) {
-    case 'acknowledged':
-      counters.acknowledged += 1;
-      break;
-    case 'rejected':
-      counters.rejected += 1;
-      break;
-    case 'retry-scheduled':
-      counters.retryScheduled += 1;
-      break;
-    case 'dead-lettered':
-      counters.deadLettered += 1;
-      break;
-    case 'cancelled':
-      counters.cancelled += 1;
-      break;
-    case 'unknown-outcome':
-      counters.unknown += 1;
-      break;
-    default:
-      break;
-  }
-}
-
-/**
- * Deliver everything that is due, then everything that becomes due within the
- * budget, running a maintenance pass between rounds so lapsed leases are
- * recovered. Reports counts only, and `pending` from the durable header, so
- * a forced stop never claims anything it did not commit.
- */
-export async function drainOutbox(
-  runtime: OutboxRuntime,
-  options: {
-    readonly timeoutMs: number;
-    readonly signal?: AbortSignal | undefined;
-    readonly pollIntervalMs?: number | undefined;
-  },
-): Promise<ApplicationOutboxDrainReport> {
-  const { timeoutMs, pollIntervalMs } = requireWaitBudget(options);
-  const deadline = runtime.now() + timeoutMs;
-  const counters: DrainCounters = {
-    acknowledged: 0,
-    rejected: 0,
-    retryScheduled: 0,
-    deadLettered: 0,
-    cancelled: 0,
-    unknown: 0,
-  };
-  let drained = false;
-  while (!runtime.disposal.aborted && options.signal?.aborted !== true) {
-    // Dispositions the maintenance pass commits are the drain's work too: a
-    // lease that lapsed after its send began is parked or dead-lettered here,
-    // and the report must say so rather than counting only what the adapter
-    // settled.
-    const maintained = await runOutboxMaintenance(runtime, runtime.now());
-    counters.unknown += maintained.parked;
-    counters.deadLettered += maintained.deadLettered;
-    counters.retryScheduled += maintained.rescheduled;
-    const result = await deliverNext(runtime, options);
-    if (result.status === 'settled') {
-      // Only what this drain committed is this drain's to report; a disposition
-      // another worker won belongs to that worker's accounting.
-      if (result.committed) count(counters, result.receipt);
-      continue;
-    }
-    const header = await loadOutboxHeader(
-      runtime.storage,
-      runtime.keys,
-      runtime.policy.namespace,
-      runtime.policy.ownerId,
-    );
-    if (header.record.openCount === 0) {
-      drained = true;
-      break;
-    }
-    const remaining = deadline - runtime.now();
-    if (remaining <= 0) break;
-    const wait =
-      result.status === 'held'
-        ? Math.min(remaining, Math.max(1, result.availableAt - runtime.now()))
-        : Math.min(remaining, pollIntervalMs);
-    if (!(await delayUnlessAborted(wait, runtime.disposal, options.signal))) break;
-  }
-  const header = await loadOutboxHeader(
-    runtime.storage,
-    runtime.keys,
-    runtime.policy.namespace,
-    runtime.policy.ownerId,
-  );
-  return Object.freeze({ ...counters, pending: header.record.openCount, drained });
 }
