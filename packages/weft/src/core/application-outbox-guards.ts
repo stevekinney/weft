@@ -9,7 +9,7 @@
  */
 
 import type { ApplicationDeliveryFailure } from './application-outbox-types.ts';
-import { createApplicationGuards } from './application-primitive-guards.ts';
+import { byteLengthOf, createApplicationGuards } from './application-primitive-guards.ts';
 import { WeftError } from './weft-error.ts';
 
 export {
@@ -87,6 +87,21 @@ export function validateFailureEvidence(
     message: optionalIdentityOf(message, 'message', MAX_DELIVERY_FAILURE_MESSAGE_BYTES),
     details: validateDurableJSONValue(details, 'details'),
   };
+}
+
+/**
+ * Bound a diagnostic string the outbox composes itself (an adapter's thrown
+ * error, say) to the failure-message ceiling, cutting on a character boundary
+ * and keeping the result well-formed, so a misbehaving transport cannot grow
+ * a delivery record without limit.
+ */
+export function boundFailureMessage(text: string): string {
+  let bounded = text.toWellFormed();
+  while (byteLengthOf(bounded) > MAX_DELIVERY_FAILURE_MESSAGE_BYTES) {
+    const excess = byteLengthOf(bounded) - MAX_DELIVERY_FAILURE_MESSAGE_BYTES;
+    bounded = bounded.slice(0, -Math.max(1, Math.ceil(excess / 4))).toWellFormed();
+  }
+  return bounded;
 }
 
 /** Validate a caller-supplied cancellation reason before it becomes durable. */

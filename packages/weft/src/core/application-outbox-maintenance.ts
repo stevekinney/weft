@@ -242,8 +242,12 @@ async function retireTerminalReceipts(
     if (terminalAt >= horizon) break;
     expired.push([key, value]);
   }
-  for (const [indexKey, bytes] of malformed) await discardTerminalEntry(runtime, indexKey, bytes);
+  for (const [indexKey, bytes] of malformed) {
+    if (runtime.disposal.aborted) return;
+    await discardTerminalEntry(runtime, indexKey, bytes);
+  }
   for (const [indexKey, bytes] of expired) {
+    if (runtime.disposal.aborted) return;
     if (await retireOneReceipt(runtime, indexKey, bytes)) counters.retired += 1;
   }
 }
@@ -285,6 +289,7 @@ async function collectLapsedDeliveries(
     let seen = 0;
     const options = cursor === undefined ? { limit: batchSize } : { limit: batchSize, gt: cursor };
     const observedAt = leaseCommitSerial();
+    if (runtime.disposal.aborted) return { lapsed: [], nextCursor: startAfter };
     for await (const [key, value] of runtime.storage.scan(runtime.keys.deliveryPrefix, options)) {
       seen += 1;
       cursor = key;
@@ -314,6 +319,10 @@ export async function runOutboxMaintenance(
   const scan = await collectLapsedDeliveries(runtime, now, previousCursor);
   try {
     for (const deliveryId of scan.lapsed) {
+      // A pass already in flight when the outbox is disposed stops at its next
+      // step rather than continuing to write against resources the caller
+      // may have released with the handle.
+      if (runtime.disposal.aborted) return Object.freeze({ ...counters });
       await recoverDelivery(runtime, deliveryId, now, counters);
     }
   } catch (error) {
@@ -321,6 +330,6 @@ export async function runOutboxMaintenance(
     throw error;
   }
   runtime.writeMaintenanceCursor(scan.nextCursor);
-  await retireTerminalReceipts(runtime, now, counters);
+  if (!runtime.disposal.aborted) await retireTerminalReceipts(runtime, now, counters);
   return Object.freeze({ ...counters });
 }

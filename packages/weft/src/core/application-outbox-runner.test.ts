@@ -1,0 +1,295 @@
+/**
+ * The adapter runner under pressure (WFT-85): a caller abort reaching the
+ * adapter mid-send, lease renewal while a send outlasts its visibility
+ * window, a renewal refused because another process recovered the lease,
+ * bounded adapter error diagnostics, maintenance dispositions counted by the
+ * drain, backlog enforced on operator retry, a maintenance pass cut short by
+ * disposal, and same-attempt refusals that leave the live lease alone.
+ */
+
+import { afterEach, describe, expect, it } from 'bun:test';
+
+import { MemoryStorage } from '../storage/memory.ts';
+import {
+  advanceTimersByTime,
+  createDeferred,
+  flushMicrotasks,
+  restoreRealTimers,
+  useFakeTimers,
+} from '../testing/fake-timers.test-support.ts';
+import {
+  beginOne,
+  claimOne,
+  createOutboxClock,
+  createOutboxFixture,
+  deliverOne,
+  enqueueOne,
+  fieldOf,
+  ScriptedAdapter,
+  statusOf,
+} from './application-outbox.test-support.ts';
+
+/** Await the adapter's first call; a genuine await, so it works under fake timers too. */
+async function untilRequested(adapter: ScriptedAdapter): Promise<void> {
+  await adapter.nextRequest();
+}
+
+describe('runner: caller abort during a send', () => {
+  it('forwards a caller abort to the adapter signal and settles the attempt as unknown', async () => {
+    const { outbox, adapter } = createOutboxFixture();
+    const deliveryId = await enqueueOne(outbox);
+    adapter.block();
+    const controller = new AbortController();
+    const pending = outbox.deliverNext({ signal: controller.signal });
+    await untilRequested(adapter);
+    controller.abort(new Error('shutting down'));
+    const result = await pending;
+    expect(adapter.requests[0]!.signal.aborted).toBe(true);
+    expect(adapter.requests[0]!.signal.reason).toMatchObject({ message: 'shutting down' });
+    expect(result.status === 'settled' && result.receipt.state).toBe('unknown-outcome');
+    const failure = await fieldOf(outbox.receipt(deliveryId), 'failure');
+    expect(failure?.message).toContain('aborted while the transport call was in flight');
+    outbox.dispose();
+  });
+
+  it('stops a drain whose caller aborts mid-send without hanging on the adapter', async () => {
+    const { outbox, adapter } = createOutboxFixture();
+    await enqueueOne(outbox);
+    adapter.block();
+    const controller = new AbortController();
+    const draining = outbox.drain({ timeoutMs: 100_000, signal: controller.signal });
+    await untilRequested(adapter);
+    controller.abort();
+    const report = await draining;
+    expect(report).toMatchObject({ unknown: 1, pending: 0, drained: false });
+    outbox.dispose();
+  });
+});
+
+describe('runner: lease renewal while the adapter runs', () => {
+  afterEach(() => {
+    restoreRealTimers();
+  });
+
+  it('renews visibility at half the window so a long send is not reclaimed', async () => {
+    useFakeTimers();
+    const { outbox, adapter, clock } = createOutboxFixture({
+      visibilityTimeoutMs: 100,
+      attemptTimeoutMs: 10_000,
+    });
+    const deliveryId = await enqueueOne(outbox);
+    const release = adapter.block();
+    const pending = outbox.deliverNext();
+    await untilRequested(adapter);
+    // Three half-windows pass; each renewal moves the expiry forward.
+    for (let step = 0; step < 3; step += 1) {
+      clock.advance(50);
+      await advanceTimersByTime(50);
+      await flushMicrotasks(32);
+    }
+    const midway = await outbox.receipt(deliveryId);
+    expect(midway?.state).toBe('attempting');
+    expect(midway?.visibilityExpiresAt).toBe(clock.now() + 100);
+    expect(await outbox.runMaintenance()).toMatchObject({ parked: 0, rescheduled: 0 });
+    release({ status: 'acknowledged' });
+    await flushMicrotasks(32);
+    const result = await pending;
+    expect(result.status === 'settled' && result.receipt.state).toBe('acknowledged');
+    outbox.dispose();
+  });
+
+  it('aborts the adapter once a renewal is refused because the lease was recovered elsewhere', async () => {
+    useFakeTimers();
+    const storage = new MemoryStorage();
+    const clock = createOutboxClock();
+    const { outbox, adapter } = createOutboxFixture({
+      storage,
+      clock,
+      visibilityTimeoutMs: 100,
+      attemptTimeoutMs: 10_000,
+    });
+    const deliveryId = await enqueueOne(outbox);
+    const release = adapter.block();
+    const pending = outbox.deliverNext();
+    await untilRequested(adapter);
+    // The clock jumps past the window before any renewal timer fires, and a
+    // sibling process recovers the lease.
+    clock.advance(100);
+    const sibling = createOutboxFixture({ storage, clock }).outbox;
+    expect(await sibling.runMaintenance()).toMatchObject({ parked: 1 });
+    await advanceTimersByTime(50);
+    await flushMicrotasks(32);
+    expect(adapter.requests[0]!.signal.aborted).toBe(true);
+    release({ status: 'acknowledged' });
+    await flushMicrotasks(32);
+    const result = await pending;
+    // Whatever the adapter said afterwards, the durable disposition stands.
+    expect(result.status === 'settled' && result.receipt.state).toBe('unknown-outcome');
+    expect(await fieldOf(outbox.receipt(deliveryId), 'cleanupPending')).toBe(true);
+    sibling.dispose();
+    outbox.dispose();
+  });
+
+  it('retries a renewal whose storage read failed rather than giving up on the lease', async () => {
+    useFakeTimers();
+    let failing = false;
+    class FlakyStorage extends MemoryStorage {
+      override async get(key: string): Promise<Uint8Array | null> {
+        if (failing) throw new Error('read failed');
+        return super.get(key);
+      }
+    }
+    const { outbox, adapter, clock } = createOutboxFixture({
+      storage: new FlakyStorage(),
+      visibilityTimeoutMs: 100,
+      attemptTimeoutMs: 10_000,
+    });
+    await enqueueOne(outbox);
+    const release = adapter.block();
+    const pending = outbox.deliverNext();
+    await untilRequested(adapter);
+    failing = true;
+    clock.advance(50);
+    await advanceTimersByTime(50);
+    await flushMicrotasks(32);
+    failing = false;
+    clock.advance(2);
+    await advanceTimersByTime(2);
+    await flushMicrotasks(32);
+    expect(adapter.requests[0]!.signal.aborted).toBe(false);
+    release({ status: 'acknowledged' });
+    await flushMicrotasks(32);
+    const result = await pending;
+    expect(result.status === 'settled' && result.receipt.state).toBe('acknowledged');
+    outbox.dispose();
+  });
+});
+
+describe('runner: bounded diagnostics and drain accounting', () => {
+  it('bounds an adapter exception message before persisting it', async () => {
+    const { outbox, adapter } = createOutboxFixture();
+    adapter.fail(new Error('x'.repeat(20_000)));
+    const deliveryId = await enqueueOne(outbox);
+    expect(await deliverOne(outbox)).toBe('unknown-outcome');
+    const failure = await fieldOf(outbox.receipt(deliveryId), 'failure');
+    expect(new TextEncoder().encode(failure?.message ?? '').byteLength).toBeLessThanOrEqual(4096);
+    expect(failure?.message).toContain('The transport adapter threw');
+    outbox.dispose();
+  });
+
+  it('counts dispositions the drain committed through maintenance', async () => {
+    const storage = new MemoryStorage();
+    const clock = createOutboxClock();
+    const crashed = createOutboxFixture({ storage, clock, attemptTimeoutMs: 100 }).outbox;
+    await enqueueOne(crashed);
+    await beginOne(crashed);
+    crashed.dispose();
+    clock.advance(100);
+    const { outbox } = createOutboxFixture({ storage, clock });
+    const report = await outbox.drain({ timeoutMs: 0 });
+    expect(report).toMatchObject({ unknown: 1, pending: 0, drained: true });
+    outbox.dispose();
+  });
+});
+
+describe('operator retry and backlog', () => {
+  it('refuses to reopen a delivery past maxBacklog, fenced on the header', async () => {
+    const { outbox, adapter } = createOutboxFixture({ maxBacklog: 1 });
+    adapter.reply({ status: 'unknown' });
+    const parked = await enqueueOne(outbox);
+    expect(await deliverOne(outbox)).toBe('unknown-outcome');
+    await enqueueOne(outbox);
+    const refused = await outbox.retry({ deliveryId: parked });
+    expect(refused).toMatchObject({
+      status: 'rejected',
+      reason: 'backlog-full',
+      capacity: { open: 1, limit: 1, remaining: 0 },
+    });
+    expect(await fieldOf(outbox.receipt(parked), 'state')).toBe('unknown-outcome');
+    expect(await outbox.capacity()).toMatchObject({ open: 1 });
+    outbox.dispose();
+  });
+
+  it('still dead-letters a parked delivery when the backlog is full', async () => {
+    const { outbox, adapter } = createOutboxFixture({ maxBacklog: 1 });
+    adapter.reply({ status: 'unknown' });
+    const parked = await enqueueOne(outbox);
+    await deliverOne(outbox);
+    await enqueueOne(outbox);
+    expect(await statusOf(outbox.deadLetter({ deliveryId: parked }))).toBe('applied');
+    outbox.dispose();
+  });
+});
+
+describe('automatic maintenance and disposal', () => {
+  afterEach(() => {
+    restoreRealTimers();
+  });
+
+  it('stops an in-flight pass at its next step once the outbox is disposed', async () => {
+    useFakeTimers();
+    const gate = createDeferred();
+    let scans = 0;
+    class GatedStorage extends MemoryStorage {
+      override async *scan(
+        ...arguments_: Parameters<MemoryStorage['scan']>
+      ): ReturnType<MemoryStorage['scan']> {
+        scans += 1;
+        if (scans === 2) await gate.promise;
+        yield* super.scan(...arguments_);
+      }
+    }
+    const storage = new GatedStorage();
+    const clock = createOutboxClock();
+    const worker = createOutboxFixture({ storage, clock, attemptTimeoutMs: 100 }).outbox;
+    const deliveryId = await enqueueOne(worker);
+    await claimOne(worker);
+    worker.dispose();
+    clock.advance(100);
+    const errors: unknown[] = [];
+    const automatic = createOutboxFixture({
+      storage,
+      clock,
+      backgroundTasks: 'automatic',
+      maintenanceIntervalMs: 10,
+      onMaintenanceError: (error) => {
+        errors.push(error);
+      },
+    }).outbox;
+    await advanceTimersByTime(10);
+    await flushMicrotasks(8);
+    // The pass is parked inside its scan; disposal lands before it resumes.
+    automatic.dispose();
+    gate.resolve();
+    await flushMicrotasks(64);
+    const observer = createOutboxFixture({ storage, clock }).outbox;
+    expect(await fieldOf(observer.receipt(deliveryId), 'state')).toBe('claimed');
+    expect(errors).toHaveLength(0);
+    observer.dispose();
+  });
+});
+
+describe('same-attempt refusals keep the lease', () => {
+  it('treats a repeated begin as idempotent without aborting the live attempt', async () => {
+    const { outbox } = createOutboxFixture();
+    await enqueueOne(outbox);
+    const claim = await beginOne(outbox);
+    const again = await outbox.beginAttempt(claim);
+    expect(again.status === 'settled' && again.receipt.state).toBe('attempting');
+    expect(claim.signal.aborted).toBe(false);
+    const settled = await outbox.settle({ ...claim, outcome: { status: 'acknowledged' } });
+    expect(settled.status).toBe('settled');
+    outbox.dispose();
+  });
+
+  it('refuses a settle before the send began without aborting the live attempt', async () => {
+    const { outbox } = createOutboxFixture();
+    await enqueueOne(outbox);
+    const claim = await claimOne(outbox);
+    const early = await outbox.settle({ ...claim, outcome: { status: 'acknowledged' } });
+    expect(early.status === 'stale' && early.receipt.state).toBe('claimed');
+    expect(claim.signal.aborted).toBe(false);
+    expect(await statusOf(outbox.beginAttempt(claim))).toBe('settled');
+    outbox.dispose();
+  });
+});

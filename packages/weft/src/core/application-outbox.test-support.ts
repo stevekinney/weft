@@ -73,8 +73,20 @@ export class ScriptedAdapter implements ApplicationDeliveryAdapter {
     return release;
   }
 
+  readonly #requestWaiters: ((request: ApplicationDeliverySendRequest) => void)[] = [];
+
+  /** Resolves with the next send request, or at once with the last one already seen. */
+  nextRequest(): Promise<ApplicationDeliverySendRequest> {
+    const last = this.requests.at(-1);
+    if (last !== undefined) return Promise.resolve(last);
+    return new Promise((resolve) => {
+      this.#requestWaiters.push(resolve);
+    });
+  }
+
   async send(request: ApplicationDeliverySendRequest): Promise<ApplicationDeliveryOutcome> {
     this.requests.push(request);
+    for (const waiter of this.#requestWaiters.splice(0)) waiter(request);
     const step = this.#script.shift();
     if (step === undefined) return this.fallback;
     if (step.kind === 'throw') throw step.error;

@@ -109,6 +109,8 @@ console.log(typeof adapter.send); // 'function'
 
 Three things the runner does that an adapter never has to think about. A thrown error is treated as `unknown`, because the request may already have left. An attempt deadline that elapses while `send()` is still pending makes the runner stop waiting, treat the result as `unknown`, and abort the signal as it releases the attempt. And a malformed outcome — not an object, an unrecognised status, `NaN` for `retryAfterMs`, a `Map` as evidence — is mapped to `unknown` with a diagnostic message rather than thrown, since by then the send may have happened and the delivery must not be retried on the strength of nothing.
 
+While `send()` is pending the runner renews the attempt's visibility at half the window it was granted, so a send that outlasts `visibilityTimeoutMs` but stays inside the attempt deadline is not reclaimed underneath the transport; a renewal refused because another process recovered the lease aborts the adapter's signal. A caller abort passed to `deliverNext({ signal })` or `drain({ signal })` is forwarded to that same signal, so an aborted drain reaches the adapter instead of waiting out the attempt.
+
 Returning from `send()` **never** settles a delivery by itself. The outbox validates the outcome and commits the matching transition, fenced on the attempt token and the `attempting` bytes. Only that commit moves the record.
 
 ## Unknown Outcomes Are Policy, Not Guesswork
@@ -210,7 +212,7 @@ An in-process attempt learns about cancellation through its signal — including
 
 Parked and failed deliveries are meant to be inspected and acted on. `list({ states: ['unknown-outcome'] })` finds them; two operator transitions move them.
 
-`retry({ deliveryId })` returns an `unknown-outcome`, `dead-lettered`, or `rejected` delivery to the due index with exactly one more attempt to spend — `maxAttempts` is raised to `attempt + 1` when the budget was spent, and the record's provenance (`attempt`, `retryCount`) is preserved. `deadLetter({ deliveryId, reason })` closes a parked delivery for good. Both are ordinary compare-and-swap transitions, and both emit a fleet event; a retry is labelled `outbox:delivery-retried` so a feed consumer can tell it from a first enqueue.
+`retry({ deliveryId })` returns an `unknown-outcome`, `dead-lettered`, or `rejected` delivery to the due index with exactly one more attempt to spend. Reopening is an admission, so it respects `maxBacklog` and reports `rejected` with the current capacity when the backlog is full — `maxAttempts` is raised to `attempt + 1` when the budget was spent, and the record's provenance (`attempt`, `retryCount`) is preserved. `deadLetter({ deliveryId, reason })` closes a parked delivery for good. Both are ordinary compare-and-swap transitions, and both emit a fleet event; a retry is labelled `outbox:delivery-retried` so a feed consumer can tell it from a first enqueue.
 
 ## Drain and Shutdown
 
@@ -236,7 +238,7 @@ const report = await outbox.drain({ timeoutMs: 0 });
 console.log(report.acknowledged, report.pending, report.drained); // 1 0 true
 ```
 
-`pending` is read from the durable header when the drain stops, so a drain cut short by its budget, a caller abort, or disposal reports what it committed and what remains — never that remaining work was acknowledged. `drained` is `true` only when nothing was left open.
+Dispositions the drain's own maintenance passes commit (a lease that lapsed after its send began, parked or dead-lettered) are counted too. `pending` is read from the durable header when the drain stops, so a drain cut short by its budget, a caller abort, or disposal reports what it committed and what remains — never that remaining work was acknowledged. `drained` is `true` only when nothing was left open.
 
 `dispose()` releases every process-local resource: the maintenance timer if one is running, in-flight waits, and every attempt-scoped signal this handle holds. It never deletes durable work. A claim this process held stays leased until it lapses and a maintenance pass recovers it — by the state it lapsed in.
 

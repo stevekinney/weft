@@ -9,7 +9,10 @@
  * @module core/application-outbox-claims
  */
 
-import type { ApplicationDeliveryReceipt } from './application-outbox-contract.ts';
+import type {
+  ApplicationDeliveryReceipt,
+  ApplicationOutboxCapacity,
+} from './application-outbox-contract.ts';
 
 // ---------------------------------------------------------------------------
 // Claims and settlement
@@ -208,6 +211,12 @@ export type ApplicationDeliveryCleanupResult =
 export type ApplicationDeliveryOperatorResult =
   | { readonly status: 'applied'; readonly receipt: ApplicationDeliveryReceipt }
   | { readonly status: 'not-applicable'; readonly receipt: ApplicationDeliveryReceipt }
+  | {
+      /** Reopening would exceed `maxBacklog`; nothing was written. */
+      readonly status: 'rejected';
+      readonly reason: 'backlog-full';
+      readonly capacity: ApplicationOutboxCapacity;
+    }
   | { readonly status: 'unknown' };
 
 // ---------------------------------------------------------------------------

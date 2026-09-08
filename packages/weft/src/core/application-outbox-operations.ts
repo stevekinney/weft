@@ -12,6 +12,7 @@
  */
 
 import type { ApplicationDeliveryOperatorResult } from './application-outbox-contract.ts';
+import { capacityOf } from './application-outbox-enqueue.ts';
 import {
   ApplicationOutboxContentionError,
   commitDeliveryTransition,
@@ -19,7 +20,8 @@ import {
   toApplicationDeliveryReceipt,
   type OutboxRuntime,
 } from './application-outbox-internals.ts';
-import { loadDelivery } from './application-outbox-storage.ts';
+import { loadDelivery, loadOutboxHeader } from './application-outbox-storage.ts';
+import { isTerminalDeliveryRecord } from './application-outbox-transition-helpers.ts';
 import {
   deadLetterDeliveryByOperator,
   retryDeliveryByOperator,
@@ -44,11 +46,31 @@ async function operate(
     if (!transition.ok) {
       return { status: 'not-applicable', receipt: toApplicationDeliveryReceipt(loaded.record) };
     }
+    // Reopening a terminal delivery is an admission: it must respect the same
+    // backlog ceiling enqueue does, checked on the header bytes the commit
+    // then fences on.
+    const header = await loadOutboxHeader(
+      runtime.storage,
+      runtime.keys,
+      runtime.policy.namespace,
+      runtime.policy.ownerId,
+    );
+    if (
+      !isTerminalDeliveryRecord(transition.next) &&
+      header.record.openCount >= runtime.policy.maxBacklog
+    ) {
+      return {
+        status: 'rejected',
+        reason: 'backlog-full',
+        capacity: capacityOf(runtime, header.record.openCount, header.record.enqueuedCount),
+      };
+    }
     const committed = await commitDeliveryTransition(runtime, {
       previous: loaded.record,
       expectedBytes: loaded.bytes,
       next: transition.next,
       now,
+      header,
     });
     if (!committed) continue;
     return { status: 'applied', receipt: toApplicationDeliveryReceipt(transition.next) };

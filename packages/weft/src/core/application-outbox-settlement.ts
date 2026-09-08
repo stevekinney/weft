@@ -102,6 +102,16 @@ async function fenced(
     const now = runtime.now();
     const transition = decide(loaded.record, now);
     if (!transition.ok) {
+      // The holder itself asked for an edge its lease does not need: a repeated
+      // begin on a record already attempting, or a settle before the send
+      // began. The lease is live and current, so its controller stays live too;
+      // only a stale, expired, or missing attempt is released.
+      if (transition.reason === 'not-applicable') {
+        return { status: 'settled', receipt: toApplicationDeliveryReceipt(loaded.record) };
+      }
+      if (transition.reason === 'not-attempting') {
+        return { status: 'stale', receipt: toApplicationDeliveryReceipt(loaded.record) };
+      }
       releaseRefusedAttempt(runtime, deliveryId, attemptToken);
       return refusal(transition.reason, loaded.record);
     }

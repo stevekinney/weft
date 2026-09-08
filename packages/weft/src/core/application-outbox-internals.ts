@@ -18,6 +18,7 @@ import {
   headerOperation,
   loadOutboxHeader,
   planDeliveryTransition,
+  type LoadedOutboxRecord,
   type OutboxKeys,
 } from './application-outbox-storage.ts';
 import { isTerminalDeliveryRecord } from './application-outbox-transition-helpers.ts';
@@ -253,6 +254,8 @@ export async function commitDeliveryTransition(
     readonly now: number;
     readonly extraConditions?: readonly ConditionalBatchCondition[] | undefined;
     readonly extraOperations?: readonly BatchOperation[] | undefined;
+    /** A header the caller already read and decided on; the commit fences on these bytes. */
+    readonly header?: LoadedOutboxRecord | undefined;
   },
 ): Promise<boolean> {
   const previousTerminal = options.previous !== null && isTerminalDeliveryRecord(options.previous);
@@ -261,12 +264,14 @@ export async function commitDeliveryTransition(
   const extraConditions = [...(options.extraConditions ?? [])];
   const extraOperations = [...(options.extraOperations ?? [])];
   if (delta !== 0) {
-    const header = await loadOutboxHeader(
-      runtime.storage,
-      runtime.keys,
-      runtime.policy.namespace,
-      runtime.policy.ownerId,
-    );
+    const header =
+      options.header ??
+      (await loadOutboxHeader(
+        runtime.storage,
+        runtime.keys,
+        runtime.policy.namespace,
+        runtime.policy.ownerId,
+      ));
     extraConditions.push({ key: runtime.keys.header, expectedValue: header.bytes });
     extraOperations.push(
       headerOperation(runtime.keys, {

@@ -179,8 +179,10 @@ export class ApplicationOutbox {
       try {
         await runOutboxMaintenance(this.#runtime, this.#runtime.now());
       } catch (error) {
+        // A pass cut short by disposal is not a failure worth reporting, and
         // `onError` itself may throw; a background pass must never become an
         // unhandled rejection.
+        if (this.#disposed) return;
         try {
           onError(error);
         } catch {
