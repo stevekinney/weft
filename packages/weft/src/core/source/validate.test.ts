@@ -90,6 +90,32 @@ describe('validateResolvedWorkflowSource()', () => {
     expect(outcome).toEqual({ ok: false, reasons: ['invalid-definition'] });
   });
 
+  it('rejects a builder-shaped export whose handler is not callable with invalid-definition', async () => {
+    // All five builder-produced object maps are present, so
+    // `isBuilderWorkflowDefinition()`'s structural check alone would
+    // pass — only an explicit `typeof handler === 'function'` check
+    // catches a `handler` that was replaced with something non-callable
+    // (`null` here) rather than dropped or omitted entirely.
+    const nonCallableHandlerExport = {
+      name: 'nonCallableHandler',
+      handler: null,
+      activities: {},
+      signals: {},
+      updates: {},
+      queries: {},
+      searchAttributes: {},
+    };
+    const outcome = await validateResolvedWorkflowSource(
+      descriptorFor({
+        name: 'nonCallableHandler',
+        revision: 'r1',
+        exportName: 'nonCallableHandler',
+      }),
+      { nonCallableHandler: nonCallableHandlerExport },
+    );
+    expect(outcome).toEqual({ ok: false, reasons: ['invalid-definition'] });
+  });
+
   it('rejects a builder-shaped export with a malformed activity name with invalid-definition', async () => {
     const malformedExport = {
       name: 'malformedActivities',

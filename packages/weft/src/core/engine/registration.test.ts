@@ -47,6 +47,16 @@ describe('resolveWorkflowTypeTarget', () => {
 
     engine[Symbol.dispose]();
   });
+
+  it('rejects a { name, handler } shape whose handler is not callable, rather than treating key-presence alone as sufficient', () => {
+    const engine = new Engine();
+
+    expect(() => engine.register({ name: 'checkout', handler: null } as never)).toThrow(
+      'engine.register() expects a WorkflowDefinition',
+    );
+
+    engine[Symbol.dispose]();
+  });
 });
 
 describe('finalizer registration (#446)', () => {

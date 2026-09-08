@@ -635,11 +635,25 @@ const checkoutSource = workflowSource(
     name: 'checkout',
     location: './workflows/checkout.ts',
     exportName: 'checkout',
-    revision: 'checkout-2026.09.01',
+    revision: 'sha256:9f2c…',
   },
   () => import('./workflows/checkout.ts'),
 );
 ```
+
+`revision` is not a label you choose freely: it must equal the exact
+content-derived revision `buildWorkflowManifestFromDefinition()` computes
+from the loaded workflow's contract (`deriveWorkflowRevision()`, a
+`sha256:`-prefixed digest of the normalized workflow contract—see
+[Revision Identity](#revision-identity) above). A `resolveWorkflowSource()`
+call whose loaded module's actual derived revision does not match the
+descriptor's `revision` fails with `artifact-revision-mismatch`. In
+practice a build/deploy pipeline computes this value offline from the same
+source—with `deriveWorkflowRevision()`/`buildWorkflowContract()` against the
+identical module, or by reading it off an already-published
+`WorkflowRevisionManifest` (the registry snapshot `weft codegen` reads, or a
+`GET /v1/registry` response)—and threads it into the descriptor, rather than
+a caller inventing one.
 
 A dynamic import path (`() => import(pathVariable)`, typed `Promise<any>`)
 is rejected at the `workflowSource()` call site itself—TypeScript cannot
@@ -673,7 +687,7 @@ installed revisions per name.
 ### `resolveWorkflowSource()`: load, validate, install
 
 ```ts partial
-const record = await engine.resolveWorkflowSource('checkout', 'checkout-2026.09.01');
+const record = await engine.resolveWorkflowSource('checkout', 'sha256:9f2c…');
 console.log(record.manifest.revision, record.installedAt);
 ```
 
@@ -706,9 +720,12 @@ with the descriptor's expectations via `checkWorkflowCompatibility()`—a
 `name`, `revision`, pinned `workflowVersion`, or pinned `contractHash`
 mismatch is reported the same way `engine.workflows.activate()` reports an
 incompatible candidate (see [Activation Compatibility](#activation-compatibility)
-above). `workflowVersion` pinning uses `checkWorkflowCompatibility`'s
-existing version-compatibility check, not raw string equality—see that
-section for what "compatible" means there. Every applicable reason is
+above). `workflowVersion` pinning routes through `checkWorkflowCompatibility`'s
+existing `workflow-version-incompatible` check, which is exact string
+equality (`checkVersionCompatibility()`'s entire contract is `storedVersion
+=== registeredVersion`—there is no semver-range matching anywhere in that
+path); a pinned `workflowVersion: '^1.0.0'` against an actual `'1.2.0'`
+rejects, it does not match. Every applicable reason is
 reported, never just the first one found; a failed resolve throws
 `WorkflowSourceValidationError`, carrying `workflowName`, `revision`, and
 the full `reasons` array.

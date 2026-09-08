@@ -261,6 +261,36 @@ describe('engine.resolveWorkflowSource()', () => {
     engine[Symbol.dispose]();
   });
 
+  it('rejects with unregistered-source-kind, not a raw TypeError, for a manually-constructed handle naming an inherited property like __proto__', async () => {
+    const engine = new Engine();
+    // `SOURCE_RESOLVERS` is a plain object literal — a bare bracket lookup
+    // (`SOURCE_RESOLVERS[descriptor.kind]`) would return an inherited
+    // `Object.prototype` member for `kind: '__proto__'` instead of
+    // `undefined`, skip the `resolver === undefined` guard, and then throw a
+    // raw `TypeError` from `resolver(handle)` rather than the documented
+    // structured rejection.
+    engine.registerSource({
+      descriptor: {
+        kind: '__proto__' as never,
+        name: 'checkout',
+        location: './checkout.ts',
+        exportName: 'checkout',
+        revision: checkoutRevision,
+      },
+      load: async () => ({ checkout: checkoutDefinition }),
+    });
+
+    const rejection = await engine
+      .resolveWorkflowSource('checkout', checkoutRevision)
+      .catch((error: unknown) => error);
+    expect(rejection).toBeInstanceOf(WorkflowSourceValidationError);
+    expect((rejection as WorkflowSourceValidationError).reasons).toEqual([
+      'unregistered-source-kind',
+    ]);
+
+    engine[Symbol.dispose]();
+  });
+
   it("rejects with this caller's own abort when the signal aborts while the not-yet-installed catalog check is still in flight, without starting the loader", async () => {
     const storage = new MemoryStorage();
     const engine = new Engine({ storage });
@@ -307,5 +337,168 @@ describe('engine.resolveWorkflowSource()', () => {
     );
 
     engine[Symbol.dispose]();
+  });
+
+  it('throws the programmer-error Error for a (name, revision) durably installed by a different process, when THIS engine never called registerSource() for it', async () => {
+    const storage = new MemoryStorage();
+    const installer = new Engine({ storage });
+    installer.register(checkoutDefinition);
+    await ensureWorkflowCatalogReady(installer);
+    installer[Symbol.dispose]();
+
+    // A fresh engine sharing the same durable storage: the catalog fast
+    // path would otherwise find `(checkout, checkoutRevision)` already
+    // installed and return it — but this engine never called
+    // `registerSource()` for that key, so it must still reject with the
+    // documented programmer-error contract instead of silently succeeding
+    // off a different process's install.
+    const resolver = new Engine({ storage });
+    await expect(resolver.resolveWorkflowSource('checkout', checkoutRevision)).rejects.toThrow(
+      /registerSource/,
+    );
+
+    resolver[Symbol.dispose]();
+  });
+
+  it('rejects with WorkflowSourceValidationError when a registered pin contradicts an already-cached manifest on the fast path', async () => {
+    const storage = new MemoryStorage();
+    const installer = new Engine({ storage });
+    const installerLoader = registerCheckoutSource(installer, async () => ({
+      checkout: checkoutDefinition,
+    }));
+    const installed = await installer.resolveWorkflowSource('checkout', checkoutRevision);
+    expect(installerLoader).toHaveBeenCalledTimes(1);
+    expect(installed.manifest.workflowVersion).toBe('0.0.0');
+    installer[Symbol.dispose]();
+
+    // A second engine, sharing storage, registers its OWN handle for the
+    // identical (name, revision) key but pins a `workflowVersion` the
+    // already-cached manifest does not carry. The fast path must validate
+    // the pin against the cached manifest — never return mismatched cached
+    // data just because it happened to already be installed.
+    const resolver = new Engine({ storage });
+    const resolverLoader = mock(async () => ({ checkout: checkoutDefinition }));
+    resolver.registerSource(
+      workflowSource(
+        {
+          name: 'checkout',
+          location: './checkout.ts',
+          exportName: 'checkout',
+          revision: checkoutRevision,
+          workflowVersion: '9.9.9',
+        },
+        resolverLoader,
+      ),
+    );
+
+    const rejection = await resolver
+      .resolveWorkflowSource('checkout', checkoutRevision)
+      .catch((error: unknown) => error);
+    expect(rejection).toBeInstanceOf(WorkflowSourceValidationError);
+    expect((rejection as WorkflowSourceValidationError).reasons).toEqual([
+      'workflow-version-incompatible',
+    ]);
+    // The fast path never invokes the loader even on a pin-mismatch reject —
+    // it fails from the cached manifest alone.
+    expect(resolverLoader).not.toHaveBeenCalled();
+
+    resolver[Symbol.dispose]();
+  });
+
+  it("rejects with this caller's own abort instead of returning a cached revision, when the signal aborts while the fast-path catalog read is still in flight", async () => {
+    const storage = new MemoryStorage();
+    const installer = new Engine({ storage });
+    const installerLoader = registerCheckoutSource(installer, async () => ({
+      checkout: checkoutDefinition,
+    }));
+    await installer.resolveWorkflowSource('checkout', checkoutRevision);
+    expect(installerLoader).toHaveBeenCalledTimes(1);
+    installer[Symbol.dispose]();
+
+    // A fresh engine, sharing storage but with no in-memory catalog cache
+    // of its own — its FIRST `resolveWorkflowSource()` call must actually
+    // restore-scan durable storage (`ensureWorkflowCatalogReady()`) before
+    // it can see the installer's entry as cached, which is the await this
+    // test gates.
+    const engine = new Engine({ storage });
+    const loader = registerCheckoutSource(engine, async () => ({ checkout: checkoutDefinition }));
+
+    const gate = Promise.withResolvers<void>();
+    const entered = Promise.withResolvers<void>();
+    const originalScan = storage.scan.bind(storage);
+    storage.scan = async function* (prefix, options) {
+      entered.resolve();
+      await gate.promise;
+      yield* originalScan(prefix, options);
+    };
+
+    const controller = new AbortController();
+    const call = engine.resolveWorkflowSource('checkout', checkoutRevision, {
+      signal: controller.signal,
+    });
+    await entered.promise;
+    // The abort lands while this call's catalog-readiness restore scan
+    // (which will discover the installer's cached entry) is parked
+    // mid-flight — before `resolveWorkflowSource` has decided the entry is
+    // cached, let alone returned it. A cached hit must not resolve
+    // successfully out from under a caller who no longer wants it.
+    controller.abort();
+    gate.resolve();
+
+    await expect(call).rejects.toBeTruthy();
+    // The fast path never invokes this engine's own loader either way.
+    expect(loader).not.toHaveBeenCalled();
+
+    engine[Symbol.dispose]();
+  });
+
+  it('leaves internals.resolvedWorkflowSources empty when the engine is disposed while catalog.install() is still in flight', async () => {
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+    const loader = registerCheckoutSource(engine, async () => ({ checkout: checkoutDefinition }));
+
+    const gate = Promise.withResolvers<void>();
+    const entered = Promise.withResolvers<void>();
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+    storage.conditionalBatch = async (conditions, operations) => {
+      entered.resolve();
+      await gate.promise;
+      return originalConditionalBatch(conditions, operations);
+    };
+
+    const inFlight = engine.resolveWorkflowSource('checkout', checkoutRevision);
+    await entered.promise;
+    // Disposal lands while `runSharedSourceLoad`'s `await catalog.install()`
+    // is parked on the gated durable write — after the loader and
+    // validation already succeeded, but before the write settles.
+    engine[Symbol.dispose]();
+    gate.resolve();
+
+    await expect(inFlight).rejects.toBeInstanceOf(EngineDisposedError);
+    expect(loader).toHaveBeenCalledTimes(1);
+
+    // `disposeSourceResolutionState()` already cleared this map; the
+    // shared load resuming after disposal must not repopulate it.
+    const internals = getInternals(engine);
+    expect(internals.resolvedWorkflowSources.size).toBe(0);
+
+    // The durable install itself still completed (a disposed engine's
+    // in-memory bookkeeping is skipped, not the already-in-flight write) —
+    // a fresh engine sharing storage sees it as already installed.
+    const verifier = new Engine({ storage });
+    verifier.registerSource(
+      workflowSource(
+        {
+          name: 'checkout',
+          location: './checkout.ts',
+          exportName: 'checkout',
+          revision: checkoutRevision,
+        },
+        async () => ({ checkout: checkoutDefinition }),
+      ),
+    );
+    const verified = await verifier.resolveWorkflowSource('checkout', checkoutRevision);
+    expect(verified.manifest.name).toBe('checkout');
+    verifier[Symbol.dispose]();
   });
 });

@@ -24,5 +24,5 @@ export type { WorkflowSourceRejectionReason } from './errors.ts';
 export { resolveSourceModule } from './resolvers.ts';
 export type { ResolveSourceModuleResult } from './resolvers.ts';
 
-export { validateResolvedWorkflowSource } from './validate.ts';
+export { buildExpectedManifest, validateResolvedWorkflowSource } from './validate.ts';
 export type { WorkflowSourceValidationOutcome } from './validate.ts';

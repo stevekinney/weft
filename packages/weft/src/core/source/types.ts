@@ -77,7 +77,7 @@ export interface WorkflowSourceDescriptor<TName extends string = string> {
   readonly exportName: string;
   /** The caller's expected content-derived revision; compared against the revision actually derived from the loaded contract. */
   readonly revision: string;
-  /** Optional pinned workflow version; compared with `checkWorkflowCompatibility`'s semver-range semantics when set. */
+  /** Optional pinned workflow version; compared for exact string equality via `checkWorkflowCompatibility` (`checkVersionCompatibility()`'s entire contract is `storedVersion === registeredVersion` — there is no semver-range matching) when set. */
   readonly workflowVersion?: string;
   /** Optional pinned contract hash; compared for exact equality when set. */
   readonly contractHash?: string;
@@ -147,7 +147,17 @@ export interface WorkflowSourceHandle<
 > {
   /** Plain, serializable source metadata. Never carries a function reference. */
   readonly descriptor: WorkflowSourceDescriptor;
-  /** Host-side loader capability. Never serialized; invoked at most once per `(name, revision)` — see `resolveWorkflowSource`. */
+  /**
+   * Host-side loader capability. Never serialized; concurrent
+   * `resolveWorkflowSource()` calls for the same `(name, revision)` share
+   * exactly one in-flight invocation (single-flight), so it is invoked at
+   * most once per key PER ATTEMPT. It is not limited to one invocation for
+   * the key's entire lifetime: `getOrCreateSharedSourceLoad()` removes the
+   * shared promise once it settles, so if that attempt's load, validation,
+   * or catalog install fails, a later `resolveWorkflowSource()` call for the
+   * same `(name, revision)` starts a fresh attempt and invokes the loader
+   * again. A successful attempt is cached — see `resolveWorkflowSource`.
+   */
   readonly load: () => Promise<unknown>;
   /** Phantom marker for the resolved workflow's input type. Not present at runtime. */
   readonly _input?: TInput;

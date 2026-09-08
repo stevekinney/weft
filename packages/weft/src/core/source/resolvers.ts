@@ -62,7 +62,17 @@ export async function resolveSourceModule(
   descriptor: WorkflowSourceDescriptor,
   handle: WorkflowSourceHandle,
 ): Promise<ResolveSourceModuleResult> {
-  const resolver = SOURCE_RESOLVERS[descriptor.kind];
+  // `Object.hasOwn` first, not a bare bracket lookup: `SOURCE_RESOLVERS` is a
+  // plain object literal, so `descriptor.kind === '__proto__'` (or
+  // `'constructor'`) would otherwise return an inherited `Object.prototype`
+  // member instead of `undefined`, skip this guard, and let `resolver(handle)`
+  // below throw a raw `TypeError` — exactly the hostile-input case this
+  // function's own contract promises a structured rejection for. Same guard
+  // `validate.ts`'s `readOwnExport()` applies to the analogous export-name
+  // lookup.
+  const resolver = Object.hasOwn(SOURCE_RESOLVERS, descriptor.kind)
+    ? SOURCE_RESOLVERS[descriptor.kind]
+    : undefined;
   if (resolver === undefined) {
     return { ok: false, reason: 'unregistered-source-kind' };
   }

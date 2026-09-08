@@ -58,8 +58,12 @@ function assertWellFormedSourceDescriptor(source: WorkflowSourceHandle): void {
  * Collision rules, checked in both directions against `engine.register()`'s
  * own state so a workflow name can never be simultaneously eager and lazy:
  *
- * - A name already eagerly registered (`internals.workflowDefinitionsByName`)
- *   cannot also be registered as a source — throws.
+ * - A name already eagerly registered (`internals.registrations` — set by
+ *   BOTH branches of `engine.register()`, unlike `workflowDefinitionsByName`,
+ *   which only the builder-produced branch populates; checking that narrower
+ *   map here would let a plain `{ name, handler }` `WorkflowDefinition`
+ *   registered via `engine.register()` collide silently with a same-named
+ *   `registerSource()` call) cannot also be registered as a source — throws.
  * - Re-registering the identical `source` object reference for the same
  *   `(name, revision)` is idempotent (a no-op), mirroring `engine.register()`'s
  *   own same-reference-is-idempotent rule for eager definitions.
@@ -79,7 +83,7 @@ export function registerSource(internals: EngineInternals, source: WorkflowSourc
   const { name, revision } = source.descriptor;
   validateWorkflowOrActivityName(name, 'workflow');
 
-  if (internals.workflowDefinitionsByName.has(name)) {
+  if (internals.registrations.has(name)) {
     throw new Error(
       `Cannot registerSource("${name}"): "${name}" is already registered as an eager workflow ` +
         'via engine.register(). A workflow name may not be both eagerly registered and a dynamic source.',

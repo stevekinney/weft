@@ -18,6 +18,11 @@
 
 import type { WorkflowRevisionRecord } from '../catalog/index.ts';
 import {
+  checkWorkflowCompatibility,
+  DEFAULT_WORKFLOW_COMPATIBILITY_POLICY,
+} from '../contract/compatibility.ts';
+import {
+  buildExpectedManifest,
   resolveSourceModule,
   validateResolvedWorkflowSource,
   WorkflowSourceValidationError,
@@ -94,7 +99,13 @@ function abortRejection(signal: AbortSignal): Promise<never> {
  * completely would require `catalog.install()` itself to check
  * `internals.disposed` at its own call boundary, which is out of scope for
  * this batch — recorded as an explicit, accepted trade-off rather than a
- * silent gap.
+ * silent gap. `internals.disposed` is re-checked a THIRD time after
+ * `catalog.install()` resolves, guarding only the in-memory
+ * `internals.resolvedWorkflowSources` write (never the durable install
+ * itself, which has already committed by then) — a disposed engine's
+ * internals stay fully empty rather than accumulating state
+ * `disposeSourceResolutionState()` already cleared and will never clear
+ * again.
  */
 async function runSharedSourceLoad(
   engine: Engine,
@@ -120,15 +131,25 @@ async function runSharedSourceLoad(
   const catalog = getWorkflowCatalog(engine);
   const installed = await catalog.install(outcome.manifest, outcome.definition);
 
-  let resolvedByRevision = internals.resolvedWorkflowSources.get(name);
-  if (resolvedByRevision === undefined) {
-    resolvedByRevision = new Map();
-    internals.resolvedWorkflowSources.set(name, resolvedByRevision);
+  // Re-checked here, not just at line 121 above `catalog.install()`: disposal
+  // can land while that `await` is in flight. `disposeSourceResolutionState()`
+  // has already cleared `internals.resolvedWorkflowSources` by the time this
+  // resumes, and nothing will ever clear it again — writing into it here would
+  // silently repopulate a disposed engine's internals with a definition and
+  // activity registry nothing will read, rather than leaving them empty as
+  // teardown intended. The durable install this promise resolves with already
+  // succeeded either way; only the in-memory bookkeeping is skipped.
+  if (!internals.disposed) {
+    let resolvedByRevision = internals.resolvedWorkflowSources.get(name);
+    if (resolvedByRevision === undefined) {
+      resolvedByRevision = new Map();
+      internals.resolvedWorkflowSources.set(name, resolvedByRevision);
+    }
+    resolvedByRevision.set(revision, {
+      definition: outcome.loadedDefinition,
+      activityRegistry: outcome.activityRegistry,
+    });
   }
-  resolvedByRevision.set(revision, {
-    definition: outcome.loadedDefinition,
-    activityRegistry: outcome.activityRegistry,
-  });
 
   return { manifest: installed.manifest, installedAt: installed.installedAt };
 }
@@ -185,47 +206,6 @@ function getOrCreateSharedSourceLoad(
   return shared;
 }
 
-/**
- * Load, validate, and install one dynamic workflow source revision
- * previously recorded via `engine.registerSource()`. Returns the installed
- * {@link WorkflowRevisionRecord} immediately, without invoking the loader
- * at all, when `(name, revision)` is already durably installed — including
- * a revision installed by a different process. When that is the case,
- * `internals.resolvedWorkflowSources` is NOT populated for this key (there
- * is no locally-loaded `WorkflowDefinition` to stash — only the durable
- * manifest was ever read) even though the catalog itself considers the
- * revision installed; a later batch reading `resolvedWorkflowSources` must
- * account for that gap rather than assuming every installed revision has a
- * live definition available in this process.
- *
- * Single-flight per `(name, revision)` — see the module doc for the full
- * cancellation contract. Throws a plain `Error` when `registerSource()` was
- * never called for this exact key (a programmer error, not untrusted-input
- * rejection); throws {@link WorkflowSourceValidationError} when the loaded
- * module fails validation; throws {@link EngineDisposedError} when the
- * engine is disposed, either already or during the call; propagates
- * {@link import('../catalog/index.ts').WorkflowCatalogConflictError}
- * unwrapped on a genuine content conflict with an already-installed
- * revision.
- *
- * @example
- * ```ts
- * import { Engine, workflowSource } from '@lostgradient/weft';
- *
- * declare const engine: Engine;
- * declare const loadCheckout: () => Promise<{
- *   checkout: import('@lostgradient/weft').WorkflowDefinition<unknown, unknown, 'checkout'>;
- * }>;
- * engine.registerSource(
- *   workflowSource(
- *     { name: 'checkout', location: './checkout.ts', exportName: 'checkout', revision: 'r1' },
- *     loadCheckout,
- *   ),
- * );
- * const record = await engine.resolveWorkflowSource('checkout', 'r1');
- * console.log(record.manifest.revision);
- * ```
- */
 /** A per-call waiter controller, forwarding an optional caller-supplied `AbortSignal` into a fresh controller disposal can also abort — plus the listener-detach cleanup for it. */
 type WaiterAbort = {
   controller: AbortController;
@@ -252,13 +232,19 @@ function createWaiterAbort(options: ResolveWorkflowSourceOptions | undefined): W
 }
 
 /**
- * Resolve `(name, revision)` against the already-installed catalog first
- * (the "repeating a resolve returns the cataloged revision" fast path,
- * requiring no loader invocation), and otherwise look up the registered
- * source handle to load — returned so the caller can thread the exact same
- * handle reference into {@link getOrCreateSharedSourceLoad} without a
- * second, potentially-racy re-lookup. Throws the documented plain `Error`
- * when no handle was ever registered for this key. Split out of
+ * Look up the registered source handle for `(name, revision)` FIRST — this
+ * engine must have called `registerSource()` for this exact key, or this
+ * throws the documented plain `Error`, regardless of what the catalog holds
+ * (a `(name, revision)` some other process durably installed does not, by
+ * itself, give this engine standing to resolve it). Only once a handle is
+ * found does this check the already-installed catalog (the "repeating a
+ * resolve returns the cataloged revision" fast path, requiring no loader
+ * invocation) — a cache hit whose registered handle pins
+ * `workflowVersion`/`contractHash` is further validated against those pins
+ * before being returned, exactly as a fresh load-and-validate would reject
+ * a mismatch. The handle is returned (not just used) so the caller can
+ * thread the exact same reference into {@link getOrCreateSharedSourceLoad}
+ * without a second, potentially-racy re-lookup. Split out of
  * {@link resolveWorkflowSource} purely to keep that function's own
  * cyclomatic complexity under the repository's ceiling.
  */
@@ -271,16 +257,13 @@ async function resolveCachedOrHandle(
   | { cached: WorkflowRevisionRecord; handle?: never }
   | { cached?: never; handle: WorkflowSourceHandle }
 > {
-  if (!isWorkflowCatalogReady(engine)) {
-    await ensureWorkflowCatalogReady(engine);
-  }
-
-  const catalog = getWorkflowCatalog(engine);
-  const existing = await catalog.resolveEntry(name, revision);
-  if (existing !== undefined) {
-    return { cached: existing };
-  }
-
+  // The handle is looked up FIRST, before any catalog read: `registerSource()`
+  // is the only thing that gives this exact (name, revision) key standing to
+  // resolve at all. Reversing the order — checking the catalog first, only
+  // falling back to the handle lookup when nothing is cached — would let a
+  // (name, revision) some OTHER process durably installed resolve
+  // successfully here even though this engine never called `registerSource()`
+  // for it, contradicting the documented programmer-error contract below.
   const handle = internals.workflowSourcesByName.get(name)?.get(revision);
   if (handle === undefined) {
     throw new Error(
@@ -288,9 +271,84 @@ async function resolveCachedOrHandle(
         'registered this exact (name, revision) — call engine.registerSource() first.',
     );
   }
+
+  if (!isWorkflowCatalogReady(engine)) {
+    await ensureWorkflowCatalogReady(engine);
+  }
+
+  const catalog = getWorkflowCatalog(engine);
+  const existing = await catalog.resolveEntry(name, revision);
+  if (existing !== undefined) {
+    // The fast path still owes the descriptor's own pins an answer: a
+    // registered handle that pins `workflowVersion`/`contractHash` must
+    // reject a cached manifest that contradicts those pins exactly as a
+    // fresh load-and-validate would (`validate.ts`'s own
+    // `checkWorkflowCompatibility` call, reused verbatim here via the same
+    // `buildExpectedManifest` helper), rather than silently returning
+    // mismatched cached data just because it happened to already be
+    // installed (by this engine, an earlier call, or another process).
+    const expectedManifest = buildExpectedManifest(handle.descriptor, existing.manifest);
+    const verdict = checkWorkflowCompatibility(
+      expectedManifest,
+      existing.manifest,
+      DEFAULT_WORKFLOW_COMPATIBILITY_POLICY,
+    );
+    if (!verdict.compatible) {
+      throw new WorkflowSourceValidationError(name, revision, verdict.reasons);
+    }
+    return { cached: existing };
+  }
+
   return { handle };
 }
 
+/**
+ * Load, validate, and install one dynamic workflow source revision
+ * previously recorded via `engine.registerSource()`. Returns the installed
+ * {@link WorkflowRevisionRecord} immediately, without invoking the loader
+ * at all, when `(name, revision)` is already durably installed — including
+ * a revision installed by a different process. When that is the case,
+ * `internals.resolvedWorkflowSources` is NOT populated for this key (there
+ * is no locally-loaded `WorkflowDefinition` to stash — only the durable
+ * manifest was ever read) even though the catalog itself considers the
+ * revision installed; a later batch reading `resolvedWorkflowSources` must
+ * account for that gap rather than assuming every installed revision has a
+ * live definition available in this process. This fast path still requires
+ * `registerSource()` to have been called for this exact key first (see
+ * {@link resolveCachedOrHandle}), and still validates a pinned
+ * `workflowVersion`/`contractHash` against the cached manifest — the ONLY
+ * thing it skips is re-invoking the loader and re-running
+ * {@link import('../source/index.ts').validateResolvedWorkflowSource}.
+ *
+ * Single-flight per `(name, revision)` — see the module doc for the full
+ * cancellation contract. Throws a plain `Error` when `registerSource()` was
+ * never called for this exact key (a programmer error, not untrusted-input
+ * rejection); throws {@link WorkflowSourceValidationError} when the loaded
+ * module fails validation, OR when a cached manifest contradicts a pinned
+ * `workflowVersion`/`contractHash`; throws {@link EngineDisposedError} when
+ * the engine is disposed, either already or during the call; propagates
+ * {@link import('../catalog/index.ts').WorkflowCatalogConflictError}
+ * unwrapped on a genuine content conflict with an already-installed
+ * revision.
+ *
+ * @example
+ * ```ts
+ * import { Engine, workflowSource } from '@lostgradient/weft';
+ *
+ * declare const engine: Engine;
+ * declare const loadCheckout: () => Promise<{
+ *   checkout: import('@lostgradient/weft').WorkflowDefinition<unknown, unknown, 'checkout'>;
+ * }>;
+ * engine.registerSource(
+ *   workflowSource(
+ *     { name: 'checkout', location: './checkout.ts', exportName: 'checkout', revision: 'r1' },
+ *     loadCheckout,
+ *   ),
+ * );
+ * const record = await engine.resolveWorkflowSource('checkout', 'r1');
+ * console.log(record.manifest.revision);
+ * ```
+ */
 export async function resolveWorkflowSource(
   engine: Engine,
   name: string,
@@ -316,17 +374,22 @@ export async function resolveWorkflowSource(
   internals.sourceResolutionWaiterControllers.add(waiter.controller);
   try {
     const outcome = await resolveCachedOrHandle(engine, internals, name, revision);
-    if (outcome.cached !== undefined) {
-      return outcome.cached;
-    }
 
-    // An abort (caller-supplied, or engine disposal) can have landed while
-    // the `await` above was in flight (catalog readiness, a durable
-    // `resolveEntry` read) — checked explicitly here so a load nobody wants
-    // any more never starts, rather than starting it and immediately racing
-    // it against an abort that already fired.
+    // An abort (caller-supplied, or engine disposal — which aborts every
+    // controller in `internals.sourceResolutionWaiterControllers`, including
+    // this one, added above before this `await`) can have landed while the
+    // `await` just above was in flight (catalog readiness, a durable
+    // `resolveEntry` read, the pin-compatibility check). Checked BEFORE
+    // either branch below — a cached hit must not resolve successfully out
+    // from under a caller who no longer wants it, any more than an
+    // about-to-start load may: both are "this specific call" work this
+    // waiter's own cancellation interest governs, per the module doc.
     if (waiter.controller.signal.aborted) {
       throw toAbortError(waiter.controller.signal);
+    }
+
+    if (outcome.cached !== undefined) {
+      return outcome.cached;
     }
 
     const shared = getOrCreateSharedSourceLoad(engine, internals, name, revision, outcome.handle);

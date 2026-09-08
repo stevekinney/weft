@@ -52,6 +52,28 @@ describe('engine.registerSource()', () => {
     engine[Symbol.dispose]();
   });
 
+  it('throws when the name is already eagerly registered as a plain (non-builder) WorkflowDefinition, not just a builder-produced one', () => {
+    // `internals.workflowDefinitionsByName` is only populated by the
+    // builder-produced branch of `engine.register()` — a hand-rolled
+    // `{ name, handler }` literal (still a valid `WorkflowDefinition`; the
+    // public type is structural) goes through `commitWorkflowDefinition()`
+    // directly and only ever touches `internals.registrations`. The
+    // collision check here must catch this shape too, or a workflow name
+    // could end up simultaneously eager and a dynamic source.
+    const engine = new Engine();
+    engine.register({
+      name: 'checkout',
+      handler: async function* () {
+        return undefined;
+      },
+    });
+    const { source } = checkoutSource();
+
+    expect(() => engine.registerSource(source)).toThrow(/already registered as an eager workflow/);
+
+    engine[Symbol.dispose]();
+  });
+
   it('throws when registering a source for a name already claimed by an eager registration, via commitWorkflowDefinition symmetric guard', () => {
     const engine = new Engine();
     const { source } = checkoutSource();

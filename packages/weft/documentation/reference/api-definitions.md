@@ -75,7 +75,7 @@ const checkoutSource = workflowSource(
     name: 'checkout',
     location: './workflows/checkout.ts',
     exportName: 'checkout',
-    revision: 'checkout-2026.09.01',
+    revision: 'sha256:9f2c…',
   },
   loadCheckout,
 );

@@ -35,7 +35,13 @@ function copiedTags(tags: ReadonlyArray<string> | undefined): string[] | undefin
  * implies this check, so this predicate has no cross-module caller today.
  */
 function isWorkflowDefinition(value: unknown): value is WorkflowDefinition {
-  return typeof value === 'object' && value !== null && 'name' in value && 'handler' in value;
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'name' in value &&
+    'handler' in value &&
+    typeof (value as { handler: unknown }).handler === 'function'
+  );
 }
 
 function assertConstraintsSupported(

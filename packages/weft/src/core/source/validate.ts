@@ -79,8 +79,15 @@ function readOwnExport(
  * `workflowVersion`/`contractHash` overridden ONLY when the descriptor pins
  * them, otherwise copied from `actual` so an unpinned field can never
  * produce a false-positive mismatch.
+ *
+ * Exported (not just used internally by {@link validateResolvedWorkflowSource})
+ * so `core/engine/source-resolution.ts`'s catalog fast path can run the
+ * identical pin check against an already-cached manifest — a registered
+ * handle that pins `workflowVersion`/`contractHash` must reject a cached
+ * manifest that contradicts those pins exactly as a fresh load-and-validate
+ * would, never silently returning mismatched cached data.
  */
-function buildExpectedManifest(
+export function buildExpectedManifest(
   descriptor: WorkflowSourceDescriptor,
   actual: WorkflowRevisionManifest,
 ): WorkflowRevisionManifest {
