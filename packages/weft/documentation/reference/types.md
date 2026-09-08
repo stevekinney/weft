@@ -508,6 +508,58 @@ interface WorkflowRevisionRecord {
 }
 ```
 
+### `WorkflowSourceDescriptor`
+
+Plain, serializable metadata identifying one dynamic workflow source (WFT-13/14) — where its code lives, which named export holds the workflow definition, and the exact revision the caller expects. Safe to log, persist, or send over the wire; carries no function reference.
+
+```ts partial
+interface WorkflowSourceDescriptor {
+  kind: WorkflowSourceKind; // 'module' today
+  name: string;
+  location: string;
+  exportName: string;
+  revision: string;
+  workflowVersion?: string;
+  contractHash?: string;
+}
+```
+
+`revision` is the caller's _expected_ content-derived revision — `resolveWorkflowSource()` compares it against the revision actually derived from the loaded contract, it never feeds it into manifest building. `workflowVersion`/`contractHash`, when present, pin additional expectations checked the same way `engine.workflows.activate()` checks compatibility.
+
+### `WorkflowSourceHandle`
+
+The typed value `workflowSource()` returns — a `WorkflowSourceDescriptor` paired with a never-serialized host-side loader capability.
+
+```ts partial
+interface WorkflowSourceHandle<
+  TInput = unknown,
+  TOutput = unknown,
+  TName extends string = string,
+  TServices = unknown,
+> {
+  readonly descriptor: WorkflowSourceDescriptor;
+  readonly load: () => Promise<unknown>;
+}
+```
+
+`TInput`/`TOutput`/`TName`/`TServices` are phantom — carried only for compile-time inference from a literal `() => import('./x.ts')` loader, never populated at runtime, mirroring `BuiltWorkflowDefinition`'s own phantom-marker convention. Pass one to `engine.registerSource()`.
+
+### `WorkflowSourceRejectionReason`
+
+Every reason `resolveWorkflowSource()` can reject a loaded workflow source, carried on a thrown `WorkflowSourceValidationError`.
+
+```ts partial
+type WorkflowSourceRejectionReason =
+  | 'unregistered-source-kind'
+  | 'missing-export'
+  | 'ambiguous-export'
+  | 'invalid-definition'
+  | 'manifest-build-failed'
+  | WorkflowCompatibilityReason; // name-mismatch | manifest-version-unsupported | contract-hash-mismatch | workflow-version-incompatible | artifact-revision-mismatch
+```
+
+The first five cover everything that can go wrong before a manifest can even be built (a missing or ambiguous export, an export that is not a builder-produced `WorkflowDefinition` — the removed bare-handler shape — or a contract exceeding a WFT-5 hostile-input limit); the rest reuse `WorkflowCompatibilityReason` verbatim once a manifest was built and compared against the descriptor's expectations. See [Dynamic Workflow Sources](../guides/workflow-versioning.md#dynamic-workflow-sources) for the full validation pipeline.
+
 ### `ActivateWorkflowRevisionOptions`
 
 Options accepted by `engine.workflows.activate()`.

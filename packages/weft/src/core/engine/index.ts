@@ -13,6 +13,7 @@ import {
   type RegisteredActivityFunction,
 } from '../activity-registry.ts';
 import { AtomicState, type AtomicStateOptions } from '../atomic-state.ts';
+import type { WorkflowRevisionRecord } from '../catalog/index.ts';
 import { deserializeCheckpoint } from '../checkpoint.ts';
 import type { StoredStreamChunk } from '../context.ts';
 import { createHandleCacheFinalizer } from '../engine-helpers.ts';
@@ -20,6 +21,7 @@ import type { TypedEventTarget, WeftEventMap } from '../events.ts';
 import type { Interceptor } from '../interceptor.ts';
 import { ReviewCoordinator, type ReviewRequest } from '../review/index.ts';
 import { Scheduler } from '../scheduler.ts';
+import type { WorkflowSourceHandle } from '../source/index.ts';
 import {
   messageName,
   type AnyActivityDefinition,
@@ -272,6 +274,11 @@ import {
   releaseSignalWaiter,
   signal as signalWorkflow,
 } from './signals.ts';
+import { registerSource as registerWorkflowSource } from './source-registration.ts';
+import {
+  resolveWorkflowSource as resolveWorkflowSourceImpl,
+  type ResolveWorkflowSourceOptions,
+} from './source-resolution.ts';
 import {
   loadScheduleState,
   loadWorkflowState,
@@ -369,6 +376,7 @@ export {
 export type { EngineLeaseHealth, LeaseLostReason } from './lease-health.ts';
 export type { RecoverAllOptions, RecoveredWorkflowInfo } from './lifecycle.ts';
 export { ScheduleHandle } from './schedule-handle.ts';
+export type { ResolveWorkflowSourceOptions } from './source-resolution.ts';
 export type {
   WorkflowFeedListener,
   WorkflowFeedRecord,
@@ -849,6 +857,10 @@ export class Engine<
     getInternals(this).catalogDrainPromise = null;
     getInternals(this).registeredCatalogRevisions = new Map();
     getInternals(this).inFlightStartsByRevision = new Map();
+    getInternals(this).workflowSourcesByName = new Map();
+    getInternals(this).sourceResolutionsInFlight = new Map();
+    getInternals(this).sourceResolutionWaiterControllers = new Set();
+    getInternals(this).resolvedWorkflowSources = new Map();
     this.#ensureRetentionSweepInterval();
     this.#startSecondInstanceDetection();
   }
@@ -1527,6 +1539,58 @@ export class Engine<
 
     registerWorkflow(getInternals(this), definition, this.#createRegistrationCallbacks());
     return typedEngineView<TWorkflows, TActivities>(this);
+  }
+  /**
+   * Record `source` as a lazily-resolvable dynamic workflow source
+   * (WFT-13/14): synchronous, and it never invokes `source.load` — it only
+   * records a catalog candidate keyed `(source.descriptor.name,
+   * source.descriptor.revision)`. Call `resolveWorkflowSource()` to
+   * actually load, validate, and install it. A workflow name may not be
+   * both eagerly registered (`engine.register()`) and a dynamic source;
+   * registering the identical `source` reference twice for the same
+   * `(name, revision)` is idempotent.
+   *
+   * @example
+   * ```ts
+   * import { Engine, workflowSource } from '@lostgradient/weft';
+   *
+   * declare const loadCheckout: () => Promise<{
+   *   checkout: import('@lostgradient/weft').WorkflowDefinition<unknown, unknown, 'checkout'>;
+   * }>;
+   * const engine = new Engine();
+   * engine.registerSource(
+   *   workflowSource(
+   *     { name: 'checkout', location: './checkout.ts', exportName: 'checkout', revision: 'r1' },
+   *     loadCheckout,
+   *   ),
+   * );
+   * ```
+   */
+  registerSource(source: WorkflowSourceHandle): void {
+    registerWorkflowSource(getInternals(this), source);
+  }
+  /**
+   * Load, validate, and install one dynamic workflow source revision
+   * previously recorded via {@link Engine.registerSource}. Single-flight
+   * per `(name, revision)`: concurrent callers for the same key share one
+   * loader invocation. Does not wire `engine.start()` or recovery to await
+   * resolution — that is a later batch's job (WFT-15).
+   *
+   * @example
+   * ```ts
+   * import { Engine } from '@lostgradient/weft';
+   *
+   * declare const engine: Engine;
+   * const record = await engine.resolveWorkflowSource('checkout', 'r1');
+   * console.log(record.manifest.revision);
+   * ```
+   */
+  async resolveWorkflowSource(
+    name: string,
+    revision: string,
+    options?: ResolveWorkflowSourceOptions,
+  ): Promise<WorkflowRevisionRecord> {
+    return resolveWorkflowSourceImpl(this as unknown as Engine, name, revision, options);
   }
   /**
    * Register every workflow from an object map at once and return a typed

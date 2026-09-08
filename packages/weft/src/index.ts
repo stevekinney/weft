@@ -94,6 +94,7 @@ export type {
   RecoverAllOptions,
   RecoveredWorkflowInfo,
   RegistryAgnosticEngine,
+  ResolveWorkflowSourceOptions,
   WorkflowWakeKind,
 } from './core/engine';
 // The durable workflow catalog's public promotion (WFT-11): `engine.workflows`
@@ -108,6 +109,19 @@ export type {
   WorkflowCatalogActivePointer,
   WorkflowRevisionRecord,
 } from './core/catalog/index.ts';
+// Dynamic workflow sources (WFT-13/14): `workflowSource()` builds a typed
+// handle pairing serializable `WorkflowSourceDescriptor` metadata with a
+// host-side loader capability; `engine.registerSource()` records it as a
+// lazy catalog candidate, `engine.resolveWorkflowSource()` loads, validates,
+// and installs it. See `documentation/guides/workflow-versioning.md#dynamic-workflow-sources`.
+export { WorkflowSourceValidationError, workflowSource } from './core/source/index.ts';
+export type {
+  WorkflowSourceDescriptor,
+  WorkflowSourceDescriptorInput,
+  WorkflowSourceHandle,
+  WorkflowSourceKind,
+  WorkflowSourceRejectionReason,
+} from './core/source/index.ts';
 // Workflow Catalog — reference accounting and removal (WFT-12). Sourced
 // from `core/engine/catalog-removal.ts`, NOT `core/catalog/index.ts` —
 // `core/catalog/**` itself stays package-internal (see that module's own
