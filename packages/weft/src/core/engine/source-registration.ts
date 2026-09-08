@@ -83,6 +83,24 @@ export function registerSource(internals: EngineInternals, source: WorkflowSourc
   const { name, revision } = source.descriptor;
   validateWorkflowOrActivityName(name, 'workflow');
 
+  // `workflowSource()` already returns a frozen descriptor, so this is a
+  // no-op for every handle built through the typed surface. It is NOT a
+  // no-op for a manually-constructed handle (bypassing that surface, same
+  // class of input `assertWellFormedSourceDescriptor` above already
+  // defends against) whose `descriptor` is a plain mutable object —
+  // `WorkflowSourceDescriptor`'s `readonly` fields are compile-time only,
+  // so nothing stops such a caller from mutating `descriptor.name`/
+  // `revision` AFTER this call returns. Without this freeze, this map would
+  // still index the ORIGINAL `(name, revision)` computed just above while
+  // `resolveWorkflowSource()` later reads the live, mutated descriptor off
+  // the same stored reference — installing an entirely different
+  // workflow/revision under this key. Freezing here closes that gap while
+  // preserving reference identity (`source` itself, and this stored
+  // `Map` entry, are still the exact object the caller passed in — only its
+  // `descriptor` becomes immutable), so the existing
+  // same-reference-is-idempotent rule below is unaffected.
+  Object.freeze(source.descriptor);
+
   if (internals.registrations.has(name)) {
     throw new Error(
       `Cannot registerSource("${name}"): "${name}" is already registered as an eager workflow ` +

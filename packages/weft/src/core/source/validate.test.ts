@@ -90,6 +90,47 @@ describe('validateResolvedWorkflowSource()', () => {
     expect(outcome).toEqual({ ok: false, reasons: ['invalid-definition'] });
   });
 
+  it('rejects a builder-shaped export whose activities field is an array or Map, not a plain record, with invalid-definition', async () => {
+    // A bare `typeof value === 'object' && value !== null` check also
+    // accepts an array, `Map`, `Date`, or other exotic-prototype value —
+    // `Object.values(new Map(...))` is empty, so validation would otherwise
+    // successfully install a manifest that silently omits the source's
+    // intended activities instead of being rejected.
+    const arrayActivitiesExport = {
+      name: 'arrayActivities',
+      handler: async function* arrayActivities() {
+        return undefined;
+      },
+      activities: [],
+      signals: {},
+      updates: {},
+      queries: {},
+      searchAttributes: {},
+    };
+    const outcomeArray = await validateResolvedWorkflowSource(
+      descriptorFor({ name: 'arrayActivities', revision: 'r1', exportName: 'arrayActivities' }),
+      { arrayActivities: arrayActivitiesExport },
+    );
+    expect(outcomeArray).toEqual({ ok: false, reasons: ['invalid-definition'] });
+
+    const mapActivitiesExport = {
+      name: 'mapActivities',
+      handler: async function* mapActivities() {
+        return undefined;
+      },
+      activities: new Map([['doStuff', { execute: async () => undefined }]]),
+      signals: {},
+      updates: {},
+      queries: {},
+      searchAttributes: {},
+    };
+    const outcomeMap = await validateResolvedWorkflowSource(
+      descriptorFor({ name: 'mapActivities', revision: 'r1', exportName: 'mapActivities' }),
+      { mapActivities: mapActivitiesExport },
+    );
+    expect(outcomeMap).toEqual({ ok: false, reasons: ['invalid-definition'] });
+  });
+
   it('rejects a builder-shaped export whose handler is not callable with invalid-definition', async () => {
     // All five builder-produced object maps are present, so
     // `isBuilderWorkflowDefinition()`'s structural check alone would

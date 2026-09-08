@@ -1,3 +1,4 @@
+import { isRecord } from '../../worker/manifest/is-record.ts';
 import { ActivityRegistry } from '../activity-registry.ts';
 import { WorkflowDefinitionRegisteredEvent } from '../events.ts';
 import {
@@ -245,11 +246,21 @@ function commitWorkflowDefinition(
  * type from `workflow-builder.ts` to avoid a cycle with the engine package;
  * the runtime check is sufficient because the builder is the only producer of
  * objects with all five fields as plain `Readonly<Record<string, ...>>`.
+ *
+ * Uses {@link isRecord}, not a bare `typeof === 'object' && !== null` check —
+ * the latter also accepts an array, `Map`, `Date`, or another exotic-prototype
+ * value. For a malformed loader export in the dynamic workflow-source
+ * validation pipeline (`core/source/validate.ts`, WFT-13/14), a field like
+ * `activities: new Map(...)` would otherwise pass this structural check,
+ * then `Object.values(...)` on it downstream silently yields an empty
+ * collection — installing a manifest that quietly omits the source's
+ * intended activities/messages instead of being rejected as
+ * `invalid-definition`.
  */
 function hasNonNullObjectField(value: object, key: string): boolean {
   if (!(key in value)) return false;
   const fieldValue = (value as { [k: string]: unknown })[key];
-  return typeof fieldValue === 'object' && fieldValue !== null;
+  return isRecord(fieldValue);
 }
 
 /**

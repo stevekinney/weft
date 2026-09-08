@@ -131,8 +131,9 @@ async function runSharedSourceLoad(
   const catalog = getWorkflowCatalog(engine);
   const installed = await catalog.install(outcome.manifest, outcome.definition);
 
-  // Re-checked here, not just at line 121 above `catalog.install()`: disposal
-  // can land while that `await` is in flight. `disposeSourceResolutionState()`
+  // Re-checked here, not just at the `internals.disposed` check immediately
+  // above (before `catalog.install()`): disposal can land while that `await`
+  // is in flight. `disposeSourceResolutionState()`
   // has already cleared `internals.resolvedWorkflowSources` by the time this
   // resumes, and nothing will ever clear it again — writing into it here would
   // silently repopulate a disposed engine's internals with a definition and
@@ -373,19 +374,27 @@ export async function resolveWorkflowSource(
 
   internals.sourceResolutionWaiterControllers.add(waiter.controller);
   try {
-    const outcome = await resolveCachedOrHandle(engine, internals, name, revision);
-
-    // An abort (caller-supplied, or engine disposal — which aborts every
-    // controller in `internals.sourceResolutionWaiterControllers`, including
-    // this one, added above before this `await`) can have landed while the
-    // `await` just above was in flight (catalog readiness, a durable
-    // `resolveEntry` read, the pin-compatibility check). Checked BEFORE
-    // either branch below — a cached hit must not resolve successfully out
-    // from under a caller who no longer wants it, any more than an
-    // about-to-start load may: both are "this specific call" work this
-    // waiter's own cancellation interest governs, per the module doc.
-    if (waiter.controller.signal.aborted) {
-      throw toAbortError(waiter.controller.signal);
+    // Raced against this waiter's own abort signal, not just re-checked
+    // after — `resolveCachedOrHandle()`'s awaits (catalog readiness, a
+    // durable `resolveEntry` read, the pin-compatibility check) can stall
+    // indefinitely on a slow storage backend; a `waiter.controller.signal
+    // .aborted` check placed only AFTER that await would never run while
+    // the await itself is still pending, leaving exactly the outstanding
+    // waiter disposal promises to reject. Racing here settles this call the
+    // moment the abort fires regardless of how long the catalog phase
+    // takes — mirroring the identical race the shared-load phase below
+    // already uses.
+    const cachedOrHandle = resolveCachedOrHandle(engine, internals, name, revision);
+    const cachedOrHandleAbort = abortRejection(waiter.controller.signal);
+    cachedOrHandleAbort.catch(() => {});
+    let outcome: Awaited<typeof cachedOrHandle>;
+    try {
+      outcome = await Promise.race([cachedOrHandle, cachedOrHandleAbort]);
+    } finally {
+      // `resolveCachedOrHandle()` keeps running even when the abort side of
+      // the race wins — swallow its eventual settle (fulfillment or
+      // rejection) so a late one never surfaces as an unhandled rejection.
+      cachedOrHandle.catch(() => {});
     }
 
     if (outcome.cached !== undefined) {

@@ -200,4 +200,39 @@ describe('engine.registerSource() structural validation', () => {
     ).toThrow(/exceeding the maximum identifier size/);
     engine[Symbol.dispose]();
   });
+
+  it("freezes a manually-constructed handle's mutable descriptor, so a post-registration mutation of name/revision throws instead of silently retargeting the registered key", () => {
+    // `workflowSource()` already returns a frozen descriptor — this can only
+    // be reached by bypassing that typed surface with a hand-built handle
+    // whose descriptor is a plain mutable object (still valid TypeScript,
+    // since `WorkflowSourceDescriptor`'s `readonly` fields are compile-time
+    // only). Without registerSource() freezing it, mutating `revision` here
+    // would leave `internals.workflowSourcesByName` still indexed under the
+    // ORIGINAL revision while `resolveWorkflowSource()` reads the mutated
+    // descriptor off the same stored reference.
+    const engine = new Engine();
+    const mutableDescriptor = {
+      kind: 'module' as const,
+      name: 'checkout',
+      location: './checkout.ts',
+      exportName: 'checkout',
+      revision: 'original-revision',
+    };
+    const source = { descriptor: mutableDescriptor, load: async () => ({}) };
+
+    engine.registerSource(source);
+
+    expect(() => {
+      mutableDescriptor.revision = 'mutated-after-registration';
+    }).toThrow(TypeError);
+    expect(source.descriptor.revision).toBe('original-revision');
+
+    const internals = getInternals(engine);
+    expect(internals.workflowSourcesByName.get('checkout')?.get('original-revision')).toBe(source);
+    expect(
+      internals.workflowSourcesByName.get('checkout')?.get('mutated-after-registration'),
+    ).toBeUndefined();
+
+    engine[Symbol.dispose]();
+  });
 });
