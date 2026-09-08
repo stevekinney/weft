@@ -278,7 +278,7 @@ function createReadyWatcher(
       const url = findReadyUrl(output.stdout, normalizedReadyPattern);
       if (url !== undefined) {
         settleWithUrl(url);
-        return;
+        return undefined;
       }
 
       fail(

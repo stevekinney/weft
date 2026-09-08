@@ -1522,11 +1522,11 @@ export class Engine<
   register(definition: unknown): unknown {
     if (isActivityDefinition(definition)) {
       this.#registerActivityDefinition(definition);
-      return typedEngineView<TWorkflows, TActivities>(this);
+      return typedEngineView(this);
     }
 
     registerWorkflow(getInternals(this), definition, this.#createRegistrationCallbacks());
-    return typedEngineView<TWorkflows, TActivities>(this);
+    return typedEngineView(this);
   }
   /**
    * Register every workflow from an object map at once and return a typed
@@ -1565,9 +1565,7 @@ export class Engine<
       // call-site typos in user code, not the engine's own batch helper.
       (this.register as (workflow: AnyWorkflowDefinition) => unknown)(definition);
     }
-    return typedEngineView<TWorkflows & InferWorkflowEntries<TWorkflowDefinitions>, TActivities>(
-      this,
-    );
+    return typedEngineView(this);
   }
 
   addInterceptor(interceptor: Interceptor): void {
@@ -1579,9 +1577,7 @@ export class Engine<
     getInternals(this).composedWorkflowInterceptor = undefined;
     getInternals(this).composedActivityInterceptor = undefined;
   }
-  #registerActivityDefinition<TDefinition extends AnyActivityDefinition>(
-    definition: TDefinition,
-  ): void {
+  #registerActivityDefinition(definition: AnyActivityDefinition): void {
     getInternals(this).activityRegistry.register(definition.name, definition);
   }
 

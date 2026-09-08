@@ -52,6 +52,10 @@ export async function executeWorkflow(command: WorkflowCommand): Promise<Command
       return executeWorkflowCancel(command, connection);
     case 'signal':
       return executeWorkflowSignal(command, connection);
+    default: {
+      const exhaustiveCheck: never = command;
+      throw new Error(`Unknown workflow command action: ${JSON.stringify(exhaustiveCheck)}`);
+    }
   }
 }
 

@@ -146,6 +146,15 @@
         "**/__tests__/**/*.ts"
       ],
       "rules": {
+        // no-unused-vars already treats a leading underscore as the repo's
+        // established "intentionally unused" convention (see the top-level
+        // argsIgnorePattern/varsIgnorePattern above), and test files lean on
+        // it heavily for discard-destructured fields, unused loop bindings,
+        // and .test-d.ts type-level assertion names. no-underscore-dangle
+        // contradicts that convention here; rewriting the dozens of sites
+        // that rely on it would not improve the tests, so it is off for
+        // test files only. Production code keeps the rule enabled.
+        "eslint/no-underscore-dangle": "off",
         "complexity": "off",
         "max-lines": "off",
         "require-yield": "off",
@@ -169,6 +178,45 @@
         "no-unused-expressions": "off",
         "unicorn/consistent-function-scoping": "off",
         "promise/always-return": "off"
+      }
+    },
+    {
+      "files": ["**/*.test-d.ts"],
+      "rules": {
+        // .test-d.ts files rely on single-use generics as the mechanism for
+        // type-level assertions: the `Equals<X, Y>` conditional-type trick
+        // needs its own single-use `T` per side to avoid union
+        // distribution, and `expectType<T>(value: T)` captures a value's
+        // inferred type purely to compare it. Removing either "unnecessary"
+        // parameter breaks the assertion it exists to perform.
+        "typescript/no-unnecessary-type-parameters": "off"
+      }
+    },
+    {
+      "files": ["src/storage/node-sqlite-loader.ts"],
+      "rules": {
+        // `BetterSqliteDatabase.transaction<TArguments, TResult>` genuinely
+        // needs both parameters even though each appears once in this
+        // method's own signature: they let a caller pass a concretely typed
+        // callback (e.g. `(a: X[], b: Y[]) => boolean`) through this
+        // structural interface. Collapsing them to `unknown[]`/`unknown`
+        // breaks real call sites (verified: NodeSQLiteStorage#conditionalBatch
+        // fails to typecheck) because a function with narrower parameter
+        // types is not assignable to one typed `(...args: unknown[]) => T`.
+        "typescript/no-unnecessary-type-parameters": "off"
+      }
+    },
+    {
+      "files": ["src/storage/node-sqlite.test.ts"],
+      "rules": {
+        // The test double's `transaction<TArguments, TResult>` must mirror
+        // `BetterSqliteDatabase.transaction`'s genuinely-generic signature
+        // (see the node-sqlite-loader.ts override above) to remain
+        // structurally assignable to `BetterSqliteConstructor`: verified
+        // that collapsing this to a non-generic `unknown[]`/`unknown`
+        // signature fails typecheck, because TypeScript does not consider a
+        // concrete function assignable to a slot requiring a generic one.
+        "typescript/no-unnecessary-type-parameters": "off"
       }
     }
   ]

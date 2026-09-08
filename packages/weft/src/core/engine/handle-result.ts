@@ -116,9 +116,11 @@ function fenceResultOnParentGeneration(
   void promise.then(
     async (value) => {
       if (await parentStillOwnsGeneration(internals, parentWorkflowId)) gate.resolve(value);
+      return undefined;
     },
     async (error: unknown) => {
       if (await parentStillOwnsGeneration(internals, parentWorkflowId)) gate.reject(error);
+      return undefined;
     },
   );
   return gate.promise;

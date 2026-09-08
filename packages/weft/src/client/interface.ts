@@ -352,8 +352,8 @@ export interface WeftClient {
     input: WorkflowInput<WorkflowRegistry, TName>,
     options?: ClientStartOptions,
   ): Promise<ClientHandle<WorkflowOutput<WorkflowRegistry, TName>>>;
-  start<TName extends string>(
-    type: UnknownNameWhenRegistryEmpty<TName>,
+  start(
+    type: UnknownNameWhenRegistryEmpty<string>,
     input: unknown,
     options?: ClientStartOptions,
   ): Promise<ClientHandle>;
@@ -389,8 +389,8 @@ export interface WeftClient {
     signal: StartOrSignalSignal,
     options?: ClientStartOrSignalOptions,
   ): Promise<ClientHandle<WorkflowOutput<WorkflowRegistry, TName>>>;
-  startOrSignal<TName extends string>(
-    type: UnknownNameWhenRegistryEmpty<TName>,
+  startOrSignal(
+    type: UnknownNameWhenRegistryEmpty<string>,
     input: unknown,
     signal: StartOrSignalSignal,
     options?: ClientStartOrSignalOptions,
@@ -410,8 +410,8 @@ export interface WeftClient {
     spec: string | ScheduleSpec,
     options?: ScheduleOptions,
   ): Promise<ClientScheduleHandle>;
-  schedule<TName extends string>(
-    type: UnknownNameWhenRegistryEmpty<TName>,
+  schedule(
+    type: UnknownNameWhenRegistryEmpty<string>,
     input: unknown,
     spec: string | ScheduleSpec,
     options?: ScheduleOptions,

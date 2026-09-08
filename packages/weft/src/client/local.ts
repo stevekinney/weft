@@ -173,8 +173,8 @@ export class LocalClient<
     input: WorkflowInput<WorkflowRegistry, TName>,
     options?: StartOptions,
   ): Promise<ClientHandle<WorkflowOutput<WorkflowRegistry, TName>>>;
-  async start<TName extends string>(
-    type: UnknownNameWhenRegistryEmpty<TName>,
+  async start(
+    type: UnknownNameWhenRegistryEmpty<string>,
     input: unknown,
     options?: StartOptions,
   ): Promise<ClientHandle>;
@@ -189,8 +189,8 @@ export class LocalClient<
     signal: StartOrSignalSignal,
     options?: StartOrSignalOptions,
   ): Promise<ClientHandle<WorkflowOutput<WorkflowRegistry, TName>>>;
-  async startOrSignal<TName extends string>(
-    type: UnknownNameWhenRegistryEmpty<TName>,
+  async startOrSignal(
+    type: UnknownNameWhenRegistryEmpty<string>,
     input: unknown,
     signal: StartOrSignalSignal,
     options?: StartOrSignalOptions,
@@ -212,8 +212,8 @@ export class LocalClient<
     spec: string | ScheduleSpec,
     options?: ScheduleOptions,
   ): Promise<ClientScheduleHandle>;
-  async schedule<TName extends string>(
-    type: UnknownNameWhenRegistryEmpty<TName>,
+  async schedule(
+    type: UnknownNameWhenRegistryEmpty<string>,
     input: unknown,
     spec: string | ScheduleSpec,
     options?: ScheduleOptions,

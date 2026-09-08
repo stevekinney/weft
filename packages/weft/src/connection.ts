@@ -265,11 +265,11 @@ function resolveServerString(context: ConnectionContext): string {
  * instead of throwing.
  */
 function loadFsModule(): typeof import('node:fs') | undefined {
-  return tryLoadNodeBuiltin<typeof import('node:fs')>('node:fs');
+  return tryLoadNodeBuiltin('node:fs');
 }
 
 function loadFsPromisesModule(): typeof import('node:fs/promises') | undefined {
-  return tryLoadNodeBuiltin<typeof import('node:fs/promises')>('node:fs/promises');
+  return tryLoadNodeBuiltin('node:fs/promises');
 }
 
 /** Record the address of a running server so later CLI commands can find it. */

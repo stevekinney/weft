@@ -435,7 +435,7 @@ describe('#456 ctx.race / ctx.all with wait-signal branches', () => {
       workflow({ name: 'race-timeout-wins' }).execute(async function* (ctx: WorkflowContext) {
         const winner = yield* ctx.race([ctx.waitForSignal<string>('ev'), ctx.sleep('10ms')]);
         // sleep resolves undefined; a signal would have resolved a string.
-        return winner === undefined ? 'timed-out' : `signalled:${String(winner)}`;
+        return winner === undefined ? 'timed-out' : `signalled:${winner}`;
       }),
     );
 

@@ -477,7 +477,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
       {
         reason:
           'Bun maps the workflow-resource parser closing brace as uncovered after the direct state-URI parsing assertion executes its return path.',
-        lines: new Set([188]),
+        lines: new Set([192]),
         requireUncoveredLines: true,
       },
     ],

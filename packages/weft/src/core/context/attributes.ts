@@ -42,11 +42,11 @@ export function setAttributes(
   }
 }
 
-export function getAttribute<T extends SearchAttributeValue = SearchAttributeValue>(
+export function getAttribute(
   internals: ContextInternals,
   key: string,
-): T | undefined {
-  return internals.searchAttributes[key] as T | undefined;
+): SearchAttributeValue | undefined {
+  return internals.searchAttributes[key];
 }
 
 export function getAttributes(

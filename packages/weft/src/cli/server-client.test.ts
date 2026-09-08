@@ -67,11 +67,7 @@ describe('callCatalogOperation version skew', () => {
     const engine = new Engine();
     const server = serve({ engine, port: 0 });
     try {
-      const result = await callCatalogOperation(
-        { server: server.url.toString() },
-        'weft.workflows.list',
-        {},
-      );
+      const result = await callCatalogOperation({ server: server.url }, 'weft.workflows.list', {});
       expect(result.ok).toBe(true);
       if (!result.ok) throw new Error('expected success');
       expect(result.value).toMatchObject({ items: [] });

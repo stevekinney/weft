@@ -24,7 +24,7 @@ import { captureCallerStack } from './validation.ts';
 interface WorkflowAtomicStateOperationCache {
   nextStep(): number;
   has(step: number): boolean;
-  get<TResult>(step: number): TResult;
+  get(step: number): unknown;
   set(step: number, value: unknown): void;
 }
 
@@ -61,7 +61,7 @@ function createContextStateOperationCache(
   return {
     nextStep: () => internals.stepIndex++,
     has: (step) => internals.accumulatedResults?.has(step) ?? false,
-    get: <TResult>(step: number) => internals.accumulatedResults?.get(step) as TResult,
+    get: (step: number) => internals.accumulatedResults?.get(step),
     set: (step, value) => {
       context.accumulatedResults.set(step, value);
     },
@@ -216,7 +216,7 @@ export class WorkflowAtomicStateHandle<T> extends EventTarget implements Workflo
 
     const step = operationCache.nextStep();
     if (operationCache.has(step)) {
-      return operationCache.get<TResult>(step);
+      return operationCache.get(step) as TResult;
     }
 
     const result = yield operation;

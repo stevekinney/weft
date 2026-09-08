@@ -86,7 +86,7 @@ describe('workflow forking', () => {
         const second = yield* durableContext.run(recordStage, 'second');
         yield* durableContext.waitForSignal('hold');
         yield* durableContext.waitForSignal('continue');
-        return `${String(first)}:${String(second)}`;
+        return `${first}:${second}`;
       }),
     );
 
@@ -186,7 +186,7 @@ describe('workflow forking', () => {
         const typedInput = String(input);
         return yield* durableContext.memo('terminal-summary', () => {
           terminalSummaries.push(typedInput);
-          return `${typedInput}:${String(stage)}`;
+          return `${typedInput}:${stage}`;
         });
       }),
     );

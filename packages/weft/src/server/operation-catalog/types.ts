@@ -64,10 +64,20 @@ export type SubscriptionOperationInvocation<Element, Envelope> = {
   readonly close: () => Promise<void>;
 };
 
+/**
+ * Envelope acknowledging that a JSON-RPC subscription has started. This is a
+ * protocol-level shape owned by the JSON-RPC WebSocket session, not an
+ * operation's own output — every `kind: 'subscription'` operation dispatched
+ * through `executeSubscription` in `stream-pipeline.ts` produces this same
+ * envelope shape, so it is not parameterized per operation.
+ */
+export type SubscriptionStartEnvelope = {
+  readonly subscriptionId: string;
+  readonly cursor: string;
+};
+
 export type OperationInvocationResult<Output, Element = unknown> =
-  | Output
-  | StreamOperationInvocation<Element>
-  | SubscriptionOperationInvocation<Element, Output>;
+  Output | StreamOperationInvocation<Element> | SubscriptionOperationInvocation<Element, Output>;
 
 /**
  * Metadata that connects an operation-catalog entry to a live MCP tool.
@@ -308,9 +318,7 @@ type SubscriptionRegistrableOperation = RegistrableOperationBase & {
 };
 
 export type RegistrableOperation =
-  | UnaryRegistrableOperation
-  | StreamRegistrableOperation
-  | SubscriptionRegistrableOperation;
+  UnaryRegistrableOperation | StreamRegistrableOperation | SubscriptionRegistrableOperation;
 
 export type DispatchContext = {
   readonly principal: Principal;

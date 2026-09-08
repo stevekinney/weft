@@ -35,7 +35,7 @@ function createServedEngine(): { engine: Engine; url: string; stop: () => Promis
   const server = serve({ engine, port: 0 });
   return {
     engine,
-    url: server.url.toString(),
+    url: server.url,
     stop: async () => {
       await server.stop();
       engine[Symbol.dispose]();

@@ -260,14 +260,25 @@ export function hashString(data: string): string {
  * try to resolve or stub. Returns `undefined` in the browser or any runtime
  * lacking `process.getBuiltinModule`, so callers on a browser-reachable path
  * must treat the result as optional rather than throwing at import time.
+ *
+ * Overloaded per known specifier so callers get the correct module type from
+ * the literal `id` argument alone, without an explicit type argument. Add a
+ * new literal overload here when a new built-in specifier is loaded through
+ * this helper.
  * @internal
  */
-export function tryLoadNodeBuiltin<T>(id: string): T | undefined {
+export function tryLoadNodeBuiltin(id: 'node:fs'): typeof import('node:fs') | undefined;
+export function tryLoadNodeBuiltin(
+  id: 'node:fs/promises',
+): typeof import('node:fs/promises') | undefined;
+export function tryLoadNodeBuiltin(id: 'node:zlib'): typeof import('node:zlib') | undefined;
+export function tryLoadNodeBuiltin(id: 'node:module'): typeof import('node:module') | undefined;
+export function tryLoadNodeBuiltin(id: string): unknown {
   const nodeProcess = getProcess();
   if (typeof nodeProcess?.getBuiltinModule !== 'function') {
     return undefined;
   }
-  return nodeProcess.getBuiltinModule(id) as T;
+  return nodeProcess.getBuiltinModule(id);
 }
 
 // ---------------------------------------------------------------------------
@@ -289,7 +300,7 @@ export function fileSize(path: string): number {
     return Bun.file(path).size;
   }
 
-  const fs = tryLoadNodeBuiltin<typeof import('node:fs')>('node:fs');
+  const fs = tryLoadNodeBuiltin('node:fs');
   if (!fs) {
     throw new Error(
       'fileSize() requires Bun or Node 22.5+ (process.getBuiltinModule). ' +
@@ -313,7 +324,7 @@ export function fileSize(path: string): number {
 // ---------------------------------------------------------------------------
 
 function loadNodeZlib(): typeof import('node:zlib') {
-  const zlib = tryLoadNodeBuiltin<typeof import('node:zlib')>('node:zlib');
+  const zlib = tryLoadNodeBuiltin('node:zlib');
   if (!zlib) {
     throw new Error(
       'gzip/gunzip require Bun or Node 22.5+ (process.getBuiltinModule). ' +
@@ -355,5 +366,5 @@ export function gunzipSync(data: Uint8Array): Uint8Array {
  * @internal
  */
 export function tryLoadNodeZlib(): typeof import('node:zlib') | undefined {
-  return tryLoadNodeBuiltin<typeof import('node:zlib')>('node:zlib');
+  return tryLoadNodeBuiltin('node:zlib');
 }

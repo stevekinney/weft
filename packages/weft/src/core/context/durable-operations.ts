@@ -260,15 +260,19 @@ export function* getVersion(
   return result as number;
 }
 
-export function* waitForUpdate<T = unknown>(
+export function* waitForUpdate(
   context: Context,
   internals: ContextInternals,
   name: string,
-): Generator<ContextOperationRequest, { payload: T; respond: (result: unknown) => void }, unknown> {
+): Generator<
+  ContextOperationRequest,
+  { payload: unknown; respond: (result: unknown) => void },
+  unknown
+> {
   const step = internals.stepIndex++;
 
   if (internals.accumulatedResults?.has(step)) {
-    const cached = internals.accumulatedResults.get(step) as { payload: T };
+    const cached = internals.accumulatedResults.get(step) as { payload: unknown };
     return { payload: cached.payload, respond: () => {} };
   }
 
@@ -287,7 +291,7 @@ export function* waitForUpdate<T = unknown>(
     callerStack,
   };
 
-  const envelope = result as { payload: T; respond: (result: unknown) => void };
+  const envelope = result as { payload: unknown; respond: (result: unknown) => void };
   context.accumulatedResults.set(step, { payload: envelope.payload });
   return envelope;
 }

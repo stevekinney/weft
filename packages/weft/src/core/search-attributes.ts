@@ -172,8 +172,8 @@ export function validateAttributeType(
       validateArrayAttribute(attributeName, value);
       break;
     default: {
-      const _exhaustive: never = declaredType;
-      throw new Error(`Unknown search attribute type declaration: ${String(_exhaustive)}`);
+      const exhaustiveCheck: never = declaredType;
+      throw new Error(`Unknown search attribute type declaration: ${String(exhaustiveCheck)}`);
     }
   }
 }

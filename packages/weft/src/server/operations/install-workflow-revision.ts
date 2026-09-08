@@ -64,7 +64,7 @@ export const installWorkflowRevisionOperation = defineOperation<
     try {
       return await e.workflows.install(manifest);
     } catch (error) {
-      throwWorkflowCatalogOperationFault(error);
+      return throwWorkflowCatalogOperationFault(error);
     }
   },
 });

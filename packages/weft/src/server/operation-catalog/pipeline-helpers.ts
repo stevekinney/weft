@@ -37,6 +37,10 @@ export function transportToAvailabilityKey(transport: TransportKind): keyof Tran
       return 'jsonRpcWebSocket';
     case 'jsonRpcStdio':
       return 'jsonRpcStdio';
+    default: {
+      const exhaustiveCheck: never = transport;
+      throw new Error(`Unknown transport kind: ${JSON.stringify(exhaustiveCheck)}`);
+    }
   }
 }
 
