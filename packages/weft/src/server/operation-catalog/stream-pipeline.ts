@@ -15,7 +15,6 @@ import {
   type DispatchResult,
   type ErasedOperation,
   type SubscriptionOperationInvocation,
-  type SubscriptionStartEnvelope,
 } from './types.ts';
 
 /**
@@ -69,13 +68,13 @@ export async function executeStream<Element>(
  * Execute a `kind: 'subscription'` operation and return its validated
  * subscribe envelope, schema-validating element iterable, and close hook.
  */
-export async function executeSubscription<Element>(
+export async function executeSubscription<Element, Envelope>(
   operationName: string,
   rawInput: unknown,
   context: DispatchContext,
 ): Promise<
   DispatchResult<{
-    envelope: SubscriptionStartEnvelope;
+    envelope: Envelope;
     iterable: AsyncIterable<Element>;
     close: () => Promise<void>;
   }>
@@ -106,7 +105,7 @@ export async function executeSubscription<Element>(
     return dispatchFailure({ code: 'EngineFailure', message: 'internal error', data: {} });
   }
 
-  const envelope = validateOutputAgainstSchema<SubscriptionStartEnvelope>(
+  const envelope = validateOutputAgainstSchema<Envelope>(
     operation.outputSchema,
     invocation.envelope,
   );

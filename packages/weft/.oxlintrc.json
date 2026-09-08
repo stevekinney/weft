@@ -253,6 +253,24 @@
         // `src/client/client-type-surface.test-d.ts`.
         "typescript/no-unnecessary-type-parameters": "off"
       }
+    },
+    {
+      "files": ["src/server/operation-catalog/stream-pipeline.ts"],
+      "rules": {
+        // `executeSubscription<Element, Envelope>`'s `Envelope` is used once
+        // in its own signature (the return type), but it is a genuine
+        // caller-supplied assertion tied to each operation's own
+        // `outputSchema` (validated at runtime, erased at the
+        // `ErasedOperation` dispatch boundary) — the same JSON.parse<T>()
+        // pattern as the sites above. Two different real subscription
+        // operations dispatch through this one function with two different
+        // envelope shapes; narrowing it to one concrete shape is a type-
+        // safety bug, not a simplification (see the PR #953 review thread
+        // and the `weft.audit.subscriptiononly` regression test in
+        // `dispatch-audit.test.ts`, which pins an envelope with no `cursor`
+        // field going through this same function).
+        "typescript/no-unnecessary-type-parameters": "off"
+      }
     }
   ]
 }

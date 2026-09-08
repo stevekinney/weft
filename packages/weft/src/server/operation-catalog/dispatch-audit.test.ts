@@ -196,6 +196,58 @@ describe('operation dispatch audit — long-lived kind guards', () => {
   });
 });
 
+describe('operation dispatch audit — executeSubscription envelope typing', () => {
+  // Regression guard: executeSubscription<Element, Envelope> must stay
+  // generic over the operation's declared envelope shape. A prior revision
+  // narrowed the return type to the canonical JSON-RPC session envelope
+  // ({ subscriptionId, cursor }), which is false for a catalog subscription
+  // whose outputSchema declares a different shape — this operation deliberately
+  // omits `cursor` to prove the envelope type genuinely follows the operation's
+  // own outputSchema/Envelope type argument rather than a hardcoded shape.
+  it('returns exactly the operation-declared envelope shape, without a cursor field the schema never declared', async () => {
+    const subscriptionIdOnlyOperation = defineOperation({
+      name: 'weft.audit.subscriptiononly',
+      mcpExposable: false,
+      destructive: false,
+      summary: 'Subscription operation whose envelope has no cursor field',
+      kind: 'subscription',
+      inputSchema: z.object({}),
+      outputSchema: z.object({ subscriptionId: z.string() }),
+      eventSchema: z.object({ value: z.number() }),
+      access: { kind: 'public' },
+      transports: { http: false, jsonRpcHttp: false, jsonRpcWebSocket: true, jsonRpcStdio: false },
+      unknownKeyPolicy: { http: 'reject', jsonRpc: 'reject' },
+      invoke: async () => ({
+        envelope: { subscriptionId: 'sub-1' },
+        iterable: (async function* () {
+          yield { value: 1 };
+        })(),
+        close: async () => {},
+      }),
+    });
+    const registry = createOperationRegistry([subscriptionIdOnlyOperation]);
+
+    const result = await executeSubscription<{ value: number }, { subscriptionId: string }>(
+      'weft.audit.subscriptiononly',
+      {},
+      {
+        principal: anonymousPrincipal(),
+        engine: {},
+        transport: 'jsonRpcWebSocket',
+        registry,
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.envelope).toEqual({ subscriptionId: 'sub-1' });
+    // The runtime envelope has no `cursor` key at all — asserting this
+    // directly, rather than only checking the TypeScript type, is what
+    // catches a return-type narrowing that lies about a field's presence.
+    expect(Object.hasOwn(result.value.envelope, 'cursor')).toBe(false);
+  });
+});
+
 describe('operation dispatch audit — HTTP-handler integration', () => {
   it('records the prefix-up-to-failure when input parsing fails on a real HTTP POST', async () => {
     // Failure-path coverage: the test proves the trace records the

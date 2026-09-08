@@ -145,7 +145,7 @@ export function createJsonRpcWebSocketSession(
     }
 
     await startSubscription(request, () =>
-      executeSubscription<EventEnvelope>(
+      executeSubscription<EventEnvelope, SubscriptionStartEnvelope>(
         WORKFLOW_EVENTS_OPERATION_NAME,
         {
           workflowId: validation.workflowId,
@@ -170,12 +170,16 @@ export function createJsonRpcWebSocketSession(
     params: Record<string, unknown> | undefined,
   ): Promise<void> {
     await startSubscription(request, () =>
-      executeSubscription<FleetEventEnvelope>(FLEET_EVENTS_OPERATION_NAME, params ?? {}, {
-        principal,
-        engine: { fleetFeed },
-        transport,
-        registry,
-      }),
+      executeSubscription<FleetEventEnvelope, SubscriptionStartEnvelope>(
+        FLEET_EVENTS_OPERATION_NAME,
+        params ?? {},
+        {
+          principal,
+          engine: { fleetFeed },
+          transport,
+          registry,
+        },
+      ),
     );
   }
 
