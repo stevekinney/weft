@@ -152,7 +152,19 @@ export type ApplicationDeliverySettleResult =
  * ```
  */
 export type ApplicationOutboxDeliverResult =
-  | { readonly status: 'settled'; readonly receipt: ApplicationDeliveryReceipt }
+  | {
+      readonly status: 'settled';
+      readonly receipt: ApplicationDeliveryReceipt;
+      /**
+       * Whether this call committed the receipt's disposition. `false` when
+       * another actor moved the delivery first (a cancellation or recovery that
+       * refused this runner's begin or settlement), when the caller aborted
+       * before the send began, or when the outbox was disposed mid-send and the
+       * lease was left for maintenance; the receipt is then the current durable
+       * state, not this runner's work.
+       */
+      readonly committed: boolean;
+    }
   | { readonly status: 'empty' }
   | { readonly status: 'held'; readonly availableAt: number };
 

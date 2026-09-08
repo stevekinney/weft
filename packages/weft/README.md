@@ -299,8 +299,9 @@ using outbox = new ApplicationOutbox({
   ownerId: 'agent-7',
   adapter: {
     async send(request) {
-      // Put the request on the wire; present request.attemptToken to the
-      // remote system as its idempotency key wherever it accepts one.
+      // Put the request on the wire. Present request.delivery.externalIdempotencyKey
+      // as the remote idempotency key when the delivery carries one; the attempt
+      // token changes per attempt and is only a request id or fence.
       void request;
       return { status: 'acknowledged', evidence: { messageId: 'm-1' } };
     },

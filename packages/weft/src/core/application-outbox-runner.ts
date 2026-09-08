@@ -51,26 +51,18 @@ async function sendOnce(
   claim: ApplicationDeliveryClaim,
   requestSignal: AbortSignal | undefined,
 ): Promise<ValidatedOutcome> {
-  // An abort that landed while the begin was committing means nothing was
-  // sent: the attempt is over, but the delivery is safe to try again.
-  if (claim.signal.aborted || requestSignal?.aborted === true) {
+  // An abort that landed while the begin was committing, or an attempt
+  // deadline that passed during it, means nothing was sent: the attempt is
+  // over, but the delivery is safe to try again.
+  const budget = claim.attemptDeadlineAt - runtime.now();
+  if (claim.signal.aborted || requestSignal?.aborted === true || budget <= 0) {
     return {
       status: 'retryable',
       failure: {
         reason: 'retryable',
-        message: 'The attempt was aborted before the transport was called.',
+        message: 'The attempt ended before the transport was called.',
       },
       retryAfterMs: undefined,
-    };
-  }
-  const budget = claim.attemptDeadlineAt - runtime.now();
-  if (budget <= 0) {
-    return {
-      status: 'unknown',
-      failure: {
-        reason: 'unknown-outcome',
-        message: 'The attempt deadline passed before the transport was called.',
-      },
     };
   }
   const raced = await raceAbortWithin(
@@ -121,7 +113,14 @@ async function sendOnce(
 }
 
 function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  if (error instanceof Error) return error.message;
+  try {
+    return String(error);
+  } catch {
+    // A thrown value whose own stringification throws still has to become a
+    // bounded diagnostic rather than a second exception out of the runner.
+    return 'a value that could not be converted to a string';
+  }
 }
 
 /**
@@ -135,12 +134,7 @@ export async function deliverNext(
   runtime: OutboxRuntime,
   options?: { readonly signal?: AbortSignal | undefined },
 ): Promise<ApplicationOutboxDeliverResult> {
-  const adapter = runtime.adapter;
-  if (adapter === undefined) {
-    throw new ApplicationDeliveryValidationError(
-      'deliverNext() and drain() require an adapter; construct the outbox with one or drive claims directly.',
-    );
-  }
+  const adapter = requireAdapter(runtime);
   const claimed = await claimNextDelivery(runtime, options);
   if (claimed.status !== 'claimed') return claimed;
   const { claim } = claimed;
@@ -155,11 +149,15 @@ export async function deliverNext(
       'The delivery request was aborted before the send began.',
       deliveryId,
     );
-    return { status: 'settled', receipt: claim.receipt };
+    return { status: 'settled', receipt: claim.receipt, committed: false };
   }
   const begun = await beginAttempt(runtime, { deliveryId, attemptToken: claim.attemptToken });
   if (begun.status !== 'settled') {
-    return { status: 'settled', receipt: await currentReceipt(runtime, deliveryId, begun) };
+    return {
+      status: 'settled',
+      receipt: await currentReceipt(runtime, deliveryId, begun),
+      committed: false,
+    };
   }
   const stopRenewing = keepLeaseAlive(runtime, claim);
   const stopForwarding = forwardAbort(runtime, claim.attemptToken, options?.signal);
@@ -175,6 +173,13 @@ export async function deliverNext(
     stopRenewing();
     stopForwarding();
   }
+  // Disposal mid-send aborted the adapter; a caller that disposed the handle
+  // may already have released the storage behind it, so nothing more is
+  // written. The lease stays `attempting` for a maintenance pass to recover
+  // as an unknown outcome, which is exactly what it is.
+  if (runtime.disposal.aborted) {
+    return { status: 'settled', receipt: begun.receipt, committed: false };
+  }
   const settled = await settleAttempt(runtime, {
     deliveryId,
     attemptToken: claim.attemptToken,
@@ -186,7 +191,20 @@ export async function deliverNext(
     'The application outbox finished this attempt.',
     deliveryId,
   );
-  return { status: 'settled', receipt: await currentReceipt(runtime, deliveryId, settled) };
+  return {
+    status: 'settled',
+    receipt: await currentReceipt(runtime, deliveryId, settled),
+    committed: settled.status === 'settled' || settled.status === 'retrying',
+  };
+}
+
+function requireAdapter(runtime: OutboxRuntime): ApplicationDeliveryAdapter {
+  if (runtime.adapter === undefined) {
+    throw new ApplicationDeliveryValidationError(
+      'deliverNext() and drain() require an adapter; construct the outbox with one or drive claims directly.',
+    );
+  }
+  return runtime.adapter;
 }
 
 /**
@@ -230,13 +248,29 @@ function keepLeaseAlive(runtime: OutboxRuntime, claim: ApplicationDeliveryClaim)
   const deliveryId = claim.receipt.deliveryId;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
-  const arm = (visibilityExpiresAt: number): void => {
+  // The last expiry durable storage confirmed. Renewal is retried only inside
+  // this window: past it the lease may already belong to someone else.
+  let confirmedExpiresAt = claim.visibilityExpiresAt;
+  const abort = (reason: string): void => {
+    const registration = runtime.attemptControllers.get(claim.attemptToken);
+    if (registration !== undefined && !registration.controller.signal.aborted) {
+      registration.controller.abort(new Error(reason));
+    }
+  };
+  const arm = (): void => {
     if (stopped) return;
-    const window = Math.max(1, Math.floor((visibilityExpiresAt - runtime.now()) / 2));
-    timer = setTimeout(() => {
-      timer = null;
-      void renew();
-    }, window);
+    const remaining = confirmedExpiresAt - runtime.now();
+    if (remaining <= 0) {
+      abort('The attempt lease expired before its renewal could be confirmed.');
+      return;
+    }
+    timer = setTimeout(
+      () => {
+        timer = null;
+        void renew();
+      },
+      Math.max(1, Math.floor(remaining / 2)),
+    );
     timer.unref?.();
   };
   const renew = async (): Promise<void> => {
@@ -244,19 +278,29 @@ function keepLeaseAlive(runtime: OutboxRuntime, claim: ApplicationDeliveryClaim)
     let result: Awaited<ReturnType<typeof heartbeatAttempt>>;
     try {
       result = await heartbeatAttempt(runtime, { deliveryId, attemptToken: claim.attemptToken });
-    } catch (error) {
+    } catch {
       // A storage failure during renewal is not a verdict on the lease; try
-      // again on the next tick and let the durable state decide.
-      if (!stopped) arm(runtime.now() + 2);
-      void error;
+      // again while the last confirmed window still holds, and abort once it
+      // cannot be confirmed before expiry.
+      arm();
       return;
     }
+    if (stopped) return;
     // A refused renewal has already released the attempt's controller — the
     // settlement path aborts the signal as it refuses — so there is nothing
     // left to do here but stop renewing.
-    if (!stopped && result.status === 'renewed') arm(result.visibilityExpiresAt);
+    if (result.status !== 'renewed') return;
+    confirmedExpiresAt = result.visibilityExpiresAt;
+    // Cancellation requested in another process reaches this runner only
+    // through the renewal; the transport is told to stop the same way an
+    // in-process request tells it.
+    if (result.cancellationRequested) {
+      abort('The application outbox cancelled this delivery.');
+      return;
+    }
+    arm();
   };
-  arm(claim.visibilityExpiresAt);
+  arm();
   return () => {
     stopped = true;
     if (timer !== null) clearTimeout(timer);
@@ -347,7 +391,9 @@ export async function drainOutbox(
     counters.retryScheduled += maintained.rescheduled;
     const result = await deliverNext(runtime, options);
     if (result.status === 'settled') {
-      count(counters, result.receipt);
+      // Only what this drain committed is this drain's to report; a disposition
+      // another worker won belongs to that worker's accounting.
+      if (result.committed) count(counters, result.receipt);
       continue;
     }
     const header = await loadOutboxHeader(

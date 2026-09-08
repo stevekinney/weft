@@ -40,7 +40,7 @@ export function decodeApplicationOutboxRecord(
     fail(key);
   }
   if (!isRecordObject(decoded)) fail(key);
-  readVersion(decoded, key);
+  readVersion(decoded, key, APPLICATION_OUTBOX_RECORD_VERSION);
   const namespace = readString(decoded, 'namespace', key);
   const ownerId = readString(decoded, 'ownerId', key);
   if (ownKey(() => KEYS.applicationOutbox(namespace, ownerId), key) !== key) fail(key);
@@ -81,7 +81,7 @@ export function decodeApplicationDeliveryIdempotencyRecord(
     fail(key);
   }
   if (!isRecordObject(decoded)) fail(key);
-  readVersion(decoded, key);
+  readVersion(decoded, key, APPLICATION_OUTBOX_RECORD_VERSION);
   return {
     recordVersion: APPLICATION_OUTBOX_RECORD_VERSION,
     deliveryId: readIdentifier(decoded['deliveryId'], key),

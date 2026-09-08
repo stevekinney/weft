@@ -366,6 +366,144 @@ describe('automatic maintenance and disposal', () => {
   });
 });
 
+describe('runner: second review round', () => {
+  afterEach(() => {
+    restoreRealTimers();
+  });
+
+  it('aborts the adapter once renewal cannot be confirmed before the last known expiry', async () => {
+    useFakeTimers();
+    let failing = false;
+    let reads = 0;
+    class DownStorage extends MemoryStorage {
+      override async get(key: string): Promise<Uint8Array | null> {
+        if (failing) {
+          reads += 1;
+          throw new Error('storage down');
+        }
+        return super.get(key);
+      }
+    }
+    const { outbox, adapter, clock } = createOutboxFixture({
+      storage: new DownStorage(),
+      visibilityTimeoutMs: 100,
+      attemptTimeoutMs: 10_000,
+    });
+    await enqueueOne(outbox);
+    adapter.block();
+    const pending = outbox.deliverNext();
+    await untilRequested(adapter);
+    failing = true;
+    // Retries halve the remaining window each time and stop at expiry.
+    for (let step = 0; step < 12; step += 1) {
+      clock.advance(10);
+      await advanceTimersByTime(10);
+      await flushMicrotasks(16);
+    }
+    expect(adapter.requests[0]!.signal.aborted).toBe(true);
+    expect(adapter.requests[0]!.signal.reason).toMatchObject({
+      message: 'The attempt lease expired before its renewal could be confirmed.',
+    });
+    expect(reads).toBeLessThan(12);
+    // The settlement that follows the abort meets the same outage and surfaces
+    // it to the caller; the lease stays `attempting` for maintenance.
+    await expect(pending).rejects.toThrow('storage down');
+    failing = false;
+    outbox.dispose();
+  });
+
+  it('aborts the adapter when a renewal reports cancellation requested elsewhere', async () => {
+    useFakeTimers();
+    const storage = new MemoryStorage();
+    const clock = createOutboxClock();
+    const { outbox, adapter } = createOutboxFixture({
+      storage,
+      clock,
+      visibilityTimeoutMs: 100,
+      attemptTimeoutMs: 10_000,
+    });
+    const deliveryId = await enqueueOne(outbox);
+    const release = adapter.block();
+    const pending = outbox.deliverNext();
+    await untilRequested(adapter);
+    const remote = createOutboxFixture({ storage: remoteView(storage), clock }).outbox;
+    expect(await statusOf(remote.requestCancellation({ deliveryId }))).toBe('requested');
+    expect(adapter.requests[0]!.signal.aborted).toBe(false);
+    clock.advance(50);
+    await advanceTimersByTime(50);
+    await flushMicrotasks(32);
+    expect(adapter.requests[0]!.signal.aborted).toBe(true);
+    release({ status: 'retryable' });
+    const result = await pending;
+    expect(result.status === 'settled' && result.receipt.state).toBe('unknown-outcome');
+    remote.dispose();
+    outbox.dispose();
+  });
+
+  it('leaves the attempting lease alone when the outbox is disposed mid-send', async () => {
+    const storage = new MemoryStorage();
+    const clock = createOutboxClock();
+    const { outbox, adapter } = createOutboxFixture({ storage, clock, attemptTimeoutMs: 100 });
+    const deliveryId = await enqueueOne(outbox);
+    adapter.block();
+    const pending = outbox.deliverNext();
+    await untilRequested(adapter);
+    outbox.dispose();
+    const result = await pending;
+    expect(result).toMatchObject({ status: 'settled', committed: false });
+    expect(result.status === 'settled' && result.receipt.state).toBe('attempting');
+    const observer = createOutboxFixture({ storage, clock }).outbox;
+    expect(await fieldOf(observer.receipt(deliveryId), 'state')).toBe('attempting');
+    clock.advance(100);
+    expect(await observer.runMaintenance()).toMatchObject({ parked: 1 });
+    observer.dispose();
+  });
+
+  it('turns an adapter failure that cannot be stringified into a bounded unknown outcome', async () => {
+    const { outbox, adapter } = createOutboxFixture();
+    adapter.fail({
+      toString() {
+        throw new Error('no string for you');
+      },
+    });
+    const deliveryId = await enqueueOne(outbox);
+    expect(await deliverOne(outbox)).toBe('unknown-outcome');
+    const failure = await fieldOf(outbox.receipt(deliveryId), 'failure');
+    expect(failure?.message).toContain('could not be converted to a string');
+    outbox.dispose();
+  });
+
+  it('counts a cancellation it committed itself when the outcome arrived before the abort', async () => {
+    const storage = new MemoryStorage();
+    const clock = createOutboxClock();
+    const remote = createOutboxFixture({ storage: remoteView(storage), clock }).outbox;
+    const { outbox } = createOutboxFixture({
+      storage,
+      clock,
+      adapter: {
+        async send(request) {
+          // The cancellation lands in another process while the send is in
+          // flight; this process learns of it only when it settles.
+          await remote.requestCancellation({ deliveryId: request.delivery.deliveryId });
+          return { status: 'rejected', message: 'refused' };
+        },
+      },
+    });
+    await enqueueOne(outbox);
+    expect(await outbox.drain({ timeoutMs: 0 })).toMatchObject({ cancelled: 1, pending: 0 });
+    remote.dispose();
+    outbox.dispose();
+  });
+
+  it('reports committed only for dispositions this runner wrote', async () => {
+    const { outbox } = createOutboxFixture();
+    await enqueueOne(outbox);
+    const result = await outbox.deliverNext();
+    expect(result).toMatchObject({ status: 'settled', committed: true });
+    outbox.dispose();
+  });
+});
+
 describe('same-attempt refusals keep the lease', () => {
   it('treats a repeated begin as idempotent without aborting the live attempt', async () => {
     const { outbox } = createOutboxFixture();

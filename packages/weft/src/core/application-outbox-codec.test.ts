@@ -20,6 +20,7 @@ import {
   encodeApplicationOutboxRecord,
 } from './application-outbox-index-codec.ts';
 import type { ApplicationDeliveryRecord } from './application-outbox-types.ts';
+import { readVersion } from './application-primitive-codec.ts';
 import { encode } from './codec.ts';
 import { PersistedDataCorruptError } from './persisted-data-incompatible-error.ts';
 
@@ -220,6 +221,14 @@ describe('delivery record codec', () => {
 
   it('fails closed on an identity that cannot build its own key', () => {
     rejects({ ...base(), state: 'queued', deliveryId: '\uD800' });
+  });
+});
+
+describe('record version reader', () => {
+  it('checks the version the owning codec expects, not the mailbox default', () => {
+    expect(() => readVersion({ recordVersion: 2 }, 'k', 2)).not.toThrow();
+    expect(() => readVersion({ recordVersion: 2 }, 'k')).toThrow(PersistedDataCorruptError);
+    expect(() => readVersion({ recordVersion: 1 }, 'k', 2)).toThrow(PersistedDataCorruptError);
   });
 });
 

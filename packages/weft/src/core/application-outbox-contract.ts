@@ -84,8 +84,10 @@ export type ApplicationDeliveryOutcome =
 /**
  * One send request handed to a transport adapter.
  *
- * `attemptToken` is the fence the adapter should present to the remote system
- * where it can (as an idempotency or request id), and `signal` aborts when
+ * `attemptToken` is unique per attempt: a per-attempt request id or fence the
+ * adapter may present, never a cross-attempt idempotency key — a retry mints a
+ * new one. Deduplication across attempts needs
+ * `delivery.externalIdempotencyKey`. `signal` aborts when
  * cancellation is requested in this process, when the runner stops waiting
  * at the attempt deadline and releases the attempt, or when the outbox is
  * disposed. `credentialRef`

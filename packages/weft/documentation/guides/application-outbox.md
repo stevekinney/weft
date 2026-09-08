@@ -77,7 +77,7 @@ queued ──claim──▶ claimed ──begin──▶ attempting ──adapte
 
 Without the intermediate write those two cases are indistinguishable, and an outbox would have to choose between duplicating effects and abandoning deliveries. The extra compare-and-swap per delivery is the price of telling them apart.
 
-`deliverNext()` performs both steps, calls the adapter, and settles. A host that drives the transport itself uses the same steps explicitly: `claim()`, `beginAttempt()`, then `settle()`.
+`deliverNext()` performs both steps, calls the adapter, and settles. Its `settled` result carries `committed`: `true` when this call wrote the receipt's disposition, `false` when another actor moved the delivery first, the caller aborted before the send began, or the outbox was disposed mid-send and the lease was left for maintenance to recover. A host that drives the transport itself uses the same steps explicitly: `claim()`, `beginAttempt()`, then `settle()`.
 
 ## The Adapter Contract
 
@@ -91,8 +91,10 @@ const adapter: ApplicationDeliveryAdapter = {
     void delivery;
     void payload;
     void signal;
-    // Present attemptToken to the remote system as an idempotency key or
-    // request id wherever it accepts one; it is unique per attempt.
+    // Cross-attempt deduplication needs a key that survives a retry: that is
+    // `delivery.externalIdempotencyKey`, when the delivery carries one. The
+    // attempt token changes on every claim, so present it only as a per-attempt
+    // request id or fence.
     const accepted = attemptToken.length > 0;
     return accepted ? { status: 'acknowledged' } : { status: 'retryable', message: '503' };
   },
@@ -283,4 +285,4 @@ The five terminal states — `acknowledged`, `rejected`, `cancelled`, `unknown-o
 
 ## What It Does Not Promise
 
-The outbox makes delivery intent, attempts, transport evidence, and disposition durable. It does not make external effects exactly-once, and it does not prove that a remote system applied a request unless that system returns verifiable acknowledgement. Weft's README says the same of every external activity side effect: at-least-once unless the external system accepts an idempotency key, supports lookup, or provides write fencing. The attempt token is the outbox's contribution to that boundary — unique per attempt, handed to the adapter for exactly this purpose — and the unknown-outcome policy is where you decide, explicitly, what a lost result may cost.
+The outbox makes delivery intent, attempts, transport evidence, and disposition durable. It does not make external effects exactly-once, and it does not prove that a remote system applied a request unless that system returns verifiable acknowledgement. Weft's README says the same of every external activity side effect: at-least-once unless the external system accepts an idempotency key, supports lookup, or provides write fencing. The outbox's contribution to that boundary is two-fold: `externalIdempotencyKey`, the stable per-delivery key an adapter presents so a remote system can deduplicate a retry across attempts, and the attempt token, unique per attempt, for per-attempt request identity and fencing. The unknown-outcome policy is where you decide, explicitly, what a lost result may cost.

@@ -71,8 +71,12 @@ export function readOptionalInteger(
   return readInteger(source, field, key);
 }
 
-export function readVersion(source: Record<string, unknown>, key: string): void {
-  if (source['recordVersion'] !== APPLICATION_MAILBOX_RECORD_VERSION) fail(key);
+export function readVersion(
+  source: Record<string, unknown>,
+  key: string,
+  expected: number = APPLICATION_MAILBOX_RECORD_VERSION,
+): void {
+  if (source['recordVersion'] !== expected) fail(key);
 }
 
 /**

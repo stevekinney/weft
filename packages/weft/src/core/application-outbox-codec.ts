@@ -322,7 +322,7 @@ function readEnvelope(bytes: Uint8Array, key: string): Record<string, unknown> {
     fail(key);
   }
   if (!isRecordObject(decoded)) fail(key);
-  readVersion(decoded, key);
+  readVersion(decoded, key, APPLICATION_OUTBOX_RECORD_VERSION);
   return decoded;
 }
 

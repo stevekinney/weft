@@ -329,7 +329,8 @@ describe('runner edge cases', () => {
         await sibling.requestCancellation({ deliveryId });
       }
     };
-    expect(await outbox.drain({ timeoutMs: 0 })).toMatchObject({ cancelled: 1, pending: 0 });
+    // The cancellation was another actor's disposition, not this drain's.
+    expect(await outbox.drain({ timeoutMs: 0 })).toMatchObject({ cancelled: 0, pending: 0 });
     expect(adapter.requests).toHaveLength(0);
     sibling.dispose();
     outbox.dispose();
