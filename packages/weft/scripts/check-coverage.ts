@@ -327,9 +327,9 @@ const COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer('COVERAGE_ALLOWANCE_OVE
     'src/server/json-rpc-websocket.ts',
     {
       reason:
-        'Transport disconnect and concurrency exits are behaviorally tested, but Bun does not deterministically attribute these residual paths.',
+        'Transport disconnect and concurrency exits are behaviorally tested, but Bun does not deterministically attribute these residual paths. Line drifted from 107 to 115 (the emit() catch-block header) after this branch added/removed unrelated lines above it in the file; the emitterBroken = true; body statement on the next line is covered, confirming the catch branch runs and only its header line is misattributed.',
       functions: 4,
-      lines: new Set([107]),
+      lines: new Set([115]),
       requireUncoveredLines: true,
     },
   ],
@@ -476,8 +476,8 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
       'src/mcp/resources.ts',
       {
         reason:
-          'Bun maps the workflow-resource parser closing brace as uncovered after the direct state-URI parsing assertion executes its return path.',
-        lines: new Set([192]),
+          'Bun maps the workflow-resource parser closing brace as uncovered after the direct state-URI parsing assertion executes its return path (192); the exhaustive default for an unknown ParsedResourceUri kind is separately unreachable through the validated URI parser, which only ever produces one of the declared kinds (114-116).',
+        lines: new Set([114, 115, 116, 192]),
         requireUncoveredLines: true,
       },
     ],
@@ -942,12 +942,30 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       },
     ],
     [
+      'src/cli/storage-factory.ts',
+      {
+        reason:
+          'Exhaustive default for an unknown storage backend is unreachable through the validated CLI/API surface; no caller can construct an invalid StorageBackend.',
+        lines: new Set([21, 22, 23, 24]),
+        requireUncoveredLines: true,
+      },
+    ],
+    [
       'src/cli/tail.ts',
       {
         reason:
           'Process-entry and failure-exit behavior runs in child processes whose hits are not attributed to the parent Bun LCOV report.',
         functions: 3,
         lines: new Set([101]),
+        requireUncoveredLines: true,
+      },
+    ],
+    [
+      'src/cli/workflow-commands.ts',
+      {
+        reason:
+          'Exhaustive default for an unknown WorkflowCommand action is unreachable through the validated CLI parser, which only ever produces one of the declared actions.',
+        lines: new Set([55, 56, 57, 58]),
         requireUncoveredLines: true,
       },
     ],
@@ -1004,6 +1022,15 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       },
     ],
     [
+      'src/core/compression.ts',
+      {
+        reason:
+          'Exhaustive default for an unknown CompressionAlgorithm is unreachable through the validated engine/CLI surface, which only ever selects one of the declared algorithms.',
+        lines: new Set([197, 198, 199]),
+        requireUncoveredLines: true,
+      },
+    ],
+    [
       'src/core/engine/anonymous-signal-sequence.ts',
       {
         reason:
@@ -1029,11 +1056,38 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       },
     ],
     [
+      'src/server/handler/auth-context-principal.ts',
+      {
+        reason:
+          'Exhaustive default for an unknown AuthContext method is unreachable through the authenticator surface, which only ever produces one of the declared AuthMethod values.',
+        lines: new Set([45, 46, 47, 48]),
+        requireUncoveredLines: true,
+      },
+    ],
+    [
+      'src/server/json-rpc-http.ts',
+      {
+        reason:
+          'Exhaustive default for an unknown DispatchJsonRpcResult kind is unreachable through the dispatch pipeline, which only ever produces one of the declared result kinds.',
+        lines: new Set([136, 137, 138]),
+        requireUncoveredLines: true,
+      },
+    ],
+    [
       'src/server/operation-catalog/workflow-adapter.ts',
       {
         reason:
           'The remaining adapter branches translate impossible catalog result variants excluded by each operation definition.',
         lines: new Set([172, 173, 174, 175, 176, 180, 181, 184, 185, 186, 187, 188, 192, 193]),
+        requireUncoveredLines: true,
+      },
+    ],
+    [
+      'src/server/runtime/websocket-upgrade.ts',
+      {
+        reason:
+          'Exhaustive default for an unknown WebSocket connectionType is unreachable through the upgrade handshake, which only ever assigns one of the declared connection types.',
+        lines: new Set([149, 150, 151]),
         requireUncoveredLines: true,
       },
     ],

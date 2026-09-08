@@ -202,8 +202,8 @@ export class HttpClient implements WeftClient {
     input: WorkflowInput<WorkflowRegistry, TName>,
     options?: ClientStartOptions,
   ): Promise<ClientHandle<WorkflowOutput<WorkflowRegistry, TName>>>;
-  async start(
-    type: UnknownNameWhenRegistryEmpty<string>,
+  async start<TName extends string>(
+    type: UnknownNameWhenRegistryEmpty<TName>,
     input: unknown,
     options?: ClientStartOptions,
   ): Promise<ClientHandle>;
@@ -223,8 +223,8 @@ export class HttpClient implements WeftClient {
     signal: StartOrSignalSignal,
     options?: ClientStartOrSignalOptions,
   ): Promise<ClientHandle<WorkflowOutput<WorkflowRegistry, TName>>>;
-  async startOrSignal(
-    type: UnknownNameWhenRegistryEmpty<string>,
+  async startOrSignal<TName extends string>(
+    type: UnknownNameWhenRegistryEmpty<TName>,
     input: unknown,
     signal: StartOrSignalSignal,
     options?: ClientStartOrSignalOptions,
@@ -255,8 +255,8 @@ export class HttpClient implements WeftClient {
     spec: string | ScheduleSpec,
     options?: ScheduleOptions,
   ): Promise<ClientScheduleHandle>;
-  async schedule(
-    type: UnknownNameWhenRegistryEmpty<string>,
+  async schedule<TName extends string>(
+    type: UnknownNameWhenRegistryEmpty<TName>,
     input: unknown,
     spec: string | ScheduleSpec,
     options?: ScheduleOptions,

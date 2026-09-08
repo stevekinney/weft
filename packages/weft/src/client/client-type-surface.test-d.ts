@@ -47,6 +47,7 @@ import type {
   ClientStartOrSignalOptions,
   FaultCode as FaultCodeFromClientBarrel,
   StartOrSignalOutcome as OutcomeFromClientBarrel,
+  UnknownNameWhenRegistryEmpty,
   WeftErrorCode as WeftErrorCodeFromClientBarrel,
 } from './index.ts';
 import {
@@ -153,6 +154,39 @@ async function proveGenericConstructor(): Promise<void> {
   void _typedClient;
 }
 void proveGenericConstructor;
+
+// --- Codex review on #953: WeftClient#start/#startOrSignal/#schedule's
+// string-name fallback overload (used when a project has not augmented
+// `WorkflowRegistry` via `weft codegen`) must stay generic over `TName`. A
+// non-generic fallback compiles today, but rejects any caller that supplies
+// an explicit type argument — e.g. `client.start<'my-workflow'>('my-workflow',
+// input)` — because TypeScript only matches an overload against a call that
+// supplies type arguments when that overload itself declares type
+// parameters; a call with one explicit type argument skips a zero-type-param
+// overload entirely rather than falling through to it.
+//
+// This can't be exercised against the real `LocalClient`/`HttpClient` types
+// with a genuinely empty registry in this file: `src/core/type-ergonomics.test-d.ts`
+// augments `WorkflowRegistry` for the whole `tsconfig.test-d.json` program
+// (module augmentation is program-wide, not file-scoped), so
+// `KnownWorkflowName` is never actually `never` in this compilation unit —
+// confirmed separately with an isolated one-file `tsc` run against
+// `LocalClient`/`HttpClient` with no augmentation in scope, where the
+// pre-fix (non-generic) fallback failed this exact call and the fixed
+// (generic) fallback passed it. Reproducing the production overload's exact
+// shape locally, using the real `UnknownNameWhenRegistryEmpty` utility,
+// keeps this regression test independent of that cross-file pollution while
+// still catching the same mistake (dropping the fallback's own `<TName>`).
+function proveFallbackOverloadAcceptsExplicitTypeArgument<TName extends string>(
+  type: UnknownNameWhenRegistryEmpty<TName>,
+): TName {
+  return type;
+}
+const _explicitTypeArgumentResolvesAgainstFallback =
+  proveFallbackOverloadAcceptsExplicitTypeArgument<'explicit-name'>(
+    'explicit-name' as UnknownNameWhenRegistryEmpty<'explicit-name'>,
+  );
+void _explicitTypeArgumentResolvesAgainstFallback;
 
 // --- Issues #725/#728: REST-only operation and storage client surfaces -----
 

@@ -218,6 +218,41 @@
         // concrete function assignable to a slot requiring a generic one.
         "typescript/no-unnecessary-type-parameters": "off"
       }
+    },
+    {
+      "files": ["src/core/types/workflow-context.ts", "src/core/context/index.ts"],
+      "rules": {
+        // `WorkflowContext#waitForUpdate`'s and `WorkflowContext#getAttribute`
+        // (and `Context`'s matching implementations) string-key fallback
+        // overloads use a return-type-only default generic
+        // (`<T = unknown>`/`<T extends SearchAttributeValue = ...>`) with
+        // nothing in the parameter list to infer it from — the same
+        // deliberate pattern as `JSON.parse<T>()`. See the "Lint suppression
+        // policy" section below for the full rationale; no overload,
+        // `NoInfer`, or helper-type rewrite preserves the caller-supplied
+        // `<T>` ergonomic these two files were built around.
+        "typescript/no-unnecessary-type-parameters": "off"
+      }
+    },
+    {
+      "files": ["src/client/interface.ts", "src/client/local.ts", "src/client/http-client.ts"],
+      "rules": {
+        // `start`/`startOrSignal`/`schedule`'s string-name fallback overload
+        // (used when `WorkflowRegistry` has no augmented names) must keep its
+        // own `<TName extends string>` type parameter even though
+        // `UnknownNameWhenRegistryEmpty<TName>` is its only use: dropping it
+        // compiles, but rejects any caller that supplies an explicit type
+        // argument (e.g. `client.start<'my-workflow'>('my-workflow', input)`)
+        // because TypeScript only matches an overload against a call
+        // carrying explicit type arguments when that overload itself
+        // declares type parameters of matching arity. Verified with an
+        // isolated single-file `tsc` check (no `tsconfig.test-d.json`
+        // cross-file `WorkflowRegistry` augmentation) that the non-generic
+        // form rejects that call and the generic form accepts it; see the
+        // `proveFallbackOverloadAcceptsExplicitTypeArgument` regression in
+        // `src/client/client-type-surface.test-d.ts`.
+        "typescript/no-unnecessary-type-parameters": "off"
+      }
     }
   ]
 }
