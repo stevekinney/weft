@@ -90,6 +90,9 @@ function dataForConflict(
     missingTypes: data.missingTypes === undefined ? undefined : [...data.missingTypes],
     missingWorkflowCount: data.missingWorkflowCount,
     samplesTruncated: data.samplesTruncated,
+    currentGeneration: data.currentGeneration,
+    compatibilityReasons:
+      data.compatibilityReasons === undefined ? undefined : [...data.compatibilityReasons],
   });
 }
 

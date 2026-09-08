@@ -179,6 +179,30 @@ listWorkflowActivityDefinitions(workflowType: string): ActivityMetadata[]
 
 Return read-only metadata for every activity registered on `workflowType`'s own `.activities({...})` step — never a same-named global activity, and never a handler function. Returns an empty array for a workflow with no `.activities({...})` step, including an unknown `workflowType`. `buildRegistrySnapshot()` (`GET /v1/registry`) uses this to fold a workflow's scoped activity schemas into its manifest contract, so a scoped activity's schema change moves that workflow's `contractHash` and `revision`.
 
+### `workflows` (getter)
+
+```ts partial
+get workflows(): EngineWorkflowsNamespace
+```
+
+Admin-facing control over the durable workflow catalog — install a revision's manifest, activate an installed revision, and read back installed/active state. Catalog bookkeeping only: it never changes which in-process handler `start()` dispatches to. See [Revisions and the Catalog](../guides/workflow-versioning.md#engineworkflows-public-catalog-control) for the full contract, including the compatibility-policy behavior of `activate()` and the sharp edge where a later `register()` reverts a manual activation.
+
+```ts partial
+interface EngineWorkflowsNamespace {
+  install(manifest: WorkflowRevisionManifest): Promise<WorkflowRevisionRecord>;
+  activate(
+    name: string,
+    revision: string,
+    options?: ActivateWorkflowRevisionOptions,
+  ): Promise<WorkflowCatalogActivationResult>;
+  getActive(name: string): Promise<WorkflowCatalogActivePointer | null>;
+  getRevision(name: string, revision: string): Promise<WorkflowRevisionRecord | null>;
+  listRevisions(name: string): Promise<readonly WorkflowRevisionRecord[]>;
+}
+```
+
+`install()` requires `getWorkflowDefinition(manifest.name)` to already resolve — it throws `WorkflowNotRegisteredError` otherwise, and `WorkflowCatalogConflictError` for a differing-content reinstall under the same `(name, revision)`. `activate()` throws `WorkflowRevisionNotInstalledError` for a revision that was never installed; otherwise it returns the catalog's structured result verbatim, including every `applied: false` refusal (`incompatible`, `stale-generation`, `expected-generation-required`, `conflict`) rather than throwing. `getActive()` is in-memory only, matching `RegistrySnapshot.activeRevisions`' existing staleness contract.
+
 ### `start()`
 
 ```ts partial

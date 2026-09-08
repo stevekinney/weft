@@ -94,21 +94,22 @@ export async function restoreWorkflowCatalog(
   return { entries, active };
 }
 
-/** One `catalog-entry:` scan iteration, split out to keep {@link restoreWorkflowCatalog}'s complexity low. */
-async function restoreOneCatalogEntry(
-  entries: Map<string, Map<string, WorkflowCatalogEntry>>,
+/**
+ * Decode and validate one durable catalog-entry record: parse as JSON,
+ * validate as a manifest via {@link parseWorkflowRevisionManifest}, and check
+ * that the decoded `(name, revision)` agrees with the caller-supplied
+ * expectation (normally read from the storage key itself). Fails closed on
+ * any disagreement — shared by {@link restoreWorkflowCatalog}'s per-entry
+ * restore, {@link readCatalogEntry}'s single-key read, and the by-name scan
+ * `WorkflowCatalog.listInstalledRevisions` uses, so the three consumers of
+ * one durable record shape can never validate it three different ways.
+ */
+async function decodeCatalogEntryRecord(
   key: string,
   bytes: Uint8Array,
-): Promise<void> {
-  const split = splitCatalogEntryKey(key);
-  if (split === null) {
-    failClosed(
-      'workflow catalog entry key',
-      key,
-      'does not match the expected catalog-entry:<name>:<revision> shape',
-    );
-  }
-
+  expectedName: string,
+  expectedRevision: string,
+): Promise<{ manifest: WorkflowRevisionManifest; installedAt: number }> {
   const parsedRecord = parseCatalogEntryRecord(bytes);
   if (parsedRecord === null) {
     failClosed('workflow catalog entry', key, 'could not be parsed as JSON');
@@ -124,7 +125,7 @@ async function restoreOneCatalogEntry(
   }
 
   const manifest = parsed.manifest;
-  if (manifest.name !== split.name || manifest.revision !== split.revision) {
+  if (manifest.name !== expectedName || manifest.revision !== expectedRevision) {
     failClosed(
       'workflow catalog entry',
       key,
@@ -132,12 +133,37 @@ async function restoreOneCatalogEntry(
     );
   }
 
+  return { manifest, installedAt: parsedRecord.installedAt };
+}
+
+/** One `catalog-entry:` scan iteration, split out to keep {@link restoreWorkflowCatalog}'s complexity low. */
+async function restoreOneCatalogEntry(
+  entries: Map<string, Map<string, WorkflowCatalogEntry>>,
+  key: string,
+  bytes: Uint8Array,
+): Promise<void> {
+  const split = splitCatalogEntryKey(key);
+  if (split === null) {
+    failClosed(
+      'workflow catalog entry key',
+      key,
+      'does not match the expected catalog-entry:<name>:<revision> shape',
+    );
+  }
+
+  const { manifest, installedAt } = await decodeCatalogEntryRecord(
+    key,
+    bytes,
+    split.name,
+    split.revision,
+  );
+
   let byName = entries.get(split.name);
   if (byName === undefined) {
     byName = new Map();
     entries.set(split.name, byName);
   }
-  byName.set(split.revision, { manifest, installedAt: parsedRecord.installedAt });
+  byName.set(split.revision, { manifest, installedAt });
 }
 
 /** One `catalog-active:` scan iteration, split out to keep {@link restoreWorkflowCatalog}'s complexity low. */
@@ -181,31 +207,37 @@ export async function readCatalogEntry(
   const key = KEYS.catalogEntry(name, revision);
   const bytes = await storage.get(key);
   if (bytes === null) return null;
+  return decodeCatalogEntryRecord(key, bytes, name, revision);
+}
 
-  const parsedRecord = parseCatalogEntryRecord(bytes);
-  if (parsedRecord === null) {
-    failClosed('workflow catalog entry', key, 'could not be parsed as JSON');
+/**
+ * Durably scan every installed revision of `name` — the
+ * `catalog-entry:<name>:` prefix `WORKFLOW_CATALOG_KEYS.catalogEntryPrefix`
+ * builds. Each record is validated exactly like
+ * {@link restoreWorkflowCatalog}'s per-entry restore (via
+ * {@link decodeCatalogEntryRecord}, shared rather than duplicated); a
+ * corrupt or unparseable entry fails closed rather than being silently
+ * skipped. Returns entries in no particular order — callers that need a
+ * deterministic order (`WorkflowCatalog.listInstalledRevisions`) sort the
+ * result themselves.
+ */
+export async function scanCatalogEntriesForName(
+  storage: Storage,
+  name: string,
+): Promise<Array<{ manifest: WorkflowRevisionManifest; installedAt: number }>> {
+  const results: Array<{ manifest: WorkflowRevisionManifest; installedAt: number }> = [];
+  for await (const [key, bytes] of storage.scan(KEYS.catalogEntryPrefix(name))) {
+    const split = splitCatalogEntryKey(key);
+    if (split === null) {
+      failClosed(
+        'workflow catalog entry key',
+        key,
+        'does not match the expected catalog-entry:<name>:<revision> shape',
+      );
+    }
+    results.push(await decodeCatalogEntryRecord(key, bytes, split.name, split.revision));
   }
-
-  const parsed = await parseWorkflowRevisionManifest(parsedRecord.manifest);
-  if (!parsed.ok) {
-    failClosed(
-      'workflow catalog entry',
-      key,
-      'does not decode as a valid installed-revision record',
-    );
-  }
-
-  const manifest = parsed.manifest;
-  if (manifest.name !== name || manifest.revision !== revision) {
-    failClosed(
-      'workflow catalog entry',
-      key,
-      'contains a manifest whose (name, revision) disagrees with its storage key',
-    );
-  }
-
-  return { manifest, installedAt: parsedRecord.installedAt };
+  return results;
 }
 
 /** Read one name's durable active pointer, or `null` when absent. */

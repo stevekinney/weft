@@ -90,7 +90,7 @@ const server = serve({
 });
 ```
 
-The built-in API-key configuration grants the configured key the default authenticated scope set. JWT and custom authenticators can provide narrower scope sets such as `workflows:read`, `workflows:write`, `workflows:admin`, `events:read`, `streams:read`, and `system:read`; requests missing the required scope fail with `401` or `403` before the operation runs. Raw `/watch` sockets require `events:read`, raw token `/stream` sockets require `streams:read`, and `weft.events.subscribe` requires `events:read`. The `events:read` feeds expose workflow-facing operational events plus worker connection lifecycle events.
+The built-in API-key configuration grants the configured key the default authenticated scope set. JWT and custom authenticators can provide narrower scope sets such as `workflows:read`, `workflows:write`, `workflows:admin`, `events:read`, `streams:read`, and `system:read`; requests missing the required scope fail with `401` or `403` before the operation runs. Raw `/watch` sockets require `events:read`, raw token `/stream` sockets require `streams:read`, and `weft.events.subscribe` requires `events:read`. The `events:read` feeds expose workflow-facing operational events plus worker connection lifecycle events. The five workflow catalog operations (`weft.workflows.revisions.install`/`.activate`/`.get`/`.list`, `weft.workflows.active.get` — see [`api-server.md`](../reference/api-server.md#workflow-catalog)) reuse these same scopes: `workflows:admin` for the two mutating operations, `workflows:read` for the three read-only ones.
 
 ### Audit trail
 

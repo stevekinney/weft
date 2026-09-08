@@ -494,6 +494,76 @@ difference blocks compatibility. `name-mismatch`, `manifest-version-unsupported`
 `contract-hash-mismatch`, and `workflow-version-incompatible` are never
 policy-tunable.
 
+### `WorkflowRevisionRecord`
+
+The public view of one installed `(name, revision)` catalog entry — returned
+by `engine.workflows.install()`/`getRevision()`/`listRevisions()`. Deliberately
+narrower than the package-internal `WorkflowCatalogEntry`, which can carry a
+live function reference this type never exposes.
+
+```ts partial
+interface WorkflowRevisionRecord {
+  manifest: WorkflowRevisionManifest;
+  installedAt: number;
+}
+```
+
+### `ActivateWorkflowRevisionOptions`
+
+Options accepted by `engine.workflows.activate()`.
+
+```ts partial
+interface ActivateWorkflowRevisionOptions {
+  expectedGeneration?: number;
+  policy?: WorkflowCompatibilityPolicy;
+}
+```
+
+`expectedGeneration` is required once the target workflow name has an active
+revision — an omitted value there refuses with `expected-generation-required`
+rather than silently activating. Omit it (or pass `0`) only for the very
+first activation of a name, which has no prior generation to name.
+
+### `WorkflowCatalogActivePointer`
+
+The durable `{ revision, generation, activatedAt }` pointer for one workflow
+name — what `engine.workflows.getActive()` returns and
+`RegistrySnapshot.activeRevisions` is built from.
+
+```ts partial
+interface WorkflowCatalogActivePointer {
+  revision: string;
+  generation: number;
+  activatedAt: number;
+}
+```
+
+### `WorkflowCatalogActivationResult`
+
+The structured result of `engine.workflows.activate()`: either the candidate
+applied (bumping the durable generation), or it was refused with one of four
+machine-readable reasons — never silently ignored.
+
+```ts partial
+type WorkflowCatalogActivationResult =
+  | { applied: true; pointer: WorkflowCatalogActivePointer }
+  | { applied: false; reason: 'incompatible'; verdict: WorkflowCompatibilityVerdict }
+  | { applied: false; reason: 'stale-generation'; currentGeneration: number }
+  | { applied: false; reason: 'expected-generation-required'; currentGeneration: number }
+  | { applied: false; reason: 'conflict' };
+```
+
+`'expected-generation-required'` and `'stale-generation'` both name the
+current durable generation so a caller can retry with the correct value
+without a second read. `'incompatible'` carries the full
+`WorkflowCompatibilityVerdict` (see above). `'conflict'` means the CAS write
+itself lost a race against a concurrent activation — `activate()` does not
+retry; use the `currentGeneration` a prior `'stale-generation'` or
+`'expected-generation-required'` refusal named (that value came from a
+durable read) to retry with the correct `expectedGeneration`, or re-read
+`getActive()` — noting that `getActive()` is in-memory-only and can itself
+be stale on a process that just lost the race.
+
 ### `ReviewStatus`
 
 ```ts partial

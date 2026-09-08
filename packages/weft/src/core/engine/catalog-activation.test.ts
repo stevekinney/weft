@@ -95,7 +95,10 @@ describe('activateCatalogRevisionCandidate', () => {
     const v2 = await manifestFor('checkout', '2.0.0');
     await activateCatalogRevisionCandidate(engine, 'checkout', v1);
 
-    await activateCatalogRevisionCandidate(engine, 'checkout', v2);
+    // expectedGeneration is required once `checkout` has an active pointer
+    // (WFT-11) — supplying the correct one here isolates this test to the
+    // `incompatible` refusal specifically, not `expected-generation-required`.
+    await activateCatalogRevisionCandidate(engine, 'checkout', v2, { expectedGeneration: 1 });
 
     expect(events.rejected).toHaveLength(1);
     const rejection = events.rejected[0]!;
@@ -122,6 +125,30 @@ describe('activateCatalogRevisionCandidate', () => {
 
     expect(events.rejected).toHaveLength(1);
     expect(events.rejected[0]?.reason).toBe('stale-generation');
+    expect(events.rejected[0]?.incompatibilityReasons).toBeUndefined();
+  });
+
+  it('expected-generation-required (WFT-11): dispatches activation-rejected, returns the result, and returns the same result even on success', async () => {
+    await using storage = new MemoryStorage();
+    await using engine = new Engine({ storage, backgroundTasks: 'manual' });
+    const events = collectCatalogEvents(engine);
+    const v1 = await manifestFor('checkout', '1.0.0');
+    const v2 = await manifestFor('checkout', '1.0.0', { description: 'later' });
+    const first = await activateCatalogRevisionCandidate(engine, 'checkout', v1);
+    expect(first.applied).toBe(true);
+
+    // Omitting expectedGeneration on a 2nd-or-later activation refuses —
+    // the wrapper must return this refusal verbatim, not just dispatch it.
+    const second = await activateCatalogRevisionCandidate(engine, 'checkout', v2, {
+      policy: { requireExactRevision: false },
+    });
+
+    expect(second.applied).toBe(false);
+    if (!second.applied) {
+      expect(second.reason).toBe('expected-generation-required');
+    }
+    expect(events.rejected).toHaveLength(1);
+    expect(events.rejected[0]?.reason).toBe('expected-generation-required');
     expect(events.rejected[0]?.incompatibilityReasons).toBeUndefined();
   });
 
@@ -154,7 +181,11 @@ describe('activateCatalogRevisionCandidate', () => {
     // activateCandidate (unlike activateRegistered) always bumps the
     // generation, even reactivating the same revision — so this is not a
     // true no-op, but nothing was DISPLACED either (draining stays silent).
-    await activateCatalogRevisionCandidate(engineB, 'checkout', v1);
+    // `engineB` never observed `engineA`'s activation in-process, but the
+    // durable generation is already 1 — expectedGeneration is required
+    // (WFT-11) once a durable active pointer exists, regardless of which
+    // process last observed it.
+    await activateCatalogRevisionCandidate(engineB, 'checkout', v1, { expectedGeneration: 1 });
 
     expect(events.installed).toHaveLength(0);
     expect(events.draining).toHaveLength(0);

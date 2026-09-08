@@ -490,13 +490,18 @@ As of `registryVersion: 2`, the response is:
 
 `workflows` is an array of `WorkflowRevisionManifest` (see
 [`workflow-versioning.md`](../guides/workflow-versioning.md)), sorted by
-`(name, revision)` — one entry per registered workflow, each pairing its
+`(name, revision)` — one entry per registered workflow (the manifest built
+fresh from what this process currently has registered), each pairing its
 normalized `contract` with a content-derived `revision` and payload-only
-`contractHash`. `activeRevisions` maps each workflow name to the `revision`
-of the manifest currently active for it; today the engine registers exactly
-one implementation per name, so that manifest is the only one a caller will
-find, but the pointer indirection means a future multi-revision registry
-source does not require another wire-shape bump. `generatedAt` is an
+`contractHash`. `activeRevisions` maps each workflow name to the durable
+catalog's active `revision` for it, read independently of `workflows[]` — as
+of WFT-11's [`engine.workflows`](#workflow-catalog) promotion, that pointer
+can name a revision NOT present in `workflows[]` at all, when an operator
+has manually activated a different installed revision than the one this
+process has registered in-process (see the [`engine.workflows` sharp
+edge](../guides/workflow-versioning.md#engineworkflows-public-catalog-control)).
+Use `weft.workflows.revisions.get`/`.list` to fetch an installed manifest
+that is not the currently-registered one. `generatedAt` is an
 informational ISO-8601 timestamp — it is excluded from `weft codegen`'s
 determinism and drift checks, since two snapshots of an unchanged registry
 must produce identical generated code regardless of when each was taken.
@@ -521,6 +526,41 @@ by `weft codegen` for exceeding that count.
 
 Weft is pre-release, so `registryVersion: 1` is not accepted — see
 [`CHANGELOG.md`](../../CHANGELOG.md) for the migration note.
+
+### Workflow Catalog
+
+Five operations (WFT-11) promote the durable workflow catalog above to a
+public, admin-facing surface — `engine.workflows` in-process, and REST +
+JSON-RPC under `/v1/registry/`. This is catalog bookkeeping and promotion
+control only: it never changes which in-process handler `engine.start()`
+dispatches to, only what `activeRevisions` (above) reports. See
+[`workflow-versioning.md`](../guides/workflow-versioning.md#engineworkflows-public-catalog-control)
+for the full contract, including `activate()`'s compatibility-policy
+behavior and the sharp edge where a later `engine.register()` reverts a
+manual activation.
+
+| Operation                           | Method & Path                                          | Access            | Notes                                                                                                           |
+| ----------------------------------- | ------------------------------------------------------ | ----------------- | --------------------------------------------------------------------------------------------------------------- |
+| `weft.workflows.revisions.install`  | `POST /v1/registry/revisions`                          | `workflows:admin` | Body: `{ "manifest": <WorkflowRevisionManifest> }`. Returns `201`.                                              |
+| `weft.workflows.revisions.activate` | `POST /v1/registry/workflows/:name/activate`           | `workflows:admin` | Body: `{ "revision", "expectedGeneration"?, "policy"? }`. Destructive.                                          |
+| `weft.workflows.revisions.get`      | `GET /v1/registry/workflows/:name/revisions/:revision` | `workflows:read`  | `404` when not installed.                                                                                       |
+| `weft.workflows.revisions.list`     | `GET /v1/registry/workflows/:name/revisions`           | `workflows:read`  | Returns `[]`, never a fault, for a name with no installed revisions.                                            |
+| `weft.workflows.active.get`         | `GET /v1/registry/workflows/:name/active`              | `workflows:read`  | Named `active.get` — operation names forbid camelCase segments; `getActive` is only the TypeScript method name. |
+
+A `revision` path segment that itself contains a `/` (e.g. a content-hash
+revision embedding one) must be percent-encoded by the caller — the router
+decodes each path segment independently, so an un-encoded `/` is parsed as
+an extra path segment rather than part of the value.
+
+`activate`'s refusal reasons (`incompatible`, `stale-generation`,
+`expected-generation-required`, `conflict`) surface as a `409 Conflict`. The
+`Conflict` fault's `data` gains two optional fields for this operation:
+`currentGeneration` (the two generation-mismatch reasons) and
+`compatibilityReasons` (the `incompatible` reason, the full ordered
+`WorkflowCompatibilityReason[]` list). REST intentionally omits `reason`
+itself from `Conflict.data` — see [Error Responses](#error-responses) — so a
+REST caller that must branch on which of the four reasons occurred should
+use JSON-RPC, which carries `reason` for every fault.
 
 ### Active alerts
 

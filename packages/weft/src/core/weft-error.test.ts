@@ -38,9 +38,11 @@ import {
   WorkerProtocolIncompatibleError,
   WorkflowAlreadyExistsError,
   WorkflowBuilderError,
+  WorkflowCatalogConflictError,
   WorkflowConcurrencyLimitExceededError,
   WorkflowNotFoundError,
   WorkflowNotRegisteredError,
+  WorkflowRevisionNotInstalledError,
   WorkflowSuspendNotSupportedError,
   WorkflowTeardownPendingError,
   WorkflowTerminalError,
@@ -150,6 +152,8 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
     new ApplicationDeliveryValidationError('destinationRef must be a non-empty string.'),
   ApplicationOutboxContentionError: () => new ApplicationOutboxContentionError('enqueue', null),
   WaitBudgetElapsedError: () => new WaitBudgetElapsedError(),
+  WorkflowCatalogConflictError: () => new WorkflowCatalogConflictError('checkout', 'r1'),
+  WorkflowRevisionNotInstalledError: () => new WorkflowRevisionNotInstalledError('checkout', 'r1'),
 };
 
 describe('WeftError', () => {

@@ -192,6 +192,32 @@ describe('REST fault shaper regressions', () => {
     ]);
   });
 
+  it('projects Conflict currentGeneration and compatibilityReasons over REST, but never reason (WFT-11)', async () => {
+    const fault: OperationFault = {
+      code: 'Conflict',
+      message: 'candidate is incompatible with the currently active revision',
+      data: {
+        reason: 'incompatible',
+        compatibilityReasons: ['contract-hash-mismatch', 'workflow-version-incompatible'],
+        currentGeneration: 3,
+      },
+    };
+
+    const body = await shapeRestFault(fault).json();
+
+    expect(body).toEqual({
+      error: 'candidate is incompatible with the currently active revision',
+      data: {
+        compatibilityReasons: ['contract-hash-mismatch', 'workflow-version-incompatible'],
+        currentGeneration: 3,
+      },
+    });
+    // `reason` itself stays withheld from REST, matching every other
+    // Conflict-producing operation in this codebase — see this file's own
+    // "deny-by-default" precedent above.
+    expect('reason' in (body as { data?: Record<string, unknown> }).data!).toBe(false);
+  });
+
   it('keeps shapeOperationFaultAsJson on the canonical REST projection (#720)', async () => {
     const fault: OperationFault = {
       code: 'NotFound',

@@ -192,22 +192,32 @@ export async function buildRegistrySnapshot(
   // mutate the prototype chain, which would silently drop it from JSON
   // output — same rationale as `workflows`/`activities` below.
   //
-  // `activeRevisions` is read from the durable catalog (WFT-10), not
-  // recomputed from the manifest each registered workflow just built. Under
-  // `engine.register()`'s "always activate on install" rule the two must
-  // always agree for this batch's single-producer case — divergence here is
-  // a Weft bug, not hostile input, so it throws an internal `Error` rather
-  // than silently trusting either source.
+  // `activeRevisions` is read from the durable catalog (WFT-10/WFT-11), not
+  // recomputed from the manifest each registered workflow just built — the
+  // catalog is the sole authority for "which revision is active," and
+  // `workflows[]` (built fresh from live `internals.registrations` above)
+  // describes what is registered/executable IN THIS PROCESS right now.
+  // Before WFT-11 the two always agreed, because `engine.register()`'s
+  // `activateRegistered` was the only producer of an active pointer and it
+  // always activates on registration. WFT-11 adds a second, independent
+  // producer — `engine.workflows.activate()` — that can legitimately
+  // activate a durably-installed candidate whose `revision` differs from
+  // whatever this process currently has registered (see that method's own
+  // JSDoc: activation moves the advertised active pointer, never which
+  // in-process handler `engine.start()` dispatches to). So the two are
+  // allowed to diverge now; only a genuinely ABSENT pointer remains a Weft
+  // bug — `register()` always installs and activates, and
+  // `ensureWorkflowCatalogReady` above already drained every pending
+  // install, so every workflow in `manifests` must have one.
   const catalog = getWorkflowCatalog(engine);
   const activeRevisions = Object.create(null) as Record<string, string>;
   for (const manifest of manifests) {
     const activePointer = catalog.resolveActive(manifest.name);
-    if (activePointer === undefined || activePointer.revision !== manifest.revision) {
+    if (activePointer === undefined) {
       throw new Error(
-        `Registry snapshot invariant violated: workflow "${manifest.name}" built manifest revision ` +
-          `"${manifest.revision}" but the workflow catalog's active pointer is ` +
-          `${activePointer === undefined ? 'absent' : `"${activePointer.revision}"`}. This is a Weft ` +
-          'bug — engine.register() always installs and activates on registration, so the two must agree.',
+        `Registry snapshot invariant violated: workflow "${manifest.name}" has no active workflow ` +
+          'catalog pointer. This is a Weft bug — engine.register() always installs and activates on ' +
+          'registration, and ensureWorkflowCatalogReady() is awaited before this point.',
       );
     }
     activeRevisions[manifest.name] = activePointer.revision;

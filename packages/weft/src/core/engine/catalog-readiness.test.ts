@@ -126,6 +126,54 @@ describe('ensureWorkflowCatalogReady', () => {
     storage[Symbol.dispose]();
   });
 
+  it('a restart (fresh Engine instance registering against the same storage) reverts a prior manual activate() — activateRegistered is documented-intended unconditional, not a regression (WFT-11)', async () => {
+    await using storage = new MemoryStorage();
+    const firstProcessEngine = new Engine({ storage, backgroundTasks: 'manual' });
+    firstProcessEngine.register(noopWorkflow('alpha'));
+    await ensureWorkflowCatalogReady(firstProcessEngine);
+    const catalog = getWorkflowCatalog(firstProcessEngine);
+    const registeredPointer = catalog.resolveActive('alpha');
+    expect(registeredPointer).toBeDefined();
+
+    // A manual `engine.workflows.activate()`-style candidate activation
+    // (exercised directly against the catalog here, same as
+    // `engine-workflows-namespace.test.ts` exercises through the public
+    // surface): a docs-only variant, same contractHash, different revision.
+    const registeredRecord = await catalog.resolveEntry('alpha', registeredPointer!.revision);
+    const manualCandidate = await catalog.install({
+      manifestVersion: 1,
+      name: 'alpha',
+      workflowVersion: '1.0.0',
+      revision: 'manually-activated-revision',
+      contractHash: registeredRecord!.manifest.contractHash,
+      contract: registeredRecord!.manifest.contract,
+    });
+    const manualResult = await catalog.activateCandidate('alpha', manualCandidate.manifest, {
+      expectedGeneration: registeredPointer!.generation,
+      policy: { requireExactRevision: false },
+    });
+    expect(manualResult.applied).toBe(true);
+    expect(catalog.resolveActive('alpha')?.revision).toBe('manually-activated-revision');
+    firstProcessEngine[Symbol.dispose]();
+
+    // Simulate a restart: a FRESH `Engine` instance, sharing the same
+    // durable storage, registering the same workflow. Its own
+    // `workflowDefinitionsByName` starts empty, so `register()` is not the
+    // idempotent no-op path — it commits and queues a fresh catalog
+    // install, which drains through `activateRegistered`'s unconditional
+    // path and reverts the manual activation back to the registered
+    // definition's own revision. Documented intended behavior (see
+    // `engine-workflows-namespace.ts`'s module doc), not a bug.
+    const restartedEngine = new Engine({ storage, backgroundTasks: 'manual' });
+    restartedEngine.register(noopWorkflow('alpha'));
+    await ensureWorkflowCatalogReady(restartedEngine);
+
+    expect(getWorkflowCatalog(restartedEngine).resolveActive('alpha')?.revision).toBe(
+      registeredPointer!.revision,
+    );
+    restartedEngine[Symbol.dispose]();
+  });
+
   it('records the activated revision in registeredCatalogRevisions and dispatches WorkflowRevisionInstalledEvent (WFT-12)', async () => {
     await using storage = new MemoryStorage();
     await using engine = new Engine({ storage, backgroundTasks: 'manual' });

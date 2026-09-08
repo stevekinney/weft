@@ -89,13 +89,14 @@ export class WorkflowRevisionActivationRejectedEvent extends Event {
   static readonly type = 'catalog:activation-rejected' as const;
   readonly workflowType: string;
   readonly candidateRevision: string;
-  readonly reason: 'incompatible' | 'stale-generation' | 'conflict';
+  readonly reason:
+    'incompatible' | 'stale-generation' | 'conflict' | 'expected-generation-required';
   readonly incompatibilityReasons: readonly WorkflowCompatibilityReason[] | undefined;
 
   constructor(
     workflowType: string,
     candidateRevision: string,
-    reason: 'incompatible' | 'stale-generation' | 'conflict',
+    reason: 'incompatible' | 'stale-generation' | 'conflict' | 'expected-generation-required',
     incompatibilityReasons?: readonly WorkflowCompatibilityReason[],
   ) {
     super(WorkflowRevisionActivationRejectedEvent.type);

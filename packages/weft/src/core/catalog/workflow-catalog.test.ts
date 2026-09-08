@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'bun:test';
 
+import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { buildWorkflowContract } from '../contract/build.ts';
 import { buildWorkflowRevisionManifest } from '../contract/manifest.ts';
 import type { WorkflowRevisionManifest } from '../contract/types.ts';
 import type { RegisteredWorkflowDefinition } from '../types/workflow-registry.ts';
-import { WorkflowCatalogActivationConflictError, WorkflowCatalogConflictError } from './errors.ts';
+import {
+  WorkflowCatalogActivationConflictError,
+  WorkflowCatalogActiveEntryMissingError,
+  WorkflowCatalogConflictError,
+} from './errors.ts';
 import { WorkflowCatalog } from './workflow-catalog.ts';
 
 function fakeDefinition(type: string): RegisteredWorkflowDefinition {
@@ -288,6 +293,188 @@ describe('WorkflowCatalog.activateCandidate', () => {
     if (!result.applied) {
       expect(result.reason).toBe('conflict');
     }
+  });
+
+  it('enforces compatibility against a cross-process active revision this instance never cached (durable read-through, not a silent skip)', async () => {
+    const storage = new MemoryStorage();
+    const writer = new WorkflowCatalog(storage);
+    const v1 = await manifestFor('checkout', '1.0.0');
+    await writer.activateCandidate('checkout', v1);
+
+    // A second instance sharing the same storage — e.g. a second process —
+    // never called `install`/`activateCandidate` for `checkout` itself, so
+    // its in-memory `#entries` cache has no entry for v1 even though v1 is
+    // durably active. Before this fix, `getEntry`'s cache-only lookup would
+    // return `undefined` here and `#refuseIncompatibleCandidate` would
+    // treat the comparison as vacuously compatible, silently skipping the
+    // check entirely.
+    const reader = new WorkflowCatalog(storage);
+    const incompatible = await manifestFor('other-workflow', '1.0.0');
+
+    const result = await reader.activateCandidate('checkout', incompatible, {
+      expectedGeneration: 1,
+    });
+
+    expect(result.applied).toBe(false);
+    if (!result.applied && result.reason === 'incompatible') {
+      expect(result.verdict.compatible).toBe(false);
+    } else {
+      throw new Error('expected an incompatible refusal from the durable read-through');
+    }
+    expect(await reader.resolveActiveDurable('checkout')).toMatchObject({ revision: v1.revision });
+  });
+
+  it('fails closed with WorkflowCatalogActiveEntryMissingError when the durably-active revision has no resolvable entry at all', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const v1 = await manifestFor('checkout', '1.0.0');
+    await catalog.activateCandidate('checkout', v1);
+
+    // Simulate storage-level corruption: the active pointer survives but
+    // its own entry does not, so neither the in-memory cache nor a durable
+    // read-through can resolve it.
+    await storage.delete(KEYS.catalogEntry('checkout', v1.revision));
+    const v2 = await manifestFor('checkout', '2.0.0');
+    const fresh = new WorkflowCatalog(storage);
+
+    await expect(
+      fresh.activateCandidate('checkout', v2, { expectedGeneration: 1 }),
+    ).rejects.toThrow(WorkflowCatalogActiveEntryMissingError);
+  });
+
+  it('refuses an omitted expectedGeneration on a 2nd-or-later activation: two refreshers cannot silently last-write-win', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const v1 = await manifestFor('checkout', '1.0.0');
+    const v2 = await manifestFor('checkout', '2.0.0');
+    await catalog.activateCandidate('checkout', v1);
+
+    const result = await catalog.activateCandidate('checkout', v2);
+
+    expect(result.applied).toBe(false);
+    if (!result.applied && result.reason === 'expected-generation-required') {
+      expect(result.currentGeneration).toBe(1);
+    } else {
+      throw new Error('expected an expected-generation-required refusal');
+    }
+    expect(catalog.resolveActive('checkout')?.revision).toBe(v1.revision);
+  });
+
+  it('still applies an explicit expectedGeneration: 0 on the very first activation (no active pointer yet)', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const manifest = await manifestFor('checkout', '1.0.0');
+
+    const result = await catalog.activateCandidate('checkout', manifest, { expectedGeneration: 0 });
+
+    expect(result.applied).toBe(true);
+  });
+
+  it('refuses a non-zero explicit expectedGeneration on the very first activation as stale-generation', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const manifest = await manifestFor('checkout', '1.0.0');
+
+    const result = await catalog.activateCandidate('checkout', manifest, { expectedGeneration: 5 });
+
+    expect(result.applied).toBe(false);
+    if (!result.applied && result.reason === 'stale-generation') {
+      expect(result.currentGeneration).toBe(0);
+    } else {
+      throw new Error('expected a stale-generation refusal');
+    }
+    expect(catalog.resolveActive('checkout')).toBeUndefined();
+  });
+});
+
+describe('WorkflowCatalog.resolveEntry', () => {
+  it('resolves a cache-hit entry without touching storage', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const manifest = await manifestFor('checkout', '1.0.0');
+    await catalog.install(manifest, fakeDefinition('checkout'));
+
+    const resolved = await catalog.resolveEntry('checkout', manifest.revision);
+
+    expect(resolved?.manifest.revision).toBe(manifest.revision);
+  });
+
+  it('reads through to durable storage for an entry installed by a different instance', async () => {
+    const storage = new MemoryStorage();
+    const writer = new WorkflowCatalog(storage);
+    const reader = new WorkflowCatalog(storage);
+    const manifest = await manifestFor('checkout', '1.0.0');
+    await writer.install(manifest, fakeDefinition('checkout'));
+
+    const resolved = await reader.resolveEntry('checkout', manifest.revision);
+
+    expect(resolved?.manifest.revision).toBe(manifest.revision);
+    expect(resolved?.manifest.workflowVersion).toBe(manifest.workflowVersion);
+  });
+
+  it('resolves to undefined for an unknown (name, revision) pair', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+
+    const resolved = await catalog.resolveEntry('checkout', 'nonexistent-revision');
+
+    expect(resolved).toBeUndefined();
+  });
+
+  it('has no TOCTOU gap against a concurrent install() on the same instance', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const manifest = await manifestFor('checkout', '1.0.0');
+
+    const [resolved] = await Promise.all([
+      catalog.resolveEntry('checkout', manifest.revision),
+      catalog.install(manifest, fakeDefinition('checkout')),
+    ]);
+
+    // JS is single-threaded with no yield point inside install() before its
+    // cache write on the fast (already-installed) path relevant here — this
+    // proves the concurrent pair converges to a consistent final state
+    // rather than the resolve landing on a torn intermediate one.
+    expect(resolved === undefined || resolved.manifest.revision === manifest.revision).toBe(true);
+    const final = await catalog.resolveEntry('checkout', manifest.revision);
+    expect(final?.manifest.revision).toBe(manifest.revision);
+  });
+});
+
+describe('WorkflowCatalog.listInstalledRevisions', () => {
+  it('lists every installed revision of a name, sorted by codepoint', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const v1 = await manifestFor('checkout', '1.0.0', { revision: 'b-revision' });
+    const v2 = await manifestFor('checkout', '2.0.0', { revision: 'a-revision' });
+    await catalog.install(v1, fakeDefinition('checkout'));
+    await catalog.install(v2, fakeDefinition('checkout'));
+
+    const revisions = await catalog.listInstalledRevisions('checkout');
+
+    expect(revisions.map((r) => r.manifest.revision)).toEqual(['a-revision', 'b-revision']);
+  });
+
+  it('returns an empty array for an unknown workflow name', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+
+    const revisions = await catalog.listInstalledRevisions('nonexistent');
+
+    expect(revisions).toEqual([]);
+  });
+
+  it('reads durable entries installed by a different instance sharing storage', async () => {
+    const storage = new MemoryStorage();
+    const writer = new WorkflowCatalog(storage);
+    const reader = new WorkflowCatalog(storage);
+    const v1 = await manifestFor('checkout', '1.0.0');
+    await writer.install(v1, fakeDefinition('checkout'));
+
+    const revisions = await reader.listInstalledRevisions('checkout');
+
+    expect(revisions).toHaveLength(1);
+    expect(revisions[0]?.manifest.revision).toBe(v1.revision);
   });
 });
 

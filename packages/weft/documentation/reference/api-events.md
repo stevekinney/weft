@@ -376,7 +376,10 @@ class WorkflowRevisionActivatedEvent extends Event {
 
 Emitted when the guarded candidate-activation primitive refuses a
 revision. `reason` is a closed, low-cardinality union safe to use as a
-metric label. `incompatibilityReasons` is populated only when `reason` is
+metric label — the same four reasons `WorkflowCatalogActivationResult`'s
+`applied: false` variants report (see
+[`workflows` (getter)](./api-engine.md#workflows-getter)).
+`incompatibilityReasons` is populated only when `reason` is
 `'incompatible'`, carrying every applicable `WorkflowCompatibilityReason`.
 
 ```ts partial
@@ -384,7 +387,8 @@ class WorkflowRevisionActivationRejectedEvent extends Event {
   static readonly type = 'catalog:activation-rejected';
   readonly workflowType: string;
   readonly candidateRevision: string;
-  readonly reason: 'incompatible' | 'stale-generation' | 'conflict';
+  readonly reason:
+    'incompatible' | 'stale-generation' | 'conflict' | 'expected-generation-required';
   readonly incompatibilityReasons: readonly WorkflowCompatibilityReason[] | undefined;
 }
 ```
