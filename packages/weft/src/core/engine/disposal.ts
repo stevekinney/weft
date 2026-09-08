@@ -23,6 +23,28 @@ function clearPendingResultPollTimers(internals: EngineInternals): void {
 }
 
 /**
+ * Dynamic workflow sources (WFT-13/14): abort every outstanding
+ * `resolveWorkflowSource()` caller's own per-call controller (the shared
+ * per-`(name, revision)` load itself is NOT aborted — it keeps running to
+ * completion independent of any individual waiter, per the single-flight
+ * contract; see `core/engine/source-resolution.ts`). Clearing
+ * `sourceResolutionsInFlight` after aborting means a `resolveWorkflowSource()`
+ * call made after this point never joins a zombie promise — it observes
+ * `internals.disposed` and rejects immediately instead. Split out of
+ * `disposeEngine` for the same complexity-ceiling reason as
+ * {@link clearPendingResultPollTimers}.
+ */
+function disposeSourceResolutionState(internals: EngineInternals): void {
+  for (const controller of internals.sourceResolutionWaiterControllers) {
+    controller.abort(new EngineDisposedError());
+  }
+  internals.sourceResolutionWaiterControllers.clear();
+  internals.sourceResolutionsInFlight.clear();
+  internals.workflowSourcesByName.clear();
+  internals.resolvedWorkflowSources.clear();
+}
+
+/**
  * Synchronous teardown for an {@link Engine}. Moved verbatim from
  * `Engine[Symbol.dispose]` — the operation order is correctness-sensitive
  * (abort before clearing waiters, dispose strategies before nulling them) and
@@ -82,6 +104,7 @@ export function disposeEngine(internals: EngineInternals): void {
   internals.reviewTimerIds.clear();
   for (const controller of internals.pendingWebhooks) controller.abort();
   internals.pendingWebhooks.clear();
+  disposeSourceResolutionState(internals);
   clearPendingResultPollTimers(internals);
   internals.sleepResolvers.clear();
   internals.sleepResolversByWorkflow.clear();

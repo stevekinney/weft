@@ -228,3 +228,37 @@ describe('register() and the deferred workflow catalog', () => {
     engine[Symbol.dispose]();
   });
 });
+
+describe('register() and dynamic workflow sources (WFT-13/14)', () => {
+  it('throws when the name is already registered as a dynamic workflow source', () => {
+    const engine = new Engine();
+    const internals = getInternals(engine);
+    // Simulate a prior `registerSource()` call without depending on
+    // `core/engine/source-registration.ts` here — this test's only
+    // responsibility is the symmetric guard inside `commitWorkflowDefinition`.
+    internals.workflowSourcesByName.set(
+      'lazyCheckout',
+      new Map([
+        [
+          'r1',
+          {
+            descriptor: {
+              kind: 'module',
+              name: 'lazyCheckout',
+              location: 'x',
+              exportName: 'x',
+              revision: 'r1',
+            },
+            load: async () => ({}),
+          },
+        ],
+      ]),
+    );
+
+    expect(() =>
+      engine.register(workflow({ name: 'lazyCheckout' }).execute(async function* () {})),
+    ).toThrow(/already registered as a dynamic workflow source/);
+
+    engine[Symbol.dispose]();
+  });
+});
