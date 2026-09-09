@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import * as lmdb from 'lmdb';
 
 import { createDiskBackedTestFixture } from '../testing/storage-backends.test-support.ts';
+import { assertDurableStorageForRecovery } from './capabilities.ts';
 import { LMDBStorage } from './lmdb';
 import {
   runBasicStorageContract,
@@ -172,6 +173,15 @@ describe('LMDBStorage', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({ path: fixture.path, noSync: true, noMetaSync: true });
 
+    // Relaxed durability can lose recently committed writes on a crash or
+    // power loss, so it must not be reported as recovery-safe 'local'
+    // persistence — it is reported as 'ephemeral', the same value
+    // MemoryStorage reports.
+    expect(storage.capabilities().persistence).toBe('ephemeral');
+    expect(() => assertDurableStorageForRecovery(storage)).toThrow(
+      'Storage is not durable enough for recovery: persistence must be "local" or "remote" (got "ephemeral").',
+    );
+
     storage[Symbol.dispose]();
   });
 
@@ -186,6 +196,11 @@ describe('LMDBStorage', () => {
     const [call] = calls;
     expect(call?.['noSync']).toBeUndefined();
     expect(call?.['noMetaSync']).toBeUndefined();
+
+    // Full durability (the default) still reports 'local' and passes the
+    // recovery-readiness gate, unchanged from before this option existed.
+    expect(storage.capabilities().persistence).toBe('local');
+    expect(() => assertDurableStorageForRecovery(storage)).not.toThrow();
 
     storage[Symbol.dispose]();
   });

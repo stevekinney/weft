@@ -561,7 +561,7 @@ new LMDBStorage(path: string, options?: LMDBStorageOptions)
 
 If the `lmdb` package is not installed, the module import fails with the upstream package's missing-module error.
 
-`LMDBStorageOptions.durability` is `'full' | 'relaxed'`, defaulting to `'full'`. `'relaxed'` opens the environment with `noSync: true` and `noMetaSync: true`, skipping `fsync` on every commit—this trades crash durability for write latency and is intended for test fixtures and other disposable environments, not for storage backing recoverable production workflows. Construction throws if `durability` is set to anything other than `'full'` or `'relaxed'`.
+`LMDBStorageOptions.durability` is `'full' | 'relaxed'`, defaulting to `'full'`. `'relaxed'` opens the environment with `noSync: true` and `noMetaSync: true`, skipping `fsync` on every commit—this trades crash durability for write latency and is intended for test fixtures and other disposable environments, not for storage backing recoverable production workflows. Construction throws if `durability` is set to anything other than `'full'` or `'relaxed'`. A relaxed-durability instance reports `capabilities().persistence` as `'ephemeral'` instead of `'local'`, so [`assertDurableStorageForRecovery()`](#assertdurablestorageforrecovery) correctly rejects it.
 
 ```ts partial
 import { LMDBStorage } from '@lostgradient/weft/storage/lmdb';

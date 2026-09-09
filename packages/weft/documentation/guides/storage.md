@@ -353,6 +353,8 @@ await using storage = new LMDBStorage('./weft-data', { durability: 'relaxed' });
 
 `'relaxed'` opens the environment with `noSync: true` and `noMetaSync: true`, skipping `fsync` on every commit. This trades crash durability for write latency—a process crash or power loss can lose recently committed data that was never flushed to disk. It exists for test fixtures and other disposable environments that open real LMDB environments and pay full fsync cost for data they immediately discard; do not use it for storage backing recoverable production workflows. `resolveStorage({ type: 'lmdb', ... })` accepts the same `durability` field in its configuration object.
 
+A relaxed-durability instance reports `capabilities().persistence` as `'ephemeral'` instead of `'local'`, so [`assertDurableStorageForRecovery()`](../reference/api-storage.md#assertdurablestorageforrecovery) correctly rejects it—a host cannot accidentally rely on it for crash recovery.
+
 ### `TursoStorage`
 
 libSQL/Turso backend for edge or serverless deployments. Optional dependency: `@libsql/client`.

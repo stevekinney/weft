@@ -61,6 +61,7 @@ export type LMDBStorageOptions = {
  */
 export class LMDBStorage implements Storage {
   #database: lmdb.RootDatabase<Buffer, string>;
+  #durability: 'full' | 'relaxed';
   #isClosed = false;
   #closePromise: Promise<void> | null = null;
 
@@ -80,6 +81,7 @@ export class LMDBStorage implements Storage {
       );
     }
 
+    this.#durability = durability;
     this.#database = openEnvironment<Buffer, string>({
       path,
       encoding: 'binary',
@@ -101,8 +103,15 @@ export class LMDBStorage implements Storage {
     // collected into an array via this.keys(), then removed in a single batch()
     // call. lmdb-js exposes no native single-operation range-delete API, so this
     // is the scan-and-delete fallback — boundedRangeDelete is false.
+    //
+    // `persistence` reflects the construction-time durability mode honestly:
+    // 'relaxed' (noSync/noMetaSync) can lose recently committed writes on a
+    // crash or power loss, so it is reported as 'ephemeral' rather than
+    // 'local' — the same value MemoryStorage reports. This is what makes
+    // assertDurableStorageForRecovery() correctly reject a relaxed-durability
+    // instance instead of accepting it as recovery-safe.
     return {
-      persistence: 'local',
+      persistence: this.#durability === 'relaxed' ? 'ephemeral' : 'local',
       readAfterWrite: 'linearizable',
       scanConsistency: 'snapshot',
       atomicBatch: true,
