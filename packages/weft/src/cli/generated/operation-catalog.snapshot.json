@@ -173,7 +173,7 @@
       "name": "weft.catalog.diagnostics",
       "kind": "unary",
       "summary": "Get bounded reference-count and removability diagnostics for one workflow revision",
-      "description": "Report whether a `(name, revision)` workflow catalog entry is installed, whether it is currently the active revision, its full reference-count breakdown, and whether it's currently removable. Never returns manifest or contract content.",
+      "description": "Report whether a `(name, revision)` workflow catalog entry is installed, whether it is currently the active revision, its full reference-count breakdown, and whether it's currently removable. When `name` was ever registered as a dynamic workflow source (`engine.registerSource()`), also reports its bounded load-state diagnostics: source kind, load state, load duration, last failure category, and outstanding waiter count. Never returns manifest or contract content.",
       "tags": ["Observability"],
       "destructive": false,
       "access": {
@@ -272,6 +272,37 @@
           },
           "revision": {
             "type": "string"
+          },
+          "source": {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "module",
+                "type": "string"
+              },
+              "lastFailureCategory": {
+                "enum": ["application", "timeout", "cancellation", "resource", "system"],
+                "type": "string"
+              },
+              "loadDurationMs": {
+                "minimum": 0,
+                "type": "number"
+              },
+              "requestedRevision": {
+                "type": "string"
+              },
+              "state": {
+                "enum": ["idle", "loading", "ready", "failed", "cancelled"],
+                "type": "string"
+              },
+              "waiterCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": ["kind", "requestedRevision", "state", "waiterCount"],
+            "type": "object"
           }
         },
         "required": ["name", "revision", "installed", "active", "references", "removable"],
@@ -7746,6 +7777,39 @@
           }
         },
         "required": ["name"],
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.workflows.revisions.preload",
+      "kind": "unary",
+      "summary": "Load, validate, and install a registered dynamic workflow source revision",
+      "description": "Load, validate, and install `(name, revision)` — previously recorded via engine.registerSource() — durably into the workflow catalog. Faults NotFound when no source was ever registered for this exact key, and Conflict when the load fails or the loaded module fails validation.",
+      "tags": ["Workflow Catalog"],
+      "destructive": false,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["workflows:admin"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["Conflict", "InvalidParams", "NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "Workflow name. Runtime validation requires a wire-safe identifier."
+          },
+          "revision": {
+            "description": "The registerSource()-registered revision to load, validate, and install. Runtime validation requires a non-empty string."
+          }
+        },
+        "required": ["name", "revision"],
         "type": "object"
       },
       "outputSchema": {}

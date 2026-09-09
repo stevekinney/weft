@@ -46,6 +46,7 @@ import {
 } from './catalog-readiness.ts';
 import { WorkflowNotRegisteredError } from './errors.ts';
 import type { Engine } from './index.ts';
+import { resolveWorkflowSource, type ResolveWorkflowSourceOptions } from './source-resolution.ts';
 
 /**
  * Options accepted by {@link EngineWorkflowsNamespace.activate}.
@@ -144,6 +145,19 @@ export interface EngineWorkflowsNamespace {
   getRevision(name: string, revision: string): Promise<WorkflowRevisionRecord | null>;
   /** Every installed revision of `name`, sorted deterministically by revision. */
   listRevisions(name: string): Promise<readonly WorkflowRevisionRecord[]>;
+  /**
+   * Load, validate, and install one dynamic workflow source revision
+   * previously recorded via `engine.registerSource()` (WFT-15/16). A thin,
+   * documented alias for `engine.resolveWorkflowSource()` — identical
+   * single-flight, cancellation, and error contract — offered here so
+   * deployment tooling that already reaches for `engine.workflows.*` for
+   * every other catalog operation does not need a second entry point.
+   */
+  preload(
+    name: string,
+    revision: string,
+    options?: ResolveWorkflowSourceOptions,
+  ): Promise<WorkflowRevisionRecord>;
 }
 
 async function ensureCatalogReady(engine: Engine): Promise<void> {
@@ -219,5 +233,6 @@ export function createEngineWorkflowsNamespace(engine: Engine): EngineWorkflowsN
     getActive: (name) => getActiveWorkflowRevision(engine, name),
     getRevision: (name, revision) => getInstalledWorkflowRevision(engine, name, revision),
     listRevisions: (name) => listInstalledWorkflowRevisions(engine, name),
+    preload: (name, revision, options) => resolveWorkflowSource(engine, name, revision, options),
   };
 }

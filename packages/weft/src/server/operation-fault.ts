@@ -37,6 +37,7 @@
 
 import type { WorkflowCompatibilityReason } from '../core/contract/compatibility.ts';
 import type { FaultCode } from '../core/fault-code.ts';
+import type { WorkflowSourceRejectionReason } from '../core/source/errors.ts';
 import { isWeftErrorCode, type WeftErrorCode } from '../core/weft-error.ts';
 
 /** Transport identifiers as seen by `executeOperation`. */
@@ -87,6 +88,11 @@ export type OperationFault =
         // `WorkflowCompatibilityReason`s — a caller branching on why
         // activation was refused needs every reason, not just the first.
         compatibilityReasons?: readonly WorkflowCompatibilityReason[] | undefined;
+        // WFT-15/16: `engine.workflows.preload()`'s loaded-module-fails-
+        // validation refusal — `WorkflowSourceValidationError`'s own full,
+        // ordered `reasons` array (distinct from `compatibilityReasons`,
+        // which is manifest-compatibility-specific).
+        sourceValidationReasons?: readonly WorkflowSourceRejectionReason[] | undefined;
       };
     }
   | { code: 'Unprocessable'; message: string; data: { reason: string } }
@@ -210,6 +216,8 @@ const REST_FAULT_DATA_EXTRACTORS: RestFaultDataExtractors = {
       currentGeneration: data.currentGeneration,
       compatibilityReasons:
         data.compatibilityReasons === undefined ? undefined : [...data.compatibilityReasons],
+      sourceValidationReasons:
+        data.sourceValidationReasons === undefined ? undefined : [...data.sourceValidationReasons],
     }),
   Unprocessable: () => NO_REST_FAULT_DATA,
   PayloadTooLarge: (data) => ({ maxBytes: data.maxBytes }),

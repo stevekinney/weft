@@ -34,7 +34,7 @@ import type {
 } from '../interceptor.ts';
 import type { HumanReviewResult, ReviewCoordinator } from '../review/index.ts';
 import type { Scheduler } from '../scheduler.ts';
-import type { Checkpoint, StartWorkflowOptions, WorkflowDefinition } from '../types.ts';
+import type { Checkpoint, StartWorkflowOptions } from '../types.ts';
 import type { UpdateCoordinator } from '../updates.ts';
 import type { WorkflowVersionTuple } from '../workflow-version-tuple.ts';
 import type { RecoveredWorkflowInfo } from './lifecycle/shared.ts';
@@ -54,6 +54,7 @@ import type { WorkflowFeedListener } from './index.ts';
 import type { LeaseManager } from './lease-manager.ts';
 import type { ScheduleHandleEngine } from './schedule-handle.ts';
 import type { SecondInstanceDetector } from './second-instance-detector.ts';
+import type { WorkflowSourceRuntimeState } from './source-runtime-state.ts';
 import type { WorkflowClaimMetricsRecorder } from './workflow-claim-metrics.ts';
 import type { WorkflowClaimRegistry } from './workflow-claim-registry.ts';
 import type { WorkflowClaimRenewalTask } from './workflow-claim-renewal-task.ts';
@@ -75,9 +76,6 @@ type EngineRuntime = WorkflowHandleEngine &
   ScheduleHandleEngine & {
     start(type: string, input: unknown, options?: StartWorkflowOptions): Promise<WorkflowHandle>;
   };
-type SourceHandle = import('../source/index.ts').WorkflowSourceHandle;
-type CatalogRevisionRecord = import('../catalog/index.ts').WorkflowRevisionRecord;
-type ResolvedSource = { definition: WorkflowDefinition; activityRegistry: ActivityRegistry };
 // ---------------------------------------------------------------------------
 // EngineInternals
 // ---------------------------------------------------------------------------
@@ -433,14 +431,14 @@ export interface EngineInternals {
   registeredCatalogRevisions: Map<string, string>;
   /** Name -> revision -> in-flight `startWorkflow` count (WFT-12, `lifecycle/start.ts`). Process-local, never persisted. */
   inFlightStartsByRevision: Map<string, Map<string, number>>;
-  /** Dynamic workflow sources (WFT-13/14): `registerSource()` candidates, keyed name then revision. Registering never invokes the loader. Process-local, never persisted. */
-  workflowSourcesByName: Map<string, Map<string, SourceHandle>>;
-  /** In-flight `resolveWorkflowSource` single-flight load per `(name, revision)`. Self-removes on settle via a `catalogDrainPromise`-style identity guard. */
-  sourceResolutionsInFlight: Map<string, Map<string, Promise<CatalogRevisionRecord>>>;
-  /** Per-caller `AbortController`s from in-flight `resolveWorkflowSource()` calls; disposal aborts every waiter without touching the shared load (mirrors `pendingWebhooks`). */
-  sourceResolutionWaiterControllers: Set<AbortController>;
-  /** A successful `resolveWorkflowSource()`'s live definition, keyed name then revision. Unread this batch — WFT-15's job. */
-  resolvedWorkflowSources: Map<string, Map<string, ResolvedSource>>;
+  /**
+   * Dynamic workflow sources (WFT-13/14, WFT-15/16): candidates, in-flight
+   * single-flight loads, per-caller waiter controllers, locally-resolved
+   * definitions, and bounded per-`(name, revision)` diagnostics — see
+   * {@link import('./source-runtime-state.ts').WorkflowSourceRuntimeState}
+   * for the full field-by-field breakdown. Process-local, never persisted.
+   */
+  sources: WorkflowSourceRuntimeState;
 }
 
 const INTERNALS = new WeakMap<object, EngineInternals>();

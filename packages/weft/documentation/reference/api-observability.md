@@ -323,6 +323,37 @@ The query is per-`(name, revision)` with a required, bounded path-parameter pair
 
 `removable` is `true` only when the revision is installed, not the active revision, and every field of `references` is `0`. See [Reference Accounting and Removal](../guides/workflow-versioning.md#reference-accounting-and-removal) for what each reference field counts and why five of the seven stay `0` until run-level revision pinning lands. This endpoint never returns manifest or contract content—only identity, active-pointer state, and reference counts—and, being a bounded per-request REST/JSON-RPC response rather than a `METRICS` entry, adding it introduces no new Prometheus label; metrics remain low-cardinality.
 
+**`source` (WFT-15/16, additive):** present only when `name` was ever `registerSource()`-registered on this engine—absent for a purely eager name, or a dynamic source this process has never heard of. Reports `kind` (the source kind, `'module'` today), `requestedRevision`, `state` (`'idle' | 'loading' | 'ready' | 'failed' | 'cancelled'`), `loadDurationMs` (present once a load has settled, measured via the engine's injected clock), `lastFailureCategory` (present only after a `'failed'` transition, the closed `FailureCategory` union), and `waiterCount` (the current outstanding `resolveWorkflowSource()` caller count for this exact `(name, revision)`). Never includes manifest, contract, or module content—identity and state only, matching the rest of this endpoint's bounded-payload contract.
+
+```http
+GET /v1/catalog/checkout/revisions/sha256%3Arevision/diagnostics
+```
+
+```json
+{
+  "name": "checkout",
+  "installed": true,
+  "active": false,
+  "references": {
+    "registeredDefinitions": 0,
+    "inFlightStarts": 0,
+    "nonTerminalRuns": 0,
+    "pinnedSchedules": 0,
+    "pendingDispatches": 0,
+    "activeExecutionRealms": 0,
+    "retainedRecoveryRecords": 0
+  },
+  "removable": true,
+  "source": {
+    "kind": "module",
+    "requestedRevision": "sha256:revision",
+    "state": "ready",
+    "loadDurationMs": 42,
+    "waiterCount": 0
+  }
+}
+```
+
 ---
 
 ## Trace Propagation

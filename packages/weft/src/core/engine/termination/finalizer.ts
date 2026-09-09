@@ -23,9 +23,8 @@
  *
  * Self-heal invariant: every exit that does NOT settle the claim (a lost claim CAS, a
  * presumed-live `running` claim, a shutdown-aborted attempt, or a missing registration)
- * re-arms a future `wf-teardown:` timer before returning, because the scheduler deletes
- * the fired timer once this returns without throwing. A non-settling exit that forgot to
- * re-arm would strand the marker with no timer to re-drive it.
+ * re-arms a future `wf-teardown:` timer before returning — the scheduler deletes the
+ * fired timer on return, so a non-settling exit that forgot to re-arm strands the marker.
  *
  * @module core/engine/termination/finalizer
  */
@@ -52,6 +51,7 @@ import {
   teardownStaleThresholdMs,
   teardownTimerOperations,
 } from './finalizer-claim.ts';
+import { resolveFinalizerRegistration } from './finalizer-registration.ts';
 
 export { teardownStaleThresholdMs, type TeardownDeadLetterRecord } from './finalizer-claim.ts';
 
@@ -207,19 +207,18 @@ async function resolveTeardownDrive(
     return clearOrRearm(internals, workflowId, token, markerBytes);
   }
 
-  const registeredFinalizer = internals.registrations.get(state.type)?.finalizer;
+  const registeredFinalizer = await resolveFinalizerRegistration(internals, state.type);
   if (registeredFinalizer === undefined) {
     // A node that recovers without this workflow type registered cannot run the
     // finalizer yet — but the resource is still owed. Leave the marker and re-arm so a
     // node that DOES register the type can run it. (Junior MF1 / Codex MF1.)
     return { kind: 'rearm', token };
   }
-  // A registration's `finalizer` is stored as `AnyActivityDefinition`, whose `execute`
-  // is typed `ActivityFunction<never>` (input contravariantly `never`). That
-  // under-describes what `activity()` produced — a named, callable activity with an
-  // optional `timeout` — so we narrow it to the structural `RunnableFinalizer` the
-  // drive relies on. Trusted by construction: only `activity()` populates this field.
-  const finalizer = registeredFinalizer as RunnableFinalizer;
+  // `resolveFinalizerRegistration` already narrows a registration's `finalizer`
+  // (stored as `AnyActivityDefinition`, whose `execute` is typed
+  // `ActivityFunction<never>`) to the structural `RunnableFinalizer` the drive
+  // relies on. Trusted by construction: only `activity()` populates this field.
+  const finalizer = registeredFinalizer;
 
   if (!runningClaimIsStale(internals, claim, finalizer)) {
     return { kind: 'rearm', token }; // a genuine live sibling drive owns it — back off and self-heal.

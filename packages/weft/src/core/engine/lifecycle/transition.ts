@@ -1,39 +1,38 @@
 import { KEYS } from '../../../storage/interface.ts';
 import { deserializeCheckpoint, serializeCheckpoint } from '../../checkpoint.ts';
 import { RegExpExtensionDecodeError } from '../../codec/extension-codec.ts';
-import { Context, setContextWorkflowInterceptor } from '../../context.ts';
 import { EMPTY_EVENT_HEAD } from '../../event-log.ts';
-import { WorkflowRecoverySkippedEvent, WorkflowStartedEvent } from '../../events.ts';
+import { WorkflowRecoverySkippedEvent } from '../../events.ts';
 import type { Checkpoint, ForkOptions, WorkflowState } from '../../types.ts';
 import { VersionMismatchError } from '../../versioning.ts';
-import { createCancelHandlerRegistration, resetCancelHandlers } from '../cancel-handlers.ts';
 import { forgetCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
 import { hydrateCheckpointReplayState } from '../checkpoint-replay.ts';
+import { DynamicWorkflowSourceUnavailableError } from '../dynamic-source-errors.ts';
+import { resolveExecutableRegistrationOrRenamedNotFound } from '../dynamic-source-execution.ts';
 import { WorkflowTypeNotRegisteredForRecoveryError } from '../errors.ts';
 import { commitFencedEngineWrite } from '../fenced-write.ts';
-import { getWorkflowExecutionStartedAt, type WorkflowHandle } from '../handles.ts';
+import type { WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
 import { WorkflowClaimUnavailableError } from '../lease-errors.ts';
 import { normalizeForkStep, selectPersistedWorkflowStartHeaders } from '../state-utilities.ts';
 import { loadWorkflowState } from '../storage-io.ts';
-import { getComposedWorkflowInterceptor } from '../strategy-helpers.ts';
 import { decodeWorkflowState } from '../validation.ts';
+import { launchWorkflowFromCheckpoint } from './checkpoint-launch.ts';
 import {
   buildForkBatchOperations,
   buildForkSearchAttributes,
   createForkLineage,
   createForkedWorkflowState,
 } from './fork-helpers.ts';
-import { createWorkflowVersionTuple, derivePreparedExecutionState } from './persist.ts';
+import { derivePreparedExecutionState } from './persist.ts';
+import { preloadRecoverableDynamicSourceTypes } from './recovery-dynamic-sources.ts';
 import { resumeWorkflowFromStorage } from './resume.ts';
 import {
-  createWorkflowHandle,
   enforceHistoryPolicyBeforeReplayById,
   loadWorkflowStartHeaders,
   setWorkflowStartHeaders,
   type LifecycleCallbacks,
   type RecoverAllOptions,
-  type RegistrationEntry,
 } from './shared.ts';
 
 type MissingRecoveryWorkflow = { type: string; workflowId: string };
@@ -41,7 +40,7 @@ type MissingRecoveryWorkflow = { type: string; workflowId: string };
 type RecoveryPreflightEntry =
   | { kind: 'local'; workflowId: string }
   | { kind: 'missing'; workflow: MissingRecoveryWorkflow }
-  | { kind: 'recoverable'; workflowId: string };
+  | { kind: 'recoverable'; workflowId: string; type: string };
 
 type RecoveryPreflightResult = {
   // Storage-scan order, preserving the interleaving callers observed before
@@ -82,11 +81,43 @@ function classifyRecoveryState(
 
   if (state.status !== 'running') return { kind: 'ignored' };
 
-  if (!internals.registrations.has(state.type)) {
+  // A registered-but-unresolved dynamic source is NOT "missing" —
+  // `recoverAll()`'s preload barrier resolves it before any generator advances.
+  if (!internals.registrations.has(state.type) && !internals.sources.byName.has(state.type)) {
     return { kind: 'missing', workflow: { type: state.type, workflowId: state.id } };
   }
 
-  return { kind: 'recoverable', workflowId: state.id };
+  return { kind: 'recoverable', workflowId: state.id, type: state.type };
+}
+
+/**
+ * Wrap `callbacks` so `resolveExecutableRegistration()` re-throws a
+ * `recoverAll()` batch's own cached failure for a type the preload barrier
+ * already classified `unavailable`, WITHOUT touching any state shared with
+ * other callers. `unavailableDynamicSourceTypes` is a plain local `Map`
+ * closed over by this one wrapper instance — nothing outside `recoverAll()`
+ * ever sees it, so a concurrent, unrelated `engine.start()`,
+ * `engine.resume()`, or a second concurrent `recoverAll()` batch for the
+ * SAME type keeps using the real, un-wrapped `callbacks.resolveExecutableRegistration`
+ * and can never observe this batch's classification (or race its own
+ * finally-reset against it). `recoverAll()` passes the returned wrapper
+ * only to its own per-entry `resume()` calls below, never publishing it
+ * anywhere `internals` or another call path could read.
+ */
+function createRecoveryScopedCallbacks(
+  callbacks: LifecycleCallbacks,
+  unavailableDynamicSourceTypes: ReadonlyMap<string, DynamicWorkflowSourceUnavailableError>,
+): LifecycleCallbacks {
+  return {
+    ...callbacks,
+    resolveExecutableRegistration: (type, onRevisionChosen) => {
+      const cachedFailure = unavailableDynamicSourceTypes.get(type);
+      if (cachedFailure !== undefined) {
+        return Promise.reject(cachedFailure);
+      }
+      return callbacks.resolveExecutableRegistration(type, onRevisionChosen);
+    },
+  };
 }
 
 function appendRecoveryClassification(
@@ -164,6 +195,19 @@ async function recoverEntryOrIsolateFailure(
     if (error instanceof WorkflowClaimUnavailableError) {
       return null;
     }
+    if (error instanceof DynamicWorkflowSourceUnavailableError) {
+      // `recoverAll()`'s preload barrier classified this entry's type
+      // `unavailable` before the loop started; `resume()` reached this
+      // exact cached error via the batch-local, closure-scoped
+      // `resolveExecutableRegistration()` wrapper `createRecoveryScopedCallbacks()`
+      // builds below, AFTER acquiring this workflow's claim and loading its
+      // terminal-cleanup tracking — the same ordering `VersionMismatchError`
+      // gets — so `failWorkflowForUnavailableDynamicSource` below commits
+      // cleanly under `ownership: 'workflow-lease'` instead of racing an
+      // unfenced write.
+      await callbacks.failWorkflowForUnavailableDynamicSource(workflowId, error);
+      return null;
+    }
     throw error;
   }
 }
@@ -177,11 +221,46 @@ export async function recoverAll(
   const handles: WorkflowHandle[] = [];
 
   if (preflight.missingWorkflows.length > 0 && options?.acknowledgeUnknownWorkflowTypes !== true) {
+    // A dynamic source registered but never yet resolved is still a
+    // "registered type" as far as an operator reading this error is
+    // concerned — `classifyRecoveryState` above already treats it as
+    // non-missing; this list must agree, or a mixed recovery batch reports
+    // every registered lazy type as unregistered.
     throw new WorkflowTypeNotRegisteredForRecoveryError({
-      registeredTypes: internals.registrations.keys(),
+      registeredTypes: new Set([
+        ...internals.registrations.keys(),
+        ...internals.sources.byName.keys(),
+      ]),
       missingWorkflows: preflight.missingWorkflows,
     });
   }
+
+  const recoverableTypes = preflight.entries
+    .filter((entry) => entry.kind === 'recoverable')
+    .map((entry) => entry.type);
+  const unavailableDynamicSourceTypes = await preloadRecoverableDynamicSourceTypes(
+    internals,
+    callbacks,
+    recoverableTypes,
+  );
+
+  // Wrap `callbacks` so THIS batch's per-entry `resume()` calls below see
+  // the barrier's failures via a closure-local `Map`, never a field on
+  // shared `internals` — a concurrent, unrelated `engine.start()`,
+  // `engine.resume()`, or a second concurrent `recoverAll()` batch keeps
+  // using the real, un-wrapped `callbacks.resolveExecutableRegistration`
+  // and can never observe (or race the reset of) this batch's
+  // classification. See `createRecoveryScopedCallbacks()` above. A
+  // `recoverable` entry whose type failed still goes through
+  // `recoverEntryOrIsolateFailure` -> `resume()` below like every other
+  // entry, so it gets the SAME claim-acquisition and
+  // terminal-cleanup-tracking sequence a version-mismatch failure gets,
+  // instead of calling `failWorkflowForUnavailableDynamicSource` directly
+  // ahead of that sequence.
+  const recoveryScopedCallbacks = createRecoveryScopedCallbacks(
+    callbacks,
+    unavailableDynamicSourceTypes,
+  );
 
   // Walk preflight entries in storage-scan order so the returned handle
   // list matches the interleaving callers observed before the preflight
@@ -204,7 +283,7 @@ export async function recoverAll(
     const handle = await recoverEntryOrIsolateFailure(
       internals,
       entry.workflowId,
-      callbacks,
+      recoveryScopedCallbacks,
       options,
     );
     if (handle !== null) {
@@ -270,12 +349,14 @@ export async function fork(
     throw new Error(`Workflow "${sourceWorkflowId}" not found`);
   }
 
-  const registration = internals.registrations.get(sourceState.type);
-  if (!registration) {
-    throw new Error(
-      `No workflow registered with name "${sourceState.type}" (needed to fork "${sourceWorkflowId}")`,
-    );
-  }
+  const { entry: registration } = await resolveExecutableRegistrationOrRenamedNotFound(
+    callbacks.resolveExecutableRegistration,
+    sourceState.type,
+    () =>
+      new Error(
+        `No workflow registered with name "${sourceState.type}" (needed to fork "${sourceWorkflowId}")`,
+      ),
+  );
 
   const fromStep =
     options?.fromStep !== undefined ? normalizeForkStep(options.fromStep) : undefined;
@@ -380,120 +461,4 @@ export async function fork(
       internals.workflowHeaders.delete(workflowId);
     }
   }
-}
-
-function launchInlineWorkflowFromCheckpoint(
-  internals: EngineInternals,
-  workflowId: string,
-  state: WorkflowState,
-  checkpoint: Checkpoint,
-  registration: RegistrationEntry,
-  callbacks: LifecycleCallbacks,
-): void {
-  const inlineStrategy = internals.inlineStrategy;
-  if (!inlineStrategy) {
-    throw new Error('Inline workflow launch requested without an inline strategy.');
-  }
-
-  const accumulatedResults = new Map<number, unknown>(checkpoint.accumulatedResults);
-  const workflowAbort = new AbortController();
-
-  resetCancelHandlers(internals, workflowId);
-  const context = new Context({
-    workflowId,
-    ...(state.workflowExecutionToken !== undefined && {
-      workflowExecutionToken: state.workflowExecutionToken,
-    }),
-    workflowType: state.type,
-    startedAt: getWorkflowExecutionStartedAt(state),
-    abortController: workflowAbort,
-    getNow: internals.options.getNow,
-    resolveWorkflowType: callbacks.resolveWorkflowTypeTarget,
-    executionStateOwnerId: state.executionStateOwnerId ?? workflowId,
-    accumulatedResults,
-    searchAttributes: checkpoint.searchAttributes,
-    registerCancelHandler: createCancelHandlerRegistration(internals, workflowId),
-    ...(registration.searchAttributes && {
-      searchAttributeSchema: registration.searchAttributes,
-    }),
-    sleepReferenceTime: checkpoint.createdAt,
-    ...(state.executionDeadline !== undefined && { deadline: state.executionDeadline }),
-    // Carry the host `ctx.log` sink onto the checkpoint-launched context, mirroring the
-    // fresh-start and resume paths. This path runs for forked / launch-from-checkpoint
-    // runs; without the sink, a log at the forked run's live frontier (and any
-    // speculative child it parents) reaches the console but never `EngineOptions.onLog`.
-    // Construction normalizes a missing `onLog` to `null`; use loose `!= null` so the
-    // narrowed type drops both `null` and the option's declared `undefined`, keeping
-    // `logSink` assignable under `exactOptionalPropertyTypes` (build's stricter tsc) (#549).
-    ...(internals.options.onLog != null && { logSink: internals.options.onLog }),
-  });
-  setContextWorkflowInterceptor(context, getComposedWorkflowInterceptor(internals));
-
-  if (internals.options.development) {
-    context.explain(true);
-  }
-
-  const generator = registration.handler(context, state.input);
-  inlineStrategy.adoptWorkflow(workflowId, generator, context, workflowAbort);
-  inlineStrategy.continueWorkflow(workflowId, undefined);
-  void callbacks.swallowPromiseRejection(
-    callbacks.processPendingUpdatesAfterInlineAdvance(workflowId),
-  );
-}
-
-function launchWorkerWorkflowFromCheckpoint(
-  internals: EngineInternals,
-  workflowId: string,
-  state: WorkflowState,
-  checkpoint: Checkpoint,
-): void {
-  const serialized = serializeCheckpoint(checkpoint);
-  internals.strategy.startWorkflow({
-    workflowId,
-    ...(state.workflowExecutionToken !== undefined && {
-      workflowExecutionToken: state.workflowExecutionToken,
-    }),
-    workflowType: state.type,
-    input: state.input,
-    checkpoint: serialized,
-    executionStateOwnerId: state.executionStateOwnerId ?? workflowId,
-    ...(state.executionDeadline !== undefined && { deadline: state.executionDeadline }),
-    ...(internals.workflowHeaders.has(workflowId) && {
-      headers: [...internals.workflowHeaders.get(workflowId)!],
-    }),
-  });
-}
-
-export function launchWorkflowFromCheckpoint(
-  internals: EngineInternals,
-  workflowId: string,
-  state: WorkflowState,
-  checkpoint: Checkpoint,
-  registration: RegistrationEntry,
-  callbacks: LifecycleCallbacks,
-): WorkflowHandle {
-  // Store checkpoint for future persistence
-  internals.checkpoints.set(workflowId, checkpoint);
-  internals.workflowVersionTuples.set(
-    workflowId,
-    createWorkflowVersionTuple(internals, registration, callbacks),
-  );
-
-  const handle = createWorkflowHandle(internals, workflowId, callbacks);
-  callbacks.dispatchEvent(new WorkflowStartedEvent(workflowId, state.type, state.input));
-
-  if (internals.inlineStrategy) {
-    launchInlineWorkflowFromCheckpoint(
-      internals,
-      workflowId,
-      state,
-      checkpoint,
-      registration,
-      callbacks,
-    );
-  } else {
-    launchWorkerWorkflowFromCheckpoint(internals, workflowId, state, checkpoint);
-  }
-
-  return handle;
 }

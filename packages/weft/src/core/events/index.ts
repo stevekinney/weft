@@ -7,3 +7,4 @@ export * from './signal-events.ts';
 export * from './system-events.ts';
 export * from './update-events.ts';
 export * from './workflow-events.ts';
+export * from './workflow-source-events.ts';

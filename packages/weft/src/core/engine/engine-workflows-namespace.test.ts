@@ -3,9 +3,10 @@
  * workflow catalog (WFT-11).
  */
 
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, mock } from 'bun:test';
 
 import { MemoryStorage } from '../../storage/memory.ts';
+import { ActivityRegistry } from '../activity-registry.ts';
 import {
   WorkflowCatalogConflictError,
   WorkflowRevisionNotInstalledError,
@@ -13,10 +14,15 @@ import {
 import { buildWorkflowContract } from '../contract/build.ts';
 import { buildWorkflowRevisionManifest } from '../contract/manifest.ts';
 import { buildRegistrySnapshot } from '../registry-snapshot.ts';
-import type { WorkflowContext } from '../types.ts';
+import { buildWorkflowManifestFromDefinition } from '../registry-workflow-manifest.ts';
+import { workflowSource } from '../source/index.ts';
+import type { WorkflowContext, WorkflowDefinition } from '../types.ts';
 import { workflow } from '../types.ts';
+import { copyWorkflowDefinition } from './construction.ts';
+import { WorkflowSourceNotRegisteredError } from './dynamic-source-errors.ts';
 import { WorkflowNotRegisteredError } from './errors.ts';
 import { Engine } from './index.ts';
+import { buildRegistrationEntry } from './registration.ts';
 
 function createEngine(): Engine {
   return new Engine({ storage: new MemoryStorage() });
@@ -285,5 +291,97 @@ describe('engine.workflows.getActive / getRevision / listRevisions', () => {
 
     const revisionRecord = await engine.workflows.getRevision('checkout', active!.revision);
     expect(revisionRecord?.manifest.revision).toBe(active!.revision);
+  });
+});
+
+// WFT-15/16: `engine.workflows.preload()` — a documented thin alias for
+// `engine.resolveWorkflowSource()`.
+describe('engine.workflows.preload', () => {
+  const lazy = workflow({ name: 'lazy-preload' }).execute(async function* () {
+    return 'preloaded';
+  });
+
+  async function lazyRevision(): Promise<string> {
+    const entry = buildRegistrationEntry('lazy-preload', lazy as WorkflowDefinition);
+    const registered = copyWorkflowDefinition('lazy-preload', entry);
+    const manifest = await buildWorkflowManifestFromDefinition(
+      registered,
+      new ActivityRegistry().listDefinitions(),
+    );
+    return manifest.revision;
+  }
+
+  it('loads, validates, and installs a registered dynamic source revision — identical effect to resolveWorkflowSource()', async () => {
+    const engine = createEngine();
+    const revision = await lazyRevision();
+    const loader = mock(async () => ({ lazyPreload: lazy }));
+    engine.registerSource(
+      workflowSource(
+        { name: 'lazy-preload', location: './lazy.ts', exportName: 'lazyPreload', revision },
+        loader,
+      ),
+    );
+
+    const record = await engine.workflows.preload('lazy-preload', revision);
+
+    expect(record.manifest.name).toBe('lazy-preload');
+    expect(record.manifest.revision).toBe(revision);
+    expect(loader).toHaveBeenCalledTimes(1);
+
+    const installed = await engine.workflows.getRevision('lazy-preload', revision);
+    expect(installed?.manifest.revision).toBe(revision);
+
+    engine[Symbol.dispose]();
+  });
+
+  it('does not re-invoke the loader on a second preload() for an already-resolved revision', async () => {
+    const engine = createEngine();
+    const revision = await lazyRevision();
+    const loader = mock(async () => ({ lazyPreload: lazy }));
+    engine.registerSource(
+      workflowSource(
+        { name: 'lazy-preload', location: './lazy.ts', exportName: 'lazyPreload', revision },
+        loader,
+      ),
+    );
+
+    await engine.workflows.preload('lazy-preload', revision);
+    await engine.workflows.preload('lazy-preload', revision);
+
+    expect(loader).toHaveBeenCalledTimes(1);
+
+    engine[Symbol.dispose]();
+  });
+
+  it('propagates WorkflowSourceNotRegisteredError for a (name, revision) never registerSource()-registered — identical to resolveWorkflowSource()', async () => {
+    const engine = createEngine();
+
+    await expect(engine.workflows.preload('never-registered', 'r1')).rejects.toBeInstanceOf(
+      WorkflowSourceNotRegisteredError,
+    );
+
+    engine[Symbol.dispose]();
+  });
+
+  it('forwards an AbortSignal option identically to resolveWorkflowSource()', async () => {
+    const engine = createEngine();
+    const revision = await lazyRevision();
+    const deferred = Promise.withResolvers<Record<string, unknown>>();
+    engine.registerSource(
+      workflowSource(
+        { name: 'lazy-preload', location: './lazy.ts', exportName: 'lazyPreload', revision },
+        () => deferred.promise,
+      ),
+    );
+
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      engine.workflows.preload('lazy-preload', revision, { signal: controller.signal }),
+    ).rejects.toBeTruthy();
+
+    deferred.resolve({ lazyPreload: lazy });
+    engine[Symbol.dispose]();
   });
 });

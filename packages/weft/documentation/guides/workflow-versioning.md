@@ -378,16 +378,18 @@ active pointer.
 `engine.workflows` promotes the catalog above to a public surface—`install`,
 `activate`, `getActive`, `getRevision`, and `listRevisions`—plus five
 matching server operations under `/v1/registry/`. This is catalog
-bookkeeping and promotion control ONLY. It never changes which in-process
-handler `engine.start()` dispatches to; that always resolves through
-whatever `engine.register()` most recently registered. Activation moves
+bookkeeping and promotion control ONLY for an eagerly-registered workflow:
+for a name only `engine.register()`-ed, activation never changes which
+in-process handler `engine.start()` dispatches to—that always resolves
+through whatever `engine.register()` most recently registered.
 `RegistrySnapshot.activeRevisions` (what `weft.system.registry`, the
-console's registry page, and `weft codegen` read)—it does not move
-execution. Connecting the two is dynamic module loading—see
-[Dynamic Workflow Sources](#dynamic-workflow-sources) below for the
-`workflowSource()`/`registerSource()`/`resolveWorkflowSource()` primitives
-this batch adds; wiring `engine.start()`/recovery to await resolution is
-still a later batch's job (WFT-15).
+console's registry page, and `weft codegen` read) still just moves the
+durable pointer, not execution, for that eager case. Connecting activation
+to execution is dynamic module loading—see
+[Dynamic Workflow Sources](#dynamic-workflow-sources) below for
+`workflowSource()`/`registerSource()`/`resolveWorkflowSource()` and how
+`engine.start()`/recovery await resolution for a `registerSource()`-registered
+name (WFT-15/16).
 
 ```ts
 import {
@@ -604,12 +606,15 @@ field-level reference.
 
 WFT-13/14 adds the primitive + loader slice of dynamic workflow loading:
 `workflowSource()`, `engine.registerSource()`, and
-`engine.resolveWorkflowSource()`. **`engine.start()` and recovery do not yet
-await resolution**—starting a workflow whose only registration is a source
-(no `engine.register()` call for the same name) does not implicitly resolve
-it. That wiring is WFT-15's job. This batch's own tests exercise
-`registerSource()`/`resolveWorkflowSource()` directly rather than through
-`engine.start()`.
+`engine.resolveWorkflowSource()`. WFT-15/16 wires it into every execution
+entry point—`engine.start()`, `startOrSignal()`, `schedule()`, `fork()`,
+`resume()`, recovery, and bulk-retry all await resolution for a
+`registerSource()`-registered name before running any handler code, and add
+bounded diagnostics plus process-local `workflow-source:*` events for the
+load pipeline. See
+[Engine Integration](#engine-integration-wft-1516) below for the full
+wiring, the candidate-until-resolved invariant, and its recovery
+limitation.
 
 ### `workflowSource()`: a typed, serializable source descriptor
 
@@ -684,6 +689,14 @@ throws. Multiple different revisions of the same lazy name may coexist
 unresolved—the lazy analog of the catalog already supporting multiple
 installed revisions per name.
 
+**Inline execution mode only (WFT-15/16):** `registerSource()` throws when
+`workflowExecutionMode: 'worker'` is configured. A dynamically-loaded
+definition resolves into THIS process's in-memory engine internals, which
+only the inline execution strategy reads directly — a Worker realm has no
+mechanism to receive that same loaded module or manifest. Use
+`workflowExecutionMode: 'inline'` (the default), or register the workflow
+eagerly with `engine.register()` instead.
+
 ### `resolveWorkflowSource()`: load, validate, install
 
 ```ts partial
@@ -737,3 +750,148 @@ route through the same contract-building normalization
 (`buildWorkflowManifestFromDefinition`), so `WorkflowCatalog.install()`
 never sees two different manifests for what is really one piece of content
 under one `(name, revision)` key.
+
+## Engine Integration (WFT-15/16)
+
+Every entry point that can launch or resume a workflow—`engine.start()`,
+`startOrSignal()`, `schedule()`, `fork()`, `resume()`, `recoverAll()`, and
+bulk-retry—now awaits dynamic-source resolution for a `registerSource()`-registered
+type before running any handler code. An eagerly `engine.register()`-ed
+type still resolves synchronously and never touches the dynamic-source
+machinery at all: starting an eager workflow never imports a differently-named
+lazy source, even when both are registered on the same engine.
+
+```ts partial
+import { Engine, workflowSource } from '@lostgradient/weft';
+
+const engine = new Engine();
+engine.registerSource(
+  workflowSource(
+    {
+      name: 'checkout',
+      location: './checkout.ts',
+      exportName: 'checkout',
+      revision: 'sha256:9f2c…',
+    },
+    () => import('./checkout.ts'),
+  ),
+);
+
+// Awaits resolution (loads, validates, and durably installs the revision)
+// before the workflow's handler ever runs.
+const handle = await engine.start('checkout', { orderId: 'order-1' });
+```
+
+**Candidate-until-resolved invariant:** no workflow handler runs while its
+definition is still a catalog candidate. `resolveExecutableRegistration()`
+(the shared internal helper every entry point above funnels through) always
+awaits the full load→validate→install pipeline before returning an
+executable registration—there is no path that hands a generator a
+definition that has not yet cleared validation.
+
+**Active-revision disambiguation:** a lazy name with exactly one registered
+revision resolves it unambiguously. A lazy name with two or more registered
+revisions resolves the catalog's active pointer (`engine.workflows.getActive()`)
+when it names one of the registered candidates; with no active pointer set
+and more than one candidate registered, resolution throws
+`DynamicWorkflowSourceUnavailableError` with `reason: 'ambiguous-revision'`
+rather than guessing—call `engine.workflows.activate()` first, or register
+only one revision at a time. There is no per-call revision override on
+`StartOptions`/`ScheduleOptions` this batch; that is intentionally out of
+scope (see the recovery limitation below).
+
+**Concurrency and cancellation:** concurrent `engine.start()` calls (or a
+`start()` racing an explicit `engine.resolveWorkflowSource()` call) for the
+same `(name, revision)` share one loader invocation—the same single-flight
+contract [`resolveWorkflowSource()`](#resolveworkflowsource-load-validate-install)
+already documents. A cancelled `resolveWorkflowSource({ signal })` waiter
+never aborts a load a concurrent `start()` still needs. Engine disposal
+settles every pending waiter with `EngineDisposedError` and closes resolver
+resources; the shared load itself is never aborted by disposal, only
+orphaned.
+
+### `engine.workflows.preload()`
+
+```ts partial
+const record = await engine.workflows.preload('checkout', 'sha256:9f2c…');
+```
+
+A documented thin alias for `engine.resolveWorkflowSource()`, offered on
+the `engine.workflows` namespace so deployment tooling that already reaches
+for `engine.workflows.*` for every other catalog operation does not need a
+second entry point. Identical single-flight, cancellation, and error
+contract. Exposed as the `weft.workflows.revisions.preload` server
+operation (`POST /v1/registry/workflows/:name/preload`)—see
+[api-server.md](../reference/api-server.md) and
+[api-observability.md](../reference/api-observability.md).
+
+### Recovery: a batch-wide preload barrier, not durable revision pinning
+
+`recoverAll()` (and therefore `Engine.create()`, which calls it by default)
+preloads every DISTINCT dynamic-source type referenced by non-terminal
+state ONCE, before advancing any of those runs' generators—not once per
+run.
+
+> [!NOTE]
+> `Engine.create()`'s options accept eager `workflows`/`activities` but have
+> no `sources` field, so there is no way to `registerSource()` a dynamic
+> type before its automatic `recover: true` pass runs. To have automatic
+> recovery resolve a `registerSource()`-registered type at all, build the
+> engine manually instead: `new Engine({ storage, ... })`, then
+> `engine.registerSource(...)` for every dynamic type, then
+> `await engine.recoverAll()`—the same sequence `dynamic-source-recovery.test.ts`
+> exercises. Passing `recover: false` to `Engine.create()` and driving
+> recovery yourself is the supported path when you need dynamic sources
+> registered before recovery runs. A type whose load fails is classified `unavailable`: only its own
+> non-terminal runs fail (with `DynamicWorkflowSourceUnavailableError` as a
+> `system`-category failure cause); sibling types—dynamic or eager—continue
+> recovering normally, mirroring the existing version-mismatch recovery
+> isolation. A registered-but-not-yet-resolved dynamic source is never routed
+> through the `'type-not-registered'` missing-registration classification
+> (`WorkflowRecoverySkippedEvent`)—only a name with no registration of any
+> kind (neither eager nor a registered source) is "missing."
+
+**This is a feature gate, not durable per-run revision pinning.** Which
+revision an in-flight run resolves against during recovery is derived at
+RUNTIME from the catalog's active pointer plus whatever `registerSource()`
+calls this process happens to have made—never persisted per-run. A
+revision-pinning scheme that survives a redeploy changing which revisions
+are registered is explicitly out of scope for this batch; treat dynamic
+sources as requiring the SAME revision set to stay registered across a
+restart for recovery to behave predictably, the same operational discipline
+`engine.register()`-only deployments already require.
+
+The same last-resolved-revision-wins rule applies to activity registries:
+resolving a dynamic type's revision installs its activity registry keyed
+only by workflow `type`, not by `(type, revision)`. If two revisions of one
+dynamic type are ever resolved concurrently on the same engine—an
+already-running run on `r1` while a fresh `start()` or recovery resolves
+`r2`—the later resolve's activity registry becomes the one every run of
+that type executes against, including the `r1` run still in flight. This is
+the same feature-gate limitation as above, not a separate bug: avoid it by
+keeping one active revision per dynamic type until durable per-run revision
+pinning lands.
+
+### Diagnostics and events
+
+`weft.catalog.diagnostics` (and the in-process `getWorkflowRevisionDiagnostics()`
+helper) gains an optional `source` field—kind, requested revision, load
+state (`idle | loading | ready | failed | cancelled`), load duration, last
+failure category, and outstanding waiter count—present only when the name
+was ever `registerSource()`-registered on this engine. Four bounded,
+process-local events fire around the load pipeline:
+`workflow-source:load-started`, `-ready`, `-failed`, and `-cancelled`. See
+[api-events.md](../reference/api-events.md#dynamic-workflow-source-events)
+and [api-observability.md](../reference/api-observability.md) for the full
+field-level reference.
+
+### New errors
+
+`WorkflowSourceNotRegisteredError` (`engine.resolveWorkflowSource()`/
+`engine.workflows.preload()` called against a specific `(name, revision)`
+`registerSource()` never recorded) and `DynamicWorkflowSourceUnavailableError`
+(a registered source's target revision is ambiguous, or its load fails) are
+new public error classes. A workflow `type` with no registration of any
+kind—eager or dynamic—still throws the pre-existing `WorkflowNotRegisteredError`,
+unchanged, from every execution entry point; see
+[api-errors.md](../reference/api-errors.md) for the full table.

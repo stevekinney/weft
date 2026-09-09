@@ -422,6 +422,87 @@ class WorkflowRevisionRemovedEvent extends Event {
 
 ---
 
+## Dynamic Workflow Source Events
+
+Fired around a `registerSource()`-registered dynamic workflow source's
+single-flight load pipeline (WFT-15/16). See [Engine Integration
+(WFT-15/16)](../guides/workflow-versioning.md#engine-integration-wft-1516)
+for firing-condition prose; these definitions are the field-level
+reference. Bounded payloads only — never a manifest, module contents, or
+the underlying error.
+
+### `WorkflowSourceLoadStartedEvent`
+
+Fired when a dynamic workflow source's single-flight load for
+`(workflowType, revision)` starts — the loader is about to be invoked.
+Never fired for a cache hit (an already-installed revision
+`resolveWorkflowSource()` returns without invoking the loader).
+
+```ts partial
+class WorkflowSourceLoadStartedEvent extends Event {
+  static readonly type = 'workflow-source:load-started';
+  readonly workflowType: string;
+  readonly revision: string;
+  readonly kind: WorkflowSourceKind;
+}
+```
+
+### `WorkflowSourceLoadReadyEvent`
+
+Fired when a dynamic workflow source's load for `(workflowType, revision)`
+completes successfully — the loader ran, validation passed, and the
+manifest is durably installed. `loadDurationMs` is measured via the
+engine's own injected clock (`EngineOptions.getNow`), never wall-clock.
+
+```ts partial
+class WorkflowSourceLoadReadyEvent extends Event {
+  static readonly type = 'workflow-source:load-ready';
+  readonly workflowType: string;
+  readonly revision: string;
+  readonly kind: WorkflowSourceKind;
+  readonly loadDurationMs: number;
+}
+```
+
+### `WorkflowSourceLoadFailedEvent`
+
+Fired when a dynamic workflow source's load for `(workflowType, revision)`
+fails — the loader threw, validation rejected the loaded module, or the
+durable install failed. `failureCategory` is the closed, low-cardinality
+`FailureCategory` classification, safe to use as a metric label; the
+underlying error itself is never included.
+
+```ts partial
+class WorkflowSourceLoadFailedEvent extends Event {
+  static readonly type = 'workflow-source:load-failed';
+  readonly workflowType: string;
+  readonly revision: string;
+  readonly kind: WorkflowSourceKind;
+  readonly loadDurationMs: number;
+  readonly failureCategory: FailureCategory;
+}
+```
+
+### `WorkflowSourceLoadCancelledEvent`
+
+Fired when the LAST outstanding `resolveWorkflowSource()` waiter for
+`(workflowType, revision)` releases (its own abort, or engine disposal)
+while the shared load is still unsettled. The shared load itself is never
+aborted — a fresh caller starting a new attempt for the same key re-fires
+`WorkflowSourceLoadStartedEvent`, not this event again for the orphaned
+attempt.
+
+```ts partial
+class WorkflowSourceLoadCancelledEvent extends Event {
+  static readonly type = 'workflow-source:load-cancelled';
+  readonly workflowType: string;
+  readonly revision: string;
+  readonly kind: WorkflowSourceKind;
+}
+```
+
+---
+
 ## Event Map Types
 
 ### `WeftEventMap`
@@ -458,8 +539,11 @@ interface WeftEventMap extends WeftReviewEventMap {
 `WeftEventMap` also carries the five [Catalog Events](#catalog-events) keys
 (`'catalog:revision-installed'`, `'catalog:revision-activated'`,
 `'catalog:activation-rejected'`, `'catalog:revision-draining'`,
-`'catalog:revision-removed'`), omitted from the example above for brevity
-along with several other existing keys (`'schedule:fired'`,
+`'catalog:revision-removed'`) and the four [Dynamic Workflow Source
+Events](#dynamic-workflow-source-events) keys (`'workflow-source:load-started'`,
+`'workflow-source:load-ready'`, `'workflow-source:load-failed'`,
+`'workflow-source:load-cancelled'`), omitted from the example above for
+brevity along with several other existing keys (`'schedule:fired'`,
 `'worker:connected'`, and others)—see the full type for the authoritative
 list.
 

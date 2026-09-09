@@ -7,9 +7,12 @@ import { buildTimerBatchOperations, normalizeStorageTimestamp } from '../schedul
 import type { Checkpoint, Duration, StartOptions, TimerEntry, WorkflowState } from '../types.ts';
 import type { WorkflowVersionTuple } from '../workflow-version-tuple.ts';
 import { notifyConditionWaiters, notifyConditionWaitersForTimerFire } from './condition-waiters.ts';
+import type { ExecutableRegistration } from './dynamic-source-execution.ts';
 import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
+import { resolveDelayedStartRegistrationOrFail } from './lifecycle/delayed-start-registration.ts';
 import { reprovideRecoveredServices } from './lifecycle/recovered-services.ts';
+import { ensureDelayedStartClaimAndCleanupBeforeFailure } from './lifecycle/standalone-claim-acquire.ts';
 import {
   acknowledgeSupersededSleepTimers,
   handleSleepTimerWithAcknowledgement,
@@ -19,8 +22,7 @@ import {
 import { commitWithWorkflowClaimFold, prepareWorkflowClaimFold } from './workflow-claim-fold.ts';
 import { buildWorkflowVisibilityIndexTransition } from './workflow-indexes.ts';
 
-type RegistrationEntry =
-  EngineInternals['registrations'] extends Map<string, infer Entry> ? Entry : never;
+type RegistrationEntry = ExecutableRegistration['entry'];
 
 type SleepOperation = Extract<ContextOperationRequest, { type: 'sleep' }>;
 
@@ -55,6 +57,7 @@ export type TimeOperationCallbacks = {
   handleScheduleTimer: (entry: TimerEntry) => Promise<void>;
   timeout: (workflowId: string) => Promise<void>;
   handleCleanupError: (source: string, error: unknown, workflowId: string) => void;
+  resolveExecutableRegistration: (type: string) => Promise<ExecutableRegistration>;
 };
 
 export function createDelayedStartTimerEntry(
@@ -124,10 +127,9 @@ export async function processSleepOperation(
     operation.scheduledFireAt,
   );
 
-  // Guard against the race where the scheduler tick fires the timer in the
-  // window between the schedule() write and registerSleepResolver(). The
-  // resolver guard prevents a spurious resolveSleepTimer call when the tick
-  // already settled the resolver via the normal post-registration path.
+  // Guard against the race where the scheduler tick fires the timer in the window
+  // between the schedule() write and registerSleepResolver(). The resolver guard
+  // prevents a spurious resolveSleepTimer call once the tick already settled it.
   const resolverKey = `${workflowId}:${operation.operationId}`;
   if (
     sleepTimerFiredEarly(internals, workflowId, operation) &&
@@ -156,8 +158,7 @@ export function registerSleepResolver(
   resolve: () => void,
   scheduledFireAt: number,
 ): void {
-  // Store the run's expected deadline so resolveSleepTimer can ignore a stale
-  // timer left by a terminated run that reused this id (see resolveSleepTimer).
+  // Store the deadline so resolveSleepTimer ignores a stale timer reused by an old run.
   internals.sleepResolvers.set(`${workflowId}:${operationId}`, {
     resolve,
     fireAt: scheduledFireAt,
@@ -188,6 +189,7 @@ export async function startDelayedWorkflow(
     | 'handleCleanupError'
     | 'loadWorkflowStartHeaders'
     | 'loadWorkflowState'
+    | 'resolveExecutableRegistration'
     | 'runSerializedWorkflowStateWrite'
     | 'setWorkflowStartHeaders'
     | 'workflowVersionTupleFromState'
@@ -203,17 +205,18 @@ export async function startDelayedWorkflow(
     return;
   }
 
-  const registration = internals.registrations.get(state.type);
-  if (!registration) {
-    await callbacks.failWorkflow(
-      entry.workflowId,
-      new Error(`No workflow registered with name "${state.type}"`),
-    );
+  const registration = await resolveDelayedStartRegistrationOrFail(
+    internals,
+    entry,
+    state.type,
+    callbacks,
+  );
+  if (registration === null) {
     return;
   }
 
   const now = internals.options.getNow();
-  const executionDeadline = await resolveDelayedExecutionDeadline(entry, now, callbacks);
+  const executionDeadline = await resolveDelayedExecutionDeadline(internals, entry, now, callbacks);
   if (executionDeadline === 'invalid') return;
 
   const runningState = await callbacks.runSerializedWorkflowStateWrite(
@@ -296,11 +299,10 @@ export async function startDelayedWorkflow(
     return;
   }
 
-  // A delayed-start workflow that crashed `pending` before its timer fired
-  // loses its in-memory services on recovery (the timer fires in a fresh
-  // process). Re-provide them before execution begins, exactly as the
-  // running-workflow resume path does — and fail the run if unavailable rather
-  // than silently executing with `ctx.services === undefined`.
+  // A delayed-start workflow that crashed `pending` before its timer fired loses
+  // its in-memory services on recovery (fires in a fresh process). Re-provide
+  // them before execution, as resume does — fail rather than run with
+  // `ctx.services === undefined`.
   const servicesUnavailable = await reprovideRecoveredServices(
     internals,
     runningState,
@@ -312,12 +314,7 @@ export async function startDelayedWorkflow(
     return;
   }
 
-  // Re-derive terminal-cleanup tracking from the durable marker, exactly as the
-  // running-workflow resume path does (loadTerminalCleanupTrackedState). On a
-  // fresh process the in-memory workflowsNeedingTerminalCleanup set is empty, so
-  // without this a recovered services-only run (no start headers, which would
-  // otherwise re-add it) would complete without scheduling the deferred durable
-  // sweep — leaking its wf-has-services marker and other per-run scratch.
+  // Re-derive terminal-cleanup tracking from the durable marker, as resume does.
   if (await storageHas(internals.storage, KEYS.terminalCleanupNeeded(entry.workflowId))) {
     internals.workflowsNeedingTerminalCleanup.add(entry.workflowId);
   }
@@ -361,6 +358,7 @@ async function loadDelayedWorkflowCheckpoint(
 }
 
 async function resolveDelayedExecutionDeadline(
+  internals: EngineInternals,
   entry: TimerEntry,
   now: number,
   callbacks: Pick<TimeOperationCallbacks, 'failWorkflow'>,
@@ -370,7 +368,7 @@ async function resolveDelayedExecutionDeadline(
   }
 
   if (!Number.isFinite(entry.executionTimeoutMs) || entry.executionTimeoutMs < 0) {
-    await failInvalidDelayedExecutionTimeout(entry, callbacks);
+    await failInvalidDelayedExecutionTimeout(internals, entry, callbacks);
     return 'invalid';
   }
 
@@ -380,15 +378,17 @@ async function resolveDelayedExecutionDeadline(
       `Delayed execution timeout for workflow "${entry.workflowId}"`,
     );
   } catch {
-    await failInvalidDelayedExecutionTimeout(entry, callbacks);
+    await failInvalidDelayedExecutionTimeout(internals, entry, callbacks);
     return 'invalid';
   }
 }
 
 async function failInvalidDelayedExecutionTimeout(
+  internals: EngineInternals,
   entry: TimerEntry,
   callbacks: Pick<TimeOperationCallbacks, 'failWorkflow'>,
 ): Promise<void> {
+  await ensureDelayedStartClaimAndCleanupBeforeFailure(internals, entry.workflowId);
   await callbacks.failWorkflow(
     entry.workflowId,
     new Error(`Invalid delayed execution timeout for workflow "${entry.workflowId}"`),
@@ -412,6 +412,7 @@ export async function handleTimerFired(
     | 'timeout'
     | 'beginWorkflowExecution'
     | 'dispatchEvent'
+    | 'resolveExecutableRegistration'
     | 'workflowVersionTupleFromState'
   >,
 ): Promise<void> {

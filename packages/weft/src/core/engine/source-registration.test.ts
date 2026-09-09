@@ -23,7 +23,7 @@ describe('engine.registerSource()', () => {
 
     expect(loader).not.toHaveBeenCalled();
     const internals = getInternals(engine);
-    expect(internals.workflowSourcesByName.get('checkout')?.get('r1')).toBe(source);
+    expect(internals.sources.byName.get('checkout')?.get('r1')).toBe(source);
 
     engine[Symbol.dispose]();
   });
@@ -37,7 +37,7 @@ describe('engine.registerSource()', () => {
 
     const internals = getInternals(engine);
     expect(internals.workflowDefinitionsByName.has('eagerWorkflow')).toBe(true);
-    expect(internals.workflowSourcesByName.get('checkout')?.has('r1')).toBe(true);
+    expect(internals.sources.byName.get('checkout')?.has('r1')).toBe(true);
 
     engine[Symbol.dispose]();
   });
@@ -94,7 +94,7 @@ describe('engine.registerSource()', () => {
     expect(() => engine.registerSource(source)).not.toThrow();
 
     const internals = getInternals(engine);
-    expect(internals.workflowSourcesByName.get('checkout')?.get('r1')).toBe(source);
+    expect(internals.sources.byName.get('checkout')?.get('r1')).toBe(source);
 
     engine[Symbol.dispose]();
   });
@@ -122,7 +122,7 @@ describe('engine.registerSource()', () => {
     engine.registerSource(revisionTwo);
 
     const internals = getInternals(engine);
-    const byRevision = internals.workflowSourcesByName.get('checkout');
+    const byRevision = internals.sources.byName.get('checkout');
     expect(byRevision?.size).toBe(2);
 
     engine[Symbol.dispose]();
@@ -207,7 +207,7 @@ describe('engine.registerSource() structural validation', () => {
     // whose descriptor is a plain mutable object (still valid TypeScript,
     // since `WorkflowSourceDescriptor`'s `readonly` fields are compile-time
     // only). Without registerSource() freezing it, mutating `revision` here
-    // would leave `internals.workflowSourcesByName` still indexed under the
+    // would leave `internals.sources.byName` still indexed under the
     // ORIGINAL revision while `resolveWorkflowSource()` reads the mutated
     // descriptor off the same stored reference.
     const engine = new Engine();
@@ -228,10 +228,26 @@ describe('engine.registerSource() structural validation', () => {
     expect(source.descriptor.revision).toBe('original-revision');
 
     const internals = getInternals(engine);
-    expect(internals.workflowSourcesByName.get('checkout')?.get('original-revision')).toBe(source);
+    expect(internals.sources.byName.get('checkout')?.get('original-revision')).toBe(source);
     expect(
-      internals.workflowSourcesByName.get('checkout')?.get('mutated-after-registration'),
+      internals.sources.byName.get('checkout')?.get('mutated-after-registration'),
     ).toBeUndefined();
+
+    engine[Symbol.dispose]();
+  });
+
+  it('throws under workflowExecutionMode: "worker" (WFT-15/16) — a dynamically-loaded definition cannot ship to a Worker realm', () => {
+    const engine = new Engine({
+      workflowExecutionMode: 'worker',
+      workerExecution: {
+        workerUrl: new URL('https://example.invalid/worker.js'),
+        poolSize: 1,
+      },
+    });
+    const { source } = checkoutSource();
+
+    expect(() => engine.registerSource(source)).toThrow(/inline execution mode/);
+    expect(getInternals(engine).sources.byName.size).toBe(0);
 
     engine[Symbol.dispose]();
   });

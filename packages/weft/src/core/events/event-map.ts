@@ -40,6 +40,12 @@ import type {
   WorkflowTeardownEvent,
   WorkflowTimedOutEvent,
 } from './workflow-events.ts';
+import type {
+  WorkflowSourceLoadCancelledEvent,
+  WorkflowSourceLoadFailedEvent,
+  WorkflowSourceLoadReadyEvent,
+  WorkflowSourceLoadStartedEvent,
+} from './workflow-source-events.ts';
 
 /**
  * Record mapping each event-name string the {@link Engine} dispatches to its
@@ -97,6 +103,10 @@ export type WeftEventMap = {
   'catalog:activation-rejected': WorkflowRevisionActivationRejectedEvent;
   'catalog:revision-draining': WorkflowRevisionDrainingEvent;
   'catalog:revision-removed': WorkflowRevisionRemovedEvent;
+  'workflow-source:load-started': WorkflowSourceLoadStartedEvent;
+  'workflow-source:load-ready': WorkflowSourceLoadReadyEvent;
+  'workflow-source:load-failed': WorkflowSourceLoadFailedEvent;
+  'workflow-source:load-cancelled': WorkflowSourceLoadCancelledEvent;
 };
 
 /**

@@ -45,7 +45,13 @@ function isWorkflowDefinition(value: unknown): value is WorkflowDefinition {
   );
 }
 
-function assertConstraintsSupported(
+/**
+ * Reject constraints on a workflow definition when the engine has no
+ * inline execution strategy. Exported so `dynamic-source-execution.ts`
+ * (WFT-15/16) can apply the identical guard to a dynamically-resolved
+ * definition — see that module's own call site.
+ */
+export function assertConstraintsSupported(
   internals: EngineInternals,
   name: string,
   registration: WorkflowDefinition,
@@ -183,6 +189,25 @@ export function buildRegistrationEntry(
   return entry;
 }
 
+/**
+ * Visit every RESOLVED `registerSource()`-registered type's normalized
+ * retention policy (via {@link buildRegistrationEntry}) — the dynamic-source
+ * counterpart to walking `internals.registrations.values()` directly for an
+ * eager type. Used by `bulk-operations-purge.ts` so a dynamic workflow's own
+ * (possibly shorter) retention window narrows the purge sweep's scan bound
+ * the same way an eager registration's does.
+ */
+export function forEachResolvedDynamicRetentionPolicy(
+  internals: EngineInternals,
+  visit: (policy: RegistrationEntry['retention']) => void,
+): void {
+  for (const [type, revisions] of internals.sources.resolved) {
+    for (const resolved of revisions.values()) {
+      visit(buildRegistrationEntry(type, resolved.definition).retention);
+    }
+  }
+}
+
 type RuntimeNamedMessageDefinition = {
   readonly name: string;
 };
@@ -217,7 +242,7 @@ function commitWorkflowDefinition(
   // Symmetric to `registerSource()`'s own eager-name collision check
   // (`core/engine/source-registration.ts`, WFT-13/14): a workflow name may
   // not be both eagerly registered and a dynamic source.
-  if (internals.workflowSourcesByName.has(name)) {
+  if (internals.sources.byName.has(name)) {
     throw new Error(
       `Cannot register("${name}"): "${name}" is already registered as a dynamic workflow source ` +
         'via engine.registerSource(). A workflow name may not be both eagerly registered and a dynamic source.',

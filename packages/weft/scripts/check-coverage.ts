@@ -1227,12 +1227,14 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       // the case-label/brace lines around it flip between hit and unhit
       // run to run with byte-identical source — a coverage-attribution
       // artifact, not a real reachability signal — so the whole
-      // `default: { ... }` block (156-159) is allowed, not just the two
-      // dead statements inside it.
+      // `default: { ... }` block is allowed, not just the two dead
+      // statements inside it. Lines realigned to 213-215 by the WFT-15/16
+      // dynamic-source-execution and early-inFlightStarts-reservation
+      // additions above this function.
       {
         reason:
           'Compile-time exhaustiveness guard for a closed discriminated union has no reachable runtime path to test without an unsafe cast.',
-        lines: new Set([156, 157, 158, 159]),
+        lines: new Set([213, 214, 215]),
       },
     ],
     [
@@ -1245,11 +1247,28 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       },
     ],
     [
+      'src/core/engine/dynamic-source-execution.ts',
+      {
+        // `resolveExecutableRegistration()`'s own doc marks this exact branch
+        // "Unreachable in practice": `resolveWorkflowSourceForExecution()`'s
+        // contract guarantees a successful resolve always populates
+        // `internals.sources.resolved` for the key it just resolved — the
+        // only way to reach this throw is to corrupt that invariant via an
+        // unsafe cast, the same class of guard already allowed for
+        // `catalog-removal.ts`'s exhaustiveness default above.
+        reason:
+          'Defensive fail-loud guard for an invariant resolveWorkflowSourceForExecution() itself guarantees; has no reachable runtime path to test without an unsafe cast. ' +
+          'Lines realigned to 130-139 after the WFT-15/16 review round 2 fix synchronized the sole-registered-revision fast path (no `await` before `onRevisionChosen` fires).',
+        lines: new Set([130, 131, 132, 133, 134, 135, 136, 137, 138, 139]),
+        requireUncoveredLines: true,
+      },
+    ],
+    [
       'src/core/engine/index.ts',
       {
         reason:
-          'Bun reports aggregate re-export and factory closures as missed although the engine entrypoint has complete line coverage. Raised from 4 to 5 when the ownership bootstrap was extended to the global lease mode: that edit adds no new function and makes strictly more code run on the lease path, and line coverage stayed at 100 percent, so the extra miss is the same attribution artifact rather than new dead code.',
-        functions: 5,
+          'Bun reports aggregate re-export and factory closures as missed although the engine entrypoint has complete line coverage. Raised from 4 to 5 when the ownership bootstrap was extended to the global lease mode: that edit adds no new function and makes strictly more code run on the lease path, and line coverage stayed at 100 percent, so the extra miss is the same attribution artifact rather than new dead code. Raised from 5 to 6 by the WFT-15/16 `getRegistration` strategy-bundle closure (dynamic-source fallback lookup) — same attribution artifact, line coverage still 100 percent.',
+        functions: 6,
       },
     ],
     [
@@ -1263,10 +1282,17 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
     [
       'src/core/engine/lifecycle/resume.ts',
       {
+        // The double-failure cleanup path IS exercised (`callbacks.failWorkflowForRecoveryHook`
+        // at the preceding line, and `callbacks.handleCleanupError` at the
+        // following line inside this catch's own body, both show real hit
+        // counts) — only the `catch (commitError) {` line's OWN counter
+        // reports zero, the identical brace/case-label attribution artifact
+        // already documented for `catalog-removal.ts`'s exhaustiveness
+        // guard above: a coverage-instrumentation quirk, not a real gap.
         reason:
-          'The remaining resume line is the double-failure cleanup branch reached only when failWorkflowForRecoveryHook itself throws after an onRecoveredWorkflow hook failure. Line realigned from 91 to 92 by the ADR 0002 workflow-claim-fold import (WFT-78).',
+          "Bun reports the catch clause's own line as missed although the surrounding failWorkflowForRecoveryHook call and this catch's own handleCleanupError body both show real hit counts — the same brace-line attribution artifact documented for catalog-removal.ts's exhaustiveness guard. Also reports one enclosing closure as missed for the same reason.",
         functions: 1,
-        lines: new Set([92]),
+        lines: new Set([93]),
         requireUncoveredLines: true,
       },
     ],
@@ -1290,8 +1316,9 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/core/engine/listing.ts',
       {
         reason:
-          'The remaining line is the equality tiebreaker after both strict id-order branches have been exercised; distinct workflow ids cannot reach it.',
-        lines: new Set([237]),
+          'The remaining line is the equality tiebreaker after both strict id-order branches have been exercised; distinct workflow ids cannot reach it. ' +
+          'Realigned to 238 after the WFT-15/16 review round 2 fix routed setAttributes() through the sync-only dynamic-registration fallback.',
+        lines: new Set([238]),
         requireUncoveredLines: true,
       },
     ],
@@ -1301,6 +1328,24 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
         reason:
           'Bun reports pending-update callbacks as missed although enqueue, replace, apply, and teardown behavior is covered.',
         functions: 2,
+      },
+    ],
+    [
+      'src/core/engine/retention.ts',
+      {
+        reason:
+          'Bun maps the closing braces of the resolved-dynamic-retention loop as uncovered after the direct `return true` inside them executes (retention.test.ts + workflow-retention.test.ts both exercise the branch itself).',
+        lines: new Set([34, 35]),
+        requireUncoveredLines: true,
+      },
+    ],
+    [
+      'src/core/engine/termination/finalizer-registration.ts',
+      {
+        reason:
+          'Bun maps the closing braces after `return undefined` in the DynamicWorkflowSourceUnavailableError catch branch as uncovered although finalizer.test.ts directly exercises that return (a load-failure dynamic finalizer resolve).',
+        lines: new Set([43, 44]),
+        requireUncoveredLines: true,
       },
     ],
     [

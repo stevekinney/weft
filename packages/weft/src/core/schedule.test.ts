@@ -1,4 +1,4 @@
-import { describe, expect, it, spyOn } from 'bun:test';
+import { describe, expect, it, mock, spyOn } from 'bun:test';
 import {
   createDeferred,
   flushMicrotasks,
@@ -40,6 +40,7 @@ import {
   getNextCronOccurrence,
   parseCronExpression,
 } from './schedule.ts';
+import { workflowSource } from './source/index.ts';
 import {
   schedule as defineSchedule,
   workflow as defineWorkflow,
@@ -323,6 +324,31 @@ describe('schedule validation helpers', () => {
     expect(() => normalizeScheduleUpdateOptions({ jitter: null as never })).toThrow(
       'options.jitter must be a duration string or a number of milliseconds',
     );
+  });
+
+  it('rejects an invalid schedule spec before ever resolving a registerSource()-registered type', async () => {
+    // Regression: engine.schedule() resolved a dynamic type's loader (single-flight,
+    // catalog-installing) BEFORE validating the caller-supplied spec/options, so an
+    // invalid schedule still paid for (and discarded the result of) a real load.
+    const type = 'dynamic-schedule-invalid-spec';
+    const definition = defineWorkflow({ name: type }).execute(async function* () {
+      return 'ok';
+    });
+    const loader = mock(async () => ({ dyn: definition }));
+    const engine = new Engine();
+    engine.registerSource(
+      workflowSource(
+        { name: type, location: './dyn.ts', exportName: 'dyn', revision: 'r1' },
+        loader,
+      ),
+    );
+
+    await expect(engine.schedule(type, null, { every: false as never })).rejects.toThrow(
+      'Schedule interval "every" must be a duration string or a number of milliseconds',
+    );
+
+    expect(loader).not.toHaveBeenCalled();
+    engine[Symbol.dispose]();
   });
 
   it('rejects a non-object schedule spec before checking cadence fields', () => {

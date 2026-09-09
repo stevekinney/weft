@@ -30,6 +30,7 @@
  * @module core/engine/lifecycle/standalone-claim-acquire
  */
 
+import { KEYS, storageHas } from '../../../storage/interface.ts';
 import type { EngineInternals } from '../internals.ts';
 import { WorkflowClaimUnavailableError } from '../lease-errors.ts';
 import { wakeOwnershipCheck } from '../wake-ownership-check.ts';
@@ -58,5 +59,26 @@ export async function acquireStandaloneClaimBeforeResume(
   const result = await registry.acquire(workflowId);
   if (result.status === 'lost-race') {
     throw new WorkflowClaimUnavailableError(workflowId, result.heldBy);
+  }
+}
+
+/**
+ * Standalone-acquire `workflowId`'s claim (see {@link acquireStandaloneClaimBeforeResume},
+ * a no-op once already held) and hydrate its terminal-cleanup tracking from
+ * the durable marker — the two preconditions a `'self'`-fenced `failWorkflow()`
+ * write needs. Used by `operations-time.ts`'s `startDelayedWorkflow` on every
+ * failure exit (dynamic-source resolve, invalid execution-timeout) BEFORE
+ * failing: a delayed-start's pending→running write is the only other place
+ * this claim would otherwise get acquired (folded atomically, per ADR 0002),
+ * so a failure committed ahead of that write needs this standalone path
+ * instead, exactly like a recovered `running`/`suspended` workflow does.
+ */
+export async function ensureDelayedStartClaimAndCleanupBeforeFailure(
+  internals: EngineInternals,
+  workflowId: string,
+): Promise<void> {
+  await acquireStandaloneClaimBeforeResume(internals, workflowId);
+  if (await storageHas(internals.storage, KEYS.terminalCleanupNeeded(workflowId))) {
+    internals.workflowsNeedingTerminalCleanup.add(workflowId);
   }
 }

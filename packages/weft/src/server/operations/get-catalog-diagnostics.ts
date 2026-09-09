@@ -43,6 +43,22 @@ const getCatalogDiagnosticsInput = z
   })
   .strict();
 
+// Dynamic-source (WFT-15/16) `source` field, additive on the existing
+// `.strict()` output schema — present only when the requested `name` was
+// ever `registerSource()`-registered on this engine.
+const sourceLoadDiagnosticsSchema = z
+  .object({
+    kind: z.literal('module'),
+    requestedRevision: z.string(),
+    state: z.enum(['idle', 'loading', 'ready', 'failed', 'cancelled']),
+    loadDurationMs: z.number().nonnegative().optional(),
+    lastFailureCategory: z
+      .enum(['application', 'timeout', 'cancellation', 'resource', 'system'])
+      .optional(),
+    waiterCount: z.number().int().nonnegative(),
+  })
+  .strict();
+
 const getCatalogDiagnosticsOutput = z
   .object({
     name: z.string(),
@@ -52,6 +68,7 @@ const getCatalogDiagnosticsOutput = z
     activeRevision: z.string().optional(),
     references: workflowRevisionReferenceCountsSchema,
     removable: z.boolean(),
+    source: sourceLoadDiagnosticsSchema.optional(),
   })
   .strict();
 
@@ -87,7 +104,10 @@ export const getCatalogDiagnosticsOperation = defineOperation<
   description:
     'Report whether a `(name, revision)` workflow catalog entry is installed, whether it is ' +
     "currently the active revision, its full reference-count breakdown, and whether it's " +
-    'currently removable. Never returns manifest or contract content.',
+    'currently removable. When `name` was ever registered as a dynamic workflow source ' +
+    '(`engine.registerSource()`), also reports its bounded load-state diagnostics: source ' +
+    'kind, load state, load duration, last failure category, and outstanding waiter count. ' +
+    'Never returns manifest or contract content.',
   destructive: false,
   tags: ['Observability'],
   inputSchema: getCatalogDiagnosticsInput,

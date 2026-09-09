@@ -1,5 +1,6 @@
 import type { RetentionOverview, WorkflowTypeRetentionPolicy } from '../types.ts';
 import { purgeInternal } from './bulk-operations.ts';
+import { getResolvedDynamicRegistration } from './dynamic-source-execution.ts';
 import type { EngineInternals } from './internals.ts';
 
 type CleanupWaiters = (workflowId: string) => void;
@@ -17,6 +18,20 @@ export function hasConfiguredRetention(internals: EngineInternals): boolean {
   for (const registration of internals.registrations.values()) {
     if (registration.retention !== undefined && registration.retention !== null) {
       return true;
+    }
+  }
+
+  // Eager registrations alone miss a `registerSource()`-registered type's
+  // own retention policy — that definition never lands in
+  // `internals.registrations` (see `dynamic-source-execution.ts`). Walk
+  // every dynamic type this engine has actually RESOLVED at least once:
+  // an unresolved candidate cannot carry a policy this process has ever
+  // read, and resolving it here would defeat the point of lazy loading.
+  for (const revisions of internals.sources.resolved.values()) {
+    for (const resolved of revisions.values()) {
+      if (resolved.definition.retention !== undefined && resolved.definition.retention !== null) {
+        return true;
+      }
     }
   }
 
@@ -91,7 +106,11 @@ export function resolveWorkflowTypeRetention(
   internals: EngineInternals,
   type: string,
 ): WorkflowTypeRetentionPolicy {
-  const registration = internals.registrations.get(type);
+  // Sync-only fallback: falls back to the most recently RESOLVED dynamic
+  // definition for `type` when there is no eager registration, matching
+  // the same last-resolved-revision-wins rule `finalizer.ts`/`constraints.ts`
+  // already rely on this helper for. Never triggers a new resolve.
+  const registration = getResolvedDynamicRegistration(internals, type);
   if (registration?.retention) {
     return {
       type,
@@ -120,7 +139,14 @@ export function getRetentionOverview(
   resolveRetentionForType: (type: string) => WorkflowTypeRetentionPolicy = (type) =>
     resolveWorkflowTypeRetention(internals, type),
 ): RetentionOverview {
-  const workflowTypes = [...internals.registrations.keys()]
+  // Union eager registrations with every `registerSource()`-registered
+  // name so a dynamic type's retention policy is visible here too, once
+  // resolved (`resolveRetentionForType` falls back to the same
+  // sync-only resolved-dynamic-definition lookup `resolveWorkflowTypeRetention`
+  // above does).
+  const workflowTypes = [
+    ...new Set([...internals.registrations.keys(), ...internals.sources.byName.keys()]),
+  ]
     .toSorted()
     .map((type) => resolveRetentionForType(type));
 

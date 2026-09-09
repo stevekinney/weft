@@ -82,6 +82,7 @@ const EXPECTED_DESTRUCTIVE: Readonly<Record<string, boolean>> = {
   'weft.workflows.revisions.activate': true,
   'weft.workflows.revisions.get': false,
   'weft.workflows.revisions.list': false,
+  'weft.workflows.revisions.preload': false,
   'weft.workflows.active.get': false,
   'weft.workflows.events.sse': false,
   'weft.workflows.streams.chunks': false,

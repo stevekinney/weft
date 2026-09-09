@@ -16,6 +16,7 @@ import {
   BulkOperationConfirmationError,
   DurableActivityScopeError,
   DurableActivityUnsupportedError,
+  DynamicWorkflowSourceUnavailableError,
   EffectReplayConflictError,
   EngineCreateNameMismatchError,
   EngineDisposalError,
@@ -43,6 +44,7 @@ import {
   WorkflowNotFoundError,
   WorkflowNotRegisteredError,
   WorkflowRevisionNotInstalledError,
+  WorkflowSourceNotRegisteredError,
   WorkflowSourceValidationError,
   WorkflowSuspendNotSupportedError,
   WorkflowTeardownPendingError,
@@ -157,6 +159,9 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
   WorkflowRevisionNotInstalledError: () => new WorkflowRevisionNotInstalledError('checkout', 'r1'),
   WorkflowSourceValidationError: () =>
     new WorkflowSourceValidationError('checkout', 'r1', ['missing-export']),
+  WorkflowSourceNotRegisteredError: () => new WorkflowSourceNotRegisteredError('checkout', 'r1'),
+  DynamicWorkflowSourceUnavailableError: () =>
+    new DynamicWorkflowSourceUnavailableError('checkout', 'r1', 'load-failed', new Error('boom')),
 };
 
 describe('WeftError', () => {

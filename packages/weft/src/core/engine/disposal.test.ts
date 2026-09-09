@@ -1,8 +1,13 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, mock } from 'bun:test';
 
 import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
-import { workflow } from '../types.ts';
+import { ActivityRegistry } from '../activity-registry.ts';
+import { WorkflowSourceLoadCancelledEvent } from '../events/workflow-source-events.ts';
+import { buildWorkflowManifestFromDefinition } from '../registry-workflow-manifest.ts';
+import { workflowSource } from '../source/index.ts';
+import { workflow, type WorkflowDefinition } from '../types.ts';
 import { UpdateTimeoutError } from '../updates.ts';
+import { copyWorkflowDefinition } from './construction.ts';
 import { disposeEngine } from './disposal.ts';
 import type { QueuedInlineWorkflowExecutionStart } from './engine-internal-types.ts';
 import { EngineDisposedError } from './errors.ts';
@@ -13,6 +18,17 @@ import {
   type InlineLaunchQueueCallbacks,
 } from './inline-launch-queue.ts';
 import { getInternals } from './internals.ts';
+import { buildRegistrationEntry } from './registration.ts';
+
+async function revisionFor(definition: WorkflowDefinition): Promise<string> {
+  const entry = buildRegistrationEntry(definition.name, definition);
+  const registered = copyWorkflowDefinition(definition.name, entry);
+  const manifest = await buildWorkflowManifestFromDefinition(
+    registered,
+    new ActivityRegistry().listDefinitions(),
+  );
+  return manifest.revision;
+}
 
 /**
  * Seed a queued inline start directly into engine internals with an `onStarted`
@@ -329,6 +345,136 @@ describe('disposeEngine', () => {
     void handle;
   });
 });
+
+// WFT-15/16: dispose() settling every pending dynamic-source waiter and
+// dispatching load-cancelled diagnostics events exactly once per key.
+describe('disposeEngine — dynamic workflow sources (WFT-15/16)', () => {
+  it('settles every pending waiter for the same key with EngineDisposedError and dispatches exactly one WorkflowSourceLoadCancelledEvent', async () => {
+    const engine = new Engine();
+    const lazy = workflow({ name: 'lazy-dispose' }).execute(async function* () {
+      return 'done';
+    });
+    const revision = await revisionFor(lazy as WorkflowDefinition);
+    const deferred = Promise.withResolvers<Record<string, unknown>>();
+    engine.registerSource(
+      workflowSource(
+        { name: 'lazy-dispose', location: './lazy.ts', exportName: 'lazyDispose', revision },
+        () => deferred.promise,
+      ),
+    );
+
+    const cancelledEvents: WorkflowSourceLoadCancelledEvent[] = [];
+    engine.addEventListener('workflow-source:load-cancelled', (event: Event) => {
+      cancelledEvents.push(event as WorkflowSourceLoadCancelledEvent);
+    });
+
+    const waiters = Array.from({ length: 5 }, () =>
+      engine.resolveWorkflowSource('lazy-dispose', revision),
+    );
+    // Attach settlement observers BEFORE disposal (not after) so nothing is
+    // ever in a genuinely unhandled state, even for a single microtask.
+    const settlements = Promise.allSettled(waiters);
+    for (let iteration = 0; iteration < 50; iteration += 1) await Promise.resolve();
+
+    engine[Symbol.dispose]();
+
+    const results = await settlements;
+    for (const result of results) {
+      expect(result.status).toBe('rejected');
+      if (result.status === 'rejected') {
+        expect(result.reason).toBeInstanceOf(EngineDisposedError);
+      }
+    }
+    expect(cancelledEvents).toHaveLength(1);
+    expect(cancelledEvents[0]?.workflowType).toBe('lazy-dispose');
+    expect(cancelledEvents[0]?.revision).toBe(revision);
+
+    deferred.resolve({ lazyDispose: lazy });
+  });
+
+  it('an orphaned in-flight load that settles after dispose does not double-dispatch the cancelled event', async () => {
+    const engine = new Engine();
+    const lazy = workflow({ name: 'lazy-orphan' }).execute(async function* () {
+      return 'done';
+    });
+    const revision = await revisionFor(lazy as WorkflowDefinition);
+    const deferred = Promise.withResolvers<Record<string, unknown>>();
+    const loader = mock(() => deferred.promise);
+    engine.registerSource(
+      workflowSource(
+        { name: 'lazy-orphan', location: './lazy.ts', exportName: 'lazyOrphan', revision },
+        loader,
+      ),
+    );
+
+    const dispatched: string[] = [];
+    engine.addEventListener('workflow-source:load-cancelled', () => {
+      dispatched.push('cancelled');
+    });
+    engine.addEventListener('workflow-source:load-ready', () => {
+      dispatched.push('ready');
+    });
+    engine.addEventListener('workflow-source:load-failed', () => {
+      dispatched.push('failed');
+    });
+
+    const waiter = engine.resolveWorkflowSource('lazy-orphan', revision);
+    await waitForLoaderInvoked(loader);
+
+    engine[Symbol.dispose]();
+    await expect(waiter).rejects.toBeInstanceOf(EngineDisposedError);
+    expect(dispatched).toEqual(['cancelled']);
+
+    // The shared load itself was never aborted (single-flight contract) —
+    // it settles later, orphaned. Its settle must not fire a SECOND event.
+    deferred.resolve({ lazyOrphan: lazy });
+    for (let iteration = 0; iteration < 50; iteration += 1) await Promise.resolve();
+
+    expect(dispatched).toEqual(['cancelled']);
+  });
+
+  it('disposeEngine(internals) called with no dispatchEvent argument defaults to a no-op and does not throw with a load in flight', async () => {
+    const engine = new Engine();
+    const lazy = workflow({ name: 'lazy-bare-dispose' }).execute(async function* () {
+      return 'done';
+    });
+    const revision = await revisionFor(lazy as WorkflowDefinition);
+    const deferred = Promise.withResolvers<Record<string, unknown>>();
+    const loader = mock(() => deferred.promise);
+    engine.registerSource(
+      workflowSource(
+        {
+          name: 'lazy-bare-dispose',
+          location: './lazy.ts',
+          exportName: 'lazyBareDispose',
+          revision,
+        },
+        loader,
+      ),
+    );
+
+    const waiter = engine.resolveWorkflowSource('lazy-bare-dispose', revision);
+    await waitForLoaderInvoked(loader);
+
+    // Every OTHER call site in this file disposes through `engine[Symbol.dispose]()`,
+    // which always passes the real `dispatchEvent` binding. A direct,
+    // internals-level `disposeEngine(internals)` call (mirroring every
+    // pre-WFT-15/16 test elsewhere in this file that still calls it this
+    // way) must keep working unchanged — the second parameter's default
+    // `() => {}` silently swallows the load-cancelled dispatch instead of
+    // throwing for lack of a real event target.
+    expect(() => disposeEngine(getInternals(engine))).not.toThrow();
+    await expect(waiter).rejects.toBeInstanceOf(EngineDisposedError);
+
+    deferred.resolve({ lazyBareDispose: lazy });
+  });
+});
+
+async function waitForLoaderInvoked(loader: ReturnType<typeof mock>): Promise<void> {
+  for (let iteration = 0; iteration < 50 && loader.mock.calls.length === 0; iteration += 1) {
+    await Promise.resolve();
+  }
+}
 
 describe('defer:false synchronous launch', () => {
   it('resolves only after the inline workflow has actually begun executing', async () => {

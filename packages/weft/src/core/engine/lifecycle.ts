@@ -4,6 +4,8 @@
 //   - persist.ts: version handling and resume-state preparation
 //   - start.ts:   start, startWorkflow, and all start-time helpers
 //   - transition.ts: fork, resume, recoverAll, and resume-from-storage
+//   - checkpoint-launch.ts: launchWorkflowFromCheckpoint and its inline/worker helpers
+//   - recovery-dynamic-sources.ts: recoverAll's dynamic-source preload barrier (WFT-15/16)
 
 export {
   EMPTY_STORAGE_VALUE,
@@ -62,6 +64,7 @@ export {
   createForkedWorkflowState,
 } from './lifecycle/fork-helpers.ts';
 
-export { fork, launchWorkflowFromCheckpoint, recoverAll, resume } from './lifecycle/transition.ts';
+export { launchWorkflowFromCheckpoint } from './lifecycle/checkpoint-launch.ts';
+export { fork, recoverAll, resume } from './lifecycle/transition.ts';
 
 export { resumeWorkflowFromStorage } from './lifecycle/resume.ts';
