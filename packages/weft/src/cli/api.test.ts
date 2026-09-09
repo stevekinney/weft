@@ -284,7 +284,7 @@ describe('api command', () => {
       const result = await executeApi({
         command: 'api',
         operationName: 'weft.workflows.list',
-        server: server.url.toString(),
+        server: server.url,
         input: '{}',
         list: false,
         yes: false,
@@ -304,7 +304,7 @@ describe('api command', () => {
     const engine = new Engine();
     const server = serve({ engine, port: 0 });
     try {
-      const client = createWeftClient({ server: server.url.toString() });
+      const client = createWeftClient({ server: server.url });
       const result = await client['weft.workflows.list']({});
 
       expect(result).toMatchObject({ items: [] });
@@ -325,7 +325,7 @@ describe('api command', () => {
       const failedOperation = await executeApi({
         command: 'api',
         operationName: 'weft.workflows.get',
-        server: server.url.toString(),
+        server: server.url,
         inputFile: inputPath,
         list: false,
         yes: false,
@@ -387,7 +387,7 @@ describe('api command', () => {
       const omittedInput = await executeApi({
         command: 'api',
         operationName: 'weft.workflows.list',
-        server: server.url.toString(),
+        server: server.url,
         list: false,
         yes: false,
         help: false,
@@ -411,7 +411,7 @@ describe('api command', () => {
       const humanReadableFailure = await executeApi({
         command: 'api',
         operationName: 'weft.workflows.get',
-        server: server.url.toString(),
+        server: server.url,
         input: '{"workflowId":"missing-workflow"}',
         list: false,
         yes: false,

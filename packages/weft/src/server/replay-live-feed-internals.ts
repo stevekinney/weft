@@ -218,8 +218,8 @@ function flushPendingBuffer<TEnvelope extends SequencedEventEnvelope>(
   return { batch, newWatermark };
 }
 
-async function armAndWait<TEnvelope extends SequencedEventEnvelope>(
-  buffer: TEnvelope[],
+async function armAndWait(
+  buffer: SequencedEventEnvelope[],
   overflowed: () => boolean,
   signal: AbortSignal | undefined,
   installWaker: (fn: (() => void) | null) => void,

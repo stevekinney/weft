@@ -131,6 +131,14 @@ export const LOAD_SENSITIVE_TEST_PATHS = [
   // runs it in the full suite (CI's runner does not reproduce the local
   // parallel-load contention).
   'src/core/context/durable-activity.portability.test.ts',
+  // Spawns a real `tsc --noEmit` subprocess (same class as
+  // src/cli/codegen-typecheck.test.ts above) against the
+  // no-workflow-registry fixture to prove the client fallback overload
+  // stays generic. Same wall-clock-unbounded-under-CPU-contention flake
+  // risk as that test. Excluded from the pre-commit parallel run; CI runs
+  // it in the full suite (CI's runner does not reproduce the local
+  // parallel-load contention).
+  'src/client/empty-registry-overloads-typecheck.test.ts',
 ] as const;
 
 /**

@@ -347,8 +347,13 @@ describe('discoverTestFiles', () => {
     // load-insensitive. This ceiling forces every addition to be a deliberate,
     // reviewed bump rather than silent list creep that erodes pre-commit signal.
     // Reduced back to 5 after the heartbeat-reclaim parity test gained a
-    // deterministic manual visibility-scan seam.
-    expect(LOAD_SENSITIVE_TEST_PATHS.length).toBeLessThanOrEqual(5);
+    // deterministic manual visibility-scan seam. Bumped to 6 for
+    // src/client/empty-registry-overloads-typecheck.test.ts (PR #953): same
+    // real-tsc-subprocess flake class as src/cli/codegen-typecheck.test.ts,
+    // required to prove the client fallback overload against a genuinely
+    // unaugmented WorkflowRegistry, which no in-process compilation unit in
+    // this repo can represent.
+    expect(LOAD_SENSITIVE_TEST_PATHS.length).toBeLessThanOrEqual(6);
   });
 });
 

@@ -206,7 +206,7 @@ describe('activationRefusalToFault', () => {
 /** Capture whatever `throwWorkflowCatalogOperationFault` throws, without a trailing statement TS would flag as unreachable (the function's return type is `never`). */
 function captureThrown(error: unknown): unknown {
   try {
-    throwWorkflowCatalogOperationFault(error);
+    return throwWorkflowCatalogOperationFault(error);
   } catch (thrown) {
     return thrown;
   }

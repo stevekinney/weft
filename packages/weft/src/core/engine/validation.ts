@@ -208,7 +208,7 @@ export function decodeWorkflowState(bytes: Uint8Array): WorkflowState {
   const state = decoded as WorkflowState;
   if (!isValidDecodedTags(state.tags)) {
     console.warn(
-      `[weft] Decoded workflow state for "${String(state.id)}" has invalid tags; ` +
+      `[weft] Decoded workflow state for "${state.id}" has invalid tags; ` +
         'dropping the malformed tag list from the decoded state.',
     );
     delete state.tags;
@@ -226,7 +226,7 @@ export function decodeWorkflowState(bytes: Uint8Array): WorkflowState {
       coerceStartWorkflowId(state.executionStateOwnerId, 'executionStateOwnerId');
     } catch {
       console.warn(
-        `[weft] Decoded workflow state for "${String(state.id)}" has an invalid ` +
+        `[weft] Decoded workflow state for "${state.id}" has an invalid ` +
           'executionStateOwnerId field; falling back to the workflow id as the execution owner. ' +
           'This usually indicates corruption or tampering of the storage record.',
       );

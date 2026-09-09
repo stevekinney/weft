@@ -16,8 +16,7 @@ describe('buildQualifiedActivityTable', () => {
       welcome: {
         name: 'welcome',
         activities: {
-          formatGreeting: async (input: unknown) =>
-            `hi ${String((input as { name: string }).name)}`,
+          formatGreeting: async (input: unknown) => `hi ${(input as { name: string }).name}`,
         },
       },
     });

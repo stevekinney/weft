@@ -47,7 +47,7 @@ export async function* storageKeysCore(
  */
 export async function storageCountCore(storage: Storage, prefix: string): Promise<number> {
   let count = 0;
-  for await (const _key of storageKeysCore(storage, prefix)) {
+  for await (const _ of storageKeysCore(storage, prefix)) {
     count++;
   }
   return count;

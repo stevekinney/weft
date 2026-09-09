@@ -44,7 +44,7 @@ const parsedArguments = (() => {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Error: ${message}`);
-    process.exit(findCliSubcommandName(Bun.argv.slice(2)) === 'api' ? 3 : 1);
+    return process.exit(findCliSubcommandName(Bun.argv.slice(2)) === 'api' ? 3 : 1);
   }
 })();
 

@@ -85,6 +85,10 @@ export function atomicStateDataKey(scope: AtomicStateScope, key: string): string
       return KEYS.stateExecution(scope.ownerWorkflowId, key);
     case 'workflow':
       return KEYS.stateWorkflow(scope.workflowType, key);
+    default: {
+      const exhaustiveCheck: never = scope;
+      throw new Error(`Unknown atomic state scope type: ${JSON.stringify(exhaustiveCheck)}`);
+    }
   }
 }
 

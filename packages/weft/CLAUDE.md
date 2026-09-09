@@ -47,6 +47,8 @@ Every directive must carry an inline rationale after `--`, at least 40 character
 
 Adding a new suppression requires explicit justification in the PR description and reviewer sign-off. The ceiling is enforced by `scripts/check-lint-disables.ts`, which runs as part of `bun run lint` (CI) and is also invoked from the pre-commit hook so local commits are gated by the same check.
 
+`typescript/no-unnecessary-type-parameters` is turned off via `.oxlintrc.json` overrides (not inline `oxlint-disable`) for `src/core/types/workflow-context.ts` and `src/core/context/index.ts`. `WorkflowContext#waitForUpdate` and `WorkflowContext#getAttribute` (and `Context`'s matching implementations) have a string-key fallback overload with a return-type-only default generic (`<T = unknown>` / `<T extends SearchAttributeValue = SearchAttributeValue>`) — the same deliberate pattern as `JSON.parse<T>()`: nothing in the parameter list infers `T`, so it exists purely so a caller can write `ctx.getAttribute<MyType>(key)`. No overload, `NoInfer` constraint, or helper-type extraction preserves that caller-supplied `<T>` ergonomic, so the rule is disabled file-scoped for exactly these two files instead. The same reasoning, and the same override mechanism, covers `start`/`startOrSignal`/`schedule`'s string-name fallback overload in `src/client/interface.ts`, `src/client/local.ts`, and `src/client/http-client.ts`: that overload's own `<TName extends string>` type parameter must stay generic so a caller-supplied explicit type argument (e.g. `client.start<'my-workflow'>(...)`) still resolves against it when `WorkflowRegistry` has no augmented names.
+
 ### Utilities
 
 ```bash

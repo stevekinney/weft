@@ -111,6 +111,10 @@ export async function readMcpResource(
       return jsonResource(uri, {
         checkpoints: await context.engine.listCheckpoints(parsed.workflowId),
       });
+    default: {
+      const exhaustiveCheck: never = parsed;
+      throw new Error(`Unknown Weft resource URI kind: ${JSON.stringify(exhaustiveCheck)}`);
+    }
   }
 }
 

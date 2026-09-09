@@ -175,7 +175,7 @@ export const submitReviewDecisionOperation = defineOperation<
       await e.submitReview(input.reviewId, reviewOptions);
       return { ok: true };
     } catch (error) {
-      mapReviewDecisionError(error, input.reviewId);
+      return mapReviewDecisionError(error, input.reviewId);
     }
   },
 });

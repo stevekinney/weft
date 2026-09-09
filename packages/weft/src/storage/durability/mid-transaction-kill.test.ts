@@ -297,6 +297,10 @@ function importLineFor(spec: AdapterSpec): string {
       return `import { NodeSQLiteStorage as Adapter } from ${JSON.stringify(nodeSqliteModuleUrl)};\nfunction openAdapter(path) { return new Adapter(path); }`;
     case 'TursoStorage':
       return `import { TursoStorage as Adapter } from ${JSON.stringify(tursoModuleUrl)};\nfunction openAdapter(path) { return new Adapter({ url: 'file:' + path }); }`;
+    default: {
+      const exhaustiveCheck: never = spec.name;
+      throw new Error(`Unknown adapter spec name: ${JSON.stringify(exhaustiveCheck)}`);
+    }
   }
 }
 
