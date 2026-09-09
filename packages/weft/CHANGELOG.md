@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-09-09
+
 ### Added
 
 - `Mailbox` (WFT-84), a durable application command mailbox: a storage-backed, strictly FIFO command queue scoped to an opaque `(namespace, resourceId)` pair, with idempotent admission bound to `(caller, target, kind, payloadDigest)`, attempt-fenced claims and renewal under an absolute per-command deadline, cancellation that is durable before it reaches any claimant and reports honestly whether cleanup is still pending, bounded backlog and listing, an explicit maintenance pass (no hidden timers), and state transitions that commit atomically with their fleet events when a `FleetEventFeed` is supplied. Requires storage with `conditionalBatch`, snapshot scans, and linearizable read-after-write. New public errors `ApplicationCommandValidationError`, `MailboxContentionError`, and `WaitBudgetElapsedError`; reserved key prefixes `appmbx:`, `appcmd:`, `appready:`, `appseq:`, `appidem:`, `appterm:`, `appprobe:`. See the [Mailbox](documentation/guides/mailbox.md) guide.
