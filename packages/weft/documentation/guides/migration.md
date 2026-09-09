@@ -5,7 +5,7 @@ This is the canonical location for per-release migration guidance. When a releas
 > [!NOTE]
 > Weft is pre-1.0, so breaking changes can land between releases without the stability guarantees a 1.0 line would carry. Each release that ships one documents its migration steps here, organized by release.
 
-## Unreleased
+## Migrating from 0.23.x to 0.24.0
 
 ### `GET /v1/registry` advances to `registryVersion: 2` (WFT-6)
 
