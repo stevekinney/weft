@@ -255,13 +255,13 @@ When a workflow drains signals with `ctx.race([ctx.waitForSignal(name), ctx.slee
 
 ### Durable Application Command Mailbox
 
-Signals are workflow control. When the thing receiving a command is an application _resource_ rather than a workflow run — an agent taking steering input, a resource fielding requests from a peer service — `ApplicationMailbox` gives it a durable, strictly FIFO command queue with real receipts.
+Signals are workflow control. When the thing receiving a command is an application _resource_ rather than a workflow run — an agent taking steering input, a resource fielding requests from a peer service — `Mailbox` gives it a durable, strictly FIFO command queue with real receipts.
 
 ```typescript
-import { ApplicationMailbox, MemoryStorage } from '@lostgradient/weft';
+import { Mailbox, MemoryStorage } from '@lostgradient/weft';
 
 await using storage = new MemoryStorage();
-using mailbox = new ApplicationMailbox({ storage, namespace: 'bureau', resourceId: 'agent-7' });
+using mailbox = new Mailbox({ storage, namespace: 'bureau', resourceId: 'agent-7' });
 
 const admission = await mailbox.admit({
   caller: 'user:42',
@@ -283,17 +283,17 @@ if (claimed.status === 'claimed' && admission.status === 'admitted') {
 
 Admission returns a receipt that, on a persistent backend such as `BunSQLiteStorage`, survives process restart; `MemoryStorage` above keeps the example self-contained and is gone with the process. Idempotency binds to `(caller, target, kind, payloadDigest)`, so an exact retry returns the original receipt and a conflicting reuse of the key returns a stable conflict without touching the original. Claims are attempt-fenced, so two consumers sharing one durable store can never both hold a valid claim _on the same command_ — delivery is strictly FIFO, but a later command may be claimed while an earlier one is still in flight, so completion order is up to the consumers. Cancellation is durable before it reaches anyone, and reports honestly whether cleanup is still outstanding rather than claiming an uncooperative handler stopped.
 
-Delivery intent, ordering, ownership, and disposition are durable; external side effects are not made exactly-once. See [Application Mailbox](documentation/guides/application-mailbox.md).
+Delivery intent, ordering, ownership, and disposition are durable; external side effects are not made exactly-once. See [Application Mailbox](documentation/guides/mailbox.md).
 
 ### Durable Application Delivery Outbox
 
-The mailbox is for commands coming _in_ to a resource. For work going _out_ — a webhook, a notification, a message to a peer service — `ApplicationOutbox` is the matching primitive: a durable, at-least-once delivery queue whose enqueue, attempt leases, transport outcomes, retry schedule, cancellation, and dead-letter state are all durable and observable, without ever confusing a transport write with an acknowledgement.
+The mailbox is for commands coming _in_ to a resource. For work going _out_ — a webhook, a notification, a message to a peer service — `Outbox` is the matching primitive: a durable, at-least-once delivery queue whose enqueue, attempt leases, transport outcomes, retry schedule, cancellation, and dead-letter state are all durable and observable, without ever confusing a transport write with an acknowledgement.
 
 ```typescript
-import { ApplicationOutbox, MemoryStorage } from '@lostgradient/weft';
+import { Outbox, MemoryStorage } from '@lostgradient/weft';
 
 await using storage = new MemoryStorage();
-using outbox = new ApplicationOutbox({
+using outbox = new Outbox({
   storage,
   namespace: 'bureau',
   ownerId: 'agent-7',
@@ -319,7 +319,7 @@ const delivered = await outbox.deliverNext();
 if (delivered.status === 'settled') console.log(delivered.receipt.state); // 'acknowledged'
 ```
 
-Every attempt is durably marked `attempting` _before_ the adapter is called, so a crash before the send is a safe retry and a crash after it is an unknown outcome — which is parked or dead-lettered by explicit policy, and retried automatically only when the delivery carries stable external idempotency evidence. Returning from `send()` never settles anything by itself; the outbox commits the matching disposition, fenced on the attempt. See [Application Outbox](documentation/guides/application-outbox.md).
+Every attempt is durably marked `attempting` _before_ the adapter is called, so a crash before the send is a safe retry and a crash after it is an unknown outcome — which is parked or dead-lettered by explicit policy, and retried automatically only when the delivery carries stable external idempotency evidence. Returning from `send()` never settles anything by itself; the outbox commits the matching disposition, fenced on the attempt. See [Application Outbox](documentation/guides/outbox.md).
 
 ### Search Attributes
 
@@ -633,7 +633,7 @@ Guides:
 - [Durable Timers](documentation/guides/durable-timers.md), [Timeouts](documentation/guides/timeouts.md), [Parallel Execution](documentation/guides/parallel-execution.md)
 - [Search Attributes](documentation/guides/search-attributes.md), [Workflow Visibility Backfill](documentation/guides/workflow-visibility-backfill.md), [State](documentation/guides/state.md), [Session State](documentation/guides/session-state.md), [Events](documentation/guides/events.md)
 - [Interceptors](documentation/guides/interceptors.md), [Observability](documentation/guides/observability.md), [Testing](documentation/guides/testing.md)
-- [Workflow Versioning](documentation/guides/workflow-versioning.md), [Remote Workers](documentation/guides/remote-workers.md), [Service Worker](documentation/guides/service-worker.md), [Resource Management](documentation/guides/resource-management.md), [Concurrency: Mutex and Semaphore](documentation/guides/concurrency.md), [Application Mailbox](documentation/guides/application-mailbox.md), [Application Outbox](documentation/guides/application-outbox.md)
+- [Workflow Versioning](documentation/guides/workflow-versioning.md), [Remote Workers](documentation/guides/remote-workers.md), [Service Worker](documentation/guides/service-worker.md), [Resource Management](documentation/guides/resource-management.md), [Concurrency: Mutex and Semaphore](documentation/guides/concurrency.md), [Application Mailbox](documentation/guides/mailbox.md), [Application Outbox](documentation/guides/outbox.md)
 
 Architecture and reference:
 

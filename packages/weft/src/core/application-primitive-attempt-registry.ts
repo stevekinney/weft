@@ -46,12 +46,14 @@ export type AttemptRegistration = {
  * than a walk over every live claim in the scope.
  */
 export class AttemptRegistry extends Map<string, AttemptRegistration> {
-  readonly #bySubject = new Map<string, Set<string>>();
+  readonly #bySubject: Map<string, Set<string>>;
 
-  // Explicit rather than implicit: the coverage instrumentation counts a
-  // derived class's synthesized constructor as a function it can never see run.
+  // The index is created here rather than as a field initializer so the class
+  // has a real constructor: the coverage instrumentation counts a derived
+  // class's synthesized constructor as a function it can never see run.
   constructor() {
     super();
+    this.#bySubject = new Map();
   }
 
   override set(attemptToken: string, registration: AttemptRegistration): this {

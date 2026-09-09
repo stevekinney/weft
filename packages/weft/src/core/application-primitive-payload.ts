@@ -9,10 +9,6 @@
  * @module core/application-primitive-payload
  */
 
-import type {
-  ApplicationCommandCausation,
-  ApplicationCommandPayload,
-} from './application-mailbox-types.ts';
 import { computePayloadDigest, PayloadDigestError } from './application-payload-digest.ts';
 import {
   createApplicationGuards,
@@ -20,6 +16,7 @@ import {
   type ApplicationValidationErrorClass,
 } from './application-primitive-guards.ts';
 import { decode, encode } from './codec.ts';
+import type { ApplicationCommandCausation, ApplicationCommandPayload } from './mailbox-types.ts';
 
 const HEX_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
 
