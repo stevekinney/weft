@@ -364,12 +364,12 @@ const COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer('COVERAGE_ALLOWANCE_OVE
     'src/storage/resolve.ts',
     {
       reason:
-        'Driver and runtime-specific behavior cannot be attributed in the default Bun LCOV process; fresh coverage confirms only these residual misses.',
-      functions: 6,
+        'Driver and runtime-specific behavior cannot be attributed in the default Bun LCOV process; fresh coverage confirms only these residual misses. Re-derived after WFT-138 added the lmdb `durability` option: the lmdb resolver/validator bodies (previously part of this allowance) are now exercised and covered, leaving only the pre-existing unreachable runtime-detection branches, the turso resolver body (never positively resolved in tests), and the two pre-existing dead-code guards in `readStorageConfigurationType`/`readRecord` that the current call path never reaches.',
+      functions: 5,
       lines: new Set([
         70, 71, 72, 73, 74, 79, 80, 81, 82, 83, 87, 96, 98, 99, 100, 101, 102, 103, 105, 113, 115,
-        116, 117, 118, 119, 120, 122, 123, 124, 125, 126, 135, 136, 137, 140, 141, 142, 143, 144,
-        145, 183, 191, 216, 237, 244, 245, 246, 247, 273, 274, 275, 276, 277, 278,
+        116, 117, 118, 119, 120, 122, 123, 124, 125, 126, 143, 144, 145, 146, 147, 148, 186, 194,
+        219, 240, 247, 248, 249, 250, 291, 292, 293, 294, 295, 296,
       ]),
       requireUncoveredLines: true,
     },

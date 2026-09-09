@@ -1,12 +1,34 @@
 import { afterEach, describe, expect, it } from 'bun:test';
+import * as lmdb from 'lmdb';
 
 import { createDiskBackedTestFixture } from '../testing/storage-backends.test-support.ts';
+import { assertDurableStorageForRecovery } from './capabilities.ts';
 import { LMDBStorage } from './lmdb';
 import {
   runBasicStorageContract,
   runBinaryAndLargeScanStorageConformance,
   runStorageCapabilityConformance,
 } from './storage-adapter.test-support.ts';
+
+/**
+ * Wraps the real `lmdb.open` so a test can assert what options a
+ * `LMDBStorage` constructed it with, while still delegating to the real LMDB
+ * environment for actual reads/writes. `LMDBStorage`'s third constructor
+ * parameter is an undocumented test-only seam—`mock.module('lmdb', ...)` is
+ * process-wide and irreversible under Bun (see `node-sqlite-loader.ts`), so
+ * this avoids mocking the module entirely.
+ */
+function createCapturingOpen(): {
+  open: typeof lmdb.open;
+  calls: Array<Record<string, unknown>>;
+} {
+  const calls: Array<Record<string, unknown>> = [];
+  const open = ((options: Record<string, unknown>) => {
+    calls.push(options);
+    return lmdb.open(options as never);
+  }) as typeof lmdb.open;
+  return { open, calls };
+}
 
 runStorageCapabilityConformance('LMDBStorage', {
   create: () =>
@@ -136,5 +158,56 @@ describe('LMDBStorage', () => {
       expect(decode(result!)).toBe(`value-${index}`);
     }
     storage[Symbol.dispose]();
+  });
+
+  it('relaxed durability opens with noSync and noMetaSync, and still round-trips a batch write', async () => {
+    const fixture = createDiskBackedTestFixture({ prefix: 'lmdb-relaxed', recursive: true });
+    fixtureCleanups.push(fixture.cleanup);
+    const { open, calls } = createCapturingOpen();
+
+    const storage = new LMDBStorage(fixture.path, { durability: 'relaxed' }, open);
+
+    await storage.batch([{ type: 'put', key: 'relaxed:key', value: encode('relaxed-value') }]);
+    expect(await storage.get('relaxed:key')).toEqual(encode('relaxed-value'));
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ path: fixture.path, noSync: true, noMetaSync: true });
+
+    // Relaxed durability can lose recently committed writes on a crash or
+    // power loss, so it must not be reported as recovery-safe 'local'
+    // persistence — it is reported as 'ephemeral', the same value
+    // MemoryStorage reports.
+    expect(storage.capabilities().persistence).toBe('ephemeral');
+    expect(() => assertDurableStorageForRecovery(storage)).toThrow(
+      'Storage is not durable enough for recovery: persistence must be "local" or "remote" (got "ephemeral").',
+    );
+
+    storage[Symbol.dispose]();
+  });
+
+  it('opens with full sync when no durability option is given (neither flag set)', () => {
+    const fixture = createDiskBackedTestFixture({ prefix: 'lmdb-full', recursive: true });
+    fixtureCleanups.push(fixture.cleanup);
+    const { open, calls } = createCapturingOpen();
+
+    const storage = new LMDBStorage(fixture.path, undefined, open);
+
+    expect(calls).toHaveLength(1);
+    const [call] = calls;
+    expect(call?.['noSync']).toBeUndefined();
+    expect(call?.['noMetaSync']).toBeUndefined();
+
+    // Full durability (the default) still reports 'local' and passes the
+    // recovery-readiness gate, unchanged from before this option existed.
+    expect(storage.capabilities().persistence).toBe('local');
+    expect(() => assertDurableStorageForRecovery(storage)).not.toThrow();
+
+    storage[Symbol.dispose]();
+  });
+
+  it('rejects a durability value that is not "full" or "relaxed"', () => {
+    expect(() => new LMDBStorage('unused-path', { durability: 'eventual' as never })).toThrow(
+      'LMDBStorage durability must be "full" or "relaxed", received "eventual".',
+    );
   });
 });

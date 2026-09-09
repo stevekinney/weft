@@ -98,8 +98,7 @@ The `batch` method writes multiple operations atomically. This is critical for c
 
 ```ts partial
 type BatchOperation =
-  | { type: 'put'; key: string; value: Uint8Array }
-  | { type: 'delete'; key: string };
+  { type: 'put'; key: string; value: Uint8Array } | { type: 'delete'; key: string };
 ```
 
 Adapters can opt into optional methods for performance and feature parity: `conditionalBatch` (compare-and-swap), `has`, `deletePrefix`, `keys`, `count`, `scoped`, and `query` (SQL passthrough, adapter-specific). Adapters that omit optional methods receive generic fallbacks via wrapper functions (`storageHas`, `storageKeys`, etc.).
@@ -340,9 +339,21 @@ import { LMDBStorage } from '@lostgradient/weft/storage/lmdb';
 await using storage = new LMDBStorage('./weft-data');
 ```
 
-The constructor takes a directory path. LMDB creates and manages the database files inside that directory; the parent must exist. The `lmdb` package must be installed separately—if it isn't, the import throws at module load with the upstream package's missing-module error.
+The constructor takes a directory path and an optional second `options` argument. LMDB creates and manages the database files inside that directory; the parent must exist. The `lmdb` package must be installed separately—if it isn't, the import throws at module load with the upstream package's missing-module error.
 
 LMDB excels at zero-copy reads, which is unbeatable for hot-path operations like task claiming. SQLite handles most workloads well (roughly 50K writes/sec in WAL mode, 100K reads/sec). If you're pushing past 30K workflows per second and need maximum read throughput, consider LMDB.
+
+`options.durability` controls how aggressively LMDB fsyncs commits, and defaults to `'full'`:
+
+```ts
+import { LMDBStorage } from '@lostgradient/weft/storage/lmdb';
+
+await using storage = new LMDBStorage('./weft-data', { durability: 'relaxed' });
+```
+
+`'relaxed'` opens the environment with `noSync: true` and `noMetaSync: true`, skipping `fsync` on every commit. This trades crash durability for write latency—a process crash or power loss can lose recently committed data that was never flushed to disk. It exists for test fixtures and other disposable environments that open real LMDB environments and pay full fsync cost for data they immediately discard; do not use it for storage backing recoverable production workflows. `resolveStorage({ type: 'lmdb', ... })` accepts the same `durability` field in its configuration object.
+
+A relaxed-durability instance reports `capabilities().persistence` as `'ephemeral'` instead of `'local'`, so [`assertDurableStorageForRecovery()`](../reference/api-storage.md#assertdurablestorageforrecovery) correctly rejects it—a host cannot accidentally rely on it for crash recovery.
 
 ### `TursoStorage`
 

@@ -403,7 +403,7 @@ A small `Storage` interface over string keys and `Uint8Array` values: five requi
 - **`SQLiteStorage`** (subpath `@lostgradient/weft/storage/sqlite`) for SQLite persistence; Bun resolves to `BunSQLiteStorage`, Node resolves to `NodeSQLiteStorage`
 - **`BunSQLiteStorage`** (subpath `@lostgradient/weft/storage/sqlite/bun`) for an explicit Bun SQLite override
 - **`NodeSQLiteStorage`** (subpath `@lostgradient/weft/storage/sqlite/node`) for an explicit Node.js SQLite override via `better-sqlite3`
-- **`LMDBStorage`** (subpath `@lostgradient/weft/storage/lmdb`) for embedded high-throughput workloads
+- **`LMDBStorage`** (subpath `@lostgradient/weft/storage/lmdb`) for embedded high-throughput workloads; accepts a `durability: 'relaxed'` option that skips `fsync` on every commit, trading crash durability for write latency—use it for test fixtures, not production storage. `capabilities().persistence` reports `'ephemeral'` for a relaxed-durability instance (instead of `'local'`), so `assertDurableStorageForRecovery()` correctly rejects it
 - **`TursoStorage`** (subpath `@lostgradient/weft/storage/turso`) for distributed libSQL deployments
 - **`NeonStorage`** (subpath `@lostgradient/weft/storage/neon`) for durable remote Neon/Postgres deployments
 - **`IndexedDBStorage`** (subpath `@lostgradient/weft/storage/indexeddb`) for browser environments

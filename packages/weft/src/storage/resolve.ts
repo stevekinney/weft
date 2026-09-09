@@ -135,7 +135,10 @@ const storageResolvers = {
   lmdb: async (configuration: LMDBStorageConfiguration) => {
     const { LMDBStorage } =
       await importStorageModule<typeof import('./lmdb.ts')>(LMDB_STORAGE_MODULE);
-    return new LMDBStorage(configuration.path);
+    return new LMDBStorage(
+      configuration.path,
+      configuration.durability === undefined ? {} : { durability: configuration.durability },
+    );
   },
   turso: async (configuration: TursoStorageConfiguration) => {
     const { TursoStorage } =
@@ -247,6 +250,17 @@ function readOptionalHeaders(
   return headers;
 }
 
+function readLmdbDurability(
+  configuration: Record<string, unknown>,
+): LMDBStorageConfiguration['durability'] {
+  const value = configuration['durability'];
+  if (value === undefined) return undefined;
+  if (value === 'full' || value === 'relaxed') {
+    return value;
+  }
+  throw new Error('LMDB storage configuration field "durability" must be one of full or relaxed.');
+}
+
 function readWebExtensionArea(
   configuration: Record<string, unknown>,
 ): WebExtensionStorageConfiguration['area'] {
@@ -266,10 +280,14 @@ const storageConfigurationValidators = {
     const path = readOptionalString(configuration, 'path', 'SQLite');
     return path === undefined ? { type: 'sqlite' } : { type: 'sqlite', path };
   },
-  lmdb: (configuration) => ({
-    type: 'lmdb',
-    path: readRequiredString(configuration, 'path', 'LMDB'),
-  }),
+  lmdb: (configuration) => {
+    const durability = readLmdbDurability(configuration);
+    return {
+      type: 'lmdb',
+      path: readRequiredString(configuration, 'path', 'LMDB'),
+      ...(durability === undefined ? {} : { durability }),
+    };
+  },
   turso: (configuration) => {
     const authToken = readOptionalString(configuration, 'authToken', 'Turso');
     return {

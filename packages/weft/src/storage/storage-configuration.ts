@@ -66,6 +66,12 @@ export type SQLiteStorageConfiguration = {
 export type LMDBStorageConfiguration = {
   type: 'lmdb';
   path: string;
+  /**
+   * LMDB commit durability. Defaults to `'full'`. `'relaxed'` trades crash
+   * durability for write latency—see {@link LMDBStorageOptions}—and is
+   * intended for test fixtures, not production storage.
+   */
+  durability?: 'full' | 'relaxed';
 };
 
 /**

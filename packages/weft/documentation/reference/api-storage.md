@@ -95,8 +95,7 @@ All storage adapters implement `Disposable`. For `BunSQLiteStorage`, this closes
 
 ```ts partial
 type BatchOperation =
-  | { type: 'put'; key: string; value: Uint8Array }
-  | { type: 'delete'; key: string };
+  { type: 'put'; key: string; value: Uint8Array } | { type: 'delete'; key: string };
 ```
 
 ### `StorageCapabilities`
@@ -552,14 +551,17 @@ import { LMDBStorage } from '@lostgradient/weft/storage/lmdb';
 ### Constructor
 
 ```ts partial
-new LMDBStorage(path: string)
+new LMDBStorage(path: string, options?: LMDBStorageOptions)
 ```
 
-| Parameter | Type     | Default | Description                                                                    |
-| --------- | -------- | ------- | ------------------------------------------------------------------------------ |
-| `path`    | `string` | —       | Directory path for the LMDB database. The parent directory must already exist. |
+| Parameter | Type                 | Default | Description                                                                    |
+| --------- | -------------------- | ------- | ------------------------------------------------------------------------------ |
+| `path`    | `string`             | —       | Directory path for the LMDB database. The parent directory must already exist. |
+| `options` | `LMDBStorageOptions` | —       | Construction options. See `durability` below.                                  |
 
 If the `lmdb` package is not installed, the module import fails with the upstream package's missing-module error.
+
+`LMDBStorageOptions.durability` is `'full' | 'relaxed'`, defaulting to `'full'`. `'relaxed'` opens the environment with `noSync: true` and `noMetaSync: true`, skipping `fsync` on every commit—this trades crash durability for write latency and is intended for test fixtures and other disposable environments, not for storage backing recoverable production workflows. Construction throws if `durability` is set to anything other than `'full'` or `'relaxed'`. A relaxed-durability instance reports `capabilities().persistence` as `'ephemeral'` instead of `'local'`, so [`assertDurableStorageForRecovery()`](#assertdurablestorageforrecovery) correctly rejects it.
 
 ```ts partial
 import { LMDBStorage } from '@lostgradient/weft/storage/lmdb';
@@ -796,7 +798,7 @@ Discriminated union of supported runtime configurations.
 type StorageConfiguration =
   | { type: 'memory' }
   | { type: 'sqlite'; path?: string }
-  | { type: 'lmdb'; path: string }
+  | { type: 'lmdb'; path: string; durability?: 'full' | 'relaxed' }
   | { type: 'turso'; url: string; authToken?: string }
   | { type: 'neon'; url: string }
   | { type: 'indexeddb'; databaseName?: string }
@@ -809,7 +811,7 @@ type StorageConfiguration =
 | --------------- | --------------- | --------------------------------- |
 | `memory`        | —               | —                                 |
 | `sqlite`        | —               | `path` (defaults to `:memory:`)   |
-| `lmdb`          | `path`          | —                                 |
+| `lmdb`          | `path`          | `durability` (default `'full'`)   |
 | `turso`         | `url`           | `authToken`                       |
 | `neon`          | `url`           | —                                 |
 | `indexeddb`     | —               | `databaseName` (default `'weft'`) |

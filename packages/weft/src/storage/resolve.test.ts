@@ -128,6 +128,19 @@ describe('resolveStorage', () => {
     storage[Symbol.dispose]();
   });
 
+  it('resolves LMDB storage and threads the durability option through', async () => {
+    const relaxedPath = join(testTempDir, 'lmdb-relaxed');
+    const storage = await resolveStorage({
+      type: 'lmdb',
+      path: relaxedPath,
+      durability: 'relaxed',
+    });
+    expect(storage.constructor.name).toBe('LMDBStorage');
+    await storage.put('durable', new Uint8Array([1, 2, 3]));
+    expect(await storage.get('durable')).toEqual(new Uint8Array([1, 2, 3]));
+    storage[Symbol.dispose]();
+  });
+
   it('rejects unknown storage configuration variants', async () => {
     await expect(resolveStorage({ type: 'nope' } as never)).rejects.toThrow(
       'Unsupported storage configuration type: nope',
@@ -146,6 +159,11 @@ describe('resolveStorage', () => {
     );
     await expect(resolveStorage({ type: 'lmdb' } as never)).rejects.toThrow(
       'LMDB storage configuration requires "path" as a string.',
+    );
+    await expect(
+      resolveStorage({ type: 'lmdb', path: './weft-data', durability: 'eventual' } as never),
+    ).rejects.toThrow(
+      'LMDB storage configuration field "durability" must be one of full or relaxed.',
     );
     await expect(resolveStorage({ type: 'neon' } as never)).rejects.toThrow(
       'Neon storage configuration requires "url" as a string.',
