@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": false,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["bun"],
+    "paths": {
+      "@lostgradient/weft": ["../../../index.ts"],
+      "@lostgradient/weft/client": ["../../../client/index.ts"]
+    }
+  },
+  "include": ["consumer.ts"]
+}
