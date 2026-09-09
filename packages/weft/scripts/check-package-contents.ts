@@ -62,9 +62,26 @@ const maximumUnpackedBytes = 12 * 1024 * 1024;
 // measured 1551 by `npm pack --dry-run`, and 1567 after merging WFT-9/WFT-10
 // (#947, the durable workflow catalog). WFT-85's extraction of the shared
 // application primitives (three new modules, one retired) reports 1571.
-// WFT-85's outbox adds its modules, the shared payload validators, and the
-// shared timing helpers, plus WFT-12 (#948) merged in between; `prepack`
-// reports 1633.
+//
+// This budget was not bumped again for WFT-11 (#949, 7 new non-test source
+// files: `engine-workflows-namespace.ts` + 6 `server/operations/*.ts`
+// catalog operations) or WFT-12 (#948, 6 new non-test source files under
+// `core/catalog/`, `core/engine/`, `core/events/`) — `check:package-contents`
+// only runs from `bun run prepack`, which only `release.yaml` invokes (never
+// PR CI), so neither PR's own verification loop ever exercised this gate.
+// WFT-13/14 (dynamic workflow sources) discovered the accumulated drift
+// while running `prepack` as an extra, non-required verification step: 8
+// more new non-test source files of its own (`core/source/{index,types,
+// workflow-source,errors,resolvers,validate}.ts`,
+// `core/engine/source-{registration,resolution}.ts`), +16 by the
+// `.js`/`.d.ts`-pair formula, on top of the ~28 entries from WFT-11/WFT-12's
+// unreconciled additions above. Bumped to the actual measured
+// `npm pack --dry-run --json --ignore-scripts` entry count (1615) rather
+// than attempting to reconstruct the exact per-batch formula for three
+// PRs' worth of unreconciled drift.
+// WFT-85's outbox then adds its modules, the shared payload validators, and
+// the shared timing helpers on top of that; `prepack` on the merged tree
+// reports the count below.
 const maximumEntryCount = 1633;
 
 type PackFile = {

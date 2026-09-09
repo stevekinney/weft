@@ -139,6 +139,32 @@ only when a registry snapshot or `weft codegen` run is later requested. See
 [Revisions and the Catalog](../guides/workflow-versioning.md#revisions-and-the-catalog)
 for the full model.
 
+### `registerSource()`
+
+```ts partial
+registerSource(source: WorkflowSourceHandle): void
+```
+
+Record a dynamic workflow source (WFT-13/14) built by `workflowSource()`. Synchronous, like `register()`, and side-effect-free beyond an in-memory record keyed `(source.descriptor.name, source.descriptor.revision)` — it never invokes `source.load` and never touches storage. A workflow name may not be both eagerly registered (`register()`) and a dynamic source; the two throw symmetrically. Call `resolveWorkflowSource()` to actually load, validate, and install it.
+
+```ts partial
+import { workflowSource } from '@lostgradient/weft';
+
+engine.registerSource(
+  workflowSource(
+    {
+      name: 'checkout',
+      location: './workflows/checkout.ts',
+      exportName: 'checkout',
+      revision: 'r1',
+    },
+    () => import('./workflows/checkout.ts'),
+  ),
+);
+```
+
+See [Dynamic Workflow Sources](../guides/workflow-versioning.md#dynamic-workflow-sources) for the full model, including why `engine.start()` does not yet await resolution.
+
 ### `getWorkflowDefinition()`
 
 ```ts partial
@@ -202,6 +228,25 @@ interface EngineWorkflowsNamespace {
 ```
 
 `install()` requires `getWorkflowDefinition(manifest.name)` to already resolve — it throws `WorkflowNotRegisteredError` otherwise, and `WorkflowCatalogConflictError` for a differing-content reinstall under the same `(name, revision)`. `activate()` throws `WorkflowRevisionNotInstalledError` for a revision that was never installed; otherwise it returns the catalog's structured result verbatim, including every `applied: false` refusal (`incompatible`, `stale-generation`, `expected-generation-required`, `conflict`) rather than throwing. `getActive()` is in-memory only, matching `RegistrySnapshot.activeRevisions`' existing staleness contract.
+
+### `resolveWorkflowSource()`
+
+```ts partial
+async resolveWorkflowSource(
+  name: string,
+  revision: string,
+  options?: { signal?: AbortSignal },
+): Promise<WorkflowRevisionRecord>
+```
+
+Load, validate, and install one dynamic workflow source revision previously recorded via `registerSource()` (WFT-13/14). `registerSource()` must have been called for this exact `(name, revision)` on THIS engine — a revision durably installed only by a different process does not, by itself, give this engine standing to resolve it. Once registered, returns the installed `WorkflowRevisionRecord` immediately, without invoking the loader, when `(name, revision)` is already durably installed — still re-validating a pinned `workflowVersion`/`contractHash` against the cached manifest. Single-flight per `(name, revision)`: concurrent callers for the same key share one loader invocation, and each caller's own cancellation (`options.signal`, or engine disposal) rejects only that caller — a load already in flight for other callers keeps running to completion.
+
+```ts partial
+const record = await engine.resolveWorkflowSource('checkout', 'sha256:9f2c…');
+console.log(record.manifest.revision, record.installedAt);
+```
+
+Throws a plain `Error` when `registerSource()` was never called for this exact `(name, revision)`; throws `WorkflowSourceValidationError` when the loaded module fails validation, or when an already-cached manifest contradicts a pinned `workflowVersion`/`contractHash` (a missing or ambiguous export, a non-builder-produced definition, an oversized contract, or a `name`/`revision`/`workflowVersion`/`contractHash` mismatch against the descriptor's expectations); throws `EngineDisposedError` when the engine is disposed. Does not wire `start()` or recovery to await resolution — see [Dynamic Workflow Sources](../guides/workflow-versioning.md#dynamic-workflow-sources) for the full contract.
 
 ### `start()`
 

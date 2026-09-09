@@ -60,6 +60,31 @@ See [the workflows guide](../guides/workflows.md) for usage patterns and motivat
 
 For build tooling that needs a workflow's normalized public contract — the same representation `weft codegen` emits types from — see `buildWorkflowContract()`, `normalizeWorkflowContract()`, and `contractHash()` in [the types reference](./types.md#workflowcontract), and [Revision Identity](../guides/workflow-versioning.md#revision-identity) for how `contractHash` and `revision` differ.
 
+### `workflowSource()`
+
+```ts
+import { workflowSource } from '@lostgradient/weft';
+import type { WorkflowDefinition } from '@lostgradient/weft';
+
+declare const loadCheckout: () => Promise<{
+  checkout: WorkflowDefinition<{ orderId: string }, { shipped: boolean }, 'checkout'>;
+}>;
+
+const checkoutSource = workflowSource(
+  {
+    name: 'checkout',
+    location: './workflows/checkout.ts',
+    exportName: 'checkout',
+    revision: 'sha256:9f2c…',
+  },
+  loadCheckout,
+);
+
+void checkoutSource;
+```
+
+`workflowSource(descriptor, loader)` builds a typed `WorkflowSourceHandle` — plain, serializable `descriptor` metadata paired with a host-side `loader` capability that is never serialized. Pass a literal `() => import('./checkout.ts')` (not a `pathVariable`-driven dynamic import) so TypeScript infers the handle's input/output/name types from the named export the descriptor points at. See [Dynamic Workflow Sources](../guides/workflow-versioning.md#dynamic-workflow-sources) in the workflow versioning guide for `engine.registerSource()`/`engine.resolveWorkflowSource()` and the full validation contract.
+
 ## Messages
 
 ```ts

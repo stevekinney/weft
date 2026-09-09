@@ -1,3 +1,4 @@
+import { isRecord } from '../../worker/manifest/is-record.ts';
 import { ActivityRegistry } from '../activity-registry.ts';
 import { WorkflowDefinitionRegisteredEvent } from '../events.ts';
 import {
@@ -13,11 +14,9 @@ import {
 import { clonePlain } from '../types/clone-plain.ts';
 import { validateWorkflowOrActivityName } from '../types/name-grammar.ts';
 import { DEFAULT_WORKFLOW_VERSION } from '../versioning.ts';
+import type { RegistrationEntry } from './engine-internal-types.ts';
 import type { EngineInternals } from './internals.ts';
 import { normalizeRetentionPolicy } from './validation.ts';
-
-type RegistrationEntry =
-  EngineInternals['registrations'] extends Map<string, infer Entry> ? Entry : never;
 
 export type RegistrationCallbacks = {
   ensureRetentionSweepInterval: () => void;
@@ -28,8 +27,22 @@ function copiedTags(tags: ReadonlyArray<string> | undefined): string[] | undefin
   return tags === undefined ? undefined : [...tags];
 }
 
+/**
+ * Structural predicate for the runtime shape produced by
+ * `workflow({ name }).execute(fn)`: an object carrying `name` and `handler`.
+ * Package-internal — the dynamic workflow-source validation pipeline
+ * (`core/source/validate.ts`, WFT-13/14) validates a loaded export against
+ * the stricter {@link isBuilderWorkflowDefinition} instead, which already
+ * implies this check, so this predicate has no cross-module caller today.
+ */
 function isWorkflowDefinition(value: unknown): value is WorkflowDefinition {
-  return typeof value === 'object' && value !== null && 'name' in value && 'handler' in value;
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'name' in value &&
+    'handler' in value &&
+    typeof (value as { handler: unknown }).handler === 'function'
+  );
 }
 
 function assertConstraintsSupported(
@@ -135,7 +148,31 @@ function applyOptionalRegistrationFields(
   }
 }
 
-function buildRegistrationEntry(name: string, registration: WorkflowDefinition): RegistrationEntry {
+/**
+ * Build the `RegistrationEntry` `engine.register()` would store for
+ * `registration`, without committing anything — pure normalization
+ * (base fields, optional fields, and, for a builder-produced definition,
+ * signal/update/query name-collision checks). Exported so the dynamic
+ * workflow-source validation pipeline (`core/source/validate.ts`, WFT-13/14)
+ * can normalize a loaded module's exported definition through the identical
+ * path `engine.register()` uses, rather than re-deriving a
+ * `RegistrationEntry` independently and risking the two producers drifting
+ * apart.
+ *
+ * @example
+ * ```ts
+ * import { workflow } from '@lostgradient/weft';
+ *
+ * const greet = workflow({ name: 'greet' }).execute(async function* (_ctx, input: string) {
+ *   return `hello ${input}`;
+ * });
+ * console.log(greet.name);
+ * ```
+ */
+export function buildRegistrationEntry(
+  name: string,
+  registration: WorkflowDefinition,
+): RegistrationEntry {
   const entry = buildBaseRegistrationEntry(name, registration);
   applyOptionalRegistrationFields(entry, registration);
   if (isBuilderWorkflowDefinition(registration)) {
@@ -177,6 +214,15 @@ function commitWorkflowDefinition(
 ): void {
   const name = definition.name;
   validateWorkflowOrActivityName(name, 'workflow');
+  // Symmetric to `registerSource()`'s own eager-name collision check
+  // (`core/engine/source-registration.ts`, WFT-13/14): a workflow name may
+  // not be both eagerly registered and a dynamic source.
+  if (internals.workflowSourcesByName.has(name)) {
+    throw new Error(
+      `Cannot register("${name}"): "${name}" is already registered as a dynamic workflow source ` +
+        'via engine.registerSource(). A workflow name may not be both eagerly registered and a dynamic source.',
+    );
+  }
   assertConstraintsSupported(internals, name, definition);
   const entry = buildRegistrationEntry(name, definition);
   internals.registrations.set(name, entry);
@@ -200,14 +246,43 @@ function commitWorkflowDefinition(
  * type from `workflow-builder.ts` to avoid a cycle with the engine package;
  * the runtime check is sufficient because the builder is the only producer of
  * objects with all five fields as plain `Readonly<Record<string, ...>>`.
+ *
+ * Uses {@link isRecord}, not a bare `typeof === 'object' && !== null` check —
+ * the latter also accepts an array, `Map`, `Date`, or another exotic-prototype
+ * value. For a malformed loader export in the dynamic workflow-source
+ * validation pipeline (`core/source/validate.ts`, WFT-13/14), a field like
+ * `activities: new Map(...)` would otherwise pass this structural check,
+ * then `Object.values(...)` on it downstream silently yields an empty
+ * collection — installing a manifest that quietly omits the source's
+ * intended activities/messages instead of being rejected as
+ * `invalid-definition`.
  */
 function hasNonNullObjectField(value: object, key: string): boolean {
   if (!(key in value)) return false;
   const fieldValue = (value as { [k: string]: unknown })[key];
-  return typeof fieldValue === 'object' && fieldValue !== null;
+  return isRecord(fieldValue);
 }
 
-function isBuilderWorkflowDefinition(value: unknown): value is WorkflowDefinition & {
+/**
+ * Structural predicate for `BuiltWorkflowDefinition` — the runtime shape
+ * `workflow({ name }).execute(...)` returns. Exported so the dynamic
+ * workflow-source validation pipeline (`core/source/validate.ts`, WFT-13/14)
+ * can reject a loaded export that is a hand-rolled `{ name, handler }`
+ * literal rather than a builder-produced definition — the same "removed
+ * bare-handler shape" rejection `engine.register()` itself applies via
+ * {@link buildRegistrationEntry}.
+ *
+ * @example
+ * ```ts
+ * import { workflow } from '@lostgradient/weft';
+ *
+ * const greet = workflow({ name: 'greet' }).execute(async function* (_ctx, input: string) {
+ *   return `hello ${input}`;
+ * });
+ * console.log(typeof greet.activities === 'object');
+ * ```
+ */
+export function isBuilderWorkflowDefinition(value: unknown): value is WorkflowDefinition & {
   readonly activities: Readonly<Record<string, Readonly<ActivityDefinition>>>;
   readonly signals: Readonly<Record<string, Readonly<SignalDefinition<unknown>>>>;
   readonly updates: Readonly<Record<string, Readonly<UpdateDefinition<unknown>>>>;
@@ -234,8 +309,25 @@ function isBuilderWorkflowDefinition(value: unknown): value is WorkflowDefinitio
  * fresh `ActivityCallable` via {@link activity}, so the engine's registry holds
  * its own callable references and the user's `BuiltWorkflowDefinition` cannot
  * influence dispatch by post-registration mutation.
+ *
+ * Exported so the dynamic workflow-source validation pipeline
+ * (`core/source/validate.ts`, WFT-13/14) can build the same
+ * uncommitted-but-canonical per-workflow registry for a loaded module's
+ * export that `engine.register()` builds for an eagerly registered one —
+ * required so {@link import('../registry-workflow-manifest.ts').buildWorkflowManifestFromDefinition}
+ * produces byte-identical manifests for the two paths.
+ *
+ * @example
+ * ```ts
+ * import { workflow } from '@lostgradient/weft';
+ *
+ * const greet = workflow({ name: 'greet' }).execute(async function* (_ctx, input: string) {
+ *   return `hello ${input}`;
+ * });
+ * console.log(Object.keys(greet.activities).length);
+ * ```
  */
-function buildPerWorkflowActivityRegistry(
+export function buildPerWorkflowActivityRegistry(
   activities: Readonly<Record<string, Readonly<ActivityDefinition>>>,
 ): ActivityRegistry {
   const registry = new ActivityRegistry();

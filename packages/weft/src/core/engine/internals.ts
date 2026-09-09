@@ -34,7 +34,7 @@ import type {
 } from '../interceptor.ts';
 import type { HumanReviewResult, ReviewCoordinator } from '../review/index.ts';
 import type { Scheduler } from '../scheduler.ts';
-import type { Checkpoint, StartWorkflowOptions } from '../types.ts';
+import type { Checkpoint, StartWorkflowOptions, WorkflowDefinition } from '../types.ts';
 import type { UpdateCoordinator } from '../updates.ts';
 import type { WorkflowVersionTuple } from '../workflow-version-tuple.ts';
 import type { RecoveredWorkflowInfo } from './lifecycle/shared.ts';
@@ -75,7 +75,9 @@ type EngineRuntime = WorkflowHandleEngine &
   ScheduleHandleEngine & {
     start(type: string, input: unknown, options?: StartWorkflowOptions): Promise<WorkflowHandle>;
   };
-
+type SourceHandle = import('../source/index.ts').WorkflowSourceHandle;
+type CatalogRevisionRecord = import('../catalog/index.ts').WorkflowRevisionRecord;
+type ResolvedSource = { definition: WorkflowDefinition; activityRegistry: ActivityRegistry };
 // ---------------------------------------------------------------------------
 // EngineInternals
 // ---------------------------------------------------------------------------
@@ -421,26 +423,24 @@ export interface EngineInternals {
    * directly.
    */
   workflowCatalog: import('../catalog/index.ts').WorkflowCatalog | null;
-  /**
-   * Workflow names `commitWorkflowDefinition` (`registration.ts`) has queued
-   * for catalog install+activate since the last drain. `engine.register()`
-   * stays synchronous — it cannot itself build a manifest (that requires
-   * `crypto.subtle`) — so it defers the actual durable install/activation to
-   * the next `ensureWorkflowCatalogReady` call instead.
-   */
+  /** Workflow names `commitWorkflowDefinition` (`registration.ts`) has queued for catalog install+activate since the last drain — `engine.register()` stays synchronous (it cannot itself build a manifest) and defers to the next `ensureWorkflowCatalogReady` call. */
   pendingCatalogInstalls: string[];
   /** Whether {@link workflowCatalog} has been restored from storage at least once. */
   catalogRestored: boolean;
-  /**
-   * The in-flight catalog restore-and-drain, or `null` when none is
-   * running. Concurrent `ensureWorkflowCatalogReady` callers await this same
-   * promise rather than racing a second restore/drain.
-   */
+  /** The in-flight catalog restore-and-drain, or `null` when none is running; concurrent `ensureWorkflowCatalogReady` callers await this same promise rather than racing a second restore/drain. */
   catalogDrainPromise: Promise<void> | null;
   /** Name -> revision this process's own register()-drain most recently activated (WFT-12, `catalog-readiness.ts`). Process-local, never persisted. */
   registeredCatalogRevisions: Map<string, string>;
   /** Name -> revision -> in-flight `startWorkflow` count (WFT-12, `lifecycle/start.ts`). Process-local, never persisted. */
   inFlightStartsByRevision: Map<string, Map<string, number>>;
+  /** Dynamic workflow sources (WFT-13/14): `registerSource()` candidates, keyed name then revision. Registering never invokes the loader. Process-local, never persisted. */
+  workflowSourcesByName: Map<string, Map<string, SourceHandle>>;
+  /** In-flight `resolveWorkflowSource` single-flight load per `(name, revision)`. Self-removes on settle via a `catalogDrainPromise`-style identity guard. */
+  sourceResolutionsInFlight: Map<string, Map<string, Promise<CatalogRevisionRecord>>>;
+  /** Per-caller `AbortController`s from in-flight `resolveWorkflowSource()` calls; disposal aborts every waiter without touching the shared load (mirrors `pendingWebhooks`). */
+  sourceResolutionWaiterControllers: Set<AbortController>;
+  /** A successful `resolveWorkflowSource()`'s live definition, keyed name then revision. Unread this batch — WFT-15's job. */
+  resolvedWorkflowSources: Map<string, Map<string, ResolvedSource>>;
 }
 
 const INTERNALS = new WeakMap<object, EngineInternals>();

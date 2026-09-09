@@ -383,8 +383,11 @@ handler `engine.start()` dispatches to; that always resolves through
 whatever `engine.register()` most recently registered. Activation moves
 `RegistrySnapshot.activeRevisions` (what `weft.system.registry`, the
 console's registry page, and `weft codegen` read)—it does not move
-execution. Connecting the two is dynamic module loading, a later batch's
-job.
+execution. Connecting the two is dynamic module loading—see
+[Dynamic Workflow Sources](#dynamic-workflow-sources) below for the
+`workflowSource()`/`registerSource()`/`resolveWorkflowSource()` primitives
+this batch adds; wiring `engine.start()`/recovery to await resolution is
+still a later batch's job (WFT-15).
 
 ```ts
 import {
@@ -448,7 +451,11 @@ a prior manual `activate()` back to the in-process registration's own
 revision. `activateRegistered` is unconditional by design (see the
 Activation Compatibility section above); it does not know about, and does
 not preserve, a manual `activate()` call. Reconciling loader-driven and
-registration-driven activation is out of scope here.
+registration-driven activation is covered by
+[Dynamic Workflow Sources](#dynamic-workflow-sources) below—`registerSource()`
+and `engine.register()` refuse to coexist under the same name, which is the
+mechanism that prevents this exact sharp edge from applying to a
+loader-driven registration.
 
 The five server operations mirror the namespace 1:1 (`reference/api-server.md`
 has the full table): `weft.workflows.revisions.install`,
@@ -592,3 +599,141 @@ disagree about when an event fires. `WorkflowRevisionActivationRejectedEvent`'s
 `'expected-generation-required'`. See
 [api-events.md](../reference/api-events.md#catalog-events) for the full
 field-level reference.
+
+## Dynamic Workflow Sources
+
+WFT-13/14 adds the primitive + loader slice of dynamic workflow loading:
+`workflowSource()`, `engine.registerSource()`, and
+`engine.resolveWorkflowSource()`. **`engine.start()` and recovery do not yet
+await resolution**—starting a workflow whose only registration is a source
+(no `engine.register()` call for the same name) does not implicitly resolve
+it. That wiring is WFT-15's job. This batch's own tests exercise
+`registerSource()`/`resolveWorkflowSource()` directly rather than through
+`engine.start()`.
+
+### `workflowSource()`: a typed, serializable source descriptor
+
+`workflowSource(descriptor, loader)` pairs plain, serializable
+`WorkflowSourceDescriptor` metadata (`kind`, `name`, `location`,
+`exportName`, `revision`, and optional pinned `workflowVersion`/
+`contractHash`) with a host-side loader capability—`() => Promise<unknown>`.
+The descriptor is safe to log, persist, or send over the wire; it can never
+execute code. **The loader is never serialized**—it is a plain JavaScript
+closure, and pairing it with the descriptor rather than folding it into the
+descriptor is the entire reason the two are separate types.
+
+Pass a literal `() => import('./checkout.ts')` as the loader—not a
+`pathVariable`-driven dynamic import—and TypeScript infers the returned
+handle's input/output/name types from the named export the descriptor
+points at, exactly as if you had imported the module directly:
+
+```ts partial
+import { workflowSource } from '@lostgradient/weft';
+
+const checkoutSource = workflowSource(
+  {
+    name: 'checkout',
+    location: './workflows/checkout.ts',
+    exportName: 'checkout',
+    revision: 'sha256:9f2c…',
+  },
+  () => import('./workflows/checkout.ts'),
+);
+```
+
+`revision` is not a label you choose freely: it must equal the exact
+content-derived revision `buildWorkflowManifestFromDefinition()` computes
+from the loaded workflow's contract (`deriveWorkflowRevision()`, a
+`sha256:`-prefixed digest of the normalized workflow contract—see
+[Revision Identity](#revision-identity) above). A `resolveWorkflowSource()`
+call whose loaded module's actual derived revision does not match the
+descriptor's `revision` fails with `artifact-revision-mismatch`. In
+practice a build/deploy pipeline computes this value offline from the same
+source—with `deriveWorkflowRevision()`/`buildWorkflowContract()` against the
+identical module, or by reading it off an already-published
+`WorkflowRevisionManifest` (the registry snapshot `weft codegen` reads, or a
+`GET /v1/registry` response)—and threads it into the descriptor, rather than
+a caller inventing one.
+
+A dynamic import path (`() => import(pathVariable)`, typed `Promise<any>`)
+is rejected at the `workflowSource()` call site itself—TypeScript cannot
+recover named-export types from `any`, so this package refuses to pretend
+otherwise. An `exportName` that names a real export but not a
+`WorkflowDefinition` compiles (TypeScript cannot know a module's export
+shape is wrong without inspecting the module), but the resulting handle's
+type parameters collapse to `never`, so misuse surfaces at the point you try
+to use the handle rather than silently widening to `unknown`.
+
+### `registerSource()`: records a candidate, never imports
+
+```ts partial
+import { Engine, workflowSource } from '@lostgradient/weft';
+
+const engine = new Engine();
+engine.registerSource(checkoutSource); // synchronous — never calls the loader
+```
+
+`registerSource()` is synchronous and side-effect-free beyond an in-memory
+record keyed `(descriptor.name, descriptor.revision)`—it never invokes
+`source.load`, never touches storage. A workflow name may not be both
+eagerly registered (`engine.register()`) and a dynamic source; the two
+throw symmetrically. Re-registering the identical handle reference for the
+same `(name, revision)` is idempotent, matching `engine.register()`'s own
+same-reference-is-idempotent rule; a different handle under the same key
+throws. Multiple different revisions of the same lazy name may coexist
+unresolved—the lazy analog of the catalog already supporting multiple
+installed revisions per name.
+
+### `resolveWorkflowSource()`: load, validate, install
+
+```ts partial
+const record = await engine.resolveWorkflowSource('checkout', 'sha256:9f2c…');
+console.log(record.manifest.revision, record.installedAt);
+```
+
+`resolveWorkflowSource(name, revision, options?)` loads the module,
+validates it from `unknown`, and installs it into the durable catalog
+(`WorkflowCatalog.install()`, the same WFT-9/10 primitive `engine.register()`'s
+own drain uses)—returning the installed `WorkflowRevisionRecord`. Calling it
+again for an already-installed `(name, revision)` returns the cataloged
+record immediately without re-evaluating the module, including a revision
+installed by a different process.
+
+**Single-flight per `(name, revision)`:** concurrent callers for the same
+key share one loader invocation. Each caller's own cancellation
+(`options.signal`, or engine disposal) only rejects that caller's own
+`resolveWorkflowSource()` call—a load already in flight for other callers
+runs to completion regardless of who requested it or who later cancels.
+Disposal rejects every outstanding waiter rather than leaving any promise
+pending.
+
+### Validation and `WorkflowSourceRejectionReason`
+
+A loaded module is validated from `unknown` before anything is installed:
+the named export must exist and must not itself be an ES module namespace
+object (an `export * as x` barrel—`ambiguous-export`), it must be a
+builder-produced `WorkflowDefinition` (a hand-rolled `{ name, handler }`
+literal is the removed bare-handler shape, and is rejected the same way
+`invalid-definition`), its contract must fit within the WFT-5 hostile-input
+limits (`manifest-build-failed`), and the built manifest must be compatible
+with the descriptor's expectations via `checkWorkflowCompatibility()`—a
+`name`, `revision`, pinned `workflowVersion`, or pinned `contractHash`
+mismatch is reported the same way `engine.workflows.activate()` reports an
+incompatible candidate (see [Activation Compatibility](#activation-compatibility)
+above). `workflowVersion` pinning routes through `checkWorkflowCompatibility`'s
+existing `workflow-version-incompatible` check, which is exact string
+equality (`checkVersionCompatibility()`'s entire contract is `storedVersion
+=== registeredVersion`—there is no semver-range matching anywhere in that
+path); a pinned `workflowVersion: '^1.0.0'` against an actual `'1.2.0'`
+rejects, it does not match. Every applicable reason is
+reported, never just the first one found; a failed resolve throws
+`WorkflowSourceValidationError`, carrying `workflowName`, `revision`, and
+the full `reasons` array.
+
+A workflow registered both eagerly (`engine.register()`) and lazily
+(`registerSource()` + `resolveWorkflowSource()`) from logically identical
+content installs the same byte-identical manifest either way—both paths
+route through the same contract-building normalization
+(`buildWorkflowManifestFromDefinition`), so `WorkflowCatalog.install()`
+never sees two different manifests for what is really one piece of content
+under one `(name, revision)` key.

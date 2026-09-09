@@ -43,6 +43,7 @@ import {
   WorkflowNotFoundError,
   WorkflowNotRegisteredError,
   WorkflowRevisionNotInstalledError,
+  WorkflowSourceValidationError,
   WorkflowSuspendNotSupportedError,
   WorkflowTeardownPendingError,
   WorkflowTerminalError,
@@ -154,6 +155,8 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
   WaitBudgetElapsedError: () => new WaitBudgetElapsedError(),
   WorkflowCatalogConflictError: () => new WorkflowCatalogConflictError('checkout', 'r1'),
   WorkflowRevisionNotInstalledError: () => new WorkflowRevisionNotInstalledError('checkout', 'r1'),
+  WorkflowSourceValidationError: () =>
+    new WorkflowSourceValidationError('checkout', 'r1', ['missing-export']),
 };
 
 describe('WeftError', () => {

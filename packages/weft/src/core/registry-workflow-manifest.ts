@@ -16,6 +16,7 @@
  *
  * @module core/registry-workflow-manifest
  */
+import type { ActivityMetadata } from './activity-registry.ts';
 import { compareCodepoint } from './compare-codepoint.ts';
 import {
   buildWorkflowRevisionManifest,
@@ -91,18 +92,24 @@ export class RegistryManifestLimitError extends WeftError<'RegistryManifestLimit
  * `worker/manifest/registry-contract-builder.ts`. An activity with neither
  * schema declared still contributes an empty `{}` entry: its *presence*
  * under this workflow, not just its schema, is part of the contract.
+ *
+ * Takes the already-resolved `activityDefinitions` array rather than an
+ * `Engine` + lookup, so this can build a manifest for a workflow that is not
+ * (yet) committed to any engine's registry — the dynamic workflow-source
+ * loader path (WFT-13/14, `core/source/validate.ts`) builds an uncommitted
+ * per-workflow `ActivityRegistry` and passes its `listDefinitions()` output
+ * straight through here, producing the exact same contract shape the eager
+ * `engine.register()` drain would have produced for byte-identical content.
  */
 function buildWorkflowScopedActivityContracts(
-  engine: Engine,
+  activityDefinitions: readonly ActivityMetadata[],
   workflowType: string,
 ): Record<string, WorkflowActivityContract> {
   // Null-prototype: an activity literally named `__proto__` is
   // grammar-valid (see name-grammar.ts) — same rationale as `activities`
   // and `activeRevisions` in `registry-snapshot.ts`.
   const activities = Object.create(null) as Record<string, WorkflowActivityContract>;
-  const scoped = engine
-    .listWorkflowActivityDefinitions(workflowType)
-    .toSorted((a, b) => compareCodepoint(a.name, b.name));
+  const scoped = [...activityDefinitions].toSorted((a, b) => compareCodepoint(a.name, b.name));
   for (const metadata of scoped) {
     const entityName = `${workflowType}.activities.${metadata.name}`;
     const contract: {
@@ -238,21 +245,39 @@ function buildMessageEntries(
 }
 
 /**
- * Build one registered workflow's {@link WorkflowRevisionManifest}, folding
- * in its `.activities({...})`-scoped registrations (WFT-6). Shared by
- * `buildRegistrySnapshot`'s per-workflow `Promise.all` and
- * {@link buildWorkflowManifestForType}'s single-workflow lookup, so the two
- * call paths can never disagree on what one workflow's manifest contains.
+ * Build one workflow definition's {@link WorkflowRevisionManifest} from its
+ * already-resolved scoped activity metadata, folding in its
+ * `.activities({...})`-scoped registrations (WFT-6). This is the shared
+ * normalization core both {@link buildOneWorkflowManifest} (the eager
+ * `engine.register()` drain path, which looks `activityDefinitions` up from
+ * the engine's registry) and the dynamic workflow-source loader path
+ * (WFT-13/14, `core/source/validate.ts`, which has no committed `Engine`
+ * registration to look up from) route through — so a workflow registered
+ * both eagerly and lazily from logically identical content always produces
+ * byte-identical manifests, never two independently-derived contracts that
+ * could disagree.
  *
  * Throws {@link RegistryManifestLimitError} if `definition`'s contract
  * exceeds a WFT-5 hostile-input limit.
+ *
+ * @example
+ * ```ts
+ * import { Engine } from '@lostgradient/weft';
+ *
+ * declare const engine: Engine;
+ * const definition = engine.getWorkflowDefinition('checkout');
+ * void definition;
+ * ```
  */
-export async function buildOneWorkflowManifest(
-  engine: Engine,
+export async function buildWorkflowManifestFromDefinition(
   definition: RegisteredWorkflowDefinition,
+  activityDefinitions: readonly ActivityMetadata[],
 ): Promise<WorkflowRevisionManifest> {
   const entry = buildWorkflowEntry(definition);
-  const workflowScopedActivities = buildWorkflowScopedActivityContracts(engine, definition.type);
+  const workflowScopedActivities = buildWorkflowScopedActivityContracts(
+    activityDefinitions,
+    definition.type,
+  );
   const contract = toWorkflowContractDraft(
     definition.type,
     definition.version,
@@ -264,6 +289,28 @@ export async function buildOneWorkflowManifest(
   } catch (cause) {
     throw new RegistryManifestLimitError(definition.type, cause);
   }
+}
+
+/**
+ * Build one registered workflow's {@link WorkflowRevisionManifest}, folding
+ * in its `.activities({...})`-scoped registrations (WFT-6). Shared by
+ * `buildRegistrySnapshot`'s per-workflow `Promise.all` and
+ * {@link buildWorkflowManifestForType}'s single-workflow lookup, so the two
+ * call paths can never disagree on what one workflow's manifest contains.
+ * A thin wrapper around {@link buildWorkflowManifestFromDefinition} that
+ * resolves `activityDefinitions` from `engine`'s own registry.
+ *
+ * Throws {@link RegistryManifestLimitError} if `definition`'s contract
+ * exceeds a WFT-5 hostile-input limit.
+ */
+export async function buildOneWorkflowManifest(
+  engine: Engine,
+  definition: RegisteredWorkflowDefinition,
+): Promise<WorkflowRevisionManifest> {
+  return buildWorkflowManifestFromDefinition(
+    definition,
+    engine.listWorkflowActivityDefinitions(definition.type),
+  );
 }
 
 /**
