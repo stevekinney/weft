@@ -15,6 +15,31 @@ import {
 import { scopedStorage } from './scoped-storage';
 
 /**
+ * Construction options for {@link LMDBStorage}.
+ *
+ * @example
+ * ```ts
+ * import { LMDBStorage, type LMDBStorageOptions } from '@lostgradient/weft/storage/lmdb';
+ *
+ * const options: LMDBStorageOptions = { durability: 'relaxed' };
+ * await using storage = new LMDBStorage('./weft-data', options);
+ * void storage;
+ * ```
+ */
+export type LMDBStorageOptions = {
+  /**
+   * LMDB commit durability.
+   * - `'full'` (default): every commit fsyncs both data and metadata to disk
+   *   before resolving—safe for production use.
+   * - `'relaxed'`: opens the environment with `noSync: true` and
+   *   `noMetaSync: true`, skipping `fsync` on every commit. This trades crash
+   *   durability for write latency and is intended for test fixtures and other
+   *   disposable environments, not for storage backing recoverable workflows.
+   */
+  durability?: 'full' | 'relaxed';
+};
+
+/**
  * LMDB-backed storage adapter. Reads hit lmdb-js's synchronous memory-mapped
  * path internally, but the Storage interface presents them as Promises and
  * copies the bytes into a fresh Uint8Array on each call. Writes use lmdb-js's
@@ -39,10 +64,26 @@ export class LMDBStorage implements Storage {
   #isClosed = false;
   #closePromise: Promise<void> | null = null;
 
-  constructor(path: string) {
-    this.#database = lmdb.open<Buffer, string>({
+  constructor(
+    path: string,
+    options?: LMDBStorageOptions,
+    // Undocumented seam so tests can observe/replace the call to `lmdb.open`
+    // without mocking the `lmdb` module (Bun's `mock.module` is process-wide
+    // and irreversible) or reaching into private fields. Not part of the
+    // public API—mirrors the `databaseConstructor` seam on NodeSQLiteStorage.
+    openEnvironment: typeof lmdb.open = lmdb.open,
+  ) {
+    const durability = options?.durability ?? 'full';
+    if (durability !== 'full' && durability !== 'relaxed') {
+      throw new Error(
+        `LMDBStorage durability must be "full" or "relaxed", received ${JSON.stringify(durability)}.`,
+      );
+    }
+
+    this.#database = openEnvironment<Buffer, string>({
       path,
       encoding: 'binary',
+      ...(durability === 'relaxed' ? { noSync: true, noMetaSync: true } : {}),
     });
   }
 
