@@ -849,6 +849,17 @@ sources as requiring the SAME revision set to stay registered across a
 restart for recovery to behave predictably, the same operational discipline
 `engine.register()`-only deployments already require.
 
+The same last-resolved-revision-wins rule applies to activity registries:
+resolving a dynamic type's revision installs its activity registry keyed
+only by workflow `type`, not by `(type, revision)`. If two revisions of one
+dynamic type are ever resolved concurrently on the same engine—an
+already-running run on `r1` while a fresh `start()` or recovery resolves
+`r2`—the later resolve's activity registry becomes the one every run of
+that type executes against, including the `r1` run still in flight. This is
+the same feature-gate limitation as above, not a separate bug: avoid it by
+keeping one active revision per dynamic type until durable per-run revision
+pinning lands.
+
 ### Diagnostics and events
 
 `weft.catalog.diagnostics` (and the in-process `getWorkflowRevisionDiagnostics()`

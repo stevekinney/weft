@@ -27,6 +27,7 @@
 import type { ActivityRegistry } from '../activity-registry.ts';
 import type { WorkflowDefinition } from '../types.ts';
 import type { FailureCategory } from '../types/identity.ts';
+import type { DynamicWorkflowSourceUnavailableError } from './dynamic-source-errors.ts';
 
 type SourceHandle = import('../source/index.ts').WorkflowSourceHandle;
 type CatalogRevisionRecord = import('../catalog/index.ts').WorkflowRevisionRecord;
@@ -81,6 +82,21 @@ export type WorkflowSourceRuntimeState = {
   lastResolvedRevisionByName: Map<string, string>;
   /** Bounded per-`(name, revision)` load-state diagnostics, keyed name then revision. */
   diagnostics: Map<string, Map<string, SourceLoadDiagnostics>>;
+  /**
+   * Recovery-scoped cache of `type -> DynamicWorkflowSourceUnavailableError`
+   * for a lazy type `recoverAll()`'s preload barrier already classified
+   * `unavailable` for the CURRENT batch. Empty outside of a `recoverAll()`
+   * call. `resolveExecutableRegistration()` checks this before doing any
+   * work so the per-entry `resume()` call `recoverAll()` makes for an
+   * already-failed type re-throws the SAME error — routing the failure
+   * through `resume()`'s normal claim-acquisition and
+   * terminal-cleanup-tracking sequence instead of re-invoking a loader that
+   * already failed once — rather than a second, redundant load attempt.
+   * `recoverAll()` populates this before its per-entry loop and clears it
+   * in a `finally` after, so it never leaks into an unrelated
+   * `engine.resume()` call.
+   */
+  recoveryUnavailableTypes: Map<string, DynamicWorkflowSourceUnavailableError>;
 };
 
 /** Build an empty {@link WorkflowSourceRuntimeState}. */
@@ -93,6 +109,7 @@ export function createWorkflowSourceRuntimeState(): WorkflowSourceRuntimeState {
     resolved: new Map(),
     lastResolvedRevisionByName: new Map(),
     diagnostics: new Map(),
+    recoveryUnavailableTypes: new Map(),
   };
 }
 

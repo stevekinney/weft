@@ -19,11 +19,7 @@
  */
 
 import type { WorkflowSourceHandle } from '../source/index.ts';
-import {
-  ensureWorkflowCatalogReady,
-  getWorkflowCatalog,
-  isWorkflowCatalogReady,
-} from './catalog-readiness.ts';
+import { ensureWorkflowCatalogReady, getWorkflowCatalog } from './catalog-readiness.ts';
 import { DynamicWorkflowSourceUnavailableError } from './dynamic-source-errors.ts';
 import { EngineDisposedError, WorkflowNotRegisteredError } from './errors.ts';
 import type { Engine } from './index.ts';
@@ -43,28 +39,32 @@ export type ExecutableRegistration = {
 
 /**
  * Pick the target revision to resolve for a lazy `type` with one or more
- * `registerSource()`-registered candidates. Prefers the catalog's active
- * pointer for `type` when it names one of the registered candidates (a
- * sync, in-memory `resolveActive()` read — not the durable
- * `resolveActiveDurable()`, to avoid a storage round trip on this hot
- * path); falls back to the sole registered revision when unambiguous;
- * otherwise throws {@link DynamicWorkflowSourceUnavailableError} with
- * `reason: 'ambiguous-revision'} without invoking either loader.
+ * `registerSource()`-registered candidates. The sole-registered-revision
+ * case is unambiguous by construction, so it returns immediately without a
+ * catalog read at all — the common case pays nothing extra. Two or more
+ * registered candidates ARE ambiguous without a pointer, so this reads the
+ * catalog's DURABLE active pointer (`resolveActiveDurable()`, not the
+ * cached, sync `resolveActive()`) — in a multi-engine `workflow-lease`
+ * deployment, a sibling engine can durably activate a new revision after
+ * this engine's in-memory `#active` cache last observed it, and only the
+ * durable read stays consistent with that promotion. Throws
+ * {@link DynamicWorkflowSourceUnavailableError} with
+ * `reason: 'ambiguous-revision'` without invoking either loader when no
+ * pointer names one of the registered candidates.
  */
 async function resolveActiveSourceRevision(
   engine: Engine,
   type: string,
   byRevision: ReadonlyMap<string, WorkflowSourceHandle>,
 ): Promise<string> {
-  if (!isWorkflowCatalogReady(engine)) {
-    await ensureWorkflowCatalogReady(engine);
-  }
-  const activeRevision = getWorkflowCatalog(engine).resolveActive(type)?.revision;
-  if (activeRevision !== undefined && byRevision.has(activeRevision)) {
-    return activeRevision;
-  }
   if (byRevision.size === 1) {
     return [...byRevision.keys()][0]!;
+  }
+  await ensureWorkflowCatalogReady(engine);
+  const activePointer = await getWorkflowCatalog(engine).resolveActiveDurable(type);
+  const activeRevision = activePointer?.revision;
+  if (activeRevision !== undefined && byRevision.has(activeRevision)) {
+    return activeRevision;
   }
   throw new DynamicWorkflowSourceUnavailableError(type, undefined, 'ambiguous-revision');
 }
@@ -83,10 +83,24 @@ export async function resolveExecutableRegistration(
   engine: Engine,
   internals: EngineInternals,
   type: string,
+  onRevisionChosen?: (revision: string) => void,
 ): Promise<ExecutableRegistration> {
   const eager = internals.registrations.get(type);
   if (eager !== undefined) {
     return { entry: eager, revision: undefined };
+  }
+
+  // `recoverAll()`'s preload barrier already resolved (or failed) every
+  // distinct lazy type up front; a `type` it classified `unavailable`
+  // populates this recovery-scoped cache for the duration of that batch so
+  // the per-entry `resume()` call below re-throws the SAME cached error
+  // (routing the failure through the normal claim-acquisition and
+  // terminal-cleanup-tracking path `resume()` already provides) instead of
+  // re-invoking a loader that already failed once for this batch. See
+  // `lifecycle/transition.ts`'s `recoverAll()`.
+  const cachedRecoveryFailure = internals.sources.recoveryUnavailableTypes.get(type);
+  if (cachedRecoveryFailure !== undefined) {
+    throw cachedRecoveryFailure;
   }
 
   const byRevision = internals.sources.byName.get(type);
@@ -105,6 +119,7 @@ export async function resolveExecutableRegistration(
   }
 
   const revision = await resolveActiveSourceRevision(engine, type, byRevision);
+  onRevisionChosen?.(revision);
 
   try {
     await resolveWorkflowSourceForExecution(engine, type, revision);

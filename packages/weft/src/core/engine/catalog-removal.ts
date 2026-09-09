@@ -28,6 +28,9 @@ import { getInternals, type EngineInternals } from './internals.ts';
 import { readSourceLoadDiagnostics, readSourceWaiterCount } from './source-diagnostics.ts';
 import type { SourceLoadDiagnostics } from './source-runtime-state.ts';
 
+type RegistrationEntry =
+  EngineInternals['registrations'] extends Map<string, infer Entry> ? Entry : never;
+
 /**
  * Reserve one in-flight-start slot against `type`'s currently active
  * revision (if any), returning the revision reserved (or `undefined` when
@@ -58,6 +61,34 @@ export function reserveInFlightStart(
     incrementNestedRevisionCount(internals.inFlightStartsByRevision, type, revision);
   }
   return revision;
+}
+
+/**
+ * `startWorkflow`'s combined "resolve `type`, reserve an `inFlightStarts`
+ * slot for the resolved revision" step. Reserves EARLY — before the loader
+ * is awaited, via `resolve()`'s `onRevisionChosen` hook — for a lazy type,
+ * closing the window where a concurrent `removeWorkflowRevision()` could
+ * observe zero references against a revision this call's own source load
+ * is about to durably (re)install; reserves afterward for an eager type,
+ * exactly as before WFT-15/16 (that path never invokes the hook).
+ */
+export async function resolveAndReserveExecutableRegistration(
+  internals: EngineInternals,
+  type: string,
+  resolve: (
+    type: string,
+    onRevisionChosen?: (revision: string) => void,
+  ) => Promise<{ entry: RegistrationEntry; revision: string | undefined }>,
+): Promise<{ registration: RegistrationEntry; inFlightRevision: string | undefined }> {
+  let reservedEarly = false;
+  const { entry: registration, revision } = await resolve(type, (chosen) => {
+    reserveInFlightStart(internals, type, chosen);
+    reservedEarly = true;
+  });
+  const inFlightRevision = reservedEarly
+    ? revision
+    : reserveInFlightStart(internals, type, revision);
+  return { registration, inFlightRevision };
 }
 
 /** Release the slot {@link reserveInFlightStart} reserved; a no-op when `revision` is `undefined`. */

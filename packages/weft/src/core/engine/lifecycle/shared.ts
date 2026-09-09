@@ -146,8 +146,21 @@ export type LifecycleCallbacks = {
    * dynamic-source resolution when `type` is not eagerly registered
    * (WFT-15/16). See `dynamic-source-execution.ts`'s own doc for the full
    * contract.
+   *
+   * `onRevisionChosen`, when given, fires synchronously the moment a lazy
+   * `type`'s target revision is picked — BEFORE the (potentially slow)
+   * loader is awaited — so a caller like `startWorkflow` can reserve an
+   * `inFlightStarts` slot for that exact revision immediately, closing the
+   * window where a concurrent `removeWorkflowRevision()` could observe zero
+   * references against a revision this call's own source load is about to
+   * durably (re)install. Never fires for an eager type (no revision to
+   * choose) or when resolution fails before a revision is picked (the
+   * ambiguous-revision case).
    */
-  resolveExecutableRegistration: (type: string) => Promise<ExecutableRegistration>;
+  resolveExecutableRegistration: (
+    type: string,
+    onRevisionChosen?: (revision: string) => void,
+  ) => Promise<ExecutableRegistration>;
   /**
    * Force a recovered workflow to a terminal `failed` state because its
    * dynamic workflow source could not be resolved during the recovery

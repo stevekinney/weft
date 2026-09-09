@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, mock } from 'bun:test';
 
 import { ActivityRegistry } from '../../core/activity-registry.ts';
 import { Engine } from '../../core/engine.ts';
+import { getWorkflowRevisionDiagnostics } from '../../core/engine/catalog-removal.ts';
 import { copyWorkflowDefinition } from '../../core/engine/construction.ts';
 import { buildRegistrationEntry } from '../../core/engine/registration.ts';
 import { buildWorkflowManifestFromDefinition } from '../../core/registry-workflow-manifest.ts';
@@ -109,7 +110,7 @@ describe('weft.workflows.revisions.preload', () => {
     expect(body.weftCode).toBe('WorkflowSourceNotRegisteredError');
   });
 
-  it('faults with Conflict (409) when the loader throws a raw exception (REST)', async () => {
+  it('faults with Conflict (409) when the loader throws a raw exception (REST), without leaking the raw exception message', async () => {
     engine = createEngine();
     const revision = await lazyCheckoutRevision();
     engine.registerSource(
@@ -121,7 +122,7 @@ describe('weft.workflows.revisions.preload', () => {
           revision,
         },
         async () => {
-          throw new Error('module explode');
+          throw new Error('ENOENT: /var/secrets/deploy-key.pem');
         },
       ),
     );
@@ -132,9 +133,16 @@ describe('weft.workflows.revisions.preload', () => {
     // `operation-fault.ts`'s own REST extractor doc) — JSON-RPC gets full
     // fidelity; see the parity test below.
     expect(response.status).toBe(409);
+    // The raw loader exception's own message must never reach the wire — a
+    // host loader can throw an error naming a filesystem path, credential,
+    // or other internal detail; this Conflict fault is not masked by the
+    // canonical `shapeRestFault` `EngineFailure` path the way an unexpected
+    // engine error would be, so this operation must scrub it itself.
+    const body = await response.text();
+    expect(body).not.toContain('/var/secrets/deploy-key.pem');
   });
 
-  it('faults with Conflict (reason "load-failed") when the loader throws a raw exception (JSON-RPC)', async () => {
+  it('faults with Conflict (reason "load-failed") when the loader throws a raw exception (JSON-RPC), without leaking the raw exception message', async () => {
     engine = createEngine();
     const revision = await lazyCheckoutRevision();
     engine.registerSource(
@@ -146,7 +154,7 @@ describe('weft.workflows.revisions.preload', () => {
           revision,
         },
         async () => {
-          throw new Error('module explode');
+          throw new Error('ENOENT: /var/secrets/deploy-key.pem');
         },
       ),
     );
@@ -163,6 +171,13 @@ describe('weft.workflows.revisions.preload', () => {
     if (result.ok) throw new Error('expected failure');
     expect(result.fault.code).toBe('Conflict');
     expect((result.fault.data as { reason?: string }).reason).toBe('load-failed');
+    expect(result.fault.message).not.toContain('/var/secrets/deploy-key.pem');
+
+    // The classified (non-leaking) cause is still observable through
+    // diagnostics — this is what the doc comment's "diagnostics retain the
+    // underlying cause" promise means in practice.
+    const diagnostics = await getWorkflowRevisionDiagnostics(engine, 'lazy-checkout', revision);
+    expect(diagnostics.source?.lastFailureCategory).toBe('application');
   });
 
   it('faults with Conflict (409) when the loaded module fails validation', async () => {

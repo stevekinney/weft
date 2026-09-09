@@ -7,6 +7,7 @@ import type { Checkpoint, ForkOptions, WorkflowState } from '../../types.ts';
 import { VersionMismatchError } from '../../versioning.ts';
 import { forgetCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
 import { hydrateCheckpointReplayState } from '../checkpoint-replay.ts';
+import { DynamicWorkflowSourceUnavailableError } from '../dynamic-source-errors.ts';
 import { resolveExecutableRegistrationOrRenamedNotFound } from '../dynamic-source-execution.ts';
 import { WorkflowTypeNotRegisteredForRecoveryError } from '../errors.ts';
 import { commitFencedEngineWrite } from '../fenced-write.ts';
@@ -164,6 +165,19 @@ async function recoverEntryOrIsolateFailure(
     if (error instanceof WorkflowClaimUnavailableError) {
       return null;
     }
+    if (error instanceof DynamicWorkflowSourceUnavailableError) {
+      // `recoverAll()`'s preload barrier classified this entry's type
+      // `unavailable` before the loop started; `resume()` reached this
+      // exact cached error via `resolveExecutableRegistration()`'s
+      // recovery-scoped cache (see `source-runtime-state.ts`) AFTER
+      // acquiring this workflow's claim and loading its terminal-cleanup
+      // tracking — the same ordering `VersionMismatchError` gets — so
+      // `failWorkflowForUnavailableDynamicSource` below commits cleanly
+      // under `ownership: 'workflow-lease'` instead of racing an
+      // unfenced write.
+      await callbacks.failWorkflowForUnavailableDynamicSource(workflowId, error);
+      return null;
+    }
     throw error;
   }
 }
@@ -177,8 +191,16 @@ export async function recoverAll(
   const handles: WorkflowHandle[] = [];
 
   if (preflight.missingWorkflows.length > 0 && options?.acknowledgeUnknownWorkflowTypes !== true) {
+    // A dynamic source registered but never yet resolved is still a
+    // "registered type" as far as an operator reading this error is
+    // concerned — `classifyRecoveryState` above already treats it as
+    // non-missing; this list must agree, or a mixed recovery batch reports
+    // every registered lazy type as unregistered.
     throw new WorkflowTypeNotRegisteredForRecoveryError({
-      registeredTypes: internals.registrations.keys(),
+      registeredTypes: new Set([
+        ...internals.registrations.keys(),
+        ...internals.sources.byName.keys(),
+      ]),
       missingWorkflows: preflight.missingWorkflows,
     });
   }
@@ -192,38 +214,47 @@ export async function recoverAll(
     recoverableTypes,
   );
 
-  // Walk preflight entries in storage-scan order so the returned handle
-  // list matches the interleaving callers observed before the preflight
-  // refactor (locals, missing, and recoverables stay in scan order).
-  for (const entry of preflight.entries) {
-    if (entry.kind === 'local') {
-      handles.push(callbacks.getHandle(entry.workflowId));
-      continue;
-    }
-    if (entry.kind === 'missing') {
-      callbacks.dispatchEvent(
-        new WorkflowRecoverySkippedEvent(
-          entry.workflow.workflowId,
-          entry.workflow.type,
-          'type-not-registered',
-        ),
+  // Publish the barrier's failures to `resolveExecutableRegistration()`'s
+  // recovery-scoped cache for the duration of this batch's per-entry loop
+  // (cleared in `finally`, never leaking into an unrelated concurrent
+  // `engine.resume()` call): a `recoverable` entry whose type failed still
+  // goes through `recoverEntryOrIsolateFailure` -> `resume()` below like
+  // every other entry, so it gets the SAME claim-acquisition and
+  // terminal-cleanup-tracking sequence a version-mismatch failure gets,
+  // instead of calling `failWorkflowForUnavailableDynamicSource` directly
+  // ahead of that sequence.
+  internals.sources.recoveryUnavailableTypes = unavailableDynamicSourceTypes;
+  try {
+    // Walk preflight entries in storage-scan order so the returned handle
+    // list matches the interleaving callers observed before the preflight
+    // refactor (locals, missing, and recoverables stay in scan order).
+    for (const entry of preflight.entries) {
+      if (entry.kind === 'local') {
+        handles.push(callbacks.getHandle(entry.workflowId));
+        continue;
+      }
+      if (entry.kind === 'missing') {
+        callbacks.dispatchEvent(
+          new WorkflowRecoverySkippedEvent(
+            entry.workflow.workflowId,
+            entry.workflow.type,
+            'type-not-registered',
+          ),
+        );
+        continue;
+      }
+      const handle = await recoverEntryOrIsolateFailure(
+        internals,
+        entry.workflowId,
+        callbacks,
+        options,
       );
-      continue;
+      if (handle !== null) {
+        handles.push(handle);
+      }
     }
-    const unavailableSource = unavailableDynamicSourceTypes.get(entry.type);
-    if (unavailableSource !== undefined) {
-      await callbacks.failWorkflowForUnavailableDynamicSource(entry.workflowId, unavailableSource);
-      continue;
-    }
-    const handle = await recoverEntryOrIsolateFailure(
-      internals,
-      entry.workflowId,
-      callbacks,
-      options,
-    );
-    if (handle !== null) {
-      handles.push(handle);
-    }
+  } finally {
+    internals.sources.recoveryUnavailableTypes = new Map();
   }
 
   return handles;

@@ -26,6 +26,7 @@ import {
   recordSourceLoadFailed,
   recordSourceLoadReady,
   recordSourceLoadStarted,
+  reviveOrphanedSourceLoadDiagnostics,
 } from './source-diagnostics.ts';
 import { createWorkflowSourceRuntimeState } from './source-runtime-state.ts';
 
@@ -106,6 +107,35 @@ describe('source load-state diagnostics — pure state machine', () => {
     recordSourceLoadStarted(internals, 'checkout', 'r1', 'module', 200);
     expect(readSourceLoadDiagnostics(internals, 'checkout', 'r1')?.state).toBe('loading');
     expect(recordSourceLoadReady(internals, 'checkout', 'r1', 260)).toBe(true);
+    expect(readSourceLoadDiagnostics(internals, 'checkout', 'r1')?.state).toBe('ready');
+  });
+
+  it('reviveOrphanedSourceLoadDiagnostics restores loading when a new waiter joins a still-in-flight, orphaned-cancelled load', () => {
+    const internals = fakeInternals();
+    recordSourceLoadStarted(internals, 'checkout', 'r1', 'module', 0);
+    beginSourceWaiter(internals, 'checkout', 'r1');
+    // Every waiter releases while the shared load (single-flight) is still
+    // unsettled — diagnostics move to `cancelled`, but nothing removed the
+    // shared promise itself from `resolutionsInFlight`.
+    endSourceWaiterAndCheckCancellation(internals, 'checkout', 'r1');
+    expect(readSourceLoadDiagnostics(internals, 'checkout', 'r1')?.state).toBe('cancelled');
+
+    // A no-op for any OTHER state — in particular, it must never fire for a
+    // genuinely fresh load (`recordSourceLoadStarted` already sets `loading`
+    // itself in that case, covered by the test above).
+    reviveOrphanedSourceLoadDiagnostics(internals, 'checkout', 'r2');
+    expect(readSourceLoadDiagnostics(internals, 'checkout', 'r2')).toBeUndefined();
+
+    // A new caller joins the SAME still-in-flight shared load — no new
+    // `recordSourceLoadStarted` call (the load itself never restarted), so
+    // this is the only thing that can un-stick diagnostics from `cancelled`.
+    reviveOrphanedSourceLoadDiagnostics(internals, 'checkout', 'r1');
+    expect(readSourceLoadDiagnostics(internals, 'checkout', 'r1')?.state).toBe('loading');
+
+    // The orphaned load's eventual settle now reaches its normal terminal
+    // transition instead of being silently suppressed by the `state !==
+    // 'loading'` guard `recordSourceLoadReady` still had from `cancelled`.
+    expect(recordSourceLoadReady(internals, 'checkout', 'r1', 50)).toBe(true);
     expect(readSourceLoadDiagnostics(internals, 'checkout', 'r1')?.state).toBe('ready');
   });
 

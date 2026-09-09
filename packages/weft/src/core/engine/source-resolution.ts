@@ -38,6 +38,7 @@ import {
   recordSourceLoadFailedAndDispatch,
   recordSourceLoadReadyAndDispatch,
   recordSourceLoadStartedAndDispatch,
+  reviveOrphanedSourceLoadDiagnostics,
   type SourceEventContext,
 } from './source-diagnostics.ts';
 
@@ -163,11 +164,9 @@ async function runSharedSourceLoad(
 }
 
 /**
- * Join the in-flight shared load for `(name, revision)`, or start one,
- * recording/dispatching the `loading`/`ready`/`failed` diagnostics
- * transitions around it. Self-removes once settled, guarded by reference
- * identity (`byRevision.get(revision) === shared`) — the same
- * `catalogDrainPromise === drainPromise` guard `catalog-readiness.ts` uses.
+ * Join the in-flight shared load for `(name, revision)` — reviving a
+ * joining caller's orphaned `cancelled` diagnostics — or start one.
+ * Self-removes once settled, guarded by reference identity.
  */
 function getOrCreateSharedSourceLoad(
   engine: Engine,
@@ -184,6 +183,7 @@ function getOrCreateSharedSourceLoad(
 
   const existing = byRevision.get(revision);
   if (existing !== undefined) {
+    reviveOrphanedSourceLoadDiagnostics(internals, name, revision);
     return existing;
   }
 

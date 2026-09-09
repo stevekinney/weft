@@ -12,10 +12,12 @@ import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { ActivityRegistry } from '../activity-registry.ts';
+import { encode } from '../codec.ts';
 import { WorkflowRecoverySkippedEvent } from '../events.ts';
 import { buildWorkflowManifestFromDefinition } from '../registry-workflow-manifest.ts';
 import { workflowSource } from '../source/index.ts';
 import { workflow, type WorkflowContext, type WorkflowDefinition } from '../types.ts';
+import { DEFAULT_WORKFLOW_VERSION } from '../versioning.ts';
 import { copyWorkflowDefinition } from './construction.ts';
 import { WorkflowTypeNotRegisteredForRecoveryError } from './errors.ts';
 import { Engine } from './index.ts';
@@ -25,6 +27,33 @@ async function waitForCheckpoint(storage: MemoryStorage, workflowId: string): Pr
   await waitForCondition(async () => (await storage.get(KEYS.checkpoint(workflowId))) !== null, {
     label: `checkpoint for ${workflowId}`,
   });
+}
+
+/**
+ * Directly write a `running` `WorkflowState` for `workflowType` into
+ * storage, bypassing `engine.start()` — which would itself reject an
+ * unregistered type before ever reaching storage. Mirrors
+ * `crash-recovery.test.ts`'s `seedStoredWorkflowState` helper, used to
+ * manufacture the "genuinely unregistered type present in storage" case
+ * `recoverAll()`'s preflight classifies `missing`.
+ */
+async function seedRunningWorkflowState(
+  storage: MemoryStorage,
+  workflowId: string,
+  workflowType: string,
+): Promise<void> {
+  await storage.put(
+    KEYS.workflow(workflowId),
+    encode({
+      id: workflowId,
+      type: workflowType,
+      status: 'running',
+      input: null,
+      versionTuple: { workflowVersion: DEFAULT_WORKFLOW_VERSION },
+      createdAt: 1,
+      updatedAt: 1,
+    }),
+  );
 }
 
 async function revisionFor(definition: WorkflowDefinition): Promise<string> {
@@ -214,6 +243,52 @@ describe('recoverAll() — dynamic-source preload barrier (WFT-15/16)', () => {
 
     expect(skippedEvents).toEqual([]);
     expect(handles.map((handle) => handle.id)).toEqual(['classified-1']);
+  });
+
+  it('WorkflowTypeNotRegisteredForRecoveryError.registeredTypes includes a registered-but-unresolved dynamic source', async () => {
+    const storage = new MemoryStorage();
+    const lazy = workflow({ name: 'lazy-listed' }).execute(async function* (ctx: WorkflowContext) {
+      return yield* ctx.waitForSignal<string>('continue');
+    });
+
+    {
+      await using original = new Engine({ storage });
+      original.register(lazy);
+      await original.start('lazy-listed', null, { id: 'listed-1' });
+      await waitForCheckpoint(storage, 'listed-1');
+    }
+    // A genuinely unregistered type, present in storage but registered on
+    // neither engine — forces `recoverAll()` down the
+    // `WorkflowTypeNotRegisteredForRecoveryError` throwing path so its
+    // `registeredTypes` field is observable. Seeded directly (not via
+    // `engine.start()`, which would itself reject an unregistered type).
+    await seedRunningWorkflowState(storage, 'unknown-1', 'totally-unknown');
+
+    const revision = await revisionFor(lazy as WorkflowDefinition);
+
+    await using recovered = new Engine({ storage });
+    recovered.registerSource(
+      workflowSource(
+        { name: 'lazy-listed', location: './lazy.ts', exportName: 'lazyListed', revision },
+        async () => ({ lazyListed: lazy }),
+      ),
+    );
+
+    const error = await recovered
+      .recoverAll()
+      .then(() => {
+        throw new Error('expected WorkflowTypeNotRegisteredForRecoveryError');
+      })
+      .catch((caught: unknown) => {
+        if (!(caught instanceof WorkflowTypeNotRegisteredForRecoveryError)) throw caught;
+        return caught;
+      });
+
+    // The dynamic source is registered (even though not yet resolved) —
+    // it must appear in the "what IS registered" list a mixed-batch error
+    // reports, not just eagerly `engine.register()`-ed types.
+    expect(error.registeredTypes).toContain('lazy-listed');
+    expect(error.missingTypes).toEqual(['totally-unknown']);
   });
 
   it('engine.resume(id) on a single lazy-type workflow triggers resolution', async () => {

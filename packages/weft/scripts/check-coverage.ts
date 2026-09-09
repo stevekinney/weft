@@ -1228,13 +1228,12 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       // run to run with byte-identical source — a coverage-attribution
       // artifact, not a real reachability signal — so the whole
       // `default: { ... }` block is allowed, not just the two dead
-      // statements inside it. Lines realigned from 156-159 to 172-175 by
-      // the WFT-15/16 dynamic-source diagnostics additions above this
-      // function.
+      // statements inside it. Lines realigned to 203-206 by the WFT-15/16
+      // dynamic-source-execution additions above this function.
       {
         reason:
           'Compile-time exhaustiveness guard for a closed discriminated union has no reachable runtime path to test without an unsafe cast.',
-        lines: new Set([172, 173, 174, 175]),
+        lines: new Set([203, 204, 205, 206]),
       },
     ],
     [
@@ -1258,7 +1257,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
         // `catalog-removal.ts`'s exhaustiveness default above.
         reason:
           'Defensive fail-loud guard for an invariant resolveWorkflowSourceForExecution() itself guarantees; has no reachable runtime path to test without an unsafe cast.',
-        lines: new Set([122, 123, 124, 125, 126, 127]),
+        lines: new Set([137, 138, 139, 140, 141, 142]),
         requireUncoveredLines: true,
       },
     ],

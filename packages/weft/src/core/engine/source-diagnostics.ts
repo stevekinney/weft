@@ -146,6 +146,32 @@ export function endSourceWaiterAndCheckCancellation(
   return true;
 }
 
+/**
+ * When a new caller joins a still-in-flight shared load whose diagnostics
+ * were marked `cancelled` (the last waiter released while the shared
+ * promise was still unsettled, and a later caller then joined that SAME
+ * orphaned promise instead of starting a fresh one — single-flight never
+ * aborts the shared load itself, only per-caller waiter interest), restore
+ * the state to `loading` so the eventual settle reaches its normal
+ * `ready`/`failed` transition instead of being silently suppressed by
+ * `recordSourceLoadReady`/`recordSourceLoadFailed`'s own `state !==
+ * 'loading'` guard. Never dispatches a fresh `WorkflowSourceLoadStartedEvent`
+ * — the load itself did not restart, only diagnostics visibility into it
+ * did. A no-op for any state other than `cancelled` (in particular,
+ * `getOrCreateSharedSourceLoad`'s cache-miss branch already sets `loading`
+ * itself via {@link recordSourceLoadStartedAndDispatch} for a genuinely new
+ * load, so this never fires there).
+ */
+export function reviveOrphanedSourceLoadDiagnostics(
+  internals: EngineInternals,
+  name: string,
+  revision: string,
+): void {
+  const entry = readSourceLoadDiagnostics(internals, name, revision);
+  if (entry === undefined || entry.state !== 'cancelled') return;
+  entry.state = 'loading';
+}
+
 /** Current outstanding-waiter count for `(name, revision)`. */
 export function readSourceWaiterCount(
   internals: EngineInternals,

@@ -77,16 +77,25 @@ export const preloadWorkflowRevisionOperation = defineOperation<
       // is the loader's OWN thrown exception (`resolveSourceModule()`
       // propagates it unwrapped) — a "the load fails" case this operation's
       // own contract promises Conflict for, same as a structurally-loaded
-      // module that fails validation.
+      // module that fails validation. Never forward the raw error's own
+      // message onto the wire: a host loader can throw an error carrying a
+      // filesystem path, a URL with embedded credentials, or another
+      // internal detail, and this Conflict fault (unlike `EngineFailure`)
+      // is NOT masked by the canonical `shapeRestFault` REST path — it
+      // would otherwise land verbatim in the REST response body. The
+      // underlying cause is still observable, in classified (not raw) form,
+      // via `weft.catalog.diagnostics`' `source.lastFailureCategory` —
+      // `engine.workflows.preload()` records it there before this catch
+      // ever runs.
       if (!isWeftError(error)) {
         const fault: OperationFault = {
           code: 'Conflict',
-          message: error instanceof Error ? error.message : String(error),
+          message: `Dynamic workflow source "${name}" revision "${revision}" failed to load.`,
           data: { reason: 'load-failed' },
         };
         throw fault;
       }
-      throwWorkflowCatalogOperationFault(error);
+      return throwWorkflowCatalogOperationFault(error);
     }
   },
 });

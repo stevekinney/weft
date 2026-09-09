@@ -19,7 +19,10 @@ import type {
   WorkflowState,
 } from '../../types.ts';
 import { type WorkflowVersionTuple } from '../../workflow-version-tuple.ts';
-import { releaseInFlightStart, reserveInFlightStart } from '../catalog-removal.ts';
+import {
+  releaseInFlightStart,
+  resolveAndReserveExecutableRegistration,
+} from '../catalog-removal.ts';
 import { forgetCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
 import { WorkflowAlreadyExistsError } from '../errors.ts';
 import { type WorkflowHandle } from '../handles.ts';
@@ -155,7 +158,7 @@ export async function startWorkflow(
   assertValidOnTerminalConflict(options);
 
   // `prepareStartWorkflow`'s sync capture of pendingParent* MUST run before any
-  // await here, or a concurrent same-tick `ctx.startChild()` could overwrite it.
+  // await, or a concurrent same-tick `ctx.startChild()` could overwrite it.
   const preparation = prepareStartWorkflow(internals, options, callbacks);
   const {
     workflowId,
@@ -170,8 +173,7 @@ export async function startWorkflow(
   assertDeferSupported(internals, options, Boolean(delayedStartTimer));
 
   // Atomic check-and-reserve, still synchronous with `prepareStartWorkflow`
-  // above: prevents two concurrent start() calls with the same ID from both
-  // passing the storage check before either writes state.
+  // above: prevents two concurrent same-ID start() calls from both passing.
   if (internals.pendingStarts.has(workflowId)) {
     throw new WorkflowAlreadyExistsError(workflowId);
   }
@@ -180,25 +182,28 @@ export async function startWorkflow(
   let inFlightRevision: string | undefined;
 
   try {
+    // Reject oversized input before any await, before a lazy type's resolve.
+    assertPayloadWithinLimit(input, internals.options.payloadSizePolicy.maxBytes, 'workflow input');
+
     // Sync for an eager type; awaits dynamic-source resolution otherwise.
-    const { entry: registration, revision: resolvedRevision } =
-      await callbacks.resolveExecutableRegistration(type);
+    const { registration, inFlightRevision: reservedRevision } =
+      await resolveAndReserveExecutableRegistration(
+        internals,
+        type,
+        callbacks.resolveExecutableRegistration,
+      );
+    inFlightRevision = reservedRevision;
     const workflowConcurrency = registration.concurrency;
-    inFlightRevision = reserveInFlightStart(internals, type, resolvedRevision);
 
     // Only caller-supplied ids can collide; a generated UUID skips the read.
     // Decide the duplicate-id outcome up front (throws for a non-terminal or
     // default-policy collision), but DEFER any destructive purge until just
-    // before the create commit below — so a `'start-new'` restart rejected by
-    // later validation leaves the prior terminal run intact. The `pendingStarts`
-    // reservation is held across the whole decide → build → purge → create
-    // window, so a concurrent same-id start cannot race into the gap.
+    // before the create commit below, so a `'start-new'` restart rejected by
+    // later validation leaves the prior terminal run intact — `pendingStarts`
+    // stays reserved across the whole window against a racing same-id start.
     const terminalRunToPurge = callerProvidedId
       ? await resolveTerminalConflictForRestart(internals, workflowId, options)
       : null;
-
-    // Reject oversized input before any durable write (and before the purge).
-    assertPayloadWithinLimit(input, internals.options.payloadSizePolicy.maxBytes, 'workflow input');
 
     const versionTuple = createWorkflowVersionTuple(internals, registration, callbacks);
 
@@ -235,14 +240,12 @@ export async function startWorkflow(
     const persistedWorkflowStartHeaders = selectPersistedWorkflowStartHeaders(workflowStartHeaders);
 
     // Last possible moment before the create commit, and after every throwing
-    // build step above (version tuple, state/deadline, checkpoint, start
-    // interceptor). Preparing here means a `'start-new'` restart rejected by any of
-    // those leaves the prior terminal run intact. This clears the OLD run's
-    // in-memory caches BEFORE the new run's maps are written below (so the clear
-    // can't wipe fresh entries) but does NOT commit the destructive storage
-    // delete — that is folded into the atomic create batch below as
-    // `purgeDeleteOperations`, so purge-and-recreate either both happen or neither
-    // does. A create-batch failure can no longer strand the id with no record.
+    // build step above, so a `'start-new'` restart rejected by any of those
+    // leaves the prior terminal run intact. Clears the OLD run's in-memory
+    // caches BEFORE the new run's maps are written below (so the clear can't
+    // wipe fresh entries) but does NOT commit the destructive storage delete —
+    // that is folded into the atomic create batch below as
+    // `purgeDeleteOperations`, so a create-batch failure can't strand the id.
     const purgeDeleteOperations =
       terminalRunToPurge !== null
         ? await prepareTerminalRunPurge(internals, terminalRunToPurge, callbacks)

@@ -362,6 +362,16 @@ export async function resumeWorkflowFromStorage(
 
   await acquireStandaloneClaimBeforeResume(internals, workflowId);
 
+  // Load terminal-cleanup tracking BEFORE anything below that can commit a
+  // terminal failure for this run (the registration lookup's dynamic-source
+  // resolution, `prepareResumeState`'s VersionMismatchError) — this depends
+  // only on `workflowId`/storage, never on checkpoint or registration state,
+  // so hoisting it here costs nothing and ensures `workflowsNeedingTerminalCleanup`
+  // is populated before any such failure's `failWorkflow()` commits, so the
+  // commit carries a proper `terminalCleanupToken` instead of stranding a
+  // persisted cleanup marker.
+  await loadTerminalCleanupTrackedState(internals, workflowId, callbacks);
+
   // Load checkpoint
   const checkpointBytes = await internals.storage.get(KEYS.checkpoint(workflowId));
   if (!checkpointBytes) {
@@ -409,7 +419,6 @@ export async function resumeWorkflowFromStorage(
   }
 
   const workflowStartHeaders = await loadWorkflowStartHeaders(internals, workflowId, callbacks);
-  await loadTerminalCleanupTrackedState(internals, workflowId, callbacks);
 
   // Re-provide the non-serialized `services` value before the generator is
   // driven forward. Inline mode only — worker mode cannot receive a
