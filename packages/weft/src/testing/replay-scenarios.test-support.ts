@@ -195,7 +195,7 @@ function registerForkFromCheckpoint(engine: Engine): void {
       const context = ctx;
       const phaseOne = yield* context.run(async () => 'phase-one');
       const branch = yield* context.waitForSignal('branch');
-      return `${String(phaseOne)}:${String(branch)}`;
+      return `${phaseOne}:${String(branch)}`;
     }),
   );
 }
@@ -207,7 +207,7 @@ function registerRecoveryAfterCrash(engine: Engine): void {
     ) {
       const context = ctx;
       const stepOne = yield* context.run(async () => 'checkpoint-me');
-      const stepTwo = yield* context.run(async () => `resumed:${String(stepOne)}`);
+      const stepTwo = yield* context.run(async () => `resumed:${stepOne}`);
       return stepTwo;
     }),
   );

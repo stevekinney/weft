@@ -99,7 +99,7 @@ function resolveAuthorizedStorage(
   operation: Parameters<typeof raiseFault>[0],
 ): Storage {
   if (!isAuthenticated(principal)) {
-    raiseFault(operation, {
+    return raiseFault(operation, {
       code: 'Unauthorized',
       message: 'authentication required',
       data: { reason: 'authentication required' },
@@ -110,7 +110,7 @@ function resolveAuthorizedStorage(
     return engine.storage;
   }
 
-  raiseFault(operation, {
+  return raiseFault(operation, {
     code: 'Forbidden',
     message: 'Raw storage access requires storage:admin.',
     data: { reason: 'Raw storage access requires storage:admin.' },

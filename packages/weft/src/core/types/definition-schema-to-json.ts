@@ -136,7 +136,7 @@ function convertValibot(schema: DefinitionSchema): Record<string, unknown> {
  * `ReferenceError`/`TypeError` from calling a stubbed browser bundle export.
  */
 function loadNodeRequire(): ((specifier: string) => unknown) | undefined {
-  const nodeModule = tryLoadNodeBuiltin<typeof import('node:module')>('node:module');
+  const nodeModule = tryLoadNodeBuiltin('node:module');
   return nodeModule?.createRequire(import.meta.url);
 }
 

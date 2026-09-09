@@ -18,6 +18,10 @@ export async function createStorage(backend: StorageBackend, database: string): 
     }
     case 'memory':
       return createMemoryStorage();
+    default: {
+      const exhaustiveCheck: never = backend;
+      throw new Error(`Unknown storage backend: ${JSON.stringify(exhaustiveCheck)}`);
+    }
   }
 }
 

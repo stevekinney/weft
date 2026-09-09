@@ -42,5 +42,9 @@ export function authContextToPrincipal(authContext: AuthContext | undefined): Pr
       return principalFromMutualTls({ subject: 'mtls-caller', scopes: [] });
     case 'public':
       return anonymousPrincipal();
+    default: {
+      const exhaustiveCheck: never = authContext.method;
+      throw new Error(`Unknown auth context method: ${JSON.stringify(exhaustiveCheck)}`);
+    }
   }
 }

@@ -154,6 +154,23 @@ async function proveGenericConstructor(): Promise<void> {
 }
 void proveGenericConstructor;
 
+// --- Codex review on #953: WeftClient#start/#startOrSignal/#schedule's
+// string-name fallback overload (used when a project has not augmented
+// `WorkflowRegistry` via `weft codegen`) must stay generic over `TName`, or
+// a caller-supplied explicit type argument (e.g.
+// `client.start<'my-workflow'>('my-workflow', input)`) no longer compiles.
+// This file cannot exercise that against the real `WeftClient`/
+// `LocalClient`/`HttpClient` types with a genuinely empty registry:
+// `src/core/type-ergonomics.test-d.ts` augments `WorkflowRegistry` for the
+// whole `tsconfig.test-d.json` program (module augmentation is program-wide,
+// not file-scoped), so `KnownWorkflowName` is never actually `never` here.
+// The real regression test lives in
+// `src/client/__fixtures__/no-workflow-registry/consumer.ts`, compiled by
+// `src/client/empty-registry-overloads-typecheck.test.ts` via an isolated
+// `tsc` invocation with no augmenting file in scope — it calls the actual
+// client methods on real `WeftClient`/`LocalClient`/`HttpClient`-typed
+// values, not a locally reproduced overload shape.
+
 // --- Issues #725/#728: REST-only operation and storage client surfaces -----
 
 declare const httpClient: HttpClient;

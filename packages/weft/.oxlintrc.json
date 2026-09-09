@@ -146,6 +146,15 @@
         "**/__tests__/**/*.ts"
       ],
       "rules": {
+        // no-unused-vars already treats a leading underscore as the repo's
+        // established "intentionally unused" convention (see the top-level
+        // argsIgnorePattern/varsIgnorePattern above), and test files lean on
+        // it heavily for discard-destructured fields, unused loop bindings,
+        // and .test-d.ts type-level assertion names. no-underscore-dangle
+        // contradicts that convention here; rewriting the dozens of sites
+        // that rely on it would not improve the tests, so it is off for
+        // test files only. Production code keeps the rule enabled.
+        "eslint/no-underscore-dangle": "off",
         "complexity": "off",
         "max-lines": "off",
         "require-yield": "off",
@@ -169,6 +178,98 @@
         "no-unused-expressions": "off",
         "unicorn/consistent-function-scoping": "off",
         "promise/always-return": "off"
+      }
+    },
+    {
+      "files": ["**/*.test-d.ts"],
+      "rules": {
+        // .test-d.ts files rely on single-use generics as the mechanism for
+        // type-level assertions: the `Equals<X, Y>` conditional-type trick
+        // needs its own single-use `T` per side to avoid union
+        // distribution, and `expectType<T>(value: T)` captures a value's
+        // inferred type purely to compare it. Removing either "unnecessary"
+        // parameter breaks the assertion it exists to perform.
+        "typescript/no-unnecessary-type-parameters": "off"
+      }
+    },
+    {
+      "files": ["src/storage/node-sqlite-loader.ts"],
+      "rules": {
+        // `BetterSqliteDatabase.transaction<TArguments, TResult>` genuinely
+        // needs both parameters even though each appears once in this
+        // method's own signature: they let a caller pass a concretely typed
+        // callback (e.g. `(a: X[], b: Y[]) => boolean`) through this
+        // structural interface. Collapsing them to `unknown[]`/`unknown`
+        // breaks real call sites (verified: NodeSQLiteStorage#conditionalBatch
+        // fails to typecheck) because a function with narrower parameter
+        // types is not assignable to one typed `(...args: unknown[]) => T`.
+        "typescript/no-unnecessary-type-parameters": "off"
+      }
+    },
+    {
+      "files": ["src/storage/node-sqlite.test.ts"],
+      "rules": {
+        // The test double's `transaction<TArguments, TResult>` must mirror
+        // `BetterSqliteDatabase.transaction`'s genuinely-generic signature
+        // (see the node-sqlite-loader.ts override above) to remain
+        // structurally assignable to `BetterSqliteConstructor`: verified
+        // that collapsing this to a non-generic `unknown[]`/`unknown`
+        // signature fails typecheck, because TypeScript does not consider a
+        // concrete function assignable to a slot requiring a generic one.
+        "typescript/no-unnecessary-type-parameters": "off"
+      }
+    },
+    {
+      "files": ["src/core/types/workflow-context.ts", "src/core/context/index.ts"],
+      "rules": {
+        // `WorkflowContext#waitForUpdate`'s and `WorkflowContext#getAttribute`
+        // (and `Context`'s matching implementations) string-key fallback
+        // overloads use a return-type-only default generic
+        // (`<T = unknown>`/`<T extends SearchAttributeValue = ...>`) with
+        // nothing in the parameter list to infer it from — the same
+        // deliberate pattern as `JSON.parse<T>()`. See the "Lint suppression
+        // policy" section below for the full rationale; no overload,
+        // `NoInfer`, or helper-type rewrite preserves the caller-supplied
+        // `<T>` ergonomic these two files were built around.
+        "typescript/no-unnecessary-type-parameters": "off"
+      }
+    },
+    {
+      "files": ["src/client/interface.ts", "src/client/local.ts", "src/client/http-client.ts"],
+      "rules": {
+        // `start`/`startOrSignal`/`schedule`'s string-name fallback overload
+        // (used when `WorkflowRegistry` has no augmented names) must keep its
+        // own `<TName extends string>` type parameter even though
+        // `UnknownNameWhenRegistryEmpty<TName>` is its only use: dropping it
+        // compiles, but rejects any caller that supplies an explicit type
+        // argument (e.g. `client.start<'my-workflow'>('my-workflow', input)`)
+        // because TypeScript only matches an overload against a call
+        // carrying explicit type arguments when that overload itself
+        // declares type parameters of matching arity. Verified with an
+        // isolated single-file `tsc` check (no `tsconfig.test-d.json`
+        // cross-file `WorkflowRegistry` augmentation) that the non-generic
+        // form rejects that call and the generic form accepts it; see the
+        // `proveFallbackOverloadAcceptsExplicitTypeArgument` regression in
+        // `src/client/client-type-surface.test-d.ts`.
+        "typescript/no-unnecessary-type-parameters": "off"
+      }
+    },
+    {
+      "files": ["src/server/operation-catalog/stream-pipeline.ts"],
+      "rules": {
+        // `executeSubscription<Element, Envelope>`'s `Envelope` is used once
+        // in its own signature (the return type), but it is a genuine
+        // caller-supplied assertion tied to each operation's own
+        // `outputSchema` (validated at runtime, erased at the
+        // `ErasedOperation` dispatch boundary) — the same JSON.parse<T>()
+        // pattern as the sites above. Two different real subscription
+        // operations dispatch through this one function with two different
+        // envelope shapes; narrowing it to one concrete shape is a type-
+        // safety bug, not a simplification (see the PR #953 review thread
+        // and the `weft.audit.subscriptiononly` regression test in
+        // `dispatch-audit.test.ts`, which pins an envelope with no `cursor`
+        // field going through this same function).
+        "typescript/no-unnecessary-type-parameters": "off"
       }
     }
   ]

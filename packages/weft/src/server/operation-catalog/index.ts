@@ -42,6 +42,7 @@ export {
   type RegistrableOperation,
   type StreamOperationInvocation,
   type SubscriptionOperationInvocation,
+  type SubscriptionStartEnvelope,
   type TransportAvailability,
   type UnknownKeyDisposition,
   type UnknownKeyPolicy,

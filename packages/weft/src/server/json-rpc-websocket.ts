@@ -34,7 +34,11 @@ import {
   validateSessionPrimitiveFrame,
   validateSubscribeParams,
 } from './json-rpc-websocket-validation.ts';
-import { executeSubscription, type DispatchResult } from './operation-catalog.ts';
+import {
+  executeSubscription,
+  type DispatchResult,
+  type SubscriptionStartEnvelope,
+} from './operation-catalog.ts';
 import type { EventEnvelope } from './workflow-event-feed.ts';
 
 export type {
@@ -58,11 +62,6 @@ type SessionRequest = {
   readonly expectsResponse: boolean;
 };
 
-type SubscriptionStartEnvelope = {
-  readonly subscriptionId: string;
-  readonly cursor: string;
-};
-
 type JsonRpcSubscriptionEnvelope = EventEnvelope | FleetEventEnvelope;
 
 type SubscriptionExecution<TEnvelope extends JsonRpcSubscriptionEnvelope> = Promise<
@@ -72,6 +71,15 @@ type SubscriptionExecution<TEnvelope extends JsonRpcSubscriptionEnvelope> = Prom
     close: () => Promise<void>;
   }>
 >;
+
+function isSessionPrimitive(method: unknown): boolean {
+  return (
+    method === SESSION_METHODS.SUBSCRIBE ||
+    method === WORKFLOW_EVENTS_OPERATION_NAME ||
+    method === SESSION_METHODS.FLEET_SUBSCRIBE ||
+    method === SESSION_METHODS.UNSUBSCRIBE
+  );
+}
 
 export function createJsonRpcWebSocketSession(
   options: JsonRpcWebSocketSessionOptions,
@@ -364,15 +372,6 @@ export function createJsonRpcWebSocketSession(
       method: SESSION_METHODS.TERMINATED,
       params: { subscriptionId, reason: 'client-unsubscribed' },
     });
-  }
-
-  function isSessionPrimitive(method: unknown): boolean {
-    return (
-      method === SESSION_METHODS.SUBSCRIBE ||
-      method === WORKFLOW_EVENTS_OPERATION_NAME ||
-      method === SESSION_METHODS.FLEET_SUBSCRIBE ||
-      method === SESSION_METHODS.UNSUBSCRIBE
-    );
   }
 
   async function handleSessionPrimitive(

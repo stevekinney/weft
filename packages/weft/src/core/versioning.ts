@@ -150,6 +150,10 @@ function formatFieldDiffs(diffs: FieldDiff[]): string {
         return `  - field \`${diff.field}\` was removed (was: ${diff.oldType})`;
       case 'type-changed':
         return `  - field \`${diff.field}\` changed type: ${diff.oldType} → ${diff.newType}`;
+      default: {
+        const exhaustiveCheck: never = diff;
+        throw new Error(`Unknown field diff change: ${JSON.stringify(exhaustiveCheck)}`);
+      }
     }
   });
 

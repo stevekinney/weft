@@ -134,7 +134,7 @@ function getFleetEventFeed(
     if (isFleetEventSubscriber(fleetFeed)) return fleetFeed;
   }
 
-  raiseFault(fleetEventsSubscriptionOperation, {
+  return raiseFault(fleetEventsSubscriptionOperation, {
     code: 'UnsupportedTransport',
     message: 'Fleet event subscription requires a WebSocket fleet event feed',
     data: { transport, supported: ['jsonRpcWebSocket'] },

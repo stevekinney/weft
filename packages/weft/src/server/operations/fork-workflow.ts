@@ -103,7 +103,7 @@ export const forkWorkflowOperation = defineOperation<ForkWorkflowInput, ForkWork
       const handle = await typedEngine.fork(input.workflowId, options);
       return { id: handle.id };
     } catch (error) {
-      resolveForkAccess(error);
+      return resolveForkAccess(error);
     }
   },
 });

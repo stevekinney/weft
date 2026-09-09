@@ -227,7 +227,7 @@ export const startOrSignalWorkflowOperation = defineOperation<
       );
       return { id: handle.id, outcome };
     } catch (error) {
-      resolveStartOrSignalWorkflowFault(error);
+      return resolveStartOrSignalWorkflowFault(error);
     }
   },
 });

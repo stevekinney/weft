@@ -87,8 +87,7 @@ function rejectsCrossOriginUpgrade(context: ServerContext, request: Request): bo
  * - `{ ok: false, response }` — reject the upgrade with this response
  */
 type PrincipalResolution =
-  | { ok: true; principal: WebSocketData['principal'] }
-  | { ok: false; response: Response };
+  { ok: true; principal: WebSocketData['principal'] } | { ok: false; response: Response };
 
 /**
  * Resolve the connection principal and enforce scope for connection types that
@@ -147,6 +146,10 @@ function upgradeScope(
     case 'generic':
     case undefined:
       return null;
+    default: {
+      const exhaustiveCheck: never = connectionType;
+      throw new Error(`Unknown WebSocket connection type: ${JSON.stringify(exhaustiveCheck)}`);
+    }
   }
 }
 

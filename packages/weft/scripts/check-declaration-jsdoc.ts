@@ -66,7 +66,7 @@ function parseArgs(argv: string[]): Selector {
   console.error(
     'check-declaration-jsdoc: usage: --all | --symbols <importPath>#<exportName>#<kind>,...',
   );
-  process.exit(1);
+  return process.exit(1);
 }
 
 // ---------------------------------------------------------------------------

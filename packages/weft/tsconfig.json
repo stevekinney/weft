@@ -74,6 +74,7 @@
     "**/dist/**",
     "**/build/**",
     "**/*.test-d.ts",
-    "src/cli/__fixtures__/codegen/typecheck/**"
+    "src/cli/__fixtures__/codegen/typecheck/**",
+    "src/client/__fixtures__/no-workflow-registry/**"
   ]
 }

@@ -23,7 +23,7 @@ describe('weft server health', () => {
     const engine = new Engine();
     const server = serve({ engine, port: 0 });
     try {
-      const result = await executeServer(healthCommand({ server: server.url.toString() }));
+      const result = await executeServer(healthCommand({ server: server.url }));
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('healthy');
     } finally {
@@ -43,7 +43,7 @@ describe('weft server health', () => {
     const server = serve({ engine, port: 0 });
     try {
       const ready = await executeServer(
-        healthCommand({ server: server.url.toString(), wait: true, waitTimeoutMs: 2000 }),
+        healthCommand({ server: server.url, wait: true, waitTimeoutMs: 2000 }),
       );
       expect(ready.exitCode).toBe(0);
     } finally {
@@ -62,9 +62,7 @@ describe('weft server health', () => {
     const engine = new Engine();
     const server = serve({ engine, port: 0 });
     try {
-      const result = await executeServer(
-        healthCommand({ server: server.url.toString(), json: true }),
-      );
+      const result = await executeServer(healthCommand({ server: server.url, json: true }));
       expect(result.exitCode).toBe(0);
       expect(JSON.parse(result.stdout)).toMatchObject({ healthy: true });
     } finally {
@@ -91,9 +89,7 @@ describe('weft server info', () => {
     const engine = new Engine();
     const server = serve({ engine, port: 0 });
     try {
-      const result = await executeServer(
-        healthCommand({ action: 'info', server: server.url.toString() }),
-      );
+      const result = await executeServer(healthCommand({ action: 'info', server: server.url }));
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('Health:  ok');
       expect(result.stdout).toContain('CLI catalog operations:');

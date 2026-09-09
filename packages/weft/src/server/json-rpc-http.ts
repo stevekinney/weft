@@ -133,6 +133,10 @@ function dispatchResultToResponse(result: DispatchJsonRpcResult): Response {
       return Response.json(result.response, { status: 200, headers: CACHE_CONTROL_HEADERS });
     case 'batch':
       return Response.json(result.responses, { status: 200, headers: CACHE_CONTROL_HEADERS });
+    default: {
+      const exhaustiveCheck: never = result;
+      throw new Error(`Unknown JSON-RPC dispatch result kind: ${JSON.stringify(exhaustiveCheck)}`);
+    }
   }
 }
 
