@@ -91,6 +91,9 @@ async function recoverDelivery(
   counters: MaintenanceCounters,
 ): Promise<void> {
   for (let attempt = 1; attempt <= MAX_OUTBOX_TRANSITION_ATTEMPTS; attempt += 1) {
+    // A recovery whose commit was refused because the outbox was disposed
+    // meanwhile must not be retried against resources the caller released.
+    if (runtime.disposal.aborted) return;
     const observedAt = leaseCommitSerial();
     const loaded = await loadDelivery(runtime.storage, runtime.keys, deliveryId);
     if (loaded === null) {

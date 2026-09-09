@@ -158,15 +158,12 @@ export async function deliverNext(
   // A caller that aborted while the claim was committing — or a handle that
   // was disposed then, which aborts the claim's own signal — gets no send at
   // all: the lease is left to lapse in `claimed`, which maintenance
-  // reschedules as a provably unsent attempt.
+  // reschedules as a provably unsent attempt. The claim's signal is also the
+  // in-process cancellation channel, and a cancellation that landed in this
+  // window has already moved the record, so the receipt is re-read unless
+  // disposal makes storage unsafe to touch.
   if (options?.signal?.aborted === true || claim.signal.aborted || runtime.disposal.aborted) {
-    releaseAttemptController(
-      runtime,
-      claim.attemptToken,
-      'The delivery request was aborted before the send began.',
-      deliveryId,
-    );
-    return { status: 'settled', receipt: claim.receipt, committed: false };
+    return abandonBeforeSend(runtime, claim);
   }
   const begun = await beginAttempt(runtime, { deliveryId, attemptToken: claim.attemptToken });
   if (begun.status !== 'settled') {
@@ -185,6 +182,24 @@ export async function deliverNext(
     visibilityExpiresAt: begun.receipt.visibilityExpiresAt ?? claim.visibilityExpiresAt,
   };
   return sendAndSettle(runtime, adapter, attempting, options?.signal);
+}
+
+/** Release an aborted claim without sending, reporting the current durable state. */
+async function abandonBeforeSend(
+  runtime: OutboxRuntime,
+  claim: ApplicationDeliveryClaim,
+): Promise<ApplicationOutboxDeliverResult> {
+  const deliveryId = claim.receipt.deliveryId;
+  releaseAttemptController(
+    runtime,
+    claim.attemptToken,
+    'The delivery request was aborted before the send began.',
+    deliveryId,
+  );
+  const receipt = runtime.disposal.aborted
+    ? claim.receipt
+    : await currentReceipt(runtime, deliveryId, { status: 'aborted' }, claim.receipt);
+  return { status: 'settled', receipt, committed: false };
 }
 
 /**

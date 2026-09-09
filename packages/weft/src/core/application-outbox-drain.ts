@@ -19,7 +19,11 @@ import type { OutboxRuntime } from './application-outbox-internals.ts';
 import { runOutboxMaintenance } from './application-outbox-maintenance.ts';
 import { deliverNext, requireAdapter } from './application-outbox-runner.ts';
 import { loadOutboxHeader } from './application-outbox-storage.ts';
-import { raceAbortWithin, WaitBudgetElapsedError } from './application-primitive-abort.ts';
+import {
+  raceAbort,
+  raceAbortWithin,
+  WaitBudgetElapsedError,
+} from './application-primitive-abort.ts';
 import { delayUnlessAborted } from './application-primitive-timing.ts';
 
 type DrainCounters = {
@@ -190,9 +194,9 @@ function absorbDelivery(
   return count(counters, result.receipt) ? subtract(pending, 1) : pending;
 }
 
-/** Lower a cached open count that may never have been observed. */
-function subtract(pending: number | null, closed: number): number | null {
-  return pending === null ? null : Math.max(0, pending - closed);
+/** Lower a cached open count that may never have been observed by closures that may not have been counted. */
+function subtract(pending: number | null, closed: number | null): number | null {
+  return pending === null ? null : Math.max(0, pending - (closed ?? 0));
 }
 
 /** Whether the drain may start another round: neither disposed nor stopped. */
@@ -228,13 +232,27 @@ async function readOpenCount(runtime: OutboxRuntime, stop: AbortSignal): Promise
 /**
  * Run one maintenance pass, fold its dispositions into the counters, and
  * return how many deliveries it closed, so the cached open count stays true.
+ *
+ * The pass checks the stop signal at every step boundary, but a scan that
+ * stalls between items answers to no signal; the wait for the pass is raced
+ * against the stop as well. A stop that wins returns `null`: the pass ends at
+ * its next boundary on its own, and whatever it commits meanwhile is not this
+ * drain's to count.
  */
 async function maintainOutbox(
   runtime: OutboxRuntime,
   counters: DrainCounters,
   stop: AbortSignal,
-): Promise<number> {
-  const report = await runOutboxMaintenance(runtime, runtime.now(), stop);
+): Promise<number | null> {
+  const pass = runOutboxMaintenance(runtime, runtime.now(), stop);
+  const raced = await raceAbort(() => pass, stop);
+  if (raced.aborted) {
+    // Nobody is left to observe how the detached pass ends; a corrupt record
+    // it meets is reported by the next pass that reaches it.
+    pass.catch(() => undefined);
+    return null;
+  }
+  const report = raced.value;
   counters.unknown += report.parked;
   counters.deadLettered += report.deadLettered;
   counters.retryScheduled += report.rescheduled;
@@ -264,7 +282,7 @@ async function pauseBeforeNextRound(
   if (!drainActive(runtime, context.stop)) return { status: 'stop', pending: context.pending };
   const closed = await maintainOutbox(runtime, context.counters, context.stop);
   const cached = subtract(context.pending, closed);
-  if (runtime.disposal.aborted) return { status: 'stop', pending: cached };
+  if (closed === null || runtime.disposal.aborted) return { status: 'stop', pending: cached };
   const pending = await readOpenCount(runtime, context.stop);
   if (pending === null) return { status: 'stop', pending: cached };
   if (pending === 0) return { status: 'drained', pending };

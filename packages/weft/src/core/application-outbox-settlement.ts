@@ -20,6 +20,7 @@ import type {
   ApplicationDeliveryHeartbeatResult,
   ApplicationDeliverySettleResult,
 } from './application-outbox-contract.ts';
+import { ApplicationDeliveryValidationError } from './application-outbox-guards.ts';
 import {
   ApplicationOutboxContentionError,
   commitDeliveryTransition,
@@ -287,6 +288,11 @@ export async function requestCancellation(
     if (loaded === null) {
       releaseTerminalAttempts(runtime, options.deliveryId, observedAt);
       return { status: 'unknown' };
+    }
+    // A cancellation whose commit was refused because the outbox was disposed
+    // during it is reported the way any call on a disposed outbox is.
+    if (runtime.disposal.aborted) {
+      throw new ApplicationDeliveryValidationError('This application outbox has been disposed.');
     }
     const now = runtime.now();
     const transition = requestDeliveryCancellation(loaded.record, { now, reason: options.reason });

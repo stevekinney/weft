@@ -77,7 +77,7 @@ queued ──claim──▶ claimed ──begin──▶ attempting ──adapte
 
 Without the intermediate write those two cases are indistinguishable, and an outbox would have to choose between duplicating effects and abandoning deliveries. The extra compare-and-swap per delivery is the price of telling them apart.
 
-`deliverNext()` performs both steps, calls the adapter, and settles. Its `settled` result carries `committed`: `true` when this call wrote the receipt's disposition, `false` when another actor moved the delivery first, the caller aborted before the send began, the caller's signal fired while the settlement was still being written (the settlement finishes on its own, fenced on the attempt, but this call stopped waiting for it), or the outbox was disposed mid-send and the lease was left for maintenance to recover. A host that drives the transport itself uses the same steps explicitly: `claim()`, `beginAttempt()`, then `settle()`.
+`deliverNext()` performs both steps, calls the adapter, and settles. Its `settled` result carries `committed`: `true` when this call wrote the receipt's disposition, `false` when another actor moved the delivery first, the caller aborted or the delivery was cancelled before the send began (the receipt is re-read, so it shows the current state), the caller's signal fired while the settlement was still being written (the settlement finishes on its own, fenced on the attempt, but this call stopped waiting for it), or the outbox was disposed mid-send and the lease was left for maintenance to recover. A host that drives the transport itself uses the same steps explicitly: `claim()`, `beginAttempt()`, then `settle()`.
 
 ## The Adapter Contract
 
@@ -218,7 +218,7 @@ Parked and failed deliveries are meant to be inspected and acted on. `list({ sta
 
 ## Drain and Shutdown
 
-`drain({ timeoutMs })` delivers everything that is due, runs a maintenance pass before its first round and whenever a round finds nothing due (so lapsed leases are recovered without rescanning the outbox before every send), and waits — bounded, and never longer than `pollIntervalMs` at a stretch, so a delivery another process enqueues meanwhile is seen promptly — for held deliveries to come due. The budget is one stop signal for the whole drain: it ends the sleeps, the maintenance passes, an in-flight send, and the wait for a settlement alike, so a drain asked to stop at a deadline stops there — a settlement still being written when it fires finishes on its own and is not counted by that drain. It reports counts only:
+`drain({ timeoutMs })` delivers everything that is due, runs a maintenance pass before its first round and whenever a round finds nothing due (so lapsed leases are recovered without rescanning the outbox before every send), and waits — bounded, and never longer than `pollIntervalMs` at a stretch, so a delivery another process enqueues meanwhile is seen promptly — for held deliveries to come due. The budget is one stop signal for the whole drain: it ends the sleeps, the maintenance passes, an in-flight send, and the wait for a settlement alike, so a drain asked to stop at a deadline stops there — a settlement still being written, or a maintenance scan still stalled on storage, when it fires finishes on its own and is not counted by that drain. It reports counts only:
 
 ```ts
 import { ApplicationOutbox, MemoryStorage } from '@lostgradient/weft';

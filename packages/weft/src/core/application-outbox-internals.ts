@@ -272,6 +272,11 @@ export async function commitDeliveryTransition(
         runtime.policy.namespace,
         runtime.policy.ownerId,
       ));
+    // The header read is an await of its own; a disposal that landed during
+    // it must stop the write here, since the caller's own guard ran before
+    // the read. Callers treat `false` as a lost compare-and-swap and re-read,
+    // where their disposal guard ends the loop.
+    if (runtime.disposal.aborted) return false;
     extraConditions.push({ key: runtime.keys.header, expectedValue: header.bytes });
     extraOperations.push(
       headerOperation(runtime.keys, {

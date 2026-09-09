@@ -13,7 +13,10 @@ import type { BatchOperation, ConditionalBatchCondition } from '../storage/inter
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { ApplicationDeliveryValidationError } from './application-outbox-guards.ts';
-import { encodeApplicationOutboxRecord } from './application-outbox-index-codec.ts';
+import {
+  encodeApplicationDeliveryEntry,
+  encodeApplicationOutboxRecord,
+} from './application-outbox-index-codec.ts';
 import { ApplicationOutboxContentionError } from './application-outbox-internals.ts';
 import { isApplicationDeliveryAttempting } from './application-outbox-types.ts';
 import { validateOutcome } from './application-outbox-validation.ts';
@@ -428,6 +431,20 @@ describe('outcome validation', () => {
         outbox.settle({ deliveryId: 'x', attemptToken: 't', outcome: { status: 'acknowledged' } }),
       ),
     ).toBe('unknown');
+    outbox.dispose();
+  });
+});
+
+describe('due index identity', () => {
+  it('halts on a due entry whose value names a delivery other than its key', async () => {
+    const { outbox, storage } = createOutboxFixture();
+    // The real delivery is due later, so the stray entry at instant 0 is the head.
+    const real = await enqueueOne(outbox, { availableAfterMs: 1000 });
+    const stray = KEYS.applicationDeliveryDue('bureau', 'agent-7', 0, 'stranded');
+    await storage.put(stray, encodeApplicationDeliveryEntry(real));
+    await expect(outbox.claim()).rejects.toThrow(PersistedDataCorruptError);
+    // The canonical entry is left in place, not discarded as an orphan.
+    expect(await storage.get(stray)).not.toBeNull();
     outbox.dispose();
   });
 });

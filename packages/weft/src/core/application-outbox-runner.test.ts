@@ -17,6 +17,7 @@ import {
   restoreRealTimers,
   useFakeTimers,
 } from '../testing/fake-timers.test-support.ts';
+import { ApplicationDeliveryValidationError } from './application-outbox-guards.ts';
 import {
   beginOne,
   claimOne,
@@ -1145,6 +1146,126 @@ describe('runner: seventh review round', () => {
     expect(again.status).toBe('stale');
     expect(again.status === 'stale' && again.receipt.state).toBe('cancellation-requested');
     other.dispose();
+    outbox.dispose();
+  });
+});
+
+describe('runner: eighth review round', () => {
+  afterEach(() => {
+    restoreRealTimers();
+  });
+
+  /** A storage whose delivery-record scans wait on `gate` once `stall` is set. */
+  function stalledScanStorage(gate: { readonly promise: Promise<void> }): MemoryStorage & {
+    stall: boolean;
+  } {
+    class StalledScanStorage extends MemoryStorage {
+      stall = false;
+
+      override async *scan(
+        ...arguments_: Parameters<MemoryStorage['scan']>
+      ): ReturnType<MemoryStorage['scan']> {
+        if (this.stall && arguments_[0].startsWith('appdlv:')) await gate.promise;
+        yield* super.scan(...arguments_);
+      }
+    }
+    return new StalledScanStorage();
+  }
+
+  it('stops at the drain deadline while a maintenance scan is stalled', async () => {
+    useFakeTimers();
+    const gate = createDeferred();
+    const storage = stalledScanStorage(gate);
+    const { outbox, adapter } = createOutboxFixture({ storage });
+    await enqueueOne(outbox);
+    storage.stall = true;
+    const draining = outbox.drain({ timeoutMs: 100 });
+    await flushMicrotasks(32);
+    await advanceTimersByTime(100);
+    expect(await draining).toMatchObject({ acknowledged: 0, pending: 1, drained: false });
+    expect(adapter.requests).toHaveLength(0);
+    gate.resolve();
+    await flushMicrotasks(64);
+    outbox.dispose();
+  });
+
+  it('swallows the failure of a maintenance pass the drain no longer waits for', async () => {
+    useFakeTimers();
+    const gate = createDeferred();
+    const storage = stalledScanStorage(gate);
+    const { outbox } = createOutboxFixture({ storage });
+    await enqueueOne(outbox);
+    storage.stall = true;
+    const draining = outbox.drain({ timeoutMs: 100 });
+    await flushMicrotasks(32);
+    await advanceTimersByTime(100);
+    expect(await draining).toMatchObject({ pending: 1, drained: false });
+    gate.reject(new Error('storage offline'));
+    await flushMicrotasks(64);
+    storage.stall = false;
+    expect(await outbox.runMaintenance()).toMatchObject({ rescheduled: 0, parked: 0 });
+    outbox.dispose();
+  });
+
+  it('does not settle when disposal lands during the settlement header read', async () => {
+    const storage = new HookedStorage();
+    const { outbox, adapter } = createOutboxFixture({ storage });
+    const id = await enqueueOne(outbox);
+    storage.beforeGet = (key) => {
+      if (key.includes('appobx:') && adapter.requests.length > 0) outbox.dispose();
+    };
+    const result = await outbox.deliverNext();
+    expect(result).toMatchObject({ status: 'settled', committed: false });
+    const observer = createOutboxFixture({ storage: remoteView(storage) }).outbox;
+    expect(await fieldOf(observer.receipt(id), 'state')).toBe('attempting');
+    observer.dispose();
+  });
+
+  it('does not recover a lease when disposal lands during the recovery header read', async () => {
+    const storage = new HookedStorage();
+    const clock = createOutboxClock();
+    const { outbox } = createOutboxFixture({ storage, clock, attemptTimeoutMs: 100 });
+    const id = await enqueueOne(outbox);
+    await beginOne(outbox);
+    clock.advance(100);
+    storage.beforeGet = (key) => {
+      if (key.includes('appobx:')) outbox.dispose();
+    };
+    expect(await outbox.runMaintenance()).toMatchObject({ parked: 0, rescheduled: 0 });
+    const observer = createOutboxFixture({ storage: remoteView(storage) }).outbox;
+    expect(await fieldOf(observer.receipt(id), 'state')).toBe('attempting');
+    observer.dispose();
+  });
+
+  it('reports a cancellation interrupted by disposal as a call on a disposed outbox', async () => {
+    const storage = new HookedStorage();
+    const { outbox } = createOutboxFixture({ storage });
+    const id = await enqueueOne(outbox);
+    await claimOne(outbox);
+    storage.beforeGet = (key) => {
+      if (key.includes('appobx:')) outbox.dispose();
+    };
+    await expect(outbox.requestCancellation({ deliveryId: id })).rejects.toThrow(
+      ApplicationDeliveryValidationError,
+    );
+    const observer = createOutboxFixture({ storage: remoteView(storage) }).outbox;
+    expect(await fieldOf(observer.receipt(id), 'state')).toBe('claimed');
+    observer.dispose();
+  });
+
+  it('re-reads the receipt of a claim whose caller aborted while it committed', async () => {
+    const storage = new HookedStorage();
+    const { outbox, adapter } = createOutboxFixture({ storage });
+    const id = await enqueueOne(outbox);
+    const controller = new AbortController();
+    storage.beforeBatch = (ordinal) => {
+      if (ordinal === 2) controller.abort(new Error('gone'));
+    };
+    const result = await outbox.deliverNext({ signal: controller.signal });
+    expect(result).toMatchObject({ status: 'settled', committed: false });
+    expect(result.status === 'settled' && result.receipt.state).toBe('claimed');
+    expect(adapter.requests).toHaveLength(0);
+    expect(await fieldOf(outbox.receipt(id), 'state')).toBe('claimed');
     outbox.dispose();
   });
 });

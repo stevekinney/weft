@@ -7,7 +7,7 @@
  */
 
 import type { BatchOperation, ConditionalBatchCondition, Storage } from '../storage/interface.ts';
-import { KEYS } from '../storage/interface.ts';
+import { encodeStorageKeyComponent, KEYS } from '../storage/interface.ts';
 import {
   decodeApplicationDeliveryRecord,
   encodeApplicationDeliveryRecord,
@@ -34,6 +34,7 @@ import {
   type ApplicationCommitPlan,
   type ApplicationEventSink,
 } from './application-primitive-commit.ts';
+import { PersistedDataCorruptError } from './persisted-data-incompatible-error.ts';
 
 /** Every key builder for one `(namespace, ownerId)` outbox, bound once. */
 export type OutboxKeys = Readonly<{
@@ -152,7 +153,7 @@ export type DueEntry = {
  * The index is keyed by `availableAt`, so the first entry is the earliest
  * delivery, due or not. The caller decides whether it is claimable now.
  *
- * @throws {PersistedDataCorruptError} When an index entry is malformed.
+ * @throws {PersistedDataCorruptError} When an index entry is malformed, or names a delivery other than the one its key names.
  */
 export async function loadDueHead(
   storage: Storage,
@@ -161,7 +162,14 @@ export async function loadDueHead(
 ): Promise<DueEntry[]> {
   const entries: DueEntry[] = [];
   for await (const [key, value] of storage.scan(keys.duePrefix, { limit })) {
-    entries.push({ key, bytes: value, deliveryId: decodeApplicationDeliveryEntry(value, key) });
+    const deliveryId = decodeApplicationDeliveryEntry(value, key);
+    // The key names the delivery too. A value that names a different one is
+    // not an orphan to tidy away — deleting it would strand the delivery the
+    // key belongs to without its only due entry — but corruption to halt on.
+    if (!key.endsWith(`:${encodeStorageKeyComponent(deliveryId)}`)) {
+      throw new PersistedDataCorruptError(key);
+    }
+    entries.push({ key, bytes: value, deliveryId });
   }
   return entries;
 }
