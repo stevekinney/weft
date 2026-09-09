@@ -49,6 +49,10 @@ function createBaseContext(storage: MemoryStorage) {
     persistedWorkflowStartHeaders: undefined,
     additionalStartOperations: undefined,
     purgeDeleteOperations: undefined,
+    // These cases exercise the idempotency and workflow-concurrency conditions in
+    // isolation; the duplicate-id condition has its own coverage in
+    // `start-duplicate-id-race.test.ts`.
+    duplicateIdCondition: undefined,
     callbacks: {} as never,
     internals: {
       deposed: false,
