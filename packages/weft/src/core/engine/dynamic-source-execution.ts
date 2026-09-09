@@ -38,17 +38,16 @@ export type ExecutableRegistration = {
 };
 
 /**
- * Pick the target revision to resolve for a lazy `type` with one or more
- * `registerSource()`-registered candidates. The sole-registered-revision
- * case is unambiguous by construction, so it returns immediately without a
- * catalog read at all — the common case pays nothing extra. Two or more
- * registered candidates ARE ambiguous without a pointer, so this reads the
- * catalog's DURABLE active pointer (`resolveActiveDurable()`, not the
- * cached, sync `resolveActive()`) — in a multi-engine `workflow-lease`
- * deployment, a sibling engine can durably activate a new revision after
- * this engine's in-memory `#active` cache last observed it, and only the
- * durable read stays consistent with that promotion. Throws
- * {@link DynamicWorkflowSourceUnavailableError} with
+ * Pick the target revision to resolve for a lazy `type` with two or more
+ * `registerSource()`-registered candidates (the caller handles the
+ * sole-candidate case itself, synchronously, before ever calling this — see
+ * `resolveExecutableRegistration()`). Multiple registered candidates ARE
+ * ambiguous without a pointer, so this reads the catalog's DURABLE active
+ * pointer (`resolveActiveDurable()`, not the cached, sync `resolveActive()`)
+ * — in a multi-engine `workflow-lease` deployment, a sibling engine can
+ * durably activate a new revision after this engine's in-memory `#active`
+ * cache last observed it, and only the durable read stays consistent with
+ * that promotion. Throws {@link DynamicWorkflowSourceUnavailableError} with
  * `reason: 'ambiguous-revision'` without invoking either loader when no
  * pointer names one of the registered candidates.
  */
@@ -57,9 +56,6 @@ async function resolveActiveSourceRevision(
   type: string,
   byRevision: ReadonlyMap<string, WorkflowSourceHandle>,
 ): Promise<string> {
-  if (byRevision.size === 1) {
-    return [...byRevision.keys()][0]!;
-  }
   await ensureWorkflowCatalogReady(engine);
   const activePointer = await getWorkflowCatalog(engine).resolveActiveDurable(type);
   const activeRevision = activePointer?.revision;
@@ -105,8 +101,22 @@ export async function resolveExecutableRegistration(
     throw new WorkflowNotRegisteredError(type);
   }
 
-  const revision = await resolveActiveSourceRevision(engine, type, byRevision);
-  onRevisionChosen?.(revision);
+  // The sole-registered-revision case is unambiguous by construction and is
+  // handled entirely synchronously here — no `await` between reading
+  // `byRevision` and firing `onRevisionChosen` — so the reservation promise
+  // documented on `resolveExecutableRegistration` above holds even for this
+  // fast path. Routing it through the async `resolveActiveSourceRevision()`
+  // instead would insert a microtask gap before `onRevisionChosen` fires,
+  // reopening the exact concurrent-`removeWorkflowRevision()` window that
+  // hook exists to close.
+  let revision: string;
+  if (byRevision.size === 1) {
+    revision = [...byRevision.keys()][0]!;
+    onRevisionChosen?.(revision);
+  } else {
+    revision = await resolveActiveSourceRevision(engine, type, byRevision);
+    onRevisionChosen?.(revision);
+  }
 
   try {
     await resolveWorkflowSourceForExecution(engine, type, revision);
@@ -177,35 +187,6 @@ export async function resolveExecutableRegistrationForRetry(
     type,
     () => new Error(`No workflow registered with name "${type}" (needed to retry "${workflowId}")`),
   );
-}
-
-/**
- * Resolve `type`'s executable registration, failing `entry`'s workflow (via
- * `callbacks.failWorkflow`) and returning `null` on any resolution error
- * instead of throwing. Used by `startDelayedWorkflow` (`operations-time.ts`)
- * to keep that function's own cyclomatic complexity under the repository's
- * ceiling, and reusable by any other fire-a-timer-then-start entry point
- * that wants the same "fail the run, don't throw out of the timer handler"
- * contract.
- */
-export async function resolveExecutableRegistrationOrFailWorkflow(
-  entry: { workflowId: string },
-  type: string,
-  callbacks: {
-    failWorkflow: (workflowId: string, error: Error) => Promise<void>;
-    resolveExecutableRegistration: (type: string) => Promise<ExecutableRegistration>;
-  },
-): Promise<ExecutableRegistration['entry'] | null> {
-  try {
-    const resolved = await callbacks.resolveExecutableRegistration(type);
-    return resolved.entry;
-  } catch (error) {
-    await callbacks.failWorkflow(
-      entry.workflowId,
-      error instanceof Error ? error : new Error(String(error)),
-    );
-    return null;
-  }
 }
 
 /**

@@ -830,14 +830,26 @@ operation (`POST /v1/registry/workflows/:name/preload`)—see
 `recoverAll()` (and therefore `Engine.create()`, which calls it by default)
 preloads every DISTINCT dynamic-source type referenced by non-terminal
 state ONCE, before advancing any of those runs' generators—not once per
-run. A type whose load fails is classified `unavailable`: only its own
-non-terminal runs fail (with `DynamicWorkflowSourceUnavailableError` as a
-`system`-category failure cause); sibling types—dynamic or eager—continue
-recovering normally, mirroring the existing version-mismatch recovery
-isolation. A registered-but-not-yet-resolved dynamic source is never routed
-through the `'type-not-registered'` missing-registration classification
-(`WorkflowRecoverySkippedEvent`)—only a name with no registration of any
-kind (neither eager nor a registered source) is "missing."
+run.
+
+> [!NOTE]
+> `Engine.create()`'s options accept eager `workflows`/`activities` but have
+> no `sources` field, so there is no way to `registerSource()` a dynamic
+> type before its automatic `recover: true` pass runs. To have automatic
+> recovery resolve a `registerSource()`-registered type at all, build the
+> engine manually instead: `new Engine({ storage, ... })`, then
+> `engine.registerSource(...)` for every dynamic type, then
+> `await engine.recoverAll()`—the same sequence `dynamic-source-recovery.test.ts`
+> exercises. Passing `recover: false` to `Engine.create()` and driving
+> recovery yourself is the supported path when you need dynamic sources
+> registered before recovery runs. A type whose load fails is classified `unavailable`: only its own
+> non-terminal runs fail (with `DynamicWorkflowSourceUnavailableError` as a
+> `system`-category failure cause); sibling types—dynamic or eager—continue
+> recovering normally, mirroring the existing version-mismatch recovery
+> isolation. A registered-but-not-yet-resolved dynamic source is never routed
+> through the `'type-not-registered'` missing-registration classification
+> (`WorkflowRecoverySkippedEvent`)—only a name with no registration of any
+> kind (neither eager nor a registered source) is "missing."
 
 **This is a feature gate, not durable per-run revision pinning.** Which
 revision an in-flight run resolves against during recovery is derived at

@@ -38,10 +38,12 @@ export type ResolvedSource = { definition: WorkflowDefinition; activityRegistry:
 /**
  * Load-state machine for one `(name, revision)`, backing both the
  * `weft.catalog.diagnostics` `source` extension and the
- * `workflow-source:load-*` events. `'idle'` is never observed externally —
- * a diagnostics entry only exists once a load has at least started — but is
- * the type-level starting point before the first `resolveWorkflowSource()`
- * call for a key.
+ * `workflow-source:load-*` events. `'idle'` is the type-level starting
+ * point before the first `resolveWorkflowSource()` call for a key, and IS
+ * observable externally: `weft.catalog.diagnostics` reports it for any
+ * `registerSource()`-registered revision that has never had a load start
+ * (see `buildSourceDiagnostics()` in `catalog-removal.ts`), and no
+ * `workflow-source:load-*` event is emitted for that state.
  */
 export type SourceLoadState = 'idle' | 'loading' | 'ready' | 'failed' | 'cancelled';
 

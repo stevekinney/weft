@@ -77,6 +77,15 @@ export async function schedule(
   spec: string | ScheduleSpec,
   options?: ScheduleOptions,
 ): Promise<ScheduleHandle> {
+  // Validate the caller-supplied `spec`/`options` BEFORE ever touching a
+  // `registerSource()`-registered type's loader below — both are pure,
+  // synchronous, and cheap, so a malformed schedule spec or option set
+  // throws immediately instead of after paying for (and single-flight
+  // installing the result of) a dynamic-source load whose work this call
+  // is about to discard anyway.
+  const normalizedSpec = normalizeScheduleSpec(spec);
+  const normalizedOptions = normalizeScheduleOptions(options);
+  const scheduleId = normalizedOptions.id ?? crypto.randomUUID();
   // Eager types resolve synchronously and never touch `internals.sources`;
   // a `registerSource()`-registered type resolves (and invokes its loader
   // exactly once) HERE, at schedule-creation time — not deferred to the
@@ -84,9 +93,6 @@ export async function schedule(
   if (!internals.registrations.has(type)) {
     await resolveExecutableRegistration(internals.engine as unknown as Engine, internals, type);
   }
-  const normalizedSpec = normalizeScheduleSpec(spec);
-  const normalizedOptions = normalizeScheduleOptions(options);
-  const scheduleId = normalizedOptions.id ?? crypto.randomUUID();
   if (internals.pendingScheduleCreations.has(scheduleId)) {
     throw new Error(`Schedule with id "${scheduleId}" already exists`);
   }

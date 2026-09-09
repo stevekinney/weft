@@ -131,7 +131,10 @@ try {
 
 ## Dynamic-source recovery: a preload barrier, not durable revision pinning (WFT-15/16)
 
-A workflow type registered via `engine.registerSource()` rather than `engine.register()` follows a different recovery shape than either the happy path or version-mismatch isolation above. `recoverAll()` preloads every DISTINCT dynamic-source type referenced by non-terminal state ONCE, before advancing any of those runs' generators — a batch-wide barrier, not a per-run resolve:
+A workflow type registered via `engine.registerSource()` rather than `engine.register()` follows a different recovery shape than either the happy path or version-mismatch isolation above. `recoverAll()` preloads every DISTINCT dynamic-source type referenced by non-terminal state ONCE, before advancing any of those runs' generators — a batch-wide barrier, not a per-run resolve.
+
+> [!NOTE]
+> `Engine.create()` has no `sources` option, so its automatic `recover: true` pass can never see a `registerSource()` call you haven't made yet. To get a dynamic type recovered automatically, build the engine manually: `new Engine({ storage, ... })`, call `engine.registerSource(...)` for each dynamic type, then `await engine.recoverAll()` — or pass `recover: false` to `Engine.create()` and drive that same sequence yourself.
 
 ```typescript partial
 const handles = await engine.recoverAll();

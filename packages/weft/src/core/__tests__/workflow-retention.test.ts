@@ -8,9 +8,19 @@ import {
 import type { BatchOperation, ScanOptions } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { ActivityRegistry } from '../activity-registry.ts';
 import { encode } from '../codec.ts';
 import { Engine } from '../engine.ts';
-import { workflow, type AttributeFilter, type WorkflowContext } from '../types.ts';
+import { copyWorkflowDefinition } from '../engine/construction.ts';
+import { buildRegistrationEntry } from '../engine/registration.ts';
+import { buildWorkflowManifestFromDefinition } from '../registry-workflow-manifest.ts';
+import { workflowSource } from '../source/index.ts';
+import {
+  workflow,
+  type AttributeFilter,
+  type WorkflowContext,
+  type WorkflowDefinition,
+} from '../types.ts';
 
 async function waitForWorkflowPresence(
   engine: Engine,
@@ -390,6 +400,51 @@ describe('workflow retention', () => {
 
     now += 9_000;
     await waitForWorkflowPresence(engine, longHandle.id, false);
+
+    engine[Symbol.dispose]();
+  });
+
+  it("a registerSource()-registered type's own retention policy overrides the engine default once resolved", async () => {
+    // Regression: a dynamic definition's `retention` never lands in
+    // `internals.registrations`, so both the purge sweep's minimum-retention scan
+    // bound and its per-workflow deadline check silently ignored it — a dynamic
+    // workflow with a SHORTER retention than the engine default never expired early.
+    let now = 5_000;
+    const engine = new Engine({
+      storage: new MemoryStorage(),
+      getNow: () => now,
+      retention: { completed: '10s' },
+      retentionSweepInterval: '10ms',
+    });
+    const type = 'dynamic-short-lived';
+    const definition = workflow({ name: type, retention: { completed: '1s' } }).execute(
+      async function* () {
+        return 'dynamic';
+      },
+    );
+    const entry = buildRegistrationEntry(type, definition as WorkflowDefinition);
+    const registered = copyWorkflowDefinition(type, entry);
+    const manifest = await buildWorkflowManifestFromDefinition(
+      registered,
+      new ActivityRegistry().listDefinitions(),
+    );
+    engine.registerSource(
+      workflowSource(
+        {
+          name: type,
+          location: './dynamic-short-lived.ts',
+          exportName: 'dyn',
+          revision: manifest.revision,
+        },
+        async () => ({ dyn: definition }),
+      ),
+    );
+
+    const handle = await engine.start(type, null, { id: 'dynamic-short-lived' });
+    await handle.result();
+
+    now += 1_500;
+    await waitForWorkflowPresence(engine, handle.id, false);
 
     engine[Symbol.dispose]();
   });

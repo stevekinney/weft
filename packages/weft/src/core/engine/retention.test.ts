@@ -1,15 +1,31 @@
 import { describe, expect, it, mock } from 'bun:test';
 
 import { MemoryStorage } from '../../storage/memory.ts';
+import { ActivityRegistry } from '../activity-registry.ts';
 import { Engine } from '../engine.ts';
-import { workflow } from '../types.ts';
+import { buildWorkflowManifestFromDefinition } from '../registry-workflow-manifest.ts';
+import { workflowSource } from '../source/index.ts';
+import { workflow, type WorkflowDefinition } from '../types.ts';
+import { copyWorkflowDefinition } from './construction.ts';
 import { getInternals } from './internals.ts';
+import { buildRegistrationEntry } from './registration.ts';
 import {
   ensureRetentionSweepInterval,
   getRetentionOverview,
   hasConfiguredRetention,
+  resolveWorkflowTypeRetention,
   runRetentionSweep,
 } from './retention.ts';
+
+async function revisionFor(definition: WorkflowDefinition): Promise<string> {
+  const entry = buildRegistrationEntry(definition.name, definition);
+  const registered = copyWorkflowDefinition(definition.name, entry);
+  const manifest = await buildWorkflowManifestFromDefinition(
+    registered,
+    new ActivityRegistry().listDefinitions(),
+  );
+  return manifest.revision;
+}
 
 describe('retention helpers', () => {
   it('treats workflow-level retention as configured retention', () => {
@@ -77,6 +93,42 @@ describe('retention helpers', () => {
     expect(cleanupErrorCall).not.toBeNull();
     expect(cleanupErrorCall![0]).toBe('retentionSweep');
     expect(cleanupErrorCall![1]).toBe(purgeError);
+
+    engine[Symbol.dispose]();
+  });
+
+  it("picks up a registerSource()-registered type's own retention policy once resolved", async () => {
+    // Regression: a dynamic definition's `retention` never lands in
+    // `internals.registrations` (only `internals.sources.resolved` once loaded), so a
+    // lookup scoped to `internals.registrations` alone silently ignored it — both for the
+    // "is any retention configured at all" check and for the per-type policy itself.
+    const type = 'dynamic-retention';
+    const definition = workflow({ name: type, retention: { completed: '2h' } }).execute(
+      async function* () {
+        return 'dynamic';
+      },
+    );
+    const revision = await revisionFor(definition as WorkflowDefinition);
+
+    const engine = new Engine();
+    engine.registerSource(
+      workflowSource(
+        { name: type, location: './dynamic-retention.ts', exportName: 'dyn', revision },
+        async () => ({ dyn: definition }),
+      ),
+    );
+
+    // Not yet resolved: no policy visible yet (lazy loading pays nothing extra).
+    expect(hasConfiguredRetention(getInternals(engine))).toBe(false);
+
+    await engine.start(type, null, { id: 'dynamic-retention-run' });
+
+    expect(hasConfiguredRetention(getInternals(engine))).toBe(true);
+    expect(resolveWorkflowTypeRetention(getInternals(engine), type)).toEqual({
+      type,
+      source: 'workflow',
+      retention: { completed: 7_200_000 },
+    });
 
     engine[Symbol.dispose]();
   });

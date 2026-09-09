@@ -15,6 +15,7 @@ import type {
 } from '../storage/interface.ts';
 import { encodeStorageKeyComponent, KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { ActivityRegistry } from './activity-registry.ts';
 import { AtomicStateConflictEvent } from './atomic-state.ts';
 import { deserializeCheckpoint } from './checkpoint.ts';
 import { decode, encode } from './codec.ts';
@@ -30,6 +31,8 @@ import {
   SLEEP_RESOLVER_READY_WAIT_TIMEOUT_MS_FOR_TESTING,
   WorkflowHandle,
 } from './engine.ts';
+import { copyWorkflowDefinition } from './engine/construction.ts';
+import { buildRegistrationEntry } from './engine/registration.ts';
 import {
   CheckpointSizeWarningEvent,
   CleanupWarningEvent,
@@ -47,6 +50,8 @@ import {
   CURRENT_PERSISTED_DATA_SCHEMA_VERSION,
   PERSISTED_DATA_SCHEMA_VERSION_KEY,
 } from './persisted-data-incompatible-error.ts';
+import { buildWorkflowManifestFromDefinition } from './registry-workflow-manifest.ts';
+import { workflowSource } from './source/index.ts';
 import { WorkflowTimeoutError } from './timeouts.ts';
 import type {
   DefinitionSchema,
@@ -4914,6 +4919,47 @@ describe('Engine', () => {
     expect(attributes!['color']).toBe('blue');
     expect(attributes!['size']).toBe('large');
     expect(attributes!['weight']).toBe(10);
+    engine[Symbol.dispose]();
+  });
+
+  it("engine.setAttributes() validates against a resolved registerSource()-registered type's schema", async () => {
+    // Regression: setAttributes() looked up the schema in `internals.registrations`
+    // only, so a `registerSource()`-registered type's schema was silently skipped —
+    // an unknown attribute on a dynamic workflow was never rejected.
+    const type = 'dynamic-attrs';
+    const definition = workflow({ name: type })
+      .searchAttributes({ region: { type: 'string' } })
+      .execute(async function* (ctx: WorkflowContext) {
+        yield* ctx.waitForSignal('never');
+      });
+    const entry = buildRegistrationEntry(type, definition);
+    const registered = copyWorkflowDefinition(type, entry);
+    const manifest = await buildWorkflowManifestFromDefinition(
+      registered,
+      new ActivityRegistry().listDefinitions(),
+    );
+
+    const engine = new Engine();
+    engine.registerSource(
+      workflowSource(
+        {
+          name: type,
+          location: './dynamic-attrs.ts',
+          exportName: 'dyn',
+          revision: manifest.revision,
+        },
+        async () => ({ dyn: definition }),
+      ),
+    );
+    const handle = await engine.start(type, null, { id: 'dynamic-attrs-run' });
+
+    await expect(engine.setAttributes(handle.id, { missing: 'x' })).rejects.toThrow(
+      'Unknown search attribute "missing". Registered attributes: region',
+    );
+    await expect(engine.setAttributes(handle.id, { region: 'us-east' })).resolves.toBeUndefined();
+    const attributesAfterSet = await engine.getAttributes(handle.id);
+    expect(attributesAfterSet?.['region']).toBe('us-east');
+
     engine[Symbol.dispose]();
   });
 

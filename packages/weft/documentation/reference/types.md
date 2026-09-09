@@ -562,7 +562,7 @@ The first five cover everything that can go wrong before a manifest can even be 
 
 ### `SourceLoadState` and `WorkflowRevisionDiagnostics.source`
 
-The load-state union backing `weft.catalog.diagnostics`' dynamic-source diagnostics extension and the `workflow-source:load-*` events (WFT-15/16). `'idle'` is never observed externally — a diagnostics entry exists only once a load has at least started.
+The load-state union backing `weft.catalog.diagnostics`' dynamic-source diagnostics extension and the `workflow-source:load-*` events (WFT-15/16). `'idle'` is the type-level starting point before any load has run, and IS observable externally: `weft.catalog.diagnostics` reports it for any `registerSource()`-registered revision that has never had a load start. Only the `workflow-source:load-*` events skip it — those fire once a load has at least started.
 
 ```ts partial
 type SourceLoadState = 'idle' | 'loading' | 'ready' | 'failed' | 'cancelled';

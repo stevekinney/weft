@@ -1258,10 +1258,8 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
         // `catalog-removal.ts`'s exhaustiveness default above.
         reason:
           'Defensive fail-loud guard for an invariant resolveWorkflowSourceForExecution() itself guarantees; has no reachable runtime path to test without an unsafe cast. ' +
-          'Lines realigned to 124-129 after the WFT-15/16 review-fix round removed the ' +
-          "recovery-scoped cache-check block that used to precede this function's byRevision lookup " +
-          '(the batch-local `createRecoveryScopedCallbacks()` wrapper in `transition.ts` replaced it).',
-        lines: new Set([124, 125, 126, 127, 128, 129]),
+          'Lines realigned to 130-139 after the WFT-15/16 review round 2 fix synchronized the sole-registered-revision fast path (no `await` before `onRevisionChosen` fires).',
+        lines: new Set([130, 131, 132, 133, 134, 135, 136, 137, 138, 139]),
         requireUncoveredLines: true,
       },
     ],
@@ -1318,8 +1316,9 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/core/engine/listing.ts',
       {
         reason:
-          'The remaining line is the equality tiebreaker after both strict id-order branches have been exercised; distinct workflow ids cannot reach it.',
-        lines: new Set([237]),
+          'The remaining line is the equality tiebreaker after both strict id-order branches have been exercised; distinct workflow ids cannot reach it. ' +
+          'Realigned to 238 after the WFT-15/16 review round 2 fix routed setAttributes() through the sync-only dynamic-registration fallback.',
+        lines: new Set([238]),
         requireUncoveredLines: true,
       },
     ],
@@ -1329,6 +1328,24 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
         reason:
           'Bun reports pending-update callbacks as missed although enqueue, replace, apply, and teardown behavior is covered.',
         functions: 2,
+      },
+    ],
+    [
+      'src/core/engine/retention.ts',
+      {
+        reason:
+          'Bun maps the closing braces of the resolved-dynamic-retention loop as uncovered after the direct `return true` inside them executes (retention.test.ts + workflow-retention.test.ts both exercise the branch itself).',
+        lines: new Set([34, 35]),
+        requireUncoveredLines: true,
+      },
+    ],
+    [
+      'src/core/engine/termination/finalizer-registration.ts',
+      {
+        reason:
+          'Bun maps the closing braces after `return undefined` in the DynamicWorkflowSourceUnavailableError catch branch as uncovered although finalizer.test.ts directly exercises that return (a load-failure dynamic finalizer resolve).',
+        lines: new Set([43, 44]),
+        requireUncoveredLines: true,
       },
     ],
     [

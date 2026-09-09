@@ -542,6 +542,45 @@ describe('engine time operation helpers', () => {
     expect(workflowsNeedingTerminalCleanup.has('workflow-delayed-no-marker')).toBe(false);
     expect(beginWorkflowExecution).toHaveBeenCalledTimes(1);
   });
+
+  it('hydrates terminal-cleanup tracking before failing on a dynamic-source resolve error', async () => {
+    // Regression: a delayed-start whose dynamic-source load fails committed
+    // failWorkflow() BEFORE ever hydrating workflowsNeedingTerminalCleanup from
+    // the durable marker, so the failing write carried no terminalCleanupToken
+    // and stranded the marker — see `ensureDelayedStartClaimAndCleanupBeforeFailure`.
+    const workflowId = 'workflow-delayed-fail-hydrate';
+    const storage = new MemoryStorage();
+    const state = createWorkflowState(workflowId, { executionStateOwnerId: workflowId });
+    const checkpoint = createCheckpoint(workflowId);
+    const workflowsNeedingTerminalCleanup = new Set<string>();
+    const failWorkflow = mock(async () => {});
+
+    await storage.put(KEYS.workflow(workflowId), encode(state));
+    await storage.put(KEYS.checkpoint(workflowId), serializeCheckpoint(checkpoint));
+    await storage.put(KEYS.terminalCleanupNeeded(workflowId), new Uint8Array(0));
+
+    await startDelayedWorkflow(
+      {
+        checkpoints: new Map<string, Checkpoint>(),
+        inlineStrategy: {},
+        workflowServices: new Map<string, unknown>(),
+        workflowsNeedingTerminalCleanup,
+        options: { getNow: () => 2_000 },
+        registrations: new Map(),
+        storage,
+        workflowVersionTuples: new Map(),
+      } as never,
+      createDelayedStartEntry(workflowId),
+      createCallbacks({
+        failWorkflow,
+        loadWorkflowState: async () => state,
+        // Default resolveExecutableRegistration throws WorkflowNotRegisteredError.
+      }),
+    );
+
+    expect(workflowsNeedingTerminalCleanup.has(workflowId)).toBe(true);
+    expect(failWorkflow).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('processSleepOperation', () => {

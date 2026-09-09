@@ -17,12 +17,17 @@ import {
   restoreRealTimers,
   useFakeTimers,
 } from '../../../testing/fake-timers.test-support.ts';
+import { ActivityRegistry } from '../../activity-registry.ts';
 import { decode, encode } from '../../codec.ts';
 import { Engine } from '../../engine.ts';
+import { buildWorkflowManifestFromDefinition } from '../../registry-workflow-manifest.ts';
+import { workflowSource } from '../../source/index.ts';
 import type { WorkflowContext, WorkflowState } from '../../types.ts';
 import { activity, workflow } from '../../types.ts';
+import { copyWorkflowDefinition } from '../construction.ts';
 import { recordFinalizerState } from '../finalizer-state.ts';
 import { getInternals } from '../internals.ts';
+import { buildRegistrationEntry } from '../registration.ts';
 import { createTeardownTimerId, type TeardownClaim } from '../state-utilities.ts';
 import { runFinalizerActivity } from './finalizer-activity.ts';
 import type { TeardownDeadLetterRecord } from './finalizer-claim.ts';
@@ -445,6 +450,102 @@ describe('runWorkflowFinalizer — defensive bail-out branches', () => {
       workflowId,
       createTeardownTimerId(token),
       makeCallbacks(terminalState(workflowId, 'unregistered')),
+    );
+
+    expect(await internals.storage.get(KEYS.teardownOwed(workflowId))).not.toBeNull();
+    expect(await teardownTimerCount(internals)).toBe(1);
+    engine[Symbol.dispose]();
+  });
+
+  it('resolves and runs a registerSource()-registered finalizer never previously resolved on this process', async () => {
+    // Regression: a purely teardown-owed workflow (started/torn down on a DIFFERENT
+    // process) never causes a resolve on THIS one — `lastResolvedRevisionByName` stays
+    // empty, so the old sync-only lookup treated it as "not registered yet" and rearmed
+    // forever. The drive must await a real resolve instead.
+    const destroyed: unknown[] = [];
+    const destroySandbox = activity({
+      name: 'destroy-sandbox-dynamic',
+      execute: async (input: unknown) => {
+        destroyed.push(input);
+      },
+    });
+    const type = 'dynamic-teardown';
+    const definition = workflow({ name: type, finalizer: destroySandbox }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      ctx.setFinalizerState({ sandboxId: 'sbx-dynamic' });
+      yield* ctx.waitForSignal('never');
+    });
+    const entry = buildRegistrationEntry(type, definition);
+    const registered = copyWorkflowDefinition(type, entry);
+    const manifest = await buildWorkflowManifestFromDefinition(
+      registered,
+      new ActivityRegistry().listDefinitions(),
+    );
+
+    const engine = new Engine();
+    engine.registerSource(
+      workflowSource(
+        {
+          name: type,
+          location: './dynamic-teardown.ts',
+          exportName: 'dyn',
+          revision: manifest.revision,
+        },
+        async () => ({ dyn: definition }),
+      ),
+    );
+    const internals = getInternals(engine);
+    const workflowId = 'wf-dynamic-finalizer';
+    const token = 'tok-dynamic';
+    await internals.storage.put(KEYS.teardownOwed(workflowId), encode(owedClaim(token)));
+    await internals.storage.put(
+      KEYS.finalizerState(workflowId),
+      encode({ sandboxId: 'sbx-dynamic' }),
+    );
+
+    await runWorkflowFinalizer(
+      internals,
+      workflowId,
+      createTeardownTimerId(token),
+      makeCallbacks(terminalState(workflowId, type)),
+    );
+
+    expect(destroyed).toEqual([{ sandboxId: 'sbx-dynamic' }]);
+    expect(await internals.storage.get(KEYS.teardownOwed(workflowId))).toBeNull();
+    expect(await teardownTimerCount(internals)).toBe(0);
+    engine[Symbol.dispose]();
+  });
+
+  it('leaves the marker and re-arms when a registerSource()-registered finalizer fails to load', async () => {
+    // The failure-path complement: the load itself fails (never resolved before,
+    // fresh restart) rather than the type being unregistered. Deferring to the next
+    // self-heal attempt (rearm) is correct — the workflow is already terminal, so a
+    // load failure must never propagate out of the finalizer drive.
+    const engine = new Engine();
+    engine.registerSource(
+      workflowSource(
+        {
+          name: 'dynamic-teardown-load-fails',
+          location: './dynamic-teardown-load-fails.ts',
+          exportName: 'dyn',
+          revision: 'any-revision',
+        },
+        async () => {
+          throw new Error('module not found');
+        },
+      ),
+    );
+    const internals = getInternals(engine);
+    const workflowId = 'wf-dynamic-finalizer-load-fails';
+    const token = 'tok-dynamic-load-fails';
+    await internals.storage.put(KEYS.teardownOwed(workflowId), encode(owedClaim(token)));
+
+    await runWorkflowFinalizer(
+      internals,
+      workflowId,
+      createTeardownTimerId(token),
+      makeCallbacks(terminalState(workflowId, 'dynamic-teardown-load-fails')),
     );
 
     expect(await internals.storage.get(KEYS.teardownOwed(workflowId))).not.toBeNull();

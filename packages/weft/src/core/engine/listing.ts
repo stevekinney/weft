@@ -15,6 +15,7 @@ import type {
 import { normalizeWorkflowTags } from '../workflow-tags.ts';
 import { mutateWorkflowTags, validateAttributeValueSizes } from './attributes-tags.ts';
 import { CONSTRAINED_ID_CHUNK_SIZE } from './candidate-read-batching.ts';
+import { getResolvedDynamicRegistration } from './dynamic-source-execution.ts';
 import type { EngineInternals } from './internals.ts';
 import { resolveListCandidateIds } from './list-candidate-resolution.ts';
 import {
@@ -324,11 +325,16 @@ export async function setAttributes(
   workflowId: string,
   attributes: Record<string, SearchAttributeValue>,
 ): Promise<void> {
-  // Validate against the registration's schema if one exists
+  // Validate against the registration's schema if one exists. Falls back
+  // to the most recently RESOLVED dynamic definition for a
+  // `registerSource()`-registered type — an eager-only lookup here silently
+  // skipped schema validation for every dynamic workflow's search
+  // attributes (never triggers a new resolve; see
+  // `getResolvedDynamicRegistration()`).
   const stateBytes = await internals.storage.get(KEYS.workflow(workflowId));
   if (stateBytes) {
     const state = decodeWorkflowState(stateBytes);
-    const registration = internals.registrations.get(state.type);
+    const registration = getResolvedDynamicRegistration(internals, state.type);
     if (registration?.searchAttributes) {
       const schema = registration.searchAttributes;
       for (const [key, value] of Object.entries(attributes)) {

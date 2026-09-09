@@ -21,15 +21,13 @@ import { forgetCommittedCheckpointBytes } from './checkpoint-commit-snapshots.ts
 import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
 import { streamWorkflowStates } from './listing.ts';
+import { forEachResolvedDynamicRetentionPolicy } from './registration.ts';
 import { decodeScheduleRunMetadata } from './schedule-run-metadata.ts';
 import { createTerminalCleanupTimerId } from './state-utilities.ts';
 import { buildExternalTerminalRotationFragment } from './storage-io.ts';
-import {
-  decodeWorkflowState,
-  isTerminalWorkflowStatus,
-  resolveRetentionForStatus,
-} from './validation.ts';
+import { decodeWorkflowState, isTerminalWorkflowStatus } from './validation.ts';
 import { buildWorkflowVisibilityIndexTransition } from './workflow-indexes.ts';
+import { getWorkflowRetentionDeadline } from './workflow-retention-deadline.ts';
 
 export const TERMINAL_CLEANUP_DELAY_MS = 60_000;
 export type PurgeParameters = {
@@ -101,6 +99,7 @@ function getMinimumRetentionMs(internals: EngineInternals): number | null {
   for (const registration of internals.registrations.values()) {
     considerRetentionPolicy(registration.retention);
   }
+  forEachResolvedDynamicRetentionPolicy(internals, considerRetentionPolicy);
 
   return minimumRetentionMs;
 }
@@ -191,19 +190,6 @@ async function shouldPurgeWorkflowState(
 
   const deadline = getWorkflowRetentionDeadline(internals, state);
   return deadline !== null && deadline <= now;
-}
-
-function getWorkflowRetentionDeadline(
-  internals: EngineInternals,
-  state: WorkflowState,
-): number | null {
-  if (!isTerminalWorkflowStatus(state.status)) return null;
-
-  const policy = internals.registrations.get(state.type)?.retention ?? internals.options.retention;
-  const retentionMs = resolveRetentionForStatus(policy, state.status);
-  if (retentionMs === undefined) return null;
-
-  return state.updatedAt + retentionMs;
 }
 
 export async function purgeWorkflow(

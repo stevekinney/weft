@@ -189,6 +189,25 @@ export function buildRegistrationEntry(
   return entry;
 }
 
+/**
+ * Visit every RESOLVED `registerSource()`-registered type's normalized
+ * retention policy (via {@link buildRegistrationEntry}) — the dynamic-source
+ * counterpart to walking `internals.registrations.values()` directly for an
+ * eager type. Used by `bulk-operations-purge.ts` so a dynamic workflow's own
+ * (possibly shorter) retention window narrows the purge sweep's scan bound
+ * the same way an eager registration's does.
+ */
+export function forEachResolvedDynamicRetentionPolicy(
+  internals: EngineInternals,
+  visit: (policy: RegistrationEntry['retention']) => void,
+): void {
+  for (const [type, revisions] of internals.sources.resolved) {
+    for (const resolved of revisions.values()) {
+      visit(buildRegistrationEntry(type, resolved.definition).retention);
+    }
+  }
+}
+
 type RuntimeNamedMessageDefinition = {
   readonly name: string;
 };
