@@ -1,5 +1,3 @@
-import { APPLICATION_MAILBOX_KEYS } from './application-mailbox-keys.ts';
-import { APPLICATION_OUTBOX_KEYS } from './application-outbox-keys.ts';
 import { requireStorageCapability, type StorageCapabilities } from './capabilities.ts';
 import { WORKFLOW_CATALOG_KEYS } from './catalog-keys.ts';
 import { DEFAULT_SCOPE } from './default-scope.ts';
@@ -11,6 +9,8 @@ import {
   storageKeysCore,
 } from './derived-operations.ts';
 import { encodeStorageKeyComponent, formatSortableStorageTimestamp } from './key-encoding.ts';
+import { MAILBOX_KEYS } from './mailbox-keys.ts';
+import { OUTBOX_KEYS } from './outbox-keys.ts';
 import { OWNERSHIP_CLAIM_KEYS } from './ownership-keys.ts';
 
 export { assertDurableStorageForRecovery, requireStorageCapability } from './capabilities.ts';
@@ -628,8 +628,8 @@ export const KEYS = {
    * {@link KEYS.leaseEpoch}.
    */
   leaseHolder: () => 'lease:holder',
-  ...APPLICATION_MAILBOX_KEYS,
-  ...APPLICATION_OUTBOX_KEYS,
+  ...MAILBOX_KEYS,
+  ...OUTBOX_KEYS,
   ...OWNERSHIP_CLAIM_KEYS,
   ...WORKFLOW_CATALOG_KEYS,
   budget: (namespace: string, period: string, date: string) =>

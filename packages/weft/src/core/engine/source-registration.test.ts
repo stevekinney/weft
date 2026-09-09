@@ -156,7 +156,7 @@ describe('engine.registerSource() structural validation', () => {
       engine.registerSource({
         descriptor: {
           kind: 'module',
-          name: '' as never,
+          name: '',
           location: './checkout.ts',
           exportName: 'checkout',
           revision: 'r1',
@@ -176,7 +176,7 @@ describe('engine.registerSource() structural validation', () => {
           name: 'checkout',
           location: './checkout.ts',
           exportName: 'checkout',
-          revision: '' as never,
+          revision: '',
         },
         load: async () => ({}),
       }),

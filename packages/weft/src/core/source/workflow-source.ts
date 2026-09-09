@@ -78,10 +78,5 @@ export function workflowSource<
       ...(input.contractHash === undefined ? {} : { contractHash: input.contractHash }),
     }),
     load: loader,
-  }) as WorkflowSourceHandle<
-    InputOf<ModuleWorkflowDefinition<TModule, TExportName>>,
-    OutputOf<ModuleWorkflowDefinition<TModule, TExportName>>,
-    NameOf<ModuleWorkflowDefinition<TModule, TExportName>>,
-    ServicesOf<ModuleWorkflowDefinition<TModule, TExportName>>
-  >;
+  });
 }

@@ -19,7 +19,7 @@ export type Raced<T> =
   | { readonly aborted: true; readonly reason: unknown };
 
 /**
- * Thrown by `ApplicationMailbox.awaitCleanup()` when a positive budget runs out
+ * Thrown by `Mailbox.awaitCleanup()` when a positive budget runs out
  * while the FIRST cleanup-state read is still in flight — there is no
  * observation yet to report as `pending`. Nothing durable changed; the wait is
  * simply over.
@@ -91,14 +91,15 @@ export function raceAbortWithin<T>(
         { once: true, signal: cleanup.signal },
       );
     }
-    run()
-      .then((value) => {
+    void (async () => {
+      try {
+        const value = await run();
         settle();
         resolve({ aborted: false, value });
-      })
-      .catch((error: unknown) => {
+      } catch (error) {
         settle();
-        reject(error as Error);
-      });
+        reject(error);
+      }
+    })();
   });
 }

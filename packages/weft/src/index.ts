@@ -541,7 +541,8 @@ export type {
 } from './core/atomic-state';
 // Durable application command mailbox — storage-backed FIFO commands with
 // receipts, attempt-fenced claims, and durable cancellation (WFT-84).
-export { ApplicationMailbox } from './core/application-mailbox';
+export { WaitBudgetElapsedError } from './core/application-primitive-abort';
+export { Mailbox } from './core/mailbox';
 export type {
   ApplicationCommandAdmission,
   ApplicationCommandCancellationResult,
@@ -553,20 +554,20 @@ export type {
   ApplicationCommandRejection,
   ApplicationCommandRenewalResult,
   ApplicationCommandSettleResult,
-  ApplicationMailboxCapacity,
-  ApplicationMailboxClaimResult,
-  ApplicationMailboxEventSink,
-  ApplicationMailboxListOptions,
-  ApplicationMailboxMaintenanceReport,
-  ApplicationMailboxOptions,
-  ApplicationMailboxWaitOptions,
-} from './core/application-mailbox-contract';
-export { ApplicationMailboxContentionError } from './core/application-mailbox-internals';
+  MailboxCapacity,
+  MailboxClaimResult,
+  MailboxEventSink,
+  MailboxListOptions,
+  MailboxMaintenanceReport,
+  MailboxOptions,
+  MailboxWaitOptions,
+} from './core/mailbox-contract';
+export { MailboxContentionError } from './core/mailbox-internals';
 export {
   isApplicationCommandLeased,
   isApplicationCommandTerminalState,
   isApplicationCommandWaiting,
-} from './core/application-mailbox-types';
+} from './core/mailbox-types';
 export type {
   ApplicationCommandAccepted,
   ApplicationCommandAvailable,
@@ -584,14 +585,13 @@ export type {
   ApplicationCommandTerminalRecord,
   ApplicationCommandTerminalState,
   ApplicationCommandWaitingRecord,
-  ApplicationMailboxRecord,
-} from './core/application-mailbox-types';
-export { ApplicationCommandValidationError } from './core/application-mailbox-validation';
-export { WaitBudgetElapsedError } from './core/application-primitive-abort';
+  MailboxRecord,
+} from './core/mailbox-types';
+export { ApplicationCommandValidationError } from './core/mailbox-validation';
 // Durable application delivery outbox — storage-backed at-least-once delivery
 // with durable attempt marking, fenced claims, unknown-outcome policy, and
 // bounded drain (WFT-85).
-export { ApplicationOutbox } from './core/application-outbox';
+export { Outbox } from './core/outbox';
 export type {
   ApplicationDeliveryAdapter,
   ApplicationDeliveryAdmission,
@@ -606,24 +606,24 @@ export type {
   ApplicationDeliveryReceipt,
   ApplicationDeliverySendRequest,
   ApplicationDeliverySettleResult,
-  ApplicationOutboxCapacity,
-  ApplicationOutboxClaimResult,
-  ApplicationOutboxDeliverResult,
-  ApplicationOutboxDrainReport,
-  ApplicationOutboxEventSink,
-  ApplicationOutboxListOptions,
-  ApplicationOutboxMaintenanceReport,
-  ApplicationOutboxOptions,
-  ApplicationOutboxWaitOptions,
-} from './core/application-outbox-contract';
-export { ApplicationDeliveryValidationError } from './core/application-outbox-guards';
-export { ApplicationOutboxContentionError } from './core/application-outbox-internals';
+  OutboxCapacity,
+  OutboxClaimResult,
+  OutboxDeliverResult,
+  OutboxDrainReport,
+  OutboxEventSink,
+  OutboxListOptions,
+  OutboxMaintenanceReport,
+  OutboxOptions,
+  OutboxWaitOptions,
+} from './core/outbox-contract';
+export { ApplicationDeliveryValidationError } from './core/outbox-guards';
+export { OutboxContentionError } from './core/outbox-internals';
 export {
   isApplicationDeliveryAttempting,
   isApplicationDeliveryLeased,
   isApplicationDeliveryTerminalState,
   isApplicationDeliveryWaiting,
-} from './core/application-outbox-types';
+} from './core/outbox-types';
 export type {
   ApplicationDeliveryAttempting,
   ApplicationDeliveryCancelling,
@@ -640,8 +640,8 @@ export type {
   ApplicationDeliveryTerminalState,
   ApplicationDeliveryUnknownOutcomePolicy,
   ApplicationDeliveryWaitingRecord,
-  ApplicationOutboxRecord,
-} from './core/application-outbox-types';
+  OutboxRecord,
+} from './core/outbox-types';
 // Durable concurrency primitives — mutex/semaphore built on AtomicState CAS.
 export { DurableMutex, DurableSemaphore, initialLockRecord } from './core/concurrency';
 export type {
