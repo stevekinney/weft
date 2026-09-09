@@ -230,9 +230,10 @@ export class Context implements WorkflowContext {
     if (prepared.cached) return;
     const execute = () => durableOperations.completePreparedSleepOperation(this, prepared);
     if (!internals.workflowInterceptor) {
-      return yield* execute();
+      yield* execute();
+      return;
     }
-    return yield* internals.workflowInterceptor.sleep(
+    yield* internals.workflowInterceptor.sleep(
       {
         workflowId: this.workflowId,
         duration: prepared.milliseconds,
@@ -291,11 +292,11 @@ export class Context implements WorkflowContext {
     { payload: T; respond: (result: unknown) => void },
     unknown
   > {
-    return yield* durableOperations.waitForUpdate<T>(
+    return (yield* durableOperations.waitForUpdate(
       this,
       getInternals(this),
       messageName(nameOrDefinition),
-    );
+    )) as { payload: T; respond: (result: unknown) => void };
   }
   waitUntil(predicate: () => boolean): Generator<ContextOperationRequest, void, unknown>;
   waitUntil(p: () => boolean, t: Duration): Generator<ContextOperationRequest, boolean, unknown>;
@@ -505,7 +506,8 @@ export class Context implements WorkflowContext {
   getAttribute<T extends SearchAttributeValue = SearchAttributeValue>(
     key: string | SearchAttributeHandle<T>,
   ): T | undefined {
-    return contextAttributes.getAttribute<T>(getInternals(this), searchAttributeName(key));
+    return contextAttributes.getAttribute(getInternals(this), searchAttributeName(key)) as
+      T | undefined;
   }
   getAttributes(): Readonly<Record<string, SearchAttributeValue>> {
     return contextAttributes.getAttributes(getInternals(this));

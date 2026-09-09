@@ -64,10 +64,26 @@ export type SubscriptionOperationInvocation<Element, Envelope> = {
   readonly close: () => Promise<void>;
 };
 
+/**
+ * Envelope acknowledging that a JSON-RPC subscription has started. This is
+ * the protocol-level shape the built-in JSON-RPC WebSocket subscriptions
+ * (`weft.workflows.events` and the fleet-events subscription in
+ * `json-rpc-websocket.ts`) use for their own `outputSchema`/envelope — it is
+ * NOT the general contract for every `kind: 'subscription'` operation.
+ * `executeSubscription` in `stream-pipeline.ts` stays generic over
+ * `Envelope` precisely because a catalog subscription can declare any
+ * envelope shape its own `outputSchema` validates; other subscription
+ * operations are free to use a different shape (see the
+ * `subscriptionId`-only regression case in
+ * `operation-catalog/dispatch-audit.test.ts`).
+ */
+export type SubscriptionStartEnvelope = {
+  readonly subscriptionId: string;
+  readonly cursor: string;
+};
+
 export type OperationInvocationResult<Output, Element = unknown> =
-  | Output
-  | StreamOperationInvocation<Element>
-  | SubscriptionOperationInvocation<Element, Output>;
+  Output | StreamOperationInvocation<Element> | SubscriptionOperationInvocation<Element, Output>;
 
 /**
  * Metadata that connects an operation-catalog entry to a live MCP tool.
@@ -308,9 +324,7 @@ type SubscriptionRegistrableOperation = RegistrableOperationBase & {
 };
 
 export type RegistrableOperation =
-  | UnaryRegistrableOperation
-  | StreamRegistrableOperation
-  | SubscriptionRegistrableOperation;
+  UnaryRegistrableOperation | StreamRegistrableOperation | SubscriptionRegistrableOperation;
 
 export type DispatchContext = {
   readonly principal: Principal;

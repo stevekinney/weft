@@ -171,8 +171,8 @@ export function activationRefusalToFault(
         data: { reason: result.reason },
       };
     default: {
-      const _exhaustive: never = result;
-      throw new Error(`Unknown activation refusal reason: ${JSON.stringify(_exhaustive)}`);
+      const exhaustiveCheck: never = result;
+      throw new Error(`Unknown activation refusal reason: ${JSON.stringify(exhaustiveCheck)}`);
     }
   }
 }

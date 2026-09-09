@@ -72,9 +72,7 @@ const SKIP_REASONS_PATH = resolve(REPO_ROOT, 'scripts/markdown-doctest-skip-reas
 type Mode = 'inventory' | 'verify' | 'ratchet';
 
 type FenceClassification =
-  | { kind: 'runnable' }
-  | { kind: 'partial'; reason: string }
-  | { kind: 'unknown-language' };
+  { kind: 'runnable' } | { kind: 'partial'; reason: string } | { kind: 'unknown-language' };
 
 type Block = {
   file: string;
@@ -153,7 +151,7 @@ function loadSkipCounts(): Record<string, number> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`extract-markdown-doctests: ${message}`);
-    process.exit(1);
+    return process.exit(1);
   }
 }
 

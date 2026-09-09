@@ -193,6 +193,11 @@ export function createCompressor(algorithm: CompressionAlgorithm): Compressor {
           return data;
         },
       };
+
+    default: {
+      const exhaustiveCheck: never = algorithm;
+      throw new Error(`Unknown compression algorithm: ${JSON.stringify(exhaustiveCheck)}`);
+    }
   }
 }
 

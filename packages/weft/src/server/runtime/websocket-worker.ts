@@ -354,8 +354,8 @@ export function handleWorkerWebSocketMessage(
     default: {
       // Exhaustiveness guard: adding a new WorkerToServerMessage variant
       // without a case above must fail this typecheck.
-      const _exhaustive: never = message;
-      return _exhaustive;
+      const exhaustiveCheck: never = message;
+      return exhaustiveCheck;
     }
   }
 }

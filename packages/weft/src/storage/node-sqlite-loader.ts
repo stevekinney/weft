@@ -21,9 +21,7 @@ export type BetterSqliteStatement = {
   all(...parameters: unknown[]): Record<string, unknown>[];
 };
 
-export type BetterSqliteTransaction = <TArguments extends unknown[], TResult>(
-  ...args: TArguments
-) => TResult;
+export type BetterSqliteTransaction = (...args: unknown[]) => unknown;
 
 export type BetterSqliteDatabase = {
   pragma(source: string): unknown;

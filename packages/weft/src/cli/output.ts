@@ -115,7 +115,7 @@ export async function confirmDestructive(options: {
   readonly readLine?: () => Promise<string>;
 }): Promise<'confirmed' | 'denied' | 'non-interactive'> {
   if (options.assumeYes) return 'confirmed';
-  const interactive = options.isTty ?? Boolean(process.stdin.isTTY);
+  const interactive = options.isTty ?? process.stdin.isTTY;
   if (!interactive) return 'non-interactive';
 
   const readLine = options.readLine ?? defaultReadLine;

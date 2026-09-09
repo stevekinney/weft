@@ -64,7 +64,7 @@ describe('raiseFault', () => {
 
     expect(thrown).toBeInstanceOf(Error);
     expect(thrown).not.toBe(fault);
-    expect(String((thrown as Error).message)).toContain(
+    expect((thrown as Error).message).toContain(
       'Operation "weft.test.operation" raised undeclared fault "Conflict"',
     );
   });

@@ -637,14 +637,9 @@ describe('activity operation helpers', () => {
       const storage = new MemoryStorage();
       const operation = createActivityOperation({
         fn: mock(() => 'redispatched'),
-        options: { idempotencyKey: `key-${String(testCase.expected)}` },
+        options: { idempotencyKey: `key-${testCase.expected}` },
       });
-      await seedStartedRecord(
-        storage,
-        'workflow-id',
-        operation,
-        `key-${String(testCase.expected)}`,
-      );
+      await seedStartedRecord(storage, 'workflow-id', operation, `key-${testCase.expected}`);
       const verify = mock(async (_result: unknown, context?: { phase?: string }) =>
         context?.phase === 'pre-dispatch-reconciliation' ? testCase.state : true,
       );

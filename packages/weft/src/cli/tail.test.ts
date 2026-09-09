@@ -181,7 +181,7 @@ describe('weft tail', () => {
       const handle = await engine.start('hold', null, { id: 'wf-tail-live' });
       const result = await executeTail({
         command: 'tail',
-        server: server.url.toString(),
+        server: server.url,
         workflowId: handle.id,
         help: false,
         json: true,

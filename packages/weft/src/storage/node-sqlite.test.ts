@@ -138,7 +138,7 @@ function createFakeDatabaseConstructor() {
     }
 
     transaction<TArguments extends unknown[], TResult>(fn: (...entries: TArguments) => TResult) {
-      return (...entries: TArguments): TResult => fn(...entries);
+      return (...entries: unknown[]): unknown => fn(...(entries as TArguments));
     }
 
     close(): void {
@@ -421,10 +421,7 @@ describeIfAvailable('NodeSQLiteStorage (integration)', () => {
 
 it('supports the adapter behavior under Bun when a database constructor is injected', async () => {
   const fake = createFakeDatabaseConstructor();
-  const storage = new NodeSQLiteStorage(
-    ':memory:',
-    fake.Database as unknown as ConstructorParameters<typeof NodeSQLiteStorage>[1],
-  );
+  const storage = new NodeSQLiteStorage(':memory:', fake.Database);
 
   // capabilities() is only reachable once an instance exists; under Bun the real
   // better-sqlite3 binding cannot load, so the injected fake constructor is the
