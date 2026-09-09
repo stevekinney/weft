@@ -143,6 +143,62 @@ function assertServicesSupportedForMode(
   }
 }
 
+/**
+ * The exact executable artifact this run is about to run: the resolved
+ * dynamic-source candidate revision, or — for an eager registration, which
+ * never populates `resolvedRevision` — this process's own
+ * `registeredCatalogRevisions` entry for `type` (the revision of the code
+ * actually loaded here, NOT `inFlightRevision`, which for an eager type
+ * falls back to the catalog's cached ACTIVE pointer and can name a revision
+ * this process never loaded under a multi-engine deployment). Synchronous,
+ * on purpose: every top-level engine.* method already awaits
+ * `ensureWorkflowCatalogReady()` before reaching `startWorkflow`, so this
+ * map is populated by the time the overwhelmingly common case gets here.
+ * `await`ing an async function always costs a microtask tick even when its
+ * own body takes a fast path (the same reason `isWorkflowCatalogReady()` is
+ * its own sync check in `catalog-readiness.ts`) — a plain sync lookup here
+ * keeps `startWorkflow`'s interleaving with concurrent callers unchanged
+ * from before this field existed. `undefined` means "genuinely not cached
+ * yet"; the caller falls back to {@link resolveStartRevisionUncached}.
+ */
+function resolveCachedStartRevision(
+  internals: EngineInternals,
+  type: string,
+  resolvedRevision: string | undefined,
+): string | undefined {
+  return resolvedRevision ?? internals.registeredCatalogRevisions.get(type);
+}
+
+/**
+ * The rare fallback {@link resolveCachedStartRevision} defers to: a fired
+ * schedule occurrence or a delayed-start timer calls `startWorkflow`
+ * directly from background scheduler code, with no top-level
+ * `ensureWorkflowCatalogReady()` gate already awaited. Re-checks catalog
+ * readiness once, then re-reads the cache.
+ */
+async function resolveStartRevisionUncached(
+  internals: EngineInternals,
+  type: string,
+): Promise<string> {
+  await ensureWorkflowCatalogReady(internals.engine as unknown as Engine);
+  const afterReadiness = internals.registeredCatalogRevisions.get(type);
+  if (afterReadiness !== undefined) {
+    return afterReadiness;
+  }
+  // Unreachable in practice: `type` resolved to a real `registration` at
+  // this call's only call site, so it is either an eager registration
+  // (which `ensureWorkflowCatalogReady()` always assigns a revision to) or
+  // a resolved dynamic source (which always populates `resolvedRevision`,
+  // handled entirely by {@link resolveCachedStartRevision} and never
+  // reaching here). Fail loud rather than silently persisting a workflow
+  // record with no revision identity.
+  throw new Error(
+    `Cannot start workflow "${type}": no catalog revision is registered for this ` +
+      'eagerly-registered type, even after re-checking catalog readiness. This should be ' +
+      'unreachable.',
+  );
+}
+
 export async function startWorkflow(
   internals: EngineInternals,
   type: string,
@@ -193,37 +249,9 @@ export async function startWorkflow(
     );
     inFlightRevision = reservedRevision;
     const workflowConcurrency = registration.concurrency;
-    // The exact executable artifact this run is about to run: the resolved
-    // dynamic-source candidate revision, or — for an eager registration,
-    // which never populates `resolvedRevision` — this process's own
-    // `registeredCatalogRevisions` entry for `type` (the revision of the
-    // code actually loaded here, NOT `inFlightRevision`, which for an eager
-    // type falls back to the catalog's cached ACTIVE pointer and can name a
-    // revision this process never loaded under a multi-engine deployment).
-    // Most `startWorkflow` entry points reach here only after a top-level
-    // engine.* method's own `ensureWorkflowCatalogReady()` await, which
-    // already populates this map — but a fired schedule occurrence or a
-    // delayed-start timer calls this function directly from background
-    // scheduler code, with no such gate. Re-check lazily, only on the rare
-    // miss, so the common already-warm path never pays this cost.
-    let revision = resolvedRevision ?? internals.registeredCatalogRevisions.get(type);
-    if (revision === undefined) {
-      await ensureWorkflowCatalogReady(internals.engine as unknown as Engine);
-      revision = internals.registeredCatalogRevisions.get(type);
-    }
-    if (revision === undefined) {
-      // Unreachable in practice: `type` resolved to a real `registration`
-      // above, so it is either an eager registration (which
-      // `ensureWorkflowCatalogReady()` always assigns a revision to) or a
-      // resolved dynamic source (which always populates `resolvedRevision`).
-      // Fail loud rather than silently persisting a workflow record with no
-      // revision identity.
-      throw new Error(
-        `Cannot start workflow "${type}": no catalog revision is registered for this ` +
-          'eagerly-registered type, even after re-checking catalog readiness. This should be ' +
-          'unreachable.',
-      );
-    }
+    const revision =
+      resolveCachedStartRevision(internals, type, resolvedRevision) ??
+      (await resolveStartRevisionUncached(internals, type));
 
     // Only caller-supplied ids can collide; a generated UUID skips the read.
     // Decide the duplicate-id outcome up front (throws for a non-terminal or

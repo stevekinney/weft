@@ -204,6 +204,13 @@ export interface WorkflowTypeReport {
  * Sentinel key {@link WorkflowTypeReport.revisionCounts} uses for active
  * workflows with no persisted `revision` (a record written before
  * revision pinning existed).
+ *
+ * @example
+ * ```ts
+ * import { UNKNOWN_WORKFLOW_REVISION_KEY } from '@lostgradient/weft';
+ *
+ * console.log(UNKNOWN_WORKFLOW_REVISION_KEY); // 'unknown'
+ * ```
  */
 export const UNKNOWN_WORKFLOW_REVISION_KEY = 'unknown';
 
