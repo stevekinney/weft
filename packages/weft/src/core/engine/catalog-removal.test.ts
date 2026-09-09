@@ -101,7 +101,11 @@ describe('removeWorkflowRevision', () => {
     await using storage = new MemoryStorage();
     await using engine = new Engine({ storage, backgroundTasks: 'manual' });
     engine.register(noopWorkflow('checkout'));
-    await engine.start('checkout', null);
+    const startedHandle = await engine.start('checkout', null);
+    // Drive the run to completion so this test's later "removal succeeds"
+    // assertion isn't blocked by the NEW `nonTerminalRuns` reference count
+    // (WFT-17) — this test is about `inFlightStarts`, not non-terminal runs.
+    await startedHandle.result();
     const revA = getWorkflowCatalog(engine).resolveActive('checkout')!.revision;
     getInternals(engine).registeredCatalogRevisions.delete('checkout');
 
@@ -248,7 +252,13 @@ describe('removeWorkflowRevision', () => {
     await using storage = new MemoryStorage();
     await using engineA = new Engine({ storage, backgroundTasks: 'manual' });
     engineA.register(noopWorkflow('checkout'));
-    await engineA.start('checkout', null);
+    // Drive the run to completion — `countWorkflowRevisionReferences()`'s
+    // `nonTerminalRuns` (WFT-17) is a DURABLE storage scan, so a genuinely
+    // non-terminal run pinned to `revA` would correctly block removal from
+    // ANY engine, not just this in-process-accounting-gap scenario this
+    // test targets (`registeredDefinitions`/`inFlightStarts`, both
+    // process-local).
+    await engineA.start('checkout', null).then((h) => h.result());
     const revA = getWorkflowCatalog(engineA).resolveActive('checkout')!.revision;
 
     const manifestB = await manifestFor('checkout', '1.0.0', { description: 'a later revision' });
@@ -497,20 +507,88 @@ describe('getWorkflowRevisionDiagnostics', () => {
 });
 
 describe('countWorkflowRevisionReferences', () => {
-  it('reports zeros for the five structurally-present WFT-17-dependent fields', async () => {
+  it('reports zeros for the four still-structurally-present fields once the run is terminal', async () => {
     await using storage = new MemoryStorage();
     await using engine = new Engine({ storage, backgroundTasks: 'manual' });
     engine.register(noopWorkflow('checkout'));
-    await engine.start('checkout', null);
+    const handle = await engine.start('checkout', null);
+    await handle.result();
     const revision = getWorkflowCatalog(engine).resolveActive('checkout')!.revision;
 
     const references = await countWorkflowRevisionReferences(engine, 'checkout', revision);
 
+    // `nonTerminalRuns` is real (WFT-17) but correctly 0 here: the run
+    // completed above. The remaining four fields stay structurally present
+    // but always 0 — each awaits revision identity in a different,
+    // later-owned subsystem (see `reference-counts.ts`'s field docs).
     expect(references.nonTerminalRuns).toBe(0);
     expect(references.pinnedSchedules).toBe(0);
     expect(references.pendingDispatches).toBe(0);
     expect(references.activeExecutionRealms).toBe(0);
     expect(references.retainedRecoveryRecords).toBe(0);
+  });
+
+  it('counts a genuinely non-terminal run pinned to the exact revision, and only that revision', async () => {
+    await using storage = new MemoryStorage();
+    await using engine = new Engine({ storage, backgroundTasks: 'manual' });
+    const parked = workflow({ name: 'checkout', version: '1.0.0' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      return yield* ctx.waitForSignal<string>('go');
+    });
+    engine.register(parked);
+    await engine.start('checkout', null, { id: 'checkout-parked' });
+    const revision = getWorkflowCatalog(engine).resolveActive('checkout')!.revision;
+
+    const references = await countWorkflowRevisionReferences(engine, 'checkout', revision);
+    expect(references.nonTerminalRuns).toBe(1);
+
+    // A DIFFERENT (never-installed) revision string must not match.
+    const otherReferences = await countWorkflowRevisionReferences(
+      engine,
+      'checkout',
+      `${revision}-different`,
+    );
+    expect(otherReferences.nonTerminalRuns).toBe(0);
+
+    await engine.getHandle('checkout-parked')?.signal('go', 'done');
+    await engine.getHandle('checkout-parked')?.result();
+  });
+
+  it('removeWorkflowRevision() refuses a revision with a non-terminal run — the WFT-12-flagged gap this batch closes', async () => {
+    await using storage = new MemoryStorage();
+    await using engine = new Engine({ storage, backgroundTasks: 'manual' });
+    const parked = workflow({ name: 'checkout', version: '1.0.0' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      return yield* ctx.waitForSignal<string>('go');
+    });
+    engine.register(parked);
+    await engine.start('checkout', null, { id: 'checkout-parked-2' });
+    const revA = getWorkflowCatalog(engine).resolveActive('checkout')!.revision;
+
+    // Move the active pointer away and clear the only OTHER reference
+    // (`registeredDefinitions`) this process still holds against revA, so
+    // `nonTerminalRuns` is the sole thing standing between this call and a
+    // (wrongly) successful removal — before WFT-17 it always was 0 and
+    // removal would have silently succeeded out from under the parked run.
+    const manifestB = await manifestFor('checkout', '1.0.0', { description: 'a later revision' });
+    await activateCatalogRevisionCandidate(engine, 'checkout', manifestB, {
+      expectedGeneration: 1,
+      policy: { requireExactRevision: false },
+    });
+    getInternals(engine).registeredCatalogRevisions.delete('checkout');
+
+    const result = await removeWorkflowRevision(engine, 'checkout', revA);
+    expect(result.removed).toBe(false);
+    if (!result.removed && result.reason === 'referenced') {
+      expect(result.references.nonTerminalRuns).toBe(1);
+    } else {
+      throw new Error(`expected a "referenced" refusal, got ${JSON.stringify(result)}`);
+    }
+
+    await engine.getHandle('checkout-parked-2')?.signal('go', 'done');
+    await engine.getHandle('checkout-parked-2')?.result();
   });
 });
 

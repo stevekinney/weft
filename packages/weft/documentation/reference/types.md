@@ -32,6 +32,8 @@ interface WorkflowState {
   result?: unknown;
   error?: string;
   versionTuple: WorkflowVersionTuple;
+  /** The exact executable artifact this run started against (WFT-17). Absent on a pre-revision-pinning record. */
+  revision?: string;
   createdAt: number;
   updatedAt: number;
   executionDeadline?: number;
@@ -54,6 +56,8 @@ interface WorkflowVersionTuple {
 ```
 
 `versionTuple` is the canonical persisted workflow version metadata. It is captured at workflow start and compared against the currently registered workflow definition during recovery. `workflowVersion` is always present; `agentVersion` and `toolVersions` appear only when the workflow declares them. `WorkflowSummary.version` remains the public list-result shortcut for `versionTuple.workflowVersion`.
+
+`revision` (WFT-17) is a distinct identity axis, sibling to `versionTuple`, set once at start admission from the exact executable artifact this run started against — never rewritten. It answers "which artifact," not "may this resume": `versionTuple` remains the sole semantic-compatibility axis recovery checks. Two runs can share one `workflowVersion` while pinned to different `revision`s (a documentation-only redeploy, for example). Every fresh start from this release forward sets it; `undefined` only on a record persisted before this field existed, which recovery treats as a bounded, explicitly-classified legacy case — see [Per-run revision pinning](../guides/workflow-versioning.md#per-run-revision-pinning-wft-17).
 
 Child runs persist their direct parent's workflow ID and execution token. `restartedFrom` identifies only the terminal run immediately displaced by `onTerminalConflict: 'start-new'`; it is informational lineage, not a retained snapshot of the purged run.
 
@@ -1182,6 +1186,8 @@ interface WorkflowSummary {
   type: string;
   status: WorkflowStatus;
   version: string;
+  /** The exact executable artifact this run started against (WFT-17). Absent on a pre-revision-pinning record. */
+  revision?: string;
   createdAt: number;
   updatedAt: number;
   tags?: string[];

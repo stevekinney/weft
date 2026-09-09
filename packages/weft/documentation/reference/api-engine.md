@@ -844,11 +844,15 @@ interface WorkflowSummary {
   type: string;
   status: WorkflowStatus;
   version: string;
+  /** The exact executable artifact this run started against (WFT-17). Absent on a pre-revision-pinning record. */
+  revision?: string;
   createdAt: number;
   updatedAt: number;
   tags?: string[];
 }
 ```
+
+`version` is `WorkflowState.versionTuple.workflowVersion` — the semantic replay-compatibility boundary `checkVersionCompatibility()` checks at recovery. `revision` (WFT-17) is a distinct, finer-grained identity: the exact revision of code this run started against, which can differ between two runs that share the same `version` (for example, a documentation-only redeploy). See [Per-run revision pinning](../guides/workflow-versioning.md#per-run-revision-pinning-wft-17) for the full contract.
 
 ### `WorkflowStatus`
 

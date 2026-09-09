@@ -217,6 +217,7 @@ describe('formatVersionCheckReport', () => {
           registeredVersion: '1.0.0',
           runningCount: 5,
           compatibility: 'compatible',
+          revisionCounts: { 'sha256:aaa': 3, 'sha256:bbb': 2 },
         },
       ],
       overallVerdict: 'safe',
@@ -228,6 +229,9 @@ describe('formatVersionCheckReport', () => {
     expect(output).toContain('5 running workflows');
     expect(output).toContain('compatible');
     expect(output).toContain('Safe to deploy');
+    // Revision is displayed distinctly from the semantic version — two
+    // revisions can share one `workflowVersion` (a doc-only redeploy).
+    expect(output).toContain('Revisions: sha256:aaa (3), sha256:bbb (2)');
   });
 
   it('shows "UNSAFE" when versions are incompatible', () => {
@@ -239,6 +243,7 @@ describe('formatVersionCheckReport', () => {
           registeredVersion: '3.0.0',
           runningCount: 2,
           compatibility: 'incompatible',
+          revisionCounts: { 'sha256:ccc': 2 },
         },
       ],
       overallVerdict: 'unsafe',

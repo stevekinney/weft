@@ -305,6 +305,31 @@ describe('engine validation helpers', () => {
     expect(invalidRestartId.restartedFrom).toBeUndefined();
   });
 
+  it('round-trips a persisted revision on decode', () => {
+    const decoded = decodeWorkflowState(encode(createWorkflowState({ revision: 'sha256:abc123' })));
+    expect(decoded.revision).toBe('sha256:abc123');
+  });
+
+  it('leaves revision undefined — not stripped, not defaulted — when absent from raw bytes', () => {
+    const decoded = decodeWorkflowState(encode(createWorkflowState()));
+    expect(decoded.revision).toBeUndefined();
+    expect('revision' in decoded).toBe(false);
+  });
+
+  it('drops a non-string, empty, or oversized decoded revision while preserving the rest of the state', () => {
+    const nonString = decodeWorkflowState(encode({ ...createWorkflowState(), revision: 42 }));
+    expect(nonString.revision).toBeUndefined();
+    expect(nonString.id).toBe('workflow-id');
+
+    const empty = decodeWorkflowState(encode({ ...createWorkflowState(), revision: '' }));
+    expect(empty.revision).toBeUndefined();
+
+    const oversized = decodeWorkflowState(
+      encode({ ...createWorkflowState(), revision: 'x'.repeat(513) }),
+    );
+    expect(oversized.revision).toBeUndefined();
+  });
+
   it('lifts a pre-unification flat version tuple into versionTuple on decode', () => {
     const flatState = {
       id: 'wf-flat',

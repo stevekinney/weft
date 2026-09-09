@@ -44,6 +44,26 @@ describe('OverviewTab', () => {
     expect(queryByText('Result')).toBeNull();
   });
 
+  test('shows a distinct Revision row when the workflow has one', async () => {
+    const { getByText } = render(OverviewTabHarness, {
+      props: {
+        client: baseClient(),
+        workflow: workflow({ revision: 'sha256:deadbeef', versionTuple: { workflowVersion: '1' } }),
+      },
+    });
+
+    expect(getByText('Revision')).not.toBeNull();
+    expect(getByText('sha256:deadbeef')).not.toBeNull();
+  });
+
+  test('omits the Revision row for a legacy workflow with no persisted revision', async () => {
+    const { queryByText } = render(OverviewTabHarness, {
+      props: { client: baseClient(), workflow: workflow() },
+    });
+
+    expect(queryByText('Revision')).toBeNull();
+  });
+
   test('completed workflow shows a Result panel', async () => {
     const { getByText } = render(OverviewTabHarness, {
       props: {

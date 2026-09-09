@@ -236,6 +236,13 @@ export default {
 workflows must be drained, cancelled, repaired, or served by code with the stored
 version before the new workflow version recovers them.
 
+The human-readable report also breaks each type's running count down by
+`revision` (WFT-17)—`Revisions: sha256:abc (3), sha256:def (2)`—distinct
+from the `storedVersion → registeredVersion` line above it: two revisions
+can share one `workflowVersion` (a documentation-only redeploy, for
+example). A run with no persisted `revision` (a pre-revision-pinning
+record) is grouped under the `unknown` key.
+
 ### schedule
 
 Manage durable schedules.

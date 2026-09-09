@@ -4,6 +4,7 @@ import { encode } from '../core/codec.ts';
 import type { WorkflowDefinition, WorkflowState } from '../core/types.ts';
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { UNKNOWN_WORKFLOW_REVISION_KEY } from './types.ts';
 import { runVersionCheck } from './version-check.ts';
 
 function makeWorkflowState(
@@ -98,8 +99,63 @@ describe('runVersionCheck', () => {
     expect(report.workflowTypes[0]!.type).toBe('order');
     expect(report.workflowTypes[0]!.storedVersion).toBe('1.0.0');
     expect(report.workflowTypes[0]!.registeredVersion).toBe('1.0.0');
+    expect(report.workflowTypes[0]!.revisionCounts).toEqual({
+      [UNKNOWN_WORKFLOW_REVISION_KEY]: 2,
+    });
     expect(report.workflowTypes[0]!.runningCount).toBe(2);
     expect(report.workflowTypes[0]!.compatibility).toBe('compatible');
+  });
+
+  it('distinguishes revision from workflowVersion for a type with multiple stored revisions sharing one workflowVersion', async () => {
+    // The doc-only-redeploy case: two revisions of the same workflow can
+    // share one semantic `workflowVersion` (e.g. a description-only
+    // contract change) — `revisionCounts` must break these out separately
+    // from `storedVersion`, which stays the single most-common
+    // `workflowVersion` across the group.
+    const storage = new MemoryStorage();
+    await seedWorkflow(
+      storage,
+      makeWorkflowState({
+        id: 'wf-1',
+        type: 'order',
+        version: '1.0.0',
+        status: 'running',
+        revision: 'sha256:aaa',
+      }),
+    );
+    await seedWorkflow(
+      storage,
+      makeWorkflowState({
+        id: 'wf-2',
+        type: 'order',
+        version: '1.0.0',
+        status: 'running',
+        revision: 'sha256:bbb',
+      }),
+    );
+    await seedWorkflow(
+      storage,
+      makeWorkflowState({
+        id: 'wf-3',
+        type: 'order',
+        version: '1.0.0',
+        status: 'pending',
+        revision: 'sha256:aaa',
+      }),
+    );
+
+    const registrations: Record<string, WorkflowDefinition> = {
+      order: { name: 'order', version: '1.0.0', handler: () => dummyHandler() },
+    };
+
+    const report = await runVersionCheck(storage, registrations);
+
+    expect(report.workflowTypes).toHaveLength(1);
+    expect(report.workflowTypes[0]!.storedVersion).toBe('1.0.0');
+    expect(report.workflowTypes[0]!.revisionCounts).toEqual({
+      'sha256:aaa': 2,
+      'sha256:bbb': 1,
+    });
   });
 
   it('returns unsafe when versions differ', async () => {

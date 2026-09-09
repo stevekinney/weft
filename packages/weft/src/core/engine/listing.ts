@@ -218,6 +218,7 @@ function summaryFromState(
     status: state.status,
     ...(state.tags !== undefined && { tags: state.tags }),
     version: state.versionTuple.workflowVersion,
+    ...(state.revision !== undefined && { revision: state.revision }),
     createdAt: state.createdAt,
     updatedAt: state.updatedAt,
     ...(state.executionDeadline !== undefined && { executionDeadline: state.executionDeadline }),

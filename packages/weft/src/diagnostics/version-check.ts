@@ -13,11 +13,16 @@ import { isTopLevelWorkflowStateKey } from '../core/engine/workflow-state-stream
 import type { WorkflowDefinition } from '../core/types.ts';
 import { DEFAULT_WORKFLOW_VERSION, checkVersionCompatibility } from '../core/versioning.ts';
 import type { Storage } from '../storage/interface.ts';
-import type { VersionCheckReport, WorkflowTypeReport } from './types.ts';
+import {
+  UNKNOWN_WORKFLOW_REVISION_KEY,
+  type VersionCheckReport,
+  type WorkflowTypeReport,
+} from './types.ts';
 
 interface WorkflowTypeGroup {
   count: number;
   versionCounts: Map<string, number>;
+  revisionCounts: Map<string, number>;
 }
 
 async function groupActiveWorkflowsByType(
@@ -38,11 +43,13 @@ async function groupActiveWorkflowsByType(
     const storedVersion = state.versionTuple.workflowVersion;
     let group = groups.get(state.type);
     if (!group) {
-      group = { count: 0, versionCounts: new Map() };
+      group = { count: 0, versionCounts: new Map(), revisionCounts: new Map() };
       groups.set(state.type, group);
     }
     group.count++;
     group.versionCounts.set(storedVersion, (group.versionCounts.get(storedVersion) ?? 0) + 1);
+    const revisionKey = state.revision ?? UNKNOWN_WORKFLOW_REVISION_KEY;
+    group.revisionCounts.set(revisionKey, (group.revisionCounts.get(revisionKey) ?? 0) + 1);
   }
   return groups;
 }
@@ -78,6 +85,7 @@ function buildWorkflowTypeReports(
       registeredVersion,
       runningCount: group.count,
       compatibility,
+      revisionCounts: Object.fromEntries(group.revisionCounts),
     });
   }
   return reports;

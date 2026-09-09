@@ -25,6 +25,7 @@ import type { WorkflowSourceKind } from '../source/index.ts';
 import { ensureWorkflowCatalogReady, getWorkflowCatalog } from './catalog-readiness.ts';
 import type { Engine } from './index.ts';
 import { getInternals, type EngineInternals } from './internals.ts';
+import { countNonTerminalRunsForRevision } from './nonterminal-revision-count.ts';
 import { readSourceLoadDiagnostics, readSourceWaiterCount } from './source-diagnostics.ts';
 import type { SourceLoadDiagnostics } from './source-runtime-state.ts';
 
@@ -76,6 +77,16 @@ export function reserveInFlightStart(
  * only assigns its own `inFlightRevision` on a successful return, so its
  * `finally` releases nothing on this path and the increment would otherwise
  * leak forever, permanently reporting the revision non-`removable`.
+ *
+ * `resolvedRevision` is the raw value `resolve()` itself returned —
+ * `undefined` for an eager registration, the resolved candidate for a
+ * dynamic source — distinct from `inFlightRevision`, which for an eager
+ * type falls back to the catalog's cached ACTIVE pointer (see
+ * {@link reserveInFlightStart}). A caller that needs "the exact revision of
+ * the code this process is about to run" (WFT-17's `WorkflowState.revision`)
+ * must use `resolvedRevision`, not `inFlightRevision` — the two intentionally
+ * diverge for an eager type under a multi-engine deployment where this
+ * process's own registration lags the durable active pointer.
  */
 export async function resolveAndReserveExecutableRegistration(
   internals: EngineInternals,
@@ -84,7 +95,11 @@ export async function resolveAndReserveExecutableRegistration(
     type: string,
     onRevisionChosen?: (revision: string) => void,
   ) => Promise<{ entry: RegistrationEntry; revision: string | undefined }>,
-): Promise<{ registration: RegistrationEntry; inFlightRevision: string | undefined }> {
+): Promise<{
+  registration: RegistrationEntry;
+  inFlightRevision: string | undefined;
+  resolvedRevision: string | undefined;
+}> {
   let earlyReservation: string | undefined;
   try {
     const { entry: registration, revision } = await resolve(type, (chosen) => {
@@ -94,7 +109,7 @@ export async function resolveAndReserveExecutableRegistration(
       earlyReservation !== undefined
         ? earlyReservation
         : reserveInFlightStart(internals, type, revision);
-    return { registration, inFlightRevision };
+    return { registration, inFlightRevision, resolvedRevision: revision };
   } catch (error) {
     releaseInFlightStart(internals, type, earlyReservation);
     throw error;
@@ -114,9 +129,11 @@ export function releaseInFlightStart(
 
 /**
  * Count every in-process reference this batch wires to a real signal
- * against `(name, revision)`. `registeredDefinitions` and `inFlightStarts`
- * are real; the other five fields of {@link WorkflowRevisionReferenceCounts}
- * stay `0` until WFT-17 (see that type's own field-level docs).
+ * against `(name, revision)`. `registeredDefinitions`, `inFlightStarts`, and
+ * `nonTerminalRuns` (WFT-17, a bounded storage scan — see
+ * {@link countNonTerminalRunsForRevision}) are real; the remaining three
+ * fields of {@link WorkflowRevisionReferenceCounts} stay `0` — schedules
+ * (WFT-20), dispatches, and execution realms are out of this batch's scope.
  */
 export async function countWorkflowRevisionReferences(
   engine: Engine,
@@ -124,10 +141,11 @@ export async function countWorkflowRevisionReferences(
   revision: string,
 ): Promise<WorkflowRevisionReferenceCounts> {
   const internals = getInternals(engine);
+  const nonTerminalRuns = await countNonTerminalRunsForRevision(internals.storage, name, revision);
   return {
     registeredDefinitions: internals.registeredCatalogRevisions.get(name) === revision ? 1 : 0,
     inFlightStarts: readNestedRevisionCount(internals.inFlightStartsByRevision, name, revision),
-    nonTerminalRuns: 0,
+    nonTerminalRuns,
     pinnedSchedules: 0,
     pendingDispatches: 0,
     activeExecutionRealms: 0,

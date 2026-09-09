@@ -264,6 +264,8 @@ function unexpectedStartOrSignalCallbacks(): StartOrSignalCallbacks {
     signalExistingWorkflow: unexpectedAsync,
     resolveExecutableRegistration: unexpectedAsync,
     failWorkflowForUnavailableDynamicSource: unexpectedAsync,
+    resolveExecutableRegistrationForRevision: unexpectedAsync,
+    failWorkflowForRevisionUnavailable: unexpectedAsync,
   };
 }
 
@@ -366,6 +368,11 @@ describe('engine.start idempotency', () => {
       expect(b.id).toBe(a.id);
       expect(c.id).toBe(a.id);
       expect(await countWorkflowRecords(engine)).toBe(1);
+      // WFT-17: idempotent concurrent starts converge on one PERSISTED
+      // revision too, not just one workflow id — read the durable record
+      // back rather than trusting any one caller's in-memory handle.
+      const converged = await readStoredWorkflowState(engine, a.id);
+      expect(converged.revision).toBeDefined();
     } finally {
       await engine[Symbol.asyncDispose]();
     }

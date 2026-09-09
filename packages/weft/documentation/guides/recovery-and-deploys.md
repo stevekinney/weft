@@ -129,23 +129,32 @@ try {
 
 `versionMismatchPolicy: 'throw'` rethrows the `VersionMismatchError` out of `recoverAll()` as soon as it reaches the first mismatched workflow in storage-scan order. Any sibling not yet processed in that call is left unresumed; siblings processed before the mismatch may already be running. Use it when version drift is an operator error that should stop further recovery during that boot attempt.
 
-## Dynamic-source recovery: a preload barrier, not durable revision pinning (WFT-15/16)
+## Dynamic-source recovery: durable per-run revision pinning (WFT-17/WFT-18)
 
-A workflow type registered via `engine.registerSource()` rather than `engine.register()` follows a different recovery shape than either the happy path or version-mismatch isolation above. `recoverAll()` preloads every DISTINCT dynamic-source type referenced by non-terminal state ONCE, before advancing any of those runs' generators — a batch-wide barrier, not a per-run resolve.
+A workflow type registered via `engine.registerSource()` rather than `engine.register()` follows a different recovery shape than either the happy path or version-mismatch isolation above. `recoverAll()` groups non-terminal state by the EXACT `(type, revision)` each run persisted at start (`WorkflowState.revision`, see [Per-run revision pinning](workflow-versioning.md#per-run-revision-pinning-wft-17) in the versioning guide) and preloads every group ONCE, before advancing any of that group's generators — a batch-wide barrier, grouped by revision, not just by type.
 
 > [!NOTE]
 > `Engine.create()` has no `sources` option, so its automatic `recover: true` pass can never see a `registerSource()` call you haven't made yet. To get a dynamic type recovered automatically, build the engine manually: `new Engine({ storage, ... })`, call `engine.registerSource(...)` for each dynamic type, then `await engine.recoverAll()` — or pass `recover: false` to `Engine.create()` and drive that same sequence yourself.
 
 ```typescript partial
 const handles = await engine.recoverAll();
-// Every non-terminal run of a `registerSource()`-registered type shares ONE
-// loader invocation for that type, resolved before any of those runs'
-// generators advance — not once per run.
+// Two non-terminal runs of the SAME type, pinned to two DIFFERENT
+// registered revisions, each recover against their OWN revision's code —
+// one loader invocation per distinct (type, revision) group, resolved
+// before any of that group's runs' generators advance.
 ```
 
-A type whose load fails during that barrier is classified `unavailable`: only its own non-terminal runs fail (to a terminal `failed` state, `system` failure category, carrying `DynamicWorkflowSourceUnavailableError`); every sibling type — dynamic or eager, and including a DIFFERENT dynamic-source type that resolved fine — recovers normally in the same call. This mirrors the version-mismatch isolation above: one bad type never aborts the whole recovery batch. The failure is committed through the SAME `resume()` path every other recovered entry takes — not a direct fail ahead of it — so it still acquires that run's `workflow-lease` claim (under `ownership: 'workflow-lease'`) and loads its terminal-cleanup tracking before committing, exactly like a version-mismatch failure does.
+Each group resolves to one of three outcomes:
 
-**This is explicitly a feature gate, not durable per-run revision pinning.** Which revision an in-flight run resolves against during recovery is derived at RUNTIME — the catalog's active pointer plus whichever `registerSource()` calls this process happens to have made — never persisted per-run. A scheme where each run durably remembers and re-resolves the EXACT revision it was launched against, independent of what a later `registerSource()` call registers, is out of scope for this batch. Operationally, treat a dynamic-source deployment the same way an `engine.register()`-only one already must: keep the same revision set registered across a restart, or recovery may resolve a run against a different revision than it started with. The same limitation means a dynamic type's activity registry is keyed by `type` alone, not `(type, revision)`: keep one active revision per dynamic type at a time, since concurrently resolving two revisions of the same type makes the later resolve's activity registry the one every run of that type executes against.
+- **Ready**: the pinned revision (or, for a legacy pre-pinning record on a type with at most one registered candidate, the sole candidate) is registered in this process. The group's runs advance normally, then fall through to the unchanged `versionTuple` compatibility check below — a "ready" group can still turn out `incompatible`.
+- **Unavailable**: the pinned revision is not registered in this process (including "it's the sole registered candidate, but a different one"), or the run is a legacy record on a type with two or more registered candidates and no pin to disambiguate with (`reason: 'legacy-ambiguous'`). Only that group's runs fail — to a terminal `failed` state, `system` failure category, carrying `WorkflowRevisionUnavailableError` — while every sibling group, including a DIFFERENT revision of the SAME type, recovers normally in the same call.
+- **Incompatible**: the group resolved, but its `versionTuple` no longer matches the registered definition's — the unchanged `VersionMismatchError` path from [Version drift](#version-drift-versionmismatchpolicy) above. Revision availability and semantic compatibility are deliberately two separate gates: `revision` never becomes a second compatibility check.
+
+A group's failure is committed through the SAME `resume()` path every other recovered entry takes — not a direct fail ahead of it — so it still acquires that run's `workflow-lease` claim (under `ownership: 'workflow-lease'`) and loads its terminal-cleanup tracking before committing, exactly like a version-mismatch failure does.
+
+**Recovery never falls back from a missing exact revision to the active revision.** Before WFT-17/WFT-18, every non-terminal run of a dynamic-source type resolved against whichever revision the CATALOG's active pointer named at recovery time — silently wrong for a run that started on a DIFFERENT revision. `WorkflowState.revision`, persisted once at start, closes that gap: a legacy record from before this field existed is treated as unambiguous (and recovers exactly as before) for an eager type or a single-candidate dynamic source — the overwhelmingly common case — and only forced into the `unavailable`/`legacy-ambiguous` outcome when the ambiguity is real (two or more registered candidates, no pin to pick between them).
+
+The activity-registry caveat from before still applies and is unchanged by this batch: a dynamic type's activity registry (and its `lastResolvedRevisionByName` entry) is keyed by `type` alone, not `(type, revision)` — this is a WFT-19 routing-key boundary. Concurrently resolving two revisions of the same type during one recovery batch makes the LATER resolve's activity registry the one every activity call for that type executes against; keep dynamic-source workflows that run alongside a sibling revision free of activity calls, or route activities through a mechanism that doesn't depend on this shared per-type registry.
 
 ## Acknowledging drift: `acknowledgeUnknownWorkflowTypes`
 

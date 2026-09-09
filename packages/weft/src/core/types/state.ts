@@ -59,6 +59,20 @@ export interface WorkflowState {
    */
   versionTuple: WorkflowVersionTuple;
   /**
+   * The exact executable artifact this run started against — the revision
+   * of the code actually loaded in this process at admission time (an
+   * eager registration's `registeredCatalogRevisions` entry, or a dynamic
+   * source's resolved candidate revision), NOT the catalog's cached active
+   * pointer. Sibling to {@link versionTuple}: `revision` answers "which
+   * artifact" for identity, diagnostics, and pinning; `versionTuple` remains
+   * the sole semantic-compatibility axis recovery checks. Every fresh start
+   * from this release forward sets it; `undefined` only on a record
+   * persisted before this field existed (a pre-upgrade run) — recovery
+   * treats that absence as a bounded, explicitly-classified legacy case
+   * rather than falling back to the currently active revision.
+   */
+  revision?: string;
+  /**
    * Durable token identifying this concrete workflow run. It changes when a
    * stable workflow id is reused with `onTerminalConflict: 'start-new'`, and
    * stays stable for the same run across recovery.
@@ -324,6 +338,8 @@ export interface WorkflowSummary {
   status: WorkflowStatus;
   tags?: string[];
   version: string;
+  /** The exact executable artifact this run started against. See {@link WorkflowState.revision}. */
+  revision?: string;
   createdAt: number;
   updatedAt: number;
   /** Execution deadline (ms epoch) if set on the workflow. */

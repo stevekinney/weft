@@ -373,6 +373,38 @@ unaffected by a later `engine.register()`/activation call for the same
 name—only new starts and recovery resolve against the catalog's current
 active pointer.
 
+### Per-run revision pinning (WFT-17)
+
+Every workflow run also carries its own `revision` field on
+`WorkflowState`, sibling to `versionTuple`, set once at start admission and
+never rewritten: the exact executable artifact this run started against—an
+eager registration's `internals.registeredCatalogRevisions` entry (the
+revision of the code actually loaded in _this_ process), or a dynamic
+source's resolved candidate revision. `engine.get(id)` and `engine.list()`
+both expose it (`WorkflowState.revision` / `WorkflowSummary.revision`),
+distinct from `versionTuple.workflowVersion`—two different revisions can
+share one `workflowVersion` (a documentation-only redeploy, for example),
+and `weft version:check`'s report breaks running workflows out by both.
+
+`revision` is identity and diagnostics only—it answers "which artifact,"
+never "may this resume." `versionTuple` remains the sole semantic
+compatibility axis recovery checks (`checkVersionCompatibility()`, above);
+nothing in this section changes that.
+
+The critical distinction from the catalog's active pointer above:
+`state.revision` is fixed at start time and is deliberately **not** the
+same value as `catalog.resolveActive(type)`, which can move later.
+Concretely: if engine A registers `checkout` and later activates a
+documentation-only revision it never itself loaded (`engine.workflows.activate()`
+with `policy: { requireExactRevision: false }`), the catalog's active
+pointer now names code this process cannot run—but a fresh start on that
+same engine still persists `state.revision` from
+`registeredCatalogRevisions` (this process's own loaded code), never from
+the active pointer. This is what makes an already-pinned run's recovery
+correct even after activation moves on—see
+[Recovery and deploys](recovery-and-deploys.md) for the full recovery-time
+grouping and classification this pin drives.
+
 ## `engine.workflows`: public catalog control
 
 `engine.workflows` promotes the catalog above to a public surface—`install`,
@@ -474,7 +506,7 @@ relying on it. `WorkflowRevisionReferenceCounts` is the bounded accounting
 interface a removal decision is gated on: seven fields, always present, so
 a caller never special-cases an "unknown" reference kind.
 
-Two fields are wired to real in-process signals now:
+Three fields are wired to real signals now:
 
 - **`registeredDefinitions`**: `1` when this process's own
   `engine.register()`-drain path most recently activated exactly this
@@ -494,17 +526,26 @@ Two fields are wired to real in-process signals now:
   feed—`buildStartBatchOperations` is internal plumbing already inside this
   same `startWorkflow` call, building one start's own storage-write batch,
   not a distinct multi-start API.
+- **`nonTerminalRuns`** (WFT-17): the count of non-terminal
+  (`running`/`pending`/`suspended`) workflow runs whose persisted
+  `WorkflowState.revision`—see [Per-run revision pinning](#per-run-revision-pinning-wft-17)
+  above—pins exactly this revision. A bounded `storage.scan('wf:')`, not an
+  in-process signal, so it is correct across every engine sharing the
+  durable store, not just this process. This closes a real gap: before
+  WFT-17, `removeWorkflowRevision()` could remove a revision a parked run
+  still needed, because nothing counted non-terminal runs against it at
+  all. A legacy run with no persisted `revision` never counts against any
+  specific revision here.
 
-The remaining five fields—`nonTerminalRuns`, `pinnedSchedules`,
-`pendingDispatches`, `activeExecutionRealms`, and `retainedRecoveryRecords`—
-stay structurally present but always `0`. Each depends on run-level
-revision pinning, which does not exist yet: a `WorkflowState` does not
-currently record which catalog revision it was started against, so there
-is nothing yet to count a non-terminal run, a pinned schedule, a queued
-dispatch, an active execution realm, or a retained recovery record
-against. That dependency lands with run-level revision pinning; until
-then, these fields exist as forward-compatible plumbing rather than a
-promise the engine cannot keep.
+The remaining four fields—`pinnedSchedules`, `pendingDispatches`,
+`activeExecutionRealms`, and `retainedRecoveryRecords`—stay structurally
+present but always `0`. Each awaits revision identity in a different,
+later-owned subsystem: `pinnedSchedules` needs schedule-level revision
+pinning (WFT-20); the other three need revision identity threaded through
+the dispatch ledger, execution realms, and retained recovery records
+respectively, none of which are scheduled yet. Until each lands, its field
+exists as forward-compatible plumbing rather than a promise the engine
+cannot keep.
 
 Removal itself is a plain, root-exported async function—not an
 `engine.workflows.*` method, and not (yet) a wire operation:

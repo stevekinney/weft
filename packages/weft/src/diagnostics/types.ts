@@ -188,7 +188,24 @@ export interface WorkflowTypeReport {
   registeredVersion: string;
   runningCount: number;
   compatibility: VersionCompatibility;
+  /**
+   * Count of active (running/pending) workflows for this type, broken down
+   * by their persisted `WorkflowState.revision` — the exact executable
+   * artifact each run started against, distinct from `storedVersion`
+   * (the semantic `versionTuple.workflowVersion`, which many revisions can
+   * share, e.g. a documentation-only redeploy). A run with no persisted
+   * revision (a pre-revision-pinning record) counts under the
+   * `UNKNOWN_WORKFLOW_REVISION_KEY` sentinel key.
+   */
+  revisionCounts: Record<string, number>;
 }
+
+/**
+ * Sentinel key {@link WorkflowTypeReport.revisionCounts} uses for active
+ * workflows with no persisted `revision` (a record written before
+ * revision pinning existed).
+ */
+export const UNKNOWN_WORKFLOW_REVISION_KEY = 'unknown';
 
 /**
  * Deployment-safety report produced by `weft version:check`.

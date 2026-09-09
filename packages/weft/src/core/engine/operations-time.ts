@@ -57,7 +57,17 @@ export type TimeOperationCallbacks = {
   handleScheduleTimer: (entry: TimerEntry) => Promise<void>;
   timeout: (workflowId: string) => Promise<void>;
   handleCleanupError: (source: string, error: unknown, workflowId: string) => void;
-  resolveExecutableRegistration: (type: string) => Promise<ExecutableRegistration>;
+  /**
+   * Resolve `type` against an EXACT pinned revision (`WorkflowState.revision`,
+   * WFT-17), `undefined` for a legacy pre-pinning record. Used by a
+   * delayed-start timer fire so a pending run's own pin is honored at
+   * launch, matching `resumeWorkflowFromStorage()`'s use of the same
+   * resolver — never the catalog's active pointer.
+   */
+  resolveExecutableRegistrationForRevision: (
+    type: string,
+    revision: string | undefined,
+  ) => Promise<ExecutableRegistration>;
 };
 
 export function createDelayedStartTimerEntry(
@@ -189,7 +199,7 @@ export async function startDelayedWorkflow(
     | 'handleCleanupError'
     | 'loadWorkflowStartHeaders'
     | 'loadWorkflowState'
-    | 'resolveExecutableRegistration'
+    | 'resolveExecutableRegistrationForRevision'
     | 'runSerializedWorkflowStateWrite'
     | 'setWorkflowStartHeaders'
     | 'workflowVersionTupleFromState'
@@ -209,6 +219,7 @@ export async function startDelayedWorkflow(
     internals,
     entry,
     state.type,
+    state.revision,
     callbacks,
   );
   if (registration === null) {
@@ -412,7 +423,7 @@ export async function handleTimerFired(
     | 'timeout'
     | 'beginWorkflowExecution'
     | 'dispatchEvent'
-    | 'resolveExecutableRegistration'
+    | 'resolveExecutableRegistrationForRevision'
     | 'workflowVersionTupleFromState'
   >,
 ): Promise<void> {
