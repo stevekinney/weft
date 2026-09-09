@@ -81,8 +81,8 @@ const maximumUnpackedBytes = 12 * 1024 * 1024;
 // PRs' worth of unreconciled drift.
 // WFT-85's outbox then adds its modules, the shared payload validators, and
 // the shared timing helpers on top of that; `prepack` on the merged tree
-// reports the count below.
-const maximumEntryCount = 1633;
+// reports 1665.
+const maximumEntryCount = 1665;
 
 type PackFile = {
   path: string;
