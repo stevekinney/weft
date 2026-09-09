@@ -17,9 +17,9 @@ import type {
 import { requireWaitBudget } from './application-outbox-guards.ts';
 import type { OutboxRuntime } from './application-outbox-internals.ts';
 import { runOutboxMaintenance } from './application-outbox-maintenance.ts';
-import { deliverNext } from './application-outbox-runner.ts';
+import { deliverNext, requireAdapter } from './application-outbox-runner.ts';
 import { loadOutboxHeader } from './application-outbox-storage.ts';
-import { WaitBudgetElapsedError } from './application-primitive-abort.ts';
+import { raceAbortWithin, WaitBudgetElapsedError } from './application-primitive-abort.ts';
 import { delayUnlessAborted } from './application-primitive-timing.ts';
 
 type DrainCounters = {
@@ -76,6 +76,9 @@ export async function drainOutbox(
     readonly pollIntervalMs?: number | undefined;
   },
 ): Promise<ApplicationOutboxDrainReport> {
+  // A drain without an adapter is a caller mistake, reported before any read
+  // or maintenance write rather than after the first pass has moved records.
+  requireAdapter(runtime);
   const { timeoutMs, pollIntervalMs } = requireWaitBudget(options);
   const deadline = runtime.now() + timeoutMs;
   const counters: DrainCounters = {
@@ -92,15 +95,16 @@ export async function drainOutbox(
     // The open count as durable storage last reported it, kept current with
     // every terminal disposition this drain commits, so a drain cut short by
     // disposal reports without touching storage the caller may have released.
-    let lastKnownPending = await readOpenCount(runtime);
-    lastKnownPending -= await maintainOutbox(runtime, counters, stop.signal);
+    let lastKnownPending = await readOpenCount(runtime, stop.signal);
+    lastKnownPending = subtract(
+      lastKnownPending,
+      await maintainOutbox(runtime, counters, stop.signal),
+    );
     while (drainActive(runtime, stop.signal) && !budgetSpent(timeoutMs, deadline, runtime.now())) {
       const result = await deliverUnlessStopped(runtime, stop.signal);
       if (result === null) break;
       if (result.status === 'settled') {
-        // Only what this drain committed is this drain's to report; a
-        // disposition another worker won belongs to that worker's accounting.
-        if (result.committed && count(counters, result.receipt)) lastKnownPending -= 1;
+        lastKnownPending = absorbDelivery(counters, result, lastKnownPending);
         continue;
       }
       const round = await pauseBeforeNextRound(runtime, result, {
@@ -113,7 +117,9 @@ export async function drainOutbox(
       drained = round.status === 'drained';
       if (round.status !== 'again') break;
     }
-    const pending = runtime.disposal.aborted ? lastKnownPending : await readOpenCount(runtime);
+    const pending = runtime.disposal.aborted
+      ? lastKnownPending
+      : ((await readOpenCount(runtime, stop.signal)) ?? lastKnownPending);
     return Object.freeze({ ...counters, pending, drained });
   } finally {
     stop.release();
@@ -168,6 +174,26 @@ async function deliverUnlessStopped(
   }
 }
 
+/**
+ * Fold one settled delivery into the counters. Only what this drain committed
+ * is this drain's to report — a disposition another worker won belongs to that
+ * worker's accounting — and a committed terminal disposition lowers the cached
+ * open count.
+ */
+function absorbDelivery(
+  counters: DrainCounters,
+  result: { readonly receipt: ApplicationDeliveryReceipt; readonly committed: boolean },
+  pending: number | null,
+): number | null {
+  if (!result.committed) return pending;
+  return count(counters, result.receipt) ? subtract(pending, 1) : pending;
+}
+
+/** Lower a cached open count that may never have been observed. */
+function subtract(pending: number | null, closed: number): number | null {
+  return pending === null ? null : Math.max(0, pending - closed);
+}
+
 /** Whether the drain may start another round: neither disposed nor stopped. */
 function drainActive(runtime: OutboxRuntime, stop: AbortSignal): boolean {
   return !runtime.disposal.aborted && !stop.aborted;
@@ -178,14 +204,24 @@ function budgetSpent(timeoutMs: number, deadline: number, now: number): boolean 
   return timeoutMs > 0 && now >= deadline;
 }
 
-async function readOpenCount(runtime: OutboxRuntime): Promise<number> {
-  const header = await loadOutboxHeader(
-    runtime.storage,
-    runtime.keys,
-    runtime.policy.namespace,
-    runtime.policy.ownerId,
+/**
+ * The durable open count, or `null` when the stop signal fired before storage
+ * answered: a bounded drain must not hang on a stalled header read, and it
+ * reports nothing it did not observe.
+ */
+async function readOpenCount(runtime: OutboxRuntime, stop: AbortSignal): Promise<number | null> {
+  const raced = await raceAbortWithin(
+    () =>
+      loadOutboxHeader(
+        runtime.storage,
+        runtime.keys,
+        runtime.policy.namespace,
+        runtime.policy.ownerId,
+      ),
+    null,
+    stop,
   );
-  return header.record.openCount;
+  return raced.aborted ? null : raced.value.record.openCount;
 }
 
 /**
@@ -225,7 +261,8 @@ async function pauseBeforeNextRound(
   if (!drainActive(runtime, context.stop)) return { status: 'stop', pending: null };
   await maintainOutbox(runtime, context.counters, context.stop);
   if (runtime.disposal.aborted) return { status: 'stop', pending: null };
-  const pending = await readOpenCount(runtime);
+  const pending = await readOpenCount(runtime, context.stop);
+  if (pending === null) return { status: 'stop', pending: null };
   if (pending === 0) return { status: 'drained', pending };
   const remaining = context.deadline - runtime.now();
   if (remaining <= 0) return { status: 'stop', pending };

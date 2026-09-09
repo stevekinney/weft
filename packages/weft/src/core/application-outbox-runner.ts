@@ -84,18 +84,7 @@ async function sendOnce(
     claim.signal,
     requestSignal,
   );
-  if (raced.aborted) {
-    return {
-      status: 'unknown',
-      failure: {
-        reason: 'unknown-outcome',
-        message:
-          raced.reason instanceof WaitBudgetElapsedError
-            ? 'The attempt deadline passed while the transport call was in flight.'
-            : 'The attempt was aborted while the transport call was in flight.',
-      },
-    };
-  }
+  if (raced.aborted) return unknownAfterLostRace(runtime, claim, raced.reason);
   if (raced.value.ok) return raced.value.outcome;
   return {
     status: 'unknown',
@@ -106,6 +95,30 @@ async function sendOnce(
       ),
     },
   };
+}
+
+/**
+ * The unknown outcome for a send the race abandoned. When the attempt deadline
+ * won, the adapter is told at once through its signal — before the settlement
+ * that follows, whose storage read may stall — so the transport cannot keep
+ * running on a lease another process may already hold.
+ */
+function unknownAfterLostRace(
+  runtime: OutboxRuntime,
+  claim: ApplicationDeliveryClaim,
+  reason: unknown,
+): ValidatedOutcome {
+  const deadlineWon = reason instanceof WaitBudgetElapsedError;
+  const message = deadlineWon
+    ? 'The attempt deadline passed while the transport call was in flight.'
+    : 'The attempt was aborted while the transport call was in flight.';
+  if (deadlineWon) {
+    const registration = runtime.attemptControllers.get(claim.attemptToken);
+    if (registration !== undefined && !registration.controller.signal.aborted) {
+      registration.controller.abort(new Error(message));
+    }
+  }
+  return { status: 'unknown', failure: { reason: 'unknown-outcome', message } };
 }
 
 function describeError(error: unknown): string {
@@ -216,7 +229,8 @@ async function sendAndSettle(
   };
 }
 
-function requireAdapter(runtime: OutboxRuntime): ApplicationDeliveryAdapter {
+/** The configured adapter, or the caller-mistake diagnostic when there is none. */
+export function requireAdapter(runtime: OutboxRuntime): ApplicationDeliveryAdapter {
   if (runtime.adapter === undefined) {
     throw new ApplicationDeliveryValidationError(
       'deliverNext() and drain() require an adapter; construct the outbox with one or drive claims directly.',

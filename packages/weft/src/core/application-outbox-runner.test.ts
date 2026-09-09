@@ -849,6 +849,99 @@ describe('runner: fifth review round', () => {
   });
 });
 
+describe('runner: sixth review round', () => {
+  afterEach(() => {
+    restoreRealTimers();
+  });
+
+  it('aborts the adapter the moment the attempt deadline wins, before settling', async () => {
+    useFakeTimers();
+    const { outbox, adapter } = createOutboxFixture({
+      attemptTimeoutMs: 20,
+      visibilityTimeoutMs: 30_000,
+    });
+    await enqueueOne(outbox);
+    adapter.block();
+    const pending = outbox.deliverNext();
+    await untilRequested(adapter);
+    await advanceTimersByTime(20);
+    await flushMicrotasks(32);
+    // The abort carries the deadline path's own reason; the release that
+    // follows settlement uses a different one, so this proves which came first.
+    expect(adapter.requests[0]!.signal.aborted).toBe(true);
+    expect(adapter.requests[0]!.signal.reason).toMatchObject({
+      message: 'The attempt deadline passed while the transport call was in flight.',
+    });
+    const result = await pending;
+    expect(result.status === 'settled' && result.receipt.state).toBe('unknown-outcome');
+    outbox.dispose();
+  });
+
+  it('ends a drain whose caller aborts while a claim is committing', async () => {
+    const storage = new HookedStorage();
+    const { outbox, adapter } = createOutboxFixture({ storage });
+    await enqueueOne(outbox);
+    const controller = new AbortController();
+    // Abort on the claim's first delivery-record read, so the stop lands
+    // while the head is being resolved and the claim throws the stop reason.
+    storage.beforeGet = (key) => {
+      if (key.includes('appdlv:')) controller.abort(new Error('gone'));
+    };
+    const report = await outbox.drain({ timeoutMs: 0, signal: controller.signal });
+    expect(report).toMatchObject({ acknowledged: 0, drained: false });
+    expect(adapter.requests).toHaveLength(0);
+    outbox.dispose();
+  });
+
+  it('propagates a storage failure from a claim instead of ending the drain quietly', async () => {
+    const storage = new HookedStorage();
+    const { outbox, adapter } = createOutboxFixture({ storage });
+    await enqueueOne(outbox);
+    storage.beforeGet = (key) => {
+      if (key.includes('appdlv:')) throw new Error('storage offline');
+    };
+    await expect(outbox.drain({ timeoutMs: 0 })).rejects.toThrow('storage offline');
+    expect(adapter.requests).toHaveLength(0);
+    outbox.dispose();
+  });
+
+  it('reports pending as null when its first header read never answers within the budget', async () => {
+    useFakeTimers();
+    const storage = new MemoryStorage();
+    const { outbox } = createOutboxFixture({ storage });
+    await enqueueOne(outbox);
+    const stalled = createOutboxFixture({
+      storage: new Proxy(storage, {
+        get(target, property, receiver) {
+          if (property === 'get') return () => new Promise(() => undefined);
+          const value: unknown = Reflect.get(target, property, receiver);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      }),
+    }).outbox;
+    const draining = stalled.drain({ timeoutMs: 50 });
+    await flushMicrotasks(16);
+    await advanceTimersByTime(50);
+    expect(await draining).toMatchObject({ pending: null, drained: false });
+    stalled.dispose();
+    outbox.dispose();
+  });
+
+  it('refuses a drain without an adapter before maintenance writes anything', async () => {
+    const storage = new MemoryStorage();
+    const clock = createOutboxClock();
+    const worker = createOutboxFixture({ storage, clock, attemptTimeoutMs: 100 }).outbox;
+    const deliveryId = await enqueueOne(worker);
+    await claimOne(worker);
+    worker.dispose();
+    clock.advance(100);
+    const { outbox } = createOutboxFixture({ storage, clock, adapter: undefined });
+    await expect(outbox.drain({ timeoutMs: 0 })).rejects.toThrow(/require an adapter/);
+    expect(await fieldOf(outbox.receipt(deliveryId), 'state')).toBe('claimed');
+    outbox.dispose();
+  });
+});
+
 describe('same-attempt refusals keep the lease', () => {
   it('treats a repeated begin as idempotent without aborting the live attempt', async () => {
     const { outbox } = createOutboxFixture();

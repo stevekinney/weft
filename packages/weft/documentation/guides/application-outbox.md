@@ -240,7 +240,7 @@ const report = await outbox.drain({ timeoutMs: 0 });
 console.log(report.acknowledged, report.pending, report.drained); // 1 0 true
 ```
 
-Dispositions the drain's own maintenance passes commit (a lease that lapsed after its send began, parked or dead-lettered) are counted too. `pending` is read from the durable header when the drain stops, so a drain cut short by its budget, a caller abort, or disposal reports what it committed and what remains — never that remaining work was acknowledged. `drained` is `true` only when nothing was left open.
+Dispositions the drain's own maintenance passes commit (a lease that lapsed after its send began, parked or dead-lettered) are counted too. `pending` is `null` only when the drain stopped before storage ever answered its first header read. Otherwise it is read from the durable header when the drain stops, so a drain cut short by its budget, a caller abort, or disposal reports what it committed and what remains — never that remaining work was acknowledged. `drained` is `true` only when nothing was left open.
 
 `dispose()` releases every process-local resource: the maintenance timer if one is running, in-flight waits, and every attempt-scoped signal this handle holds. It never deletes durable work. A claim this process held stays leased until it lapses and a maintenance pass recovers it — by the state it lapsed in.
 

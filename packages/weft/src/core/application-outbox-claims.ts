@@ -292,8 +292,13 @@ export type ApplicationOutboxDrainReport = Readonly<{
   deadLettered: number;
   cancelled: number;
   unknown: number;
-  /** Deliveries still open when the drain stopped. */
-  pending: number;
+  /**
+   * Deliveries still open when the drain stopped, as durable storage last
+   * reported it, kept current with the dispositions this drain committed.
+   * `null` when the drain stopped before storage ever answered its first
+   * header read: nothing was observed, so nothing is claimed.
+   */
+  pending: number | null;
   /** Whether the drain stopped because nothing was left to do, rather than budget or abort. */
   drained: boolean;
 }>;
