@@ -23,8 +23,7 @@ import {
 import { commitWithWorkflowClaimFold, prepareWorkflowClaimFold } from './workflow-claim-fold.ts';
 import { buildWorkflowVisibilityIndexTransition } from './workflow-indexes.ts';
 
-type RegistrationEntry =
-  EngineInternals['registrations'] extends Map<string, infer Entry> ? Entry : never;
+type RegistrationEntry = ExecutableRegistration['entry'];
 
 type SleepOperation = Extract<ContextOperationRequest, { type: 'sleep' }>;
 
