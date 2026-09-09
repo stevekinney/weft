@@ -35,13 +35,16 @@ function clearPendingResultPollTimers(internals: EngineInternals): void {
  * {@link clearPendingResultPollTimers}.
  */
 function disposeSourceResolutionState(internals: EngineInternals): void {
-  for (const controller of internals.sourceResolutionWaiterControllers) {
+  for (const controller of internals.sources.waiterControllers) {
     controller.abort(new EngineDisposedError());
   }
-  internals.sourceResolutionWaiterControllers.clear();
-  internals.sourceResolutionsInFlight.clear();
-  internals.workflowSourcesByName.clear();
-  internals.resolvedWorkflowSources.clear();
+  internals.sources.waiterControllers.clear();
+  internals.sources.resolutionsInFlight.clear();
+  internals.sources.byName.clear();
+  internals.sources.resolved.clear();
+  internals.sources.waitersByKey.clear();
+  internals.sources.lastResolvedRevisionByName.clear();
+  internals.sources.diagnostics.clear();
 }
 
 /**

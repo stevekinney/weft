@@ -217,7 +217,7 @@ function commitWorkflowDefinition(
   // Symmetric to `registerSource()`'s own eager-name collision check
   // (`core/engine/source-registration.ts`, WFT-13/14): a workflow name may
   // not be both eagerly registered and a dynamic source.
-  if (internals.workflowSourcesByName.has(name)) {
+  if (internals.sources.byName.has(name)) {
     throw new Error(
       `Cannot register("${name}"): "${name}" is already registered as a dynamic workflow source ` +
         'via engine.registerSource(). A workflow name may not be both eagerly registered and a dynamic source.',

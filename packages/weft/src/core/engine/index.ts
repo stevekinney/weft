@@ -279,6 +279,7 @@ import {
   resolveWorkflowSource as resolveWorkflowSourceImpl,
   type ResolveWorkflowSourceOptions,
 } from './source-resolution.ts';
+import { createWorkflowSourceRuntimeState } from './source-runtime-state.ts';
 import {
   loadScheduleState,
   loadWorkflowState,
@@ -331,6 +332,10 @@ export {
   type WorkflowCatalogRemovalResult,
   type WorkflowRevisionDiagnostics,
 } from './catalog-removal.ts';
+export {
+  DynamicWorkflowSourceUnavailableError,
+  WorkflowSourceNotRegisteredError,
+} from './dynamic-source-errors.ts';
 export type {
   PendingTimelineEntry,
   RegistrationEntry,
@@ -857,10 +862,7 @@ export class Engine<
     getInternals(this).catalogDrainPromise = null;
     getInternals(this).registeredCatalogRevisions = new Map();
     getInternals(this).inFlightStartsByRevision = new Map();
-    getInternals(this).workflowSourcesByName = new Map();
-    getInternals(this).sourceResolutionsInFlight = new Map();
-    getInternals(this).sourceResolutionWaiterControllers = new Set();
-    getInternals(this).resolvedWorkflowSources = new Map();
+    getInternals(this).sources = createWorkflowSourceRuntimeState();
     this.#ensureRetentionSweepInterval();
     this.#startSecondInstanceDetection();
   }

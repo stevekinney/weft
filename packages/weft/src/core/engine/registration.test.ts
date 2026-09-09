@@ -246,7 +246,7 @@ describe('register() and dynamic workflow sources (WFT-13/14)', () => {
     // Simulate a prior `registerSource()` call without depending on
     // `core/engine/source-registration.ts` here — this test's only
     // responsibility is the symmetric guard inside `commitWorkflowDefinition`.
-    internals.workflowSourcesByName.set(
+    internals.sources.byName.set(
       'lazyCheckout',
       new Map([
         [

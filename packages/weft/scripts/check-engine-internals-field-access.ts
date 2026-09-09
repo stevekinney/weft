@@ -83,10 +83,7 @@ const ENGINE_INTERNALS_FIELDS = [
   'catalogDrainPromise',
   'registeredCatalogRevisions',
   'inFlightStartsByRevision',
-  'workflowSourcesByName',
-  'sourceResolutionsInFlight',
-  'sourceResolutionWaiterControllers',
-  'resolvedWorkflowSources',
+  'sources',
 ];
 
 interface Violation {

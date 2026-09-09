@@ -227,7 +227,7 @@ describe('engine.resolveWorkflowSource()', () => {
 
     const internals = getInternals(engine);
     expect(
-      internals.sourceResolutionsInFlight.get('checkout')?.get(checkoutRevision),
+      internals.sources.resolutionsInFlight.get('checkout')?.get(checkoutRevision),
     ).toBeUndefined();
 
     engine[Symbol.dispose]();
@@ -452,7 +452,7 @@ describe('engine.resolveWorkflowSource()', () => {
     engine[Symbol.dispose]();
   });
 
-  it('leaves internals.resolvedWorkflowSources empty when the engine is disposed while catalog.install() is still in flight', async () => {
+  it('leaves internals.sources.resolved empty when the engine is disposed while catalog.install() is still in flight', async () => {
     const storage = new MemoryStorage();
     const engine = new Engine({ storage });
     const loader = registerCheckoutSource(engine, async () => ({ checkout: checkoutDefinition }));
@@ -480,7 +480,7 @@ describe('engine.resolveWorkflowSource()', () => {
     // `disposeSourceResolutionState()` already cleared this map; the
     // shared load resuming after disposal must not repopulate it.
     const internals = getInternals(engine);
-    expect(internals.resolvedWorkflowSources.size).toBe(0);
+    expect(internals.sources.resolved.size).toBe(0);
 
     // The durable install itself still completed (a disposed engine's
     // in-memory bookkeeping is skipped, not the already-in-flight write) —

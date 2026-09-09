@@ -108,10 +108,10 @@ export function registerSource(internals: EngineInternals, source: WorkflowSourc
     );
   }
 
-  let byRevision = internals.workflowSourcesByName.get(name);
+  let byRevision = internals.sources.byName.get(name);
   if (byRevision === undefined) {
     byRevision = new Map();
-    internals.workflowSourcesByName.set(name, byRevision);
+    internals.sources.byName.set(name, byRevision);
   }
 
   const existing = byRevision.get(revision);

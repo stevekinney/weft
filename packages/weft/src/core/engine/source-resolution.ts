@@ -5,7 +5,7 @@
  *
  * Single-flight per `(name, revision)`: the underlying load+validate+install
  * work is shared by every concurrent caller for the same key via
- * `internals.sourceResolutionsInFlight`, but each caller races that shared
+ * `internals.sources.resolutionsInFlight`, but each caller races that shared
  * work against its OWN per-call cancellation interest — a cancelled waiter
  * never aborts a load another waiter still needs, and the shared load
  * itself is never tied to any individual caller's lifetime. Disposal aborts
@@ -101,7 +101,7 @@ function abortRejection(signal: AbortSignal): Promise<never> {
  * this batch — recorded as an explicit, accepted trade-off rather than a
  * silent gap. `internals.disposed` is re-checked a THIRD time after
  * `catalog.install()` resolves, guarding only the in-memory
- * `internals.resolvedWorkflowSources` write (never the durable install
+ * `internals.sources.resolved` write (never the durable install
  * itself, which has already committed by then) — a disposed engine's
  * internals stay fully empty rather than accumulating state
  * `disposeSourceResolutionState()` already cleared and will never clear
@@ -134,17 +134,17 @@ async function runSharedSourceLoad(
   // Re-checked here, not just at the `internals.disposed` check immediately
   // above (before `catalog.install()`): disposal can land while that `await`
   // is in flight. `disposeSourceResolutionState()`
-  // has already cleared `internals.resolvedWorkflowSources` by the time this
+  // has already cleared `internals.sources.resolved` by the time this
   // resumes, and nothing will ever clear it again — writing into it here would
   // silently repopulate a disposed engine's internals with a definition and
   // activity registry nothing will read, rather than leaving them empty as
   // teardown intended. The durable install this promise resolves with already
   // succeeded either way; only the in-memory bookkeeping is skipped.
   if (!internals.disposed) {
-    let resolvedByRevision = internals.resolvedWorkflowSources.get(name);
+    let resolvedByRevision = internals.sources.resolved.get(name);
     if (resolvedByRevision === undefined) {
       resolvedByRevision = new Map();
-      internals.resolvedWorkflowSources.set(name, resolvedByRevision);
+      internals.sources.resolved.set(name, resolvedByRevision);
     }
     resolvedByRevision.set(revision, {
       definition: outcome.loadedDefinition,
@@ -157,7 +157,7 @@ async function runSharedSourceLoad(
 
 /**
  * Join the in-flight shared load for `(name, revision)`, or start one.
- * Self-removes from `internals.sourceResolutionsInFlight` once it settles,
+ * Self-removes from `internals.sources.resolutionsInFlight` once it settles,
  * guarded by reference identity (`byRevision.get(revision) === shared`) so
  * a disposal-triggered `clear()` racing a late settle can never delete a
  * successor load that has already taken this key's place — the exact
@@ -171,10 +171,10 @@ function getOrCreateSharedSourceLoad(
   revision: string,
   handle: WorkflowSourceHandle,
 ): Promise<WorkflowRevisionRecord> {
-  let byRevision = internals.sourceResolutionsInFlight.get(name);
+  let byRevision = internals.sources.resolutionsInFlight.get(name);
   if (byRevision === undefined) {
     byRevision = new Map();
-    internals.sourceResolutionsInFlight.set(name, byRevision);
+    internals.sources.resolutionsInFlight.set(name, byRevision);
   }
 
   const existing = byRevision.get(revision);
@@ -189,11 +189,11 @@ function getOrCreateSharedSourceLoad(
     revision,
     handle,
   ).finally(() => {
-    const currentByRevision = internals.sourceResolutionsInFlight.get(name);
+    const currentByRevision = internals.sources.resolutionsInFlight.get(name);
     if (currentByRevision?.get(revision) !== shared) return;
     currentByRevision.delete(revision);
     if (currentByRevision.size === 0) {
-      internals.sourceResolutionsInFlight.delete(name);
+      internals.sources.resolutionsInFlight.delete(name);
     }
   });
   // Every real caller observes this same promise via `Promise.race` in
@@ -217,7 +217,7 @@ type WaiterAbort = {
  * Build this call's own `AbortController`, forwarding `options.signal`'s
  * abort into it (so either the caller's own cancellation OR engine
  * disposal — which aborts every controller in
- * `internals.sourceResolutionWaiterControllers` — cancels this specific
+ * `internals.sources.waiterControllers` — cancels this specific
  * call). `detach()` removes the forwarding listener; callers must invoke it
  * exactly once, in a `finally`.
  */
@@ -254,6 +254,7 @@ async function resolveCachedOrHandle(
   internals: EngineInternals,
   name: string,
   revision: string,
+  requireLocalDefinition: boolean,
 ): Promise<
   | { cached: WorkflowRevisionRecord; handle?: never }
   | { cached?: never; handle: WorkflowSourceHandle }
@@ -265,7 +266,7 @@ async function resolveCachedOrHandle(
   // (name, revision) some OTHER process durably installed resolve
   // successfully here even though this engine never called `registerSource()`
   // for it, contradicting the documented programmer-error contract below.
-  const handle = internals.workflowSourcesByName.get(name)?.get(revision);
+  const handle = internals.sources.byName.get(name)?.get(revision);
   if (handle === undefined) {
     throw new Error(
       `resolveWorkflowSource("${name}", "${revision}") was called before registerSource() ` +
@@ -297,6 +298,27 @@ async function resolveCachedOrHandle(
     if (!verdict.compatible) {
       throw new WorkflowSourceValidationError(name, revision, verdict.reasons);
     }
+    // Internal-only fallthrough (never reachable from the public
+    // `engine.resolveWorkflowSource()` surface, which always passes
+    // `requireLocalDefinition: false`): a caller that needs a LOCAL
+    // `WorkflowDefinition` — not just the durable manifest — cannot be
+    // satisfied by the cache hit alone when no prior resolve in THIS
+    // process ever populated `internals.sources.resolved` for this
+    // exact key (for example, a fresh process whose catalog already has
+    // `(name, revision)` durably installed by a DIFFERENT process). Falling
+    // through to `{ handle }` re-runs the full load -> validate -> install
+    // pipeline via `runSharedSourceLoad`, which populates the local
+    // resolved-definition cache as a side effect; `catalog.install()` is
+    // idempotent on byte-identical content, so re-installing an
+    // already-installed manifest never throws. Once resolved locally once,
+    // subsequent calls in this same process take the ordinary cache-hit
+    // return below without re-invoking the loader.
+    if (
+      requireLocalDefinition &&
+      internals.sources.resolved.get(name)?.get(revision) === undefined
+    ) {
+      return { handle };
+    }
     return { cached: existing };
   }
 
@@ -309,12 +331,15 @@ async function resolveCachedOrHandle(
  * {@link WorkflowRevisionRecord} immediately, without invoking the loader
  * at all, when `(name, revision)` is already durably installed — including
  * a revision installed by a different process. When that is the case,
- * `internals.resolvedWorkflowSources` is NOT populated for this key (there
+ * `internals.sources.resolved` is NOT populated for this key (there
  * is no locally-loaded `WorkflowDefinition` to stash — only the durable
  * manifest was ever read) even though the catalog itself considers the
- * revision installed; a later batch reading `resolvedWorkflowSources` must
+ * revision installed; a caller reading `internals.sources.resolved` must
  * account for that gap rather than assuming every installed revision has a
- * live definition available in this process. This fast path still requires
+ * live definition available in this process — see
+ * {@link resolveWorkflowSourceForExecution} for the internal-only variant
+ * that closes exactly this gap for callers that need a local definition.
+ * This fast path still requires
  * `registerSource()` to have been called for this exact key first (see
  * {@link resolveCachedOrHandle}), and still validates a pinned
  * `workflowVersion`/`contractHash` against the cached manifest — the ONLY
@@ -356,11 +381,43 @@ export async function resolveWorkflowSource(
   revision: string,
   options?: ResolveWorkflowSourceOptions,
 ): Promise<WorkflowRevisionRecord> {
+  return resolveWorkflowSourceCore(engine, name, revision, options, false);
+}
+
+/**
+ * Internal-only variant of {@link resolveWorkflowSource} used exclusively by
+ * `resolveExecutableRegistration()` (`dynamic-source-execution.ts`, WFT-15).
+ * Identical cancellation, disposal, and single-flight contract, with one
+ * difference: a cache hit whose local resolved-definition cache
+ * (`internals.sources.resolved`) is still empty for this exact key falls
+ * through to a real load instead of returning the cached manifest —
+ * closing the cross-process-restart gap {@link resolveWorkflowSource}'s own
+ * doc calls out. `catalog.install()` is idempotent on byte-identical
+ * content, so re-installing an already-installed manifest never throws.
+ * Not exported from the package root — reached only via
+ * `resolveExecutableRegistration`.
+ */
+export async function resolveWorkflowSourceForExecution(
+  engine: Engine,
+  name: string,
+  revision: string,
+  options?: ResolveWorkflowSourceOptions,
+): Promise<WorkflowRevisionRecord> {
+  return resolveWorkflowSourceCore(engine, name, revision, options, true);
+}
+
+async function resolveWorkflowSourceCore(
+  engine: Engine,
+  name: string,
+  revision: string,
+  options: ResolveWorkflowSourceOptions | undefined,
+  requireLocalDefinition: boolean,
+): Promise<WorkflowRevisionRecord> {
   const internals = getInternals(engine);
   const waiter = createWaiterAbort(options);
 
   // Checked before touching storage, the shared-load map, or
-  // `internals.sourceResolutionWaiterControllers` — a pre-aborted signal on
+  // `internals.sources.waiterControllers` — a pre-aborted signal on
   // the very first caller for a fresh `(name, revision)` must never invoke
   // the loader at all.
   if (waiter.controller.signal.aborted) {
@@ -372,7 +429,7 @@ export async function resolveWorkflowSource(
     throw new EngineDisposedError();
   }
 
-  internals.sourceResolutionWaiterControllers.add(waiter.controller);
+  internals.sources.waiterControllers.add(waiter.controller);
   try {
     // Raced against this waiter's own abort signal, not just re-checked
     // after — `resolveCachedOrHandle()`'s awaits (catalog readiness, a
@@ -384,7 +441,13 @@ export async function resolveWorkflowSource(
     // moment the abort fires regardless of how long the catalog phase
     // takes — mirroring the identical race the shared-load phase below
     // already uses.
-    const cachedOrHandle = resolveCachedOrHandle(engine, internals, name, revision);
+    const cachedOrHandle = resolveCachedOrHandle(
+      engine,
+      internals,
+      name,
+      revision,
+      requireLocalDefinition,
+    );
     const cachedOrHandleAbort = abortRejection(waiter.controller.signal);
     cachedOrHandleAbort.catch(() => {});
     let outcome: Awaited<typeof cachedOrHandle>;
@@ -407,6 +470,6 @@ export async function resolveWorkflowSource(
     return await Promise.race([shared, waiterAbort]);
   } finally {
     waiter.detach();
-    internals.sourceResolutionWaiterControllers.delete(waiter.controller);
+    internals.sources.waiterControllers.delete(waiter.controller);
   }
 }
