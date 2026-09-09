@@ -1228,12 +1228,13 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       // run to run with byte-identical source — a coverage-attribution
       // artifact, not a real reachability signal — so the whole
       // `default: { ... }` block is allowed, not just the two dead
-      // statements inside it. Lines realigned to 203-206 by the WFT-15/16
-      // dynamic-source-execution additions above this function.
+      // statements inside it. Lines realigned to 213-215 by the WFT-15/16
+      // dynamic-source-execution and early-inFlightStarts-reservation
+      // additions above this function.
       {
         reason:
           'Compile-time exhaustiveness guard for a closed discriminated union has no reachable runtime path to test without an unsafe cast.',
-        lines: new Set([203, 204, 205, 206]),
+        lines: new Set([213, 214, 215]),
       },
     ],
     [
