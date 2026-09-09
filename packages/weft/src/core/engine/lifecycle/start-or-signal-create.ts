@@ -325,9 +325,13 @@ async function resolveCreateRaceOutcome(
           idempotencyKey,
         };
       }
-      // Caller-id path: the only CAS condition was the signal's `sigres:` marker,
-      // so this is a pre-buffered signal of the same signalId, not a concurrent
-      // winner — create the workflow.
+      // Caller-id path: reaching `StartIdempotencyRaceLostError` here means the
+      // signal's `sigres:` marker was the condition that missed, so this is a
+      // pre-buffered signal of the same signalId — create the workflow. Since
+      // WFT-152 the caller-id create also carries a duplicate-id condition, but a
+      // loss on THAT one raises `WorkflowAlreadyExistsError` (handled above) rather
+      // than reaching this branch, because `buildAndCommitStartBatch` attributes
+      // the miss to a specific condition before falling through to this sentinel.
       return { kind: 'signal-already-buffered' };
     }
     throw error;

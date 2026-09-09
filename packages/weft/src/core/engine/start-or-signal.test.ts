@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 
 import { CompressedStorage } from '../../storage/compressed-storage.ts';
-import type { BatchOperation, Storage } from '../../storage/interface.ts';
+import type {
+  BatchOperation,
+  ConditionalBatchCondition,
+  Storage,
+} from '../../storage/interface.ts';
 import { encodeStorageKeyComponent, KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { flushMicrotasks } from '../../testing/fake-timers.test-support.ts';
@@ -187,28 +191,71 @@ function storageWithAbortingFirstConditionalBatch(
   });
 }
 
-function storageWithInjectedBatchFailure(inner: Storage): Storage & { failNextBatch(): void } {
-  let shouldFailBatch = false;
+/**
+ * Fail the PLAIN create commit for `workflowId` — the one
+ * `plainCreateBufferedSignalOrResolve` issues after the signal-folded create has
+ * already lost to a pre-buffered `sigres:` marker.
+ *
+ * Targeted by key rather than by "the next commit". A one-shot next-commit trip is
+ * fragile: `startOrSignal` issues several commits before that create (catalog
+ * install, catalog activate, then the signal-folded create attempt), so the arming
+ * lands on whichever happens to be intercepted first. That is exactly what went
+ * wrong once — with only `batch` wrapped, the plain create was coincidentally the
+ * sole plain `batch` call, and widening the wrapper to `conditionalBatch` (which
+ * WFT-152 made the plain create use, since it now carries a duplicate-id condition)
+ * silently retargeted the injection onto the catalog write. The assertion still
+ * passed on the error message while no longer exercising the rethrow branch it
+ * exists to cover.
+ *
+ * The plain create is the only commit that puts the workflow record WITHOUT also
+ * putting a `sigres:` marker: the signal-folded attempt carries both, and the
+ * catalog commits carry neither.
+ */
+function storageWithInjectedBatchFailure(
+  inner: Storage,
+): Storage & { failNextPlainCreate(workflowId: string): void } {
+  let targetWorkflowId: string | null = null;
+  const failIfPlainCreate = (operations: BatchOperation[]): void => {
+    if (targetWorkflowId === null) return;
+    const putsWorkflowRecord = operations.some(
+      (operation) => operation.type === 'put' && operation.key === KEYS.workflow(targetWorkflowId!),
+    );
+    const foldsSignal = operations.some(
+      (operation) => operation.type === 'put' && operation.key.startsWith('sigres:'),
+    );
+    if (putsWorkflowRecord && !foldsSignal) {
+      targetWorkflowId = null;
+      throw new Error('injected plain create batch failure');
+    }
+  };
   return new Proxy(inner, {
     get(target, property, receiver) {
       if (property === 'batch') {
         return async (operations: BatchOperation[]): Promise<void> => {
-          if (shouldFailBatch) {
-            shouldFailBatch = false;
-            throw new Error('injected plain create batch failure');
-          }
+          failIfPlainCreate(operations);
           return target.batch(operations);
         };
       }
-      if (property === 'failNextBatch') {
-        return () => {
-          shouldFailBatch = true;
+      if (property === 'conditionalBatch') {
+        return async (
+          conditions: ConditionalBatchCondition[],
+          operations: BatchOperation[],
+        ): Promise<boolean> => {
+          failIfPlainCreate(operations);
+          // MemoryStorage always provides it; `Storage.conditionalBatch` is optional
+          // only because capability-gated backends may omit it.
+          return target.conditionalBatch!(conditions, operations);
+        };
+      }
+      if (property === 'failNextPlainCreate') {
+        return (workflowId: string) => {
+          targetWorkflowId = workflowId;
         };
       }
       const value = Reflect.get(target, property, receiver);
       return typeof value === 'function' ? value.bind(target) : value;
     },
-  }) as Storage & { failNextBatch(): void };
+  }) as Storage & { failNextPlainCreate(workflowId: string): void };
 }
 
 /**
@@ -1668,7 +1715,7 @@ describe('engine.startOrSignal', () => {
 
     try {
       await engine.signal('buffered-batch-failure', 'release', 'winner', { signalId: 'sig-batch' });
-      storage.failNextBatch();
+      storage.failNextPlainCreate('buffered-batch-failure');
 
       await expect(
         engine.startOrSignal(

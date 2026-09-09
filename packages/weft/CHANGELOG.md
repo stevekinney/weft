@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Two separate `Engine` instances started concurrently against one shared store with the same explicit `id` and no `idempotencyKey` no longer leave the losing caller hanging (WFT-152). Both starts previously committed blind: `persistStartBatch` took its unconditioned path, the second engine's create record overwrote the first's, and both engines launched a generator for the same id. Only one of them then reached `notifyCompletionWaiters()` — the other found the workflow already non-`running` in `completeWorkflow()` and returned early — so the loser's `handle.result()` never settled. Under `ownership: 'none'` there is no claim registry, so the cross-engine result poll that rescues this case under `ownership: 'workflow-lease'` never runs.
+
+  The chosen behaviour is **fail fast**, not resolve-to-winner: with no `idempotencyKey` the caller has expressed no intent to share a run, and a duplicate explicit id is already an error everywhere else. A start with a caller-supplied `id` now carries a compare-and-swap precondition on the workflow record as its duplicate-id check observed it (`null` when absent, or the prior terminal run's exact bytes for an `onTerminalConflict: 'start-new'` restart), committed atomically with the create batch. The loser rejects with `WorkflowAlreadyExistsError` — the same error the in-engine `pendingStarts` guard already raises for the identical collision, so a cross-engine duplicate id is indistinguishable from an in-engine one at the call site. This does not make `ownership: 'none'` safe for multiple engines; recovery, timers, and signal delivery remain uncoordinated. See [Recovery and Deploys](documentation/guides/recovery-and-deploys.md#one-engine-per-durable-store).
+
+  Starts with a generated id are unchanged and stay on the unconditioned single-write hot path, since a v4 UUID cannot collide. Explicit-id starts now commit through `conditionalBatch`; every engine already requires that capability for workflow catalog activation at `Engine.create()`, so no backend loses support.
+
 ## [0.24.0] - 2026-09-09
 
 ### Added

@@ -2,6 +2,7 @@ import type { BatchOperation, ConditionalBatchCondition } from '../../../storage
 import { requireStorageCapability, storageValuesEqual } from '../../../storage/interface.ts';
 import { AtomicStateConflictError } from '../../atomic-state.ts';
 import type { Checkpoint, StartOptions, TimerEntry, WorkflowState } from '../../types.ts';
+import { WorkflowAlreadyExistsError } from '../errors.ts';
 import {
   commitFencedEngineWrite,
   commitFencedEngineWriteAllowingPreconditionFailure,
@@ -46,7 +47,7 @@ export class StartIdempotencyRaceLostError extends Error {
 const WORKFLOW_CONCURRENCY_ADMISSION_MAX_ATTEMPTS = 5;
 
 type TaggedStartCondition = {
-  source: 'workflow-concurrency' | 'start-precondition';
+  source: 'workflow-concurrency' | 'start-precondition' | 'duplicate-id';
   condition: ConditionalBatchCondition;
 };
 
@@ -129,12 +130,21 @@ async function persistStartBatch(
   return committed ? 'committed' : 'precondition-lost';
 }
 
-async function hasStartPreconditionConflict(
+/**
+ * Re-read the conditions tagged `source` and report whether any no longer matches.
+ * A `conditionalBatch` returning `false` says only that SOME condition missed, so
+ * this is how the caller attributes the miss to one specific cause — an idempotency
+ * race, a duplicate id, or a workflow-concurrency admission slip — each of which
+ * the caller answers with a different, caller-visible outcome. Returns `false`
+ * immediately when no condition carries `source`.
+ */
+async function hasStartConditionConflict(
   internals: EngineInternals,
   conditions: TaggedStartCondition[],
+  source: TaggedStartCondition['source'],
 ): Promise<boolean> {
   for (const entry of conditions) {
-    if (entry.source !== 'start-precondition') continue;
+    if (entry.source !== source) continue;
     const currentValue = await internals.storage.get(entry.condition.key);
     if (!storageValuesEqual(currentValue, entry.condition.expectedValue)) {
       return true;
@@ -150,6 +160,12 @@ function tagStartPreconditions(
     source: 'start-precondition' as const,
     condition,
   }));
+}
+
+function tagDuplicateIdCondition(
+  condition: ConditionalBatchCondition | undefined,
+): TaggedStartCondition[] {
+  return condition === undefined ? [] : [{ source: 'duplicate-id' as const, condition }];
 }
 
 function tagWorkflowConcurrencyConditions(
@@ -184,8 +200,7 @@ export type StartBatchContext = {
   persistedWorkflowStartHeaders: Map<string, string> | undefined;
   additionalStartOperations: BatchOperation[] | undefined;
   buildWorkflowConcurrencyStartOperations:
-    | (() => Promise<WorkflowConcurrencyStartOperations | undefined>)
-    | undefined;
+    (() => Promise<WorkflowConcurrencyStartOperations | undefined>) | undefined;
   callbacks: LifecycleCallbacks;
   /**
    * Storage deletes for a prior terminal run being displaced by an
@@ -194,6 +209,13 @@ export type StartBatchContext = {
    * {@link buildStartBatchOperations}). Undefined for an ordinary start.
    */
   purgeDeleteOperations: BatchOperation[] | undefined;
+  /**
+   * Compare-and-swap precondition making the caller-supplied-id duplicate check
+   * atomic with this commit (WFT-152). Built by `buildDuplicateIdCondition` from
+   * the exact bytes the duplicate-id read observed. Undefined for a generated id,
+   * which cannot collide and so keeps the unconditioned hot path.
+   */
+  duplicateIdCondition: ConditionalBatchCondition | undefined;
 };
 
 /**
@@ -240,6 +262,7 @@ export async function buildAndCommitStartBatch(
     );
     const conditions = [
       ...tagStartPreconditions(idempotent?.conditions),
+      ...tagDuplicateIdCondition(context.duplicateIdCondition),
       ...tagWorkflowConcurrencyConditions(workflowConcurrency?.conditions ?? []),
     ];
     // ADR 0002 row `startWorkflow`/`buildAndCommitStartBatch`: claim-acquiring for
@@ -264,11 +287,24 @@ export async function buildAndCommitStartBatch(
     if (outcome === 'committed') {
       return;
     }
-    if (await hasStartPreconditionConflict(internals, conditions)) {
+    if (await hasStartConditionConflict(internals, conditions, 'start-precondition')) {
       throw new StartIdempotencyRaceLostError();
     }
     if (outcome === 'claim-lost') {
       return throwWorkflowClaimUnavailable(internals, workflowId);
+    }
+    // WFT-152: another engine sharing this store committed a create for the same
+    // caller-supplied id after this start's duplicate-id read. Surface the SAME
+    // error the in-engine `pendingStarts` guard raises for the identical
+    // collision, so a cross-engine duplicate id is indistinguishable from an
+    // in-engine one from the caller's side. Checked AFTER `claim-lost` because a
+    // `workflow-lease` loser fails both conditions and must keep reporting the
+    // claim outcome, and BEFORE the workflow-concurrency fallthrough because a
+    // duplicate id is terminal — re-entering the admission retry loop would
+    // re-fail this same condition on every attempt and end in a misleading
+    // `AtomicStateConflictError`.
+    if (await hasStartConditionConflict(internals, conditions, 'duplicate-id')) {
+      throw new WorkflowAlreadyExistsError(workflowId);
     }
     if (workflowConcurrency === undefined) {
       throw new StartIdempotencyRaceLostError();

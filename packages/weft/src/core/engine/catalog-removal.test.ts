@@ -212,9 +212,15 @@ describe('removeWorkflowRevision', () => {
     const gate = Promise.withResolvers<void>();
     const entered = Promise.withResolvers<void>();
     const originalBatch = storage.batch.bind(storage);
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
     let batchCalls = 0;
     let paused = false;
-    storage.batch = async (operations) => {
+    // Pause the first commit made while a `checkout` start is reserved, whichever
+    // commit method carries it. The child start supplies an explicit `id`, so its
+    // create batch commits through `conditionalBatch` (WFT-152 conditions it on the
+    // duplicate-id read) rather than the plain `batch` a generated-id start uses —
+    // wrapping only `batch` would never see the child's CREATE write at all.
+    const pauseWhileReserved = async (): Promise<void> => {
       batchCalls += 1;
       const internals = getInternals(engine);
       const alreadyReserved =
@@ -224,7 +230,14 @@ describe('removeWorkflowRevision', () => {
         entered.resolve();
         await gate.promise;
       }
+    };
+    storage.batch = async (operations) => {
+      await pauseWhileReserved();
       return originalBatch(operations);
+    };
+    storage.conditionalBatch = async (conditions, operations) => {
+      await pauseWhileReserved();
+      return originalConditionalBatch(conditions, operations);
     };
 
     const parentPromise = engine.start('checkout-parent', { startChild: true });
