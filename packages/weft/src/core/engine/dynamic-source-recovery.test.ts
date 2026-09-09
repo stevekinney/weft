@@ -21,6 +21,7 @@ import { DEFAULT_WORKFLOW_VERSION } from '../versioning.ts';
 import { copyWorkflowDefinition } from './construction.ts';
 import { WorkflowTypeNotRegisteredForRecoveryError } from './errors.ts';
 import { Engine } from './index.ts';
+import { getInternals } from './internals.ts';
 import { buildRegistrationEntry } from './registration.ts';
 
 async function waitForCheckpoint(storage: MemoryStorage, workflowId: string): Promise<void> {
@@ -328,5 +329,107 @@ describe('recoverAll() — dynamic-source preload barrier (WFT-15/16)', () => {
 
     await handle.signal('continue', 'resumed-value');
     expect(await handle.result()).toBe('resumed:resumed-value');
+  });
+
+  it("a concurrent engine.start() for a type mid-recoverAll() batch does not observe the batch's stale classification", async () => {
+    // Regression test for a fixed cross-call race: `recoverAll()`'s
+    // preload barrier used to publish a failed type's classification into
+    // a FIELD on shared `internals.sources`, read by every caller of
+    // `resolveExecutableRegistration()` — including a totally unrelated
+    // concurrent `engine.start()` for a DIFFERENT run of the same type,
+    // not just `recoverAll()`'s own per-entry loop. That let an unrelated
+    // `start()` fail immediately on a stale cached error without ever
+    // attempting its own fresh resolution, even though the transient
+    // failure that produced it may have already cleared. The fix threads
+    // the batch's failures through a closure-local wrapper
+    // (`createRecoveryScopedCallbacks()`, `transition.ts`) `recoverAll()`
+    // passes ONLY to its own per-entry `resume()` calls, so no state is
+    // shared with any other caller at all.
+    const storage = new MemoryStorage();
+    const flaky = workflow({ name: 'lazy-flaky' }).execute(async function* (ctx: WorkflowContext) {
+      return yield* ctx.waitForSignal<string>('continue');
+    });
+    const filler = workflow({ name: 'eager-filler' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      return yield* ctx.waitForSignal<string>('continue');
+    });
+
+    {
+      await using original = new Engine({ storage });
+      original.register(flaky);
+      original.register(filler);
+      await original.start('lazy-flaky', null, { id: 'flaky-1' });
+      await waitForCheckpoint(storage, 'flaky-1');
+      // Several eager (no preload needed) recoverable entries give
+      // `recoverAll()`'s per-entry loop real async work to do AFTER the
+      // barrier settles `lazy-flaky` `unavailable`, so the batch is still
+      // in flight when the concurrent `engine.start()` below fires.
+      for (let index = 0; index < 20; index += 1) {
+        await original.start('eager-filler', null, { id: `filler-${index}` });
+        await waitForCheckpoint(storage, `filler-${index}`);
+      }
+    }
+
+    const flakyRevision = await revisionFor(flaky as WorkflowDefinition);
+
+    await using recovered = new Engine({ storage });
+    recovered.register(filler);
+    let loaderCalls = 0;
+    recovered.registerSource(
+      workflowSource(
+        {
+          name: 'lazy-flaky',
+          location: './lazy.ts',
+          exportName: 'lazyFlaky',
+          revision: flakyRevision,
+        },
+        async () => {
+          loaderCalls += 1;
+          // Call 1 is `recoverAll()`'s own barrier preload — fails,
+          // classifying `lazy-flaky` `unavailable` for that batch. Every
+          // subsequent call (the concurrent `engine.start()` below, and
+          // its own retry) succeeds, simulating a transient failure that
+          // has already cleared.
+          if (loaderCalls === 1) throw new Error('transient loader failure');
+          return { lazyFlaky: flaky };
+        },
+      ),
+    );
+
+    const internals = getInternals(recovered);
+    const recoverAllPromise = recovered.recoverAll();
+    // Fire the concurrent `start()` only once the barrier's OWN load for
+    // this exact `(name, revision)` has fully settled and single-flight
+    // has cleared it from `resolutionsInFlight` — otherwise both calls
+    // would legitimately share the SAME in-flight load (correct
+    // single-flight behavior, not the bug this test targets) instead of
+    // the concurrent call reaching a fresh `resolveExecutableRegistration()`
+    // while `recoverAll()`'s per-entry loop (busy with the 20 filler
+    // entries) is still in progress.
+    await waitForCondition(
+      () =>
+        loaderCalls >= 1 &&
+        internals.sources.resolutionsInFlight.get('lazy-flaky')?.get(flakyRevision) === undefined,
+      { label: 'barrier load for lazy-flaky settled and single-flight cleared' },
+    );
+    const concurrentStartPromise = recovered.start('lazy-flaky', null, {
+      id: 'flaky-concurrent',
+    });
+
+    const handles = await recoverAllPromise;
+    const concurrentHandle = await concurrentStartPromise;
+
+    // `recoverAll()`'s own batch still correctly fails its own `flaky-1` run.
+    expect(handles.some((handle) => handle.id === 'flaky-1')).toBe(false);
+    const recoveredFlakyState = await recovered.get('flaky-1');
+    expect(recoveredFlakyState?.status).toBe('failed');
+
+    // The concurrent, unrelated `start()` call must NOT have observed the
+    // batch's stale cached failure — it gets its own fresh resolution
+    // attempt (a second, independent loader invocation), which succeeds.
+    expect(loaderCalls).toBeGreaterThanOrEqual(2);
+    await concurrentHandle.signal('continue', 'ok');
+    expect(await concurrentHandle.result()).toBe('ok');
   });
 });

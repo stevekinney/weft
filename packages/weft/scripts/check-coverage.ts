@@ -1257,8 +1257,11 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
         // unsafe cast, the same class of guard already allowed for
         // `catalog-removal.ts`'s exhaustiveness default above.
         reason:
-          'Defensive fail-loud guard for an invariant resolveWorkflowSourceForExecution() itself guarantees; has no reachable runtime path to test without an unsafe cast.',
-        lines: new Set([137, 138, 139, 140, 141, 142]),
+          'Defensive fail-loud guard for an invariant resolveWorkflowSourceForExecution() itself guarantees; has no reachable runtime path to test without an unsafe cast. ' +
+          'Lines realigned to 124-129 after the WFT-15/16 review-fix round removed the ' +
+          "recovery-scoped cache-check block that used to precede this function's byRevision lookup " +
+          '(the batch-local `createRecoveryScopedCallbacks()` wrapper in `transition.ts` replaced it).',
+        lines: new Set([124, 125, 126, 127, 128, 129]),
         requireUncoveredLines: true,
       },
     ],

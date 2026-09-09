@@ -279,6 +279,40 @@ describe('throwWorkflowCatalogOperationFault', () => {
     }
   });
 
+  it('bounds a reason: load-failed message, never forwarding the raw cause onto the wire (defense-in-depth)', () => {
+    // The error's OWN `.message` embeds the raw cause — see
+    // `dynamic-source-errors.ts`'s constructor — so a sensitive detail
+    // (a filesystem path, a URL with embedded credentials) in the raw
+    // loader exception must never survive into the fault this helper
+    // builds, matching `preload-workflow-revision.ts`'s bounded-message
+    // fix for the same leak class.
+    const sensitiveCause = new Error('/etc/secrets/token=abc123 unreadable');
+    const fault = captureThrown(
+      new DynamicWorkflowSourceUnavailableError('checkout', 'r1', 'load-failed', sensitiveCause),
+    );
+
+    expect(isOperationFault(fault)).toBe(true);
+    if (isOperationFault(fault) && fault.code === 'Conflict') {
+      expect(fault.message).not.toContain('/etc/secrets/token=abc123');
+      expect(fault.message).toBe(
+        'Dynamic workflow source "checkout" revision "r1" failed to load.',
+      );
+      expect(fault.data.reason).toBe('load-failed');
+    }
+  });
+
+  it('forwards the reason: ambiguous-revision message verbatim (never interpolates a cause)', () => {
+    const fault = captureThrown(
+      new DynamicWorkflowSourceUnavailableError('checkout', undefined, 'ambiguous-revision'),
+    );
+
+    expect(isOperationFault(fault)).toBe(true);
+    if (isOperationFault(fault) && fault.code === 'Conflict') {
+      expect(fault.message).toContain('multiple revisions are');
+      expect(fault.data.reason).toBe('ambiguous-revision');
+    }
+  });
+
   it('maps WorkflowSourceValidationError to Conflict with sourceValidationReasons', () => {
     const fault = captureThrown(
       new WorkflowSourceValidationError('checkout', 'r1', ['missing-export']),

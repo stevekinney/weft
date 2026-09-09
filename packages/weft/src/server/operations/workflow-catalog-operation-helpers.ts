@@ -223,9 +223,25 @@ export function throwWorkflowCatalogOperationFault(error: unknown): never {
     throw fault;
   }
   if (error instanceof DynamicWorkflowSourceUnavailableError) {
+    // Defense-in-depth, not a live leak today: no CURRENT caller of this
+    // shared helper routes a `reason: 'load-failed'` instance through
+    // here (`engine.workflows.preload()` calls `resolveWorkflowSource()`
+    // directly, which never throws this error type — see
+    // `preload-workflow-revision.ts`'s own catch for the raw-loader-error
+    // case this family actually hits). But `DynamicWorkflowSourceUnavailableError`'s
+    // OWN `.message` embeds the raw underlying `cause.message` for that
+    // reason (`dynamic-source-errors.ts`'s constructor) — the exact
+    // message-leak class `preload-workflow-revision.ts` bounds for a raw
+    // loader exception. Build the same bounded message here so a future
+    // caller that DOES route this error type through this helper doesn't
+    // silently reintroduce the leak; `'ambiguous-revision'`'s message
+    // never interpolates a cause, so it's safe to forward verbatim.
     const fault: OperationFault = {
       code: 'Conflict',
-      message: error.message,
+      message:
+        error.reason === 'load-failed'
+          ? `Dynamic workflow source "${error.workflowType}"${error.revision === undefined ? '' : ` revision "${error.revision}"`} failed to load.`
+          : error.message,
       data: { reason: error.reason, weftCode: error.code },
     };
     throw fault;

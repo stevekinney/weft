@@ -90,6 +90,36 @@ function classifyRecoveryState(
   return { kind: 'recoverable', workflowId: state.id, type: state.type };
 }
 
+/**
+ * Wrap `callbacks` so `resolveExecutableRegistration()` re-throws a
+ * `recoverAll()` batch's own cached failure for a type the preload barrier
+ * already classified `unavailable`, WITHOUT touching any state shared with
+ * other callers. `unavailableDynamicSourceTypes` is a plain local `Map`
+ * closed over by this one wrapper instance — nothing outside `recoverAll()`
+ * ever sees it, so a concurrent, unrelated `engine.start()`,
+ * `engine.resume()`, or a second concurrent `recoverAll()` batch for the
+ * SAME type keeps using the real, un-wrapped `callbacks.resolveExecutableRegistration`
+ * and can never observe this batch's classification (or race its own
+ * finally-reset against it). `recoverAll()` passes the returned wrapper
+ * only to its own per-entry `resume()` calls below, never publishing it
+ * anywhere `internals` or another call path could read.
+ */
+function createRecoveryScopedCallbacks(
+  callbacks: LifecycleCallbacks,
+  unavailableDynamicSourceTypes: ReadonlyMap<string, DynamicWorkflowSourceUnavailableError>,
+): LifecycleCallbacks {
+  return {
+    ...callbacks,
+    resolveExecutableRegistration: (type, onRevisionChosen) => {
+      const cachedFailure = unavailableDynamicSourceTypes.get(type);
+      if (cachedFailure !== undefined) {
+        return Promise.reject(cachedFailure);
+      }
+      return callbacks.resolveExecutableRegistration(type, onRevisionChosen);
+    },
+  };
+}
+
 function appendRecoveryClassification(
   result: RecoveryPreflightResult,
   classification: RecoveryPreflightClassification,
@@ -168,12 +198,12 @@ async function recoverEntryOrIsolateFailure(
     if (error instanceof DynamicWorkflowSourceUnavailableError) {
       // `recoverAll()`'s preload barrier classified this entry's type
       // `unavailable` before the loop started; `resume()` reached this
-      // exact cached error via `resolveExecutableRegistration()`'s
-      // recovery-scoped cache (see `source-runtime-state.ts`) AFTER
-      // acquiring this workflow's claim and loading its terminal-cleanup
-      // tracking — the same ordering `VersionMismatchError` gets — so
-      // `failWorkflowForUnavailableDynamicSource` below commits cleanly
-      // under `ownership: 'workflow-lease'` instead of racing an
+      // exact cached error via the batch-local, closure-scoped
+      // `resolveExecutableRegistration()` wrapper `createRecoveryScopedCallbacks()`
+      // builds below, AFTER acquiring this workflow's claim and loading its
+      // terminal-cleanup tracking — the same ordering `VersionMismatchError`
+      // gets — so `failWorkflowForUnavailableDynamicSource` below commits
+      // cleanly under `ownership: 'workflow-lease'` instead of racing an
       // unfenced write.
       await callbacks.failWorkflowForUnavailableDynamicSource(workflowId, error);
       return null;
@@ -214,47 +244,51 @@ export async function recoverAll(
     recoverableTypes,
   );
 
-  // Publish the barrier's failures to `resolveExecutableRegistration()`'s
-  // recovery-scoped cache for the duration of this batch's per-entry loop
-  // (cleared in `finally`, never leaking into an unrelated concurrent
-  // `engine.resume()` call): a `recoverable` entry whose type failed still
-  // goes through `recoverEntryOrIsolateFailure` -> `resume()` below like
-  // every other entry, so it gets the SAME claim-acquisition and
+  // Wrap `callbacks` so THIS batch's per-entry `resume()` calls below see
+  // the barrier's failures via a closure-local `Map`, never a field on
+  // shared `internals` — a concurrent, unrelated `engine.start()`,
+  // `engine.resume()`, or a second concurrent `recoverAll()` batch keeps
+  // using the real, un-wrapped `callbacks.resolveExecutableRegistration`
+  // and can never observe (or race the reset of) this batch's
+  // classification. See `createRecoveryScopedCallbacks()` above. A
+  // `recoverable` entry whose type failed still goes through
+  // `recoverEntryOrIsolateFailure` -> `resume()` below like every other
+  // entry, so it gets the SAME claim-acquisition and
   // terminal-cleanup-tracking sequence a version-mismatch failure gets,
   // instead of calling `failWorkflowForUnavailableDynamicSource` directly
   // ahead of that sequence.
-  internals.sources.recoveryUnavailableTypes = unavailableDynamicSourceTypes;
-  try {
-    // Walk preflight entries in storage-scan order so the returned handle
-    // list matches the interleaving callers observed before the preflight
-    // refactor (locals, missing, and recoverables stay in scan order).
-    for (const entry of preflight.entries) {
-      if (entry.kind === 'local') {
-        handles.push(callbacks.getHandle(entry.workflowId));
-        continue;
-      }
-      if (entry.kind === 'missing') {
-        callbacks.dispatchEvent(
-          new WorkflowRecoverySkippedEvent(
-            entry.workflow.workflowId,
-            entry.workflow.type,
-            'type-not-registered',
-          ),
-        );
-        continue;
-      }
-      const handle = await recoverEntryOrIsolateFailure(
-        internals,
-        entry.workflowId,
-        callbacks,
-        options,
-      );
-      if (handle !== null) {
-        handles.push(handle);
-      }
+  const recoveryScopedCallbacks = createRecoveryScopedCallbacks(
+    callbacks,
+    unavailableDynamicSourceTypes,
+  );
+
+  // Walk preflight entries in storage-scan order so the returned handle
+  // list matches the interleaving callers observed before the preflight
+  // refactor (locals, missing, and recoverables stay in scan order).
+  for (const entry of preflight.entries) {
+    if (entry.kind === 'local') {
+      handles.push(callbacks.getHandle(entry.workflowId));
+      continue;
     }
-  } finally {
-    internals.sources.recoveryUnavailableTypes = new Map();
+    if (entry.kind === 'missing') {
+      callbacks.dispatchEvent(
+        new WorkflowRecoverySkippedEvent(
+          entry.workflow.workflowId,
+          entry.workflow.type,
+          'type-not-registered',
+        ),
+      );
+      continue;
+    }
+    const handle = await recoverEntryOrIsolateFailure(
+      internals,
+      entry.workflowId,
+      recoveryScopedCallbacks,
+      options,
+    );
+    if (handle !== null) {
+      handles.push(handle);
+    }
   }
 
   return handles;

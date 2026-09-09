@@ -90,19 +90,6 @@ export async function resolveExecutableRegistration(
     return { entry: eager, revision: undefined };
   }
 
-  // `recoverAll()`'s preload barrier already resolved (or failed) every
-  // distinct lazy type up front; a `type` it classified `unavailable`
-  // populates this recovery-scoped cache for the duration of that batch so
-  // the per-entry `resume()` call below re-throws the SAME cached error
-  // (routing the failure through the normal claim-acquisition and
-  // terminal-cleanup-tracking path `resume()` already provides) instead of
-  // re-invoking a loader that already failed once for this batch. See
-  // `lifecycle/transition.ts`'s `recoverAll()`.
-  const cachedRecoveryFailure = internals.sources.recoveryUnavailableTypes.get(type);
-  if (cachedRecoveryFailure !== undefined) {
-    throw cachedRecoveryFailure;
-  }
-
   const byRevision = internals.sources.byName.get(type);
   if (byRevision === undefined) {
     // No eager registration AND no dynamic source at all for `type` — this
