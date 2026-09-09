@@ -656,6 +656,199 @@ describe('runner: fourth review round', () => {
   });
 });
 
+describe('runner: fifth review round', () => {
+  afterEach(() => {
+    restoreRealTimers();
+  });
+
+  it('honours the drain budget while deliveries keep settling', async () => {
+    useFakeTimers();
+    const clock = createOutboxClock();
+    const { outbox } = createOutboxFixture({
+      clock,
+      adapter: {
+        async send() {
+          clock.advance(60);
+          return { status: 'acknowledged' };
+        },
+      },
+    });
+    for (let index = 0; index < 5; index += 1) await enqueueOne(outbox);
+    const report = await outbox.drain({ timeoutMs: 100 });
+    expect(report).toMatchObject({ acknowledged: 2, pending: 3, drained: false });
+    outbox.dispose();
+  });
+
+  it('aborts an in-flight send when the drain budget elapses', async () => {
+    useFakeTimers();
+    const { outbox, adapter } = createOutboxFixture();
+    await enqueueOne(outbox);
+    adapter.block();
+    const draining = outbox.drain({ timeoutMs: 100 });
+    await untilRequested(adapter);
+    await advanceTimersByTime(100);
+    const report = await draining;
+    expect(adapter.requests[0]!.signal.aborted).toBe(true);
+    expect(report).toMatchObject({ unknown: 1, pending: 0, drained: false });
+    outbox.dispose();
+  });
+
+  it('caps a held sleep by the poll interval so newly due work is seen', async () => {
+    useFakeTimers();
+    const storage = new MemoryStorage();
+    const clock = createOutboxClock();
+    const { outbox, adapter } = createOutboxFixture({ storage, clock });
+    await enqueueOne(outbox, { availableAfterMs: 10_000 });
+    const controller = new AbortController();
+    const draining = outbox.drain({
+      timeoutMs: 1000,
+      pollIntervalMs: 50,
+      signal: controller.signal,
+    });
+    await flushMicrotasks(32);
+    const producer = createOutboxFixture({ storage: remoteView(storage), clock }).outbox;
+    await enqueueOne(producer);
+    // One poll interval later the drain looks again and finds the new delivery
+    // due, well before the held one's own instant.
+    clock.advance(50);
+    await advanceTimersByTime(50);
+    await adapter.nextRequest();
+    await flushMicrotasks(64);
+    controller.abort();
+    const report = await draining;
+    expect(report).toMatchObject({ acknowledged: 1, pending: 1, drained: false });
+    producer.dispose();
+    outbox.dispose();
+  });
+
+  it('never writes a renewal that resumes after disposal', async () => {
+    useFakeTimers();
+    const storage = new HookedStorage();
+    const clock = createOutboxClock();
+    const { outbox, adapter } = createOutboxFixture({
+      storage,
+      clock,
+      visibilityTimeoutMs: 100,
+      attemptTimeoutMs: 10_000,
+    });
+    const deliveryId = await enqueueOne(outbox);
+    adapter.block();
+    const pending = outbox.deliverNext();
+    await untilRequested(adapter);
+    const observer = createOutboxFixture({ storage, clock }).outbox;
+    const before = await fieldOf(observer.receipt(deliveryId), 'visibilityExpiresAt');
+    let reads = 0;
+    storage.beforeGet = (key) => {
+      // The renewal's own read of the record is where disposal lands.
+      if (key.startsWith('appdlv:') && (reads += 1) === 1) outbox.dispose();
+    };
+    clock.advance(50);
+    await advanceTimersByTime(50);
+    await flushMicrotasks(32);
+    void pending;
+    expect(await fieldOf(observer.receipt(deliveryId), 'visibilityExpiresAt')).toBe(before);
+    observer.dispose();
+  });
+
+  it('leaves a claim that committed after disposal in the provably unsent state', async () => {
+    const storage = new HookedStorage();
+    const clock = createOutboxClock();
+    const { outbox, adapter } = createOutboxFixture({ storage, clock, attemptTimeoutMs: 100 });
+    const deliveryId = await enqueueOne(outbox);
+    storage.beforeBatch = (ordinal) => {
+      if (ordinal === 2) outbox.dispose();
+    };
+    const result = await outbox.deliverNext();
+    expect(result).toMatchObject({ status: 'settled', committed: false });
+    expect(result.status === 'settled' && result.receipt.state).toBe('claimed');
+    expect(adapter.requests).toHaveLength(0);
+    const observer = createOutboxFixture({ storage, clock }).outbox;
+    clock.advance(100);
+    expect(await observer.runMaintenance()).toMatchObject({ rescheduled: 1, parked: 0 });
+    expect(await fieldOf(observer.receipt(deliveryId), 'state')).toBe('retry-scheduled');
+    observer.dispose();
+  });
+
+  it('keeps the cached pending count current with the work it committed', async () => {
+    let released = false;
+    class ReleasedStorage extends MemoryStorage {
+      override async get(key: string): Promise<Uint8Array | null> {
+        if (released) throw new Error('storage released');
+        return super.get(key);
+      }
+    }
+    const { outbox, adapter } = createOutboxFixture({ storage: new ReleasedStorage() });
+    await enqueueOne(outbox);
+    await enqueueOne(outbox);
+    adapter.reply({ status: 'acknowledged' });
+    adapter.block();
+    const draining = outbox.drain({ timeoutMs: 100_000 });
+    await untilRequested(adapter);
+    await adapter.nextRequest(1);
+    outbox.dispose();
+    released = true;
+    expect(await draining).toMatchObject({ acknowledged: 1, pending: 1, drained: false });
+  });
+
+  it('runs maintenance once up front and on idle rounds, not before every send', async () => {
+    let recordScans = 0;
+    class CountingStorage extends MemoryStorage {
+      override async *scan(
+        ...arguments_: Parameters<MemoryStorage['scan']>
+      ): ReturnType<MemoryStorage['scan']> {
+        if (arguments_[0].startsWith('appdlv:')) recordScans += 1;
+        yield* super.scan(...arguments_);
+      }
+    }
+    const { outbox } = createOutboxFixture({ storage: new CountingStorage() });
+    for (let index = 0; index < 6; index += 1) await enqueueOne(outbox);
+    const report = await outbox.drain({ timeoutMs: 0 });
+    expect(report).toMatchObject({ acknowledged: 6, drained: true });
+    expect(recordScans).toBeLessThanOrEqual(2);
+    outbox.dispose();
+  });
+
+  it('stops a maintenance pass when the drain caller aborts mid-scan', async () => {
+    const gate = createDeferred();
+    let scans = 0;
+    class GatedStorage extends MemoryStorage {
+      override async *scan(
+        ...arguments_: Parameters<MemoryStorage['scan']>
+      ): ReturnType<MemoryStorage['scan']> {
+        scans += 1;
+        if (scans === 1) await gate.promise;
+        yield* super.scan(...arguments_);
+      }
+    }
+    const { outbox, adapter } = createOutboxFixture({ storage: new GatedStorage() });
+    await enqueueOne(outbox);
+    const controller = new AbortController();
+    const draining = outbox.drain({ timeoutMs: 0, signal: controller.signal });
+    await flushMicrotasks(16);
+    controller.abort();
+    gate.resolve();
+    const report = await draining;
+    expect(report).toMatchObject({ pending: 1, drained: false });
+    expect(adapter.requests).toHaveLength(0);
+    outbox.dispose();
+  });
+
+  it('turns an Error whose message is not a string into a bounded unknown outcome', async () => {
+    class OddError extends Error {
+      override get message(): string {
+        return Symbol('odd') as unknown as string;
+      }
+    }
+    const { outbox, adapter } = createOutboxFixture();
+    adapter.fail(new OddError());
+    const deliveryId = await enqueueOne(outbox);
+    expect(await deliverOne(outbox)).toBe('unknown-outcome');
+    const failure = await fieldOf(outbox.receipt(deliveryId), 'failure');
+    expect(failure?.message).toContain('Symbol(odd)');
+    outbox.dispose();
+  });
+});
+
 describe('same-attempt refusals keep the lease', () => {
   it('treats a repeated begin as idempotent without aborting the live attempt', async () => {
     const { outbox } = createOutboxFixture();

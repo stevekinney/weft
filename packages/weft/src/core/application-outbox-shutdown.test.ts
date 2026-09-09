@@ -61,9 +61,15 @@ describe('ApplicationOutbox drain', () => {
     adapter.reply({ status: 'retryable' });
     const deliveryId = await enqueueOne(outbox);
     const draining = outbox.drain({ timeoutMs: 100, pollIntervalMs: 50 });
+    // The one delivery settles as retryable; the drain then idles until its
+    // budget elapses, with the retry still 500ms away.
+    await adapter.nextRequest();
+    await flushMicrotasks(64);
+    clock.advance(50);
+    await advanceTimersByTime(50);
     await flushMicrotasks(32);
-    clock.advance(100);
-    await advanceTimersByTime(100);
+    clock.advance(50);
+    await advanceTimersByTime(50);
     const report = await draining;
     expect(report).toMatchObject({
       retryScheduled: 1,
@@ -77,12 +83,17 @@ describe('ApplicationOutbox drain', () => {
 
   it('waits for a held delivery to come due within the budget', async () => {
     useFakeTimers();
-    const { outbox, clock } = createOutboxFixture();
+    const { outbox, clock, adapter } = createOutboxFixture();
     await enqueueOne(outbox, { availableAfterMs: 80 });
     const draining = outbox.drain({ timeoutMs: 1000, pollIntervalMs: 50 });
     await flushMicrotasks(32);
-    clock.advance(80);
-    await advanceTimersByTime(80);
+    // Held sleeps are capped by the poll interval: one 50ms look, then 30ms.
+    clock.advance(50);
+    await advanceTimersByTime(50);
+    await flushMicrotasks(32);
+    clock.advance(30);
+    await advanceTimersByTime(30);
+    await adapter.nextRequest();
     const report = await draining;
     expect(report).toMatchObject({ acknowledged: 1, pending: 0, drained: true });
     outbox.dispose();

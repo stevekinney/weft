@@ -218,7 +218,7 @@ Parked and failed deliveries are meant to be inspected and acted on. `list({ sta
 
 ## Drain and Shutdown
 
-`drain({ timeoutMs })` delivers everything that is due, runs a maintenance pass between rounds so lapsed leases are recovered, and waits — bounded — for held deliveries to come due. It reports counts only:
+`drain({ timeoutMs })` delivers everything that is due, runs a maintenance pass before its first round and whenever a round finds nothing due (so lapsed leases are recovered without rescanning the outbox before every send), and waits — bounded, and never longer than `pollIntervalMs` at a stretch, so a delivery another process enqueues meanwhile is seen promptly — for held deliveries to come due. The budget is one stop signal for the whole drain: it ends the sleeps, the maintenance passes, and an in-flight send alike, so a drain asked to stop at a deadline stops there. It reports counts only:
 
 ```ts
 import { ApplicationOutbox, MemoryStorage } from '@lostgradient/weft';

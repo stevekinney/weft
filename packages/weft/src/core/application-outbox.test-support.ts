@@ -73,20 +73,29 @@ export class ScriptedAdapter implements ApplicationDeliveryAdapter {
     return release;
   }
 
-  readonly #requestWaiters: ((request: ApplicationDeliverySendRequest) => void)[] = [];
+  readonly #requestWaiters: { readonly index: number; readonly resolve: () => void }[] = [];
 
-  /** Resolves with the next send request, or at once with the last one already seen. */
-  nextRequest(): Promise<ApplicationDeliverySendRequest> {
-    const last = this.requests.at(-1);
-    if (last !== undefined) return Promise.resolve(last);
-    return new Promise((resolve) => {
-      this.#requestWaiters.push(resolve);
-    });
+  /**
+   * Resolves with the send request at `index` once the adapter has been called
+   * that many times: a genuine await, so it works under fake timers, and it
+   * never spins when the request already exists.
+   */
+  async nextRequest(index = 0): Promise<ApplicationDeliverySendRequest> {
+    if (this.requests.length <= index) {
+      await new Promise<void>((resolve) => {
+        this.#requestWaiters.push({ index, resolve });
+      });
+    }
+    return this.requests[index]!;
   }
 
   async send(request: ApplicationDeliverySendRequest): Promise<ApplicationDeliveryOutcome> {
     this.requests.push(request);
-    for (const waiter of this.#requestWaiters.splice(0)) waiter(request);
+    const ready = this.#requestWaiters.filter((waiter) => waiter.index < this.requests.length);
+    for (const waiter of ready) {
+      this.#requestWaiters.splice(this.#requestWaiters.indexOf(waiter), 1);
+      waiter.resolve();
+    }
     const step = this.#script.shift();
     if (step === undefined) return this.fallback;
     if (step.kind === 'throw') throw step.error;

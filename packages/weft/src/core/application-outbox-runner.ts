@@ -110,7 +110,11 @@ async function sendOnce(
 
 function describeError(error: unknown): string {
   try {
-    return error instanceof Error ? error.message : String(error);
+    // An `Error` subclass may return anything from its `message` getter;
+    // coerce inside the guard so a hostile value cannot escape as a second
+    // exception from the template below.
+    const message: unknown = error instanceof Error ? error.message : error;
+    return typeof message === 'string' ? message : String(message);
   } catch {
     // A thrown value whose own stringification throws still has to become a
     // bounded diagnostic rather than a second exception out of the runner.
@@ -134,10 +138,11 @@ export async function deliverNext(
   if (claimed.status !== 'claimed') return claimed;
   const { claim } = claimed;
   const deliveryId = claim.receipt.deliveryId;
-  // A caller that aborted while the claim was committing gets no send at all:
-  // the lease is left to lapse in `claimed`, which maintenance reschedules as
-  // a provably unsent attempt.
-  if (options?.signal?.aborted === true) {
+  // A caller that aborted while the claim was committing — or a handle that
+  // was disposed then, which aborts the claim's own signal — gets no send at
+  // all: the lease is left to lapse in `claimed`, which maintenance
+  // reschedules as a provably unsent attempt.
+  if (options?.signal?.aborted === true || claim.signal.aborted || runtime.disposal.aborted) {
     releaseAttemptController(
       runtime,
       claim.attemptToken,
@@ -150,7 +155,7 @@ export async function deliverNext(
   if (begun.status !== 'settled') {
     return {
       status: 'settled',
-      receipt: await currentReceipt(runtime, deliveryId, begun),
+      receipt: await currentReceipt(runtime, deliveryId, begun, claim.receipt),
       committed: false,
     };
   }
@@ -206,7 +211,7 @@ async function sendAndSettle(
   );
   return {
     status: 'settled',
-    receipt: await currentReceipt(runtime, deliveryId, settled),
+    receipt: await currentReceipt(runtime, deliveryId, settled, attempting.receipt),
     committed: settled.status === 'settled' || settled.status === 'retrying',
   };
 }
@@ -334,16 +339,20 @@ function keepLeaseAlive(runtime: OutboxRuntime, claim: ApplicationDeliveryClaim)
   };
 }
 
-/** The receipt a refused or settled step reports, re-read when the step carried none. */
+/**
+ * The receipt a refused or settled step reports, re-read when the step carried
+ * none. A record retired by retention in the meantime — another process
+ * recovered and terminalized the attempt and a short retention window already
+ * deleted the receipt — is an ordinary race, reported with the last receipt
+ * this runner observed rather than as an error.
+ */
 async function currentReceipt(
   runtime: OutboxRuntime,
   deliveryId: string,
   result: { readonly status: string; readonly receipt?: ApplicationDeliveryReceipt },
+  lastObserved: ApplicationDeliveryReceipt,
 ): Promise<ApplicationDeliveryReceipt> {
   if (result.receipt !== undefined) return result.receipt;
   const loaded = await loadDelivery(runtime.storage, runtime.keys, deliveryId);
-  if (loaded !== null) return toApplicationDeliveryReceipt(loaded.record);
-  throw new ApplicationDeliveryValidationError(
-    `Delivery "${deliveryId}" was retired while its attempt was in flight.`,
-  );
+  return loaded === null ? lastObserved : toApplicationDeliveryReceipt(loaded.record);
 }

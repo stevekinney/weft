@@ -173,6 +173,12 @@ export async function heartbeatAttempt(
       releaseRefusedAttempt(runtime, options.deliveryId, options.attemptToken);
       return { status: 'unknown' };
     }
+    // A renewal already in flight when the outbox was disposed must not write:
+    // the caller may have released the storage with the handle, and the
+    // runner that asked for the renewal has stopped waiting for it.
+    if (runtime.disposal.aborted) {
+      return { status: 'stale', receipt: toApplicationDeliveryReceipt(loaded.record) };
+    }
     const now = runtime.now();
     const transition = heartbeatDeliveryAttempt(loaded.record, {
       attemptToken: options.attemptToken,

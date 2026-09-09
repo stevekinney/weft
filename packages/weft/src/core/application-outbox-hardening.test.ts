@@ -301,7 +301,7 @@ describe('runner edge cases', () => {
     outbox.dispose();
   });
 
-  it('reports a delivery retired mid-flight as a validation error', async () => {
+  it('reports a delivery retired mid-flight as an uncommitted race, not an error', async () => {
     const storage = new ScriptedStorage();
     const { outbox } = createOutboxFixture({ storage });
     const deliveryId = await enqueueOne(outbox);
@@ -311,7 +311,9 @@ describe('runner edge cases', () => {
         await storage.delete(KEYS.applicationDelivery(NAMESPACE, OWNER, deliveryId));
       }
     };
-    await expect(outbox.deliverNext()).rejects.toThrow(/retired while its attempt/);
+    const result = await outbox.deliverNext();
+    expect(result).toMatchObject({ status: 'settled', committed: false });
+    expect(result.status === 'settled' && result.receipt.deliveryId).toBe(deliveryId);
     outbox.dispose();
   });
 

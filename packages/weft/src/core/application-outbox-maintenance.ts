@@ -46,6 +46,14 @@ import {
 } from './application-outbox-types.ts';
 import { leaseCommitSerial } from './application-primitive-attempt-registry.ts';
 
+/**
+ * Whether a pass must stop at its next step: the outbox was disposed, or the
+ * caller driving it (a bounded drain) aborted.
+ */
+function halted(runtime: OutboxRuntime, stop: AbortSignal | undefined): boolean {
+  return runtime.disposal.aborted || stop?.aborted === true;
+}
+
 type MaintenanceCounters = {
   rescheduled: number;
   parked: number;
@@ -226,6 +234,7 @@ async function retireTerminalReceipts(
   runtime: OutboxRuntime,
   now: number,
   counters: MaintenanceCounters,
+  stop: AbortSignal | undefined,
 ): Promise<void> {
   const horizon = now - runtime.policy.terminalRetentionMs;
   if (horizon < 0) return;
@@ -243,11 +252,11 @@ async function retireTerminalReceipts(
     expired.push([key, value]);
   }
   for (const [indexKey, bytes] of malformed) {
-    if (runtime.disposal.aborted) return;
+    if (halted(runtime, stop)) return;
     await discardTerminalEntry(runtime, indexKey, bytes);
   }
   for (const [indexKey, bytes] of expired) {
-    if (runtime.disposal.aborted) return;
+    if (halted(runtime, stop)) return;
     if (await retireOneReceipt(runtime, indexKey, bytes)) counters.retired += 1;
   }
 }
@@ -281,6 +290,7 @@ async function collectLapsedDeliveries(
   runtime: OutboxRuntime,
   now: number,
   startAfter: string | undefined,
+  stop: AbortSignal | undefined,
 ): Promise<{ lapsed: string[]; nextCursor: string | undefined }> {
   const batchSize = runtime.policy.maintenanceBatchSize;
   const lapsed: string[] = [];
@@ -289,7 +299,7 @@ async function collectLapsedDeliveries(
     let seen = 0;
     const options = cursor === undefined ? { limit: batchSize } : { limit: batchSize, gt: cursor };
     const observedAt = leaseCommitSerial();
-    if (runtime.disposal.aborted) return { lapsed: [], nextCursor: startAfter };
+    if (halted(runtime, stop)) return { lapsed: [], nextCursor: startAfter };
     for await (const [key, value] of runtime.storage.scan(runtime.keys.deliveryPrefix, options)) {
       seen += 1;
       cursor = key;
@@ -313,16 +323,17 @@ async function collectLapsedDeliveries(
 export async function runOutboxMaintenance(
   runtime: OutboxRuntime,
   now: number,
+  stop?: AbortSignal,
 ): Promise<ApplicationOutboxMaintenanceReport> {
   const counters: MaintenanceCounters = { rescheduled: 0, parked: 0, deadLettered: 0, retired: 0 };
   const previousCursor = runtime.readMaintenanceCursor();
-  const scan = await collectLapsedDeliveries(runtime, now, previousCursor);
+  const scan = await collectLapsedDeliveries(runtime, now, previousCursor, stop);
   try {
     for (const deliveryId of scan.lapsed) {
       // A pass already in flight when the outbox is disposed stops at its next
       // step rather than continuing to write against resources the caller
       // may have released with the handle.
-      if (runtime.disposal.aborted) return Object.freeze({ ...counters });
+      if (halted(runtime, stop)) return Object.freeze({ ...counters });
       await recoverDelivery(runtime, deliveryId, now, counters);
     }
   } catch (error) {
@@ -330,6 +341,6 @@ export async function runOutboxMaintenance(
     throw error;
   }
   runtime.writeMaintenanceCursor(scan.nextCursor);
-  if (!runtime.disposal.aborted) await retireTerminalReceipts(runtime, now, counters);
+  if (!halted(runtime, stop)) await retireTerminalReceipts(runtime, now, counters, stop);
   return Object.freeze({ ...counters });
 }
