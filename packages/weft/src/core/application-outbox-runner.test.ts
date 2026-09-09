@@ -46,7 +46,7 @@ function remoteView(storage: MemoryStorage): MemoryStorage {
 
 /** A storage whose conditional batches can be observed per call. */
 class HookedStorage extends MemoryStorage {
-  beforeBatch: ((ordinal: number) => void) | null = null;
+  beforeBatch: ((ordinal: number) => void | Promise<void>) | null = null;
   beforeGet: ((key: string) => void | Promise<void>) | null = null;
   #ordinal = 0;
 
@@ -59,7 +59,7 @@ class HookedStorage extends MemoryStorage {
     ...arguments_: Parameters<MemoryStorage['conditionalBatch']>
   ): Promise<boolean> {
     this.#ordinal += 1;
-    this.beforeBatch?.(this.#ordinal);
+    await this.beforeBatch?.(this.#ordinal);
     return super.conditionalBatch(...arguments_);
   }
 }
@@ -1265,6 +1265,77 @@ describe('runner: eighth review round', () => {
     expect(result).toMatchObject({ status: 'settled', committed: false });
     expect(result.status === 'settled' && result.receipt.state).toBe('claimed');
     expect(adapter.requests).toHaveLength(0);
+    expect(await fieldOf(outbox.receipt(id), 'state')).toBe('claimed');
+    outbox.dispose();
+  });
+});
+
+describe('runner: ninth review round', () => {
+  afterEach(() => {
+    restoreRealTimers();
+  });
+
+  it('stops at the drain deadline while a claim commit is stalled, and sends nothing after', async () => {
+    useFakeTimers();
+    const storage = new HookedStorage();
+    const { outbox, adapter } = createOutboxFixture({ storage });
+    const id = await enqueueOne(outbox);
+    const gate = createDeferred();
+    const stalled = createDeferred();
+    storage.beforeBatch = async (ordinal) => {
+      if (ordinal !== 2) return;
+      stalled.resolve();
+      await gate.promise;
+    };
+    const draining = outbox.drain({ timeoutMs: 100 });
+    // A genuine await: the payload digest before the commit needs a real turn.
+    await stalled.promise;
+    await advanceTimersByTime(100);
+    expect(await draining).toMatchObject({ acknowledged: 0, pending: 1, drained: false });
+    // The detached claim commits, sees the stop, and leaves its lease to lapse.
+    gate.resolve();
+    await flushMicrotasks(64);
+    expect(adapter.requests).toHaveLength(0);
+    expect(await fieldOf(outbox.receipt(id), 'state')).toBe('claimed');
+    outbox.dispose();
+  });
+
+  it('does not recover a lease the drain stopped waiting for during its load', async () => {
+    useFakeTimers();
+    const storage = new HookedStorage();
+    const clock = createOutboxClock();
+    const { outbox } = createOutboxFixture({ storage, clock, attemptTimeoutMs: 100 });
+    const id = await enqueueOne(outbox);
+    await claimOne(outbox);
+    clock.advance(100);
+    const gate = createDeferred();
+    storage.beforeGet = async (key) => {
+      if (key.includes('appdlv:')) await gate.promise;
+    };
+    const draining = outbox.drain({ timeoutMs: 100 });
+    await flushMicrotasks(32);
+    await advanceTimersByTime(100);
+    expect(await draining).toMatchObject({ retryScheduled: 0, pending: 1, drained: false });
+    gate.resolve();
+    await flushMicrotasks(64);
+    storage.beforeGet = null;
+    expect(await fieldOf(outbox.receipt(id), 'state')).toBe('claimed');
+    outbox.dispose();
+  });
+
+  it('refuses a heartbeat whose commit lands past the attempt deadline', async () => {
+    const storage = new HookedStorage();
+    const clock = createOutboxClock();
+    const { outbox } = createOutboxFixture({ storage, clock, attemptTimeoutMs: 100 });
+    const id = await enqueueOne(outbox);
+    const claim = await claimOne(outbox);
+    clock.advance(99);
+    storage.beforeBatch = (ordinal) => {
+      if (ordinal === 3) clock.advance(1);
+    };
+    const result = await outbox.heartbeat(claim);
+    expect(result.status).toBe('deadline-exceeded');
+    expect(claim.signal.aborted).toBe(true);
     expect(await fieldOf(outbox.receipt(id), 'state')).toBe('claimed');
     outbox.dispose();
   });

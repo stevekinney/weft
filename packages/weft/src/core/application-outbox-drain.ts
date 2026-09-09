@@ -163,20 +163,27 @@ function drainStopSignal(
 }
 
 /**
- * One delivery under the drain's stop signal. A claim that the stop signal
- * interrupts throws that signal's reason, which for the drain is not an error
- * but the end of its work; anything else propagates.
+ * One delivery, waited for only as long as the drain's stop signal allows.
+ * The signal reaches every phase that observes it — the head lookup, the
+ * send, the settlement — but a storage call that stalls between them answers
+ * to nothing, so the wait itself is raced against the stop too. A stop that
+ * wins ends the drain's work: the delivery finishes on its own, sending
+ * nothing once it sees the signal, and is not this drain's to count. A
+ * failure of the delivery while the drain still waits propagates.
  */
 async function deliverUnlessStopped(
   runtime: OutboxRuntime,
   stop: AbortSignal,
 ): Promise<Awaited<ReturnType<typeof deliverNext>> | null> {
-  try {
-    return await deliverNext(runtime, { signal: stop });
-  } catch (error) {
-    if (stop.aborted && error === stop.reason) return null;
-    throw error;
+  const delivery = deliverNext(runtime, { signal: stop });
+  const raced = await raceAbort(() => delivery, stop);
+  if (raced.aborted) {
+    // The detached delivery ends by throwing the stop's reason or by
+    // abandoning its claim; neither is anyone's to observe now.
+    delivery.catch(() => undefined);
+    return null;
   }
+  return raced.value;
 }
 
 /**

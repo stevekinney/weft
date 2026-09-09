@@ -225,6 +225,14 @@ export async function heartbeatAttempt(
       }),
     );
     if (!committed) continue;
+    // The commit is an await of its own. A renewal decided just inside the
+    // attempt deadline can land past it, with a persisted expiry already in
+    // the past; reporting that as renewed would let the claimant keep sending
+    // while maintenance recovers the record for another attempt.
+    if (runtime.now() >= transition.next.attemptDeadlineAt) {
+      releaseRefusedAttempt(runtime, options.deliveryId, options.attemptToken);
+      return refusal('deadline-exceeded', transition.next);
+    }
     return {
       status: 'renewed',
       visibilityExpiresAt: transition.next.visibilityExpiresAt,

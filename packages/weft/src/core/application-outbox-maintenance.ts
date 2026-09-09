@@ -89,17 +89,23 @@ async function recoverDelivery(
   deliveryId: string,
   now: number,
   counters: MaintenanceCounters,
+  stop: AbortSignal | undefined,
 ): Promise<void> {
   for (let attempt = 1; attempt <= MAX_OUTBOX_TRANSITION_ATTEMPTS; attempt += 1) {
     // A recovery whose commit was refused because the outbox was disposed
     // meanwhile must not be retried against resources the caller released.
-    if (runtime.disposal.aborted) return;
+    if (halted(runtime, stop)) return;
     const observedAt = leaseCommitSerial();
     const loaded = await loadDelivery(runtime.storage, runtime.keys, deliveryId);
     if (loaded === null) {
       reconcileLocalAttempts(runtime, deliveryId, undefined, observedAt);
       return;
     }
+    // The load is an await of its own: a stop or disposal that landed during
+    // it — a drain that stopped waiting for this pass, say — must not be
+    // followed by a write, and a reschedule carries no header read through
+    // which a later guard could intervene.
+    if (halted(runtime, stop)) return;
     if (!isDeliveryLeaseExpired(loaded.record, now)) {
       reconcileLocalAttempts(runtime, deliveryId, loaded.record, observedAt);
       return;
@@ -337,7 +343,7 @@ export async function runOutboxMaintenance(
       // step rather than continuing to write against resources the caller
       // may have released with the handle.
       if (halted(runtime, stop)) return Object.freeze({ ...counters });
-      await recoverDelivery(runtime, deliveryId, now, counters);
+      await recoverDelivery(runtime, deliveryId, now, counters, stop);
     }
   } catch (error) {
     runtime.writeMaintenanceCursor(previousCursor);

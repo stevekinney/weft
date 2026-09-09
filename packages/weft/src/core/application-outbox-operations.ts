@@ -78,7 +78,7 @@ async function operate(
   throw new ApplicationOutboxContentionError(operation, deliveryId);
 }
 
-/** Return a parked, dead-lettered, or rejected delivery to the due index with one more attempt. */
+/** Return a parked, dead-lettered, or rejected delivery to the due index with at least one more attempt: an unspent budget is kept, a spent one is raised by one. */
 export function retryDelivery(
   runtime: OutboxRuntime,
   deliveryId: string,

@@ -397,11 +397,14 @@ export function requestDeliveryCancellation(
 
 /**
  * Operator retry: return a parked, dead-lettered, or rejected delivery to the
- * due index with exactly one more attempt to spend.
+ * due index with at least one more attempt to spend.
  *
- * `maxAttempts` is raised to `attempt + 1` when the budget is spent, so the
- * retried delivery can be claimed once; a second operator retry grants one
- * more. The record's provenance (`attempt`, `retryCount`) is preserved.
+ * A budget the delivery never used up — a permanent rejection on its first
+ * attempt of five, say — is kept, so the reopened delivery may retry on its
+ * own up to `maxAttempts`; a spent budget is raised to `attempt + 1`, so the
+ * delivery can be claimed exactly once more, and a second operator retry
+ * grants one more again. The record's provenance (`attempt`, `retryCount`) is
+ * preserved.
  */
 export function retryDeliveryByOperator(
   record: ApplicationDeliveryRecord,

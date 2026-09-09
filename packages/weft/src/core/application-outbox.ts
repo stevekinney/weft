@@ -384,7 +384,7 @@ export class ApplicationOutbox {
     });
   }
 
-  /** Return a parked, dead-lettered, or rejected delivery to the queue with one more attempt. */
+  /** Return a parked, dead-lettered, or rejected delivery to the queue with at least one more attempt: an unspent budget is kept, a spent one is raised by one. */
   async retry(options: {
     readonly deliveryId: string;
   }): Promise<ApplicationDeliveryOperatorResult> {
