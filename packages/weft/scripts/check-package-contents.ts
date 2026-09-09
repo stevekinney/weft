@@ -79,7 +79,10 @@ const maximumUnpackedBytes = 12 * 1024 * 1024;
 // `npm pack --dry-run --json --ignore-scripts` entry count (1615) rather
 // than attempting to reconstruct the exact per-batch formula for three
 // PRs' worth of unreconciled drift.
-const maximumEntryCount = 1615;
+// WFT-85's outbox then adds its modules, the shared payload validators, and
+// the shared timing helpers on top of that; `prepack` on the merged tree
+// reports 1665.
+const maximumEntryCount = 1665;
 
 type PackFile = {
   path: string;

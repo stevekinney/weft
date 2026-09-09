@@ -32,7 +32,7 @@ export {
 /** Maximum bytes in an idempotency key. */
 export const MAX_APPLICATION_IDEMPOTENCY_KEY_BYTES = 256;
 /** Maximum bytes in a content-addressed payload reference. */
-export const MAX_APPLICATION_PAYLOAD_REFERENCE_BYTES = 2048;
+export { MAX_APPLICATION_PAYLOAD_REFERENCE_BYTES } from './application-primitive-payload.ts';
 /** Maximum claims allowed for one command. */
 export const MAX_APPLICATION_COMMAND_ATTEMPTS = 100;
 /** Maximum open commands a mailbox may be configured to hold. */
