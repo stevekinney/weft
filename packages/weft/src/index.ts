@@ -594,6 +594,60 @@ export type {
 } from './core/application-mailbox-types';
 export { ApplicationCommandValidationError } from './core/application-mailbox-validation';
 export { WaitBudgetElapsedError } from './core/application-primitive-abort';
+// Durable application delivery outbox — storage-backed at-least-once delivery
+// with durable attempt marking, fenced claims, unknown-outcome policy, and
+// bounded drain (WFT-85).
+export { ApplicationOutbox } from './core/application-outbox';
+export type {
+  ApplicationDeliveryAdapter,
+  ApplicationDeliveryAdmission,
+  ApplicationDeliveryCancellationResult,
+  ApplicationDeliveryClaim,
+  ApplicationDeliveryClaimedPayload,
+  ApplicationDeliveryCleanupResult,
+  ApplicationDeliveryHeartbeatResult,
+  ApplicationDeliveryInput,
+  ApplicationDeliveryOperatorResult,
+  ApplicationDeliveryOutcome,
+  ApplicationDeliveryReceipt,
+  ApplicationDeliverySendRequest,
+  ApplicationDeliverySettleResult,
+  ApplicationOutboxCapacity,
+  ApplicationOutboxClaimResult,
+  ApplicationOutboxDeliverResult,
+  ApplicationOutboxDrainReport,
+  ApplicationOutboxEventSink,
+  ApplicationOutboxListOptions,
+  ApplicationOutboxMaintenanceReport,
+  ApplicationOutboxOptions,
+  ApplicationOutboxWaitOptions,
+} from './core/application-outbox-contract';
+export { ApplicationDeliveryValidationError } from './core/application-outbox-guards';
+export { ApplicationOutboxContentionError } from './core/application-outbox-internals';
+export {
+  isApplicationDeliveryAttempting,
+  isApplicationDeliveryLeased,
+  isApplicationDeliveryTerminalState,
+  isApplicationDeliveryWaiting,
+} from './core/application-outbox-types';
+export type {
+  ApplicationDeliveryAttempting,
+  ApplicationDeliveryCancelling,
+  ApplicationDeliveryCausation,
+  ApplicationDeliveryClaimed,
+  ApplicationDeliveryFailure,
+  ApplicationDeliveryLeasedRecord,
+  ApplicationDeliveryPayload,
+  ApplicationDeliveryQueued,
+  ApplicationDeliveryRecord,
+  ApplicationDeliveryRetryScheduled,
+  ApplicationDeliveryState,
+  ApplicationDeliveryTerminalRecord,
+  ApplicationDeliveryTerminalState,
+  ApplicationDeliveryUnknownOutcomePolicy,
+  ApplicationDeliveryWaitingRecord,
+  ApplicationOutboxRecord,
+} from './core/application-outbox-types';
 // Durable concurrency primitives — mutex/semaphore built on AtomicState CAS.
 export { DurableMutex, DurableSemaphore, initialLockRecord } from './core/concurrency';
 export type {

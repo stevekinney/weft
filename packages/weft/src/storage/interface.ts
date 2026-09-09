@@ -1,4 +1,5 @@
 import { APPLICATION_MAILBOX_KEYS } from './application-mailbox-keys.ts';
+import { APPLICATION_OUTBOX_KEYS } from './application-outbox-keys.ts';
 import { requireStorageCapability, type StorageCapabilities } from './capabilities.ts';
 import { WORKFLOW_CATALOG_KEYS } from './catalog-keys.ts';
 import { DEFAULT_SCOPE } from './default-scope.ts';
@@ -628,6 +629,7 @@ export const KEYS = {
    */
   leaseHolder: () => 'lease:holder',
   ...APPLICATION_MAILBOX_KEYS,
+  ...APPLICATION_OUTBOX_KEYS,
   ...OWNERSHIP_CLAIM_KEYS,
   ...WORKFLOW_CATALOG_KEYS,
   budget: (namespace: string, period: string, date: string) =>

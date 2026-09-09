@@ -679,4 +679,32 @@ describe('getWorkflowRevisionDiagnostics — dynamic-source extension (WFT-15/16
     expect(diagnosticsAfter.references.inFlightStarts).toBe(0);
     expect(getInternals(engine).inFlightStartsByRevision.get('lazy-checkout')).toBeUndefined();
   });
+
+  it('a failed engine.start() on a lazy type releases its early inFlightStarts reservation instead of leaking it', async () => {
+    // `resolveAndReserveExecutableRegistration()`'s `onRevisionChosen` hook
+    // reserves BEFORE the loader is awaited; if the loader then throws, the
+    // reservation must be released rather than left permanently inflated
+    // (which would report the revision non-removable forever).
+    await using storage = new MemoryStorage();
+    await using engine = new Engine({ storage, backgroundTasks: 'manual' });
+    const revision = await lazyRevision();
+    engine.registerSource(
+      workflowSource(
+        { name: 'lazy-checkout', location: './lazy.ts', exportName: 'lazy', revision },
+        async () => {
+          throw new Error('loader exploded');
+        },
+      ),
+    );
+
+    await expect(engine.start('lazy-checkout', null)).rejects.toThrow();
+
+    const diagnosticsAfter = await getWorkflowRevisionDiagnostics(
+      engine,
+      'lazy-checkout',
+      revision,
+    );
+    expect(diagnosticsAfter.references.inFlightStarts).toBe(0);
+    expect(getInternals(engine).inFlightStartsByRevision.get('lazy-checkout')).toBeUndefined();
+  });
 });

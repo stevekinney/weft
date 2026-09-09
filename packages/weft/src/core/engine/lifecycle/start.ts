@@ -172,8 +172,7 @@ export async function startWorkflow(
 
   assertDeferSupported(internals, options, Boolean(delayedStartTimer));
 
-  // Atomic check-and-reserve, still synchronous with `prepareStartWorkflow`
-  // above: prevents two concurrent same-ID start() calls from both passing.
+  // Atomic check-and-reserve, still synchronous with the prep above.
   if (internals.pendingStarts.has(workflowId)) {
     throw new WorkflowAlreadyExistsError(workflowId);
   }
@@ -185,7 +184,6 @@ export async function startWorkflow(
     // Reject oversized input before any await, before a lazy type's resolve.
     assertPayloadWithinLimit(input, internals.options.payloadSizePolicy.maxBytes, 'workflow input');
 
-    // Sync for an eager type; awaits dynamic-source resolution otherwise.
     const { registration, inFlightRevision: reservedRevision } =
       await resolveAndReserveExecutableRegistration(
         internals,
@@ -239,13 +237,11 @@ export async function startWorkflow(
     );
     const persistedWorkflowStartHeaders = selectPersistedWorkflowStartHeaders(workflowStartHeaders);
 
-    // Last possible moment before the create commit, and after every throwing
-    // build step above, so a `'start-new'` restart rejected by any of those
-    // leaves the prior terminal run intact. Clears the OLD run's in-memory
-    // caches BEFORE the new run's maps are written below (so the clear can't
-    // wipe fresh entries) but does NOT commit the destructive storage delete —
-    // that is folded into the atomic create batch below as
-    // `purgeDeleteOperations`, so a create-batch failure can't strand the id.
+    // Last possible moment before the create commit, so a `'start-new'`
+    // restart rejected by any earlier build step leaves the prior terminal
+    // run intact. Clears the OLD run's in-memory caches BEFORE the new run's
+    // maps are written below, but folds the destructive storage delete into
+    // the atomic create batch as `purgeDeleteOperations` below.
     const purgeDeleteOperations =
       terminalRunToPurge !== null
         ? await prepareTerminalRunPurge(internals, terminalRunToPurge, callbacks)

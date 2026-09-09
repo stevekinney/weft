@@ -22,6 +22,9 @@ import {
   APPLICATION_MAILBOX_RECORD_VERSION,
   isApplicationCommandTerminalState,
 } from './application-mailbox-types.ts';
+import { computeRetryBackoffMs } from './application-primitive-timing.ts';
+
+export { computeRetryBackoffMs };
 
 /**
  * Why a proposed transition is illegal. Stable and low-cardinality, so callers
@@ -103,10 +106,4 @@ export function applicationCommandIdentityFields(record: ApplicationCommandRecor
     firstClaimedAt: record.firstClaimedAt,
     availableAt: record.availableAt,
   } as const;
-}
-
-/** Deterministic exponential backoff. No jitter, so redelivery timing is testable. */
-export function computeRetryBackoffMs(attempt: number, baseMs: number, maximumMs: number): number {
-  const raw = baseMs * 2 ** Math.max(0, attempt - 1);
-  return Math.min(Number.isFinite(raw) ? raw : maximumMs, maximumMs);
 }

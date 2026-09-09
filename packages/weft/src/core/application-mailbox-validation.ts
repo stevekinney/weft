@@ -20,17 +20,13 @@ import {
   MAX_APPLICATION_IDEMPOTENCY_KEY_BYTES,
   MAX_APPLICATION_IDENTITY_BYTES,
   MAX_APPLICATION_MAILBOX_BACKLOG,
-  MAX_APPLICATION_PAYLOAD_REFERENCE_BYTES,
   optionalIdentityOf,
   requireIdentity,
   requireNonNegativeInteger,
   requirePositiveInteger,
 } from './application-mailbox-guards.ts';
 import type { ApplicationCommandPayload } from './application-mailbox-types.ts';
-import { computePayloadDigest, PayloadDigestError } from './application-payload-digest.ts';
-import { decode, encode } from './codec.ts';
-
-const HEX_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
+import { createPayloadValidators } from './application-primitive-payload.ts';
 
 /** Mailbox defaults resolved once at construction. */
 export type ResolvedMailboxPolicy = Readonly<{
@@ -126,124 +122,9 @@ export type ValidatedCommandInput = Readonly<{
   commandTimeoutMs: number;
 }>;
 
-async function validateInlinePayload(
-  payload: object,
-  maxInlinePayloadBytes: number,
-): Promise<{ payload: ApplicationCommandPayload; digest: string }> {
-  const value: unknown = Reflect.get(payload, 'value');
-  // Snapshot BEFORE anything is awaited, then size-check and digest the snapshot.
-  // Digesting awaits Web Crypto, so a caller mutating its object during that await
-  // would otherwise have the new bytes persisted under the old digest — and the
-  // resulting command fails verification at the FIFO head, blocking every command
-  // behind it. Taking the snapshot first makes the digested bytes and the stored
-  // bytes the same bytes by construction.
-  let encoded: Uint8Array;
-  try {
-    encoded = encode(value);
-  } catch (cause) {
-    throw new ApplicationCommandValidationError(
-      'payload.value is not encodable by the structured-clone codec.',
-      { cause },
-    );
-  }
-  if (encoded.byteLength > maxInlinePayloadBytes) {
-    throw new ApplicationCommandValidationError(
-      `payload.value encodes to ${encoded.byteLength} bytes, over the ${maxInlinePayloadBytes}-byte inline ceiling. Store it behind a content-addressed reference instead.`,
-    );
-  }
-  const snapshot: unknown = decode(encoded);
-  try {
-    return {
-      payload: { form: 'inline', value: snapshot },
-      digest: await computePayloadDigest(snapshot),
-    };
-  } catch (cause) {
-    if (cause instanceof PayloadDigestError) {
-      throw new ApplicationCommandValidationError(
-        `payload.value cannot be digested: ${cause.message}`,
-        { cause },
-      );
-    }
-    throw cause;
-  }
-}
-
-function validateReferencePayload(payload: object): {
-  payload: ApplicationCommandPayload;
-  digest: string;
-} {
-  const reference = requireIdentity(
-    Reflect.get(payload, 'reference'),
-    'payload.reference',
-    MAX_APPLICATION_PAYLOAD_REFERENCE_BYTES,
-  );
-  const digest: unknown = Reflect.get(payload, 'digest');
-  if (typeof digest !== 'string' || !HEX_DIGEST_PATTERN.test(digest)) {
-    throw new ApplicationCommandValidationError(
-      'payload.digest must be a 64-character lowercase hexadecimal SHA-256 digest. A reference payload has no other way to bind idempotency to payload identity.',
-    );
-  }
-  const rawByteLength: unknown = Reflect.get(payload, 'byteLength');
-  if (rawByteLength === undefined) {
-    return { payload: { form: 'reference', reference, digest }, digest };
-  }
-  const referencedBytes = requireNonNegativeInteger(
-    rawByteLength,
-    'payload.byteLength',
-    Number.MAX_SAFE_INTEGER,
-  );
-  return {
-    payload: { form: 'reference', reference, digest, byteLength: referencedBytes },
-    digest,
-  };
-}
-
-async function validatePayload(
-  payload: unknown,
-  maxInlinePayloadBytes: number,
-): Promise<{ payload: ApplicationCommandPayload; digest: string }> {
-  if (typeof payload !== 'object' || payload === null || !('form' in payload)) {
-    throw new ApplicationCommandValidationError(
-      'payload must be an inline or reference payload object.',
-    );
-  }
-  const form: unknown = Reflect.get(payload, 'form');
-  if (form === 'inline') return validateInlinePayload(payload, maxInlinePayloadBytes);
-  if (form !== 'reference') {
-    throw new ApplicationCommandValidationError("payload.form must be 'inline' or 'reference'.");
-  }
-  return validateReferencePayload(payload);
-}
-
-function validateCausation(
-  causation: ApplicationCommandInput['causation'],
-): ApplicationCommandInput['causation'] {
-  if (causation === undefined) return undefined;
-  // `typeof null === 'object'`, so the null case needs naming or it escapes as a
-  // raw TypeError from the field reads below.
-  if (typeof causation !== 'object' || causation === null) {
-    throw new ApplicationCommandValidationError('causation must be an object when present.');
-  }
-  const correlationId = optionalIdentityOf(
-    causation.correlationId,
-    'causation.correlationId',
-    MAX_APPLICATION_IDENTITY_BYTES,
-  );
-  const causationId = optionalIdentityOf(
-    causation.causationId,
-    'causation.causationId',
-    MAX_APPLICATION_IDENTITY_BYTES,
-  );
-  const traceparent = optionalIdentityOf(
-    causation.traceparent,
-    'causation.traceparent',
-    MAX_APPLICATION_IDENTITY_BYTES,
-  );
-  if (correlationId === undefined && causationId === undefined && traceparent === undefined) {
-    return undefined;
-  }
-  return { correlationId, causationId, traceparent };
-}
+const { validatePayload, validateCausation } = createPayloadValidators(
+  ApplicationCommandValidationError,
+);
 
 /**
  * Validate one command offered for admission and resolve its effective policy.

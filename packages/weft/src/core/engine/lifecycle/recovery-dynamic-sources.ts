@@ -18,9 +18,14 @@ import type { LifecycleCallbacks } from './shared.ts';
  * eager registration (which resolves synchronously and needs no preload),
  * concurrently, one loader invocation per distinct type even when many
  * non-terminal runs share it. Returns a `type -> DynamicWorkflowSourceUnavailableError`
- * map for the caller to route failed types straight to
- * `failWorkflowForUnavailableDynamicSource` without ever calling `resume()`.
- * A disposal mid-preload aborts the whole barrier by rethrowing, matching
+ * map; `recoverAll()` (`transition.ts`) publishes it into
+ * `internals.sources.recoveryUnavailableTypes` for the duration of its
+ * per-entry loop rather than failing a matched type directly — every
+ * entry, failed type or not, still goes through
+ * `recoverEntryOrIsolateFailure()` -> `resume()`, so a cached failure here
+ * commits AFTER claim acquisition and terminal-cleanup tracking, exactly
+ * like the existing `VersionMismatchError` isolation. A disposal mid-preload
+ * aborts the whole barrier by rethrowing, matching
  * `recoverEntryOrIsolateFailure`'s own un-isolated treatment of
  * {@link EngineDisposedError}.
  */

@@ -70,7 +70,12 @@ export function reserveInFlightStart(
  * closing the window where a concurrent `removeWorkflowRevision()` could
  * observe zero references against a revision this call's own source load
  * is about to durably (re)install; reserves afterward for an eager type,
- * exactly as before WFT-15/16 (that path never invokes the hook).
+ * exactly as before WFT-15/16 (that path never invokes the hook). If the
+ * loader then fails — `resolve()` rejects AFTER the hook already fired — the
+ * early reservation is released here before rethrowing: `startWorkflow`
+ * only assigns its own `inFlightRevision` on a successful return, so its
+ * `finally` releases nothing on this path and the increment would otherwise
+ * leak forever, permanently reporting the revision non-`removable`.
  */
 export async function resolveAndReserveExecutableRegistration(
   internals: EngineInternals,
@@ -80,15 +85,20 @@ export async function resolveAndReserveExecutableRegistration(
     onRevisionChosen?: (revision: string) => void,
   ) => Promise<{ entry: RegistrationEntry; revision: string | undefined }>,
 ): Promise<{ registration: RegistrationEntry; inFlightRevision: string | undefined }> {
-  let reservedEarly = false;
-  const { entry: registration, revision } = await resolve(type, (chosen) => {
-    reserveInFlightStart(internals, type, chosen);
-    reservedEarly = true;
-  });
-  const inFlightRevision = reservedEarly
-    ? revision
-    : reserveInFlightStart(internals, type, revision);
-  return { registration, inFlightRevision };
+  let earlyReservation: string | undefined;
+  try {
+    const { entry: registration, revision } = await resolve(type, (chosen) => {
+      earlyReservation = reserveInFlightStart(internals, type, chosen);
+    });
+    const inFlightRevision =
+      earlyReservation !== undefined
+        ? earlyReservation
+        : reserveInFlightStart(internals, type, revision);
+    return { registration, inFlightRevision };
+  } catch (error) {
+    releaseInFlightStart(internals, type, earlyReservation);
+    throw error;
+  }
 }
 
 /** Release the slot {@link reserveInFlightStart} reserved; a no-op when `revision` is `undefined`. */

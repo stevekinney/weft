@@ -8,7 +8,9 @@ import {
   ActivityResolutionError,
   ActivityScheduleToCloseTimeoutError,
   ApplicationCommandValidationError,
+  ApplicationDeliveryValidationError,
   ApplicationMailboxContentionError,
+  ApplicationOutboxContentionError,
   AsyncActivityTokenNotFoundError,
   AtomicStateConflictError,
   BranchTopologyChangedError,
@@ -149,6 +151,9 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
   ApplicationCommandValidationError: () =>
     new ApplicationCommandValidationError('caller must be a non-empty string.'),
   ApplicationMailboxContentionError: () => new ApplicationMailboxContentionError('admit', null),
+  ApplicationDeliveryValidationError: () =>
+    new ApplicationDeliveryValidationError('destinationRef must be a non-empty string.'),
+  ApplicationOutboxContentionError: () => new ApplicationOutboxContentionError('enqueue', null),
   WaitBudgetElapsedError: () => new WaitBudgetElapsedError(),
   WorkflowCatalogConflictError: () => new WorkflowCatalogConflictError('checkout', 'r1'),
   WorkflowRevisionNotInstalledError: () => new WorkflowRevisionNotInstalledError('checkout', 'r1'),
