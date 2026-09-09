@@ -8,11 +8,8 @@
  * @module core/application-primitive-codec
  */
 
-import {
-  MAX_APPLICATION_IDENTITY_BYTES,
-  isWellFormedString,
-} from './application-mailbox-guards.ts';
-import { APPLICATION_MAILBOX_RECORD_VERSION } from './application-mailbox-types.ts';
+import { MAX_APPLICATION_IDENTITY_BYTES, isWellFormedString } from './mailbox-guards.ts';
+import { MAILBOX_RECORD_VERSION } from './mailbox-types.ts';
 import { PersistedDataCorruptError } from './persisted-data-incompatible-error.ts';
 
 export function isRecordObject(value: unknown): value is Record<string, unknown> {
@@ -74,7 +71,7 @@ export function readOptionalInteger(
 export function readVersion(
   source: Record<string, unknown>,
   key: string,
-  expected: number = APPLICATION_MAILBOX_RECORD_VERSION,
+  expected: number = MAILBOX_RECORD_VERSION,
 ): void {
   if (source['recordVersion'] !== expected) fail(key);
 }

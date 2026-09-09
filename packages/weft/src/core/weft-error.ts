@@ -68,9 +68,9 @@ export type WeftErrorCode =
   | 'WorkerManifestBuildError'
   | 'OwnershipModeMismatchError'
   | 'ApplicationCommandValidationError'
-  | 'ApplicationMailboxContentionError'
+  | 'MailboxContentionError'
   | 'ApplicationDeliveryValidationError'
-  | 'ApplicationOutboxContentionError'
+  | 'OutboxContentionError'
   | 'WaitBudgetElapsedError'
   | 'WorkflowCatalogConflictError'
   | 'WorkflowRevisionNotInstalledError'
@@ -152,9 +152,9 @@ const publicWeftErrorCodeMap = {
   WorkerManifestBuildError: true,
   OwnershipModeMismatchError: true,
   ApplicationCommandValidationError: true,
-  ApplicationMailboxContentionError: true,
+  MailboxContentionError: true,
   ApplicationDeliveryValidationError: true,
-  ApplicationOutboxContentionError: true,
+  OutboxContentionError: true,
   WaitBudgetElapsedError: true,
   WorkflowCatalogConflictError: true,
   WorkflowRevisionNotInstalledError: true,
