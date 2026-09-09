@@ -110,10 +110,11 @@ export async function drainOutbox(
       const round = await pauseBeforeNextRound(runtime, result, {
         counters,
         deadline,
+        pending: lastKnownPending,
         pollIntervalMs,
         stop: stop.signal,
       });
-      lastKnownPending = round.pending ?? lastKnownPending;
+      lastKnownPending = round.pending;
       drained = round.status === 'drained';
       if (round.status !== 'again') break;
     }
@@ -245,8 +246,9 @@ async function maintainOutbox(
  * read the open count (unless disposed), decide whether the drain is done,
  * and sleep until the next look — never longer than the poll interval, so a
  * delivery another process enqueues meanwhile is seen promptly, and never
- * longer than the budget. `pending` is `null` only when disposal made the
- * read unsafe.
+ * longer than the budget. The returned `pending` is the durable count when
+ * it was read, otherwise the cached count lowered by what the maintenance
+ * pass closed.
  */
 async function pauseBeforeNextRound(
   runtime: OutboxRuntime,
@@ -254,15 +256,17 @@ async function pauseBeforeNextRound(
   context: {
     readonly counters: DrainCounters;
     readonly deadline: number;
+    readonly pending: number | null;
     readonly pollIntervalMs: number;
     readonly stop: AbortSignal;
   },
 ): Promise<{ readonly status: 'again' | 'drained' | 'stop'; readonly pending: number | null }> {
-  if (!drainActive(runtime, context.stop)) return { status: 'stop', pending: null };
-  await maintainOutbox(runtime, context.counters, context.stop);
-  if (runtime.disposal.aborted) return { status: 'stop', pending: null };
+  if (!drainActive(runtime, context.stop)) return { status: 'stop', pending: context.pending };
+  const closed = await maintainOutbox(runtime, context.counters, context.stop);
+  const cached = subtract(context.pending, closed);
+  if (runtime.disposal.aborted) return { status: 'stop', pending: cached };
   const pending = await readOpenCount(runtime, context.stop);
-  if (pending === null) return { status: 'stop', pending: null };
+  if (pending === null) return { status: 'stop', pending: cached };
   if (pending === 0) return { status: 'drained', pending };
   const remaining = context.deadline - runtime.now();
   if (remaining <= 0) return { status: 'stop', pending };

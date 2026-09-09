@@ -39,6 +39,7 @@ export type ApplicationOutboxTransitionRejection =
   | 'not-attempting'
   | 'deadline-exceeded'
   | 'already-terminal'
+  | 'cancellation-requested'
   | 'not-applicable';
 
 /** The outcome of a proposed transition: the record to persist, or why the edge is illegal. */

@@ -39,7 +39,7 @@ const delivered = await outbox.deliverNext();
 if (delivered.status === 'settled') console.log(delivered.receipt.state); // 'acknowledged'
 ```
 
-The outbox requires storage that reports `conditionalBatch` support and `scanConsistency: 'snapshot'`. Every transition is a compare-and-swap against the exact bytes the record was read as, and a claim is decided by reading the earliest entry of a sorted due index, which a best-effort scan could miss. `MemoryStorage`, `BunSQLiteStorage`, `LMDBStorage`, and the Postgres adapters qualify.
+The outbox requires storage that reports `conditionalBatch` support, `scanConsistency: 'snapshot'`, and `readAfterWrite: 'linearizable'`. Every transition is a compare-and-swap against the exact bytes the record was read as; a claim is decided by reading the earliest entry of a sorted due index, which a best-effort scan could miss; and maintenance reconciles this process's live attempts against the record it reads, so a read that lags another handle's commit could abort a current attempt underneath its transport. `MemoryStorage`, `BunSQLiteStorage`, `LMDBStorage`, and the Postgres adapters qualify; `TursoStorage`, `HttpStorage`, and `IndexedDBStorage` are rejected at construction.
 
 ## Enqueue Returns a Receipt Before Anything Is Sent
 
@@ -77,7 +77,7 @@ queued ──claim──▶ claimed ──begin──▶ attempting ──adapte
 
 Without the intermediate write those two cases are indistinguishable, and an outbox would have to choose between duplicating effects and abandoning deliveries. The extra compare-and-swap per delivery is the price of telling them apart.
 
-`deliverNext()` performs both steps, calls the adapter, and settles. Its `settled` result carries `committed`: `true` when this call wrote the receipt's disposition, `false` when another actor moved the delivery first, the caller aborted before the send began, or the outbox was disposed mid-send and the lease was left for maintenance to recover. A host that drives the transport itself uses the same steps explicitly: `claim()`, `beginAttempt()`, then `settle()`.
+`deliverNext()` performs both steps, calls the adapter, and settles. Its `settled` result carries `committed`: `true` when this call wrote the receipt's disposition, `false` when another actor moved the delivery first, the caller aborted before the send began, the caller's signal fired while the settlement was still being written (the settlement finishes on its own, fenced on the attempt, but this call stopped waiting for it), or the outbox was disposed mid-send and the lease was left for maintenance to recover. A host that drives the transport itself uses the same steps explicitly: `claim()`, `beginAttempt()`, then `settle()`.
 
 ## The Adapter Contract
 
@@ -111,7 +111,7 @@ console.log(typeof adapter.send); // 'function'
 
 Three things the runner does that an adapter never has to think about. A thrown error is treated as `unknown`, because the request may already have left. An attempt deadline that elapses while `send()` is still pending makes the runner stop waiting, treat the result as `unknown`, and abort the signal as it releases the attempt. And a malformed outcome — not an object, an unrecognised status, `NaN` for `retryAfterMs`, a `Map` as evidence — is mapped to `unknown` with a diagnostic message rather than thrown, since by then the send may have happened and the delivery must not be retried on the strength of nothing.
 
-While `send()` is pending the runner renews the attempt's visibility at half the window it was granted, so a send that outlasts `visibilityTimeoutMs` but stays inside the attempt deadline is not reclaimed underneath the transport; a renewal refused because another process recovered the lease aborts the adapter's signal. A caller abort passed to `deliverNext({ signal })` or `drain({ signal })` is forwarded to that same signal, so an aborted drain reaches the adapter instead of waiting out the attempt.
+While `send()` is pending, and until the settlement that follows commits or is refused, the runner renews the attempt's visibility at half the window it was granted, so a send that outlasts `visibilityTimeoutMs` but stays inside the attempt deadline is not reclaimed underneath the transport, and a slow settlement write does not hand a known result to maintenance as an unknown one; a renewal refused because another process recovered the lease aborts the adapter's signal. A caller abort passed to `deliverNext({ signal })` or `drain({ signal })` is forwarded to that same signal, so an aborted drain reaches the adapter instead of waiting out the attempt.
 
 Returning from `send()` **never** settles a delivery by itself. The outbox validates the outcome and commits the matching transition, fenced on the attempt token and the `attempting` bytes. Only that commit moves the record.
 
@@ -208,7 +208,7 @@ Cancellation is durable before it reaches anyone: `requestCancellation()` commit
 
 An acknowledgement always wins over a cancellation request. If the adapter reports `acknowledged` after cancellation was requested, the effect happened and the receipt says `acknowledged`, with `cancellationRequestedAt` retained as evidence. Any other outcome on a cancelling delivery honours the cancellation: `cancelled` when nothing was confirmed, the unknown-outcome policy when the result was lost.
 
-An in-process attempt learns about cancellation through its signal — including through another `ApplicationOutbox` handle over the same `Storage` instance. A worker in another process learns from `heartbeat()`'s `cancellationRequested` flag. `cleanupState()` and the bounded `awaitCleanup()` report whether the attempt has settled; `pending` means the outbox stopped waiting, never that the transport stopped.
+An in-process attempt learns about cancellation through its signal — including through another `ApplicationOutbox` handle over the same `Storage` instance. A worker in another process learns from `heartbeat()`'s `cancellationRequested` flag, and a `beginAttempt()` repeated after cancellation was requested is refused as `stale` rather than answered as an idempotent success. `cleanupState()` and the bounded `awaitCleanup()` report whether the attempt has settled; `pending` means the outbox stopped waiting, never that the transport stopped.
 
 ## Operator Transitions
 
@@ -218,7 +218,7 @@ Parked and failed deliveries are meant to be inspected and acted on. `list({ sta
 
 ## Drain and Shutdown
 
-`drain({ timeoutMs })` delivers everything that is due, runs a maintenance pass before its first round and whenever a round finds nothing due (so lapsed leases are recovered without rescanning the outbox before every send), and waits — bounded, and never longer than `pollIntervalMs` at a stretch, so a delivery another process enqueues meanwhile is seen promptly — for held deliveries to come due. The budget is one stop signal for the whole drain: it ends the sleeps, the maintenance passes, and an in-flight send alike, so a drain asked to stop at a deadline stops there. It reports counts only:
+`drain({ timeoutMs })` delivers everything that is due, runs a maintenance pass before its first round and whenever a round finds nothing due (so lapsed leases are recovered without rescanning the outbox before every send), and waits — bounded, and never longer than `pollIntervalMs` at a stretch, so a delivery another process enqueues meanwhile is seen promptly — for held deliveries to come due. The budget is one stop signal for the whole drain: it ends the sleeps, the maintenance passes, an in-flight send, and the wait for a settlement alike, so a drain asked to stop at a deadline stops there — a settlement still being written when it fires finishes on its own and is not counted by that drain. It reports counts only:
 
 ```ts
 import { ApplicationOutbox, MemoryStorage } from '@lostgradient/weft';
@@ -240,7 +240,7 @@ const report = await outbox.drain({ timeoutMs: 0 });
 console.log(report.acknowledged, report.pending, report.drained); // 1 0 true
 ```
 
-Dispositions the drain's own maintenance passes commit (a lease that lapsed after its send began, parked or dead-lettered) are counted too. `pending` is `null` only when the drain stopped before storage ever answered its first header read. Otherwise it is read from the durable header when the drain stops, so a drain cut short by its budget, a caller abort, or disposal reports what it committed and what remains — never that remaining work was acknowledged. `drained` is `true` only when nothing was left open.
+Dispositions the drain's own maintenance passes commit (a lease that lapsed after its send began, parked or dead-lettered) are counted too. `pending` is read from the durable header when the drain ends on its own — nothing left open, or the clock crossing the deadline between rounds. A drain cut short by its budget timer, a caller abort, or disposal does not read storage again: it reports the count it last observed, kept current with every disposition it committed and every delivery its maintenance passes closed, and `null` only when storage never answered its first header read. Either way a report says what was committed and what remains — never that remaining work was acknowledged. `drained` is `true` only when nothing was left open.
 
 `dispose()` releases every process-local resource: the maintenance timer if one is running, in-flight waits, and every attempt-scoped signal this handle holds. It never deletes durable work. A claim this process held stays leased until it lapses and a maintenance pass recovers it — by the state it lapsed in.
 

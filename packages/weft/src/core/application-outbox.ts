@@ -75,6 +75,34 @@ import {
 import type { JSONValue } from './json.ts';
 
 /**
+ * Reject storage the outbox cannot be correct on. Every transition is a
+ * compare-and-swap; the due index is read as a sorted scan whose earliest
+ * genuine entry decides whether anything is due, which a best-effort scan can
+ * miss; and maintenance and cleanup reconcile this process's live attempt
+ * controllers against the record they read, releasing every attempt but the
+ * one it names, so a read that lags another handle's commit could name a
+ * stale attempt and abort a newer, current one underneath its transport.
+ */
+function requireOutboxStorage(storage: ApplicationOutboxOptions['storage']): void {
+  const capabilities = storage.capabilities();
+  if (!capabilities.conditionalBatch) {
+    throw new ApplicationDeliveryValidationError(
+      'Application outboxes require storage with conditional batch support: every transition is a compare-and-swap.',
+    );
+  }
+  if (capabilities.scanConsistency !== 'snapshot') {
+    throw new ApplicationDeliveryValidationError(
+      'Application outboxes require storage with snapshot scan consistency: claims read the earliest due entry, and a best-effort scan can miss one.',
+    );
+  }
+  if (capabilities.readAfterWrite !== 'linearizable') {
+    throw new ApplicationDeliveryValidationError(
+      'Application outboxes require storage with linearizable read-after-write: maintenance reconciles live attempts against what it reads, and a stale read could abort a current one.',
+    );
+  }
+}
+
+/**
  * A durable, at-least-once application delivery outbox.
  *
  * @example
@@ -112,21 +140,7 @@ export class ApplicationOutbox {
 
   constructor(options: ApplicationOutboxOptions) {
     const policy = resolveOutboxPolicy(options);
-    const capabilities = options.storage.capabilities();
-    if (!capabilities.conditionalBatch) {
-      throw new ApplicationDeliveryValidationError(
-        'Application outboxes require storage with conditional batch support: every transition is a compare-and-swap.',
-      );
-    }
-    // The due index is read as a sorted scan and the earliest genuine entry
-    // decides whether anything is due. A best-effort scan can return a later
-    // entry ahead of an earlier one a concurrent write is still landing, and the
-    // compare-and-swap fences only the delivery actually returned.
-    if (capabilities.scanConsistency !== 'snapshot') {
-      throw new ApplicationDeliveryValidationError(
-        'Application outboxes require storage with snapshot scan consistency: claims read the earliest due entry, and a best-effort scan can miss one.',
-      );
-    }
+    requireOutboxStorage(options.storage);
     if (options.adapter !== undefined && typeof options.adapter.send !== 'function') {
       throw new ApplicationDeliveryValidationError('adapter must expose a send() function.');
     }

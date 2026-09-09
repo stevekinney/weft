@@ -179,6 +179,12 @@ export function beginDeliveryAttempt(
   const checked = checkCurrentAttempt(record, options.attemptToken, options.now);
   if (!checked.ok) return rejectedTransition(checked.reason);
   const { leased } = checked;
+  // A repeated begin on a record already attempting is idempotent; one after
+  // cancellation was requested is refused, so a claimant in another process
+  // that retries its begin cannot take the answer as leave to send.
+  if (leased.state === 'cancellation-requested') {
+    return rejectedTransition('cancellation-requested');
+  }
   if (leased.state !== 'claimed') return rejectedTransition('not-applicable');
   return succeededTransition({
     ...leased,

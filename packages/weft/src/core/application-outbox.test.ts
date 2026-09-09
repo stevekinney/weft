@@ -29,7 +29,7 @@ import { decode, encode } from './codec.ts';
 import { PersistedDataCorruptError } from './persisted-data-incompatible-error.ts';
 
 describe('ApplicationOutbox construction', () => {
-  it('rejects storage without conditional batch support or snapshot scans', () => {
+  it('rejects storage without conditional batches, snapshot scans, or linearizable reads', () => {
     class WithoutConditionalBatch extends MemoryStorage {
       override capabilities(): ReturnType<MemoryStorage['capabilities']> {
         return { ...super.capabilities(), conditionalBatch: false };
@@ -40,7 +40,16 @@ describe('ApplicationOutbox construction', () => {
         return { ...super.capabilities(), scanConsistency: 'best-effort' };
       }
     }
-    for (const storage of [new WithoutConditionalBatch(), new BestEffortScan()]) {
+    class SessionReads extends MemoryStorage {
+      override capabilities(): ReturnType<MemoryStorage['capabilities']> {
+        return { ...super.capabilities(), readAfterWrite: 'session' };
+      }
+    }
+    for (const storage of [
+      new WithoutConditionalBatch(),
+      new BestEffortScan(),
+      new SessionReads(),
+    ]) {
       expect(() => new ApplicationOutbox({ storage, namespace: 'n', ownerId: 'o' })).toThrow(
         ApplicationDeliveryValidationError,
       );

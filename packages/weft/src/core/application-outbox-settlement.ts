@@ -34,7 +34,10 @@ import {
   loadDelivery,
   planDeliveryTransition,
 } from './application-outbox-storage.ts';
-import { isTerminalDeliveryRecord } from './application-outbox-transition-helpers.ts';
+import {
+  isTerminalDeliveryRecord,
+  type ApplicationOutboxTransitionRejection,
+} from './application-outbox-transition-helpers.ts';
 import {
   beginDeliveryAttempt,
   heartbeatDeliveryAttempt,
@@ -78,6 +81,31 @@ function releaseRefusedAttempt(
 }
 
 /**
+ * Report an edge the record refuses. The holder itself asking for an edge its
+ * lease does not need — a repeated begin on a record already attempting, or
+ * a settle before the send began — keeps its controller live, because the
+ * lease is live and current; only a stale, expired, missing, or cancelled
+ * attempt is released. A repeated begin after cancellation was requested is
+ * refused, so the holder cannot read it as permission to call the transport.
+ */
+function refuse(
+  runtime: OutboxRuntime,
+  deliveryId: string,
+  attemptToken: string,
+  reason: ApplicationOutboxTransitionRejection,
+  record: ApplicationDeliveryRecord,
+): ApplicationDeliverySettleResult {
+  if (reason === 'not-applicable') {
+    return { status: 'settled', receipt: toApplicationDeliveryReceipt(record) };
+  }
+  if (reason === 'not-attempting') {
+    return { status: 'stale', receipt: toApplicationDeliveryReceipt(record) };
+  }
+  releaseRefusedAttempt(runtime, deliveryId, attemptToken);
+  return refusal(reason, record);
+}
+
+/**
  * The shared shape of every attempt-fenced write: decide the next record from
  * the current one, commit it, and report.
  */
@@ -97,23 +125,18 @@ async function fenced(
       releaseRefusedAttempt(runtime, deliveryId, attemptToken);
       return { status: 'unknown' };
     }
+    // A write already in flight when the outbox was disposed must not land:
+    // the caller may have released the storage with the handle. The record
+    // stays as it is for a maintenance pass elsewhere to recover.
+    if (runtime.disposal.aborted) {
+      return { status: 'stale', receipt: toApplicationDeliveryReceipt(loaded.record) };
+    }
     // Fresh clock after the asynchronous load: a request that began inside the
     // attempt deadline can cross it during the read.
     const now = runtime.now();
     const transition = decide(loaded.record, now);
     if (!transition.ok) {
-      // The holder itself asked for an edge its lease does not need: a repeated
-      // begin on a record already attempting, or a settle before the send
-      // began. The lease is live and current, so its controller stays live too;
-      // only a stale, expired, or missing attempt is released.
-      if (transition.reason === 'not-applicable') {
-        return { status: 'settled', receipt: toApplicationDeliveryReceipt(loaded.record) };
-      }
-      if (transition.reason === 'not-attempting') {
-        return { status: 'stale', receipt: toApplicationDeliveryReceipt(loaded.record) };
-      }
-      releaseRefusedAttempt(runtime, deliveryId, attemptToken);
-      return refusal(transition.reason, loaded.record);
+      return refuse(runtime, deliveryId, attemptToken, transition.reason, loaded.record);
     }
     const committed = await commitDeliveryTransition(runtime, {
       previous: loaded.record,

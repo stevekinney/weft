@@ -34,7 +34,11 @@ import {
 import { beginAttempt, heartbeatAttempt, settleAttempt } from './application-outbox-settlement.ts';
 import { loadDelivery } from './application-outbox-storage.ts';
 import { validateOutcome, type ValidatedOutcome } from './application-outbox-validation.ts';
-import { raceAbortWithin, WaitBudgetElapsedError } from './application-primitive-abort.ts';
+import {
+  raceAbort,
+  raceAbortWithin,
+  WaitBudgetElapsedError,
+} from './application-primitive-abort.ts';
 
 /**
  * Call the adapter once, bounded by the attempt deadline and the attempt's
@@ -187,6 +191,14 @@ export async function deliverNext(
  * Run the adapter for a begun attempt — renewing the lease and forwarding
  * the caller's abort while it runs — then settle on what it reported, unless
  * the outbox was disposed mid-send.
+ *
+ * The lease is renewed until the settlement commits or is refused, not only
+ * while the adapter runs: a settlement whose storage read outlasts the
+ * visibility window must not hand a known result to a maintenance pass that
+ * would recover the still-`attempting` record as unknown. The caller's stop
+ * signal bounds the wait for that settlement too. A stop that lands during
+ * it ends the wait, not the settlement, which is fenced and finishes on its
+ * own; the result is reported as not committed by this call.
  */
 async function sendAndSettle(
   runtime: OutboxRuntime,
@@ -201,7 +213,6 @@ async function sendAndSettle(
   try {
     outcome = await sendOnce(runtime, adapter, attempting, requestSignal);
   } finally {
-    stopRenewing();
     stopForwarding();
   }
   // Disposal mid-send aborted the adapter; a caller that disposed the handle
@@ -209,19 +220,30 @@ async function sendAndSettle(
   // written. The lease stays `attempting` for a maintenance pass to recover
   // as an unknown outcome, which is exactly what it is.
   if (runtime.disposal.aborted) {
+    stopRenewing();
     return { status: 'settled', receipt: attempting.receipt, committed: false };
   }
-  const settled = await settleAttempt(runtime, {
+  const settling = settleAttempt(runtime, {
     deliveryId,
     attemptToken: attempting.attemptToken,
     outcome,
+  }).finally(() => {
+    stopRenewing();
+    releaseAttemptController(
+      runtime,
+      attempting.attemptToken,
+      'The application outbox finished this attempt.',
+      deliveryId,
+    );
   });
-  releaseAttemptController(
-    runtime,
-    attempting.attemptToken,
-    'The application outbox finished this attempt.',
-    deliveryId,
-  );
+  const raced = await raceAbort(() => settling, requestSignal);
+  if (raced.aborted) {
+    // Nobody is left to observe how the detached settlement ends; a storage
+    // failure there leaves the record `attempting` for maintenance.
+    settling.catch(() => undefined);
+    return { status: 'settled', receipt: attempting.receipt, committed: false };
+  }
+  const settled = raced.value;
   return {
     status: 'settled',
     receipt: await currentReceipt(runtime, deliveryId, settled, attempting.receipt),
