@@ -7,6 +7,7 @@ import type {
   WorkflowServicesResolverScheduleInfo,
 } from '../../types.ts';
 import { normalizeWorkflowTags } from '../../workflow-tags.ts';
+import type { ExecutableRegistration } from '../dynamic-source-execution.ts';
 import type { QueuedInlineWorkflowExecutionStart } from '../engine-internal-types.ts';
 import { type WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
@@ -140,6 +141,20 @@ export type LifecycleCallbacks = {
    * {@link RecoverAllOptions.versionMismatchPolicy}.
    */
   failWorkflowForVersionMismatch: (workflowId: string, error: Error) => Promise<void>;
+  /**
+   * Turn a workflow `type` into an executable registration, awaiting
+   * dynamic-source resolution when `type` is not eagerly registered
+   * (WFT-15/16). See `dynamic-source-execution.ts`'s own doc for the full
+   * contract.
+   */
+  resolveExecutableRegistration: (type: string) => Promise<ExecutableRegistration>;
+  /**
+   * Force a recovered workflow to a terminal `failed` state because its
+   * dynamic workflow source could not be resolved during the recovery
+   * preload barrier — only this run fails; `recoverAll()` continues
+   * recovering sibling types.
+   */
+  failWorkflowForUnavailableDynamicSource: (workflowId: string, error: Error) => Promise<void>;
 };
 
 /**

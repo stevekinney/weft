@@ -246,7 +246,23 @@ const record = await engine.resolveWorkflowSource('checkout', 'sha256:9f2c…');
 console.log(record.manifest.revision, record.installedAt);
 ```
 
-Throws a plain `Error` when `registerSource()` was never called for this exact `(name, revision)`; throws `WorkflowSourceValidationError` when the loaded module fails validation, or when an already-cached manifest contradicts a pinned `workflowVersion`/`contractHash` (a missing or ambiguous export, a non-builder-produced definition, an oversized contract, or a `name`/`revision`/`workflowVersion`/`contractHash` mismatch against the descriptor's expectations); throws `EngineDisposedError` when the engine is disposed. Does not wire `start()` or recovery to await resolution — see [Dynamic Workflow Sources](../guides/workflow-versioning.md#dynamic-workflow-sources) for the full contract.
+Throws `WorkflowSourceNotRegisteredError` when `registerSource()` was never called for this exact `(name, revision)`; throws `WorkflowSourceValidationError` when the loaded module fails validation, or when an already-cached manifest contradicts a pinned `workflowVersion`/`contractHash` (a missing or ambiguous export, a non-builder-produced definition, an oversized contract, or a `name`/`revision`/`workflowVersion`/`contractHash` mismatch against the descriptor's expectations); throws `EngineDisposedError` when the engine is disposed. `start()`, `startOrSignal()`, `schedule()`, `fork()`, `resume()`, recovery, and bulk-retry all await resolution through this same primitive for a `registerSource()`-registered type (WFT-15/16) — see [Engine Integration (WFT-15/16)](../guides/workflow-versioning.md#engine-integration-wft-1516) for the full contract, including the active-revision disambiguation rule and the recovery-barrier limitation.
+
+### `engine.workflows.preload()`
+
+```ts partial
+async preload(
+  name: string,
+  revision: string,
+  options?: { signal?: AbortSignal },
+): Promise<WorkflowRevisionRecord>
+```
+
+A documented thin alias for `resolveWorkflowSource()` (WFT-15/16), offered on the `workflows` namespace alongside `install()`/`activate()`/`getActive()`/`getRevision()`/`listRevisions()` so deployment tooling that already reaches for `engine.workflows.*` for every other catalog operation does not need a second entry point. Identical single-flight, cancellation, and error contract.
+
+```ts partial
+const record = await engine.workflows.preload('checkout', 'sha256:9f2c…');
+```
 
 ### `start()`
 
@@ -258,7 +274,7 @@ async start<TName extends keyof WorkflowRegistry & string>(
 ): Promise<WorkflowHandle<WorkflowOutput<WorkflowRegistry, TName>>>
 ```
 
-Start a new workflow execution. Names declared in the augmentable `WorkflowRegistry` get typed input and typed `handle.result()` output. When a workflow registry is present, TypeScript rejects names outside that registry; use `workflow()` definitions with `Engine.create({ workflows })` or `engine.withWorkflow()` to add names explicitly. Throws if `type` is not registered or a workflow with the given `id` already exists.
+Start a new workflow execution. Names declared in the augmentable `WorkflowRegistry` get typed input and typed `handle.result()` output. When a workflow registry is present, TypeScript rejects names outside that registry; use `workflow()` definitions with `Engine.create({ workflows })` or `engine.withWorkflow()` to add names explicitly. Throws `WorkflowNotRegisteredError` if `type` is neither eagerly registered nor a `registerSource()`-registered dynamic source, or `WorkflowAlreadyExistsError` if a workflow with the given `id` already exists. For a `registerSource()`-registered `type`, `start()` awaits dynamic-source resolution (WFT-15/16) before running any handler code — see [`resolveWorkflowSource()`](#resolveworkflowsource) above.
 
 Pass `options.idempotencyKey` for at-most-once starts: the first call commits the workflow and a durable key→id mapping in one compare-and-swap, and every later call with the same key returns a handle to that run instead of starting a second (even after it reaches a terminal state). Concurrent same-key callers converge on one run. `id` and `idempotencyKey` are mutually exclusive — idempotency assigns its own generated id and dedups through the key, so supply one or the other. Idempotent start requires a storage backend with `conditionalBatch` and throws if it is absent.
 

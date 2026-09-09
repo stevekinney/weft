@@ -45,7 +45,13 @@ function isWorkflowDefinition(value: unknown): value is WorkflowDefinition {
   );
 }
 
-function assertConstraintsSupported(
+/**
+ * Reject constraints on a workflow definition when the engine has no
+ * inline execution strategy. Exported so `dynamic-source-execution.ts`
+ * (WFT-15/16) can apply the identical guard to a dynamically-resolved
+ * definition — see that module's own call site.
+ */
+export function assertConstraintsSupported(
   internals: EngineInternals,
   name: string,
   registration: WorkflowDefinition,

@@ -10,6 +10,7 @@ import { type WorkflowVersionTuple } from '../../workflow-version-tuple.ts';
 import { createCancelHandlerRegistration, resetCancelHandlers } from '../cancel-handlers.ts';
 import { rememberCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
 import { rehydrateChildCancellationHandlers } from '../child-workflow-cancellation.ts';
+import { resolveExecutableRegistrationOrRenamedNotFound } from '../dynamic-source-execution.ts';
 import { commitFencedEngineWrite } from '../fenced-write.ts';
 import { getWorkflowExecutionStartedAt, type WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
@@ -369,13 +370,18 @@ export async function resumeWorkflowFromStorage(
 
   const checkpoint = deserializeCheckpoint(checkpointBytes);
 
-  // Look up registration
-  const registration = internals.registrations.get(state.type);
-  if (!registration) {
-    throw new Error(
-      `No workflow registered with name "${state.type}" (needed to resume "${workflowId}")`,
-    );
-  }
+  // Look up registration, awaiting dynamic-source resolution when `state.type`
+  // is not eagerly registered. A genuinely unregistered type keeps this
+  // function's own, more specific message (naming the resuming workflow)
+  // rather than `resolveExecutableRegistration`'s generic one.
+  const { entry: registration } = await resolveExecutableRegistrationOrRenamedNotFound(
+    callbacks.resolveExecutableRegistration,
+    state.type,
+    () =>
+      new Error(
+        `No workflow registered with name "${state.type}" (needed to resume "${workflowId}")`,
+      ),
+  );
 
   const preparedResumeState = await prepareResumeState(
     internals,

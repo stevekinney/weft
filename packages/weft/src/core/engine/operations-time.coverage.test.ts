@@ -81,6 +81,10 @@ describe('delayed-start coverage regression', () => {
           handleCleanupError: () => {},
           loadWorkflowStartHeaders: async () => undefined,
           loadWorkflowState,
+          resolveExecutableRegistration: async () => ({
+            entry: { handler: async function* () {}, version: '1' },
+            revision: undefined,
+          }),
           runSerializedWorkflowStateWrite: async (_workflowId, writeOperation) => writeOperation(),
           setWorkflowStartHeaders: () => {},
           workflowVersionTupleFromState: () => ({ workflowVersion: '1' }),

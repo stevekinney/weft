@@ -560,6 +560,29 @@ type WorkflowSourceRejectionReason =
 
 The first five cover everything that can go wrong before a manifest can even be built (a missing or ambiguous export, an export that is not a builder-produced `WorkflowDefinition` — the removed bare-handler shape — or a contract exceeding a WFT-5 hostile-input limit); the rest reuse `WorkflowCompatibilityReason` verbatim once a manifest was built and compared against the descriptor's expectations. See [Dynamic Workflow Sources](../guides/workflow-versioning.md#dynamic-workflow-sources) for the full validation pipeline.
 
+### `SourceLoadState` and `WorkflowRevisionDiagnostics.source`
+
+The load-state union backing `weft.catalog.diagnostics`' dynamic-source diagnostics extension and the `workflow-source:load-*` events (WFT-15/16). `'idle'` is never observed externally — a diagnostics entry exists only once a load has at least started.
+
+```ts partial
+type SourceLoadState = 'idle' | 'loading' | 'ready' | 'failed' | 'cancelled';
+```
+
+`WorkflowRevisionDiagnostics` (returned by `getWorkflowRevisionDiagnostics()`, the in-process helper behind `weft.catalog.diagnostics`) gains an optional `source` field, present only when the requested `name` was ever `registerSource()`-registered on this engine:
+
+```ts partial
+interface WorkflowRevisionDiagnosticsSource {
+  kind: WorkflowSourceKind;
+  requestedRevision: string;
+  state: SourceLoadState;
+  loadDurationMs?: number;
+  lastFailureCategory?: FailureCategory;
+  waiterCount: number;
+}
+```
+
+See [`GET /v1/catalog/:name/revisions/:revision/diagnostics`](./api-observability.md#get-v1catalognamerevisionsrevisiondiagnostics) for the full REST/JSON-RPC response shape and [Engine Integration (WFT-15/16)](../guides/workflow-versioning.md#engine-integration-wft-1516) for the state-machine prose.
+
 ### `ActivateWorkflowRevisionOptions`
 
 Options accepted by `engine.workflows.activate()`.

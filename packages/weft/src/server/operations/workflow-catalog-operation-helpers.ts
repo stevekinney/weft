@@ -19,7 +19,12 @@ import type { WorkflowRevisionManifestValidationFailure } from '../../core/contr
 import { MAX_CONTRACT_IDENTIFIER_BYTES } from '../../core/contract/limits.ts';
 import { parseWorkflowRevisionManifest } from '../../core/contract/manifest-parse.ts';
 import type { WorkflowRevisionManifest } from '../../core/contract/types.ts';
+import {
+  DynamicWorkflowSourceUnavailableError,
+  WorkflowSourceNotRegisteredError,
+} from '../../core/engine/dynamic-source-errors.ts';
 import { WorkflowNotRegisteredError } from '../../core/engine/errors.ts';
+import { WorkflowSourceValidationError } from '../../core/source/errors.ts';
 import { validateWorkflowOrActivityName } from '../../core/types/name-grammar.ts';
 import type { AccessPolicy } from '../authorization.ts';
 import type { OperationFault } from '../operation-fault.ts';
@@ -171,8 +176,8 @@ export function activationRefusalToFault(
         data: { reason: result.reason },
       };
     default: {
-      const _exhaustive: never = result;
-      throw new Error(`Unknown activation refusal reason: ${JSON.stringify(_exhaustive)}`);
+      const exhaustiveCheck: never = result;
+      throw new Error(`Unknown activation refusal reason: ${JSON.stringify(exhaustiveCheck)}`);
     }
   }
 }
@@ -204,6 +209,41 @@ export function throwWorkflowCatalogOperationFault(error: unknown): never {
       code: 'Conflict',
       message: error.message,
       data: { reason: 'catalog-conflict', weftCode: error.code },
+    };
+    throw fault;
+  }
+  // WFT-15/16: `engine.workflows.preload()` (a `resolveWorkflowSource()`
+  // alias) can additionally throw these two dynamic-source errors.
+  if (error instanceof WorkflowSourceNotRegisteredError) {
+    const fault: OperationFault = {
+      code: 'NotFound',
+      message: error.message,
+      data: { resource: 'workflow-source', identifier: error.workflowType, weftCode: error.code },
+    };
+    throw fault;
+  }
+  if (error instanceof DynamicWorkflowSourceUnavailableError) {
+    const fault: OperationFault = {
+      code: 'Conflict',
+      message: error.message,
+      data: { reason: error.reason, weftCode: error.code },
+    };
+    throw fault;
+  }
+  // A loaded module that fails validation (`engine.workflows.preload()`,
+  // WFT-15/16) — not a load failure (the raw loader exception itself isn't
+  // a typed Weft error; see `preload-workflow-revision.ts`'s own catch for
+  // that case), but a structurally-loaded module rejected by
+  // `validateResolvedWorkflowSource()`.
+  if (error instanceof WorkflowSourceValidationError) {
+    const fault: OperationFault = {
+      code: 'Conflict',
+      message: error.message,
+      data: {
+        reason: 'validation-failed',
+        sourceValidationReasons: error.reasons,
+        weftCode: error.code,
+      },
     };
     throw fault;
   }

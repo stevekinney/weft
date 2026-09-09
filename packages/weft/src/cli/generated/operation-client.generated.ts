@@ -69,6 +69,7 @@ export const CATALOG_OPERATION_NAMES = [
   'weft.workflows.revisions.get',
   'weft.workflows.revisions.install',
   'weft.workflows.revisions.list',
+  'weft.workflows.revisions.preload',
   'weft.workflows.scheduleprovenance.get',
   'weft.workflows.signal',
   'weft.workflows.start',
@@ -145,6 +146,7 @@ export const CLIENT_OPERATION_NAMES = [
   'weft.workflows.revisions.get',
   'weft.workflows.revisions.install',
   'weft.workflows.revisions.list',
+  'weft.workflows.revisions.preload',
   'weft.workflows.scheduleprovenance.get',
   'weft.workflows.signal',
   'weft.workflows.start',
@@ -325,6 +327,15 @@ export type ClientOperationTypes = {
       };
       readonly removable: boolean;
       readonly revision: string;
+      readonly source?: {
+        readonly kind: 'module';
+        readonly lastFailureCategory?:
+          'application' | 'timeout' | 'cancellation' | 'resource' | 'system';
+        readonly loadDurationMs?: number;
+        readonly requestedRevision: string;
+        readonly state: 'idle' | 'loading' | 'ready' | 'failed' | 'cancelled';
+        readonly waiterCount: number;
+      };
     };
     readonly faults: never;
   };
@@ -1218,6 +1229,11 @@ export type ClientOperationTypes = {
     readonly input: { readonly name: unknown };
     readonly output: unknown;
     readonly faults: 'InvalidParams';
+  };
+  'weft.workflows.revisions.preload': {
+    readonly input: { readonly name: unknown; readonly revision: unknown };
+    readonly output: unknown;
+    readonly faults: 'Conflict' | 'InvalidParams' | 'NotFound';
   };
   'weft.workflows.scheduleprovenance.get': {
     readonly input: { readonly workflowId: string };

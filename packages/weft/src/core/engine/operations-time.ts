@@ -7,6 +7,10 @@ import { buildTimerBatchOperations, normalizeStorageTimestamp } from '../schedul
 import type { Checkpoint, Duration, StartOptions, TimerEntry, WorkflowState } from '../types.ts';
 import type { WorkflowVersionTuple } from '../workflow-version-tuple.ts';
 import { notifyConditionWaiters, notifyConditionWaitersForTimerFire } from './condition-waiters.ts';
+import {
+  resolveExecutableRegistrationOrFailWorkflow,
+  type ExecutableRegistration,
+} from './dynamic-source-execution.ts';
 import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
 import { reprovideRecoveredServices } from './lifecycle/recovered-services.ts';
@@ -55,6 +59,7 @@ export type TimeOperationCallbacks = {
   handleScheduleTimer: (entry: TimerEntry) => Promise<void>;
   timeout: (workflowId: string) => Promise<void>;
   handleCleanupError: (source: string, error: unknown, workflowId: string) => void;
+  resolveExecutableRegistration: (type: string) => Promise<ExecutableRegistration>;
 };
 
 export function createDelayedStartTimerEntry(
@@ -124,10 +129,9 @@ export async function processSleepOperation(
     operation.scheduledFireAt,
   );
 
-  // Guard against the race where the scheduler tick fires the timer in the
-  // window between the schedule() write and registerSleepResolver(). The
-  // resolver guard prevents a spurious resolveSleepTimer call when the tick
-  // already settled the resolver via the normal post-registration path.
+  // Guard against the race where the scheduler tick fires the timer in the window
+  // between the schedule() write and registerSleepResolver(). The resolver guard
+  // prevents a spurious resolveSleepTimer call once the tick already settled it.
   const resolverKey = `${workflowId}:${operation.operationId}`;
   if (
     sleepTimerFiredEarly(internals, workflowId, operation) &&
@@ -156,8 +160,7 @@ export function registerSleepResolver(
   resolve: () => void,
   scheduledFireAt: number,
 ): void {
-  // Store the run's expected deadline so resolveSleepTimer can ignore a stale
-  // timer left by a terminated run that reused this id (see resolveSleepTimer).
+  // Store the deadline so resolveSleepTimer ignores a stale timer reused by an old run.
   internals.sleepResolvers.set(`${workflowId}:${operationId}`, {
     resolve,
     fireAt: scheduledFireAt,
@@ -188,6 +191,7 @@ export async function startDelayedWorkflow(
     | 'handleCleanupError'
     | 'loadWorkflowStartHeaders'
     | 'loadWorkflowState'
+    | 'resolveExecutableRegistration'
     | 'runSerializedWorkflowStateWrite'
     | 'setWorkflowStartHeaders'
     | 'workflowVersionTupleFromState'
@@ -203,12 +207,12 @@ export async function startDelayedWorkflow(
     return;
   }
 
-  const registration = internals.registrations.get(state.type);
-  if (!registration) {
-    await callbacks.failWorkflow(
-      entry.workflowId,
-      new Error(`No workflow registered with name "${state.type}"`),
-    );
+  const registration = await resolveExecutableRegistrationOrFailWorkflow(
+    entry,
+    state.type,
+    callbacks,
+  );
+  if (registration === null) {
     return;
   }
 
@@ -296,11 +300,10 @@ export async function startDelayedWorkflow(
     return;
   }
 
-  // A delayed-start workflow that crashed `pending` before its timer fired
-  // loses its in-memory services on recovery (the timer fires in a fresh
-  // process). Re-provide them before execution begins, exactly as the
-  // running-workflow resume path does — and fail the run if unavailable rather
-  // than silently executing with `ctx.services === undefined`.
+  // A delayed-start workflow that crashed `pending` before its timer fired loses
+  // its in-memory services on recovery (fires in a fresh process). Re-provide
+  // them before execution, as resume does — fail rather than run with
+  // `ctx.services === undefined`.
   const servicesUnavailable = await reprovideRecoveredServices(
     internals,
     runningState,
@@ -412,6 +415,7 @@ export async function handleTimerFired(
     | 'timeout'
     | 'beginWorkflowExecution'
     | 'dispatchEvent'
+    | 'resolveExecutableRegistration'
     | 'workflowVersionTupleFromState'
   >,
 ): Promise<void> {

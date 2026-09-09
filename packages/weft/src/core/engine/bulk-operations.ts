@@ -44,6 +44,7 @@ import {
   validateBulkConfirmation,
   withBulkAuditEvent,
 } from './bulk-operations-shared.ts';
+import { resolveExecutableRegistrationForRetry } from './dynamic-source-execution.ts';
 import { BulkDeleteRequiresTerminalWorkflowsError } from './errors.ts';
 import {
   assertLeaseHeldForEngineWork,
@@ -344,12 +345,11 @@ async function reactivateFailedWorkflowFromCheckpointSerialized(
       throw new Error('Checkpoint no longer exists');
     }
     const checkpoint = deserializeCheckpoint(currentCheckpointBytes);
-    const registration = internals.registrations.get(currentState.type);
-    if (registration === undefined) {
-      throw new Error(
-        `No workflow registered with name "${currentState.type}" (needed to retry "${workflowId}")`,
-      );
-    }
+    const { entry: registration } = await resolveExecutableRegistrationForRetry(
+      internals,
+      currentState.type,
+      workflowId,
+    );
 
     const concurrencyStartOperations =
       registration.concurrency === undefined

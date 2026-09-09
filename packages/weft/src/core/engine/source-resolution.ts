@@ -7,11 +7,10 @@
  * work is shared by every concurrent caller for the same key via
  * `internals.sources.resolutionsInFlight`, but each caller races that shared
  * work against its OWN per-call cancellation interest — a cancelled waiter
- * never aborts a load another waiter still needs, and the shared load
- * itself is never tied to any individual caller's lifetime. Disposal aborts
- * every outstanding waiter (rejecting each pending `resolveWorkflowSource()`
- * call) without touching the shared load, which keeps running to whatever
- * point it naturally settles.
+ * never aborts a load another waiter still needs, and the shared load itself
+ * is never tied to any individual caller's lifetime. Disposal aborts every
+ * outstanding waiter (rejecting each pending `resolveWorkflowSource()` call)
+ * without touching the shared load, which keeps running to its own settle.
  *
  * @module core/engine/source-resolution
  */
@@ -29,9 +28,18 @@ import {
   type WorkflowSourceHandle,
 } from '../source/index.ts';
 import { ensureWorkflowCatalogReady, isWorkflowCatalogReady } from './catalog-readiness.ts';
+import { WorkflowSourceNotRegisteredError } from './dynamic-source-errors.ts';
 import { EngineDisposedError } from './errors.ts';
 import type { Engine } from './index.ts';
 import { getInternals, getWorkflowCatalog, type EngineInternals } from './internals.ts';
+import {
+  beginSourceWaiter,
+  endSourceWaiterAndDispatchCancellation,
+  recordSourceLoadFailedAndDispatch,
+  recordSourceLoadReadyAndDispatch,
+  recordSourceLoadStartedAndDispatch,
+  type SourceEventContext,
+} from './source-diagnostics.ts';
 
 /**
  * Options accepted by {@link resolveWorkflowSource}.
@@ -101,11 +109,10 @@ function abortRejection(signal: AbortSignal): Promise<never> {
  * this batch — recorded as an explicit, accepted trade-off rather than a
  * silent gap. `internals.disposed` is re-checked a THIRD time after
  * `catalog.install()` resolves, guarding only the in-memory
- * `internals.sources.resolved` write (never the durable install
- * itself, which has already committed by then) — a disposed engine's
- * internals stay fully empty rather than accumulating state
- * `disposeSourceResolutionState()` already cleared and will never clear
- * again.
+ * `internals.sources.resolved` write (never the durable install itself,
+ * already committed by then) — a disposed engine's internals stay fully
+ * empty rather than accumulating state `disposeSourceResolutionState()`
+ * already cleared and will never clear again.
  */
 async function runSharedSourceLoad(
   engine: Engine,
@@ -156,13 +163,11 @@ async function runSharedSourceLoad(
 }
 
 /**
- * Join the in-flight shared load for `(name, revision)`, or start one.
- * Self-removes from `internals.sources.resolutionsInFlight` once it settles,
- * guarded by reference identity (`byRevision.get(revision) === shared`) so
- * a disposal-triggered `clear()` racing a late settle can never delete a
- * successor load that has already taken this key's place — the exact
- * `catalogDrainPromise === drainPromise` guard `catalog-readiness.ts` uses
- * for its own single in-flight promise.
+ * Join the in-flight shared load for `(name, revision)`, or start one,
+ * recording/dispatching the `loading`/`ready`/`failed` diagnostics
+ * transitions around it. Self-removes once settled, guarded by reference
+ * identity (`byRevision.get(revision) === shared`) — the same
+ * `catalogDrainPromise === drainPromise` guard `catalog-readiness.ts` uses.
  */
 function getOrCreateSharedSourceLoad(
   engine: Engine,
@@ -182,20 +187,40 @@ function getOrCreateSharedSourceLoad(
     return existing;
   }
 
+  const eventContext: SourceEventContext = {
+    engine,
+    internals,
+    name,
+    revision,
+    kind: handle.descriptor.kind,
+  };
+  recordSourceLoadStartedAndDispatch(eventContext, internals.options.getNow());
+
   const shared: Promise<WorkflowRevisionRecord> = runSharedSourceLoad(
     engine,
     internals,
     name,
     revision,
     handle,
-  ).finally(() => {
-    const currentByRevision = internals.sources.resolutionsInFlight.get(name);
-    if (currentByRevision?.get(revision) !== shared) return;
-    currentByRevision.delete(revision);
-    if (currentByRevision.size === 0) {
-      internals.sources.resolutionsInFlight.delete(name);
-    }
-  });
+  )
+    .then(
+      (record) => {
+        recordSourceLoadReadyAndDispatch(eventContext, internals.options.getNow());
+        return record;
+      },
+      (error: unknown) => {
+        recordSourceLoadFailedAndDispatch(eventContext, internals.options.getNow(), error);
+        throw error;
+      },
+    )
+    .finally(() => {
+      const currentByRevision = internals.sources.resolutionsInFlight.get(name);
+      if (currentByRevision?.get(revision) !== shared) return;
+      currentByRevision.delete(revision);
+      if (currentByRevision.size === 0) {
+        internals.sources.resolutionsInFlight.delete(name);
+      }
+    });
   // Every real caller observes this same promise via `Promise.race` in
   // `resolveWorkflowSource` below. This standalone catch exists so that if
   // every waiter aborts before the shared load settles, its eventual
@@ -268,10 +293,7 @@ async function resolveCachedOrHandle(
   // for it, contradicting the documented programmer-error contract below.
   const handle = internals.sources.byName.get(name)?.get(revision);
   if (handle === undefined) {
-    throw new Error(
-      `resolveWorkflowSource("${name}", "${revision}") was called before registerSource() ` +
-        'registered this exact (name, revision) — call engine.registerSource() first.',
-    );
+    throw new WorkflowSourceNotRegisteredError(name, revision);
   }
 
   if (!isWorkflowCatalogReady(engine)) {
@@ -430,6 +452,7 @@ async function resolveWorkflowSourceCore(
   }
 
   internals.sources.waiterControllers.add(waiter.controller);
+  beginSourceWaiter(internals, name, revision);
   try {
     // Raced against this waiter's own abort signal, not just re-checked
     // after — `resolveCachedOrHandle()`'s awaits (catalog readiness, a
@@ -471,5 +494,6 @@ async function resolveWorkflowSourceCore(
   } finally {
     waiter.detach();
     internals.sources.waiterControllers.delete(waiter.controller);
+    endSourceWaiterAndDispatchCancellation(engine, internals, name, revision);
   }
 }

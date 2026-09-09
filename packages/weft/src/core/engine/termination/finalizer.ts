@@ -23,9 +23,8 @@
  *
  * Self-heal invariant: every exit that does NOT settle the claim (a lost claim CAS, a
  * presumed-live `running` claim, a shutdown-aborted attempt, or a missing registration)
- * re-arms a future `wf-teardown:` timer before returning, because the scheduler deletes
- * the fired timer once this returns without throwing. A non-settling exit that forgot to
- * re-arm would strand the marker with no timer to re-drive it.
+ * re-arms a future `wf-teardown:` timer before returning — the scheduler deletes the
+ * fired timer on return, so a non-settling exit that forgot to re-arm strands the marker.
  *
  * @module core/engine/termination/finalizer
  */
@@ -34,6 +33,7 @@ import { KEYS } from '../../../storage/interface.ts';
 import { decode } from '../../codec.ts';
 import { WorkflowTeardownEvent } from '../../events.ts';
 import type { WorkflowState } from '../../types.ts';
+import { getResolvedDynamicRegistration } from '../dynamic-source-execution.ts';
 import { buildTeardownSuccessOperations } from '../finalizer-status.ts';
 import type { EngineInternals } from '../internals.ts';
 import { isTeardownClaim, parseTeardownTimerId, type TeardownClaim } from '../state-utilities.ts';
@@ -207,7 +207,7 @@ async function resolveTeardownDrive(
     return clearOrRearm(internals, workflowId, token, markerBytes);
   }
 
-  const registeredFinalizer = internals.registrations.get(state.type)?.finalizer;
+  const registeredFinalizer = getResolvedDynamicRegistration(internals, state.type)?.finalizer;
   if (registeredFinalizer === undefined) {
     // A node that recovers without this workflow type registered cannot run the
     // finalizer yet — but the resource is still owed. Leave the marker and re-arm so a

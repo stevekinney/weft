@@ -129,6 +129,21 @@ try {
 
 `versionMismatchPolicy: 'throw'` rethrows the `VersionMismatchError` out of `recoverAll()` as soon as it reaches the first mismatched workflow in storage-scan order. Any sibling not yet processed in that call is left unresumed; siblings processed before the mismatch may already be running. Use it when version drift is an operator error that should stop further recovery during that boot attempt.
 
+## Dynamic-source recovery: a preload barrier, not durable revision pinning (WFT-15/16)
+
+A workflow type registered via `engine.registerSource()` rather than `engine.register()` follows a different recovery shape than either the happy path or version-mismatch isolation above. `recoverAll()` preloads every DISTINCT dynamic-source type referenced by non-terminal state ONCE, before advancing any of those runs' generators — a batch-wide barrier, not a per-run resolve:
+
+```typescript partial
+const handles = await engine.recoverAll();
+// Every non-terminal run of a `registerSource()`-registered type shares ONE
+// loader invocation for that type, resolved before any of those runs'
+// generators advance — not once per run.
+```
+
+A type whose load fails during that barrier is classified `unavailable`: only its own non-terminal runs fail (to a terminal `failed` state, `system` failure category, carrying `DynamicWorkflowSourceUnavailableError`); every sibling type — dynamic or eager, and including a DIFFERENT dynamic-source type that resolved fine — recovers normally in the same call. This mirrors the version-mismatch isolation above: one bad type never aborts the whole recovery batch.
+
+**This is explicitly a feature gate, not durable per-run revision pinning.** Which revision an in-flight run resolves against during recovery is derived at RUNTIME — the catalog's active pointer plus whichever `registerSource()` calls this process happens to have made — never persisted per-run. A scheme where each run durably remembers and re-resolves the EXACT revision it was launched against, independent of what a later `registerSource()` call registers, is out of scope for this batch. Operationally, treat a dynamic-source deployment the same way an `engine.register()`-only one already must: keep the same revision set registered across a restart, or recovery may resolve a run against a different revision than it started with.
+
 ## Acknowledging drift: `acknowledgeUnknownWorkflowTypes`
 
 Sometimes drift is intentional: a rolling deploy where old pods are still serving the workflow type the new pod doesn't know; a storage migration where you're copying records into a partial registry; a one-shot operator script that doesn't need to drive every workflow type the database holds.

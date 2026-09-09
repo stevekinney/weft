@@ -1,19 +1,27 @@
 import { describe, expect, it } from 'bun:test';
 
 import { MemoryStorage } from '../../storage/memory.ts';
+import { ActivityRegistry } from '../activity-registry.ts';
 import { buildWorkflowContract } from '../contract/build.ts';
 import { buildWorkflowRevisionManifest } from '../contract/manifest.ts';
 import type { WorkflowRevisionManifest } from '../contract/types.ts';
 import { WorkflowRevisionRemovedEvent } from '../events/catalog-events.ts';
-import { workflow, type WorkflowContext } from '../types.ts';
+import { buildWorkflowManifestFromDefinition } from '../registry-workflow-manifest.ts';
+import { workflowSource } from '../source/index.ts';
+import { workflow, type WorkflowContext, type WorkflowDefinition } from '../types.ts';
 import { activateCatalogRevisionCandidate } from './catalog-activation.ts';
+import { ensureWorkflowCatalogReady } from './catalog-readiness.ts';
 import {
   countWorkflowRevisionReferences,
   getWorkflowRevisionDiagnostics,
+  releaseInFlightStart,
   removeWorkflowRevision,
+  reserveInFlightStart,
 } from './catalog-removal.ts';
+import { copyWorkflowDefinition } from './construction.ts';
 import { Engine } from './index.ts';
 import { getInternals, getWorkflowCatalog } from './internals.ts';
+import { buildRegistrationEntry } from './registration.ts';
 
 async function manifestFor(
   name: string,
@@ -503,5 +511,172 @@ describe('countWorkflowRevisionReferences', () => {
     expect(references.pendingDispatches).toBe(0);
     expect(references.activeExecutionRealms).toBe(0);
     expect(references.retainedRecoveryRecords).toBe(0);
+  });
+});
+
+// WFT-15/16: `WorkflowRevisionDiagnostics.source` and the `revisionOverride`
+// threading fix for `reserveInFlightStart`/`releaseInFlightStart`.
+describe('getWorkflowRevisionDiagnostics — dynamic-source extension (WFT-15/16)', () => {
+  const lazyDefinition = workflow({ name: 'lazy-checkout' }).execute(async function* () {
+    return 'done';
+  });
+
+  async function lazyRevision(): Promise<string> {
+    const definition = lazyDefinition as WorkflowDefinition;
+    const entry = buildRegistrationEntry(definition.name, definition);
+    const registered = copyWorkflowDefinition(definition.name, entry);
+    const manifest = await buildWorkflowManifestFromDefinition(
+      registered,
+      new ActivityRegistry().listDefinitions(),
+    );
+    return manifest.revision;
+  }
+
+  it('omits `source` for a purely eager name', async () => {
+    await using storage = new MemoryStorage();
+    await using engine = new Engine({ storage, backgroundTasks: 'manual' });
+    engine.register(noopWorkflow('checkout'));
+    await engine.start('checkout', null);
+    const revision = getWorkflowCatalog(engine).resolveActive('checkout')!.revision;
+
+    const diagnostics = await getWorkflowRevisionDiagnostics(engine, 'checkout', revision);
+
+    expect(diagnostics.source).toBeUndefined();
+  });
+
+  it('reports state:"idle" for a registerSource()-registered name never resolved', async () => {
+    await using storage = new MemoryStorage();
+    await using engine = new Engine({ storage, backgroundTasks: 'manual' });
+    const revision = await lazyRevision();
+    engine.registerSource(
+      workflowSource(
+        { name: 'lazy-checkout', location: './lazy.ts', exportName: 'lazy', revision },
+        async () => ({ lazy: lazyDefinition }),
+      ),
+    );
+
+    const diagnostics = await getWorkflowRevisionDiagnostics(engine, 'lazy-checkout', revision);
+
+    expect(diagnostics.source).toBeDefined();
+    expect(diagnostics.source?.kind).toBe('module');
+    expect(diagnostics.source?.requestedRevision).toBe(revision);
+    expect(diagnostics.source?.state).toBe('idle');
+    expect(diagnostics.source?.waiterCount).toBe(0);
+  });
+
+  it('falls back to kind "module" when querying a revision registered under no entry for this name', async () => {
+    await using storage = new MemoryStorage();
+    await using engine = new Engine({ storage, backgroundTasks: 'manual' });
+    const revision = await lazyRevision();
+    engine.registerSource(
+      workflowSource(
+        { name: 'lazy-checkout', location: './lazy.ts', exportName: 'lazy', revision },
+        async () => ({ lazy: lazyDefinition }),
+      ),
+    );
+
+    // `lazy-checkout` IS registerSource()-registered (under `revision`), so
+    // `source` is present — but THIS specific revision was never registered
+    // and never resolved, so both `diagnostics` and `registeredRevisions.get()`
+    // miss, exercising the last-resort 'module' fallback.
+    const diagnostics = await getWorkflowRevisionDiagnostics(
+      engine,
+      'lazy-checkout',
+      'never-registered-revision',
+    );
+
+    expect(diagnostics.source).toBeDefined();
+    expect(diagnostics.source?.kind).toBe('module');
+    expect(diagnostics.source?.state).toBe('idle');
+  });
+
+  it('reports state:"ready" and loadDurationMs once the source has resolved', async () => {
+    await using storage = new MemoryStorage();
+    await using engine = new Engine({ storage, backgroundTasks: 'manual' });
+    const revision = await lazyRevision();
+    engine.registerSource(
+      workflowSource(
+        { name: 'lazy-checkout', location: './lazy.ts', exportName: 'lazy', revision },
+        async () => ({ lazy: lazyDefinition }),
+      ),
+    );
+    await engine.resolveWorkflowSource('lazy-checkout', revision);
+
+    const diagnostics = await getWorkflowRevisionDiagnostics(engine, 'lazy-checkout', revision);
+
+    expect(diagnostics.source?.state).toBe('ready');
+    expect(diagnostics.source?.loadDurationMs).toBeGreaterThanOrEqual(0);
+    expect(diagnostics.source?.lastFailureCategory).toBeUndefined();
+  });
+
+  it('reserveInFlightStart/releaseInFlightStart thread an explicit revisionOverride for a lazy type (revisionOverride threading fix)', async () => {
+    // `reserveInFlightStart(internals, type, revisionOverride)` — the
+    // `revisionOverride` fix `startWorkflow()` passes the resolved dynamic-
+    // source revision through for once resolution completes (unit-level:
+    // `reserveInFlightStart` re-derives via `catalog.resolveActive(type)`
+    // when no override is given, which reads `undefined` for a dynamic
+    // source never `engine.workflows.activate()`-d — exactly the gap this
+    // parameter closes). Reproducing the live async race through a real
+    // `engine.start()` call is not reliable: `reserveInFlightStart` is only
+    // called AFTER `resolveExecutableRegistration()` resolves (the revision
+    // must be known before a revision-scoped concurrency slot can be
+    // reserved), so the in-flight window it protects is the atomic create
+    // commit immediately after resolution, not the load itself.
+    await using storage = new MemoryStorage();
+    await using engine = new Engine({ storage, backgroundTasks: 'manual' });
+    const revision = await lazyRevision();
+    engine.registerSource(
+      workflowSource(
+        { name: 'lazy-checkout', location: './lazy.ts', exportName: 'lazy', revision },
+        async () => ({ lazy: lazyDefinition }),
+      ),
+    );
+    // No catalog active pointer for 'lazy-checkout' — the exact scenario
+    // where the pre-fix `catalog.resolveActive(type)?.revision` read would
+    // silently derive `undefined` instead of the real resolved revision.
+    await ensureWorkflowCatalogReady(engine);
+    expect(getWorkflowCatalog(engine).resolveActive('lazy-checkout')).toBeUndefined();
+
+    const internals = getInternals(engine);
+    const releaseRevision = reserveInFlightStart(internals, 'lazy-checkout', revision);
+    expect(releaseRevision).toBe(revision);
+
+    const diagnosticsWhileReserved = await getWorkflowRevisionDiagnostics(
+      engine,
+      'lazy-checkout',
+      revision,
+    );
+    expect(diagnosticsWhileReserved.references.inFlightStarts).toBe(1);
+
+    releaseInFlightStart(internals, 'lazy-checkout', releaseRevision);
+
+    const diagnosticsAfter = await getWorkflowRevisionDiagnostics(
+      engine,
+      'lazy-checkout',
+      revision,
+    );
+    expect(diagnosticsAfter.references.inFlightStarts).toBe(0);
+  });
+
+  it('a live engine.start() on a lazy type leaves no stale inFlightStarts reservation behind', async () => {
+    await using storage = new MemoryStorage();
+    await using engine = new Engine({ storage, backgroundTasks: 'manual' });
+    const revision = await lazyRevision();
+    engine.registerSource(
+      workflowSource(
+        { name: 'lazy-checkout', location: './lazy.ts', exportName: 'lazy', revision },
+        async () => ({ lazy: lazyDefinition }),
+      ),
+    );
+
+    await engine.start('lazy-checkout', null);
+
+    const diagnosticsAfter = await getWorkflowRevisionDiagnostics(
+      engine,
+      'lazy-checkout',
+      revision,
+    );
+    expect(diagnosticsAfter.references.inFlightStarts).toBe(0);
+    expect(getInternals(engine).inFlightStartsByRevision.get('lazy-checkout')).toBeUndefined();
   });
 });

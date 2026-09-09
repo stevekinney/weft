@@ -11,8 +11,9 @@ import type {
   ScheduleUpdateOptions,
   WorkflowState,
 } from '../types.ts';
-import { WorkflowNotRegisteredError } from './errors.ts';
+import { resolveExecutableRegistration } from './dynamic-source-execution.ts';
 import { commitFencedEngineWrite } from './fenced-write.ts';
+import type { Engine } from './index.ts';
 import type { EngineInternals } from './internals.ts';
 import { ScheduleHandle } from './schedule-handle.ts';
 import { resolveEffectiveScheduleFireAt } from './schedule-jitter.ts';
@@ -76,8 +77,12 @@ export async function schedule(
   spec: string | ScheduleSpec,
   options?: ScheduleOptions,
 ): Promise<ScheduleHandle> {
+  // Eager types resolve synchronously and never touch `internals.sources`;
+  // a `registerSource()`-registered type resolves (and invokes its loader
+  // exactly once) HERE, at schedule-creation time — not deferred to the
+  // schedule's first fire.
   if (!internals.registrations.has(type)) {
-    throw new WorkflowNotRegisteredError(type);
+    await resolveExecutableRegistration(internals.engine as unknown as Engine, internals, type);
   }
   const normalizedSpec = normalizeScheduleSpec(spec);
   const normalizedOptions = normalizeScheduleOptions(options);

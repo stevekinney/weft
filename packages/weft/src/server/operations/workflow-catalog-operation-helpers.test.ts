@@ -17,7 +17,12 @@ import {
 } from '../../core/catalog/index.ts';
 import { buildWorkflowContract } from '../../core/contract/build.ts';
 import { buildWorkflowRevisionManifest } from '../../core/contract/manifest.ts';
+import {
+  DynamicWorkflowSourceUnavailableError,
+  WorkflowSourceNotRegisteredError,
+} from '../../core/engine/dynamic-source-errors.ts';
 import { WorkflowNotRegisteredError } from '../../core/engine/errors.ts';
+import { WorkflowSourceValidationError } from '../../core/source/errors.ts';
 import { isOperationFault } from './operation-helpers.ts';
 import {
   activationRefusalToFault,
@@ -244,6 +249,46 @@ describe('throwWorkflowCatalogOperationFault', () => {
     const original = new Error('something else entirely');
 
     expect(() => throwWorkflowCatalogOperationFault(original)).toThrow(original);
+  });
+
+  // WFT-15/16: the two dynamic-source errors and the source-validation error
+  // `engine.workflows.preload()` can additionally throw. `DynamicWorkflowSourceUnavailableError`
+  // is unreachable through any CURRENT caller of this shared helper
+  // (`preload-workflow-revision.ts` calls `resolveWorkflowSource()`
+  // directly, never `resolveExecutableRegistration()`) — a direct unit
+  // test is the only way to cover this defensive branch, matching the
+  // module's own stated contract that it classifies every typed error this
+  // family "can produce."
+  it('maps WorkflowSourceNotRegisteredError to NotFound', () => {
+    const fault = captureThrown(new WorkflowSourceNotRegisteredError('checkout', 'r1'));
+
+    expect(isOperationFault(fault)).toBe(true);
+    if (isOperationFault(fault)) {
+      expect(fault.code).toBe('NotFound');
+    }
+  });
+
+  it('maps DynamicWorkflowSourceUnavailableError to Conflict', () => {
+    const fault = captureThrown(
+      new DynamicWorkflowSourceUnavailableError('checkout', 'r1', 'load-failed', new Error('boom')),
+    );
+
+    expect(isOperationFault(fault)).toBe(true);
+    if (isOperationFault(fault)) {
+      expect(fault.code).toBe('Conflict');
+    }
+  });
+
+  it('maps WorkflowSourceValidationError to Conflict with sourceValidationReasons', () => {
+    const fault = captureThrown(
+      new WorkflowSourceValidationError('checkout', 'r1', ['missing-export']),
+    );
+
+    expect(isOperationFault(fault)).toBe(true);
+    if (isOperationFault(fault) && fault.code === 'Conflict') {
+      expect(fault.data.reason).toBe('validation-failed');
+      expect(fault.data.sourceValidationReasons).toEqual(['missing-export']);
+    }
   });
 });
 

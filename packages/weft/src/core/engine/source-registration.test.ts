@@ -235,4 +235,20 @@ describe('engine.registerSource() structural validation', () => {
 
     engine[Symbol.dispose]();
   });
+
+  it('throws under workflowExecutionMode: "worker" (WFT-15/16) — a dynamically-loaded definition cannot ship to a Worker realm', () => {
+    const engine = new Engine({
+      workflowExecutionMode: 'worker',
+      workerExecution: {
+        workerUrl: new URL('https://example.invalid/worker.js'),
+        poolSize: 1,
+      },
+    });
+    const { source } = checkoutSource();
+
+    expect(() => engine.registerSource(source)).toThrow(/inline execution mode/);
+    expect(getInternals(engine).sources.byName.size).toBe(0);
+
+    engine[Symbol.dispose]();
+  });
 });

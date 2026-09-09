@@ -1173,12 +1173,14 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       // the case-label/brace lines around it flip between hit and unhit
       // run to run with byte-identical source — a coverage-attribution
       // artifact, not a real reachability signal — so the whole
-      // `default: { ... }` block (156-159) is allowed, not just the two
-      // dead statements inside it.
+      // `default: { ... }` block is allowed, not just the two dead
+      // statements inside it. Lines realigned from 156-159 to 172-175 by
+      // the WFT-15/16 dynamic-source diagnostics additions above this
+      // function.
       {
         reason:
           'Compile-time exhaustiveness guard for a closed discriminated union has no reachable runtime path to test without an unsafe cast.',
-        lines: new Set([156, 157, 158, 159]),
+        lines: new Set([172, 173, 174, 175]),
       },
     ],
     [
@@ -1191,11 +1193,27 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       },
     ],
     [
+      'src/core/engine/dynamic-source-execution.ts',
+      {
+        // `resolveExecutableRegistration()`'s own doc marks this exact branch
+        // "Unreachable in practice": `resolveWorkflowSourceForExecution()`'s
+        // contract guarantees a successful resolve always populates
+        // `internals.sources.resolved` for the key it just resolved — the
+        // only way to reach this throw is to corrupt that invariant via an
+        // unsafe cast, the same class of guard already allowed for
+        // `catalog-removal.ts`'s exhaustiveness default above.
+        reason:
+          'Defensive fail-loud guard for an invariant resolveWorkflowSourceForExecution() itself guarantees; has no reachable runtime path to test without an unsafe cast.',
+        lines: new Set([122, 123, 124, 125, 126, 127]),
+        requireUncoveredLines: true,
+      },
+    ],
+    [
       'src/core/engine/index.ts',
       {
         reason:
-          'Bun reports aggregate re-export and factory closures as missed although the engine entrypoint has complete line coverage. Raised from 4 to 5 when the ownership bootstrap was extended to the global lease mode: that edit adds no new function and makes strictly more code run on the lease path, and line coverage stayed at 100 percent, so the extra miss is the same attribution artifact rather than new dead code.',
-        functions: 5,
+          'Bun reports aggregate re-export and factory closures as missed although the engine entrypoint has complete line coverage. Raised from 4 to 5 when the ownership bootstrap was extended to the global lease mode: that edit adds no new function and makes strictly more code run on the lease path, and line coverage stayed at 100 percent, so the extra miss is the same attribution artifact rather than new dead code. Raised from 5 to 6 by the WFT-15/16 `getRegistration` strategy-bundle closure (dynamic-source fallback lookup) — same attribution artifact, line coverage still 100 percent.',
+        functions: 6,
       },
     ],
     [
@@ -1209,10 +1227,17 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
     [
       'src/core/engine/lifecycle/resume.ts',
       {
+        // The double-failure cleanup path IS exercised (`callbacks.failWorkflowForRecoveryHook`
+        // at the preceding line, and `callbacks.handleCleanupError` at the
+        // following line inside this catch's own body, both show real hit
+        // counts) — only the `catch (commitError) {` line's OWN counter
+        // reports zero, the identical brace/case-label attribution artifact
+        // already documented for `catalog-removal.ts`'s exhaustiveness
+        // guard above: a coverage-instrumentation quirk, not a real gap.
         reason:
-          'The remaining resume line is the double-failure cleanup branch reached only when failWorkflowForRecoveryHook itself throws after an onRecoveredWorkflow hook failure. Line realigned from 91 to 92 by the ADR 0002 workflow-claim-fold import (WFT-78).',
+          "Bun reports the catch clause's own line as missed although the surrounding failWorkflowForRecoveryHook call and this catch's own handleCleanupError body both show real hit counts — the same brace-line attribution artifact documented for catalog-removal.ts's exhaustiveness guard. Also reports one enclosing closure as missed for the same reason.",
         functions: 1,
-        lines: new Set([92]),
+        lines: new Set([93]),
         requireUncoveredLines: true,
       },
     ],

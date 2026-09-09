@@ -21,7 +21,7 @@ import type {
 import { type WorkflowVersionTuple } from '../../workflow-version-tuple.ts';
 import { releaseInFlightStart, reserveInFlightStart } from '../catalog-removal.ts';
 import { forgetCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
-import { WorkflowAlreadyExistsError, WorkflowNotRegisteredError } from '../errors.ts';
+import { WorkflowAlreadyExistsError } from '../errors.ts';
 import { type WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
 import { createDelayedStartTimerEntry } from '../operations-time.ts';
@@ -151,15 +151,11 @@ export async function startWorkflow(
   callbacks: LifecycleCallbacks,
   buildIdempotentStartOperations?: BuildIdempotentStartOperations,
 ): Promise<WorkflowHandle> {
-  const registration = internals.registrations.get(type);
-  if (!registration) {
-    throw new WorkflowNotRegisteredError(type);
-  }
-  const workflowConcurrency = registration.concurrency;
-
   assertServicesSupportedForMode(internals, options);
   assertValidOnTerminalConflict(options);
 
+  // `prepareStartWorkflow`'s sync capture of pendingParent* MUST run before any
+  // await here, or a concurrent same-tick `ctx.startChild()` could overwrite it.
   const preparation = prepareStartWorkflow(internals, options, callbacks);
   const {
     workflowId,
@@ -173,16 +169,23 @@ export async function startWorkflow(
 
   assertDeferSupported(internals, options, Boolean(delayedStartTimer));
 
-  // Atomic check-and-reserve: prevent two concurrent start() calls with the
-  // same ID from both passing the storage check before either writes state.
+  // Atomic check-and-reserve, still synchronous with `prepareStartWorkflow`
+  // above: prevents two concurrent start() calls with the same ID from both
+  // passing the storage check before either writes state.
   if (internals.pendingStarts.has(workflowId)) {
     throw new WorkflowAlreadyExistsError(workflowId);
   }
   internals.pendingStarts.add(workflowId);
   let startSucceeded = false;
-  const inFlightRevision = reserveInFlightStart(internals, type);
+  let inFlightRevision: string | undefined;
 
   try {
+    // Sync for an eager type; awaits dynamic-source resolution otherwise.
+    const { entry: registration, revision: resolvedRevision } =
+      await callbacks.resolveExecutableRegistration(type);
+    const workflowConcurrency = registration.concurrency;
+    inFlightRevision = reserveInFlightStart(internals, type, resolvedRevision);
+
     // Only caller-supplied ids can collide; a generated UUID skips the read.
     // Decide the duplicate-id outcome up front (throws for a non-terminal or
     // default-policy collision), but DEFER any destructive purge until just

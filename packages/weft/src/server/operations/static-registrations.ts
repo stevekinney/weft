@@ -105,6 +105,10 @@ import {
 } from './list-workflow-revisions.ts';
 import { listWorkflowsOperation, listWorkflowsRestBinding } from './list-workflows.ts';
 import { pauseScheduleOperation, pauseScheduleRestBinding } from './pause-schedule.ts';
+import {
+  preloadWorkflowRevisionOperation,
+  preloadWorkflowRevisionRestBinding,
+} from './preload-workflow-revision.ts';
 import { purgeWorkflowsOperation, purgeWorkflowsRestBinding } from './purge-workflows.ts';
 import {
   queryWorkflowOperation,
@@ -199,6 +203,7 @@ export const STATIC_REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = [
   getRegistryRestBinding,
   installWorkflowRevisionRestBinding,
   activateWorkflowRevisionRestBinding,
+  preloadWorkflowRevisionRestBinding,
   getWorkflowRevisionRestBinding,
   listWorkflowRevisionsRestBinding,
   getActiveWorkflowRevisionRestBinding,
@@ -283,6 +288,7 @@ export const STATIC_OPERATIONS: ReadonlyArray<RegistrableOperation> = [
   getRegistryOperation,
   installWorkflowRevisionOperation,
   activateWorkflowRevisionOperation,
+  preloadWorkflowRevisionOperation,
   getWorkflowRevisionOperation,
   listWorkflowRevisionsOperation,
   getActiveWorkflowRevisionOperation,

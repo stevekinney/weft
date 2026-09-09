@@ -1,6 +1,7 @@
 import type { ConstraintCheckState } from '../constraint.ts';
 import { ConstraintViolatedEvent } from '../events.ts';
 import type { OperationOutcome } from '../types.ts';
+import { getResolvedDynamicRegistration } from './dynamic-source-execution.ts';
 import type { EngineInternals } from './internals.ts';
 import type { CapturedRejectionReason } from './strategy-helpers.ts';
 
@@ -37,7 +38,7 @@ export async function evaluateConstraints(
   const context = internals.inlineStrategy?.getContext(workflowId);
   if (!context) return false;
 
-  const registration = internals.registrations.get(context.workflowType);
+  const registration = getResolvedDynamicRegistration(internals, context.workflowType);
   const constraints = registration?.constraints;
   if (!constraints || constraints.length === 0) return false;
 

@@ -147,6 +147,7 @@ import {
   type KnownWorkflowNames,
 } from './construction.ts';
 import { disposeEngine } from './disposal.ts';
+import { getResolvedDynamicRegistration } from './dynamic-source-execution.ts';
 import {
   type ActivityDefinitionName,
   type EngineCreateOptions,
@@ -680,8 +681,21 @@ export class Engine<
       maxNestingDepth: resolvedOptions.maxNestingDepth,
       development: resolvedOptions.development,
       broadcastEvents: resolvedOptions.broadcastEvents,
-      getRegistration: getInternals(this).registrations.get.bind(getInternals(this).registrations),
-      listRegisteredWorkflowTypes: () => getInternals(this).registrations.keys(),
+      // Falls back to the most recently resolved dynamic-source definition
+      // (WFT-15/16) when `type` has no eager registration — the execution
+      // strategy's own launch path, separate from `startWorkflow()`'s own
+      // (already-awaited) `resolveExecutableRegistration()` call, which
+      // does not itself write to `internals.registrations`. By the time
+      // this runs the source has already resolved (`startWorkflow()`
+      // awaited it before ever reaching the strategy), so this stays a
+      // synchronous, no-resolve lookup — never a fresh loader invocation.
+      getRegistration: (workflowType) =>
+        getResolvedDynamicRegistration(getInternals(this), workflowType),
+      listRegisteredWorkflowTypes: () =>
+        new Set([
+          ...getInternals(this).registrations.keys(),
+          ...getInternals(this).sources.lastResolvedRevisionByName.keys(),
+        ]).values(),
       getComposedWorkflowInterceptor: () => getComposedWorkflowInterceptor(getInternals(this)),
       resolveWorkflowType: this.#resolveWorkflowTypeTarget.bind(this),
       registerCancelHandler: (workflowId, handler) =>
@@ -2717,7 +2731,7 @@ export class Engine<
     // failure is swallowed internally), so the `.catch` here is defense in
     // depth, not a load-bearing guard.
     const { registry: workflowClaimRegistry } = this.#detachWorkflowClaimOwnership();
-    disposeEngine(getInternals(this));
+    disposeEngine(getInternals(this), (event) => this.dispatchEvent(event));
     if (this.#synchronousDisposeResult === null) {
       this.#synchronousDisposeResult = leaseManager?.release() ?? Promise.resolve(true);
     }
@@ -2766,7 +2780,7 @@ export class Engine<
         // way disposeEngine stops the global lease's renewals: synchronously,
         // before any awaited release.
         const { registry: workflowClaimRegistry } = this.#detachWorkflowClaimOwnership();
-        disposeEngine(getInternals(this));
+        disposeEngine(getInternals(this), (event) => this.dispatchEvent(event));
         // A lease acquire may still be parked (waiting for handoff) when disposal
         // runs. disposeEngine() set `disposed` and stopped the manager, so the
         // parked acquire's wait loop exits (or, if it already committed a holder

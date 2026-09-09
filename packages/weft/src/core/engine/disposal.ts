@@ -1,3 +1,4 @@
+import { WorkflowSourceLoadCancelledEvent } from '../events/workflow-source-events.ts';
 import { disposeEngineCleanupInterval } from './engine-runtime-helpers.ts';
 import { EngineDisposedError } from './errors.ts';
 import { disposeQueuedInlineWorkflowStarts } from './inline-launch-queue.ts';
@@ -23,20 +24,56 @@ function clearPendingResultPollTimers(internals: EngineInternals): void {
 }
 
 /**
- * Dynamic workflow sources (WFT-13/14): abort every outstanding
+ * Reject pending result waiters before clearing so external `handle.result()`
+ * callers observe a deterministic rejection instead of a promise that never
+ * settles. Mirrors the signalWaiters settle-before-clear precedent above.
+ * (update/review waiters are internal generator wait-frames awaited only by
+ * the now-disposed engine; abandoning them is correct, and resolving them
+ * would step a workflow generator against torn-down machinery. External
+ * update/review callers are bounded by their own response timeouts.) Split
+ * out of `disposeEngine` for the same complexity-ceiling reason as
+ * {@link clearPendingResultPollTimers}.
+ */
+function rejectPendingResultResolvers(internals: EngineInternals): void {
+  for (const waiter of internals.resultResolvers.values()) {
+    waiter.reject(new EngineDisposedError());
+  }
+}
+
+/**
+ * Dynamic workflow sources (WFT-13/14, WFT-15/16): abort every outstanding
  * `resolveWorkflowSource()` caller's own per-call controller (the shared
  * per-`(name, revision)` load itself is NOT aborted — it keeps running to
  * completion independent of any individual waiter, per the single-flight
  * contract; see `core/engine/source-resolution.ts`). Clearing
- * `sourceResolutionsInFlight` after aborting means a `resolveWorkflowSource()`
+ * `resolutionsInFlight` after aborting means a `resolveWorkflowSource()`
  * call made after this point never joins a zombie promise — it observes
- * `internals.disposed` and rejects immediately instead. Split out of
+ * `internals.disposed` and rejects immediately instead.
+ *
+ * Captures every `(name, revision)` key whose diagnostics are still
+ * `loading` BEFORE clearing, and dispatches exactly one
+ * `WorkflowSourceLoadCancelledEvent` per key via `dispatchEvent` —
+ * disposal aborts every waiter controller synchronously, but each
+ * waiter's own `finally` (which would otherwise detect "last waiter
+ * releasing while loading") only runs on a later microtask, by which time
+ * this function has already cleared the diagnostics it would have read;
+ * doing the sweep here, synchronously, before clearing, is what makes the
+ * event fire exactly once per key instead of never. Split out of
  * `disposeEngine` for the same complexity-ceiling reason as
  * {@link clearPendingResultPollTimers}.
  */
-function disposeSourceResolutionState(internals: EngineInternals): void {
+function disposeSourceResolutionState(
+  internals: EngineInternals,
+  dispatchEvent: (event: Event) => void,
+): void {
   for (const controller of internals.sources.waiterControllers) {
     controller.abort(new EngineDisposedError());
+  }
+  const stillLoading: Array<{ name: string; revision: string; kind: 'module' }> = [];
+  for (const [name, byRevision] of internals.sources.diagnostics) {
+    for (const [revision, entry] of byRevision) {
+      if (entry.state === 'loading') stillLoading.push({ name, revision, kind: entry.kind });
+    }
   }
   internals.sources.waiterControllers.clear();
   internals.sources.resolutionsInFlight.clear();
@@ -45,6 +82,9 @@ function disposeSourceResolutionState(internals: EngineInternals): void {
   internals.sources.waitersByKey.clear();
   internals.sources.lastResolvedRevisionByName.clear();
   internals.sources.diagnostics.clear();
+  for (const { name, revision, kind } of stillLoading) {
+    dispatchEvent(new WorkflowSourceLoadCancelledEvent(name, revision, kind));
+  }
 }
 
 /**
@@ -52,9 +92,16 @@ function disposeSourceResolutionState(internals: EngineInternals): void {
  * `Engine[Symbol.dispose]` — the operation order is correctness-sensitive
  * (abort before clearing waiters, dispose strategies before nulling them) and
  * is preserved exactly. `Engine[Symbol.dispose]` and `[Symbol.asyncDispose]`
- * both delegate here.
+ * both delegate here. `dispatchEvent` defaults to a no-op so every existing
+ * direct-internals test that calls this with one argument keeps compiling
+ * and running — only `Engine`'s own two call sites pass the real
+ * `engine.dispatchEvent` binding, which is what lets
+ * `disposeSourceResolutionState` fire `workflow-source:load-cancelled`.
  */
-export function disposeEngine(internals: EngineInternals): void {
+export function disposeEngine(
+  internals: EngineInternals,
+  dispatchEvent: (event: Event) => void = () => {},
+): void {
   internals.disposed = true;
   internals.alertManager?.[Symbol.dispose]();
   internals.alertManager = null;
@@ -83,16 +130,7 @@ export function disposeEngine(internals: EngineInternals): void {
   disposeSecondInstanceDetection(internals);
   disposeLeaseManager(internals);
   internals.handleCache.clear();
-  // Reject pending result waiters before clearing so external `handle.result()`
-  // callers observe a deterministic rejection instead of a promise that never
-  // settles. Mirrors the signalWaiters settle-before-clear precedent above.
-  // (update/review waiters are internal generator wait-frames awaited only by
-  // the now-disposed engine; abandoning them is correct, and resolving them
-  // would step a workflow generator against torn-down machinery. External
-  // update/review callers are bounded by their own response timeouts.)
-  for (const waiter of internals.resultResolvers.values()) {
-    waiter.reject(new EngineDisposedError());
-  }
+  rejectPendingResultResolvers(internals);
   rejectAllSleepTimerAcknowledgements(internals, new EngineDisposedError());
   internals.resultResolvers.clear();
   internals.updateWaiters.clear();
@@ -107,7 +145,7 @@ export function disposeEngine(internals: EngineInternals): void {
   internals.reviewTimerIds.clear();
   for (const controller of internals.pendingWebhooks) controller.abort();
   internals.pendingWebhooks.clear();
-  disposeSourceResolutionState(internals);
+  disposeSourceResolutionState(internals, dispatchEvent);
   clearPendingResultPollTimers(internals);
   internals.sleepResolvers.clear();
   internals.sleepResolversByWorkflow.clear();

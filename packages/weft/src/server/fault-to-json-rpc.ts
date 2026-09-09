@@ -93,6 +93,8 @@ function dataForConflict(
     currentGeneration: data.currentGeneration,
     compatibilityReasons:
       data.compatibilityReasons === undefined ? undefined : [...data.compatibilityReasons],
+    sourceValidationReasons:
+      data.sourceValidationReasons === undefined ? undefined : [...data.sourceValidationReasons],
   });
 }
 

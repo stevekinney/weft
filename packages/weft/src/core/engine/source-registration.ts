@@ -79,6 +79,22 @@ function assertWellFormedSourceDescriptor(source: WorkflowSourceHandle): void {
  * `commitWorkflowDefinition`.
  */
 export function registerSource(internals: EngineInternals, source: WorkflowSourceHandle): void {
+  // Inline-only for now (WFT-15/16): a dynamically-loaded definition is
+  // resolved and wired into THIS process's in-memory `internals` maps
+  // (`activityRegistriesByWorkflow`, `workflowTypesByHandler`) — exactly
+  // what the inline execution strategy reads directly. A Worker realm has
+  // no mechanism this batch wires to receive that same loaded module or
+  // manifest, so registering a dynamic source under `workflowExecutionMode:
+  // 'worker'` would silently resolve a definition the worker thread could
+  // never actually execute. Fail loud at registration time rather than at
+  // a confusing later `start()` failure.
+  if (internals.inlineStrategy === null) {
+    throw new Error(
+      'registerSource() is only supported in inline execution mode; a dynamically-loaded ' +
+        'definition cannot be shipped to a Worker realm. Use workflowExecutionMode: "inline", ' +
+        'or register this workflow eagerly with engine.register() instead.',
+    );
+  }
   assertWellFormedSourceDescriptor(source);
   const { name, revision } = source.descriptor;
   validateWorkflowOrActivityName(name, 'workflow');

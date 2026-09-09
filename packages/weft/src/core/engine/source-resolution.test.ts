@@ -329,7 +329,7 @@ describe('engine.resolveWorkflowSource()', () => {
     engine[Symbol.dispose]();
   });
 
-  it('throws a plain Error when resolving a (name, revision) that was never registerSource()-d', async () => {
+  it('throws WorkflowSourceNotRegisteredError when resolving a (name, revision) that was never registerSource()-d', async () => {
     const engine = new Engine();
 
     await expect(engine.resolveWorkflowSource('neverRegistered', 'r1')).rejects.toThrow(

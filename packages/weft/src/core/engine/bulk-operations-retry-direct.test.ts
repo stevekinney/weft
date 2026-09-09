@@ -62,6 +62,7 @@ function createInternals(storage: MemoryStorage) {
     scheduler: {
       cancel: mock(async () => {}),
     },
+    sources: { byName: new Map() },
     storage,
     workflowStateWriteChains: new Map(),
     scheduleStateOperationChains: new Map(),

@@ -11,6 +11,7 @@ import { workflow } from '../types.ts';
 import type { WorkflowVersionTuple } from '../workflow-version-tuple.ts';
 import { collectWorkflowPurgeDeleteOperations } from './bulk-operations-purge.ts';
 import { createLifecycleCallbacks as createEngineLifecycleCallbacks } from './callback-creators.ts';
+import { WorkflowNotRegisteredError } from './errors.ts';
 import { Engine } from './index.ts';
 import { getInternals } from './internals.ts';
 import { WorkflowClaimUnavailableError } from './lease-errors.ts';
@@ -45,7 +46,16 @@ import {
 } from './lifecycle.ts';
 import { encodeWorkflowClaimHolder } from './workflow-claim-codec.ts';
 
-function createLifecycleCallbacks(overrides: Record<string, unknown> = {}) {
+/**
+ * `registrations` mirrors whatever `Map` the test's own `internals` literal
+ * uses (or an empty one), so the default `resolveExecutableRegistration`
+ * stub reproduces the real callback's "eager registration, else not
+ * registered" contract without each call site needing its own override.
+ */
+function createLifecycleCallbacks(
+  overrides: Record<string, unknown> = {},
+  registrations: Map<string, { handler: Function; version: string }> = new Map(),
+) {
   return {
     createWorkflowHandleWithResultPromise: (workflowId: string) => ({ id: workflowId }),
     dispatchEvent: mock(() => {}),
@@ -58,6 +68,11 @@ function createLifecycleCallbacks(overrides: Record<string, unknown> = {}) {
     processPendingUpdatesForHandlers: async () => {},
     processPendingUpdatesAfterReplay: () => {},
     queueInlineWorkflowExecutionStart: () => {},
+    resolveExecutableRegistration: mock(async (type: string) => {
+      const entry = registrations.get(type);
+      if (entry === undefined) throw new WorkflowNotRegisteredError(type);
+      return { entry, revision: undefined };
+    }),
     resolveWorkflowTypeTarget: (target: string | Function) =>
       typeof target === 'string' ? target : target.name,
     runSerializedWorkflowStateWrite: async <Result>(
@@ -117,6 +132,19 @@ type ResumeWorkflowFromStorageInternalsOptions = {
   workflowVersionTuples?: Map<string, { workflowVersion: string }>;
 };
 
+/** Shared with `createLifecycleCallbacks(overrides, RESUME_TEST_REGISTRATIONS)` at call sites using this helper, so `resolveExecutableRegistration` resolves the same 'workflow' entry `resumeWorkflowFromStorage` reads off `internals.registrations` — the two are independent inputs since the lookup moved into the callback. */
+const RESUME_TEST_REGISTRATIONS = new Map([
+  [
+    'workflow',
+    {
+      handler: async function* () {
+        return 'done';
+      },
+      version: '1',
+    },
+  ],
+]);
+
 function createResumeWorkflowFromStorageInternals({
   storage,
   strategy = { startWorkflow: mock(() => {}) },
@@ -130,17 +158,7 @@ function createResumeWorkflowFromStorageInternals({
     inlineStrategy: null,
     options: { development: false, getNow: () => 1_000, historyPolicy: { maxEvents: null } },
     parkedInlineWorkflows: new Set<string>(),
-    registrations: new Map([
-      [
-        'workflow',
-        {
-          handler: async function* () {
-            return 'done';
-          },
-          version: '1',
-        },
-      ],
-    ]),
+    registrations: RESUME_TEST_REGISTRATIONS,
     storage,
     strategy,
     terminalizingWorkflows,
@@ -192,7 +210,7 @@ describe('engine lifecycle coverage helpers', () => {
 
     await expect(
       recoverAll(
-        { registrations: new Map(), storage } as never,
+        { registrations: new Map(), sources: { byName: new Map() }, storage } as never,
         createLifecycleCallbacks({
           getHandle: (workflowId: string) => ({ id: workflowId }),
         }) as never,
@@ -201,7 +219,7 @@ describe('engine lifecycle coverage helpers', () => {
 
     const skippedEvents: Event[] = [];
     const handles = await recoverAll(
-      { registrations: new Map(), storage } as never,
+      { registrations: new Map(), sources: { byName: new Map() }, storage } as never,
       createLifecycleCallbacks({
         dispatchEvent: (event: Event) => {
           skippedEvents.push(event);
@@ -318,7 +336,7 @@ describe('engine lifecycle coverage helpers', () => {
     );
     await expect(
       fork(
-        { registrations: new Map(), storage } as never,
+        { registrations: new Map(), sources: { byName: new Map() }, storage } as never,
         'workflow-missing-registration',
         undefined,
         createLifecycleCallbacks() as never,
@@ -344,7 +362,7 @@ describe('engine lifecycle coverage helpers', () => {
         { registrations, storage } as never,
         'workflow-missing-registration',
         { fromStep: 3 },
-        createLifecycleCallbacks() as never,
+        createLifecycleCallbacks({}, registrations) as never,
       ),
     ).rejects.toThrow(
       'Checkpoint not found at step 3 for workflow "workflow-missing-registration"',
@@ -355,7 +373,7 @@ describe('engine lifecycle coverage helpers', () => {
         { registrations, storage } as never,
         'workflow-missing-registration',
         undefined,
-        createLifecycleCallbacks() as never,
+        createLifecycleCallbacks({}, registrations) as never,
       ),
     ).rejects.toThrow('Checkpoint not found for workflow "workflow-missing-registration"');
   });
@@ -404,7 +422,12 @@ describe('engine lifecycle coverage helpers', () => {
     };
 
     await expect(
-      fork(internals as never, sourceWorkflowId, undefined, createLifecycleCallbacks() as never),
+      fork(
+        internals as never,
+        sourceWorkflowId,
+        undefined,
+        createLifecycleCallbacks({}, internals.registrations) as never,
+      ),
     ).rejects.toThrow('fork batch failed');
 
     expect(internals.checkpoints.size).toBe(0);
@@ -446,28 +469,29 @@ describe('engine lifecycle coverage helpers', () => {
   });
 
   it('rejects duplicate pending start reservations before writing state', async () => {
+    const registrations = new Map([
+      [
+        'workflow',
+        {
+          handler: async function* () {
+            return 'done';
+          },
+          version: '1',
+        },
+      ],
+    ]);
     await expect(
       startWorkflow(
         {
           options: { getNow: () => 1_000, payloadSizePolicy: { maxBytes: null } },
           pendingStarts: new Set(['workflow-duplicate-start']),
-          registrations: new Map([
-            [
-              'workflow',
-              {
-                handler: async function* () {
-                  return 'done';
-                },
-                version: '1',
-              },
-            ],
-          ]),
+          registrations,
         } as never,
         'workflow',
         null,
         { id: 'workflow-duplicate-start' },
         undefined,
-        createLifecycleCallbacks() as never,
+        createLifecycleCallbacks({}, registrations) as never,
       ),
     ).rejects.toThrow('Workflow with id "workflow-duplicate-start" already exists');
   });
@@ -1285,9 +1309,12 @@ describe('engine lifecycle coverage helpers', () => {
         }),
         workflowId,
         true,
-        createLifecycleCallbacks({
-          getHandle: () => ({ id: workflowId }),
-        }) as never,
+        createLifecycleCallbacks(
+          {
+            getHandle: () => ({ id: workflowId }),
+          },
+          RESUME_TEST_REGISTRATIONS,
+        ) as never,
       ),
     ).rejects.toThrow(`Cannot resume workflow "${workflowId}": termination is in progress`);
   });
@@ -1309,16 +1336,19 @@ describe('engine lifecycle coverage helpers', () => {
         }),
         workflowId,
         true,
-        createLifecycleCallbacks({
-          getHandle: () => ({ id: workflowId }),
-          runSerializedWorkflowStateWrite: async <Result>(
-            _workflowId: string,
-            writeOperation: () => Promise<Result>,
-          ) => {
-            await storage.delete(KEYS.workflow(workflowId));
-            return writeOperation();
+        createLifecycleCallbacks(
+          {
+            getHandle: () => ({ id: workflowId }),
+            runSerializedWorkflowStateWrite: async <Result>(
+              _workflowId: string,
+              writeOperation: () => Promise<Result>,
+            ) => {
+              await storage.delete(KEYS.workflow(workflowId));
+              return writeOperation();
+            },
           },
-        }) as never,
+          RESUME_TEST_REGISTRATIONS,
+        ) as never,
       ),
     ).rejects.toThrow(`Workflow "${workflowId}" not found in storage`);
   });
@@ -1375,10 +1405,13 @@ describe('engine lifecycle coverage helpers', () => {
       internals as never,
       workflowId,
       true,
-      createLifecycleCallbacks({
-        dispatchEvent,
-        getHandle: () => handle,
-      }) as never,
+      createLifecycleCallbacks(
+        {
+          dispatchEvent,
+          getHandle: () => handle,
+        },
+        internals.registrations,
+      ) as never,
     );
 
     expect(resumedHandle.id).toBe(handle.id);
