@@ -253,17 +253,34 @@ export async function resolveExecutableRegistrationOrRenamedNotFound(
 
 /**
  * {@link resolveExecutableRegistrationOrRenamedNotFound}, pre-bound to
- * `bulk-operations.ts`'s retry-failed message shape. Kept here (with the
- * bulk of the logic off `bulk-operations.ts`, already at its own
+ * `bulk-operations.ts`'s retry-failed message shape. Resolves against the
+ * failed run's own EXACT pinned `revision` (`WorkflowState.revision`, WFT-17)
+ * via {@link resolveExecutableRegistrationForRevision} — never the catalog's
+ * active pointer — so a bulk retry's pre-reactivation concurrency-admission
+ * lookup agrees with the exact-revision resolve the subsequent
+ * `engine.resume()` performs. Resolving against the active pointer here
+ * instead would let a retry commit the failed->running reactivation batch
+ * against the WRONG registration's `concurrency` config, and then — if the
+ * pinned revision is unavailable while a different revision is active —
+ * only discover that after the reactivation already committed, leaving the
+ * run stranded `running` with no generator ever resuming. Kept here (with
+ * the bulk of the logic off `bulk-operations.ts`, already at its own
  * oxlint `max-lines` ceiling) rather than inlined at that one call site.
  */
 export async function resolveExecutableRegistrationForRetry(
   internals: EngineInternals,
   type: string,
+  revision: string | undefined,
   workflowId: string,
 ): Promise<ExecutableRegistration> {
   return resolveExecutableRegistrationOrRenamedNotFound(
-    (t) => resolveExecutableRegistration(internals.engine as unknown as Engine, internals, t),
+    (t) =>
+      resolveExecutableRegistrationForRevision(
+        internals.engine as unknown as Engine,
+        internals,
+        t,
+        revision,
+      ),
     type,
     () => new Error(`No workflow registered with name "${type}" (needed to retry "${workflowId}")`),
   );

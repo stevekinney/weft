@@ -241,7 +241,10 @@ The human-readable report also breaks each type's running count down by
 from the `storedVersion → registeredVersion` line above it: two revisions
 can share one `workflowVersion` (a documentation-only redeploy, for
 example). A run with no persisted `revision` (a pre-revision-pinning
-record) is grouped under the `unknown` key.
+record) is counted separately and appended as `unpinned (N)`—never folded
+into the per-revision breakdown itself, since a dynamic source's `revision`
+is any non-empty, bounded string with no reserved values and could
+legitimately collide with a sentinel key.
 
 ### schedule
 

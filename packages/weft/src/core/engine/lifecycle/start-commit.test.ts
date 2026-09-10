@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'bun:test';
 
-import type { ConditionalBatchCondition } from '../../../storage/interface.ts';
+import { KEYS, type ConditionalBatchCondition } from '../../../storage/interface.ts';
 import { MemoryStorage } from '../../../storage/memory.ts';
 import { AtomicStateConflictError } from '../../atomic-state.ts';
 import type { Checkpoint, WorkflowState } from '../../types.ts';
+import { WorkflowRevisionUnavailableError } from '../revision-errors.ts';
 import { WorkflowClaimRegistry } from '../workflow-claim-registry.ts';
 import { buildAndCommitStartBatch } from './start-commit.ts';
 
@@ -191,5 +192,71 @@ describe('start-commit lifecycle helpers', () => {
     await expect(storage.get(`wf:${context.workflowId}`)).resolves.not.toBeNull();
     await expect(storage.get('start-idempotent-mapping')).resolves.toEqual(new Uint8Array([1]));
     expect(registry.currentEpoch(context.workflowId)).toBe(1);
+  });
+
+  it('fails closed with WorkflowRevisionUnavailableError when a workflow-concurrency retry re-reads a catalog entry a concurrent removal already deleted', async () => {
+    // WFT-17 (Codex review on PR #958): `buildCatalogEntryStartPrecondition()`
+    // re-reads the catalog entry FRESH every loop attempt. Attempt 0 finds it
+    // still installed, loses its CAS for an unrelated (workflow-concurrency)
+    // reason, and retries; by attempt 1 a concurrent `removeWorkflowRevision()`
+    // has already deleted it, so this attempt's read finds nothing and throws
+    // immediately — the "already gone before this attempt even builds a
+    // precondition" case, distinct from `hasCatalogEntryConflict()`'s
+    // after-the-fact CAS-loss re-check (covered by the catalog-removal.test.ts
+    // race test).
+    const storage = new MemoryStorage();
+    const entryKey = KEYS.catalogEntry('workflow', 'rev-1');
+    const entryBytes = new Uint8Array([9]);
+    await storage.put(entryKey, entryBytes);
+
+    let entryReads = 0;
+    const originalGet = storage.get.bind(storage);
+    storage.get = async (key: string) => {
+      if (key === entryKey) {
+        entryReads += 1;
+        // Reads 1-2 are attempt 0's precondition build and its post-conflict
+        // catalog-entry re-check — both still find the entry. Read 3 is
+        // attempt 1's fresh precondition build, after the simulated
+        // concurrent removal.
+        return entryReads <= 2 ? entryBytes : null;
+      }
+      return originalGet(key);
+    };
+    storage.conditionalBatch = async () => false;
+
+    const registry = new WorkflowClaimRegistry({
+      storage,
+      engineId: 'test-engine',
+      getNow: () => Date.now(),
+      claimTtlMs: 30_000,
+      claimRenewIntervalMs: 5_000,
+    });
+    const context = {
+      ...createBaseContext(storage),
+      state: createWorkflowState({ id: 'workflow-start-commit', revision: 'rev-1' }),
+      internals: {
+        deposed: false,
+        leaseManager: null,
+        options: { ownershipMode: 'workflow-lease' },
+        storage,
+        workflowClaimRegistry: registry,
+      } as never,
+    };
+
+    await expect(
+      buildAndCommitStartBatch(
+        {
+          ...context,
+          buildWorkflowConcurrencyStartOperations: async () => ({
+            conditions: [{ key: 'workflow-concurrency', expectedValue: null }],
+            operations: [],
+            stateKey: 'workflow-concurrency',
+          }),
+        },
+        undefined,
+      ),
+    ).rejects.toBeInstanceOf(WorkflowRevisionUnavailableError);
+    expect(entryReads).toBe(3);
+    await expect(storage.get(`wf:${context.workflowId}`)).resolves.toBeNull();
   });
 });

@@ -33,6 +33,43 @@ export const BULK_OPERATION_SAMPLE_LIMIT = 20;
 export const DEFAULT_BULK_OPERATION_CONCURRENCY = 1;
 const DEFAULT_BULK_OPERATION_PRINCIPAL: BulkOperationPrincipal = { method: 'in-process' };
 
+export type BulkWorkflowPoolResult<TItem, TResult> =
+  | { item: TItem; status: 'fulfilled'; value: TResult }
+  | { item: TItem; status: 'rejected'; reason: unknown };
+
+/**
+ * Shared bounded-concurrency runner every bulk operation (cancel, retry,
+ * signal, delete) uses to drive its per-workflow work: runs `items` in
+ * fixed-size batches of `concurrencyLimit`, capturing each item's outcome
+ * rather than letting one rejection abort the batch (mirrors
+ * `Promise.allSettled`, but keyed back to the originating `item` so a
+ * caller can map a failure to the workflow it belongs to).
+ */
+export async function runBulkWorkflowPool<TItem, TResult>(
+  items: readonly TItem[],
+  concurrencyLimit: number,
+  operation: (item: TItem) => Promise<TResult>,
+): Promise<BulkWorkflowPoolResult<TItem, TResult>[]> {
+  const results: BulkWorkflowPoolResult<TItem, TResult>[] = [];
+
+  for (let batchStart = 0; batchStart < items.length; batchStart += concurrencyLimit) {
+    const batchItems = items.slice(batchStart, batchStart + concurrencyLimit);
+    results.push(
+      ...(await Promise.all(
+        batchItems.map(async (item): Promise<BulkWorkflowPoolResult<TItem, TResult>> => {
+          try {
+            return { item, status: 'fulfilled', value: await operation(item) };
+          } catch (reason) {
+            return { item, status: 'rejected', reason };
+          }
+        }),
+      )),
+    );
+  }
+
+  return results;
+}
+
 export type BulkWorkflowSnapshot = {
   id: string;
   type: string;

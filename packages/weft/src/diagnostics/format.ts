@@ -213,9 +213,14 @@ export function formatVersionCheckReport(report: VersionCheckReport): string {
     lines.push(`  ${typeReport.runningCount} running workflows`);
     lines.push(`  Compatibility: ${typeReport.compatibility}`);
     const revisionEntries = Object.entries(typeReport.revisionCounts);
-    if (revisionEntries.length > 0) {
+    if (revisionEntries.length > 0 || typeReport.unpinnedRunningCount > 0) {
       const revisionSummary = revisionEntries
         .map(([revision, count]) => `${revision} (${count})`)
+        .concat(
+          typeReport.unpinnedRunningCount > 0
+            ? [`unpinned (${typeReport.unpinnedRunningCount})`]
+            : [],
+        )
         .join(', ');
       lines.push(`  Revisions: ${revisionSummary}`);
     }

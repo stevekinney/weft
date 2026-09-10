@@ -1,5 +1,10 @@
-import type { BatchOperation, ConditionalBatchCondition } from '../../../storage/interface.ts';
-import { requireStorageCapability, storageValuesEqual } from '../../../storage/interface.ts';
+import {
+  KEYS,
+  requireStorageCapability,
+  storageValuesEqual,
+  type BatchOperation,
+  type ConditionalBatchCondition,
+} from '../../../storage/interface.ts';
 import { AtomicStateConflictError } from '../../atomic-state.ts';
 import type { Checkpoint, StartOptions, TimerEntry, WorkflowState } from '../../types.ts';
 import {
@@ -7,6 +12,7 @@ import {
   commitFencedEngineWriteAllowingPreconditionFailure,
 } from '../fenced-write.ts';
 import type { EngineInternals } from '../internals.ts';
+import { WorkflowRevisionUnavailableError } from '../revision-errors.ts';
 import {
   commitWithWorkflowClaimFold,
   prepareWorkflowClaimFold,
@@ -46,9 +52,79 @@ export class StartIdempotencyRaceLostError extends Error {
 const WORKFLOW_CONCURRENCY_ADMISSION_MAX_ATTEMPTS = 5;
 
 type TaggedStartCondition = {
-  source: 'workflow-concurrency' | 'start-precondition';
+  source: 'workflow-concurrency' | 'start-precondition' | 'catalog-entry';
   condition: ConditionalBatchCondition;
 };
+
+/**
+ * Admission-time defense against the WFT-17 catalog-removal/start race
+ * (Codex review, PR #958): fence a fresh start's create batch on the
+ * resolved revision's durable catalog entry still being installed — so a
+ * concurrent `removeWorkflowRevision()` on a DIFFERENT process, landing
+ * between this process resolving `state.revision` and this batch's own
+ * commit, cannot let the start silently commit a `wf:` record pinned to a
+ * revision the catalog no longer carries (which recovery would later find
+ * `unavailable` anyway, but only after the run had already run for a while
+ * believing itself durably identified).
+ *
+ * Scoped to `ownershipMode !== 'none'` only: the cross-process race this
+ * closes cannot occur under `ownership: 'none'`, which is single-writer by
+ * contract (see "One engine per durable store" in the recovery guide) — the
+ * SAME-process case is already closed by `inFlightStartsByRevision`
+ * (reserved before this batch even builds). Both `'lease'` and
+ * `'workflow-lease'` already require `conditionalBatch` for an ordinary
+ * start's own epoch/claim fencing, so this adds no NEW storage-capability
+ * requirement for the common path — only for a delayed (`startAt`/`startAfter`)
+ * start under `workflow-lease`, which today can reach the zero-precondition
+ * plain-`batch()` fast path; that narrow path now also requires
+ * `conditionalBatch`, consistent with every other write this ownership mode
+ * already makes.
+ *
+ * `conditionalBatch`'s precondition is checked against the LIVE stored value
+ * AT COMMIT TIME, not at the time this function's own read happens — so
+ * this needs no ordering coordination with `removeWorkflowRevision()`'s own
+ * CAS; whichever one's commit lands first wins, and the loser's CAS fails
+ * closed. A `null` read here (the entry is ALREADY gone by the time this
+ * process looks) throws immediately rather than building an
+ * `expectedValue: null` "still absent" precondition — the entry was
+ * installed synchronously before `ensureWorkflowCatalogReady()` returned for
+ * an eager type, or resolved and installed by `resolveExecutableRegistrationForRevision()`
+ * for a dynamic source, so ITS absence here can only mean a concurrent
+ * removal already won; treating that as "still absent, so still fine to
+ * commit against" would be the exact bug this function exists to close.
+ */
+function needsCatalogEntryStartPrecondition(
+  internals: EngineInternals,
+  state: WorkflowState,
+): state is WorkflowState & { revision: string } {
+  return internals.options.ownershipMode !== 'none' && state.revision !== undefined;
+}
+
+/**
+ * Only called once {@link needsCatalogEntryStartPrecondition} has already
+ * confirmed (synchronously) that a precondition is needed — `await`ing an
+ * `async` function always costs a microtask tick even when its own body
+ * would take a fast-path early return, the same reason `isWorkflowCatalogReady()`
+ * (`catalog-readiness.ts`) is its own sync check rather than folded into
+ * `ensureWorkflowCatalogReady()`'s body. `buildAndCommitStartBatch()` is
+ * EVERY start's shared commit loop, including `ownership: 'none'`'s hot
+ * path, so an unconditional `await` here — even one whose body always
+ * returns `undefined` immediately for that mode — would still shift this
+ * loop's interleaving against concurrent callers on every single start,
+ * with no compensating benefit for the mode where the precondition never
+ * applies at all.
+ */
+async function buildCatalogEntryStartPrecondition(
+  internals: EngineInternals,
+  state: WorkflowState & { revision: string },
+): Promise<TaggedStartCondition> {
+  const key = KEYS.catalogEntry(state.type, state.revision);
+  const entryBytes = await internals.storage.get(key);
+  if (entryBytes === null) {
+    throw new WorkflowRevisionUnavailableError(state.type, state.revision, 'not-installed');
+  }
+  return { source: 'catalog-entry', condition: { key, expectedValue: entryBytes } };
+}
 
 /** Outcome of {@link persistStartBatch}, disambiguating WHICH kind of race was lost. */
 type PersistStartBatchOutcome = 'committed' | 'precondition-lost' | 'claim-lost';
@@ -143,6 +219,30 @@ async function hasStartPreconditionConflict(
   return false;
 }
 
+/**
+ * Re-check specifically the `'catalog-entry'`-tagged condition (see
+ * {@link buildCatalogEntryStartPrecondition}) against live storage, to
+ * disambiguate a lost CAS caused by a concurrent revision removal from an
+ * idempotency or workflow-concurrency conflict. Checked AFTER
+ * {@link hasStartPreconditionConflict} in `buildAndCommitStartBatch` — a
+ * same-idempotency-key winner takes priority when both are somehow true,
+ * since resolving to the existing run is more useful to the caller than a
+ * removal error.
+ */
+async function hasCatalogEntryConflict(
+  internals: EngineInternals,
+  conditions: TaggedStartCondition[],
+): Promise<boolean> {
+  for (const entry of conditions) {
+    if (entry.source !== 'catalog-entry') continue;
+    const currentValue = await internals.storage.get(entry.condition.key);
+    if (!storageValuesEqual(currentValue, entry.condition.expectedValue)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function tagStartPreconditions(
   conditions: ConditionalBatchCondition[] | undefined,
 ): TaggedStartCondition[] {
@@ -184,8 +284,7 @@ export type StartBatchContext = {
   persistedWorkflowStartHeaders: Map<string, string> | undefined;
   additionalStartOperations: BatchOperation[] | undefined;
   buildWorkflowConcurrencyStartOperations:
-    | (() => Promise<WorkflowConcurrencyStartOperations | undefined>)
-    | undefined;
+    (() => Promise<WorkflowConcurrencyStartOperations | undefined>) | undefined;
   callbacks: LifecycleCallbacks;
   /**
    * Storage deletes for a prior terminal run being displaced by an
@@ -220,6 +319,18 @@ export async function buildAndCommitStartBatch(
     const workflowConcurrency = await context.buildWorkflowConcurrencyStartOperations?.();
     lastWorkflowConcurrencyStateKey =
       workflowConcurrency?.stateKey ?? lastWorkflowConcurrencyStateKey;
+    // Re-read fresh every attempt of this loop, same as `idempotent`/`claimFold`
+    // above/below — a stale read from an earlier attempt would doom a later
+    // retry's CAS, and real time (a full storage round-trip) passes between
+    // attempts. Throws `WorkflowRevisionUnavailableError` immediately if the
+    // revision is ALREADY gone by the time this attempt reads it. The sync
+    // guard is checked BEFORE ever calling the async builder — see that
+    // function's own doc for why an unconditional `await` here would cost
+    // every start, including `ownership: 'none'`'s hot path, a microtask
+    // tick it has no use for.
+    const catalogEntryPrecondition = needsCatalogEntryStartPrecondition(internals, state)
+      ? await buildCatalogEntryStartPrecondition(internals, state)
+      : undefined;
 
     const startOperations = buildStartBatchOperations(
       internals,
@@ -241,6 +352,7 @@ export async function buildAndCommitStartBatch(
     const conditions = [
       ...tagStartPreconditions(idempotent?.conditions),
       ...tagWorkflowConcurrencyConditions(workflowConcurrency?.conditions ?? []),
+      ...(catalogEntryPrecondition === undefined ? [] : [catalogEntryPrecondition]),
     ];
     // ADR 0002 row `startWorkflow`/`buildAndCommitStartBatch`: claim-acquiring for
     // an ordinary start, but the delayed `startAt`/`startAfter` create batch is
@@ -266,6 +378,9 @@ export async function buildAndCommitStartBatch(
     }
     if (await hasStartPreconditionConflict(internals, conditions)) {
       throw new StartIdempotencyRaceLostError();
+    }
+    if (await hasCatalogEntryConflict(internals, conditions)) {
+      throw new WorkflowRevisionUnavailableError(state.type, state.revision, 'not-installed');
     }
     if (outcome === 'claim-lost') {
       return throwWorkflowClaimUnavailable(internals, workflowId);

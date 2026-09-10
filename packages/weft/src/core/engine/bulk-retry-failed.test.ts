@@ -3,10 +3,26 @@ import { describe, expect, it } from 'bun:test';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { ActivityRegistry } from '../activity-registry.ts';
 import { decode } from '../codec.ts';
-import type { WorkflowContext, WorkflowState } from '../types.ts';
+import { buildWorkflowManifestFromDefinition } from '../registry-workflow-manifest.ts';
+import { workflowSource } from '../source/index.ts';
+import type { WorkflowContext, WorkflowDefinition, WorkflowState } from '../types.ts';
 import { workflow } from '../types.ts';
+import { copyWorkflowDefinition } from './construction.ts';
 import { Engine } from './index.ts';
+import { buildRegistrationEntry } from './registration.ts';
+
+/** Real, content-derived revision for a definition — mirrors `dynamic-source-recovery.test.ts`'s helper of the same name. */
+async function revisionFor(definition: WorkflowDefinition): Promise<string> {
+  const entry = buildRegistrationEntry(definition.name, definition);
+  const registered = copyWorkflowDefinition(definition.name, entry);
+  const manifest = await buildWorkflowManifestFromDefinition(
+    registered,
+    new ActivityRegistry().listDefinitions(),
+  );
+  return manifest.revision;
+}
 
 async function waitForWorkflowStatus(
   engine: Engine,
@@ -226,5 +242,90 @@ describe('bulk failed-workflow retry', () => {
         requestId: 'bulk-retry-audit-request',
       }),
     ]);
+  });
+
+  it("a checkpoint-backed retry resolves against the failed run's own pinned revision, not the active pointer — leaving the workflow FAILED, not stranded RUNNING, when that revision is unavailable", async () => {
+    // The bug this test guards against: the pre-reactivation concurrency-
+    // admission lookup used to resolve the dynamic source's ACTIVE
+    // candidate (whatever this process happens to have registered),
+    // commit the failed -> running reactivation batch against it, and only
+    // discover — inside the SUBSEQUENT `engine.resume()`, which correctly
+    // resolves the run's own exact pin — that the pinned revision doesn't
+    // match. By then the reactivation had already committed, so the
+    // workflow was left stranded `running` forever with no generator ever
+    // advancing, even though the bulk-retry result reported it as failed.
+    const storage = new MemoryStorage();
+
+    const originalDefinition = workflow({
+      name: 'retry-dynamic-pin',
+      description: 'original candidate',
+    }).execute(async function* (ctx: WorkflowContext) {
+      yield* ctx.run(async () => 'checkpoint-marker');
+      throw new Error('always fails after the checkpoint');
+    });
+    const originalRevision = await revisionFor(originalDefinition);
+
+    await using engineA = new Engine({ storage });
+    engineA.registerSource(
+      workflowSource(
+        {
+          name: 'retry-dynamic-pin',
+          location: './original.ts',
+          exportName: 'a',
+          revision: originalRevision,
+        },
+        async () => ({ a: originalDefinition }),
+      ),
+    );
+
+    const handle = await engineA.start(
+      'retry-dynamic-pin',
+      {},
+      { id: 'bulk-retry-pin-target', tags: ['retry-pin-target'] },
+    );
+    const failedState = await waitForWorkflowStatus(engineA, handle.id, 'failed');
+    expect(failedState.revision).toBe(originalRevision);
+    expect(await storage.get(KEYS.checkpoint(handle.id))).not.toBeNull();
+
+    // A different process (fresh engine, same durable storage) that only
+    // registers a DIFFERENT revision of the SAME type — simulating a
+    // redeploy that rotated the candidate set without the exact revision
+    // this run started on.
+    const replacementDefinition = workflow({
+      name: 'retry-dynamic-pin',
+      description: 'replacement candidate',
+    }).execute(async function* (ctx: WorkflowContext) {
+      yield* ctx.run(async () => 'unused');
+      return 'unused';
+    });
+    const replacementRevision = await revisionFor(replacementDefinition);
+    expect(replacementRevision).not.toBe(originalRevision);
+
+    await using engineB = new Engine({ storage });
+    engineB.registerSource(
+      workflowSource(
+        {
+          name: 'retry-dynamic-pin',
+          location: './replacement.ts',
+          exportName: 'b',
+          revision: replacementRevision,
+        },
+        async () => ({ b: replacementDefinition }),
+      ),
+    );
+
+    const result = await engineB.retryFailedAll({ tags: ['retry-pin-target'] });
+
+    expect(result.retried).toBe(0);
+    expect(result.failed).toBe(1);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]?.id).toBe(handle.id);
+
+    // The critical regression assertion: the workflow must still be
+    // `failed`, never `running` — the exact-revision resolve now happens
+    // BEFORE the reactivation batch commits, so a retry that cannot honor
+    // the pin never touches the persisted state at all.
+    const stateAfterFailedRetry = await engineB.get(handle.id);
+    expect(stateAfterFailedRetry?.status).toBe('failed');
   });
 });

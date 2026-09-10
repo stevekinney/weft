@@ -29,11 +29,22 @@ import { WeftError } from '../weft-error.ts';
  *   `revision` was ever persisted for it) and its type is a dynamic source
  *   with two or more registered candidates, so there is no way to tell which
  *   one it actually started against.
+ * - `reason: 'not-installed'` — thrown at FRESH START admission, not
+ *   recovery: under a lease ownership mode, the resolved revision's durable
+ *   catalog entry was concurrently removed (`removeWorkflowRevision()` on a
+ *   different process) between this process resolving it and the start
+ *   batch's own commit. Fails the one `start()` call outright — never
+ *   retried inside the engine — so the caller re-issues `start()`, which
+ *   re-resolves against whatever is actually still installed.
  *
- * Recovery classifies the affected `(type, revision)` group `unavailable`:
- * only the runs in that group fail (with this error as their `system`
- * failure cause); sibling groups — including OTHER revisions of the same
- * dynamic-source type — continue recovering normally.
+ * `engine.recoverAll()` classifies the affected `(type, revision)` group
+ * `unavailable`: only the runs in that group fail (with this error as their
+ * `system` failure cause, delivered via `failWorkflow()`/`onRecoveredWorkflow`,
+ * never thrown to `recoverAll()`'s own caller); sibling groups — including
+ * OTHER revisions of the same dynamic-source type — continue recovering
+ * normally. A standalone `engine.resume(workflowId)` call has no such
+ * isolation to fall back on — there is only the one run — so it throws this
+ * error directly to its caller instead.
  *
  * @example
  * ```ts
@@ -41,7 +52,7 @@ import { WeftError } from '../weft-error.ts';
  *
  * const engine = new Engine();
  * try {
- *   await engine.recoverAll();
+ *   await engine.resume('workflow-id');
  * } catch (err) {
  *   if (err instanceof WorkflowRevisionUnavailableError) {
  *     console.error(err.workflowType, err.revision, err.reason);
@@ -52,12 +63,12 @@ import { WeftError } from '../weft-error.ts';
 export class WorkflowRevisionUnavailableError extends WeftError<'WorkflowRevisionUnavailableError'> {
   readonly workflowType: string;
   readonly revision: string | undefined;
-  readonly reason: 'not-registered' | 'legacy-ambiguous';
+  readonly reason: 'not-registered' | 'legacy-ambiguous' | 'not-installed';
 
   constructor(
     workflowType: string,
     revision: string | undefined,
-    reason: 'not-registered' | 'legacy-ambiguous',
+    reason: 'not-registered' | 'legacy-ambiguous' | 'not-installed',
   ) {
     super(
       'WorkflowRevisionUnavailableError',
@@ -65,7 +76,11 @@ export class WorkflowRevisionUnavailableError extends WeftError<'WorkflowRevisio
         ? `Cannot recover workflow type "${workflowType}": this run predates revision ` +
             'pinning and the type is a dynamic source with multiple registered revisions, ' +
             'so which one it started against cannot be determined.'
-        : `Cannot recover workflow type "${workflowType}": its pinned revision` +
+        : reason === 'not-installed'
+          ? `Cannot start workflow type "${workflowType}": revision` +
+            `${revision === undefined ? '' : ` "${revision}"`} is no longer installed in the ` +
+            'durable catalog (removed concurrently by another process). Retry the start.'
+          : `Cannot recover workflow type "${workflowType}": its pinned revision` +
             `${revision === undefined ? '' : ` "${revision}"`} is not registered in this ` +
             'process. Register the exact revision this run started against before retrying.',
     );

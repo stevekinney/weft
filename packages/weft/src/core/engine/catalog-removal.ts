@@ -18,6 +18,7 @@ import {
   incrementNestedRevisionCount,
   readNestedRevisionCount,
   totalWorkflowRevisionReferences,
+  type WorkflowRevisionRecord,
   type WorkflowRevisionReferenceCounts,
 } from '../catalog/index.ts';
 import { WorkflowRevisionRemovedEvent } from '../events/catalog-events.ts';
@@ -183,6 +184,32 @@ export type WorkflowCatalogRemovalResult =
  * compare-and-swap loses to a concurrent writer — the caller may re-read
  * and retry. Dispatches `catalog:revision-removed` on success.
  *
+ * Checks references BOTH before and after the durable delete (WFT-17,
+ * Codex review on PR #958). The pre-check above is an OPTIMIZATION — it
+ * refuses upfront in the common case, avoiding a needless delete-then-restore
+ * round trip — but is not, on its own, the guarantee: a concurrent
+ * `engine.start()` on a DIFFERENT process could read the entry as still
+ * installed, and commit a NEW run pinned to `revision`, in the narrow
+ * window between this function's pre-check scan and its own delete CAS
+ * landing; the pre-check's zero-references snapshot would then be stale
+ * by the time the delete actually commits. The POST-check closes this: it
+ * is safe to trust because `start-commit.ts`'s own start batch fences on
+ * this exact catalog entry's bytes (`buildCatalogEntryStartPrecondition`)
+ * — `conditionalBatch`'s precondition is evaluated against LIVE storage
+ * state at commit time, so ANY start whose commit lands after this
+ * function's delete necessarily loses its own CAS and never creates the
+ * reference at all. A nonzero post-delete count can therefore only be a
+ * run that committed BEFORE the delete — this function restores the entry
+ * (re-`install()`s the captured manifest) and reports `'referenced'`
+ * rather than leaving a real, still-referenced run pinned to a revision
+ * the catalog no longer carries. The one residual gap: a process crash
+ * between the delete committing and the restore committing leaves the
+ * revision durably uninstalled while a run still references it — that run
+ * becomes `unavailable` (not silently wrong-code-executing) at its next
+ * recovery, a bounded and diagnosable failure via
+ * {@link import('./revision-errors.ts').WorkflowRevisionUnavailableError},
+ * not a correctness violation.
+ *
  * @example
  * ```ts
  * import { Engine, removeWorkflowRevision, workflow } from '@lostgradient/weft';
@@ -212,16 +239,25 @@ export async function removeWorkflowRevision(
     return { removed: false, reason: 'active', activeRevision: active.revision };
   }
 
-  const references = await countWorkflowRevisionReferences(engine, name, revision);
-  if (totalWorkflowRevisionReferences(references) > 0) {
-    return { removed: false, reason: 'referenced', references };
+  const preReferences = await countWorkflowRevisionReferences(engine, name, revision);
+  if (totalWorkflowRevisionReferences(preReferences) > 0) {
+    return { removed: false, reason: 'referenced', references: preReferences };
   }
+
+  // Captured BEFORE `catalog.remove()` — a successful removal clears this
+  // entry from the catalog's in-memory cache, after which even a fresh
+  // `resolveEntry()` would durably miss too (the entry is actually gone by
+  // then). `manifest` is all `install()` needs to restore the durable
+  // record; a process-local `definition` (if this process happens to have
+  // one cached) is deliberately not required — restoring here reinstates
+  // catalog IDENTITY for a still-referenced revision, not this process's
+  // own ability to execute it.
+  const capturedEntry = await catalog.resolveEntry(name, revision);
 
   const result = await catalog.remove(name, revision);
   switch (result.outcome) {
     case 'removed':
-      engine.dispatchEvent(new WorkflowRevisionRemovedEvent(name, revision));
-      return { removed: true };
+      return finalizeRevisionRemoval(engine, name, revision, capturedEntry);
     case 'not-found':
       return { removed: false, reason: 'not-found' };
     case 'active':
@@ -233,6 +269,32 @@ export async function removeWorkflowRevision(
       throw new Error(`Unknown workflow catalog removal outcome: ${String(exhaustive)}`);
     }
   }
+}
+
+/**
+ * The post-delete half of {@link removeWorkflowRevision}'s TOCTOU defense
+ * (split out to keep that function under the complexity ceiling): re-counts
+ * references now that `catalog.remove()` has actually committed, and — if a
+ * reference appeared in the narrow window between the pre-check and this
+ * commit (see the removal-race note above `removeWorkflowRevision`) —
+ * restores the just-deleted entry from `capturedEntry` rather than leaving
+ * a real run pinned to a revision the catalog no longer carries.
+ */
+async function finalizeRevisionRemoval(
+  engine: Engine,
+  name: string,
+  revision: string,
+  capturedEntry: WorkflowRevisionRecord | undefined,
+): Promise<WorkflowCatalogRemovalResult> {
+  const postReferences = await countWorkflowRevisionReferences(engine, name, revision);
+  if (totalWorkflowRevisionReferences(postReferences) > 0) {
+    if (capturedEntry !== undefined) {
+      await getWorkflowCatalog(engine).install(capturedEntry.manifest);
+    }
+    return { removed: false, reason: 'referenced', references: postReferences };
+  }
+  engine.dispatchEvent(new WorkflowRevisionRemovedEvent(name, revision));
+  return { removed: true };
 }
 
 /**

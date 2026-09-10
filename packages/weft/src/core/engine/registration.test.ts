@@ -9,6 +9,7 @@ import { Engine } from '../engine.ts';
 import { activity, workflow } from '../types.ts';
 import { DEFAULT_WORKFLOW_VERSION } from '../versioning.ts';
 import { activateCatalogRevisionCandidate } from './catalog-activation.ts';
+import { ensureWorkflowCatalogReady } from './catalog-readiness.ts';
 import { getInternals, getWorkflowCatalog } from './internals.ts';
 import { resolveWorkflowTypeTarget, type RegistrationCallbacks } from './registration.ts';
 
@@ -354,5 +355,56 @@ describe('WFT-17: persisted WorkflowState.revision at start admission', () => {
     const summary = listed.items[0]!;
     expect('revision' in summary).toBe(false);
     expect(summary.revision).toBeUndefined();
+  });
+
+  it('invalidates a stale registeredCatalogRevisions entry immediately on re-registration, before the next catalog drain', async () => {
+    // `registeredCatalogRevisions` is populated only by the ASYNC catalog
+    // drain, once per pending install — it can lag `internals.registrations`
+    // between a synchronous `register()` commit and the next drain
+    // completing. `resolveCachedStartRevision()` (`lifecycle/start.ts`)
+    // reads this map SYNCHRONOUSLY for an internal start that bypasses the
+    // top-level `ensureWorkflowCatalogReady()` gate every top-level
+    // `engine.*` method awaits first (`ctx.startChild()`, a scheduled
+    // occurrence firing mid-drain) — without invalidating the stale entry,
+    // such a start could read the PREVIOUS manifest's revision for code
+    // `internals.registrations` has already replaced.
+    //
+    // The ordinary `workflow().execute()` builder path throws on re-registering
+    // a name with different content (`checkWorkflowCollision`), so this
+    // exercises the one path that CAN legitimately change an eager
+    // registration's content under an unchanged name: a hand-rolled plain
+    // `WorkflowDefinition` object (not builder-produced), which
+    // `commitWorkflowDefinition` accepts without a collision check.
+    await using engine = new Engine({ backgroundTasks: 'manual' });
+    const internals = getInternals(engine);
+    const name = 'reg-cache-invalidation';
+
+    engine.register({
+      name,
+      handler: async function* () {
+        return 'v1';
+      },
+      description: 'first candidate',
+    } as never);
+    await ensureWorkflowCatalogReady(engine as unknown as Engine);
+    const revisionV1 = internals.registeredCatalogRevisions.get(name);
+    expect(revisionV1).toBeDefined();
+
+    engine.register({
+      name,
+      handler: async function* () {
+        return 'v2';
+      },
+      description: 'second candidate',
+    } as never);
+
+    // Immediately, BEFORE the next drain runs: the stale v1 entry must
+    // already be gone, not silently served to a synchronous reader.
+    expect(internals.registeredCatalogRevisions.has(name)).toBe(false);
+
+    await ensureWorkflowCatalogReady(engine as unknown as Engine);
+    const revisionV2 = internals.registeredCatalogRevisions.get(name);
+    expect(revisionV2).toBeDefined();
+    expect(revisionV2).not.toBe(revisionV1);
   });
 });

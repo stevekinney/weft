@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
+import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { ActivityRegistry } from '../activity-registry.ts';
 import { buildWorkflowContract } from '../contract/build.ts';
@@ -22,6 +23,8 @@ import { copyWorkflowDefinition } from './construction.ts';
 import { Engine } from './index.ts';
 import { getInternals, getWorkflowCatalog } from './internals.ts';
 import { buildRegistrationEntry } from './registration.ts';
+import { WorkflowRevisionUnavailableError } from './revision-errors.ts';
+import { WorkflowClaimRegistry } from './workflow-claim-registry.ts';
 
 async function manifestFor(
   name: string,
@@ -784,5 +787,248 @@ describe('getWorkflowRevisionDiagnostics — dynamic-source extension (WFT-15/16
     );
     expect(diagnosticsAfter.references.inFlightStarts).toBe(0);
     expect(getInternals(engine).inFlightStartsByRevision.get('lazy-checkout')).toBeUndefined();
+  });
+});
+
+/**
+ * WFT-17: the catalog-removal/start-admission race (Codex review, PR #958,
+ * spec open question #3). Under `ownership: 'workflow-lease'`, TWO REAL
+ * engine processes share ONE `MemoryStorage` — engine A holds the eager
+ * registration and starts runs; engine B never registers the type at all
+ * (an "admin"/cleanup process) and calls `removeWorkflowRevision()` — the
+ * scenario `catalog-removal.test.ts`'s single-engine tests above cannot
+ * exercise, since a SAME-process removal is already refused outright by
+ * `registeredDefinitions` before the race window ever opens.
+ *
+ * `MemoryStorage#conditionalBatch` has no internal `await` (see
+ * `workflow-claim-two-engine.test.ts`'s own module doc), so these tests
+ * gate at the OUTER call boundary — replacing `storage.conditionalBatch`
+ * with a wrapper that awaits a `Promise.withResolvers()` latch before
+ * delegating to the real implementation — the same technique this file's
+ * `storage.batch` interleaving tests above already use.
+ */
+describe('removeWorkflowRevision vs. a concurrent start() — cross-process race (WFT-17)', () => {
+  async function revisionFor(definition: WorkflowDefinition): Promise<string> {
+    const entry = buildRegistrationEntry(definition.name, definition);
+    const registered = copyWorkflowDefinition(definition.name, entry);
+    const manifest = await buildWorkflowManifestFromDefinition(
+      registered,
+      new ActivityRegistry().listDefinitions(),
+    );
+    return manifest.revision;
+  }
+
+  /** Real, working `ownership: 'workflow-lease'` engine — mirrors `workflow-claim-two-engine.test.ts`'s `createClaimEngine`. */
+  async function createClaimEngine(
+    storage: MemoryStorage,
+    engineId: string,
+    workflows: Record<string, WorkflowDefinition>,
+  ): Promise<Engine> {
+    // Cast once, here, to the bare `Engine` type `removeWorkflowRevision()`/
+    // `activateCatalogRevisionCandidate()` accept — `Engine.create()`'s
+    // return type is parameterized by the exact `workflows` object passed
+    // in, so engine A (registered) and engine B (an empty registry) infer
+    // structurally different phantom workflow registries even though both
+    // are ordinary, fully-functional engines at runtime.
+    const engine = (await Engine.create({
+      storage,
+      workflows,
+      ownership: 'workflow-lease',
+      workflowClaimTtl: '1m',
+      workflowClaimRenewInterval: '5s',
+      recover: false,
+    })) as unknown as Engine;
+    getInternals(engine).workflowClaimRegistry = new WorkflowClaimRegistry({
+      storage,
+      engineId,
+      getNow: () => Date.now(),
+      claimTtlMs: 60_000,
+      claimRenewIntervalMs: 5_000,
+    });
+    return engine;
+  }
+
+  it("restores the entry and reports 'referenced' when a run committed by a concurrent start lands between removal's delete and its own post-check", async () => {
+    const storage = new MemoryStorage();
+    const raceRestoreWorkflow = workflow({ name: 'race-restore', version: '1.0.0' }).execute(
+      async function* (ctx: WorkflowContext) {
+        return yield* ctx.waitForSignal<string>('go');
+      },
+    );
+    const revisionR1 = await revisionFor(raceRestoreWorkflow);
+
+    await using engineA = await createClaimEngine(storage, 'engine-a', {
+      'race-restore': raceRestoreWorkflow,
+    });
+    // Prime the catalog (install R1 + activate it) with an UNCONTENDED start.
+    await engineA.start('race-restore', null, { id: 'race-restore-priming' }).then(async (h) => {
+      await h.signal('go', 'done');
+      await h.result();
+    });
+
+    // Move the ACTIVE pointer to a DIFFERENT revision R2 — R1 stays
+    // INSTALLED but not active, the state `removeWorkflowRevision()`
+    // actually needs to reach its reference-count checks at all (an active
+    // revision is refused before ever reaching them).
+    const manifestR2 = await manifestFor('race-restore', '1.0.0', {
+      description: 'a later revision A never loaded',
+    });
+    await activateCatalogRevisionCandidate(engineA, 'race-restore', manifestR2, {
+      expectedGeneration: 1,
+      policy: { requireExactRevision: false },
+    });
+    expect(getWorkflowCatalog(engineA).resolveActive('race-restore')?.revision).toBe(
+      manifestR2.revision,
+    );
+
+    // Engine B: a SEPARATE process that never `register()`s 'race-restore'
+    // — its own `registeredCatalogRevisions` has no entry for it, so
+    // `countWorkflowRevisionReferences`'s `registeredDefinitions` count is
+    // 0 from B's side, unlike a same-process removal attempt.
+    await using engineB = await createClaimEngine(storage, 'engine-b', {});
+
+    // Both engines share this ONE `storage` instance, so the wrapper below
+    // must pause ONLY removal's own delete-CAS — never A's later start
+    // commit, which also goes through `conditionalBatch` (its claim fold),
+    // or A's start would deadlock awaiting the same gate B is parked on.
+    // `removeCatalogEntry()`'s delete-CAS is the only call in this test
+    // whose operations include a `'delete'` on this exact catalog-entry key.
+    const entryKey = KEYS.catalogEntry('race-restore', revisionR1);
+    const gate = Promise.withResolvers<void>();
+    const entered = Promise.withResolvers<void>();
+    const originalConditionalBatch = storage.conditionalBatch!.bind(storage);
+    storage.conditionalBatch = async (conditions, operations) => {
+      const isRemovalDelete = operations.some((op) => op.type === 'delete' && op.key === entryKey);
+      if (isRemovalDelete) {
+        entered.resolve();
+        await gate.promise;
+      }
+      return originalConditionalBatch(conditions, operations);
+    };
+
+    const removalPromise = removeWorkflowRevision(engineB, 'race-restore', revisionR1);
+    await entered.promise;
+    // Removal is now parked exactly at its delete-CAS: the pre-check above
+    // already ran (finding zero references, since A's priming run already
+    // completed to a TERMINAL state and pins to no revision the pre-check
+    // would count).
+
+    // A fresh, non-terminal start on ENGINE A — the SAME process that still
+    // has R1's code loaded — pins to R1 (its own `registeredCatalogRevisions`
+    // entry), NOT the now-active R2 (the exact "pinned runs continue on
+    // their original revision after activation changes" acceptance
+    // criterion). Its own start-commit catalog-entry precondition reads R1
+    // still installed (B's delete hasn't landed yet — B is parked above)
+    // and commits successfully.
+    const parkedHandle = await engineA.start('race-restore', null, {
+      id: 'race-restore-parked',
+    });
+    const parkedState = await engineA.get('race-restore-parked');
+    expect(parkedState?.revision).toBe(revisionR1);
+    // Durably `running` (non-terminal) regardless of whether `engine.get()`
+    // presents it as `'pending'` — the queued-not-yet-dispatched inline
+    // presentation `hasQueuedInlineWorkflowStart` produces — since it is
+    // this DURABLE non-terminal status the removal post-check below reads
+    // directly from storage.
+    expect(['running', 'pending']).toContain(parkedState?.status ?? 'missing');
+
+    gate.resolve();
+    const result = await removalPromise;
+
+    expect(result).toEqual({
+      removed: false,
+      reason: 'referenced',
+      references: expect.objectContaining({ nonTerminalRuns: 1 }),
+    });
+    // The entry was restored — still installed, from EITHER engine's view.
+    expect(await getWorkflowCatalog(engineB).hasInstalled('race-restore', revisionR1)).toBe(true);
+    expect(await getWorkflowCatalog(engineA).hasInstalled('race-restore', revisionR1)).toBe(true);
+
+    // A's parked run is unaffected — never touched by the removal/restore
+    // dance, still running against its own in-memory code.
+    await parkedHandle.signal('go', 'done');
+    expect(await parkedHandle.result()).toBe('done');
+  });
+
+  it("fails a fresh start closed with WorkflowRevisionUnavailableError('not-installed') when the resolved revision is removed by a concurrent process before the start's own commit lands — no wf: record is created", async () => {
+    const storage = new MemoryStorage();
+    const raceFailClosedWorkflow = workflow({
+      name: 'race-fail-closed',
+      version: '1.0.0',
+    }).execute(async function* (ctx: WorkflowContext) {
+      return yield* ctx.waitForSignal<string>('go');
+    });
+    const revisionR1 = await revisionFor(raceFailClosedWorkflow);
+
+    await using engineA = await createClaimEngine(storage, 'engine-a-fc', {
+      'race-fail-closed': raceFailClosedWorkflow,
+    });
+    await engineA
+      .start('race-fail-closed', null, { id: 'race-fail-closed-priming' })
+      .then(async (h) => {
+        await h.signal('go', 'done');
+        await h.result();
+      });
+
+    // `removeWorkflowRevision()` refuses removal of the currently ACTIVE
+    // revision outright — move the active pointer to a DIFFERENT revision
+    // first, so R1 is installed-but-not-active, the state this test's race
+    // actually needs to reach `removeWorkflowRevision()`'s reference checks
+    // at all.
+    const manifestR2 = await manifestFor('race-fail-closed', '1.0.0', {
+      description: 'a later revision A never loaded',
+    });
+    const activation = await activateCatalogRevisionCandidate(
+      engineA,
+      'race-fail-closed',
+      manifestR2,
+      {
+        expectedGeneration: 1,
+        policy: { requireExactRevision: false },
+      },
+    );
+    expect(activation.applied).toBe(true);
+    expect(getWorkflowCatalog(engineA).resolveActive('race-fail-closed')?.revision).toBe(
+      manifestR2.revision,
+    );
+
+    await using engineB = await createClaimEngine(storage, 'engine-b-fc', {});
+
+    const gate = Promise.withResolvers<void>();
+    const entered = Promise.withResolvers<void>();
+    const originalConditionalBatch = storage.conditionalBatch!.bind(storage);
+    let paused = false;
+    storage.conditionalBatch = async (conditions, operations) => {
+      if (!paused) {
+        paused = true;
+        entered.resolve();
+        await gate.promise;
+      }
+      return originalConditionalBatch(conditions, operations);
+    };
+
+    // Park engine A's NEW start exactly at its own commit CAS: its
+    // catalog-entry precondition already captured R1's bytes (read before
+    // this gated call) before pausing here.
+    const startPromise = engineA.start('race-fail-closed', null, {
+      id: 'race-fail-closed-new',
+    });
+    await entered.promise;
+
+    // Restore the real conditionalBatch for engine B's OWN removal so it is
+    // not itself gated by the same wrapper (both engines share one
+    // `storage` instance).
+    storage.conditionalBatch = originalConditionalBatch;
+    const removed = await removeWorkflowRevision(engineB, 'race-fail-closed', revisionR1);
+    expect(removed).toEqual({ removed: true });
+    expect(await getWorkflowCatalog(engineB).hasInstalled('race-fail-closed', revisionR1)).toBe(
+      false,
+    );
+
+    gate.resolve();
+    await expect(startPromise).rejects.toThrow(WorkflowRevisionUnavailableError);
+
+    const state = await engineA.get('race-fail-closed-new');
+    expect(state).toBeNull();
   });
 });

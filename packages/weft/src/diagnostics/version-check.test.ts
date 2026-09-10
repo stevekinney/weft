@@ -4,7 +4,6 @@ import { encode } from '../core/codec.ts';
 import type { WorkflowDefinition, WorkflowState } from '../core/types.ts';
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
-import { UNKNOWN_WORKFLOW_REVISION_KEY } from './types.ts';
 import { runVersionCheck } from './version-check.ts';
 
 function makeWorkflowState(
@@ -99,9 +98,11 @@ describe('runVersionCheck', () => {
     expect(report.workflowTypes[0]!.type).toBe('order');
     expect(report.workflowTypes[0]!.storedVersion).toBe('1.0.0');
     expect(report.workflowTypes[0]!.registeredVersion).toBe('1.0.0');
-    expect(report.workflowTypes[0]!.revisionCounts).toEqual({
-      [UNKNOWN_WORKFLOW_REVISION_KEY]: 2,
-    });
+    // Both runs have no persisted `revision` — counted in the separate
+    // `unpinnedRunningCount` field, never as a sentinel key inside
+    // `revisionCounts`, which stays empty.
+    expect(report.workflowTypes[0]!.revisionCounts).toEqual({});
+    expect(report.workflowTypes[0]!.unpinnedRunningCount).toBe(2);
     expect(report.workflowTypes[0]!.runningCount).toBe(2);
     expect(report.workflowTypes[0]!.compatibility).toBe('compatible');
   });
@@ -156,6 +157,47 @@ describe('runVersionCheck', () => {
       'sha256:aaa': 2,
       'sha256:bbb': 1,
     });
+  });
+
+  it('keeps a run genuinely pinned to the literal revision "unknown" distinct from a legacy run with no persisted revision at all', async () => {
+    // A dynamic source's `revision` is any non-empty, bounded string with
+    // no reserved values, so a run can legitimately be pinned to the
+    // literal string "unknown". Folding "no persisted revision" into
+    // `revisionCounts` under a sentinel key would make that run
+    // indistinguishable from a legacy (revision-undefined) run — this
+    // proves the two stay in separate buckets (`revisionCounts` vs
+    // `unpinnedRunningCount`).
+    const storage = new MemoryStorage();
+    await seedWorkflow(
+      storage,
+      makeWorkflowState({
+        id: 'wf-pinned-unknown',
+        type: 'order',
+        version: '1.0.0',
+        status: 'running',
+        revision: 'unknown',
+      }),
+    );
+    await seedWorkflow(
+      storage,
+      makeWorkflowState({
+        id: 'wf-legacy',
+        type: 'order',
+        version: '1.0.0',
+        status: 'running',
+      }),
+    );
+
+    const registrations: Record<string, WorkflowDefinition> = {
+      order: { name: 'order', version: '1.0.0', handler: () => dummyHandler() },
+    };
+
+    const report = await runVersionCheck(storage, registrations);
+
+    expect(report.workflowTypes).toHaveLength(1);
+    expect(report.workflowTypes[0]!.revisionCounts).toEqual({ unknown: 1 });
+    expect(report.workflowTypes[0]!.unpinnedRunningCount).toBe(1);
+    expect(report.workflowTypes[0]!.runningCount).toBe(2);
   });
 
   it('returns unsafe when versions differ', async () => {

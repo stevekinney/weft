@@ -586,6 +586,25 @@ so a concurrent activation that makes the target revision active between
 the read and the delete loses the race rather than being silently
 overwritten) and `catalog:revision-removed` fires.
 
+**Removal re-checks references AFTER the delete too** (WFT-17, closing a
+cross-process TOCTOU): the reference count above is a snapshot, and a
+concurrent `engine.start()` on a DIFFERENT process could read the entry as
+still installed and commit a new run pinned to it in the narrow window
+between this function's own pre-check and its delete landing. Once the
+delete lands, `removeWorkflowRevision` re-counts references; if the count
+is now nonzero, it restores the entry (re-`install()`s the captured
+manifest, byte-identical) and returns `'referenced'` instead of leaving a
+real run pinned to a revision the catalog no longer carries. This is safe
+because it composes with the OTHER half of the fix below: any start whose
+own commit lands after the delete necessarily loses its own compare-and-swap,
+so a nonzero post-delete count can only be a run that committed before the
+delete. The one residual gap: a process crash between the delete committing
+and the restore committing leaves the revision durably uninstalled while a
+run still references it—that run becomes `unavailable` (via
+`WorkflowRevisionUnavailableError`, not silent wrong-code execution) at its
+next recovery, a bounded and diagnosable failure, not a correctness
+violation.
+
 `getWorkflowRevisionDiagnostics(engine, name, revision)` projects the same
 accounting into a read-only shape—`installed`, `active`, `activeRevision`,
 `references`, and a derived `removable` boolean—without attempting the
@@ -593,14 +612,40 @@ removal, useful for an operator checking whether a cleanup would succeed
 before running it. It backs the `weft.catalog.diagnostics` operation; see
 [api-observability.md](../reference/api-observability.md).
 
-Reference accounting in this batch is **in-process only**: under
-`ownership: 'workflow-lease'` (ADR 0002), a second engine process sharing
-the same durable store has its own, empty `registeredDefinitions`/
-`inFlightStarts` signals and can remove a revision the first process still
-has registered and is actively running against. This is a known, deliberate
-scope limit—durable, cross-process reference tracking depends on the same
-run-level revision pinning the five always-zero fields above are waiting
-on.
+`registeredDefinitions` and `inFlightStarts` remain **in-process only**:
+under `ownership: 'workflow-lease'` (ADR 0002), a second engine process
+sharing the same durable store has its own, empty view of these two
+signals. This is a known, deliberate scope limit for THOSE two fields—full
+cross-process visibility into them depends on the same run-level revision
+pinning the two remaining always-zero fields are waiting on. It no longer
+means a second process can silently remove a revision the first is actively
+running against, though: `nonTerminalRuns` is durable and cross-process
+already (above), and start admission itself now closes the commit-timing
+race under a lease ownership mode—see
+[Start admission fences on the resolved catalog entry](#start-admission-fences-on-the-resolved-catalog-entry-wft-17)
+below.
+
+### Start admission fences on the resolved catalog entry (WFT-17)
+
+Under `ownership: 'lease'` or `'workflow-lease'`, a fresh `engine.start()`'s
+create batch carries an ADDITIONAL compare-and-swap precondition: the
+resolved revision's durable catalog entry (`catalog-entry:<name>:<revision>`)
+must still equal the bytes this process read. `conditionalBatch`'s
+precondition is evaluated against LIVE storage state at commit time, not at
+read time—so this needs no coordination with `removeWorkflowRevision()`'s
+own CAS beyond both operating on the same key: whichever commit lands first
+wins, and the loser's compare-and-swap fails closed. A start whose resolved
+revision is concurrently removed by another process before its own commit
+lands throws `WorkflowRevisionUnavailableError` with `reason: 'not-installed'`
+directly to the caller—never retried inside the engine, and no `wf:` record
+is ever created for that attempt. Scoped to lease ownership modes only:
+under `ownership: 'none'` the durable store is single-writer by contract
+(see [One engine per durable store](recovery-and-deploys.md#one-engine-per-durable-store)
+in the recovery guide), so the cross-process race this closes cannot occur
+there, and the zero-precondition plain-`batch()` fast path is unchanged.
+Both `'lease'` and `'workflow-lease'` already require `conditionalBatch` for
+an ordinary start's own epoch or claim fencing, so this adds no new storage
+capability requirement for the common path.
 
 ### Catalog Events
 
@@ -866,12 +911,16 @@ operation (`POST /v1/registry/workflows/:name/preload`)—see
 [api-server.md](../reference/api-server.md) and
 [api-observability.md](../reference/api-observability.md).
 
-### Recovery: a batch-wide preload barrier, not durable revision pinning
+### Recovery: durable per-run revision pinning, grouped by exact `(type, revision)` (WFT-17/WFT-18)
 
 `recoverAll()` (and therefore `Engine.create()`, which calls it by default)
-preloads every DISTINCT dynamic-source type referenced by non-terminal
-state ONCE, before advancing any of those runs' generators—not once per
-run.
+groups non-terminal state by the EXACT `(type, revision)` each run
+persisted at start (`WorkflowState.revision`, see
+[Per-run revision pinning](#per-run-revision-pinning-wft-17) above) and
+preloads every group ONCE, before advancing any of that group's
+generators—not once per run, and not once per type either: two runs of the
+SAME type pinned to two DIFFERENT revisions recover against their own
+revision's code, never against whichever revision happens to be active.
 
 > [!NOTE]
 > `Engine.create()`'s options accept eager `workflows`/`activities` but have
@@ -883,35 +932,40 @@ run.
 > `await engine.recoverAll()`—the same sequence `dynamic-source-recovery.test.ts`
 > exercises. Passing `recover: false` to `Engine.create()` and driving
 > recovery yourself is the supported path when you need dynamic sources
-> registered before recovery runs. A type whose load fails is classified `unavailable`: only its own
-> non-terminal runs fail (with `DynamicWorkflowSourceUnavailableError` as a
-> `system`-category failure cause); sibling types—dynamic or eager—continue
-> recovering normally, mirroring the existing version-mismatch recovery
-> isolation. A registered-but-not-yet-resolved dynamic source is never routed
-> through the `'type-not-registered'` missing-registration classification
-> (`WorkflowRecoverySkippedEvent`)—only a name with no registration of any
-> kind (neither eager nor a registered source) is "missing."
+> registered before recovery runs. A group whose pinned revision cannot be
+> resolved is classified `unavailable`: only its own non-terminal runs fail
+> (with `WorkflowRevisionUnavailableError` as a `system`-category failure
+> cause); sibling groups—including a DIFFERENT revision of the SAME
+> type—continue recovering normally, mirroring the existing version-mismatch
+> recovery isolation. A registered-but-not-yet-resolved dynamic source is
+> never routed through the `'type-not-registered'` missing-registration
+> classification (`WorkflowRecoverySkippedEvent`)—only a name with no
+> registration of any kind (neither eager nor a registered source) is
+> "missing."
 
-**This is a feature gate, not durable per-run revision pinning.** Which
-revision an in-flight run resolves against during recovery is derived at
-RUNTIME from the catalog's active pointer plus whatever `registerSource()`
-calls this process happens to have made—never persisted per-run. A
-revision-pinning scheme that survives a redeploy changing which revisions
-are registered is explicitly out of scope for this batch; treat dynamic
-sources as requiring the SAME revision set to stay registered across a
-restart for recovery to behave predictably, the same operational discipline
-`engine.register()`-only deployments already require.
+**Recovery never falls back from a missing exact revision to the active
+revision.** A legacy record from before `WorkflowState.revision` existed is
+treated as unambiguous—and recovers exactly as before—for an eager type or
+a dynamic source with at most one registered candidate; it is forced
+`unavailable` (`reason: 'legacy-ambiguous'`) only when the ambiguity is
+real: a dynamic source with two or more registered candidates and no pin to
+disambiguate with. See
+[Dynamic-source recovery](recovery-and-deploys.md#dynamic-source-recovery-durable-per-run-revision-pinning-wft-17wft-18)
+in the recovery guide for the full ready/unavailable/incompatible
+classification and worked examples.
 
-The same last-resolved-revision-wins rule applies to activity registries:
-resolving a dynamic type's revision installs its activity registry keyed
-only by workflow `type`, not by `(type, revision)`. If two revisions of one
-dynamic type are ever resolved concurrently on the same engine—an
-already-running run on `r1` while a fresh `start()` or recovery resolves
-`r2`—the later resolve's activity registry becomes the one every run of
-that type executes against, including the `r1` run still in flight. This is
-the same feature-gate limitation as above, not a separate bug: avoid it by
-keeping one active revision per dynamic type until durable per-run revision
-pinning lands.
+The activity-registry caveat below is a separate, still-open limitation
+this batch does not touch: resolving a dynamic type's revision installs its
+activity registry keyed only by workflow `type`, not by `(type, revision)`.
+If two revisions of one dynamic type are ever resolved concurrently on the
+same engine—an already-running run on `r1` while a fresh `start()` or
+recovery resolves `r2`—the later resolve's activity registry becomes the
+one every run of that type executes against, including the `r1` run still
+in flight. This is a WFT-19 routing-key boundary (see
+[the batch scope note](recovery-and-deploys.md#dynamic-source-recovery-durable-per-run-revision-pinning-wft-17wft-18)):
+avoid it by keeping one active revision per dynamic type, or by routing
+activities through a mechanism that doesn't depend on this shared per-type
+registry.
 
 ### Diagnostics and events
 

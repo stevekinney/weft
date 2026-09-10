@@ -22,7 +22,6 @@ export type {
   StabilityResult,
 } from './memory-profiler.ts';
 export { generateRecommendations } from './recommendations.ts';
-export { UNKNOWN_WORKFLOW_REVISION_KEY } from './types.ts';
 export type {
   DatabaseHealth,
   DiagnosticReport,

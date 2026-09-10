@@ -226,7 +226,7 @@ const BASE_COVERAGE_ALLOWANCES = buildAllowanceLayer('BASE_COVERAGE_ALLOWANCES',
       reason:
         'Process-entry and failure-exit behavior runs in child processes whose hits are not attributed to the parent Bun LCOV report.',
       functions: 1,
-      lines: new Set([383, 384]),
+      lines: new Set([377, 378]),
       requireUncoveredLines: true,
     },
   ],
@@ -1232,11 +1232,16 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       // dynamic-source-execution and early-inFlightStarts-reservation
       // additions above this function. Lines realigned to 231-233 by the
       // WFT-17 `resolvedRevision` field and updated JSDoc added above this
-      // function.
+      // function. Lines realigned to 267-270 by the WFT-17 removal-race
+      // fix's `WorkflowRevisionRecord` import and the `finalizeRevisionRemoval()`
+      // extraction (Codex review on PR #958) — the switch itself, and this
+      // default guard, are otherwise unchanged; the closing brace (270) now
+      // also attributes as missed, the same brace-line artifact already
+      // documented above for this exact guard.
       {
         reason:
           'Compile-time exhaustiveness guard for a closed discriminated union has no reachable runtime path to test without an unsafe cast.',
-        lines: new Set([231, 232, 233]),
+        lines: new Set([267, 268, 269, 270]),
       },
     ],
     [
