@@ -134,53 +134,39 @@ export function resolveForkPersistedRevision(
  * actually persisted" gate) — `buildCatalogEntryRevisionCondition` itself is
  * reused unchanged, since `commitFencedEngineWrite`'s `baseConditions` wants
  * the same flat `ConditionalBatchCondition`, not `start()`'s own tagged
- * multi-precondition wrapper. A `'none'` ownership mode returns no
- * condition, byte-for-byte unfenced — identical to `start()`'s own no-op
- * there. Throws `WorkflowRevisionUnavailableError('not-installed')` should
- * the entry have vanished in the narrow window since this same revision was
- * already confirmed resolvable earlier in `fork()` — a genuine loss, not a
- * false positive, and still entirely before any commit (no partial write).
+ * multi-precondition wrapper. Throws
+ * `WorkflowRevisionUnavailableError('not-installed')` should the entry have
+ * vanished in the narrow window since this same revision was already
+ * confirmed resolvable earlier in `fork()` — a genuine loss, not a false
+ * positive, and still entirely before any commit (no partial write).
  *
- * **Known residual limitation, documented rather than fixed (Codex review
- * round 8, P1):** the `'none'`-mode no-op above is safe against a
- * `removeWorkflowRevision()` that is still deciding — the in-flight
- * reservation this fork's own resolver takes (via `onRevisionChosen`,
- * round 5) makes `removeWorkflowRevision()`'s pre-delete AND post-delete
- * reference counts (`catalog-removal.ts`'s `preReferences`/`postReferences`)
- * both observe the reservation and refuse or roll back. What it is NOT safe
- * against is a `removeWorkflowRevision()` that has ALREADY finished its
- * `postReferences` check at zero and moved on to
- * `finalizeCatalogTombstone()`'s own CAS: that CAS is conditioned only on
- * the tombstone key's bytes, not on the catalog-entry key or on
- * `inFlightStartsByRevision`, and `catalog.install()` (the reinstall this
- * fork's dynamic-source resolution performs, WFT-15/16) is conditioned only
- * on the entry key, not on the tombstone. A fork whose reservation and
- * reinstall both land in that specific window — after the post-check reads
- * zero, before the tombstone CAS commits — races the tombstone finalization
- * cleanly (neither CAS touches the other's key) and the fork's own commit
- * here is genuinely unfenced under `'none'`. The result:
- * `removeWorkflowRevision()` returns `{ removed: true }` while a live,
- * referenced `WorkflowState` now durably exists against that revision.
- * Closing this needs one of two real design changes, not a bounded
- * review-response fix: either serialize `finalizeRevisionRemoval()` against
- * `inFlightStartsByRevision` reservations all the way through
- * `finalizeCatalogTombstone()` (not just at the two reference-count
- * snapshots), or make this `'none'`-mode branch return a real
- * catalog-entry-bytes condition unconditionally — reversing the round-1
- * choice that `'none'` never needs `conditionalBatch` here. Both are
- * genuine architectural decisions with real tradeoffs (a broader lock in
- * the first case; a `conditionalBatch` on every `'none'`-mode fork commit,
- * a mode chosen specifically because it does not need one, in the second) —
- * left for a follow-up rather than decided unilaterally inside a review
- * response. See the CHANGELOG and `workflow-versioning.md` for the same
- * note stated once more for readers who do not read source JSDoc.
+ * **Fenced under `'none'` too, closing the round-8 gap (WFT-21, Codex
+ * review items 1-3):** a `'none'` ownership mode used to return no
+ * condition here (byte-for-byte unfenced, mirroring `start()`'s own no-op),
+ * on the premise that `'none'` never needs `conditionalBatch`. That premise
+ * was already false for this exact write: `catalog.install()`'s own durable
+ * write (`core/catalog/storage-io.ts`'s `writeCatalogEntry`) unconditionally
+ * requires the `conditionalBatch` storage capability regardless of
+ * ownership mode, so fencing the fork commit on the entry's bytes here adds
+ * no NEW capability requirement under `'none'` — the capability was already
+ * a hard dependency of the dynamic-source-load path this same fork just
+ * went through. Combined with `catalog.install()` itself now refusing to
+ * resurrect a tombstoned revision (see
+ * {@link import('../../catalog/errors.ts').WorkflowRevisionTombstonedError}'s
+ * JSDoc), this closes the residual window the previous JSDoc revision
+ * documented: a fork whose reservation and reinstall land after
+ * `removeWorkflowRevision()`'s `postReferences` check reads zero but before
+ * `finalizeCatalogTombstone()`'s CAS commits no longer races the tombstone
+ * finalization cleanly — `install()` fails closed on the tombstone, and
+ * (for the source run's own already-resolved revision) this commit
+ * precondition fails closed on the entry bytes changing/vanishing.
  */
 export async function buildForkCatalogEntryCondition(
   internals: EngineInternals,
   type: string,
   persistedRevision: string | undefined,
 ): Promise<ConditionalBatchCondition[]> {
-  if (internals.options.ownershipMode === 'none' || persistedRevision === undefined) {
+  if (persistedRevision === undefined) {
     return [];
   }
   return [await buildCatalogEntryRevisionCondition(internals, type, persistedRevision)];
@@ -427,4 +413,36 @@ export function buildForkBatchOperations(
   }
 
   return operations;
+}
+
+/**
+ * Build the fork's own checkpoint from the source's prepared checkpoint —
+ * strips `accumulatedResultReplayWatermark` (the source's own, not
+ * meaningful for the fresh fork), stamps `createdAt`/`workflowId`, carries
+ * the fork's own fresh `workflowExecutionToken` (never the source's), and
+ * derives fresh search attributes. Extracted out of `fork()` itself purely
+ * to keep `transition.ts` under the repository's implementation-file-size
+ * ceiling; no behavior change from what was previously inlined there.
+ */
+export function buildForkCheckpoint(
+  internals: EngineInternals,
+  workflowId: string,
+  forkedAt: number,
+  sourceCheckpoint: Checkpoint,
+  forkState: WorkflowState,
+  lineage: ForkLineage,
+  callbacks: LifecycleCallbacks,
+): Checkpoint {
+  const { accumulatedResultReplayWatermark: _sourceReplayWatermark, ...sourceCheckpointForFork } =
+    sourceCheckpoint;
+  return {
+    ...sourceCheckpointForFork,
+    createdAt: forkedAt,
+    workflowId,
+    // The fork's own fresh token, never the source's.
+    ...(forkState.workflowExecutionToken !== undefined && {
+      workflowExecutionToken: forkState.workflowExecutionToken,
+    }),
+    searchAttributes: buildForkSearchAttributes(internals, sourceCheckpoint, lineage, callbacks),
+  };
 }

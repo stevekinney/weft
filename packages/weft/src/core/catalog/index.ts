@@ -23,6 +23,7 @@ export {
   WorkflowCatalogActiveEntryMissingError,
   WorkflowCatalogConflictError,
   WorkflowRevisionNotInstalledError,
+  WorkflowRevisionTombstonedError,
 } from './errors.ts';
 export {
   decrementNestedRevisionCount,

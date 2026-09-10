@@ -5,17 +5,17 @@
  *
  * Single-flight per `(name, revision)`: the underlying load+validate+install
  * work is shared by every concurrent caller for the same key via
- * `internals.sources.resolutionsInFlight`, but each caller races that shared
- * work against its OWN per-call cancellation interest — a cancelled waiter
- * never aborts a load another waiter still needs, and the shared load itself
- * is never tied to any individual caller's lifetime. Disposal aborts every
+ * `internals.sources.resolutionsInFlight`, but each caller races that work
+ * against its OWN per-call cancellation interest — a cancelled waiter never
+ * aborts a load another waiter still needs, and the shared load is never
+ * tied to any individual caller's lifetime. Disposal aborts every
  * outstanding waiter (rejecting each pending `resolveWorkflowSource()` call)
  * without touching the shared load, which keeps running to its own settle.
  *
  * @module core/engine/source-resolution
  */
 
-import type { WorkflowRevisionRecord } from '../catalog/index.ts';
+import { WorkflowRevisionTombstonedError, type WorkflowRevisionRecord } from '../catalog/index.ts';
 import {
   checkWorkflowCompatibility,
   DEFAULT_WORKFLOW_COMPATIBILITY_POLICY,
@@ -32,6 +32,7 @@ import { WorkflowSourceNotRegisteredError } from './dynamic-source-errors.ts';
 import { EngineDisposedError } from './errors.ts';
 import type { Engine } from './index.ts';
 import { getInternals, getWorkflowCatalog, type EngineInternals } from './internals.ts';
+import { WorkflowRevisionUnavailableError } from './revision-errors.ts';
 import {
   beginSourceWaiter,
   endSourceWaiterAndDispatchCancellation,
@@ -99,20 +100,18 @@ function abortRejection(signal: AbortSignal): Promise<never> {
  * started before disposal would otherwise write through to already-closed
  * storage. A small window still exists between that check and
  * `catalog.install()`'s own internal write (the check-then-write is not
- * atomic): this is accepted rather than eliminated, because `install()`'s
- * write is a CAS through `storageConditionalBatch` — a write that lands
- * against storage the engine no longer considers open either applies
- * harmlessly (this repo's storage backends do not require an open
- * "session" to accept a write) or fails, and a failure here simply becomes
- * this shared promise's rejection like any other. Closing the window
- * completely would require `catalog.install()` itself to check
- * `internals.disposed` at its own call boundary, which is out of scope for
- * this batch — recorded as an explicit, accepted trade-off rather than a
- * silent gap. `internals.disposed` is re-checked a THIRD time after
- * `catalog.install()` resolves, guarding only the in-memory
- * `internals.sources.resolved` write (never the durable install itself,
- * already committed by then) — a disposed engine's internals stay fully
- * empty rather than accumulating state `disposeSourceResolutionState()`
+ * atomic): accepted rather than eliminated, since `install()`'s write is a
+ * CAS through `storageConditionalBatch` — a write that lands against
+ * storage the engine no longer considers open either applies harmlessly or
+ * fails, and a failure here simply becomes this shared promise's rejection
+ * like any other. Closing the window completely would require
+ * `catalog.install()` itself to check `internals.disposed`, out of scope
+ * here — an explicit, accepted trade-off. `internals.disposed` is re-checked
+ * a THIRD time after `catalog.install()` resolves, guarding only the
+ * in-memory `internals.sources.resolved` write (never the durable install
+ * itself, already committed by then) — a disposed engine's internals stay
+ * fully empty rather than accumulating state
+ * `disposeSourceResolutionState()`
  * already cleared and will never clear again.
  */
 async function runSharedSourceLoad(
@@ -137,17 +136,19 @@ async function runSharedSourceLoad(
   }
 
   const catalog = getWorkflowCatalog(engine);
-  const installed = await catalog.install(outcome.manifest, outcome.definition);
+  // WFT-21, items 1-3: translate a tombstoned-revision refusal — see `WorkflowRevisionTombstonedError`'s JSDoc.
+  const installed = await catalog
+    .install(outcome.manifest, outcome.definition)
+    .catch((error: unknown) => {
+      if (!(error instanceof WorkflowRevisionTombstonedError)) throw error;
+      throw new WorkflowRevisionUnavailableError(name, revision, 'not-installed');
+    });
 
-  // Re-checked here, not just at the `internals.disposed` check immediately
-  // above (before `catalog.install()`): disposal can land while that `await`
-  // is in flight. `disposeSourceResolutionState()`
-  // has already cleared `internals.sources.resolved` by the time this
-  // resumes, and nothing will ever clear it again — writing into it here would
-  // silently repopulate a disposed engine's internals with a definition and
-  // activity registry nothing will read, rather than leaving them empty as
-  // teardown intended. The durable install this promise resolves with already
-  // succeeded either way; only the in-memory bookkeeping is skipped.
+  // Re-checked here, not just before `catalog.install()`: disposal can land
+  // while that `await` is in flight, and `disposeSourceResolutionState()`
+  // has already cleared `internals.sources.resolved` for good — writing
+  // here would silently repopulate a disposed engine's internals. The
+  // durable install already succeeded either way; only this bookkeeping is skipped.
   if (!internals.disposed) {
     let resolvedByRevision = internals.sources.resolved.get(name);
     if (resolvedByRevision === undefined) {

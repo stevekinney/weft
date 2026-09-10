@@ -45,6 +45,7 @@ import { buildWorkflowManifestFromDefinition } from '../../registry-workflow-man
 import { workflowSource } from '../../source/index.ts';
 import { workflow, type WorkflowContext, type WorkflowDefinition } from '../../types.ts';
 import { copyWorkflowDefinition } from '../construction.ts';
+import { ForkSourceReplacedError } from '../errors.ts';
 import { getWorkflowCatalog, removeWorkflowRevision } from '../index.ts';
 import { getInternals } from '../internals.ts';
 import { buildRegistrationEntry } from '../registration.ts';
@@ -238,9 +239,16 @@ describe('fork() legacy-dynamic-source default fork — WFT-21 Codex review roun
       await storage.put(KEYS.workflow(sourceHandle.id), encode(legacyState));
 
       const originalBatch = storage.batch.bind(storage);
+      const originalConditionalBatch = storage.conditionalBatch.bind(storage);
       const gate = Promise.withResolvers<void>();
       const entered = Promise.withResolvers<void>();
       let paused = false;
+      // The fork's own commit now routes through `conditionalBatch` rather
+      // than a plain `batch` under `ownership: 'none'` too (WFT-21, Codex
+      // review items 1-3 — `buildForkCatalogEntryCondition` fences even
+      // `'none'`-mode commits on the entry bytes once a revision is
+      // persisted), so both write paths must be intercepted to still park
+      // this test exactly at the fork's own commit.
       storage.batch = async (operations) => {
         if (!paused) {
           paused = true;
@@ -248,6 +256,14 @@ describe('fork() legacy-dynamic-source default fork — WFT-21 Codex review roun
           await gate.promise;
         }
         return originalBatch(operations);
+      };
+      storage.conditionalBatch = async (conditions, operations) => {
+        if (!paused) {
+          paused = true;
+          entered.resolve();
+          await gate.promise;
+        }
+        return originalConditionalBatch(conditions, operations);
       };
 
       // Default fork — no `options.revision` — onto the legacy source's
@@ -267,6 +283,7 @@ describe('fork() legacy-dynamic-source default fork — WFT-21 Codex review roun
       }
 
       storage.batch = originalBatch;
+      storage.conditionalBatch = originalConditionalBatch;
       gate.resolve();
       const forked = await forkPromise;
       const forkedState = await engine.get(forked.id);
@@ -457,9 +474,16 @@ describe('fork() legacy-dynamic-source double-reservation — WFT-21 Codex revie
       await storage.put(KEYS.workflow(sourceHandle.id), encode(legacyState));
 
       const originalBatch = storage.batch.bind(storage);
+      const originalConditionalBatch = storage.conditionalBatch.bind(storage);
       const gate = Promise.withResolvers<void>();
       const entered = Promise.withResolvers<void>();
       let paused = false;
+      // The fork's own commit now routes through `conditionalBatch` rather
+      // than a plain `batch` under `ownership: 'none'` too (WFT-21, Codex
+      // review items 1-3 — `buildForkCatalogEntryCondition` fences even
+      // `'none'`-mode commits on the entry bytes once a revision is
+      // persisted), so both write paths must be intercepted to still park
+      // this test exactly at the fork's own commit.
       storage.batch = async (operations) => {
         if (!paused) {
           paused = true;
@@ -467,6 +491,14 @@ describe('fork() legacy-dynamic-source double-reservation — WFT-21 Codex revie
           await gate.promise;
         }
         return originalBatch(operations);
+      };
+      storage.conditionalBatch = async (conditions, operations) => {
+        if (!paused) {
+          paused = true;
+          entered.resolve();
+          await gate.promise;
+        }
+        return originalConditionalBatch(conditions, operations);
       };
 
       const forkPromise = engine.fork(sourceHandle.id);
@@ -483,6 +515,7 @@ describe('fork() legacy-dynamic-source double-reservation — WFT-21 Codex revie
       expect(getInternals(engine).inFlightStartsByRevision.get(type)?.get(revisionV1)).toBe(1);
 
       storage.batch = originalBatch;
+      storage.conditionalBatch = originalConditionalBatch;
       gate.resolve();
       const forked = await forkPromise;
       const forkedState = await engine.get(forked.id);
@@ -499,6 +532,366 @@ describe('fork() legacy-dynamic-source double-reservation — WFT-21 Codex revie
     } finally {
       engine[Symbol.dispose]();
     }
+  });
+});
+
+describe('fork() vs. a concurrent start-new replacement of the SOURCE — WFT-21 Codex review, item 6', () => {
+  it('rejects with ForkSourceReplacedError when the loaded source checkpoint already reflects a later generation than the sourceState read at the top of fork()', async () => {
+    await using storage = new MemoryStorage();
+    await using engine = new Engine({ storage });
+    const raceWorkflow = workflow({ name: 'fork-race-checkpoint' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      yield* ctx.run(async () => 'step-one');
+      return 'done';
+    });
+    engine.register(raceWorkflow);
+
+    const sourceHandle = await engine.start('fork-race-checkpoint', null, {
+      id: 'wf-fork-race-checkpoint',
+    });
+    await sourceHandle.result();
+    const originalState = decode((await storage.get(KEYS.workflow(sourceHandle.id)))!) as Record<
+      string,
+      unknown
+    >;
+    expect(originalState['workflowExecutionToken']).toBeDefined();
+
+    // Simulate a version-compatible `start-new` replacement that has
+    // ALREADY produced its own step-1 checkpoint — its live checkpoint
+    // bytes now carry the REPLACEMENT's token, while the `WorkflowState`
+    // `fork()` reads at its own top (below) still needs to observe the
+    // ORIGINAL — so mutate the checkpoint now, and restore the original
+    // `WorkflowState` bytes for `fork()`'s own read (a real `start-new`
+    // replacement commits both atomically; this isolates JUST the
+    // checkpoint-vs-state correlation this fix adds).
+    const replacementCheckpointBytes = decode(
+      (await storage.get(KEYS.checkpoint(sourceHandle.id)))!,
+    ) as Record<string, unknown>;
+    replacementCheckpointBytes['workflowExecutionToken'] = 'replacement-checkpoint-token';
+    await storage.put(KEYS.checkpoint(sourceHandle.id), encode(replacementCheckpointBytes));
+
+    await expect(engine.fork(sourceHandle.id)).rejects.toThrow(ForkSourceReplacedError);
+  });
+
+  it('rejects with ForkSourceReplacedError when the source is replaced AFTER the checkpoint correlates cleanly but BEFORE the pre-commit revalidation', async () => {
+    class ReplaceOnSecondStateReadStorage extends MemoryStorage {
+      #stateReadCount = 0;
+      #replacementBytes: Uint8Array | null = null;
+
+      armReplacement(bytes: Uint8Array): void {
+        this.#replacementBytes = bytes;
+      }
+
+      override async get(key: string): Promise<Uint8Array | null> {
+        if (key === KEYS.workflow(sourceId) && this.#replacementBytes !== null) {
+          this.#stateReadCount += 1;
+          // First read: `fork()`'s own early `sourceState` read — return the
+          // ORIGINAL bytes. Every read after that (the pre-commit
+          // revalidation this fix adds) sees the replacement.
+          if (this.#stateReadCount > 1) {
+            return this.#replacementBytes;
+          }
+        }
+        return super.get(key);
+      }
+    }
+
+    let sourceId = '';
+    await using storage = new ReplaceOnSecondStateReadStorage();
+    await using engine = new Engine({ storage });
+    const raceWorkflow = workflow({ name: 'fork-race-precommit' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      yield* ctx.run(async () => 'step-one');
+      return 'done';
+    });
+    engine.register(raceWorkflow);
+
+    const sourceHandle = await engine.start('fork-race-precommit', null, {
+      id: 'wf-fork-race-precommit',
+    });
+    sourceId = sourceHandle.id;
+    await sourceHandle.result();
+
+    const originalStateBytes = (await storage.get(KEYS.workflow(sourceHandle.id)))!;
+    const replacedState = { ...(decode(originalStateBytes) as Record<string, unknown>) };
+    replacedState['workflowExecutionToken'] = 'replacement-run-token-before-commit';
+    replacedState['revision'] = 'sha256:replacement-revision-before-commit';
+    storage.armReplacement(encode(replacedState));
+
+    await expect(engine.fork(sourceHandle.id)).rejects.toThrow(ForkSourceReplacedError);
+  });
+
+  it('tolerates a source checkpoint with no workflowExecutionToken (a pre-upgrade record) — the correlation check has nothing to compare, so the fork proceeds', async () => {
+    await using storage = new MemoryStorage();
+    await using engine = new Engine({ storage });
+    const raceWorkflow = workflow({ name: 'fork-race-legacy-checkpoint' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      yield* ctx.run(async () => 'step-one');
+      return 'done';
+    });
+    engine.register(raceWorkflow);
+
+    const sourceHandle = await engine.start('fork-race-legacy-checkpoint', null, {
+      id: 'wf-fork-race-legacy-checkpoint',
+    });
+    await sourceHandle.result();
+    // `sourceState.workflowExecutionToken` stays defined; only the
+    // CHECKPOINT'S token is stripped, simulating a checkpoint chain that
+    // predates the field.
+    const legacyCheckpoint = {
+      ...(decode((await storage.get(KEYS.checkpoint(sourceHandle.id)))!) as Record<
+        string,
+        unknown
+      >),
+    };
+    delete legacyCheckpoint['workflowExecutionToken'];
+    await storage.put(KEYS.checkpoint(sourceHandle.id), encode(legacyCheckpoint));
+
+    const forkHandle = await engine.fork(sourceHandle.id);
+    await expect(forkHandle.result()).resolves.toBe('done');
+  });
+
+  it('tolerates a source WorkflowState with no workflowExecutionToken (a pre-upgrade record) — the pre-commit revalidation has nothing to compare, so the fork proceeds', async () => {
+    await using storage = new MemoryStorage();
+    await using engine = new Engine({ storage });
+    const raceWorkflow = workflow({ name: 'fork-race-legacy-state' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      yield* ctx.run(async () => 'step-one');
+      return 'done';
+    });
+    engine.register(raceWorkflow);
+
+    const sourceHandle = await engine.start('fork-race-legacy-state', null, {
+      id: 'wf-fork-race-legacy-state',
+    });
+    await sourceHandle.result();
+    // Strip the token from BOTH the checkpoint and the state, so the FIRST
+    // correlation check also has nothing to compare (both sides
+    // token-less) and lets execution reach the pre-commit revalidation's
+    // own early-return branch.
+    const legacyCheckpoint = {
+      ...(decode((await storage.get(KEYS.checkpoint(sourceHandle.id)))!) as Record<
+        string,
+        unknown
+      >),
+    };
+    delete legacyCheckpoint['workflowExecutionToken'];
+    await storage.put(KEYS.checkpoint(sourceHandle.id), encode(legacyCheckpoint));
+
+    const legacyState = {
+      ...(decode((await storage.get(KEYS.workflow(sourceHandle.id)))!) as Record<string, unknown>),
+    };
+    delete legacyState['workflowExecutionToken'];
+    await storage.put(KEYS.workflow(sourceHandle.id), encode(legacyState));
+
+    const forkHandle = await engine.fork(sourceHandle.id);
+    await expect(forkHandle.result()).resolves.toBe('done');
+  });
+});
+
+describe('catalog.install() vs. a concurrent removeCatalogEntry() tombstone — WFT-21 Codex review items 1-3', () => {
+  it("fails a fork's commit closed under ownership: 'none' too, not just 'lease'/'workflow-lease' (item 2 — buildForkCatalogEntryCondition's 'none' no-op)", async () => {
+    const storage = new MemoryStorage();
+    const type = 'fork-catalog-race-none';
+    const definitionV1 = workflow({ name: type, description: 'v1' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      return yield* ctx.waitForSignal<string>('go');
+    });
+    const definitionV2 = workflow({ name: type, description: 'v2' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      return yield* ctx.waitForSignal<string>('go');
+    });
+    const revisionV1 = await revisionFor(type, definitionV1);
+    const revisionV2 = await revisionFor(type, definitionV2);
+
+    // Default `ownership: 'none'` — the exact mode `buildForkCatalogEntryCondition`
+    // used to skip entirely.
+    await using engine = new Engine({ storage });
+    engine.registerSource(
+      workflowSource(
+        { name: type, location: './v1.ts', exportName: 'v1', revision: revisionV1 },
+        async () => ({ v1: definitionV1 }),
+      ),
+    );
+    const sourceHandle = await engine.start(type, null, { id: 'fork-catalog-race-none-source' });
+
+    engine.registerSource(
+      workflowSource(
+        { name: type, location: './v2.ts', exportName: 'v2', revision: revisionV2 },
+        async () => ({ v2: definitionV2 }),
+      ),
+    );
+    await engine.resolveWorkflowSource(type, revisionV2);
+    expect(await getWorkflowCatalog(engine).hasInstalled(type, revisionV2)).toBe(true);
+
+    const gate = Promise.withResolvers<void>();
+    const entered = Promise.withResolvers<void>();
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+    let paused = false;
+    storage.conditionalBatch = async (conditions, operations) => {
+      if (!paused) {
+        paused = true;
+        entered.resolve();
+        await gate.promise;
+      }
+      return originalConditionalBatch(conditions, operations);
+    };
+
+    // Park the fork's own commit exactly at its `conditionalBatch` call —
+    // under `'none'` this now carries the same catalog-entry condition
+    // `'lease'`/`'workflow-lease'` already had.
+    const forkPromise = engine.fork(sourceHandle.id, { revision: revisionV2 });
+    await entered.promise;
+
+    storage.conditionalBatch = originalConditionalBatch;
+    // `removeWorkflowRevision()` checks THIS process's own in-memory
+    // `inFlightStartsByRevision` — the fork issued against `engine` itself
+    // already reserved `revisionV2` there, so removing through the SAME
+    // engine instance would see it as `'referenced'` rather than exercising
+    // the durable-commit race this test targets. A separate, unleased
+    // engine sharing storage is a legitimate separate caller (mirrors the
+    // round-1 test above), simulating the cross-process case where the
+    // remover's own process never took that reservation.
+    const remover = new Engine({ storage });
+    let removed;
+    try {
+      removed = await removeWorkflowRevision(remover, type, revisionV2);
+    } finally {
+      remover[Symbol.dispose]();
+    }
+    expect(removed).toEqual({ removed: true });
+
+    gate.resolve();
+    let forkError: unknown;
+    try {
+      await forkPromise;
+    } catch (error) {
+      forkError = error;
+    }
+    expect(forkError).toBeInstanceOf(WorkflowRevisionUnavailableError);
+    expect((forkError as WorkflowRevisionUnavailableError).reason).toBe('not-installed');
+    expect((forkError as WorkflowRevisionUnavailableError).revision).toBe(revisionV2);
+
+    const runs = await engine.list({ type });
+    expect(runs.items).toHaveLength(1);
+    expect(runs.items[0]?.id).toBe(sourceHandle.id);
+    expect(await storage.get(KEYS.catalogEntry(type, revisionV2))).toBeNull();
+
+    await engine.signal(sourceHandle.id, 'go', 'done');
+    await expect(sourceHandle.result()).resolves.toBe('done');
+  });
+
+  it('refuses to resurrect a revision from a DIFFERENT engine instance racing the exact window a concurrent removal has deleted the entry and written its tombstone, but not yet finalized it (items 1 & 3 — catalog.install() itself, the shared root cause of both the legacy fork resolver hook and the explicit-revision fork load)', async () => {
+    const storage = new MemoryStorage();
+    const type = 'fork-catalog-race-install';
+    const definitionV1 = workflow({ name: type, description: 'v1' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      return yield* ctx.waitForSignal<string>('go');
+    });
+    const revisionV1 = await revisionFor(type, definitionV1);
+    const entryKey = KEYS.catalogEntry(type, revisionV1);
+    const tombstoneKey = KEYS.catalogTombstone(type, revisionV1);
+
+    // Engine B boots and restores its catalog snapshot BEFORE v1 is ever
+    // installed anywhere — so its one-time restore
+    // (`ensureWorkflowCatalogReady`'s `restoreWorkflowCatalog` call) never
+    // caches v1 into its own process-local `#entries` map at all.
+    // `WorkflowCatalog.install()`'s FIRST check is that local cache — a
+    // cache HIT returns immediately without ever touching durable storage,
+    // so this ordering is required for engine B's later `install()` call to
+    // actually reach the durable read/write path this test targets, rather
+    // than short-circuiting on stale in-memory bookkeeping.
+    const engineB = new Engine({ storage });
+    engineB.registerSource(
+      workflowSource(
+        { name: type, location: './v1.ts', exportName: 'v1', revision: revisionV1 },
+        async () => ({ v1: definitionV1 }),
+      ),
+    );
+    expect(await engineB.workflows.listRevisions(type)).toEqual([]);
+
+    const engineA = new Engine({ storage });
+    engineA.registerSource(
+      workflowSource(
+        { name: type, location: './v1.ts', exportName: 'v1', revision: revisionV1 },
+        async () => ({ v1: definitionV1 }),
+      ),
+    );
+    // Install v1 durably via engine A, then leave it unreferenced so it is
+    // removable.
+    await engineA.resolveWorkflowSource(type, revisionV1);
+    expect(await getWorkflowCatalog(engineA).hasInstalled(type, revisionV1)).toBe(true);
+
+    // `removeWorkflowRevision()`'s delete-and-tombstone write
+    // (`catalog.remove()`) and its later tombstone finalization
+    // (`finalizeCatalogTombstone()`) are TWO SEPARATE `conditionalBatch`
+    // commits within the same call — the entry is durably absent with its
+    // tombstone durably present for the whole gap between them. Pause
+    // exactly there: after the delete-and-tombstone batch commits (`result`
+    // is `true`), before returning control to `removeWorkflowRevision()`'s
+    // caller.
+    const gate = Promise.withResolvers<void>();
+    const entered = Promise.withResolvers<void>();
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+    let paused = false;
+    storage.conditionalBatch = async (conditions, operations) => {
+      const result = await originalConditionalBatch(conditions, operations);
+      const isDeleteAndTombstoneWrite =
+        result &&
+        operations.some((op) => op.type === 'delete' && op.key === entryKey) &&
+        operations.some((op) => op.type === 'put' && op.key === tombstoneKey);
+      if (isDeleteAndTombstoneWrite && !paused) {
+        paused = true;
+        entered.resolve();
+        await gate.promise;
+      }
+      return result;
+    };
+
+    const removalPromise = removeWorkflowRevision(engineA, type, revisionV1);
+    await entered.promise;
+
+    // Parked mid-removal: the entry is durably absent, the tombstone is
+    // durably present.
+    expect(await storage.get(entryKey)).toBeNull();
+    expect(await storage.get(tombstoneKey)).not.toBeNull();
+
+    // Engine B — the DIFFERENT instance set up above, which has never
+    // cached this revision locally — tries to (re)install the exact same
+    // revision during this window: the real shape of a fork's
+    // dynamic-source load racing a concurrent removal.
+    try {
+      let reinstallError: unknown;
+      try {
+        await engineB.resolveWorkflowSource(type, revisionV1);
+      } catch (error) {
+        reinstallError = error;
+      }
+      expect(reinstallError).toBeInstanceOf(WorkflowRevisionUnavailableError);
+      expect((reinstallError as WorkflowRevisionUnavailableError).reason).toBe('not-installed');
+      expect((reinstallError as WorkflowRevisionUnavailableError).revision).toBe(revisionV1);
+
+      // No resurrection: the entry stayed durably absent throughout.
+      expect(await storage.get(entryKey)).toBeNull();
+      expect(await getWorkflowCatalog(engineB).hasInstalled(type, revisionV1)).toBe(false);
+    } finally {
+      engineB[Symbol.dispose]();
+    }
+
+    // Release the parked removal — it finalizes the tombstone normally,
+    // proving the reinstall attempt above did not disturb it.
+    gate.resolve();
+    storage.conditionalBatch = originalConditionalBatch;
+    const removed = await removalPromise;
+    expect(removed).toEqual({ removed: true });
+    expect(await storage.get(tombstoneKey)).toBeNull();
   });
 });
 

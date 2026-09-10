@@ -10,6 +10,7 @@ import {
   WorkflowCatalogActivationConflictError,
   WorkflowCatalogActiveEntryMissingError,
   WorkflowCatalogConflictError,
+  WorkflowRevisionTombstonedError,
 } from './errors.ts';
 import { WorkflowCatalog } from './workflow-catalog.ts';
 
@@ -112,6 +113,41 @@ describe('WorkflowCatalog.install', () => {
 
     expect(adopted.installedAt).toBe(original.installedAt);
     expect(reader.getEntry('checkout', 'pinned-1')).toBeDefined();
+  });
+
+  it('refuses to resurrect a revision whose removal has written a tombstone (WFT-21, Codex review items 1-3)', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const manifest = await manifestFor('checkout', '1.0.0', { revision: 'pinned-1' });
+
+    // Simulate `removeCatalogEntry()` having already deleted the entry and
+    // written its tombstone in the same `conditionalBatch` — the exact
+    // durable state a fork's dynamic-source load can observe mid-removal,
+    // before the tombstone is resolved (restored or finalized).
+    await storage.put(
+      KEYS.catalogTombstone('checkout', 'pinned-1'),
+      new TextEncoder().encode(JSON.stringify({ manifest, installedAt: Date.now() })),
+    );
+
+    await expect(catalog.install(manifest, fakeDefinition('checkout'))).rejects.toThrow(
+      WorkflowRevisionTombstonedError,
+    );
+    // No entry was resurrected.
+    expect(catalog.getEntry('checkout', 'pinned-1')).toBeUndefined();
+    expect(await storage.get(KEYS.catalogEntry('checkout', 'pinned-1'))).toBeNull();
+  });
+
+  it('installs a fresh (name, revision) normally once its tombstone has been resolved (finalized)', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const manifest = await manifestFor('checkout', '1.0.0', { revision: 'pinned-1' });
+
+    // A tombstone that already existed and was resolved would have been
+    // deleted by the resolver — simulate that by never writing one at all,
+    // confirming the tombstone condition does not spuriously block a
+    // perfectly ordinary fresh install.
+    const installed = await catalog.install(manifest, fakeDefinition('checkout'));
+    expect(installed.manifest.revision).toBe('pinned-1');
   });
 
   it('defensively rejects an invalid workflow name even for a hand-built manifest', async () => {

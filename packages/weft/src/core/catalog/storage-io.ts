@@ -268,12 +268,16 @@ export async function readActivePointer(
 }
 
 /**
- * Durably write one installed-revision entry, CAS-guarded on the key being
- * absent (`expectedValue: null`). Returns `true` when this write won the
- * race, `false` when another writer had already durably installed this
- * exact `(name, revision)` key first — `WorkflowCatalog.install()` re-reads
- * via {@link readCatalogEntry} on `false` to decide whether that concurrent
- * write was byte-identical (idempotent) or a genuine conflict.
+ * Durably write one installed-revision entry, CAS-guarded on BOTH the entry
+ * key being absent (`expectedValue: null`) AND the entry's tombstone key
+ * being absent. Returns `true` when this write won the race, `false` when
+ * EITHER precondition failed — `WorkflowCatalog.install()` distinguishes
+ * the two causes itself (re-reading the entry, then the tombstone, on
+ * `false`) since a flat boolean cannot: a durable entry already installed
+ * (idempotent-or-conflict, the original condition) versus a tombstone
+ * currently present for this exact `(name, revision)` (WFT-21, Codex
+ * review items 1-3 — refuse to resurrect a revision `removeCatalogEntry()`
+ * is deleting or has deleted, until its tombstone is resolved).
  *
  * CAS-protected rather than a plain `put`: "content-addressed by
  * `(name, revision)`, so racing writers always agree" only holds when
@@ -292,9 +296,13 @@ export async function writeCatalogEntry(
 ): Promise<boolean> {
   const bytes = new TextEncoder().encode(JSON.stringify({ manifest, installedAt }));
   const key = KEYS.catalogEntry(manifest.name, manifest.revision);
+  const tombstoneKey = KEYS.catalogTombstone(manifest.name, manifest.revision);
   return storageConditionalBatch(
     storage,
-    [{ key, expectedValue: null }],
+    [
+      { key, expectedValue: null },
+      { key: tombstoneKey, expectedValue: null },
+    ],
     [{ type: 'put', key, value: bytes }],
   );
 }

@@ -538,6 +538,28 @@ throws for the identical class of loss—previously it fell through to a
 generic `EngineFailure`, so `weft.workflows.fork` returned a 500 instead of
 the documented 409 a client should retry against.
 
+**The SOURCE run itself is also guarded against a concurrent replacement**
+(Codex review, item 6). Everything above fences the fork's TARGET revision;
+this is a different mechanism protecting the fork's SOURCE. `fork()` reads
+`sourceState` once, at its own top, then performs a possibly-async
+registration resolve before loading and hydrating the source checkpoint it
+forks from, and further async work (header lookup, lineage construction,
+search attribute derivation, the catalog-entry condition build) before its
+own commit. A concurrent `start(..., { id: sourceWorkflowId,
+onTerminalConflict: 'start-new' })` replacement landing in either window—if
+version-compatible with the original—could let `derivePreparedExecutionState()`
+accept a checkpoint already reflecting the replacement while the fork still
+carried `sourceState`'s own STALE type/input, producing and executing a
+mixed-generation fork. `fork()` now correlates `sourceState.workflowExecutionToken`
+against the loaded checkpoint's own token immediately after hydration, and
+revalidates it again by re-reading `WorkflowState` immediately before the
+commit—either mismatch throws `ForkSourceReplacedError` (mapped to a
+`Conflict` fault over REST/JSON-RPC) rather than risking a mixed-generation
+commit. Both checks tolerate either side lacking the token (a pre-upgrade
+record), the same bounded precedent `resolveReplayRevision()` uses for
+`replayTo()`. The caller re-issues `fork()`, which reads the replacement's
+own current state fresh.
+
 **A third, narrower reservation closes one remaining legacy-source gap**
 (Codex review round 3). The in-memory reservation above reserves against
 `targetRevision` (`options.revision ?? sourceState.revision`)—a no-op when
@@ -606,6 +628,32 @@ serializing removal against reservations through finalization or fencing
 the fork's commit under `'none'` too—both real design decisions, not a
 bounded fix—see `buildForkCatalogEntryCondition()`'s own doc comment for
 the full explanation.
+
+**Both residuals above are now fixed (Codex review, items 1-3).** The
+shared root cause: `WorkflowCatalog.install()`'s durable write was
+CAS-guarded only on the entry key being absent, never on its tombstone, so
+a load/reinstall racing a concurrent removal could win the CAS and
+resurrect an entry between its delete and its tombstone's resolution,
+regardless of ownership mode or which process performed the load.
+`writeCatalogEntry()` now also conditions on the entry's tombstone key
+being absent, in the same `conditionalBatch`; a CAS loss caused
+specifically by a present tombstone throws a new internal
+`WorkflowRevisionTombstonedError` rather than the pre-existing
+`WorkflowCatalogConflictError`. Since `core/catalog/**` cannot throw the
+engine-layer `WorkflowRevisionUnavailableError` directly (the directional
+import boundary `check-import-cycles.ts` enforces), `catalog.install()`'s
+single call site—`core/engine/source-resolution.ts`'s
+`runSharedSourceLoad()`, reached by every dynamic-source load, shared by
+both the legacy fork resolver hook and the explicit-revision fork
+load—catches it and translates it to `WorkflowRevisionUnavailableError(name,
+revision, 'not-installed')`. Separately, `buildForkCatalogEntryCondition()`'s
+`'none'`-mode branch is no longer a no-op: it now fences the fork's own
+final commit on the target revision's catalog-entry bytes under every
+ownership mode, since `writeCatalogEntry()` already unconditionally
+requires the `conditionalBatch` storage capability regardless of ownership
+mode—fencing under `'none'` adds no new capability requirement. Together
+these close "removal is rejected while any durable or live reference
+exists" for every ownership mode and load path named above.
 
 The ADR 0002 workflow-lease reclaim-eligibility check
 (`isWorkflowTypeRegistered`) is source- and revision-aware for the same
@@ -872,12 +920,15 @@ Five fields are wired to real signals now:
   sole surviving evidence the revision was ever referenced. A single-slot
   record whose computed history key (its own `workflowExecutionToken`, or
   the fixed legacy fallback segment when it has none) already exists is
-  skipped as already counted by the history scan above; a record with no
-  `workflowExecutionToken` is pinned conservatively—counted toward every
-  queried revision of the matching type—since the legacy fallback
-  segment's own documented id-reuse collision means a single "does a
-  history sibling exist" check cannot be trusted for it the way it can for
-  a token-bearing record.
+  skipped as already counted by the history scan above; a record with NO
+  matching history key is provably pre-upgrade—both keys have been written
+  together, in the same batch, on every write since the history namespace
+  was added—regardless of whether it happens to carry a
+  `workflowExecutionToken` (a field that predates the `revision` field this
+  scan matches against). Among these provable orphans, one with a
+  `revision` field uses an exact match; one without is pinned
+  conservatively—counted toward every queried revision of the matching
+  type—since its true revision cannot be determined at all.
 
 The remaining two fields—`pendingDispatches` and `activeExecutionRealms`—
 stay structurally present but always `0`. Each awaits revision identity
