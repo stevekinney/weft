@@ -1366,7 +1366,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       },
     ],
     [
-      'src/core/engine/lifecycle/resume.ts',
+      'src/core/engine/lifecycle/resume-body.ts',
       {
         // The double-failure cleanup path IS exercised (`callbacks.failWorkflowForRecoveryHook`
         // at the preceding line, and `callbacks.handleCleanupError` at the
@@ -1376,9 +1376,9 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
         // already documented for `catalog-removal.ts`'s exhaustiveness
         // guard above: a coverage-instrumentation quirk, not a real gap.
         reason:
-          "Bun reports the catch clause's own line as missed although the surrounding failWorkflowForRecoveryHook call and this catch's own handleCleanupError body both show real hit counts — the same brace-line attribution artifact documented for catalog-removal.ts's exhaustiveness guard. Also reports one enclosing closure as missed for the same reason. (Line moved from 93 to 102 when the WFT-19 review round 5 fix's doc comments were added.)",
+          "Bun reports the catch clause's own line as missed although the surrounding failWorkflowForRecoveryHook call and this catch's own handleCleanupError body both show real hit counts — the same brace-line attribution artifact documented for catalog-removal.ts's exhaustiveness guard. Also reports one enclosing closure as missed for the same reason. (WFT-134 split this file's contents out of `resume.ts`, where this allowance's key/line previously lived at line 102, into this new file at line 112, to keep `resume.ts` under the implementation-file-size ceiling once the WFT-134 claim-release wrapping was added there.)",
         functions: 1,
-        lines: new Set([102]),
+        lines: new Set([112]),
         requireUncoveredLines: true,
       },
     ],

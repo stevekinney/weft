@@ -1,0 +1,491 @@
+/**
+ * `resumeWorkflowFromStorage()`'s guts — split out of `resume.ts`, which has
+ * no headroom under the repository's 500-line implementation-file ceiling
+ * for the WFT-134 claim-release wrapping added around this logic (mirrors
+ * `resume-generation-guard.ts`'s same split). `resume.ts` itself is now just
+ * the public entry point: load/validate state, acquire a claim if needed,
+ * and call {@link performResumeAfterClaimAcquired} below inside the
+ * claim-release `try`/`catch`.
+ *
+ * @module core/engine/lifecycle/resume-body
+ */
+
+import { KEYS } from '../../../storage/interface.ts';
+import { deserializeCheckpoint, serializeCheckpoint } from '../../checkpoint.ts';
+import { encode } from '../../codec.ts';
+import { Context, setContextWorkflowInterceptor } from '../../context.ts';
+import { EventLog, type EventHeadRecord } from '../../event-log.ts';
+import { WorkflowResumedEvent } from '../../events.ts';
+import { buildTimerBatchOperations } from '../../scheduler.ts';
+import type { Checkpoint, WorkflowServicesResolverInfo, WorkflowState } from '../../types.ts';
+import { type WorkflowVersionTuple } from '../../workflow-version-tuple.ts';
+import { createCancelHandlerRegistration, resetCancelHandlers } from '../cancel-handlers.ts';
+import { rememberCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
+import { rehydrateChildCancellationHandlers } from '../child-workflow-cancellation.ts';
+import { resolveExecutableRegistrationOrRenamedNotFound } from '../dynamic-source-execution.ts';
+import { commitFencedEngineWrite } from '../fenced-write.ts';
+import { getWorkflowExecutionStartedAt, type WorkflowHandle } from '../handles.ts';
+import type { EngineInternals } from '../internals.ts';
+import { loadWorkflowState } from '../storage-io.ts';
+import { getComposedWorkflowInterceptor } from '../strategy-helpers.ts';
+import { buildWorkflowVisibilityIndexTransition } from '../workflow-indexes.ts';
+import { prepareResumeState } from './persist.ts';
+import {
+  reprovideRecoveredServices,
+  workflowServicesResolverInfoFromState,
+} from './recovered-services.ts';
+import { assertSameGeneration, deriveResumeGeneration } from './resume-generation-guard.ts';
+import {
+  enforceHistoryPolicyBeforeReplay,
+  loadTerminalCleanupTrackedState,
+  loadWorkflowStartHeaders,
+  setWorkflowStartHeaders,
+  type LifecycleCallbacks,
+  type RecoverAllOptions,
+  type RecoveredWorkflowInfo,
+  type RegistrationEntry,
+} from './shared.ts';
+
+export type SerializedResumeArgs = {
+  workflowId: string;
+  resumeCheckpoint: Checkpoint;
+  serializedCheckpoint: Uint8Array;
+  registeredVersionTuple: WorkflowVersionTuple;
+  restoredHead: EventHeadRecord;
+  workflowStartHeaders: Map<string, string> | undefined;
+  registration: RegistrationEntry;
+  /**
+   * The EXACT revision `registration` resolved against, NOT `state.revision`
+   * re-read independently (WFT-19 round 5): a legacy record with one registered
+   * candidate has `state.revision === undefined` even though the resolver
+   * resolved it — caching `state.revision` here would disable exact-revision lookup.
+   */
+  resolvedRevision: string | undefined;
+  expectedGeneration: ReturnType<typeof deriveResumeGeneration>;
+  callbacks: LifecycleCallbacks;
+};
+
+/**
+ * Re-provide a recovered inline workflow's non-serialized `services` before the
+ * generator is driven forward. Returns `true` when the resume must STOP (the run
+ * was failed for unavailable services, or the terminal commit faulted), `false`
+ * to continue. See {@link reprovideRecoveredServices} for the full contract.
+ */
+async function prepareRecoveredServicesOrFail(
+  internals: EngineInternals,
+  state: WorkflowState,
+  callbacks: LifecycleCallbacks,
+  resolverInfo?: WorkflowServicesResolverInfo,
+): Promise<boolean> {
+  return reprovideRecoveredServices(
+    internals,
+    state,
+    callbacks.failWorkflowForUnavailableServices,
+    callbacks.handleCleanupError,
+    callbacks.dispatchEvent,
+    resolverInfo,
+  );
+}
+
+async function runRecoveredWorkflowHookOrFail(
+  internals: EngineInternals,
+  state: WorkflowState,
+  handle: WorkflowHandle,
+  resolverInfo: WorkflowServicesResolverInfo,
+  onRecoveredWorkflow: NonNullable<RecoverAllOptions['onRecoveredWorkflow']>,
+  callbacks: LifecycleCallbacks,
+): Promise<boolean> {
+  const info: RecoveredWorkflowInfo = {
+    ...resolverInfo,
+    handle,
+    launchOptions: resolverInfo.launchOptions ?? { id: state.id },
+    services: internals.workflowServices.get(state.id),
+  };
+  try {
+    await onRecoveredWorkflow(info);
+    return false;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    const hookError = new Error(`Recovery hook failed for workflow "${state.id}": ${reason}`);
+    try {
+      await callbacks.failWorkflowForRecoveryHook(state.id, hookError);
+    } catch (commitError) {
+      callbacks.handleCleanupError('onRecoveredWorkflow', commitError, state.id);
+    }
+    return true;
+  }
+}
+
+async function prepareRecoveredWorkflowOrFail(
+  internals: EngineInternals,
+  state: WorkflowState,
+  callbacks: LifecycleCallbacks,
+  onRecoveredWorkflow: RecoverAllOptions['onRecoveredWorkflow'],
+): Promise<{ handle: WorkflowHandle; shouldStop: boolean }> {
+  const resolverInfo =
+    onRecoveredWorkflow === undefined
+      ? undefined
+      : await workflowServicesResolverInfoFromState(internals, state);
+  const handle = callbacks.getHandle(state.id);
+  if (await prepareRecoveredServicesOrFail(internals, state, callbacks, resolverInfo)) {
+    return { handle, shouldStop: true };
+  }
+  if (onRecoveredWorkflow === undefined || resolverInfo === undefined) {
+    return { handle, shouldStop: false };
+  }
+  const shouldStop = await runRecoveredWorkflowHookOrFail(
+    internals,
+    state,
+    handle,
+    resolverInfo,
+    onRecoveredWorkflow,
+    callbacks,
+  );
+  return { handle, shouldStop };
+}
+
+function assertResumeNotTerminating(internals: EngineInternals, workflowId: string): void {
+  if (internals.terminalizingWorkflows.has(workflowId)) {
+    throw new Error(`Cannot resume workflow "${workflowId}": termination is in progress`);
+  }
+}
+
+function commitSerializedResumeState(
+  internals: EngineInternals,
+  args: Pick<
+    SerializedResumeArgs,
+    | 'workflowId'
+    | 'resumeCheckpoint'
+    | 'serializedCheckpoint'
+    | 'registeredVersionTuple'
+    | 'restoredHead'
+    | 'workflowStartHeaders'
+    | 'callbacks'
+  >,
+): void {
+  const {
+    workflowId,
+    resumeCheckpoint,
+    serializedCheckpoint,
+    registeredVersionTuple,
+    restoredHead,
+    callbacks,
+  } = args;
+  internals.checkpoints.set(workflowId, resumeCheckpoint);
+  rememberCommittedCheckpointBytes(internals, workflowId, serializedCheckpoint);
+  internals.workflowVersionTuples.set(workflowId, registeredVersionTuple);
+  internals.eventLogHeads.set(workflowId, restoredHead);
+  setWorkflowStartHeaders(internals, workflowId, args.workflowStartHeaders, callbacks);
+  internals.parkedInlineWorkflows.delete(workflowId);
+}
+
+async function relaunchInlineWorkflowAfterResume(
+  internals: EngineInternals,
+  latestState: WorkflowState,
+  args: Pick<
+    SerializedResumeArgs,
+    'workflowId' | 'resumeCheckpoint' | 'registration' | 'resolvedRevision' | 'callbacks'
+  >,
+): Promise<void> {
+  const { workflowId, resumeCheckpoint, registration, resolvedRevision, callbacks } = args;
+  // Keep the final running-state check and the re-entry into user code
+  // in the same serialized section so cancel/timeout cannot commit a
+  // terminal state and still let a parked workflow continue.
+  //
+  const accumulatedResults = new Map<number, unknown>(resumeCheckpoint.accumulatedResults);
+  const workflowAbort = new AbortController();
+
+  // Populate the per-instance identity cache BEFORE any possible activity
+  // dispatch (WFT-19) — the only place `workflowTypeByWorkflowId` was ever
+  // populated on ANY resume/recovery path before this fix (`start-exec.ts`'s
+  // `startWorkflowExecution()` is bypassed here entirely). Must land before
+  // `inlineStrategy.adoptWorkflow` below, which can trigger the first turn.
+  // Uses `resolvedRevision`, not `latestState.revision` — see
+  // `SerializedResumeArgs.resolvedRevision`'s doc (WFT-19 review round 5).
+  internals.workflowTypeByWorkflowId.set(workflowId, {
+    type: latestState.type,
+    revision: resolvedRevision,
+  });
+
+  resetCancelHandlers(internals, workflowId);
+  await rehydrateChildCancellationHandlers(internals, workflowId, callbacks);
+  const context = new Context({
+    workflowId,
+    ...(latestState.workflowExecutionToken !== undefined && {
+      workflowExecutionToken: latestState.workflowExecutionToken,
+    }),
+    workflowType: latestState.type,
+    startedAt: getWorkflowExecutionStartedAt(latestState),
+    abortController: workflowAbort,
+    getNow: internals.options.getNow,
+    resolveWorkflowType: callbacks.resolveWorkflowTypeTarget,
+    executionStateOwnerId: latestState.executionStateOwnerId ?? workflowId,
+    accumulatedResults,
+    locals: resumeCheckpoint.locals,
+    searchAttributes: resumeCheckpoint.searchAttributes,
+    registerCancelHandler: createCancelHandlerRegistration(internals, workflowId),
+    ...(registration.searchAttributes && {
+      searchAttributeSchema: registration.searchAttributes,
+    }),
+    sleepReferenceTime: resumeCheckpoint.createdAt,
+    ...(latestState.executionDeadline !== undefined && {
+      deadline: latestState.executionDeadline,
+    }),
+    // Non-serialized services re-provided by resolveServicesForRecovery (or set
+    // at start when resuming in the same process); undefined when none.
+    services: internals.workflowServices.get(workflowId),
+    // Carry the host `ctx.log` sink onto the recovered context, mirroring the
+    // fresh-start path (resolveLogSinkOption). Without it, a log at the live frontier
+    // of a recovered run — and any speculative child it parents — reaches the console
+    // but never `EngineOptions.onLog`. Construction normalizes a missing `onLog` to
+    // `null`; use loose `!= null` so the narrowed type drops both `null` and the option's
+    // declared `undefined`, keeping `logSink` assignable under `exactOptionalPropertyTypes`
+    // (the build's stricter tsc enforces this) (#549).
+    ...(internals.options.onLog != null && { logSink: internals.options.onLog }),
+  });
+  setContextWorkflowInterceptor(context, getComposedWorkflowInterceptor(internals));
+
+  if (internals.options.development) {
+    context.explain(true);
+  }
+
+  const generator = registration.handler(context, latestState.input);
+  const inlineStrategy = internals.inlineStrategy!;
+  inlineStrategy.adoptWorkflow(workflowId, generator, context, workflowAbort);
+  inlineStrategy.continueWorkflow(workflowId, undefined);
+}
+
+async function relaunchWorkerWorkflowAfterResume(
+  internals: EngineInternals,
+  latestState: WorkflowState,
+  args: Pick<
+    SerializedResumeArgs,
+    'workflowId' | 'resumeCheckpoint' | 'workflowStartHeaders' | 'resolvedRevision' | 'callbacks'
+  >,
+): Promise<void> {
+  const { workflowId, resumeCheckpoint, workflowStartHeaders, resolvedRevision, callbacks } = args;
+  // See `relaunchInlineWorkflowAfterResume()`'s matching comment: identity
+  // population (WFT-19), landed before `startWorkflow()` below, using
+  // `resolvedRevision` per `SerializedResumeArgs.resolvedRevision`'s doc.
+  internals.workflowTypeByWorkflowId.set(workflowId, {
+    type: latestState.type,
+    revision: resolvedRevision,
+  });
+  resetCancelHandlers(internals, workflowId);
+  await rehydrateChildCancellationHandlers(internals, workflowId, callbacks);
+  const serialized = serializeCheckpoint(resumeCheckpoint);
+  internals.strategy.startWorkflow({
+    workflowId,
+    ...(latestState.workflowExecutionToken !== undefined && {
+      workflowExecutionToken: latestState.workflowExecutionToken,
+    }),
+    workflowType: latestState.type,
+    input: latestState.input,
+    checkpoint: serialized,
+    nestingDepth: internals.workflowNestingDepths.get(workflowId) ?? 0,
+    executionStateOwnerId: latestState.executionStateOwnerId ?? workflowId,
+    ...(latestState.executionDeadline !== undefined && {
+      deadline: latestState.executionDeadline,
+    }),
+    ...(workflowStartHeaders !== undefined &&
+      workflowStartHeaders.size > 0 && {
+        headers: [...workflowStartHeaders],
+      }),
+  });
+}
+
+/**
+ * Durably flip a suspended workflow back to 'running' before relaunch. No-op for
+ * a workflow already running (the recoverAll path), so the common recovery case
+ * does no extra storage write. Mutates `state.status` in place so the in-memory
+ * `latestState` the relaunch helpers read also reflects 'running'.
+ *
+ * Re-arms the execution-deadline timer in the same batch when one is persisted.
+ * The deadline is absolute wall-clock and suspend cancelled its durable timer,
+ * so it must be re-inserted here at the same absolute `fireAt`. A `fireAt` that
+ * is already in the past is selected by the scheduler's next expired-timer scan,
+ * so a workflow resumed past its deadline times out immediately — exactly the
+ * "suspension does not extend the deadline" contract.
+ */
+async function reactivateSuspendedWorkflowState(
+  internals: EngineInternals,
+  state: WorkflowState,
+): Promise<void> {
+  if (state.status !== 'suspended') {
+    return;
+  }
+  const previousState: WorkflowState = { ...state };
+  state.status = 'running';
+  state.updatedAt = internals.options.getNow();
+  // Resume flips suspended→running — engine-generated workflow state. Fence it on
+  // the lease epoch (issue #470 Step 2) so a deposed engine cannot reactivate a
+  // workflow the successor already owns.
+  await commitFencedEngineWrite(
+    internals,
+    state.id,
+    [
+      { type: 'put', key: KEYS.workflow(state.id), value: encode(state) },
+      ...buildWorkflowVisibilityIndexTransition(state.id, previousState, state).batchOps,
+      ...(state.executionDeadline !== undefined
+        ? buildTimerBatchOperations({
+            id: `deadline:${state.id}`,
+            workflowId: state.id,
+            fireAt: state.executionDeadline,
+            kind: 'execution-deadline',
+          })
+        : []),
+    ],
+    [],
+    () => new Error(`Resume of workflow "${state.id}" lost its CAS race.`),
+  );
+}
+
+async function performSerializedResume(
+  internals: EngineInternals,
+  args: SerializedResumeArgs,
+): Promise<void> {
+  const { workflowId } = args;
+  assertResumeNotTerminating(internals, workflowId);
+
+  const latestState = await loadWorkflowState(internals, workflowId);
+  assertResumeNotTerminating(internals, workflowId);
+
+  if (!latestState) {
+    throw new Error(`Workflow "${workflowId}" not found in storage`);
+  }
+
+  if (latestState.status !== 'running' && latestState.status !== 'suspended') {
+    throw new Error(
+      `Cannot resume workflow "${workflowId}": status is "${latestState.status}", expected "running" or "suspended"`,
+    );
+  }
+
+  assertSameGeneration(workflowId, latestState, args.expectedGeneration);
+  // A suspended workflow must be flipped back to 'running' durably as part of
+  // this serialized section, before the generator is relaunched. If we
+  // relaunched but left the persisted status 'suspended', a crash right after
+  // relaunch would orphan the run: recoverAll() deliberately skips 'suspended',
+  // so nothing would ever re-drive it. Recovered-running workflows already have
+  // status 'running', so the flip is gated to the suspended case to avoid an
+  // extra state write (and visibility-index churn) on every recoverAll() resume.
+  await reactivateSuspendedWorkflowState(internals, latestState);
+
+  commitSerializedResumeState(internals, args);
+
+  if (internals.inlineStrategy) {
+    await relaunchInlineWorkflowAfterResume(internals, latestState, args);
+    return;
+  }
+  await relaunchWorkerWorkflowAfterResume(internals, latestState, args);
+}
+
+/**
+ * Everything `resumeWorkflowFromStorage` does once a claim (if any) is
+ * acquired: load tracking/checkpoint/registration state, prepare the resume,
+ * and either relaunch inline or in a worker. `resumeWorkflowFromStorage`
+ * itself just wraps a call to this in the WFT-134 claim-release
+ * `try`/`catch`.
+ */
+export async function performResumeAfterClaimAcquired(
+  internals: EngineInternals,
+  workflowId: string,
+  state: WorkflowState,
+  dispatchResumedEvent: boolean,
+  callbacks: LifecycleCallbacks,
+  onRecoveredWorkflow?: RecoverAllOptions['onRecoveredWorkflow'],
+): Promise<WorkflowHandle> {
+  // Load terminal-cleanup tracking BEFORE anything below that can commit a
+  // terminal failure for this run: ensures `workflowsNeedingTerminalCleanup`
+  // is populated before such a `failWorkflow()` commits a proper token.
+  await loadTerminalCleanupTrackedState(internals, workflowId, callbacks);
+
+  // Load checkpoint
+  const checkpointBytes = await internals.storage.get(KEYS.checkpoint(workflowId));
+  if (!checkpointBytes) {
+    throw new Error(`Checkpoint not found for workflow "${workflowId}"`);
+  }
+
+  const checkpoint = deserializeCheckpoint(checkpointBytes);
+
+  // Look up registration, awaiting dynamic-source resolution when `state.type`
+  // is not eagerly registered. Always resolved against `state.revision` — the
+  // EXACT executable artifact this run started against (WFT-17), never the
+  // catalog's active pointer. `revision` is threaded through as
+  // `SerializedResumeArgs.resolvedRevision` (WFT-19 review round 5).
+  const { entry: registration, revision: resolvedRevision } =
+    await resolveExecutableRegistrationOrRenamedNotFound(
+      (type) => callbacks.resolveExecutableRegistrationForRevision(type, state.revision),
+      state.type,
+      () =>
+        new Error(
+          `No workflow registered with name "${state.type}" (needed to resume "${workflowId}")`,
+        ),
+    );
+
+  const preparedResumeState = await prepareResumeState(
+    internals,
+    workflowId,
+    state,
+    checkpoint,
+    checkpointBytes,
+    registration,
+    callbacks,
+  );
+  const resumeCheckpoint = preparedResumeState.checkpoint;
+  const registeredVersionTuple = preparedResumeState.versionTuple;
+
+  // Restore the event log head from storage so that the next appendToBatch()
+  // call uses the correct sequence number and prevHash rather than falling
+  // back to EMPTY_EVENT_HEAD (sequence -1) and overwriting existing entries.
+  const eventLog = new EventLog(internals.storage, workflowId);
+  const restoredHead = await eventLog.loadHead();
+
+  // History circuit breaker, pre-replay site: if the persisted history already
+  // exceeds maxEvents, terminate without replaying so the oversized log never
+  // stalls the shared event loop.
+  if (await enforceHistoryPolicyBeforeReplay(internals, workflowId, restoredHead, callbacks)) {
+    return callbacks.getHandle(workflowId);
+  }
+
+  const workflowStartHeaders = await loadWorkflowStartHeaders(internals, workflowId, callbacks);
+
+  // Re-provide the non-serialized `services` value before the generator is
+  // driven forward. Inline mode only — worker mode cannot receive a
+  // non-serializable value (and `engine.start` rejected `services` there). When
+  // the resolver reports the run unavailable, fail just this run and skip the
+  // resume so the engine and other recovered runs are unaffected.
+  const { handle, shouldStop } = await prepareRecoveredWorkflowOrFail(
+    internals,
+    state,
+    callbacks,
+    onRecoveredWorkflow,
+  );
+  if (shouldStop) {
+    return handle;
+  }
+  await callbacks.runSerializedWorkflowStateWrite(workflowId, () =>
+    performSerializedResume(internals, {
+      workflowId,
+      resumeCheckpoint,
+      serializedCheckpoint: preparedResumeState.serializedCheckpoint,
+      registeredVersionTuple,
+      restoredHead,
+      workflowStartHeaders,
+      registration,
+      resolvedRevision,
+      expectedGeneration: deriveResumeGeneration(state),
+      callbacks,
+    }),
+  );
+
+  if (dispatchResumedEvent) {
+    callbacks.dispatchEvent(new WorkflowResumedEvent(workflowId, resumeCheckpoint.step));
+  }
+  if (internals.inlineStrategy) {
+    void callbacks.swallowPromiseRejection(
+      callbacks.processPendingUpdatesAfterInlineAdvance(workflowId),
+    );
+  }
+
+  return handle;
+}

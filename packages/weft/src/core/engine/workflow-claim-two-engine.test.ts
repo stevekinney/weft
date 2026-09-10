@@ -23,7 +23,11 @@
  */
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
+import {
+  KEYS,
+  type BatchOperation,
+  type ConditionalBatchCondition,
+} from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { workflow, type WorkflowContext } from '../types.ts';
@@ -404,6 +408,184 @@ describe('WFT-134: engine.suspend() does not strand a same-engine resume() under
 
     await engine.signal(workflowId, 'go');
     expect(await resumedHandle.result()).toBe('ran');
+    expect(activityRunCounts.get(workflowId)).toBe(1);
+  });
+
+  it('Part 2 (suspend.ts): the local claim forgotten after suspend is the PRE-suspend generation, not a fresh one a same-engine resume raced in before the commit promise resolved', async () => {
+    // Reproduces the review's exact race: with an asynchronous storage
+    // adapter, suspend's durable commit can already be visible while the
+    // `await` suspendWorkflow itself is sitting on has not yet resumed. A
+    // concurrent same-engine `resume()` can land in that gap, observe the
+    // durably-suspended state, and `acquire()` a fresh claim before suspend's
+    // own continuation runs. Sampling the epoch to forget AFTER that `await`
+    // (the pre-fix code) would then capture resume's fresh epoch, not the one
+    // suspend's own rotation deposed, and forget the live claim resume just
+    // installed. Gating the specific `conditionalBatch` call suspend's own
+    // external-terminal rotation makes (identified by its
+    // `wf-owner-holder:<id>` delete) lets the underlying `MemoryStorage`
+    // mutation apply (`MemoryStorage#conditionalBatch` has no internal
+    // `await`, per this file's module doc) while withholding the resolved
+    // PROMISE from `suspendWorkflow`, modeling an adapter with real I/O
+    // latency without needing one.
+    const storage = new MemoryStorage();
+    const workflows: ClaimWorkflows = { 'claim-race-recovery': claimRaceRecoveryWorkflow };
+    await using engine = await createClaimEngine(storage, 'engine-a', workflows);
+    const workflowId = 'suspend-precommit-epoch-capture';
+
+    const handle = await engine.start('claim-race-recovery', null, { id: workflowId });
+    await waitForCondition(() => engine[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]() === 1, {
+      label: 'inline workflow parked on waitForSignal',
+    });
+    const registry = getInternals(engine).workflowClaimRegistry;
+    expect(registry).not.toBeNull();
+    const preSuspendEpoch = registry?.currentEpoch(workflowId) ?? null;
+    expect(preSuspendEpoch).not.toBeNull();
+
+    const reached = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let armed = true;
+    const holderKey = KEYS.workflowOwnerHolder(workflowId);
+    const internals = getInternals(engine);
+    const realStorage = internals.storage;
+    internals.storage = new Proxy(realStorage, {
+      get(target, property, receiver) {
+        if (property === 'conditionalBatch') {
+          return async (conditions: ConditionalBatchCondition[], operations: BatchOperation[]) => {
+            const result = await target.conditionalBatch!(conditions, operations);
+            if (armed && operations.some((op) => op.type === 'delete' && op.key === holderKey)) {
+              armed = false;
+              reached.resolve();
+              await release.promise;
+            }
+            return result;
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    const suspendPromise = handle.suspend();
+    await reached.promise;
+
+    // Durable invariant: the rotation is already visible even though
+    // `suspendPromise` has not resolved.
+    expect(await storage.get(holderKey)).toBeNull();
+
+    // A concurrent same-engine resume() races in through the gap: it reads
+    // the durably-suspended state and installs a fresh claim before
+    // suspend's own promise continuation runs.
+    const resumePromise = engine.resume(workflowId);
+    await waitForCondition(() => (registry?.currentEpoch(workflowId) ?? null) !== preSuspendEpoch, {
+      label: 'resume() installs a fresh claim epoch',
+    });
+    const freshEpoch = registry?.currentEpoch(workflowId) ?? null;
+    expect(freshEpoch).not.toBeNull();
+    expect(freshEpoch).not.toBe(preSuspendEpoch);
+
+    release.resolve();
+    await suspendPromise;
+
+    // The regression: suspend's forget-local-claim step must not wipe the
+    // fresh claim resume() just installed — it must still equal resume's
+    // epoch, never `null`, once suspend's own writeOperation finishes.
+    expect(registry?.currentEpoch(workflowId)).toBe(freshEpoch);
+
+    const resumedHandle = await resumePromise;
+    await engine.signal(workflowId, 'go');
+    expect(await resumedHandle.result()).toBe('ran');
+    expect(activityRunCounts.get(workflowId)).toBe(1);
+  });
+
+  it('resume(): a claim freshly acquired for a workflow that turns terminal mid-flight is released, not leaked (standalone-claim-acquire.ts)', async () => {
+    // Reproduces the review's other race: another engine can cancel/time out
+    // a suspended workflow AFTER `resumeWorkflowFromStorage()`'s own initial
+    // state read but BEFORE `acquireStandaloneClaimBeforeResume` runs.
+    // `registry.acquire()` does not itself check workflow status, so it wins
+    // a fresh claim for a workflow that is actually terminal; without a fix,
+    // nothing ever releases it, and it would keep renewing forever and block
+    // a legitimate `start-new`.
+    const storage = new MemoryStorage();
+    const workflows: ClaimWorkflows = { 'claim-race-recovery': claimRaceRecoveryWorkflow };
+    const workflowId = 'resume-terminal-mid-flight';
+
+    // Seed a durably suspended workflow via a throwaway plain engine,
+    // mirroring the "Part 1" test's seeding pattern above.
+    {
+      await using seedEngine = await Engine.create({ storage, workflows, recover: false });
+      const seedHandle = await seedEngine.start('claim-race-recovery', null, { id: workflowId });
+      await waitForCondition(
+        async () => (await storage.get(KEYS.checkpoint(workflowId))) !== null,
+        { label: `checkpoint for seeded workflow "${workflowId}"` },
+      );
+      await seedHandle.suspend();
+    }
+    expect(await storage.get(KEYS.workflowOwnerHolder(workflowId))).toBeNull();
+
+    await using engineA = await createClaimEngine(storage, 'engine-a', workflows);
+    await using engineB = await createClaimEngine(storage, 'engine-b', workflows);
+    const registryA = getInternals(engineA).workflowClaimRegistry;
+    expect(registryA).not.toBeNull();
+
+    // Gate engineA's SECOND read of the workflow record: `resume()`'s own
+    // local-ownership read (`lifecycle/transition.ts`) happens first and is
+    // left unblocked (engineA never locally owned this workflow, so that
+    // check is a fast in-memory no-op regardless of timing); the read
+    // `resumeWorkflowFromStorage()` makes at its own top is the second. Let
+    // the real (still-'suspended') value resolve internally, but withhold it
+    // from the caller until engineB's concurrent cancel has committed.
+    const reached = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let matchCount = 0;
+    const workflowKey = KEYS.workflow(workflowId);
+    const internalsA = getInternals(engineA);
+    const realStorageA = internalsA.storage;
+    internalsA.storage = new Proxy(realStorageA, {
+      get(target, property, receiver) {
+        if (property === 'get') {
+          return async (key: string) => {
+            const value = await target.get(key);
+            if (key === workflowKey) {
+              matchCount += 1;
+              if (matchCount === 2) {
+                reached.resolve();
+                await release.promise;
+              }
+            }
+            return value;
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    const resumePromise = engineA.resume(workflowId);
+    await reached.promise;
+
+    // A different engine terminalizes the workflow while engineA's resume is
+    // still holding the stale 'suspended' state it already read.
+    await engineB.cancel(workflowId);
+
+    release.resolve();
+
+    await expect(resumePromise).rejects.toThrow(/status is "cancelled"/);
+
+    // The regression: `acquireStandaloneClaimBeforeResume` freshly installed
+    // a claim for engineA (no cached epoch, and nothing else held it after
+    // engineB's rotation) for what turned out to be a now-terminal workflow.
+    // It must be released here, not leaked.
+    expect(registryA?.currentEpoch(workflowId)).toBeNull();
+
+    // Proves the release was DURABLE, not just a local cache clear: a
+    // legitimate `start-new` must not lose its own claim CAS to a stranded
+    // holder record.
+    const restarted = await engineA.start('claim-race-recovery', null, {
+      id: workflowId,
+      onTerminalConflict: 'start-new',
+    });
+    await engineA.signal(workflowId, 'go');
+    expect(await restarted.result()).toBe('ran');
     expect(activityRunCounts.get(workflowId)).toBe(1);
   });
 });

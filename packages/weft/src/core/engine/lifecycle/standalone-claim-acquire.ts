@@ -47,13 +47,22 @@ import type { EngineInternals } from '../internals.ts';
 import { WorkflowClaimUnavailableError } from '../lease-errors.ts';
 import { wakeOwnershipCheck } from '../wake-ownership-check.ts';
 
+/**
+ * Returns `true` when this call itself performed a fresh `registry.acquire()`
+ * (whether because no claim was cached yet, or because the `'holder-absent'`
+ * fallback below ran) — `false` when no acquisition happened at all (folding
+ * disabled, no registry, or the cached claim matched). Callers use this to
+ * know whether THEY are now responsible for releasing a claim this call just
+ * installed if the resume they were preparing turns out not to be resumable
+ * after all — see `resume.ts`'s `resumeWorkflowFromStorage` (WFT-134).
+ */
 export async function acquireStandaloneClaimBeforeResume(
   internals: EngineInternals,
   workflowId: string,
-): Promise<void> {
-  if (internals.options.ownershipMode !== 'workflow-lease') return;
+): Promise<boolean> {
+  if (internals.options.ownershipMode !== 'workflow-lease') return false;
   const registry = internals.workflowClaimRegistry;
-  if (registry === null) return;
+  if (registry === null) return false;
   const cachedEpoch = registry.currentEpoch(workflowId);
   if (cachedEpoch !== null) {
     const check = await wakeOwnershipCheck({
@@ -64,7 +73,7 @@ export async function acquireStandaloneClaimBeforeResume(
       expectedEpoch: cachedEpoch,
     });
     if (check.status === 'match') {
-      return;
+      return false;
     }
     // WFT-134: `'holder-absent'` specifically — NOT `'holder-undecodable'` or
     // `'generation-mismatch'`, both of which stay hard failures below, since
@@ -79,6 +88,18 @@ export async function acquireStandaloneClaimBeforeResume(
     // fresh `registry.acquire()`, the same path a never-before-seen claim
     // takes below — rather than hard-failing a legitimate same-engine
     // resume immediately after its own suspend.
+    //
+    // That fall-through is exactly as safe as the "no claim cached yet"
+    // path below with respect to the workflow's OWN resumability: neither
+    // this claim-registry read nor `registry.acquire()` itself checks
+    // `WorkflowState.status` at all — a fresh acquire can win the CAS for a
+    // workflow that went terminal (a different engine's cancel/timeout, or
+    // an `onTerminalConflict: 'start-new'` replacement) in the gap between
+    // `resumeWorkflowFromStorage()`'s initial state read and this call. That
+    // is a real, separate race (not the same-engine-suspend race this
+    // fall-through exists for) with its own fix: the caller releases this
+    // freshly-acquired claim if its later, status-aware validation rejects
+    // the resume (see the return-value doc above).
     if (check.reason !== 'holder-absent') {
       throw new WorkflowClaimUnavailableError(workflowId, check.observedEngineId);
     }
@@ -86,6 +107,41 @@ export async function acquireStandaloneClaimBeforeResume(
   const result = await registry.acquire(workflowId);
   if (result.status === 'lost-race') {
     throw new WorkflowClaimUnavailableError(workflowId, result.heldBy);
+  }
+  return true;
+}
+
+/**
+ * Best-effort durable release of a claim {@link acquireStandaloneClaimBeforeResume}
+ * freshly acquired for THIS resume attempt, called when a later, status-aware
+ * check (`performSerializedResume`'s status/generation re-validation in
+ * `resume.ts`) rejects the resume after all (WFT-134). Without this, a claim
+ * acquired for a workflow that turned out to be non-resumable — already
+ * terminal, or replaced by an `onTerminalConflict: 'start-new'` run — stays
+ * installed: the renewal task keeps refreshing it indefinitely, and a
+ * legitimate `start-new` (or the replacement run's own fold-acquire) loses
+ * its CAS against a claim nothing is actually driving.
+ *
+ * A full durable `release()`, not a local-only `forgetLocalClaim()`: the
+ * acquire this undoes durably wrote BOTH `wf-owner-epoch:<id>` and
+ * `wf-owner-holder:<id>`, and it is specifically the durable holder record
+ * that would otherwise block a legitimate replacement's own acquire — merely
+ * clearing this engine's local cache would leave that durable block in place.
+ * Swallows a lost-race/thrown release the same way every other best-effort
+ * claim release in this codebase does (see `complete.ts`'s
+ * `releaseWorkflowClaimAfterTerminalSettlement`): a failed release here just
+ * leaves the claim for TTL/grace expiry, never worse than not attempting it.
+ */
+export async function releaseFreshlyAcquiredResumeClaim(
+  internals: EngineInternals,
+  workflowId: string,
+): Promise<void> {
+  const registry = internals.workflowClaimRegistry;
+  if (registry === null) return;
+  try {
+    await registry.release(workflowId);
+  } catch {
+    // Best-effort — see this function's doc.
   }
 }
 
