@@ -588,6 +588,43 @@ describe('validateCheckpointShape (via deserializeCheckpoint)', () => {
     expect(() => deserializeCheckpoint(bytes)).toThrow('createdAt');
   });
 
+  it('accepts a checkpoint with no `workflowExecutionToken` (legacy, predates WFT-21)', () => {
+    const { encode } = require('./codec.ts');
+    const bytes = encode({
+      workflowId: 'wf-no-token',
+      step: 0,
+      locals: {},
+      accumulatedResults: [],
+      searchAttributes: {},
+      version: '1.0.0',
+      schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
+      createdAt: Date.now(),
+    });
+
+    const checkpoint = deserializeCheckpoint(bytes);
+    expect(checkpoint.workflowExecutionToken).toBeUndefined();
+  });
+
+  it('throws when `workflowExecutionToken` is present but not a non-empty string (WFT-21)', () => {
+    const { encode } = require('./codec.ts');
+    const cases: unknown[] = ['', 0, false, {}, []];
+    for (const invalidToken of cases) {
+      const bytes = encode({
+        workflowId: 'wf-invalid-token',
+        step: 0,
+        locals: {},
+        accumulatedResults: [],
+        searchAttributes: {},
+        version: '1.0.0',
+        schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
+        createdAt: Date.now(),
+        workflowExecutionToken: invalidToken,
+      });
+
+      expect(() => deserializeCheckpoint(bytes)).toThrow('workflowExecutionToken');
+    }
+  });
+
   it('throws when Worker replay signatures have invalid entries', () => {
     const { encode } = require('./codec.ts');
     const bytes = encode({

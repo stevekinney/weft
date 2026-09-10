@@ -708,8 +708,11 @@ describe('countWorkflowRevisionReferences', () => {
     await handle.result();
     const revA = getWorkflowCatalog(engine).resolveActive('checkout')!.revision;
 
+    // Seed under `teardownDeadLetterHistory` — the namespace
+    // `countTeardownDeadLettersForRevision()` actually scans (WFT-21, Codex
+    // review round 3, P2), not the single-slot `teardownDeadLetter`.
     await storage.put(
-      KEYS.teardownDeadLetter(handle.id),
+      KEYS.teardownDeadLetterHistory(handle.id, 'dead-letter-token'),
       encode({
         type: 'checkout',
         lastError: 'resource leaked',

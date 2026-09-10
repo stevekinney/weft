@@ -6,6 +6,7 @@ import { buildIndexOperations } from '../../search-attributes.ts';
 import type { Checkpoint, ForkLineage, SearchAttributeValue, WorkflowState } from '../../types.ts';
 import type { ForkOptions } from '../../types/options.ts';
 import { type WorkflowVersionTuple } from '../../workflow-version-tuple.ts';
+import { reserveInFlightStart } from '../catalog-removal.ts';
 import { hydrateCheckpointReplayState } from '../checkpoint-replay.ts';
 import { canResolveRevisionLocally } from '../dynamic-source-execution.ts';
 import type { EngineInternals } from '../internals.ts';
@@ -149,6 +150,33 @@ export async function buildForkCatalogEntryCondition(
     return [];
   }
   return [await buildCatalogEntryRevisionCondition(internals, type, persistedRevision)];
+}
+
+/**
+ * A SECOND, conditional in-flight reservation for `fork()` (WFT-21, Codex
+ * review round 3, P1) — closes the one gap `fork()`'s own early
+ * `targetRevision` reservation cannot cover: a legacy (pre-revision-pinning)
+ * source run on a dynamic-source type with exactly one registered candidate
+ * has `sourceState.revision` genuinely `undefined`, so `targetRevision`
+ * (`options.revision ?? sourceState.revision`) is `undefined` too and the
+ * early reservation is a no-op — yet the resolver still resolves, and the
+ * fork still persists against, that sole candidate's real revision
+ * (`persistedRevision`). Reserves that real revision instead, but ONLY when
+ * it differs from `targetRevision` (otherwise the early reservation already
+ * covers it, and a second reservation would double-count the fork's own
+ * in-flight reference). See `fork-revision-catalog-race.test.ts`'s round-3
+ * `describe` block for the full end-to-end race this closes.
+ */
+export function reserveLegacyForkTargetRevision(
+  internals: EngineInternals,
+  type: string,
+  targetRevision: string | undefined,
+  persistedRevision: string | undefined,
+): string | undefined {
+  if (persistedRevision === targetRevision) {
+    return undefined;
+  }
+  return reserveInFlightStart(internals, type, persistedRevision);
 }
 
 export function createForkLineage(

@@ -25,6 +25,7 @@ import {
   createForkLineage,
   createForkedWorkflowState,
   loadForkSourceCheckpoint,
+  reserveLegacyForkTargetRevision,
   resolveForkPersistedRevision,
   resolveForkTargetRevision,
 } from './fork-helpers.ts';
@@ -341,21 +342,13 @@ export async function fork(
 
   // Resolve against the SOURCE run's own exact pinned revision (WFT-17's
   // `WorkflowState.revision`), never the catalog's currently active pointer
-  // (WFT-19 review round 2, found while proving the identity-cache fix
-  // below): the active pointer can move between the source run's start and
-  // this fork call, and resolving via `resolveExecutableRegistration`
-  // (active-pointer-based) would launch the FORKED run against a different
-  // revision's handler entirely — not just a routing mismatch downstream of
-  // execution, but the wrong code running from the very first turn. Mirrors
-  // `resolveExecutableRegistrationForRetry()`'s identical fix for bulk retry.
-  //
-  // `options.revision` (WFT-21) is an explicit, validated opt-in to fork
-  // against a DIFFERENT installed revision than the source run's own pin —
-  // validated BEFORE the checkpoint is ever read, so an unresolvable
-  // request fails fast with no partial write. When absent, `targetRevision`
-  // is exactly `sourceState.revision`, preserving this fork's pre-WFT-21
-  // behavior byte-for-byte. See `resolveForkTargetRevision()`'s own doc for
-  // why this is extracted rather than inlined here.
+  // (WFT-19 review round 2): the active pointer can move between the
+  // source run's start and this fork call, and resolving via the
+  // active-pointer path would launch the FORKED run against the wrong
+  // code from the very first turn. `options.revision` (WFT-21) is an
+  // explicit, validated opt-in to fork against a DIFFERENT installed
+  // revision — validated before any checkpoint read. See
+  // `resolveForkTargetRevision()`'s own doc for the full precedence chain.
   const targetRevision = resolveForkTargetRevision(internals, sourceState, options);
   // Reserve an in-flight-start slot against `targetRevision` BEFORE any
   // further async work (WFT-21, Codex review round 2, P1): closes the
@@ -369,6 +362,9 @@ export async function fork(
   // that function's own doc. Released, unconditionally, in this function's
   // own outer `finally` below.
   const inFlightRevision = reserveInFlightStart(internals, sourceState.type, targetRevision);
+  // Second, conditional reservation — see `reserveLegacyForkTargetRevision()`'s
+  // doc (WFT-21, Codex review round 3, P1); released below unconditionally.
+  let legacyResolvedInFlightRevision: string | undefined;
   try {
     // `revision` here is the resolver's OWN resolved revision — threaded
     // through to `launchWorkflowFromCheckpoint()`'s identity-cache population
@@ -387,6 +383,12 @@ export async function fork(
     // The fork's own persisted `revision` (WFT-21) — see
     // `resolveForkPersistedRevision()`'s own doc for the precedence chain.
     const persistedRevision = resolveForkPersistedRevision(options, sourceState, resolvedRevision);
+    legacyResolvedInFlightRevision = reserveLegacyForkTargetRevision(
+      internals,
+      sourceState.type,
+      targetRevision,
+      persistedRevision,
+    );
 
     const fromStep =
       options?.fromStep !== undefined ? normalizeForkStep(options.fromStep) : undefined;
@@ -410,17 +412,6 @@ export async function fork(
     const lineage = createForkLineage(internals, sourceWorkflowId, sourceCheckpoint, callbacks);
     const { accumulatedResultReplayWatermark: _sourceReplayWatermark, ...sourceCheckpointForFork } =
       preparedExecutionState.checkpoint;
-    const forkCheckpoint: Checkpoint = {
-      ...sourceCheckpointForFork,
-      createdAt: forkedAt,
-      workflowId,
-      searchAttributes: buildForkSearchAttributes(
-        internals,
-        preparedExecutionState.checkpoint,
-        lineage,
-        callbacks,
-      ),
-    };
     const forkState = createForkedWorkflowState(
       internals,
       workflowId,
@@ -431,6 +422,21 @@ export async function fork(
       callbacks,
       persistedRevision,
     );
+    const forkCheckpoint: Checkpoint = {
+      ...sourceCheckpointForFork,
+      createdAt: forkedAt,
+      workflowId,
+      // The forked run's own fresh token, never the source's (WFT-21).
+      ...(forkState.workflowExecutionToken !== undefined && {
+        workflowExecutionToken: forkState.workflowExecutionToken,
+      }),
+      searchAttributes: buildForkSearchAttributes(
+        internals,
+        preparedExecutionState.checkpoint,
+        lineage,
+        callbacks,
+      ),
+    };
 
     // Fence the commit below against a concurrent removeWorkflowRevision()
     // targeting this fork's own persisted revision (WFT-21, Codex review
@@ -486,5 +492,6 @@ export async function fork(
     }
   } finally {
     releaseInFlightStart(internals, sourceState.type, inFlightRevision);
+    releaseInFlightStart(internals, sourceState.type, legacyResolvedInFlightRevision);
   }
 }

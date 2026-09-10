@@ -320,6 +320,18 @@ describe('engine-driven finalizer teardown (#446 Phase 2)', () => {
     expect(record.finalizerInput).toEqual({ sandboxId: 'sbx-doomed' });
     expect(typeof record.deadLetteredAt).toBe('number');
 
+    // `deadLetterTeardown()` also writes the identical record to the
+    // per-generation history namespace `retainedRecoveryRecords` reference
+    // counting scans (WFT-21, Codex review round 3, P2) — keyed by this
+    // run's own `workflowExecutionToken` so a LATER generation reusing this
+    // same workflow id can never overwrite this generation's evidence.
+    expect(record.workflowExecutionToken).toBeDefined();
+    const historyBytes = await engine.storage.get(
+      KEYS.teardownDeadLetterHistory('teardown-dl-1', record.workflowExecutionToken!),
+    );
+    expect(historyBytes).not.toBeNull();
+    expect(decode(historyBytes!)).toEqual(record);
+
     engine[Symbol.dispose]();
   });
 

@@ -201,7 +201,13 @@ describe('resolveOrphanedCatalogTombstones', () => {
       deadLetteredAt: 1,
       revision: v1.revision,
     };
-    await storage.put(KEYS.teardownDeadLetter('checkout-dead-lettered'), encode(deadLetter));
+    // Seed under `teardownDeadLetterHistory` — the namespace
+    // `countTeardownDeadLettersForRevision()` actually scans (WFT-21, Codex
+    // review round 3, P2), not the single-slot `teardownDeadLetter`.
+    await storage.put(
+      KEYS.teardownDeadLetterHistory('checkout-dead-lettered', 'dead-letter-token'),
+      encode(deadLetter),
+    );
 
     await simulateCrashedRemoval(storage, 'checkout', v1.revision);
 

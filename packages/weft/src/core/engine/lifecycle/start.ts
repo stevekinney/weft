@@ -297,6 +297,7 @@ export async function startWorkflow(
       workflowId,
       versionTuple.workflowVersion,
       options,
+      state.workflowExecutionToken,
       callbacks,
     );
     const workflowStartHeaders = runWorkflowStartInterceptor(

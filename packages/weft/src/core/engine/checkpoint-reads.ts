@@ -12,10 +12,12 @@ import { decode } from '../codec.ts';
 import { sanitizeDebugValueForDisplay } from '../debug-output.ts';
 import { EventLog } from '../event-log.ts';
 import type {
+  Checkpoint,
   CheckpointState,
   CheckpointSummary,
   WorkflowEvent,
   WorkflowReplay,
+  WorkflowState,
   WorkflowTimelineEntry,
 } from '../types.ts';
 import { hydrateCheckpointReplayState } from './checkpoint-replay.ts';
@@ -191,19 +193,13 @@ export async function replayTo(
   // The run's own pinned revision (WFT-21): omitted when the workflow
   // record has since been purged (`state === null`), when it predates
   // revision pinning (`state.revision === undefined`), OR — closing the
-  // `state`-vs-`checkpoint` consistency gap above (Codex review round 2,
+  // `state`-vs-`checkpoint` consistency gap between this checkpoint's own
+  // independent read and the `state` read above (Codex review round 2,
   // P2) — when `state` belongs to a DIFFERENT, later execution than this
-  // checkpoint. `advanceCheckpoint()` (`core/checkpoint/lifecycle.ts`)
-  // re-stamps `createdAt` to "now" on every single step save, so for the
-  // run this checkpoint actually came from, `checkpoint.createdAt` is
-  // ALWAYS `>= state.createdAt` (that run's own fixed start time — steps
-  // can only be saved after their run starts). A `start-new` replacement
-  // stamps a BRAND NEW `WorkflowState.createdAt` at replacement time,
-  // strictly later than any checkpoint the DISPLACED run ever saved — so
-  // `checkpoint.createdAt < state.createdAt` reliably means `state` is
-  // that replacement, not this checkpoint's own run.
-  const revision =
-    state !== null && rawCheckpoint.createdAt >= state.createdAt ? state.revision : undefined;
+  // checkpoint (a concurrent `start(..., { id: workflowId,
+  // onTerminalConflict: 'start-new' })` landing between the two reads).
+  // See `resolveReplayRevision()`'s own doc for how that's detected.
+  const revision = resolveReplayRevision(rawCheckpoint, state);
 
   return {
     checkpoint: sanitizeCheckpointState({
@@ -225,4 +221,44 @@ export async function replayTo(
     ...(watermark !== null ? { compactedBefore: watermark.sequence } : {}),
     ...(revision !== undefined ? { revision } : {}),
   };
+}
+
+/**
+ * Resolve the revision to report for a `replayTo()` result, correlating an
+ * independently-read checkpoint history entry against an
+ * independently-read `WorkflowState` (WFT-21, Codex review round 3, P2).
+ *
+ * Prefers an EXACT identity check — `rawCheckpoint.workflowExecutionToken
+ * === state.workflowExecutionToken` — whenever both sides carry that field:
+ * each genuinely fresh execution (a `start()`, or a `fork()`) mints its own
+ * token once and every checkpoint that execution ever saves carries it
+ * forward unchanged (see `Checkpoint.workflowExecutionToken`'s own doc), so
+ * a match here proves `state` and `rawCheckpoint` belong to the SAME run,
+ * with no timing assumption at all.
+ *
+ * Falls back to the original `createdAt` comparison only when either side
+ * predates this field (a checkpoint or a workflow record persisted before
+ * this release) — `advanceCheckpoint()` re-stamps `createdAt` to "now" on
+ * every step save, so for the run a checkpoint actually came from,
+ * `checkpoint.createdAt` is always `>= state.createdAt` (that run's own
+ * fixed start time); a `start-new` replacement stamps a brand new
+ * `WorkflowState.createdAt` strictly later than anything the displaced run
+ * ever saved, so the reverse inequality still reliably detects a mismatch
+ * for that legacy case — same-millisecond collisions and non-monotonic
+ * clocks aside, which the token check above exists specifically to close.
+ */
+function resolveReplayRevision(
+  rawCheckpoint: Checkpoint,
+  state: WorkflowState | null,
+): string | undefined {
+  if (state === null) return undefined;
+  if (
+    rawCheckpoint.workflowExecutionToken !== undefined &&
+    state.workflowExecutionToken !== undefined
+  ) {
+    return rawCheckpoint.workflowExecutionToken === state.workflowExecutionToken
+      ? state.revision
+      : undefined;
+  }
+  return rawCheckpoint.createdAt >= state.createdAt ? state.revision : undefined;
 }

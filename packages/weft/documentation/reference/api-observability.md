@@ -328,6 +328,7 @@ A revision with a completed-but-unpurged run still pinned to it reports `removab
 ```json
 {
   "name": "checkout",
+  "revision": "sha256:a1b2c3...",
   "installed": true,
   "active": false,
   "references": {
@@ -352,6 +353,7 @@ GET /v1/catalog/checkout/revisions/sha256%3Arevision/diagnostics
 ```json
 {
   "name": "checkout",
+  "revision": "sha256:d4e5f6...",
   "installed": true,
   "active": false,
   "references": {

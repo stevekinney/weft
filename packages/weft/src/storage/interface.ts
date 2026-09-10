@@ -719,12 +719,43 @@ export const KEYS = {
   teardownDeadLetter: (workflowId: string) =>
     `wf-teardown-deadletter:${encodeStorageKeyComponent(workflowId)}`,
   /**
-   * Prefix over every {@link teardownDeadLetter} record, for the bounded
-   * `retainedRecoveryRecords` reference-count scan (WFT-21) — see
-   * {@link import('../core/engine/retained-recovery-record-count.ts').countTeardownDeadLettersForRevision}.
-   * Mirrors {@link terminalWorkflowPrefix}'s existing bare-prefix convention.
+   * Prefix over every {@link teardownDeadLetter} record. Historically also the
+   * `retainedRecoveryRecords` reference-count scan's own target, but that scan
+   * now reads {@link teardownDeadLetterHistoryPrefix} instead (WFT-21, Codex
+   * review round 3, P2) — see that key's own doc for why.
    */
   teardownDeadLetterPrefix: () => 'wf-teardown-deadletter:',
+  /**
+   * Durable, PER-GENERATION sibling of {@link teardownDeadLetter} (WFT-21,
+   * Codex review round 3, P2), written alongside it with the identical
+   * {@link import('../core/engine/termination/finalizer-claim.ts').TeardownDeadLetterRecord}
+   * value. `teardownDeadLetter` itself stays keyed by `workflowId` ALONE —
+   * unchanged, so `getFinalizerStatus` keeps serving "the latest dead letter
+   * for this workflow id" exactly as before — which means a workflow id
+   * reused across generations (purge, or `onTerminalConflict: 'start-new'`)
+   * has each LATER generation's dead letter silently overwrite an EARLIER
+   * generation's at that single slot. This key adds `workflowExecutionToken`
+   * as a second segment specifically so `retainedRecoveryRecords`' reference
+   * counting — which must see every generation's leaked revision, not just
+   * the most recent one — never loses an earlier generation's evidence to a
+   * later generation reusing the same id. See
+   * {@link import('../core/engine/retained-recovery-record-count.ts').countTeardownDeadLettersForRevision},
+   * which scans {@link teardownDeadLetterHistoryPrefix} rather than
+   * `teardownDeadLetterPrefix`. A dead-lettering run with no
+   * `workflowExecutionToken` (a legacy, pre-token run) uses a fixed sentinel
+   * segment instead — see `deadLetterTeardown()`'s own doc for that bounded
+   * edge case. Same purge-survival contract as `teardownDeadLetter`: never
+   * in the purge delete-set.
+   */
+  teardownDeadLetterHistory: (workflowId: string, workflowExecutionToken: string) =>
+    `wf-teardown-deadletter-history:${encodeStorageKeyComponent(workflowId)}:${encodeStorageKeyComponent(workflowExecutionToken)}`,
+  /**
+   * Prefix over every {@link teardownDeadLetterHistory} record, for the
+   * bounded `retainedRecoveryRecords` reference-count scan (WFT-21, Codex
+   * review round 3, P2). Mirrors {@link terminalWorkflowPrefix}'s existing
+   * bare-prefix convention.
+   */
+  teardownDeadLetterHistoryPrefix: () => 'wf-teardown-deadletter-history:',
   offload: (workflowId: string, key: string) =>
     `offload:${encodeStorageKeyComponent(workflowId)}:${key}`,
   archive: (workflowId: string, key: string) =>

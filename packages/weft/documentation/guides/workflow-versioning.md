@@ -530,6 +530,18 @@ catalog entry, and still let the fork's own commit land right behind
 it—durably persisting a reference to a revision the catalog now claims is
 gone.
 
+**A third, narrower reservation closes one remaining legacy-source gap**
+(Codex review round 3). The in-memory reservation above reserves against
+`targetRevision` (`options.revision ?? sourceState.revision`)—a no-op when
+BOTH are `undefined`, which happens only for a default fork of a legacy
+(pre-revision-pinning) source run on a dynamic-source type with exactly one
+registered candidate. The resolver still resolves—and the fork still
+persists against—that sole candidate's real revision even though nothing
+was reserved for it. `fork()` now reserves a SECOND, conditional in-memory
+slot for the resolver's own resolved revision whenever it differs from
+`targetRevision`—exactly this legacy case—closing the gap under every
+ownership mode, released unconditionally alongside the first reservation.
+
 The ADR 0002 workflow-lease reclaim-eligibility check
 (`isWorkflowTypeRegistered`) is source- and revision-aware for the same
 reason—see
@@ -770,7 +782,23 @@ Five fields are wired to real signals now:
   terminal-run component rides the exact same `storage.scan('wf:')` pass
   `nonTerminalRuns` already pays for (one scan classifies each record into
   exactly one of the two buckets); the dead-letter component is its own
-  bounded `storage.scan('wf-teardown-deadletter:')`.
+  bounded `storage.scan('wf-teardown-deadletter-history:')`.
+
+  The dead-letter component scans a dedicated **per-generation** history
+  namespace, not the single-slot `wf-teardown-deadletter:<workflowId>` key
+  the finalizer-status API reads (Codex review round 3, P2). That single
+  slot is keyed by workflow id alone, so a workflow id reused across
+  generations—purge, or `onTerminalConflict: 'start-new'`—would have a
+  LATER generation's dead letter silently overwrite an EARLIER generation's
+  at that slot, destroying both the audit record and the reference count
+  for whatever revision the earlier generation had leaked. Every
+  dead-lettering finalizer now ALSO writes the identical record to
+  `wf-teardown-deadletter-history:<workflowId>:<workflowExecutionToken>`—
+  keyed additionally by the dead-lettering run's own execution
+  token—so every generation's record, and its revision reference, survives
+  independently. The single-slot key is untouched, so the finalizer-status
+  API keeps serving "the latest dead letter for this workflow id" exactly
+  as before.
 
 The remaining two fields—`pendingDispatches` and `activeExecutionRealms`—
 stay structurally present but always `0`. Each awaits revision identity

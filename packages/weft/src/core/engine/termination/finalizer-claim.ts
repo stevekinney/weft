@@ -135,6 +135,18 @@ export interface TeardownDeadLetterRecord {
   revision?: string;
 }
 
+/**
+ * Fixed second key segment `deadLetterTeardown()` uses for
+ * {@link KEYS.teardownDeadLetterHistory} when the dead-lettering run has no
+ * `workflowExecutionToken` (a legacy, pre-token run) — WFT-21, Codex review
+ * round 3, P2. A second legacy run reusing the same workflow id and ALSO
+ * dead-lettering would collide on this same sentinel segment, silently
+ * losing the earlier legacy record's reference — a bounded edge case
+ * affecting only runs that predate `WorkflowState.workflowExecutionToken`,
+ * mirroring this file's own `revision === undefined` legacy fallback.
+ */
+const LEGACY_DEAD_LETTER_HISTORY_TOKEN = 'legacy';
+
 /** Build the operations that arm a fresh `wf-teardown:` timer at `fireAt` (same token). */
 export function teardownTimerOperations(
   token: string,
@@ -287,9 +299,18 @@ export async function deadLetterTeardown(
     ...(details.finalizerInput === undefined ? {} : { finalizerInput: details.finalizerInput }),
     ...(revision === undefined ? {} : { revision }),
   };
+  const deadLetterBytes = encode(deadLetter);
   return settleOnRunningClaim(internals, workflowId, expectedBytes, [
     { type: 'delete', key: KEYS.teardownOwed(workflowId) },
     { type: 'delete', key: KEYS.finalizerState(workflowId) },
-    { type: 'put', key: KEYS.teardownDeadLetter(workflowId), value: encode(deadLetter) },
+    { type: 'put', key: KEYS.teardownDeadLetter(workflowId), value: deadLetterBytes },
+    {
+      type: 'put',
+      key: KEYS.teardownDeadLetterHistory(
+        workflowId,
+        workflowExecutionToken ?? LEGACY_DEAD_LETTER_HISTORY_TOKEN,
+      ),
+      value: deadLetterBytes,
+    },
   ]);
 }

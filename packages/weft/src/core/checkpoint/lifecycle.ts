@@ -19,6 +19,7 @@ export function createCheckpoint(
   workflowId: WorkflowId,
   version: string,
   now?: number,
+  workflowExecutionToken?: string,
 ): Checkpoint {
   return {
     workflowId,
@@ -29,6 +30,7 @@ export function createCheckpoint(
     version,
     schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
     createdAt: now ?? Date.now(),
+    ...(workflowExecutionToken !== undefined && { workflowExecutionToken }),
   };
 }
 
@@ -61,6 +63,9 @@ export function advanceCheckpoint(
     workflowId: checkpoint.workflowId,
     step: checkpoint.step + 1,
     locals,
+    ...(checkpoint.workflowExecutionToken !== undefined && {
+      workflowExecutionToken: checkpoint.workflowExecutionToken,
+    }),
     accumulatedResults: options?.accumulatedResults ?? checkpoint.accumulatedResults,
     ...((options?.accumulatedResultReplayWatermark ??
       checkpoint.accumulatedResultReplayWatermark) === undefined

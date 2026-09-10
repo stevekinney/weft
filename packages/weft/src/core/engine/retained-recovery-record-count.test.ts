@@ -17,12 +17,24 @@ function makeDeadLetter(
   };
 }
 
+/**
+ * Seed a dead letter under `teardownDeadLetterHistory` — the namespace
+ * `countTeardownDeadLettersForRevision()` actually scans (WFT-21, Codex
+ * review round 3, P2) — keyed by `workflowExecutionToken` when the record
+ * carries one, or a fixed per-call fallback otherwise, so two calls for the
+ * SAME `workflowId` (simulating id reuse across generations) never collide
+ * unless the caller passes the same token/fallback on purpose.
+ */
 async function seedDeadLetter(
   storage: MemoryStorage,
   workflowId: string,
   record: TeardownDeadLetterRecord,
+  fallbackToken = workflowId,
 ): Promise<void> {
-  await storage.put(KEYS.teardownDeadLetter(workflowId), encode(record));
+  await storage.put(
+    KEYS.teardownDeadLetterHistory(workflowId, record.workflowExecutionToken ?? fallbackToken),
+    encode(record),
+  );
 }
 
 describe('countTeardownDeadLettersForRevision', () => {
@@ -59,7 +71,10 @@ describe('countTeardownDeadLettersForRevision', () => {
 
   it('skips an undecodable record rather than throwing', async () => {
     const storage = new MemoryStorage();
-    await storage.put(KEYS.teardownDeadLetter('wf-corrupt'), new Uint8Array([0xc1]));
+    await storage.put(
+      KEYS.teardownDeadLetterHistory('wf-corrupt', 'corrupt-token'),
+      new Uint8Array([0xc1]),
+    );
     await seedDeadLetter(
       storage,
       'wf-good',
@@ -67,5 +82,56 @@ describe('countTeardownDeadLettersForRevision', () => {
     );
 
     expect(await countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')).toBe(1);
+  });
+
+  it("retains an earlier generation's dead-letter revision reference after the workflow id is reused (WFT-21, Codex review round 3, P2)", async () => {
+    const storage = new MemoryStorage();
+    // Two generations of the SAME workflow id — a real `start-new`/purge id-reuse
+    // scenario — each dead-lettering under a DIFFERENT revision of the same
+    // type. Before this fix, `deadLetterTeardown()` wrote both records to the
+    // single `KEYS.teardownDeadLetter(workflowId)` slot, so the second
+    // generation's write would silently destroy the first generation's
+    // evidence and reference count. The history namespace keys each
+    // generation by its own `workflowExecutionToken`, so neither write
+    // collides with the other.
+    await seedDeadLetter(
+      storage,
+      'wf-reused',
+      makeDeadLetter({
+        type: 'checkout',
+        revision: 'rev-a',
+        workflowExecutionToken: 'generation-1-token',
+      }),
+    );
+    await seedDeadLetter(
+      storage,
+      'wf-reused',
+      makeDeadLetter({
+        type: 'checkout',
+        revision: 'rev-b',
+        workflowExecutionToken: 'generation-2-token',
+      }),
+    );
+
+    expect(await countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')).toBe(1);
+    expect(await countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-b')).toBe(1);
+  });
+
+  it('a legacy dead letter with no workflowExecutionToken uses a fixed history fallback segment, so a second legacy generation for the same id can still collide (documented bounded edge case)', async () => {
+    const storage = new MemoryStorage();
+    await storage.put(
+      KEYS.teardownDeadLetterHistory('wf-legacy-reused', 'legacy'),
+      encode(makeDeadLetter({ type: 'checkout', revision: 'rev-a' })),
+    );
+    // A second legacy (no-token) generation for the SAME id dead-lettering
+    // under a DIFFERENT revision collides on the same fallback segment —
+    // this is the documented, bounded exception, not a regression.
+    await storage.put(
+      KEYS.teardownDeadLetterHistory('wf-legacy-reused', 'legacy'),
+      encode(makeDeadLetter({ type: 'checkout', revision: 'rev-b' })),
+    );
+
+    expect(await countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')).toBe(0);
+    expect(await countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-b')).toBe(1);
   });
 });

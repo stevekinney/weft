@@ -14,6 +14,16 @@
  * dead-lettered stays permanently non-removable until a future
  * acknowledge/clear API exists (not built this batch).
  *
+ * Scans `KEYS.teardownDeadLetterHistoryPrefix()`, NOT
+ * `KEYS.teardownDeadLetterPrefix()` (WFT-21, Codex review round 3, P2): the
+ * latter is a single slot per workflow id, so a workflow id reused across
+ * generations (purge, or `onTerminalConflict: 'start-new'`) would have a
+ * LATER generation's dead letter silently overwrite an EARLIER generation's
+ * at that slot — destroying the earlier generation's revision reference
+ * this scan exists to protect. The history namespace is keyed additionally
+ * by `workflowExecutionToken`, so every generation's record survives
+ * independently — see `KEYS.teardownDeadLetterHistory`'s own doc.
+ *
  * Mirrors `pinned-schedule-revision-count.ts`'s bounded-scan shape and doc
  * style.
  *
@@ -38,7 +48,7 @@ export async function countTeardownDeadLettersForRevision(
   revision: string,
 ): Promise<number> {
   let count = 0;
-  for await (const [, bytes] of storage.scan(KEYS.teardownDeadLetterPrefix())) {
+  for await (const [, bytes] of storage.scan(KEYS.teardownDeadLetterHistoryPrefix())) {
     let decoded: unknown;
     try {
       decoded = decode(bytes);
