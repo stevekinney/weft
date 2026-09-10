@@ -5,7 +5,10 @@ import {
   type BroadcastCallbacks,
 } from './broadcast.ts';
 import type { ConstraintCallbacks } from './constraints.ts';
-import { resolveExecutableRegistration } from './dynamic-source-execution.ts';
+import {
+  resolveExecutableRegistration,
+  resolveExecutableRegistrationForRevision,
+} from './dynamic-source-execution.ts';
 import type { GuardCallbacks } from './guards.ts';
 import { createWorkflowHandleWithResultPromise } from './handle-result.ts';
 import type { Engine } from './index.ts';
@@ -186,6 +189,21 @@ export function createLifecycleCallbacks<TWorkflows extends object, TActivities 
         onRevisionChosen,
       ),
     failWorkflowForUnavailableDynamicSource: (workflowId, error) =>
+      failWorkflow(
+        getInternals(engine),
+        workflowId,
+        error,
+        createTerminationCallbacks(engine),
+        'system',
+      ),
+    resolveExecutableRegistrationForRevision: (type, revision) =>
+      resolveExecutableRegistrationForRevision(
+        engine as unknown as Engine,
+        getInternals(engine),
+        type,
+        revision,
+      ),
+    failWorkflowForRevisionUnavailable: (workflowId, error) =>
       failWorkflow(
         getInternals(engine),
         workflowId,

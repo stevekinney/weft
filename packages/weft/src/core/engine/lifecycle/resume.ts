@@ -381,11 +381,17 @@ export async function resumeWorkflowFromStorage(
   const checkpoint = deserializeCheckpoint(checkpointBytes);
 
   // Look up registration, awaiting dynamic-source resolution when `state.type`
-  // is not eagerly registered. A genuinely unregistered type keeps this
-  // function's own, more specific message (naming the resuming workflow)
-  // rather than `resolveExecutableRegistration`'s generic one.
+  // is not eagerly registered. Always resolved against `state.revision` — the
+  // EXACT executable artifact this run started against (WFT-17), `undefined`
+  // for a pre-revision-pinning record — never the catalog's active pointer,
+  // so "recovery never falls back from a missing exact revision to the
+  // active revision" holds for both a standalone `engine.resume(id)` and
+  // `recoverAll()`'s batch (which reach this same call through
+  // `resume()` -> `resumeWorkflowFromStorage()`). A genuinely unregistered
+  // type keeps this function's own, more specific message (naming the
+  // resuming workflow) rather than the resolver's generic one.
   const { entry: registration } = await resolveExecutableRegistrationOrRenamedNotFound(
-    callbacks.resolveExecutableRegistration,
+    (type) => callbacks.resolveExecutableRegistrationForRevision(type, state.revision),
     state.type,
     () =>
       new Error(

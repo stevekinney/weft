@@ -3,12 +3,17 @@
  * `(name, revision)` removal decision is gated on (WFT-12).
  *
  * Seven fields, all always present so a consumer never has to special-case
- * an "unknown" reference kind. Two are wired to real in-process signals this
- * batch; the remaining five stay structurally present but always `0` until
- * run-level revision pinning lands (WFT-17) gives them something real to
- * count — see each field's own doc for its specific WFT-17 dependency. This
- * mirrors `workflow-catalog.ts`'s own precedent of describing a forward
- * dependency in prose rather than leaving a `TODO`/`FIXME` marker.
+ * an "unknown" reference kind. Three are wired to real in-process/durable
+ * signals: `registeredDefinitions` and `inFlightStarts` from WFT-12,
+ * `nonTerminalRuns` from WFT-17 (a bounded storage scan of persisted
+ * `WorkflowState.revision` pins — see {@link countNonTerminalRunsForRevision}).
+ * The remaining four stay structurally present but always `0` — each awaits
+ * revision identity in a different, later-owned subsystem (schedules:
+ * WFT-20; dispatch ledger, execution realms, and retained recovery records:
+ * not yet scheduled) — see each field's own doc for its specific
+ * dependency. This mirrors `workflow-catalog.ts`'s own precedent of
+ * describing a forward dependency in prose rather than leaving a
+ * `TODO`/`FIXME` marker.
  *
  * Keyed by structured `(name, revision)` throughout — nested
  * `Map<string, Map<string, number>>`, never a delimiter-joined string — so a
@@ -57,32 +62,35 @@ export type WorkflowRevisionReferenceCounts = Readonly<{
    */
   inFlightStarts: number;
   /**
-   * Non-terminal runs whose `WorkflowState` pins exactly this revision.
-   * Always `0` until run-level revision pinning (WFT-17) gives a run's
-   * persisted state a `revision` field to count against.
+   * Non-terminal (`running`/`pending`/`suspended`) runs whose `WorkflowState`
+   * pins exactly this revision. Wired now (WFT-17), via a bounded
+   * `storage.scan('wf:')` — see
+   * {@link import('../engine/nonterminal-revision-count.ts').countNonTerminalRunsForRevision}.
+   * A legacy run with no persisted `revision` never counts against any
+   * specific revision here.
    */
   nonTerminalRuns: number;
   /**
-   * Schedules pinned to exactly this revision. Always `0` until WFT-17
+   * Schedules pinned to exactly this revision. Always `0` until WFT-20
    * introduces schedule-level revision pinning.
    */
   pinnedSchedules: number;
   /**
    * Queued dispatches (delayed starts, retries) targeting exactly this
-   * revision. Always `0` until WFT-17 threads revision identity through the
-   * dispatch ledger.
+   * revision. Always `0` until a later batch threads revision identity
+   * through the dispatch ledger.
    */
   pendingDispatches: number;
   /**
    * Active execution realms (remote worker sessions) currently running
-   * exactly this revision. Always `0` until WFT-17 gives a realm's
+   * exactly this revision. Always `0` until a later batch gives a realm's
    * advertised contract a revision this accounting can compare against.
    */
   activeExecutionRealms: number;
   /**
    * Retained recovery records (crash-recovery checkpoints, dead letters)
-   * referencing exactly this revision. Always `0` until WFT-17 threads
-   * revision identity through those retained records.
+   * referencing exactly this revision. Always `0` until a later batch
+   * threads revision identity through those retained records.
    */
   retainedRecoveryRecords: number;
 }>;

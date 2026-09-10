@@ -40,6 +40,7 @@ export const WEFT_RESERVED_KEY_PREFIXES = [
   'budget-charged:',
   'catalog-active:',
   'catalog-entry:',
+  'catalog-tombstone:',
   'child-by-parent:',
   'ev:',
   'fleet-event-by-workflow:',

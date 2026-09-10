@@ -13,12 +13,14 @@ import {
 import {
   getResolvedDynamicRegistration,
   resolveExecutableRegistration,
+  resolveExecutableRegistrationForRevision,
   resolveExecutableRegistrationOrRenamedNotFound,
 } from './dynamic-source-execution.ts';
 import { WorkflowNotRegisteredError } from './errors.ts';
 import { Engine } from './index.ts';
 import { getInternals } from './internals.ts';
 import { buildRegistrationEntry } from './registration.ts';
+import { WorkflowRevisionUnavailableError } from './revision-errors.ts';
 
 const eagerDefinition = workflow({ name: 'eager' }).execute(async function* () {
   return 'eager-done';
@@ -40,15 +42,22 @@ async function revisionFor(definition: WorkflowDefinition): Promise<string> {
 
 let lazyRevision: string;
 let lazyRevisionB: string;
+// A second, distinct definition for the same name — differ by description so
+// the derived revision hash differs from `lazyDefinition`'s. Exposed at
+// module scope (not just inside beforeAll) so a loader that resolves
+// `lazyRevisionB` can return THIS exact definition — a loader returning
+// `{ ...lazyDefinition, name: 'lazy' }` instead validates against the wrong
+// contract and throws `artifact-revision-mismatch` the moment it actually
+// loads (as opposed to merely being registered and never invoked).
+const lazyVariantDefinition = workflow({ name: 'lazy', description: 'variant-b' }).execute(
+  async function* () {
+    return 'lazy-b-done';
+  },
+);
 
 beforeAll(async () => {
   lazyRevision = await revisionFor(lazyDefinition as WorkflowDefinition);
-  // A second, distinct revision for the same name — differ by description so
-  // the derived revision hash differs from `lazyRevision`.
-  const variant = workflow({ name: 'lazy', description: 'variant-b' }).execute(async function* () {
-    return 'lazy-b-done';
-  });
-  lazyRevisionB = await revisionFor(variant as WorkflowDefinition);
+  lazyRevisionB = await revisionFor(lazyVariantDefinition as WorkflowDefinition);
 });
 
 function registerLazy(
@@ -192,6 +201,130 @@ describe('resolveExecutableRegistration()', () => {
     deferred.resolve({ lazy: lazyDefinition });
     await promise;
     expect(resolved).toBe(true);
+
+    engine[Symbol.dispose]();
+  });
+});
+
+describe('resolveExecutableRegistrationForRevision() (WFT-17/WFT-18)', () => {
+  it('resolves an eager registration regardless of the pinned revision argument', async () => {
+    const engine = await newEngine();
+    engine.register(eagerDefinition);
+    const internals = getInternals(engine);
+
+    const { entry, revision } = await resolveExecutableRegistrationForRevision(
+      engine,
+      internals,
+      'eager',
+      'some-pin-eager-ignores',
+    );
+
+    expect(entry.handler).toBe(eagerDefinition.handler);
+    expect(revision).toBeUndefined();
+
+    engine[Symbol.dispose]();
+  });
+
+  it('throws the pre-existing WorkflowNotRegisteredError for a type with no registration of any kind', async () => {
+    const engine = await newEngine();
+    const internals = getInternals(engine);
+
+    const rejection = await resolveExecutableRegistrationForRevision(
+      engine,
+      internals,
+      'nobody-home',
+      undefined,
+    ).catch((error: unknown) => error);
+
+    expect(rejection).toBeInstanceOf(WorkflowNotRegisteredError);
+
+    engine[Symbol.dispose]();
+  });
+
+  it('a legacy (revision-undefined) pin on a single-candidate dynamic source falls through to the ordinary active-pointer resolve', async () => {
+    const engine = await newEngine();
+    const loader = registerLazy(engine, lazyRevision, async () => ({ lazy: lazyDefinition }));
+    const internals = getInternals(engine);
+
+    const { entry, revision } = await resolveExecutableRegistrationForRevision(
+      engine,
+      internals,
+      'lazy',
+      undefined,
+    );
+
+    expect(entry.handler).toBe(lazyDefinition.handler);
+    expect(revision).toBe(lazyRevision);
+    expect(loader).toHaveBeenCalledTimes(1);
+
+    engine[Symbol.dispose]();
+  });
+
+  it('a legacy (revision-undefined) pin on a multi-candidate dynamic source throws WorkflowRevisionUnavailableError(reason: "legacy-ambiguous"), invoking neither loader', async () => {
+    const engine = await newEngine();
+    const loaderA = registerLazy(engine, lazyRevision, async () => ({ lazy: lazyDefinition }));
+    const loaderB = registerLazy(engine, lazyRevisionB, async () => ({
+      lazy: { ...lazyDefinition, name: 'lazy' },
+    }));
+    const internals = getInternals(engine);
+
+    const rejection = await resolveExecutableRegistrationForRevision(
+      engine,
+      internals,
+      'lazy',
+      undefined,
+    ).catch((error: unknown) => error);
+
+    expect(rejection).toBeInstanceOf(WorkflowRevisionUnavailableError);
+    expect((rejection as WorkflowRevisionUnavailableError).reason).toBe('legacy-ambiguous');
+    expect((rejection as WorkflowRevisionUnavailableError).revision).toBeUndefined();
+    expect(loaderA).not.toHaveBeenCalled();
+    expect(loaderB).not.toHaveBeenCalled();
+
+    engine[Symbol.dispose]();
+  });
+
+  it('a defined pin naming a revision this process never registered throws WorkflowRevisionUnavailableError(reason: "not-registered") without invoking the loader', async () => {
+    const engine = await newEngine();
+    const loader = registerLazy(engine, lazyRevision, async () => ({ lazy: lazyDefinition }));
+    const internals = getInternals(engine);
+
+    const rejection = await resolveExecutableRegistrationForRevision(
+      engine,
+      internals,
+      'lazy',
+      'sha256:never-registered',
+    ).catch((error: unknown) => error);
+
+    expect(rejection).toBeInstanceOf(WorkflowRevisionUnavailableError);
+    expect((rejection as WorkflowRevisionUnavailableError).reason).toBe('not-registered');
+    expect((rejection as WorkflowRevisionUnavailableError).revision).toBe(
+      'sha256:never-registered',
+    );
+    expect(loader).not.toHaveBeenCalled();
+
+    engine[Symbol.dispose]();
+  });
+
+  it('a defined pin naming a registered revision loads and installs it exactly like resolveExecutableRegistration()', async () => {
+    const engine = await newEngine();
+    const loaderA = registerLazy(engine, lazyRevision, async () => ({ lazy: lazyDefinition }));
+    const loaderB = registerLazy(engine, lazyRevisionB, async () => ({
+      lazy: lazyVariantDefinition,
+    }));
+
+    const internals = getInternals(engine);
+    const { entry, revision } = await resolveExecutableRegistrationForRevision(
+      engine,
+      internals,
+      'lazy',
+      lazyRevisionB,
+    );
+
+    expect(revision).toBe(lazyRevisionB);
+    expect(loaderB).toHaveBeenCalledTimes(1);
+    expect(loaderA).not.toHaveBeenCalled();
+    expect(entry.handler).toBe(lazyVariantDefinition.handler);
 
     engine[Symbol.dispose]();
   });

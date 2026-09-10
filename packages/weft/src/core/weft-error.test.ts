@@ -44,6 +44,7 @@ import {
   WorkflowNotFoundError,
   WorkflowNotRegisteredError,
   WorkflowRevisionNotInstalledError,
+  WorkflowRevisionUnavailableError,
   WorkflowSourceNotRegisteredError,
   WorkflowSourceValidationError,
   WorkflowSuspendNotSupportedError,
@@ -162,6 +163,8 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
   WorkflowSourceNotRegisteredError: () => new WorkflowSourceNotRegisteredError('checkout', 'r1'),
   DynamicWorkflowSourceUnavailableError: () =>
     new DynamicWorkflowSourceUnavailableError('checkout', 'r1', 'load-failed', new Error('boom')),
+  WorkflowRevisionUnavailableError: () =>
+    new WorkflowRevisionUnavailableError('checkout', 'r1', 'not-registered'),
 };
 
 describe('WeftError', () => {

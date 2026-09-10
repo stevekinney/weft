@@ -73,6 +73,12 @@ function createLifecycleCallbacks(
       if (entry === undefined) throw new WorkflowNotRegisteredError(type);
       return { entry, revision: undefined };
     }),
+    resolveExecutableRegistrationForRevision: mock(async (type: string) => {
+      const entry = registrations.get(type);
+      if (entry === undefined) throw new WorkflowNotRegisteredError(type);
+      return { entry, revision: undefined };
+    }),
+    failWorkflowForRevisionUnavailable: mock(async () => {}),
     resolveWorkflowTypeTarget: (target: string | Function) =>
       typeof target === 'string' ? target : target.name,
     runSerializedWorkflowStateWrite: async <Result>(
@@ -457,6 +463,7 @@ describe('engine lifecycle coverage helpers', () => {
         'workflow',
         null,
         { workflowVersion: '1' },
+        'rev-timeout-overflow',
         { executionTimeout: Number.MAX_SAFE_INTEGER },
         undefined,
         'workflow-timeout-overflow',
@@ -509,6 +516,7 @@ describe('engine lifecycle coverage helpers', () => {
         toolVersions: ['search@3'],
         workflowVersion: '2',
       },
+      'rev-pending-state',
       undefined,
       ['critical'],
       'owner-workflow',
@@ -523,6 +531,7 @@ describe('engine lifecycle coverage helpers', () => {
         executionStateOwnerId: 'owner-workflow',
         status: 'pending',
         tags: ['critical'],
+        revision: 'rev-pending-state',
         versionTuple: {
           agentVersion: 'agent-2',
           toolVersions: ['search@3'],

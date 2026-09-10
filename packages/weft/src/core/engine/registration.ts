@@ -253,6 +253,20 @@ function commitWorkflowDefinition(
   internals.registrations.set(name, entry);
   callbacks.ensureRetentionSweepInterval();
   internals.workflowTypesByHandler.set(definition.handler, name);
+  // Invalidate any stale `registeredCatalogRevisions` entry for `name`
+  // (WFT-17): that map is populated only by the ASYNC drain below, once per
+  // pending install, so it can lag `internals.registrations` between this
+  // synchronous commit and the next drain completing. `resolveCachedStartRevision()`
+  // (`lifecycle/start.ts`) reads this map SYNCHRONOUSLY for an internal
+  // start that bypasses the top-level `ensureWorkflowCatalogReady()` gate
+  // (`ctx.startChild()`, a scheduled occurrence firing mid-drain) — without
+  // this delete, such a start could read the PREVIOUS manifest's revision
+  // for code that has already been replaced in `internals.registrations`.
+  // A no-op for the ordinary first-time-registration case (nothing to
+  // delete yet); `checkWorkflowCollision`'s idempotent (same-reference)
+  // branch returns before ever reaching this function, so a routine
+  // re-`register()` call of an unchanged definition never pays this cost.
+  internals.registeredCatalogRevisions.delete(name);
   // `engine.register()` stays synchronous — it cannot itself build a
   // manifest (that requires `crypto.subtle`) — so it defers the actual
   // durable catalog install/activation to the next

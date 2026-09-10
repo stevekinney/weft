@@ -58,6 +58,22 @@ describe('WorkflowDetailHeader', () => {
     expect(getByText('Running')).not.toBeNull();
   });
 
+  test('renders a distinct revision badge when the workflow has one', async () => {
+    const { getByText } = renderHeader({
+      workflow: workflow({ revision: 'sha256:abcdef1234567890' }),
+    });
+
+    // Truncated via `truncateId` (first8…last4), distinct from the version badge.
+    expect(getByText(/^rev /)).not.toBeNull();
+    expect(getByText('v2.4.1')).not.toBeNull();
+  });
+
+  test('renders no revision badge for a legacy workflow with no persisted revision', async () => {
+    const { queryByText } = renderHeader({ workflow: workflow() });
+
+    expect(queryByText(/^rev /)).toBeNull();
+  });
+
   test('running workflows offer cancel, suspend, and force timeout', async () => {
     const { getByRole } = renderHeader({ workflow: workflow({ status: 'running' }) });
 

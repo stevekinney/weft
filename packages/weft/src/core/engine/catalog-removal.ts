@@ -15,16 +15,20 @@
 
 import {
   decrementNestedRevisionCount,
+  finalizeCatalogTombstone,
   incrementNestedRevisionCount,
   readNestedRevisionCount,
+  restoreCatalogEntryFromTombstone,
   totalWorkflowRevisionReferences,
   type WorkflowRevisionReferenceCounts,
 } from '../catalog/index.ts';
 import { WorkflowRevisionRemovedEvent } from '../events/catalog-events.ts';
 import type { WorkflowSourceKind } from '../source/index.ts';
 import { ensureWorkflowCatalogReady, getWorkflowCatalog } from './catalog-readiness.ts';
+import { resolveCatalogTombstoneIfPresent } from './catalog-tombstone-recovery.ts';
 import type { Engine } from './index.ts';
 import { getInternals, type EngineInternals } from './internals.ts';
+import { countNonTerminalRunsForRevision } from './nonterminal-revision-count.ts';
 import { readSourceLoadDiagnostics, readSourceWaiterCount } from './source-diagnostics.ts';
 import type { SourceLoadDiagnostics } from './source-runtime-state.ts';
 
@@ -76,6 +80,16 @@ export function reserveInFlightStart(
  * only assigns its own `inFlightRevision` on a successful return, so its
  * `finally` releases nothing on this path and the increment would otherwise
  * leak forever, permanently reporting the revision non-`removable`.
+ *
+ * `resolvedRevision` is the raw value `resolve()` itself returned —
+ * `undefined` for an eager registration, the resolved candidate for a
+ * dynamic source — distinct from `inFlightRevision`, which for an eager
+ * type falls back to the catalog's cached ACTIVE pointer (see
+ * {@link reserveInFlightStart}). A caller that needs "the exact revision of
+ * the code this process is about to run" (WFT-17's `WorkflowState.revision`)
+ * must use `resolvedRevision`, not `inFlightRevision` — the two intentionally
+ * diverge for an eager type under a multi-engine deployment where this
+ * process's own registration lags the durable active pointer.
  */
 export async function resolveAndReserveExecutableRegistration(
   internals: EngineInternals,
@@ -84,7 +98,11 @@ export async function resolveAndReserveExecutableRegistration(
     type: string,
     onRevisionChosen?: (revision: string) => void,
   ) => Promise<{ entry: RegistrationEntry; revision: string | undefined }>,
-): Promise<{ registration: RegistrationEntry; inFlightRevision: string | undefined }> {
+): Promise<{
+  registration: RegistrationEntry;
+  inFlightRevision: string | undefined;
+  resolvedRevision: string | undefined;
+}> {
   let earlyReservation: string | undefined;
   try {
     const { entry: registration, revision } = await resolve(type, (chosen) => {
@@ -94,7 +112,7 @@ export async function resolveAndReserveExecutableRegistration(
       earlyReservation !== undefined
         ? earlyReservation
         : reserveInFlightStart(internals, type, revision);
-    return { registration, inFlightRevision };
+    return { registration, inFlightRevision, resolvedRevision: revision };
   } catch (error) {
     releaseInFlightStart(internals, type, earlyReservation);
     throw error;
@@ -115,8 +133,19 @@ export function releaseInFlightStart(
 /**
  * Count every in-process reference this batch wires to a real signal
  * against `(name, revision)`. `registeredDefinitions` and `inFlightStarts`
- * are real; the other five fields of {@link WorkflowRevisionReferenceCounts}
- * stay `0` until WFT-17 (see that type's own field-level docs).
+ * are in-memory, constant-time lookups; `nonTerminalRuns` (WFT-17 — see
+ * {@link countNonTerminalRunsForRevision}) is an UNBOUNDED, full `wf:`-prefix
+ * durable scan — the same shape `groupActiveWorkflowsByType` already uses
+ * elsewhere for this class of diagnostic, so it's consistent with how this
+ * codebase already pays for this, but it is O(n) in the total number of
+ * workflow records, not bounded by `(name, revision)`. `removeWorkflowRevision()`
+ * calls this TWICE per removal attempt (its own pre-check, and
+ * {@link finalizeRevisionRemoval}'s post-check) — worth knowing before
+ * wiring `removeWorkflowRevision()` into an automated cleanup path on a
+ * large durable store, rather than the operator-triggered use this batch
+ * assumes. The remaining three fields of {@link WorkflowRevisionReferenceCounts}
+ * stay `0` — schedules (WFT-20), dispatches, and execution realms are out
+ * of this batch's scope.
  */
 export async function countWorkflowRevisionReferences(
   engine: Engine,
@@ -124,10 +153,11 @@ export async function countWorkflowRevisionReferences(
   revision: string,
 ): Promise<WorkflowRevisionReferenceCounts> {
   const internals = getInternals(engine);
+  const nonTerminalRuns = await countNonTerminalRunsForRevision(internals.storage, name, revision);
   return {
     registeredDefinitions: internals.registeredCatalogRevisions.get(name) === revision ? 1 : 0,
     inFlightStarts: readNestedRevisionCount(internals.inFlightStartsByRevision, name, revision),
-    nonTerminalRuns: 0,
+    nonTerminalRuns,
     pinnedSchedules: 0,
     pendingDispatches: 0,
     activeExecutionRealms: 0,
@@ -165,6 +195,39 @@ export type WorkflowCatalogRemovalResult =
  * compare-and-swap loses to a concurrent writer — the caller may re-read
  * and retry. Dispatches `catalog:revision-removed` on success.
  *
+ * Checks references BOTH before and after the durable delete (WFT-17,
+ * Codex review on PR #958). The pre-check above is an OPTIMIZATION — it
+ * refuses upfront in the common case, avoiding a needless delete-then-restore
+ * round trip — but is not, on its own, the guarantee: a concurrent
+ * `engine.start()` on a DIFFERENT process could read the entry as still
+ * installed, and commit a NEW run pinned to `revision`, in the narrow
+ * window between this function's pre-check scan and its own delete CAS
+ * landing; the pre-check's zero-references snapshot would then be stale
+ * by the time the delete actually commits. The POST-check closes this: it
+ * is safe to trust because `start-commit.ts`'s own start batch fences on
+ * this exact catalog entry's bytes (`buildCatalogEntryStartPrecondition`)
+ * — `conditionalBatch`'s precondition is evaluated against LIVE storage
+ * state at commit time, so ANY start whose commit lands after this
+ * function's delete necessarily loses its own CAS and never creates the
+ * reference at all. A nonzero post-delete count can therefore only be a
+ * run that committed BEFORE the delete — this function restores the entry
+ * and reports `'referenced'` rather than leaving a real, still-referenced
+ * run pinned to a revision the catalog no longer carries.
+ *
+ * `catalog.remove()`'s delete and `finalizeRevisionRemoval`'s restore-or-
+ * finalize used to be two SEPARATE commits (WFT-17/18, Codex review on PR
+ * #958): a process crash between them left the revision durably uninstalled
+ * with NO durable record of what was deleted, recoverable by no one. Both
+ * halves of `removeCatalogEntry` (the delete) now land in ONE
+ * `conditionalBatch` with a `catalog-tombstone:<name>:<revision>` record
+ * (the exact deleted bytes) — see `core/catalog/removal.ts`'s module doc —
+ * so this function's own restore-or-finalize below is itself a SECOND
+ * atomic operation (not a bare `install()`/no-op), and a crash between the
+ * two commits leaves a durable tombstone ANY process can resolve, not just
+ * this one. `catalog-tombstone-recovery.ts`'s boot-time sweep and this
+ * function's own targeted pre-check (below) both close that residual
+ * window; see that module's doc for the full mechanism.
+ *
  * @example
  * ```ts
  * import { Engine, removeWorkflowRevision, workflow } from '@lostgradient/weft';
@@ -184,6 +247,16 @@ export async function removeWorkflowRevision(
 ): Promise<WorkflowCatalogRemovalResult> {
   await ensureWorkflowCatalogReady(engine);
   const catalog = getWorkflowCatalog(engine);
+  const internals = getInternals(engine);
+
+  // A stale tombstone from an EARLIER, unresolved removal of this EXACT
+  // `(name, revision)` key (a peer process crashed after this engine's own
+  // boot-time sweep already ran — see `catalog-tombstone-recovery.ts`)
+  // would otherwise make `removeCatalogEntry`'s own CAS below fail closed
+  // with `'conflict'` forever, since it requires the tombstone key absent.
+  // Resolving it first — one extra `storage.get` on the common,
+  // no-tombstone path — lets a fresh removal decision proceed normally.
+  await resolveCatalogTombstoneIfPresent(internals.storage, name, revision);
 
   if (!(await catalog.hasInstalled(name, revision))) {
     return { removed: false, reason: 'not-found' };
@@ -194,16 +267,15 @@ export async function removeWorkflowRevision(
     return { removed: false, reason: 'active', activeRevision: active.revision };
   }
 
-  const references = await countWorkflowRevisionReferences(engine, name, revision);
-  if (totalWorkflowRevisionReferences(references) > 0) {
-    return { removed: false, reason: 'referenced', references };
+  const preReferences = await countWorkflowRevisionReferences(engine, name, revision);
+  if (totalWorkflowRevisionReferences(preReferences) > 0) {
+    return { removed: false, reason: 'referenced', references: preReferences };
   }
 
   const result = await catalog.remove(name, revision);
   switch (result.outcome) {
     case 'removed':
-      engine.dispatchEvent(new WorkflowRevisionRemovedEvent(name, revision));
-      return { removed: true };
+      return finalizeRevisionRemoval(engine, name, revision, result.tombstoneBytes);
     case 'not-found':
       return { removed: false, reason: 'not-found' };
     case 'active':
@@ -215,6 +287,38 @@ export async function removeWorkflowRevision(
       throw new Error(`Unknown workflow catalog removal outcome: ${String(exhaustive)}`);
     }
   }
+}
+
+/**
+ * The post-delete half of {@link removeWorkflowRevision}'s TOCTOU defense
+ * (split out to keep that function under the complexity ceiling): re-counts
+ * references now that `catalog.remove()` has actually committed, and — if a
+ * reference appeared in the narrow window between the pre-check and this
+ * commit (see the removal-race note above `removeWorkflowRevision`) —
+ * atomically restores the just-tombstoned entry from `tombstoneBytes`
+ * (`restoreCatalogEntryFromTombstone`) rather than leaving a real run
+ * pinned to a revision the catalog no longer carries. Otherwise atomically
+ * finalizes the tombstone (`finalizeCatalogTombstone`), completing the
+ * removal. Either resolution losing its own CAS (a concurrent boot-time
+ * sweep or another `removeWorkflowRevision` call already resolved this
+ * exact tombstone first) is a harmless, already-consistent no-op — nothing
+ * further to do either way.
+ */
+async function finalizeRevisionRemoval(
+  engine: Engine,
+  name: string,
+  revision: string,
+  tombstoneBytes: Uint8Array,
+): Promise<WorkflowCatalogRemovalResult> {
+  const internals = getInternals(engine);
+  const postReferences = await countWorkflowRevisionReferences(engine, name, revision);
+  if (totalWorkflowRevisionReferences(postReferences) > 0) {
+    await restoreCatalogEntryFromTombstone(internals.storage, name, revision, tombstoneBytes);
+    return { removed: false, reason: 'referenced', references: postReferences };
+  }
+  await finalizeCatalogTombstone(internals.storage, name, revision, tombstoneBytes);
+  engine.dispatchEvent(new WorkflowRevisionRemovedEvent(name, revision));
+  return { removed: true };
 }
 
 /**

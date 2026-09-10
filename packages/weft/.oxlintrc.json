@@ -92,7 +92,6 @@
       "files": [
         "src/client/http-client-requests.ts",
         "src/core/engine/checkpoint-io.ts",
-        "src/core/engine/bulk-operations.ts",
         "src/core/engine/operations-activity.ts",
         "src/core/engine/operations-coordination.ts",
         "src/core/engine/schedules.ts",

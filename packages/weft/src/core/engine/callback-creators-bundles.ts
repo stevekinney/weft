@@ -22,7 +22,7 @@ import {
   handleScheduleTimerForEngine,
 } from './callback-creators-schedule.ts';
 import type { ChildWorkflowOperationCallbacks } from './child-workflow.ts';
-import { resolveExecutableRegistration } from './dynamic-source-execution.ts';
+import { resolveExecutableRegistrationForRevision } from './dynamic-source-execution.ts';
 import { commitFencedEngineWrite } from './fenced-write.ts';
 import { guardTerminalWorkflow, guardTerminalWorkflowAfterCoordinatedRequest } from './guards.ts';
 import type { Engine } from './index.ts';
@@ -253,8 +253,13 @@ export function createTimeOperationCallbacks<TWorkflows extends object, TActivit
     timeout: (workflowId) => engine.timeout(workflowId),
     handleCleanupError: (source, error, workflowId) =>
       createTerminationCallbacks(engine).handleCleanupError(source, error, workflowId),
-    resolveExecutableRegistration: (type) =>
-      resolveExecutableRegistration(engine as unknown as Engine, getInternals(engine), type),
+    resolveExecutableRegistrationForRevision: (type, revision) =>
+      resolveExecutableRegistrationForRevision(
+        engine as unknown as Engine,
+        getInternals(engine),
+        type,
+        revision,
+      ),
   };
 }
 

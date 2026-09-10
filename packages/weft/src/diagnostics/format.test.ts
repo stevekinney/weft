@@ -217,6 +217,8 @@ describe('formatVersionCheckReport', () => {
           registeredVersion: '1.0.0',
           runningCount: 5,
           compatibility: 'compatible',
+          revisionCounts: { 'sha256:aaa': 3, 'sha256:bbb': 2 },
+          unpinnedRunningCount: 0,
         },
       ],
       overallVerdict: 'safe',
@@ -228,6 +230,9 @@ describe('formatVersionCheckReport', () => {
     expect(output).toContain('5 running workflows');
     expect(output).toContain('compatible');
     expect(output).toContain('Safe to deploy');
+    // Revision is displayed distinctly from the semantic version — two
+    // revisions can share one `workflowVersion` (a doc-only redeploy).
+    expect(output).toContain('Revisions: sha256:aaa (3), sha256:bbb (2)');
   });
 
   it('shows "UNSAFE" when versions are incompatible', () => {
@@ -239,6 +244,8 @@ describe('formatVersionCheckReport', () => {
           registeredVersion: '3.0.0',
           runningCount: 2,
           compatibility: 'incompatible',
+          revisionCounts: { 'sha256:ccc': 2 },
+          unpinnedRunningCount: 0,
         },
       ],
       overallVerdict: 'unsafe',
@@ -248,6 +255,33 @@ describe('formatVersionCheckReport', () => {
 
     expect(output).toContain('UNSAFE');
     expect(output).toContain('version mismatches found');
+  });
+
+  it('shows a distinct "unpinned" bucket for legacy pre-revision-pinning runs, never folded into revisionCounts', () => {
+    // `revisionCounts` holds only real, persisted revision values. A
+    // dynamic source's `revision` is any non-empty, bounded string with no
+    // reserved values — a legacy run with no persisted `revision` (WFT-17)
+    // is counted in the separate `unpinnedRunningCount` field instead of a
+    // sentinel key inside `revisionCounts`, so it can never collide with a
+    // genuinely pinned run whose revision happens to share that string.
+    const report: VersionCheckReport = {
+      workflowTypes: [
+        {
+          type: 'order',
+          storedVersion: '1.0.0',
+          registeredVersion: '1.0.0',
+          runningCount: 2,
+          compatibility: 'compatible',
+          revisionCounts: {},
+          unpinnedRunningCount: 2,
+        },
+      ],
+      overallVerdict: 'safe',
+    };
+
+    const output = formatVersionCheckReport(report);
+
+    expect(output).toContain('Revisions: unpinned (2)');
   });
 
   it('shows "Safe to deploy" for empty workflow types', () => {

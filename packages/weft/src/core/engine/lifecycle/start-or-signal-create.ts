@@ -16,10 +16,8 @@ import { WorkflowAlreadyExistsError } from '../errors.ts';
 import { type StartOrSignalOutcome, type WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
 import { buildCreateBatchSignalOperations } from '../signals.ts';
-import {
-  StartIdempotencyRaceLostError,
-  type BuildIdempotentStartOperations,
-} from './start-commit.ts';
+import { StartIdempotencyRaceLostError } from './start-commit-errors.ts';
+import { type BuildIdempotentStartOperations } from './start-commit.ts';
 import {
   requireWinnerId,
   resolveCallerIdWinnerOrRetry,

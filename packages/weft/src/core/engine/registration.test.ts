@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'bun:test';
 
+import { KEYS } from '../../storage/interface.ts';
+import { decode, encode } from '../codec.ts';
+import { buildWorkflowContract } from '../contract/build.ts';
+import { buildWorkflowRevisionManifest } from '../contract/manifest.ts';
+import type { WorkflowRevisionManifest } from '../contract/types.ts';
 import { Engine } from '../engine.ts';
 import { activity, workflow } from '../types.ts';
 import { DEFAULT_WORKFLOW_VERSION } from '../versioning.ts';
-import { getInternals } from './internals.ts';
+import { activateCatalogRevisionCandidate } from './catalog-activation.ts';
+import { ensureWorkflowCatalogReady } from './catalog-readiness.ts';
+import { getInternals, getWorkflowCatalog } from './internals.ts';
 import { resolveWorkflowTypeTarget, type RegistrationCallbacks } from './registration.ts';
 
 const callbacks: RegistrationCallbacks = {
@@ -270,5 +277,134 @@ describe('register() and dynamic workflow sources (WFT-13/14)', () => {
     ).toThrow(/already registered as a dynamic workflow source/);
 
     engine[Symbol.dispose]();
+  });
+});
+
+describe('WFT-17: persisted WorkflowState.revision at start admission', () => {
+  it("a fresh start persists this process's own registeredCatalogRevisions entry, not the catalog's active pointer — proven where they differ", async () => {
+    await using engine = new Engine({ backgroundTasks: 'manual' });
+    engine.register(
+      workflow({ name: 'checkout', version: '1.0.0' }).execute(async function* () {
+        return 'done';
+      }),
+    );
+    await engine.start('checkout', null, { id: 'priming' }).then((h) => h.result());
+    const ownRevision = getInternals(engine).registeredCatalogRevisions.get('checkout')!;
+
+    // Move the durable ACTIVE pointer to a DIFFERENT revision without this
+    // process ever loading that code — `activateCatalogRevisionCandidate`
+    // is the guarded primitive `engine.workflows.activate()` uses, distinct
+    // from `register()`'s own install+activate path, so
+    // `registeredCatalogRevisions` is untouched by it. This engine's
+    // `resolveActive('checkout')` now names a revision it has never run.
+    const laterContract = buildWorkflowContract({
+      name: 'checkout',
+      version: '1.0.0',
+      description: 'a later revision this process never loaded',
+    });
+    const laterManifest: WorkflowRevisionManifest =
+      await buildWorkflowRevisionManifest(laterContract);
+    await activateCatalogRevisionCandidate(engine, 'checkout', laterManifest, {
+      expectedGeneration: 1,
+      policy: { requireExactRevision: false },
+    });
+    const activePointerRevision = getWorkflowCatalog(engine).resolveActive('checkout')!.revision;
+    expect(activePointerRevision).not.toBe(ownRevision);
+    expect(activePointerRevision).toBe(laterManifest.revision);
+
+    // A fresh start now: if it followed the active pointer (the pre-WFT-17
+    // bug — `resolveAndReserveExecutableRegistration()`'s `inFlightRevision`
+    // falls back to `catalog.resolveActive()` for an eager type), it would
+    // persist `activePointerRevision` — a revision this process cannot
+    // actually execute. It must persist `ownRevision` instead: the exact
+    // code this process is actually about to run.
+    const handle = await engine.start('checkout', null, { id: 'after-activation' });
+    await handle.result();
+
+    const state = await engine.get('after-activation');
+    expect(state?.revision).toBe(ownRevision);
+    expect(state?.revision).not.toBe(activePointerRevision);
+
+    // WorkflowSummary (engine.list()) carries the same distinction: name,
+    // revision, and semantic version all present and distinct.
+    const listed = await engine.list({ type: 'checkout' });
+    const summary = listed.items.find((item) => item.id === 'after-activation')!;
+    expect(summary.type).toBe('checkout');
+    expect(summary.version).toBe('1.0.0');
+    expect(summary.revision).toBe(ownRevision);
+  });
+
+  it('omits WorkflowSummary.revision (not null) for a legacy record with no persisted revision', async () => {
+    await using engine = new Engine({ backgroundTasks: 'manual' });
+    engine.register(
+      workflow({ name: 'legacy-summary' }).execute(async function* () {
+        return 'done';
+      }),
+    );
+    await engine.start('legacy-summary', null, { id: 'legacy-summary-1' }).then((h) => h.result());
+
+    // Strip the persisted revision directly in storage, simulating a
+    // pre-this-release record, then read it back through the summary path.
+    const key = KEYS.workflow('legacy-summary-1');
+    const bytes = await engine.storage.get(key);
+    const decoded = decode(bytes!) as Record<string, unknown>;
+    delete decoded['revision'];
+    await engine.storage.put(key, encode(decoded));
+
+    const listed = await engine.list({ type: 'legacy-summary' });
+    const summary = listed.items[0]!;
+    expect('revision' in summary).toBe(false);
+    expect(summary.revision).toBeUndefined();
+  });
+
+  it('invalidates a stale registeredCatalogRevisions entry immediately on re-registration, before the next catalog drain', async () => {
+    // `registeredCatalogRevisions` is populated only by the ASYNC catalog
+    // drain, once per pending install — it can lag `internals.registrations`
+    // between a synchronous `register()` commit and the next drain
+    // completing. `resolveCachedStartRevision()` (`lifecycle/start.ts`)
+    // reads this map SYNCHRONOUSLY for an internal start that bypasses the
+    // top-level `ensureWorkflowCatalogReady()` gate every top-level
+    // `engine.*` method awaits first (`ctx.startChild()`, a scheduled
+    // occurrence firing mid-drain) — without invalidating the stale entry,
+    // such a start could read the PREVIOUS manifest's revision for code
+    // `internals.registrations` has already replaced.
+    //
+    // The ordinary `workflow().execute()` builder path throws on re-registering
+    // a name with different content (`checkWorkflowCollision`), so this
+    // exercises the one path that CAN legitimately change an eager
+    // registration's content under an unchanged name: a hand-rolled plain
+    // `WorkflowDefinition` object (not builder-produced), which
+    // `commitWorkflowDefinition` accepts without a collision check.
+    await using engine = new Engine({ backgroundTasks: 'manual' });
+    const internals = getInternals(engine);
+    const name = 'reg-cache-invalidation';
+
+    engine.register({
+      name,
+      handler: async function* () {
+        return 'v1';
+      },
+      description: 'first candidate',
+    } as never);
+    await ensureWorkflowCatalogReady(engine as unknown as Engine);
+    const revisionV1 = internals.registeredCatalogRevisions.get(name);
+    expect(revisionV1).toBeDefined();
+
+    engine.register({
+      name,
+      handler: async function* () {
+        return 'v2';
+      },
+      description: 'second candidate',
+    } as never);
+
+    // Immediately, BEFORE the next drain runs: the stale v1 entry must
+    // already be gone, not silently served to a synchronous reader.
+    expect(internals.registeredCatalogRevisions.has(name)).toBe(false);
+
+    await ensureWorkflowCatalogReady(engine as unknown as Engine);
+    const revisionV2 = internals.registeredCatalogRevisions.get(name);
+    expect(revisionV2).toBeDefined();
+    expect(revisionV2).not.toBe(revisionV1);
   });
 });

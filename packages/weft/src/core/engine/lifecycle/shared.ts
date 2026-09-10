@@ -168,6 +168,27 @@ export type LifecycleCallbacks = {
    * recovering sibling types.
    */
   failWorkflowForUnavailableDynamicSource: (workflowId: string, error: Error) => Promise<void>;
+  /**
+   * Resolve workflow `type` against its EXACT pinned revision (WFT-17's
+   * `WorkflowState.revision`, `undefined` for a legacy pre-pinning record)
+   * instead of whichever revision the catalog currently considers active.
+   * Used by every resume path (`resumeWorkflowFromStorage`) so a pinned run
+   * never falls back to the active pointer. See
+   * `dynamic-source-execution.ts`'s `resolveExecutableRegistrationForRevision()`
+   * for the full classification contract.
+   */
+  resolveExecutableRegistrationForRevision: (
+    type: string,
+    revision: string | undefined,
+  ) => Promise<ExecutableRegistration>;
+  /**
+   * Force a recovered workflow to a terminal `failed` state because its
+   * pinned revision could not be resolved during the recovery preload
+   * barrier (WFT-18) — a {@link import('../revision-errors.ts').WorkflowRevisionUnavailableError}.
+   * Only this run fails; `recoverAll()` continues recovering sibling
+   * `(type, revision)` groups, including other revisions of the same type.
+   */
+  failWorkflowForRevisionUnavailable: (workflowId: string, error: Error) => Promise<void>;
 };
 
 /**

@@ -226,7 +226,7 @@ const BASE_COVERAGE_ALLOWANCES = buildAllowanceLayer('BASE_COVERAGE_ALLOWANCES',
       reason:
         'Process-entry and failure-exit behavior runs in child processes whose hits are not attributed to the parent Bun LCOV report.',
       functions: 1,
-      lines: new Set([383, 384]),
+      lines: new Set([377, 378]),
       requireUncoveredLines: true,
     },
   ],
@@ -1230,11 +1230,23 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       // `default: { ... }` block is allowed, not just the two dead
       // statements inside it. Lines realigned to 213-215 by the WFT-15/16
       // dynamic-source-execution and early-inFlightStarts-reservation
-      // additions above this function.
+      // additions above this function. Lines realigned to 231-233 by the
+      // WFT-17 `resolvedRevision` field and updated JSDoc added above this
+      // function. Lines realigned to 267-270 by the WFT-17 removal-race
+      // fix's `WorkflowRevisionRecord` import and the `finalizeRevisionRemoval()`
+      // extraction (Codex review on PR #958) — the switch itself, and this
+      // default guard, are otherwise unchanged; the closing brace (270) now
+      // also attributes as missed, the same brace-line artifact already
+      // documented above for this exact guard. Lines realigned to 285-288
+      // by the WFT-17/18 second-round Codex review's atomic-tombstone
+      // rework (`resolveCatalogTombstoneIfPresent` pre-check, and
+      // `tombstoneBytes`-based restore/finalize) added above this
+      // function — the switch and default guard themselves are otherwise
+      // unchanged.
       {
         reason:
           'Compile-time exhaustiveness guard for a closed discriminated union has no reachable runtime path to test without an unsafe cast.',
-        lines: new Set([213, 214, 215]),
+        lines: new Set([285, 286, 287, 288]),
       },
     ],
     [
@@ -1258,8 +1270,9 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
         // `catalog-removal.ts`'s exhaustiveness default above.
         reason:
           'Defensive fail-loud guard for an invariant resolveWorkflowSourceForExecution() itself guarantees; has no reachable runtime path to test without an unsafe cast. ' +
-          'Lines realigned to 130-139 after the WFT-15/16 review round 2 fix synchronized the sole-registered-revision fast path (no `await` before `onRevisionChosen` fires).',
-        lines: new Set([130, 131, 132, 133, 134, 135, 136, 137, 138, 139]),
+          'Lines realigned to 130-139 after the WFT-15/16 review round 2 fix synchronized the sole-registered-revision fast path (no `await` before `onRevisionChosen` fires). ' +
+          'Lines realigned to 147-156 after WFT-17/WFT-18 split this guard into a shared `loadAndInstallSourceRevision()` tail reused by both `resolveExecutableRegistration()` and the new `resolveExecutableRegistrationForRevision()` — the guard itself is unchanged, only its position moved.',
+        lines: new Set([147, 148, 149, 150, 151, 152, 153, 154, 155, 156]),
         requireUncoveredLines: true,
       },
     ],
@@ -1277,6 +1290,27 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
         reason:
           'Bun reports the deposition callback as missed although successful deposition and lease-loss behavior are covered through fenced-write tests.',
         functions: 1,
+      },
+    ],
+    [
+      'src/core/engine/lifecycle/start.ts',
+      {
+        // `resolveStartRevisionUncached()`'s own doc marks this "Unreachable
+        // in practice": every call site resolved `type` to a real
+        // `registration` first, so `registeredCatalogRevisions` is always
+        // populated by the time `ensureWorkflowCatalogReady()` here
+        // settles — either because `type` is an eager registration (which
+        // that call always assigns a revision to) or a resolved dynamic
+        // source (handled entirely by the sync `resolveCachedStartRevision()`
+        // fast path and never reaching this fallback at all). Line 188 is
+        // the `if (afterReadiness !== undefined) { return … }` block's
+        // fallthrough when the readiness re-check still finds nothing —
+        // the same unreachable condition the throw two lines later guards;
+        // 196-197 are that throw statement's own first two lines.
+        reason:
+          'Defensive fail-loud guard for an invariant every call site of resolveStartRevisionUncached() already guarantees; has no reachable runtime path to test without corrupting registeredCatalogRevisions via an unsafe cast.',
+        lines: new Set([188, 196, 197]),
+        requireUncoveredLines: true,
       },
     ],
     [
@@ -1317,8 +1351,9 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       {
         reason:
           'The remaining line is the equality tiebreaker after both strict id-order branches have been exercised; distinct workflow ids cannot reach it. ' +
-          'Realigned to 238 after the WFT-15/16 review round 2 fix routed setAttributes() through the sync-only dynamic-registration fallback.',
-        lines: new Set([238]),
+          'Realigned to 238 after the WFT-15/16 review round 2 fix routed setAttributes() through the sync-only dynamic-registration fallback. ' +
+          'Realigned to 239 after WFT-17/WFT-18 added the `revision` field to summaryFromState() above it.',
+        lines: new Set([239]),
         requireUncoveredLines: true,
       },
     ],

@@ -67,6 +67,7 @@ export {
   WorkflowHandle,
   WorkflowNotFoundError,
   WorkflowNotRegisteredError,
+  WorkflowRevisionUnavailableError,
   WorkflowSourceNotRegisteredError,
   WorkflowSuspendNotSupportedError,
   WorkflowTeardownPendingError,
