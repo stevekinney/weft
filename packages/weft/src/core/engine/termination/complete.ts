@@ -415,7 +415,14 @@ async function releaseWorkflowClaimAfterTerminalSettlement(
   if (registry === null || capturedEpoch === null) return;
   if (registry.currentEpoch(workflowId) !== capturedEpoch) return;
   try {
-    await registry.release(workflowId);
+    // `expectedEpoch` closes the same window this function's own pre-check
+    // narrows but cannot fully close on its own (WFT-134 review round 2,
+    // issue B): a replacement can still land between the check above and
+    // this call. `release()` re-verifies internally after its own
+    // in-flight-renewal await, so passing the captured epoch here is strictly
+    // more conservative than the bare call — it can only additionally no-op,
+    // never additionally release.
+    await registry.release(workflowId, capturedEpoch);
   } catch {
     // Best-effort — see this function's doc.
   }

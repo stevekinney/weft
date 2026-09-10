@@ -80,6 +80,22 @@ export async function suspendWorkflow(
   workflowId: string,
   callbacks: TerminationCallbacks,
 ): Promise<void> {
+  // Captured synchronously BEFORE the durable commit below starts (see the
+  // inline comment at the capture site) — WFT-134: this must be the
+  // PRE-suspend generation, the one this suspend's own rotation is about to
+  // depose. Sampling the registry AFTER the commit's `await` resolves is
+  // unsafe even with no other code running in between: with an asynchronous
+  // storage adapter, the durable delete of `wf-owner-holder:<id>` can already
+  // be visible to a concurrent same-engine `resume()` before this function's
+  // own `await` settles. That resume() can observe the suspended state,
+  // `acquire()` a fresh claim, and overwrite this registry's single
+  // `workflowId`-keyed tracking entry before a post-commit read would run —
+  // so a post-commit sample can capture the FRESH epoch resume just installed
+  // instead of the one suspend itself deposed, and the equality guard below
+  // would then forget the live claim resume just acquired.
+  const capturedClaimEpochForForget: number | null =
+    internals.workflowClaimRegistry?.currentEpoch(workflowId) ?? null;
+
   const suspended = await callbacks.runSerializedWorkflowStateWrite(workflowId, async () => {
     const state = await callbacks.loadWorkflowState(workflowId);
     if (!state || state.status !== 'running') {
@@ -148,11 +164,34 @@ export async function suspendWorkflow(
       ...buildDeadlineTimerDeleteOperations(workflowId, state.executionDeadline),
     ]);
 
+    // The commit above just durably deleted `wf-owner-holder:<id>` (folded in
+    // via `commitExternalTerminalWorkflowStateOperations` ->
+    // `buildExternalTerminalRotationFragment`). `capturedClaimEpochForForget`
+    // — captured at the top of this function, BEFORE this commit was even
+    // queued — is this engine's LOCAL claim cache entry as it stood prior to
+    // that deletion; forgetting it below (after this function's own
+    // `await callbacks.runSerializedWorkflowStateWrite(...)` resolves) closes
+    // WFT-134's same-engine-resume race regardless of renewal-tick timing or
+    // how long the durable commit's own promise takes to settle. Guarded on
+    // the exact captured epoch so a claim acquired by an unrelated concurrent
+    // `resume()`/`start-new` replacement for this same workflow id is never
+    // forgotten in its place.
+
     return true;
   });
 
   if (!suspended) {
     return;
+  }
+
+  // See the capture site's comment above for why this is epoch-guarded
+  // rather than an unconditional `forgetLocalClaim`.
+  if (
+    internals.workflowClaimRegistry !== null &&
+    capturedClaimEpochForForget !== null &&
+    internals.workflowClaimRegistry.currentEpoch(workflowId) === capturedClaimEpochForForget
+  ) {
+    internals.workflowClaimRegistry.forgetLocalClaim(workflowId);
   }
 
   const event = new WorkflowSuspendedEvent(workflowId);
