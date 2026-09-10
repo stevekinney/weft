@@ -69,8 +69,13 @@ describe('countTeardownDeadLettersForRevision', () => {
     expect(await countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')).toBe(0);
   });
 
-  it('skips an undecodable record rather than throwing', async () => {
+  it('fails the whole scan closed on an undecodable record, rather than silently skipping it and under-counting (WFT-21, Codex review round 10, P2, superseding the earlier skip-and-continue behavior)', async () => {
     const storage = new MemoryStorage();
+    // `0xc1` is msgpack's reserved "never used" byte — guaranteed to throw on
+    // decode, standing in for a record written with a custom `finalizerInput`
+    // serializer tag this process has never registered (Codex's own scenario:
+    // a peer or operator process in a multi-process `workflow-lease`
+    // deployment scanning a dead letter it cannot fully decode).
     await storage.put(
       KEYS.teardownDeadLetterHistory('wf-corrupt', 'corrupt-token'),
       new Uint8Array([0xc1]),
@@ -81,7 +86,14 @@ describe('countTeardownDeadLettersForRevision', () => {
       makeDeadLetter({ type: 'checkout', revision: 'rev-a' }),
     );
 
-    expect(await countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')).toBe(1);
+    // Before the fix, this resolved to `1` — silently skipping the
+    // undecodable record and reporting only the decodable one, which let
+    // `removeWorkflowRevision()` treat a revision an undecodable-but-real
+    // dead letter still pins as safe to remove. It must now reject outright,
+    // regardless of which OTHER records in the same scan were decodable.
+    await expect(
+      countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a'),
+    ).rejects.toThrow();
   });
 
   it("retains an earlier generation's dead-letter revision reference after the workflow id is reused (WFT-21, Codex review round 3, P2)", async () => {
