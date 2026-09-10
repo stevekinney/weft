@@ -73,6 +73,28 @@ function splitCatalogTombstoneKey(key: string): { name: string; revision: string
  * process's own targeted check, another process's boot sweep, or the
  * original caller finishing normally) is a harmless no-op — never an
  * error, never double-processed.
+ *
+ * **Known limitation, documented rather than fixed (self-audit following
+ * Codex review round 10):** all three counts below propagate an
+ * undecodable durable record as a thrown error rather than a value — none
+ * of `decodeWorkflowState()`, `decodeScheduleState()`, or (since round 10)
+ * `countTeardownDeadLettersForRevision()`'s own `decode()` call is guarded.
+ * For {@link resolveCatalogTombstoneIfPresent}'s targeted, operator-invoked
+ * call this is exactly the desired fail-closed behavior. For the BOOT-TIME
+ * sweep (`resolveOrphanedCatalogTombstones()`, called from
+ * `ensureWorkflowCatalogReady()` with no surrounding try/catch), the same
+ * propagation means one undecodable record anywhere in the relevant scan —
+ * not necessarily related to the orphan actually being resolved — blocks
+ * `internals.catalogRestored` from ever becoming `true`, so every future
+ * `start`/`resume`/`fork`/recovery call retries and re-hits the identical
+ * failure. This is a pre-existing property of the boot sweep (present for
+ * `WorkflowState`/schedule decode failures since WFT-12/17/20); round 10
+ * only removed dead letters' status as the one scan that disagreed with it
+ * by silently under-counting instead. Whether the boot sweep should isolate
+ * a per-tombstone reference-count failure (skip, log, continue) rather than
+ * block ALL catalog readiness is a genuine design question, left open — see
+ * the CHANGELOG entry alongside the round-10 dead-letter fix for the full
+ * writeup.
  */
 async function resolveCatalogTombstone(
   storage: Storage,
