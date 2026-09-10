@@ -162,6 +162,11 @@
       <div class="weft-workflow-detail__badges">
         <h1 class="weft-workflow-detail__title">{workflow.type}</h1>
         <Badge variant="accent" monospace>v{workflow.versionTuple.workflowVersion}</Badge>
+        {#if workflow.revision !== undefined}
+          <Tooltip text={`Revision (exact executable artifact): ${workflow.revision}`}>
+            <Badge variant="neutral" monospace>rev {truncateId(workflow.revision)}</Badge>
+          </Tooltip>
+        {/if}
         {#if presentation.tooltip}
           <Tooltip text={presentation.tooltip}>
             <Badge variant={presentation.variant}>

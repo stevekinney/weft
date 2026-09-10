@@ -1,15 +1,5 @@
-import {
-  KEYS,
-  requireStorageCapability,
-  storageHas,
-  type BatchOperation,
-  type ConditionalBatchCondition,
-} from '../../storage/interface.ts';
+import { KEYS, storageHas } from '../../storage/interface.ts';
 import { assertScopedBulkWorkflowFilter } from '../bulk-workflow-filter.ts';
-import { deserializeCheckpoint } from '../checkpoint.ts';
-import { decode, encode } from '../codec.ts';
-import { buildTimerBatchOperations } from '../scheduler.ts';
-import { buildIndexOperations } from '../search-attributes.ts';
 import type {
   BulkCancelResult,
   BulkDeleteResult,
@@ -26,12 +16,12 @@ import type {
   BulkTagResult,
   ListFilter,
   PurgeResult,
-  SearchAttributeValue,
   WorkflowState,
   WorkflowStatus,
 } from '../types.ts';
-import { buildTerminalWorkflowIndexOperations, bulkMutateWorkflowTags } from './attributes-tags.ts';
+import { bulkMutateWorkflowTags } from './attributes-tags.ts';
 import { purgeInternal, purgeWorkflow, type CleanupWaiters } from './bulk-operations-purge.ts';
+import { runBulkFailedWorkflowRetry } from './bulk-operations-retry.ts';
 import {
   buildActionableBulkWorkflowFilter,
   buildBulkOperationPreparation,
@@ -39,29 +29,18 @@ import {
   normalizeBulkOperationOptions,
   prepareBulkOperation,
   resolveBulkOperationConcurrency,
+  runBulkWorkflowPool,
   shouldPersistBulkAudit,
   toBulkOperationError,
   validateBulkConfirmation,
   withBulkAuditEvent,
 } from './bulk-operations-shared.ts';
-import { resolveExecutableRegistrationForRetry } from './dynamic-source-execution.ts';
 import { BulkDeleteRequiresTerminalWorkflowsError } from './errors.ts';
-import {
-  assertLeaseHeldForEngineWork,
-  commitFencedEngineWriteAllowingPreconditionFailure,
-} from './fenced-write.ts';
+import { assertLeaseHeldForEngineWork } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
 import { BULK_OPERATION_BATCH_SIZE } from './listing.ts';
-import { createTerminalCleanupTimerId } from './state-utilities.ts';
-import { loadWorkflowState, runSerializedWorkflowStateWrite } from './storage-io.ts';
-import { decodeWorkflowState, isTerminalWorkflowStatus } from './validation.ts';
-import {
-  commitWithWorkflowClaimFold,
-  prepareWorkflowClaimFold,
-  throwWorkflowClaimUnavailable,
-} from './workflow-claim-fold.ts';
-import { buildWorkflowConcurrencyStartOperations } from './workflow-concurrency.ts';
-import { buildWorkflowVisibilityIndexTransition } from './workflow-indexes.ts';
+import { loadWorkflowState } from './storage-io.ts';
+import { isTerminalWorkflowStatus } from './validation.ts';
 
 export { purgeInternal, TERMINAL_CLEANUP_DELAY_MS } from './bulk-operations-purge.ts';
 
@@ -71,37 +50,6 @@ export { purgeInternal, TERMINAL_CLEANUP_DELAY_MS } from './bulk-operations-purg
 // reaches a suspended run (it buffers the signal durably and replays it on
 // resume, exactly like a parked running run).
 const ACTIVE_WORKFLOW_STATUSES: WorkflowStatus[] = ['pending', 'running', 'suspended'];
-const FAILED_WORKFLOW_STATUSES: WorkflowStatus[] = ['failed'];
-const CHECKPOINT_RETRY_CONCURRENCY_ADMISSION_MAX_ATTEMPTS = 5;
-
-type BulkWorkflowPoolResult<TItem, TResult> =
-  | { item: TItem; status: 'fulfilled'; value: TResult }
-  | { item: TItem; status: 'rejected'; reason: unknown };
-
-async function runBulkWorkflowPool<TItem, TResult>(
-  items: readonly TItem[],
-  concurrencyLimit: number,
-  operation: (item: TItem) => Promise<TResult>,
-): Promise<BulkWorkflowPoolResult<TItem, TResult>[]> {
-  const results: BulkWorkflowPoolResult<TItem, TResult>[] = [];
-
-  for (let batchStart = 0; batchStart < items.length; batchStart += concurrencyLimit) {
-    const batchItems = items.slice(batchStart, batchStart + concurrencyLimit);
-    results.push(
-      ...(await Promise.all(
-        batchItems.map(async (item): Promise<BulkWorkflowPoolResult<TItem, TResult>> => {
-          try {
-            return { item, status: 'fulfilled', value: await operation(item) };
-          } catch (reason) {
-            return { item, status: 'rejected', reason };
-          }
-        }),
-      )),
-    );
-  }
-
-  return results;
-}
 
 export async function purge(
   internals: EngineInternals,
@@ -206,56 +154,6 @@ export async function cancelAll(
   return runBulkCancellation(internals, filter, options);
 }
 
-async function runBulkFailedWorkflowRetry(
-  internals: EngineInternals,
-  filter: ListFilter,
-  options: BulkOperationOptions = {},
-): Promise<BulkRetryFailedResult | BulkOperationDryRunResult> {
-  options = normalizeBulkOperationOptions(options);
-  assertScopedBulkWorkflowFilter(filter);
-  const actionableFilter = buildActionableBulkWorkflowFilter(
-    internals,
-    filter,
-    FAILED_WORKFLOW_STATUSES,
-  );
-  const preparation = await prepareBulkOperation(
-    internals,
-    'retry-failed',
-    actionableFilter,
-    filter,
-    {},
-    options,
-  );
-  if (options.dryRun === true) return preparation.preview;
-
-  validateBulkConfirmation(options, preparation);
-  const bulkConcurrency = resolveBulkOperationConcurrency(options);
-  let retried = 0;
-  const errors: BulkOperationError[] = [];
-
-  const retryResults = await runBulkWorkflowPool(
-    preparation.workflowIds,
-    bulkConcurrency,
-    async (workflowId) => {
-      await retryFailedWorkflow(internals, workflowId);
-      return { status: 'retried' as const };
-    },
-  );
-
-  for (const retryResult of retryResults) {
-    if (retryResult.status === 'rejected') {
-      errors.push(toBulkOperationError(internals, retryResult.item, retryResult.reason));
-      continue;
-    }
-
-    retried += 1;
-  }
-
-  const result: BulkRetryFailedResult = { retried, failed: errors.length, errors };
-  if (!shouldPersistBulkAudit(options)) return result;
-  return withBulkAuditEvent(internals, preparation, options, result, retried);
-}
-
 export async function retryFailedAll(
   internals: EngineInternals,
   filter: ListFilter,
@@ -278,212 +176,6 @@ export async function retryFailedAll(
 ): Promise<BulkRetryFailedResult | BulkOperationDryRunResult> {
   assertLeaseHeldForEngineWork(internals);
   return runBulkFailedWorkflowRetry(internals, filter, options);
-}
-
-async function retryFailedWorkflow(internals: EngineInternals, workflowId: string): Promise<void> {
-  const state = await loadWorkflowState(internals, workflowId);
-  if (state === null) {
-    throw new Error('Workflow no longer exists');
-  }
-  if (state.status !== 'failed') {
-    throw new Error(`Workflow is ${state.status}, not failed`);
-  }
-
-  const checkpointBytes = await internals.storage.get(KEYS.checkpoint(workflowId));
-  if (checkpointBytes !== null) {
-    await reactivateFailedWorkflowFromCheckpoint(internals, state);
-    await internals.engine.resume(workflowId);
-    return;
-  }
-
-  await internals.engine.start(state.type, state.input, {
-    id: workflowId,
-    onTerminalConflict: 'start-new',
-    ...(state.tags !== undefined ? { tags: state.tags } : {}),
-  });
-}
-
-type ReactivatedFailedWorkflow = {
-  terminalCleanupTimerId: string | undefined;
-};
-
-async function reactivateFailedWorkflowFromCheckpoint(
-  internals: EngineInternals,
-  state: WorkflowState,
-): Promise<void> {
-  const reactivated = await runSerializedWorkflowStateWrite(internals, state.id, async () =>
-    reactivateFailedWorkflowFromCheckpointSerialized(internals, state.id),
-  );
-
-  if (reactivated.terminalCleanupTimerId !== undefined) {
-    await internals.scheduler.cancel(reactivated.terminalCleanupTimerId, state.id);
-  }
-}
-
-async function reactivateFailedWorkflowFromCheckpointSerialized(
-  internals: EngineInternals,
-  workflowId: string,
-): Promise<ReactivatedFailedWorkflow> {
-  let lastConcurrencyStateKey: string | undefined;
-
-  for (
-    let attempt = 0;
-    attempt < CHECKPOINT_RETRY_CONCURRENCY_ADMISSION_MAX_ATTEMPTS;
-    attempt += 1
-  ) {
-    const currentStateBytes = await internals.storage.get(KEYS.workflow(workflowId));
-    if (currentStateBytes === null) {
-      throw new Error('Workflow no longer exists');
-    }
-    const currentState = decodeWorkflowState(currentStateBytes);
-    if (currentState.status !== 'failed') {
-      throw new Error(`Workflow is ${currentState.status}, not failed`);
-    }
-
-    const currentCheckpointBytes = await internals.storage.get(KEYS.checkpoint(workflowId));
-    if (currentCheckpointBytes === null) {
-      throw new Error('Checkpoint no longer exists');
-    }
-    const checkpoint = deserializeCheckpoint(currentCheckpointBytes);
-    const { entry: registration } = await resolveExecutableRegistrationForRetry(
-      internals,
-      currentState.type,
-      workflowId,
-    );
-
-    const concurrencyStartOperations =
-      registration.concurrency === undefined
-        ? undefined
-        : await buildWorkflowConcurrencyStartOperations(
-            internals,
-            currentState.type,
-            workflowId,
-            currentState.input,
-            registration.concurrency,
-          );
-    lastConcurrencyStateKey = concurrencyStartOperations?.stateKey ?? lastConcurrencyStateKey;
-
-    const reactivatedState = buildReactivatedWorkflowState(internals, currentState);
-    const currentAttributes = await loadSearchAttributes(internals, workflowId);
-    const operations: BatchOperation[] = [
-      ...buildTerminalWorkflowIndexOperations(currentState, reactivatedState),
-      { type: 'put', key: KEYS.workflow(workflowId), value: encode(reactivatedState) },
-      ...buildWorkflowVisibilityIndexTransition(workflowId, currentState, reactivatedState)
-        .batchOps,
-      ...buildRetrySearchAttributeOperations(
-        workflowId,
-        currentAttributes,
-        checkpoint.searchAttributes,
-      ),
-      ...(reactivatedState.executionDeadline === undefined
-        ? []
-        : buildTimerBatchOperations({
-            id: `deadline:${workflowId}`,
-            workflowId,
-            fireAt: reactivatedState.executionDeadline,
-            kind: 'execution-deadline',
-          })),
-      ...(concurrencyStartOperations?.operations ?? []),
-    ];
-    const conditions = concurrencyStartOperations?.conditions ?? [];
-    const committed = await commitFailedWorkflowReactivation(
-      internals,
-      workflowId,
-      operations,
-      conditions,
-    );
-
-    if (committed) {
-      return {
-        terminalCleanupTimerId:
-          currentState.terminalCleanupToken === undefined
-            ? undefined
-            : createTerminalCleanupTimerId(false, currentState.terminalCleanupToken),
-      };
-    }
-  }
-
-  throw new Error(
-    `Workflow concurrency admission for "${lastConcurrencyStateKey ?? workflowId}" changed too many times while retrying failed workflow "${workflowId}"`,
-  );
-}
-
-/**
- * ADR 0002: claim-acquiring — folds `acquire()` into this reactivation batch.
- * A lost claim throws; the follow-up `engine.resume()` skips re-acquiring.
- */
-async function commitFailedWorkflowReactivation(
-  internals: EngineInternals,
-  workflowId: string,
-  operations: BatchOperation[],
-  conditions: ConditionalBatchCondition[],
-): Promise<boolean> {
-  const claimFold = await prepareWorkflowClaimFold(internals, workflowId);
-  if (claimFold === undefined) {
-    if (conditions.length > 0) {
-      requireStorageCapability(internals.storage, 'conditionalBatch', 'retry failed workflow');
-    }
-    return commitFencedEngineWriteAllowingPreconditionFailure(
-      internals,
-      workflowId,
-      operations,
-      conditions,
-    );
-  }
-  const result = await commitWithWorkflowClaimFold(
-    internals,
-    claimFold,
-    operations,
-    conditions,
-    'retry failed workflow claim acquisition',
-  );
-  if (result.status === 'committed') return true;
-  return result.claimConflict ? throwWorkflowClaimUnavailable(internals, workflowId) : false;
-}
-
-function buildReactivatedWorkflowState(
-  internals: EngineInternals,
-  state: WorkflowState,
-): WorkflowState {
-  const reactivatedState: WorkflowState = {
-    ...state,
-    status: 'running',
-    updatedAt: internals.options.getNow(),
-  };
-  delete reactivatedState.error;
-  delete reactivatedState.errorStack;
-  delete reactivatedState.failureCategory;
-  delete reactivatedState.result;
-  delete reactivatedState.terminationReason;
-  delete reactivatedState.terminalCleanupToken;
-  return reactivatedState;
-}
-
-async function loadSearchAttributes(
-  internals: EngineInternals,
-  workflowId: string,
-): Promise<Record<string, SearchAttributeValue>> {
-  const attributeBytes = await internals.storage.get(KEYS.attribute(workflowId));
-  if (attributeBytes === null) return {};
-  return decode(attributeBytes) as Record<string, SearchAttributeValue>;
-}
-
-function buildRetrySearchAttributeOperations(
-  workflowId: string,
-  currentAttributes: Record<string, SearchAttributeValue>,
-  checkpointAttributes: Record<string, SearchAttributeValue>,
-): BatchOperation[] {
-  const operations = buildIndexOperations(workflowId, currentAttributes, checkpointAttributes);
-  if (Object.keys(checkpointAttributes).length === 0) {
-    operations.push({ type: 'delete', key: KEYS.attribute(workflowId) });
-  } else {
-    operations.push({
-      type: 'put',
-      key: KEYS.attribute(workflowId),
-      value: encode(checkpointAttributes),
-    });
-  }
-  return operations;
 }
 
 export async function signalAll(

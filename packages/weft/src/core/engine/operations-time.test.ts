@@ -74,7 +74,7 @@ function createCallbacks(
   | 'handleCleanupError'
   | 'loadWorkflowStartHeaders'
   | 'loadWorkflowState'
-  | 'resolveExecutableRegistration'
+  | 'resolveExecutableRegistrationForRevision'
   | 'runSerializedWorkflowStateWrite'
   | 'setWorkflowStartHeaders'
   | 'workflowVersionTupleFromState'
@@ -88,8 +88,8 @@ function createCallbacks(
     loadWorkflowState: mock(async () => null),
     // Default: no registration exists — mirrors an `internals.registrations`
     // Map with no matching key. Tests exercising a real registration pass
-    // their own `resolveExecutableRegistration` override instead.
-    resolveExecutableRegistration: mock(async (type: string) => {
+    // their own `resolveExecutableRegistrationForRevision` override instead.
+    resolveExecutableRegistrationForRevision: mock(async (type: string) => {
       throw new WorkflowNotRegisteredError(type);
     }),
     runSerializedWorkflowStateWrite: async (_workflowId, writeOperation) => writeOperation(),
@@ -216,7 +216,10 @@ describe('engine time operation helpers', () => {
       createCallbacks({
         failWorkflow,
         loadWorkflowState: async () => state,
-        resolveExecutableRegistration: async () => ({ entry: registration, revision: undefined }),
+        resolveExecutableRegistrationForRevision: async () => ({
+          entry: registration,
+          revision: undefined,
+        }),
       }),
     );
 
@@ -238,7 +241,10 @@ describe('engine time operation helpers', () => {
       createCallbacks({
         failWorkflow,
         loadWorkflowState: async () => state,
-        resolveExecutableRegistration: async () => ({ entry: registration, revision: undefined }),
+        resolveExecutableRegistrationForRevision: async () => ({
+          entry: registration,
+          revision: undefined,
+        }),
       }),
     );
 
@@ -277,7 +283,10 @@ describe('engine time operation helpers', () => {
         beginWorkflowExecution,
         loadWorkflowStartHeaders: async () => new Map([['traceparent', '00-test']]),
         loadWorkflowState: async () => state,
-        resolveExecutableRegistration: async () => ({ entry: registration, revision: undefined }),
+        resolveExecutableRegistrationForRevision: async () => ({
+          entry: registration,
+          revision: undefined,
+        }),
         setWorkflowStartHeaders,
       }),
     );
@@ -318,7 +327,10 @@ describe('engine time operation helpers', () => {
             status: loadCount === 1 ? 'pending' : 'completed',
           });
         }),
-        resolveExecutableRegistration: async () => ({ entry: registration, revision: undefined }),
+        resolveExecutableRegistrationForRevision: async () => ({
+          entry: registration,
+          revision: undefined,
+        }),
         runSerializedWorkflowStateWrite: async (_workflowId, writeOperation) => {
           return writeOperation();
         },
@@ -326,6 +338,46 @@ describe('engine time operation helpers', () => {
     );
 
     expect(beginWorkflowExecution).not.toHaveBeenCalled();
+  });
+
+  it("resolves the delayed-start fire against the pending run's own pinned revision (WFT-17), never a fresh active-pointer lookup", async () => {
+    // The pending record's `revision` was already set correctly at the
+    // original `engine.start({ startAt })` call; the fire path here must
+    // honor that exact pin, matching `resumeWorkflowFromStorage()`'s own
+    // use of `resolveExecutableRegistrationForRevision` rather than
+    // resolving fresh against whatever is currently active.
+    const storage = new MemoryStorage();
+    const workflowId = 'workflow-delayed-revision-pin';
+    const state = createWorkflowState(workflowId, { revision: 'sha256:pinned-revision' });
+    const checkpoint = createCheckpoint(workflowId);
+    const registration = { handler: async function* () {}, version: '1' };
+    const resolveCalls: Array<{ type: string; revision: string | undefined }> = [];
+
+    await storage.put(KEYS.workflow(workflowId), encode(state));
+    await storage.put(KEYS.checkpoint(workflowId), serializeCheckpoint(checkpoint));
+
+    await startDelayedWorkflow(
+      {
+        checkpoints: new Map<string, Checkpoint>(),
+        inlineStrategy: {},
+        workflowServices: new Map<string, unknown>(),
+        options: { getNow: () => 2_000 },
+        registrations: new Map(),
+        storage,
+        workflowVersionTuples: new Map(),
+      } as never,
+      createDelayedStartEntry(workflowId),
+      createCallbacks({
+        beginWorkflowExecution: mock(() => {}),
+        loadWorkflowState: async () => state,
+        resolveExecutableRegistrationForRevision: async (type: string, revision) => {
+          resolveCalls.push({ type, revision });
+          return { entry: registration, revision };
+        },
+      }),
+    );
+
+    expect(resolveCalls).toEqual([{ type: state.type, revision: 'sha256:pinned-revision' }]);
   });
 
   it('fails a recovered delayed-start run whose services the resolver reports unavailable', async () => {
@@ -354,7 +406,7 @@ describe('engine time operation helpers', () => {
         beginWorkflowExecution: fixture.beginWorkflowExecution,
         failWorkflow: fixture.failWorkflow,
         loadWorkflowState: async () => fixture.state,
-        resolveExecutableRegistration: async () => ({
+        resolveExecutableRegistrationForRevision: async () => ({
           entry: fixture.registration,
           revision: undefined,
         }),
@@ -393,7 +445,7 @@ describe('engine time operation helpers', () => {
         },
         failWorkflow: fixture.failWorkflow,
         loadWorkflowState: async () => fixture.state,
-        resolveExecutableRegistration: async () => ({
+        resolveExecutableRegistrationForRevision: async () => ({
           entry: fixture.registration,
           revision: undefined,
         }),
@@ -448,7 +500,10 @@ describe('engine time operation helpers', () => {
         beginWorkflowExecution,
         failWorkflow,
         loadWorkflowState: async () => state,
-        resolveExecutableRegistration: async () => ({ entry: registration, revision: undefined }),
+        resolveExecutableRegistrationForRevision: async () => ({
+          entry: registration,
+          revision: undefined,
+        }),
         runSerializedWorkflowStateWrite: async (_workflowId, writeOperation) => writeOperation(),
       }),
     );
@@ -502,7 +557,10 @@ describe('engine time operation helpers', () => {
       createCallbacks({
         beginWorkflowExecution,
         loadWorkflowState: async () => state,
-        resolveExecutableRegistration: async () => ({ entry: registration, revision: undefined }),
+        resolveExecutableRegistrationForRevision: async () => ({
+          entry: registration,
+          revision: undefined,
+        }),
         runSerializedWorkflowStateWrite: async (_workflowId, writeOperation) => writeOperation(),
       }),
     );
@@ -574,7 +632,7 @@ describe('engine time operation helpers', () => {
       createCallbacks({
         failWorkflow,
         loadWorkflowState: async () => state,
-        // Default resolveExecutableRegistration throws WorkflowNotRegisteredError.
+        // Default resolveExecutableRegistrationForRevision throws WorkflowNotRegisteredError.
       }),
     );
 

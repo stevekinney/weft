@@ -45,12 +45,6 @@ export const CLASSIFIED_OVERSIZED_IMPLEMENTATION_FILES = [
       'The Engine declaration surface is tracked by local task 3765ffa6-1430-4be5-970c-c0f984ff34df; this issue excludes that refactor.',
   },
   {
-    path: 'src/core/engine/bulk-operations.ts',
-    classification: 'justified-exception',
-    rationale:
-      'Bulk cancel, delete, retry, signal, tag, and purge operations share one confirmation, filtering, outcome, and audit contract.',
-  },
-  {
     path: 'src/storage/interface.ts',
     classification: 'justified-exception',
     rationale:

@@ -71,6 +71,14 @@
   const definitionItems = $derived([
     { id: 'type', term: 'Type', definition: workflow.type },
     { id: 'version', term: 'Version', definition: versionSummaryText },
+    // Distinct from "Version": `revision` is the exact executable artifact
+    // this run started against (identity/diagnostics/pinning), while
+    // `versionTuple` above is the sole semantic-compatibility axis. Two
+    // revisions can share one workflowVersion (e.g. a doc-only redeploy).
+    // Absent on a pre-revision-pinning (legacy) record.
+    ...(workflow.revision !== undefined
+      ? [{ id: 'revision', term: 'Revision', definition: workflow.revision }]
+      : []),
     { id: 'created', term: 'Created', definition: new Date(workflow.createdAt).toISOString() },
     ...(workflow.executionDeadline !== undefined
       ? [

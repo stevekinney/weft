@@ -188,6 +188,30 @@ export interface WorkflowTypeReport {
   registeredVersion: string;
   runningCount: number;
   compatibility: VersionCompatibility;
+  /**
+   * Count of active (running/pending) workflows for this type that carry a
+   * persisted `WorkflowState.revision`, broken down by that EXACT revision
+   * — the exact executable artifact each run started against, distinct
+   * from `storedVersion` (the semantic `versionTuple.workflowVersion`,
+   * which many revisions can share, e.g. a documentation-only redeploy).
+   *
+   * Deliberately holds only real, persisted revision values — a dynamic
+   * source's `revision` is any non-empty, bounded string with no reserved
+   * values, so folding "no persisted revision" into this same map under a
+   * sentinel key could collide with a genuinely pinned run that happens to
+   * use that literal string. A run with no persisted revision (a
+   * pre-revision-pinning record) is counted separately, in
+   * {@link WorkflowTypeReport.unpinnedRunningCount}.
+   */
+  revisionCounts: Record<string, number>;
+  /**
+   * Count of active (running/pending) workflows for this type with no
+   * persisted `WorkflowState.revision` — a record written before
+   * per-run revision pinning existed (WFT-17). Kept out of
+   * {@link WorkflowTypeReport.revisionCounts} so it can never collide with
+   * a genuinely pinned revision that happens to share the same string.
+   */
+  unpinnedRunningCount: number;
 }
 
 /**

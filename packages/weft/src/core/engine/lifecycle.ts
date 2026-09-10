@@ -5,7 +5,7 @@
 //   - start.ts:   start, startWorkflow, and all start-time helpers
 //   - transition.ts: fork, resume, recoverAll, and resume-from-storage
 //   - checkpoint-launch.ts: launchWorkflowFromCheckpoint and its inline/worker helpers
-//   - recovery-dynamic-sources.ts: recoverAll's dynamic-source preload barrier (WFT-15/16)
+//   - recovery-revision-groups.ts: recoverAll's per-(type, revision) preload barrier (WFT-17/WFT-18)
 
 export {
   EMPTY_STORAGE_VALUE,
@@ -29,14 +29,14 @@ export {
   workflowVersionTupleFromState,
 } from './lifecycle/persist.ts';
 
+export { resolveScheduledStartAt, start, startWorkflow } from './lifecycle/start.ts';
+
 export {
+  applyRestartLineage,
   createInitialCheckpoint,
   createInitialWorkflowState,
   parseStartOptionDuration,
-  resolveScheduledStartAt,
-  start,
-  startWorkflow,
-} from './lifecycle/start.ts';
+} from './lifecycle/start-state.ts';
 
 export {
   startOrSignal,

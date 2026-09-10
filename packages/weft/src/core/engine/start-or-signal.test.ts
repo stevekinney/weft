@@ -6,12 +6,17 @@ import { encodeStorageKeyComponent, KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { flushMicrotasks } from '../../testing/fake-timers.test-support.ts';
 import { TestEngine } from '../../testing/test-engine.ts';
+import { ActivityRegistry } from '../activity-registry.ts';
 import { decode, encode } from '../codec.ts';
 import { Engine } from '../engine.ts';
 import { WorkflowCompletedEvent } from '../events.ts';
-import type { WorkflowContext, WorkflowState } from '../types.ts';
+import { buildWorkflowManifestFromDefinition } from '../registry-workflow-manifest.ts';
+import { workflowSource } from '../source/index.ts';
+import type { WorkflowContext, WorkflowDefinition, WorkflowState } from '../types.ts';
 import { workflow } from '../types.ts';
+import { activateCatalogRevisionCandidate } from './catalog-activation.ts';
 import { ensureWorkflowCatalogReady } from './catalog-readiness.ts';
+import { copyWorkflowDefinition } from './construction.ts';
 import { drainQueuedInlineWorkflowStartsForEngine } from './engine-runtime-helpers.ts';
 import { IdempotencyKeyPurgedError, StartOrSignalConflictError } from './errors.ts';
 import { getInternals } from './internals.ts';
@@ -22,6 +27,7 @@ import {
   type StartOrSignalCallbacks,
 } from './lifecycle/start-or-signal-resolution.ts';
 import { startWithIdempotency } from './lifecycle/start-or-signal.ts';
+import { buildRegistrationEntry } from './registration.ts';
 
 const waitForRelease = workflow({ name: 'wait-for-release' }).execute(async function* (
   ctx: WorkflowContext,
@@ -235,6 +241,13 @@ async function readStoredWorkflowState(engine: Engine, workflowId: string): Prom
   return decode(bytes) as WorkflowState;
 }
 
+/** Real, content-derived manifest for a definition — mirrors `dynamic-source-recovery.test.ts`'s `revisionFor` helper, returning the full manifest rather than just `.revision`. */
+async function manifestFor(definition: WorkflowDefinition) {
+  const entry = buildRegistrationEntry(definition.name, definition);
+  const registered = copyWorkflowDefinition(definition.name, entry);
+  return buildWorkflowManifestFromDefinition(registered, new ActivityRegistry().listDefinitions());
+}
+
 function unexpectedStartOrSignalCallbacks(): StartOrSignalCallbacks {
   const unexpected = (): never => {
     throw new Error('restart retry regression must not use lifecycle callbacks');
@@ -264,6 +277,8 @@ function unexpectedStartOrSignalCallbacks(): StartOrSignalCallbacks {
     signalExistingWorkflow: unexpectedAsync,
     resolveExecutableRegistration: unexpectedAsync,
     failWorkflowForUnavailableDynamicSource: unexpectedAsync,
+    resolveExecutableRegistrationForRevision: unexpectedAsync,
+    failWorkflowForRevisionUnavailable: unexpectedAsync,
   };
 }
 
@@ -366,6 +381,96 @@ describe('engine.start idempotency', () => {
       expect(b.id).toBe(a.id);
       expect(c.id).toBe(a.id);
       expect(await countWorkflowRecords(engine)).toBe(1);
+      // WFT-17: idempotent concurrent starts converge on one PERSISTED
+      // revision too, not just one workflow id — read the durable record
+      // back rather than trusting any one caller's in-memory handle. Only a
+      // structural proof on its own (`checkout`/`wait-for-release` has
+      // exactly one registered revision here, so convergence is guaranteed
+      // by the pre-existing idempotency CAS regardless of whether the
+      // revision-persistence logic is correct) — see the dynamic-source
+      // version of this test immediately below for a real convergence
+      // proof against genuine multi-candidate ambiguity.
+      const converged = await readStoredWorkflowState(engine, a.id);
+      expect(converged.revision).toBeDefined();
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('converges concurrent idempotent same-key starts to one persisted revision under REAL multi-candidate ambiguity — racing an active-pointer flip mid-resolution — not just a single-registered-revision structural guarantee', async () => {
+    // Strengthens the single-candidate test above (Codex/reviewer nit on PR
+    // #958): with only ONE registered revision, `converged.revision` being
+    // defined proves nothing about whether `resolveCachedStartRevision`
+    // picked the SAME revision for every concurrent caller — there is only
+    // one possible answer. Here `race-convergence` has TWO real, distinct,
+    // content-derived candidate revisions, and the active pointer flips
+    // from A to B WHILE the three idempotent starts are resolving —
+    // `resolveActiveSourceRevision()`'s durable read means each caller can,
+    // in principle, observe a different active candidate mid-race. The
+    // idempotency CAS still must converge every caller onto exactly ONE
+    // persisted `wf:` record with exactly ONE revision — this test proves
+    // that revision is always a REAL registered candidate (A or B), the
+    // same one for every caller, rather than merely "some defined string".
+    const storage = new MemoryStorage();
+    const definitionA = workflow({ name: 'race-convergence', description: 'candidate A' }).execute(
+      async function* (ctx: WorkflowContext) {
+        return yield* ctx.waitForSignal<string>('release');
+      },
+    );
+    const definitionB = workflow({ name: 'race-convergence', description: 'candidate B' }).execute(
+      async function* (ctx: WorkflowContext) {
+        return yield* ctx.waitForSignal<string>('release');
+      },
+    );
+    const manifestA = await manifestFor(definitionA);
+    const manifestB = await manifestFor(definitionB);
+
+    const engine = new Engine({ storage });
+    engine.registerSource(
+      workflowSource(
+        {
+          name: 'race-convergence',
+          location: './a.ts',
+          exportName: 'a',
+          revision: manifestA.revision,
+        },
+        async () => ({ a: definitionA }),
+      ),
+    );
+    engine.registerSource(
+      workflowSource(
+        {
+          name: 'race-convergence',
+          location: './b.ts',
+          exportName: 'b',
+          revision: manifestB.revision,
+        },
+        async () => ({ b: definitionB }),
+      ),
+    );
+    const activationA = await activateCatalogRevisionCandidate(
+      engine,
+      'race-convergence',
+      manifestA,
+    );
+    expect(activationA.applied).toBe(true);
+
+    try {
+      const [[a, b, c]] = await Promise.all([
+        Promise.all([
+          engine.start('race-convergence', null, { idempotencyKey: 'race-multi' }),
+          engine.start('race-convergence', null, { idempotencyKey: 'race-multi' }),
+          engine.start('race-convergence', null, { idempotencyKey: 'race-multi' }),
+        ]),
+        activateCatalogRevisionCandidate(engine, 'race-convergence', manifestB),
+      ]);
+      expect(b.id).toBe(a.id);
+      expect(c.id).toBe(a.id);
+      expect(await countWorkflowRecords(engine)).toBe(1);
+
+      const converged = await readStoredWorkflowState(engine, a.id);
+      expect(converged.revision).toBeDefined();
+      expect([manifestA.revision, manifestB.revision]).toContain(converged.revision!);
     } finally {
       await engine[Symbol.asyncDispose]();
     }

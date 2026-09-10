@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'bun:test';
 
+import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { removeCatalogEntry } from '../catalog/removal.ts';
+import { WorkflowCatalog } from '../catalog/workflow-catalog.ts';
+import { encode } from '../codec.ts';
+import { buildWorkflowContract } from '../contract/build.ts';
+import { buildWorkflowRevisionManifest } from '../contract/manifest.ts';
 import { WorkflowRevisionInstalledEvent } from '../events/catalog-events.ts';
 import { RegistryManifestLimitError } from '../registry-workflow-manifest.ts';
 import { workflow, type WorkflowContext } from '../types.ts';
+import type { RegisteredWorkflowDefinition } from '../types/workflow-registry.ts';
+import { DEFAULT_WORKFLOW_VERSION } from '../versioning.ts';
 import { ensureWorkflowCatalogReady } from './catalog-readiness.ts';
 import { EngineDisposedError } from './errors.ts';
 import { Engine } from './index.ts';
@@ -29,10 +37,11 @@ describe('ensureWorkflowCatalogReady', () => {
 
     await Promise.all([ensureWorkflowCatalogReady(engine), ensureWorkflowCatalogReady(engine)]);
 
-    // Restoring scans both `catalog-entry:` and `catalog-active:` once —
-    // two scans total, not four, proving the concurrent callers shared one
-    // drain rather than each restoring independently.
-    expect(scanCalls).toBe(2);
+    // Restoring scans `catalog-tombstone:` (the WFT-17/18 orphan sweep),
+    // `catalog-entry:`, and `catalog-active:` once each — three scans
+    // total, not six, proving the concurrent callers shared one drain
+    // rather than each restoring independently.
+    expect(scanCalls).toBe(3);
     expect(getWorkflowCatalog(engine).resolveActive('alpha')?.generation).toBe(1);
   });
 
@@ -205,5 +214,82 @@ describe('ensureWorkflowCatalogReady', () => {
     await ensureWorkflowCatalogReady(engineB);
 
     expect(installed).toHaveLength(0);
+  });
+});
+
+function fakeDefinition(type: string): RegisteredWorkflowDefinition {
+  return { type, version: '1.0.0', tags: [] };
+}
+
+describe('ensureWorkflowCatalogReady — boot-time orphaned-tombstone sweep (WFT-17/18)', () => {
+  it('restores an orphaned tombstone (from a simulated crashed removal) still referenced by a non-terminal run BEFORE building its in-memory catalog snapshot', async () => {
+    await using storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const contract = buildWorkflowContract({ name: 'checkout', version: '1.0.0' });
+    const v1 = await buildWorkflowRevisionManifest(contract);
+    const v2 = await buildWorkflowRevisionManifest(
+      buildWorkflowContract({
+        name: 'checkout',
+        version: '1.0.0',
+        description: 'a later revision',
+      }),
+    );
+    await catalog.activateRegistered('checkout', v1, fakeDefinition('checkout'));
+    await catalog.activateRegistered('checkout', v2, fakeDefinition('checkout'));
+
+    // A non-terminal run pinned to v1 — the durable reference the sweep's
+    // fresh reference count must see.
+    await storage.put(
+      KEYS.workflow('checkout-pinned'),
+      encode({
+        id: 'checkout-pinned',
+        type: 'checkout',
+        status: 'running',
+        input: null,
+        versionTuple: { workflowVersion: DEFAULT_WORKFLOW_VERSION },
+        revision: v1.revision,
+        createdAt: 1,
+        updatedAt: 1,
+      }),
+    );
+
+    // Simulate the crash: `removeCatalogEntry`'s delete+tombstone commits,
+    // but (unlike a real `removeWorkflowRevision()` call) nothing resolves
+    // it — the process "crashed" right here.
+    const removed = await removeCatalogEntry(storage, 'checkout', v1.revision);
+    if (removed.outcome !== 'removed') throw new Error('expected removed');
+    expect(await storage.get(KEYS.catalogEntry('checkout', v1.revision))).toBeNull();
+
+    // A fresh engine — simulating the restart after the crash.
+    await using recovered = new Engine({ storage, backgroundTasks: 'manual' });
+    await ensureWorkflowCatalogReady(recovered);
+
+    expect(await storage.get(KEYS.catalogTombstone('checkout', v1.revision))).toBeNull();
+    expect(await getWorkflowCatalog(recovered).hasInstalled('checkout', v1.revision)).toBe(true);
+  });
+
+  it('finalizes an orphaned tombstone with no remaining references before building its in-memory catalog snapshot', async () => {
+    await using storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const contract = buildWorkflowContract({ name: 'checkout', version: '1.0.0' });
+    const v1 = await buildWorkflowRevisionManifest(contract);
+    const v2 = await buildWorkflowRevisionManifest(
+      buildWorkflowContract({
+        name: 'checkout',
+        version: '1.0.0',
+        description: 'a later revision',
+      }),
+    );
+    await catalog.activateRegistered('checkout', v1, fakeDefinition('checkout'));
+    await catalog.activateRegistered('checkout', v2, fakeDefinition('checkout'));
+
+    const removed = await removeCatalogEntry(storage, 'checkout', v1.revision);
+    if (removed.outcome !== 'removed') throw new Error('expected removed');
+
+    await using recovered = new Engine({ storage, backgroundTasks: 'manual' });
+    await ensureWorkflowCatalogReady(recovered);
+
+    expect(await storage.get(KEYS.catalogTombstone('checkout', v1.revision))).toBeNull();
+    expect(await getWorkflowCatalog(recovered).hasInstalled('checkout', v1.revision)).toBe(false);
   });
 });

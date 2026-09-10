@@ -11,15 +11,25 @@ import { ensureDelayedStartClaimAndCleanupBeforeFailure } from './standalone-cla
  * claim standalone + hydrates cleanup tracking BEFORE failing — the
  * happy-path pending→running fold later in `startDelayedWorkflow` would
  * otherwise establish both.
+ *
+ * Resolved against `revision` — the pending run's own persisted
+ * `WorkflowState.revision` (WFT-17), `undefined` for a legacy record —
+ * never the catalog's active pointer, so a delayed-start fire honors the
+ * exact revision this run was created against, matching
+ * `resumeWorkflowFromStorage()`'s use of the same resolver.
  */
 export async function resolveDelayedStartRegistrationOrFail(
   internals: EngineInternals,
   entry: TimerEntry,
   type: string,
-  callbacks: Pick<TimeOperationCallbacks, 'failWorkflow' | 'resolveExecutableRegistration'>,
+  revision: string | undefined,
+  callbacks: Pick<
+    TimeOperationCallbacks,
+    'failWorkflow' | 'resolveExecutableRegistrationForRevision'
+  >,
 ): Promise<ExecutableRegistration['entry'] | null> {
   try {
-    const resolved = await callbacks.resolveExecutableRegistration(type);
+    const resolved = await callbacks.resolveExecutableRegistrationForRevision(type, revision);
     return resolved.entry;
   } catch (error) {
     await ensureDelayedStartClaimAndCleanupBeforeFailure(internals, entry.workflowId);

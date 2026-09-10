@@ -25,6 +25,7 @@ import { EngineDisposedError, WorkflowNotRegisteredError } from './errors.ts';
 import type { Engine } from './index.ts';
 import type { EngineInternals } from './internals.ts';
 import { assertConstraintsSupported, buildRegistrationEntry } from './registration.ts';
+import { WorkflowRevisionUnavailableError } from './revision-errors.ts';
 import { resolveWorkflowSourceForExecution } from './source-resolution.ts';
 
 type RegistrationEntry =
@@ -118,6 +119,22 @@ export async function resolveExecutableRegistration(
     onRevisionChosen?.(revision);
   }
 
+  return loadAndInstallSourceRevision(engine, internals, type, revision);
+}
+
+/**
+ * Shared tail of {@link resolveExecutableRegistration} and
+ * {@link resolveExecutableRegistrationForRevision}: await the load, then
+ * install the resulting local definition into every registry a caller of
+ * either function needs populated. Split out so both resolvers install a
+ * newly-loaded dynamic source identically.
+ */
+async function loadAndInstallSourceRevision(
+  engine: Engine,
+  internals: EngineInternals,
+  type: string,
+  revision: string,
+): Promise<ExecutableRegistration> {
   try {
     await resolveWorkflowSourceForExecution(engine, type, revision);
   } catch (error) {
@@ -148,6 +165,69 @@ export async function resolveExecutableRegistration(
 }
 
 /**
+ * Resolve workflow `type` against its EXACT pinned `revision` — the
+ * `WorkflowState.revision` a run persisted at start (WFT-17) — instead of
+ * whichever revision the catalog currently considers active. This is the
+ * resolver `resumeWorkflowFromStorage()` (`lifecycle/resume.ts`) uses for
+ * EVERY resume (both `recoverAll()`'s batch and a standalone
+ * `engine.resume(id)`), so "recovery never falls back from a missing exact
+ * revision to the active revision" (WFT-17/WFT-18's acceptance criterion)
+ * holds uniformly, not just inside the batch preflight.
+ *
+ * Classification:
+ * - An eager registration is always resolved from `internals.registrations`
+ *   regardless of `revision` — eager has no ambiguity to pin against (the
+ *   process runs whatever code it has loaded), so a stale or absent pin on
+ *   an eager type is harmless and must not block the common redeploy path.
+ * - A dynamic source with `revision === undefined` (a legacy, pre-pinning
+ *   record) falls through to the ordinary {@link resolveExecutableRegistration}
+ *   active-pointer resolution when the type has at most one registered
+ *   candidate (unambiguous by construction), or throws
+ *   {@link WorkflowRevisionUnavailableError} with `reason: 'legacy-ambiguous'`
+ *   when it has two or more (there is no way to tell which one the run
+ *   actually started against).
+ * - A dynamic source with a defined `revision` throws
+ *   {@link WorkflowRevisionUnavailableError} with `reason: 'not-registered'`
+ *   when that exact revision is not among this process's registered
+ *   candidates (covers both "never registered at all" and "was the sole
+ *   candidate, but a different one is registered now") — otherwise it is
+ *   loaded and installed exactly like {@link resolveExecutableRegistration}'s
+ *   own dynamic path.
+ * - `type` with neither an eager registration nor any registered source
+ *   throws the pre-existing {@link WorkflowNotRegisteredError}, matching
+ *   {@link resolveExecutableRegistration}.
+ */
+export async function resolveExecutableRegistrationForRevision(
+  engine: Engine,
+  internals: EngineInternals,
+  type: string,
+  revision: string | undefined,
+): Promise<ExecutableRegistration> {
+  const eager = internals.registrations.get(type);
+  if (eager !== undefined) {
+    return { entry: eager, revision: undefined };
+  }
+
+  const byRevision = internals.sources.byName.get(type);
+  if (byRevision === undefined) {
+    throw new WorkflowNotRegisteredError(type);
+  }
+
+  if (revision === undefined) {
+    if (byRevision.size <= 1) {
+      return resolveExecutableRegistration(engine, internals, type);
+    }
+    throw new WorkflowRevisionUnavailableError(type, undefined, 'legacy-ambiguous');
+  }
+
+  if (!byRevision.has(revision)) {
+    throw new WorkflowRevisionUnavailableError(type, revision, 'not-registered');
+  }
+
+  return loadAndInstallSourceRevision(engine, internals, type, revision);
+}
+
+/**
  * Wraps `callbacks.resolveExecutableRegistration(type)`, remapping ONLY the
  * "no source registered at all" case (a {@link WorkflowNotRegisteredError})
  * to `notFoundError` — a caller's own, more-specific "no workflow
@@ -173,17 +253,34 @@ export async function resolveExecutableRegistrationOrRenamedNotFound(
 
 /**
  * {@link resolveExecutableRegistrationOrRenamedNotFound}, pre-bound to
- * `bulk-operations.ts`'s retry-failed message shape. Kept here (with the
- * bulk of the logic off `bulk-operations.ts`, already at its own
+ * `bulk-operations.ts`'s retry-failed message shape. Resolves against the
+ * failed run's own EXACT pinned `revision` (`WorkflowState.revision`, WFT-17)
+ * via {@link resolveExecutableRegistrationForRevision} — never the catalog's
+ * active pointer — so a bulk retry's pre-reactivation concurrency-admission
+ * lookup agrees with the exact-revision resolve the subsequent
+ * `engine.resume()` performs. Resolving against the active pointer here
+ * instead would let a retry commit the failed->running reactivation batch
+ * against the WRONG registration's `concurrency` config, and then — if the
+ * pinned revision is unavailable while a different revision is active —
+ * only discover that after the reactivation already committed, leaving the
+ * run stranded `running` with no generator ever resuming. Kept here (with
+ * the bulk of the logic off `bulk-operations.ts`, already at its own
  * oxlint `max-lines` ceiling) rather than inlined at that one call site.
  */
 export async function resolveExecutableRegistrationForRetry(
   internals: EngineInternals,
   type: string,
+  revision: string | undefined,
   workflowId: string,
 ): Promise<ExecutableRegistration> {
   return resolveExecutableRegistrationOrRenamedNotFound(
-    (t) => resolveExecutableRegistration(internals.engine as unknown as Engine, internals, t),
+    (t) =>
+      resolveExecutableRegistrationForRevision(
+        internals.engine as unknown as Engine,
+        internals,
+        t,
+        revision,
+      ),
     type,
     () => new Error(`No workflow registered with name "${type}" (needed to retry "${workflowId}")`),
   );

@@ -18,6 +18,10 @@ import type { VersionCheckReport, WorkflowTypeReport } from './types.ts';
 interface WorkflowTypeGroup {
   count: number;
   versionCounts: Map<string, number>;
+  /** Only workflows with a persisted `revision` — see {@link WorkflowTypeReport.revisionCounts}. */
+  revisionCounts: Map<string, number>;
+  /** Workflows with no persisted `revision` — see {@link WorkflowTypeReport.unpinnedRunningCount}. */
+  unpinnedCount: number;
 }
 
 async function groupActiveWorkflowsByType(
@@ -38,11 +42,20 @@ async function groupActiveWorkflowsByType(
     const storedVersion = state.versionTuple.workflowVersion;
     let group = groups.get(state.type);
     if (!group) {
-      group = { count: 0, versionCounts: new Map() };
+      group = { count: 0, versionCounts: new Map(), revisionCounts: new Map(), unpinnedCount: 0 };
       groups.set(state.type, group);
     }
     group.count++;
     group.versionCounts.set(storedVersion, (group.versionCounts.get(storedVersion) ?? 0) + 1);
+    // Kept out of `revisionCounts` entirely — a dynamic source's `revision`
+    // is any non-empty, bounded string with no reserved values, so a
+    // sentinel key inside the same map could collide with a genuinely
+    // pinned run that happens to use that literal string.
+    if (state.revision === undefined) {
+      group.unpinnedCount++;
+    } else {
+      group.revisionCounts.set(state.revision, (group.revisionCounts.get(state.revision) ?? 0) + 1);
+    }
   }
   return groups;
 }
@@ -78,6 +91,8 @@ function buildWorkflowTypeReports(
       registeredVersion,
       runningCount: group.count,
       compatibility,
+      revisionCounts: Object.fromEntries(group.revisionCounts),
+      unpinnedRunningCount: group.unpinnedCount,
     });
   }
   return reports;

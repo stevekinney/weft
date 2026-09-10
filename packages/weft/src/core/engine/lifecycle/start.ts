@@ -1,5 +1,4 @@
 import type { BatchOperation } from '../../../storage/interface.ts';
-import { createCheckpoint } from '../../checkpoint.ts';
 import { assertPayloadWithinLimit } from '../../payload-size.ts';
 import { normalizeStorageTimestamp } from '../../scheduler.ts';
 import {
@@ -8,17 +7,9 @@ import {
   assertValidOnTerminalConflict,
   coerceStartWorkflowId,
   coerceStartWorkflowTimestamp,
-  parseStartWorkflowDuration,
 } from '../../start-workflow-validation.ts';
-import type {
-  Checkpoint,
-  Duration,
-  StartOptions,
-  StartWorkflowOptions,
-  TimerEntry,
-  WorkflowState,
-} from '../../types.ts';
-import { type WorkflowVersionTuple } from '../../workflow-version-tuple.ts';
+import type { StartOptions, StartWorkflowOptions, TimerEntry } from '../../types.ts';
+import { ensureWorkflowCatalogReady } from '../catalog-readiness.ts';
 import {
   releaseInFlightStart,
   resolveAndReserveExecutableRegistration,
@@ -26,6 +17,7 @@ import {
 import { forgetCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
 import { WorkflowAlreadyExistsError } from '../errors.ts';
 import { type WorkflowHandle } from '../handles.ts';
+import type { Engine } from '../index.ts';
 import type { EngineInternals } from '../internals.ts';
 import { createDelayedStartTimerEntry } from '../operations-time.ts';
 import { selectPersistedWorkflowStartHeaders } from '../state-utilities.ts';
@@ -43,6 +35,12 @@ import {
   beginExecutionAwaitingLiveness,
   runWorkflowStartInterceptor,
 } from './start-exec.ts';
+import {
+  applyRestartLineage,
+  createInitialCheckpoint,
+  createInitialWorkflowState,
+  parseStartOptionDuration,
+} from './start-state.ts';
 import {
   prepareTerminalRunPurge,
   resolveTerminalConflictForRestart,
@@ -145,6 +143,62 @@ function assertServicesSupportedForMode(
   }
 }
 
+/**
+ * The exact executable artifact this run is about to run: the resolved
+ * dynamic-source candidate revision, or — for an eager registration, which
+ * never populates `resolvedRevision` — this process's own
+ * `registeredCatalogRevisions` entry for `type` (the revision of the code
+ * actually loaded here, NOT `inFlightRevision`, which for an eager type
+ * falls back to the catalog's cached ACTIVE pointer and can name a revision
+ * this process never loaded under a multi-engine deployment). Synchronous,
+ * on purpose: every top-level engine.* method already awaits
+ * `ensureWorkflowCatalogReady()` before reaching `startWorkflow`, so this
+ * map is populated by the time the overwhelmingly common case gets here.
+ * `await`ing an async function always costs a microtask tick even when its
+ * own body takes a fast path (the same reason `isWorkflowCatalogReady()` is
+ * its own sync check in `catalog-readiness.ts`) — a plain sync lookup here
+ * keeps `startWorkflow`'s interleaving with concurrent callers unchanged
+ * from before this field existed. `undefined` means "genuinely not cached
+ * yet"; the caller falls back to {@link resolveStartRevisionUncached}.
+ */
+function resolveCachedStartRevision(
+  internals: EngineInternals,
+  type: string,
+  resolvedRevision: string | undefined,
+): string | undefined {
+  return resolvedRevision ?? internals.registeredCatalogRevisions.get(type);
+}
+
+/**
+ * The rare fallback {@link resolveCachedStartRevision} defers to: a fired
+ * schedule occurrence or a delayed-start timer calls `startWorkflow`
+ * directly from background scheduler code, with no top-level
+ * `ensureWorkflowCatalogReady()` gate already awaited. Re-checks catalog
+ * readiness once, then re-reads the cache.
+ */
+async function resolveStartRevisionUncached(
+  internals: EngineInternals,
+  type: string,
+): Promise<string> {
+  await ensureWorkflowCatalogReady(internals.engine as unknown as Engine);
+  const afterReadiness = internals.registeredCatalogRevisions.get(type);
+  if (afterReadiness !== undefined) {
+    return afterReadiness;
+  }
+  // Unreachable in practice: `type` resolved to a real `registration` at
+  // this call's only call site, so it is either an eager registration
+  // (which `ensureWorkflowCatalogReady()` always assigns a revision to) or
+  // a resolved dynamic source (which always populates `resolvedRevision`,
+  // handled entirely by {@link resolveCachedStartRevision} and never
+  // reaching here). Fail loud rather than silently persisting a workflow
+  // record with no revision identity.
+  throw new Error(
+    `Cannot start workflow "${type}": no catalog revision is registered for this ` +
+      'eagerly-registered type, even after re-checking catalog readiness. This should be ' +
+      'unreachable.',
+  );
+}
+
 export async function startWorkflow(
   internals: EngineInternals,
   type: string,
@@ -184,14 +238,20 @@ export async function startWorkflow(
     // Reject oversized input before any await, before a lazy type's resolve.
     assertPayloadWithinLimit(input, internals.options.payloadSizePolicy.maxBytes, 'workflow input');
 
-    const { registration, inFlightRevision: reservedRevision } =
-      await resolveAndReserveExecutableRegistration(
-        internals,
-        type,
-        callbacks.resolveExecutableRegistration,
-      );
+    const {
+      registration,
+      inFlightRevision: reservedRevision,
+      resolvedRevision,
+    } = await resolveAndReserveExecutableRegistration(
+      internals,
+      type,
+      callbacks.resolveExecutableRegistration,
+    );
     inFlightRevision = reservedRevision;
     const workflowConcurrency = registration.concurrency;
+    const revision =
+      resolveCachedStartRevision(internals, type, resolvedRevision) ??
+      (await resolveStartRevisionUncached(internals, type));
 
     // Only caller-supplied ids can collide; a generated UUID skips the read.
     // Decide the duplicate-id outcome up front (throws for a non-terminal or
@@ -211,6 +271,7 @@ export async function startWorkflow(
       type,
       input,
       versionTuple,
+      revision,
       options,
       preparation.normalizedTags,
       executionStateOwnerId,
@@ -331,17 +392,6 @@ export async function startWorkflow(
   }
 }
 
-function applyRestartLineage(state: WorkflowState, displacedState: WorkflowState | null): void {
-  if (displacedState === null) return;
-  state.restartedFrom = {
-    workflowId: displacedState.id,
-    ...(displacedState.workflowExecutionToken !== undefined && {
-      workflowExecutionToken: displacedState.workflowExecutionToken,
-    }),
-    replacedAt: state.createdAt,
-  };
-}
-
 export function resolveScheduledStartAt(
   internals: EngineInternals,
   options: StartOptions | undefined,
@@ -374,126 +424,4 @@ export function resolveScheduledStartAt(
   }
 
   return undefined;
-}
-
-export function parseStartOptionDuration(
-  _internals: EngineInternals,
-  duration: Duration,
-  fieldName: 'options.executionTimeout' | 'options.startAfter',
-  _callbacks: LifecycleCallbacks,
-): number {
-  return parseStartWorkflowDuration(duration, fieldName);
-}
-
-function buildInitialIdentitySlice(
-  workflowId: string,
-  type: string,
-  input: unknown,
-  versionTuple: WorkflowVersionTuple,
-  executionStateOwnerId: string | undefined,
-  parentWorkflowId: string | undefined,
-  parentWorkflowExecutionToken: string | undefined,
-  delayedStartTimer: TimerEntry | undefined,
-  now: number,
-  tags: string[] | undefined,
-): WorkflowState {
-  return {
-    id: workflowId,
-    type,
-    status: delayedStartTimer ? 'pending' : 'running',
-    input,
-    versionTuple,
-    workflowExecutionToken: crypto.randomUUID(),
-    ...(executionStateOwnerId !== undefined && { executionStateOwnerId }),
-    ...(parentWorkflowId !== undefined && { parentWorkflowId }),
-    ...(parentWorkflowExecutionToken !== undefined && { parentWorkflowExecutionToken }),
-    createdAt: now,
-    ...(!delayedStartTimer && { startedAt: now }),
-    updatedAt: now,
-    ...(tags !== undefined && { tags }),
-  };
-}
-
-function resolveInitialExecutionDeadline(
-  internals: EngineInternals,
-  options: StartOptions | undefined,
-  delayedStartTimer: TimerEntry | undefined,
-  now: number,
-  callbacks: LifecycleCallbacks,
-): number | undefined {
-  if (options?.executionTimeout === undefined || delayedStartTimer) {
-    return undefined;
-  }
-  const executionTimeoutMilliseconds = parseStartOptionDuration(
-    internals,
-    options.executionTimeout,
-    'options.executionTimeout',
-    callbacks,
-  );
-  try {
-    return normalizeStorageTimestamp(
-      now + executionTimeoutMilliseconds,
-      'options.executionTimeout',
-    );
-  } catch {
-    throw new StartWorkflowValidationError(
-      'options.executionTimeout must resolve to a finite, non-negative deadline',
-    );
-  }
-}
-
-export function createInitialWorkflowState(
-  internals: EngineInternals,
-  workflowId: string,
-  type: string,
-  input: unknown,
-  versionTuple: WorkflowVersionTuple,
-  options: StartOptions | undefined,
-  tags: string[] | undefined,
-  executionStateOwnerId: string | undefined,
-  parentWorkflowId: string | undefined,
-  parentWorkflowExecutionToken: string | undefined,
-  delayedStartTimer: TimerEntry | undefined,
-  callbacks: LifecycleCallbacks,
-): WorkflowState {
-  const now = internals.options.getNow();
-  const state = buildInitialIdentitySlice(
-    workflowId,
-    type,
-    input,
-    versionTuple,
-    executionStateOwnerId,
-    parentWorkflowId,
-    parentWorkflowExecutionToken,
-    delayedStartTimer,
-    now,
-    tags,
-  );
-
-  const executionDeadline = resolveInitialExecutionDeadline(
-    internals,
-    options,
-    delayedStartTimer,
-    now,
-    callbacks,
-  );
-  if (executionDeadline !== undefined) {
-    state.executionDeadline = executionDeadline;
-  }
-
-  return state;
-}
-
-export function createInitialCheckpoint(
-  internals: EngineInternals,
-  workflowId: string,
-  workflowVersion: string,
-  options: StartOptions | undefined,
-  _callbacks: LifecycleCallbacks,
-): Checkpoint {
-  const checkpoint = createCheckpoint(workflowId, workflowVersion, internals.options.getNow());
-  if (options?.searchAttributes) {
-    checkpoint.searchAttributes = { ...options.searchAttributes };
-  }
-  return checkpoint;
 }

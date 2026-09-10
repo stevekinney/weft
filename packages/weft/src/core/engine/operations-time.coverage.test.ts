@@ -81,7 +81,7 @@ describe('delayed-start coverage regression', () => {
           handleCleanupError: () => {},
           loadWorkflowStartHeaders: async () => undefined,
           loadWorkflowState,
-          resolveExecutableRegistration: async () => ({
+          resolveExecutableRegistrationForRevision: async () => ({
             entry: { handler: async function* () {}, version: '1' },
             revision: undefined,
           }),

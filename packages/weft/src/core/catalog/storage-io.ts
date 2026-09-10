@@ -104,7 +104,16 @@ export async function restoreWorkflowCatalog(
  * `WorkflowCatalog.listInstalledRevisions` uses, so the three consumers of
  * one durable record shape can never validate it three different ways.
  */
-async function decodeCatalogEntryRecord(
+/**
+ * Decode and validate a raw catalog-entry-record byte string against an
+ * expected `(name, revision)` — exported for {@link import('./removal.ts').restoreCatalogEntryFromTombstone}'s
+ * caller (`WorkflowCatalog.restoreFromTombstone`) and the boot-time orphan
+ * sweep (`orphaned-tombstones.ts`) to re-populate the in-memory cache from
+ * a tombstone's bytes, which are byte-identical to the entry bytes this
+ * function already validates for {@link restoreWorkflowCatalog} and
+ * {@link readCatalogEntry}.
+ */
+export async function decodeCatalogEntryRecord(
   key: string,
   bytes: Uint8Array,
   expectedName: string,

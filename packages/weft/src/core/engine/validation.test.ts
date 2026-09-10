@@ -305,6 +305,44 @@ describe('engine validation helpers', () => {
     expect(invalidRestartId.restartedFrom).toBeUndefined();
   });
 
+  it('round-trips a persisted revision on decode', () => {
+    const decoded = decodeWorkflowState(encode(createWorkflowState({ revision: 'sha256:abc123' })));
+    expect(decoded.revision).toBe('sha256:abc123');
+  });
+
+  it('leaves revision undefined — not stripped, not defaulted — when absent from raw bytes', () => {
+    const decoded = decodeWorkflowState(encode(createWorkflowState()));
+    expect(decoded.revision).toBeUndefined();
+    expect('revision' in decoded).toBe(false);
+  });
+
+  it('replaces a non-string, empty, or oversized decoded revision with a deterministic corruption marker — never drops it to undefined', () => {
+    // A present-but-malformed `revision` must never become `undefined`:
+    // `undefined` is the SAME signal a genuinely absent `revision` carries
+    // (a legitimate pre-revision-pinning record), which recovery treats as
+    // unambiguous — and silently executes — for an eager type or a
+    // single-candidate dynamic source. A corrupted value must instead
+    // produce a corruption/unavailable failure, not be silently downgraded
+    // to "legacy."
+    const nonString = decodeWorkflowState(encode({ ...createWorkflowState(), revision: 42 }));
+    expect(nonString.revision).toBe('weft:corrupted-revision:workflow-id');
+    expect(nonString.id).toBe('workflow-id');
+
+    const empty = decodeWorkflowState(encode({ ...createWorkflowState(), revision: '' }));
+    expect(empty.revision).toBe('weft:corrupted-revision:workflow-id');
+
+    const oversized = decodeWorkflowState(
+      encode({ ...createWorkflowState(), revision: 'x'.repeat(513) }),
+    );
+    expect(oversized.revision).toBe('weft:corrupted-revision:workflow-id');
+
+    // Deterministic: the same corrupted record produces the same marker on
+    // every decode, so repeated recovery attempts behave consistently
+    // rather than drifting.
+    const decodedAgain = decodeWorkflowState(encode({ ...createWorkflowState(), revision: 42 }));
+    expect(decodedAgain.revision).toBe(nonString.revision);
+  });
+
   it('lifts a pre-unification flat version tuple into versionTuple on decode', () => {
     const flatState = {
       id: 'wf-flat',

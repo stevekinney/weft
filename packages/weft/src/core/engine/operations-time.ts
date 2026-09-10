@@ -4,10 +4,8 @@ import { deserializeCheckpoint } from '../checkpoint.ts';
 import { encode } from '../codec.ts';
 import type { ContextOperationRequest } from '../context.ts';
 import { buildTimerBatchOperations, normalizeStorageTimestamp } from '../scheduler.ts';
-import type { Checkpoint, Duration, StartOptions, TimerEntry, WorkflowState } from '../types.ts';
-import type { WorkflowVersionTuple } from '../workflow-version-tuple.ts';
+import type { Checkpoint, StartOptions, TimerEntry, WorkflowState } from '../types.ts';
 import { notifyConditionWaiters, notifyConditionWaitersForTimerFire } from './condition-waiters.ts';
-import type { ExecutableRegistration } from './dynamic-source-execution.ts';
 import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
 import { resolveDelayedStartRegistrationOrFail } from './lifecycle/delayed-start-registration.ts';
@@ -19,46 +17,13 @@ import {
   resolveSleepTimer,
   retainDiscardedDurableTimer,
 } from './sleep-timer-acknowledgements.ts';
+import { type TimeOperationCallbacks } from './time-operation-callbacks.ts';
 import { commitWithWorkflowClaimFold, prepareWorkflowClaimFold } from './workflow-claim-fold.ts';
 import { buildWorkflowVisibilityIndexTransition } from './workflow-indexes.ts';
 
-type RegistrationEntry = ExecutableRegistration['entry'];
-
 type SleepOperation = Extract<ContextOperationRequest, { type: 'sleep' }>;
 
-export type TimeOperationCallbacks = {
-  completeOperation: (workflowId: string, value: unknown) => void;
-  dispatchEvent: (event: Event) => void;
-  loadWorkflowState: (workflowId: string) => Promise<WorkflowState | null>;
-  failWorkflow: (workflowId: string, error: Error) => Promise<void>;
-  runSerializedWorkflowStateWrite: <Result>(
-    workflowId: string,
-    writeOperation: () => Promise<Result>,
-  ) => Promise<Result>;
-  beginWorkflowExecution: (
-    workflowId: string,
-    workflowExecutionToken: string | undefined,
-    workflowType: string,
-    input: unknown,
-    checkpoint: Checkpoint,
-    executionDeadline: number | undefined,
-    executionStateOwnerId: string,
-    registration: RegistrationEntry,
-  ) => void;
-  workflowVersionTupleFromState: (state: WorkflowState) => WorkflowVersionTuple;
-  setWorkflowStartHeaders: (workflowId: string, headers: Map<string, string> | undefined) => void;
-  loadWorkflowStartHeaders: (workflowId: string) => Promise<Map<string, string> | undefined>;
-  parseStartOptionDuration: (
-    value: Duration,
-    fieldName: 'options.executionTimeout' | 'options.startAfter',
-  ) => number;
-  runDeferredTerminalCleanup: (workflowId: string, timerId: string) => Promise<void>;
-  runWorkflowFinalizer: (workflowId: string, timerId: string) => Promise<void>;
-  handleScheduleTimer: (entry: TimerEntry) => Promise<void>;
-  timeout: (workflowId: string) => Promise<void>;
-  handleCleanupError: (source: string, error: unknown, workflowId: string) => void;
-  resolveExecutableRegistration: (type: string) => Promise<ExecutableRegistration>;
-};
+export type { TimeOperationCallbacks };
 
 export function createDelayedStartTimerEntry(
   _internals: EngineInternals,
@@ -189,7 +154,7 @@ export async function startDelayedWorkflow(
     | 'handleCleanupError'
     | 'loadWorkflowStartHeaders'
     | 'loadWorkflowState'
-    | 'resolveExecutableRegistration'
+    | 'resolveExecutableRegistrationForRevision'
     | 'runSerializedWorkflowStateWrite'
     | 'setWorkflowStartHeaders'
     | 'workflowVersionTupleFromState'
@@ -209,6 +174,7 @@ export async function startDelayedWorkflow(
     internals,
     entry,
     state.type,
+    state.revision,
     callbacks,
   );
   if (registration === null) {
@@ -412,7 +378,7 @@ export async function handleTimerFired(
     | 'timeout'
     | 'beginWorkflowExecution'
     | 'dispatchEvent'
-    | 'resolveExecutableRegistration'
+    | 'resolveExecutableRegistrationForRevision'
     | 'workflowVersionTupleFromState'
   >,
 ): Promise<void> {

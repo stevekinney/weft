@@ -14,6 +14,7 @@ import { commitFencedEngineWrite } from '../fenced-write.ts';
 import type { WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
 import { WorkflowClaimUnavailableError } from '../lease-errors.ts';
+import { WorkflowRevisionUnavailableError } from '../revision-errors.ts';
 import { normalizeForkStep, selectPersistedWorkflowStartHeaders } from '../state-utilities.ts';
 import { loadWorkflowState } from '../storage-io.ts';
 import { decodeWorkflowState } from '../validation.ts';
@@ -25,7 +26,11 @@ import {
   createForkedWorkflowState,
 } from './fork-helpers.ts';
 import { derivePreparedExecutionState } from './persist.ts';
-import { preloadRecoverableDynamicSourceTypes } from './recovery-dynamic-sources.ts';
+import {
+  buildRecoveryRevisionGroups,
+  classifyRevisionGroups,
+  createRecoveryScopedRevisionCallbacks,
+} from './recovery-revision-groups.ts';
 import { resumeWorkflowFromStorage } from './resume.ts';
 import {
   enforceHistoryPolicyBeforeReplayById,
@@ -40,7 +45,7 @@ type MissingRecoveryWorkflow = { type: string; workflowId: string };
 type RecoveryPreflightEntry =
   | { kind: 'local'; workflowId: string }
   | { kind: 'missing'; workflow: MissingRecoveryWorkflow }
-  | { kind: 'recoverable'; workflowId: string; type: string };
+  | { kind: 'recoverable'; workflowId: string; type: string; revision: string | undefined };
 
 type RecoveryPreflightResult = {
   // Storage-scan order, preserving the interleaving callers observed before
@@ -87,37 +92,7 @@ function classifyRecoveryState(
     return { kind: 'missing', workflow: { type: state.type, workflowId: state.id } };
   }
 
-  return { kind: 'recoverable', workflowId: state.id, type: state.type };
-}
-
-/**
- * Wrap `callbacks` so `resolveExecutableRegistration()` re-throws a
- * `recoverAll()` batch's own cached failure for a type the preload barrier
- * already classified `unavailable`, WITHOUT touching any state shared with
- * other callers. `unavailableDynamicSourceTypes` is a plain local `Map`
- * closed over by this one wrapper instance — nothing outside `recoverAll()`
- * ever sees it, so a concurrent, unrelated `engine.start()`,
- * `engine.resume()`, or a second concurrent `recoverAll()` batch for the
- * SAME type keeps using the real, un-wrapped `callbacks.resolveExecutableRegistration`
- * and can never observe this batch's classification (or race its own
- * finally-reset against it). `recoverAll()` passes the returned wrapper
- * only to its own per-entry `resume()` calls below, never publishing it
- * anywhere `internals` or another call path could read.
- */
-function createRecoveryScopedCallbacks(
-  callbacks: LifecycleCallbacks,
-  unavailableDynamicSourceTypes: ReadonlyMap<string, DynamicWorkflowSourceUnavailableError>,
-): LifecycleCallbacks {
-  return {
-    ...callbacks,
-    resolveExecutableRegistration: (type, onRevisionChosen) => {
-      const cachedFailure = unavailableDynamicSourceTypes.get(type);
-      if (cachedFailure !== undefined) {
-        return Promise.reject(cachedFailure);
-      }
-      return callbacks.resolveExecutableRegistration(type, onRevisionChosen);
-    },
-  };
+  return { kind: 'recoverable', workflowId: state.id, type: state.type, revision: state.revision };
 }
 
 function appendRecoveryClassification(
@@ -195,16 +170,26 @@ async function recoverEntryOrIsolateFailure(
     if (error instanceof WorkflowClaimUnavailableError) {
       return null;
     }
+    if (error instanceof WorkflowRevisionUnavailableError) {
+      // `recoverAll()`'s preload barrier classified this entry's
+      // `(type, revision)` group `unavailable` before the loop started;
+      // `resume()` reached this exact cached error via the batch-local,
+      // closure-scoped `resolveExecutableRegistrationForRevision()` wrapper
+      // `createRecoveryScopedRevisionCallbacks()` builds below, AFTER
+      // acquiring this workflow's claim and loading its terminal-cleanup
+      // tracking — the same ordering `VersionMismatchError` gets — so
+      // `failWorkflowForRevisionUnavailable` below commits cleanly under
+      // `ownership: 'workflow-lease'` instead of racing an unfenced write.
+      await callbacks.failWorkflowForRevisionUnavailable(workflowId, error);
+      return null;
+    }
     if (error instanceof DynamicWorkflowSourceUnavailableError) {
-      // `recoverAll()`'s preload barrier classified this entry's type
-      // `unavailable` before the loop started; `resume()` reached this
-      // exact cached error via the batch-local, closure-scoped
-      // `resolveExecutableRegistration()` wrapper `createRecoveryScopedCallbacks()`
-      // builds below, AFTER acquiring this workflow's claim and loading its
-      // terminal-cleanup tracking — the same ordering `VersionMismatchError`
-      // gets — so `failWorkflowForUnavailableDynamicSource` below commits
-      // cleanly under `ownership: 'workflow-lease'` instead of racing an
-      // unfenced write.
+      // A legacy (revision-undefined) run on a dynamic source with a single
+      // registered candidate falls through to the ordinary active-pointer
+      // resolve inside `resolveExecutableRegistrationForRevision()`, which
+      // can still fail with THIS error (a load failure, or an
+      // ambiguous-revision race against a concurrent removal) rather than
+      // `WorkflowRevisionUnavailableError` — isolate it the same way.
       await callbacks.failWorkflowForUnavailableDynamicSource(workflowId, error);
       return null;
     }
@@ -235,31 +220,33 @@ export async function recoverAll(
     });
   }
 
-  const recoverableTypes = preflight.entries
-    .filter((entry) => entry.kind === 'recoverable')
-    .map((entry) => entry.type);
-  const unavailableDynamicSourceTypes = await preloadRecoverableDynamicSourceTypes(
+  const recoverableEntries = preflight.entries.filter(
+    (entry): entry is Extract<RecoveryPreflightEntry, { kind: 'recoverable' }> =>
+      entry.kind === 'recoverable',
+  );
+  const revisionGroups = buildRecoveryRevisionGroups(recoverableEntries);
+  const revisionClassifications = await classifyRevisionGroups(
     internals,
     callbacks,
-    recoverableTypes,
+    revisionGroups,
   );
 
   // Wrap `callbacks` so THIS batch's per-entry `resume()` calls below see
   // the barrier's failures via a closure-local `Map`, never a field on
   // shared `internals` — a concurrent, unrelated `engine.start()`,
   // `engine.resume()`, or a second concurrent `recoverAll()` batch keeps
-  // using the real, un-wrapped `callbacks.resolveExecutableRegistration`
+  // using the real, un-wrapped `callbacks.resolveExecutableRegistrationForRevision`
   // and can never observe (or race the reset of) this batch's
-  // classification. See `createRecoveryScopedCallbacks()` above. A
-  // `recoverable` entry whose type failed still goes through
+  // classification. See `createRecoveryScopedRevisionCallbacks()`. A
+  // `recoverable` entry whose group failed still goes through
   // `recoverEntryOrIsolateFailure` -> `resume()` below like every other
   // entry, so it gets the SAME claim-acquisition and
   // terminal-cleanup-tracking sequence a version-mismatch failure gets,
-  // instead of calling `failWorkflowForUnavailableDynamicSource` directly
-  // ahead of that sequence.
-  const recoveryScopedCallbacks = createRecoveryScopedCallbacks(
+  // instead of calling `failWorkflowForRevisionUnavailable` directly ahead
+  // of that sequence.
+  const recoveryScopedCallbacks = createRecoveryScopedRevisionCallbacks(
     callbacks,
-    unavailableDynamicSourceTypes,
+    revisionClassifications,
   );
 
   // Walk preflight entries in storage-scan order so the returned handle

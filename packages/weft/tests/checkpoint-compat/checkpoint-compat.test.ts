@@ -3,15 +3,24 @@
  *
  * Contract: These fixtures freeze observable behavior. Engine PRs must not
  * change any EXISTING record — key, value, or ordering — inside a fixture;
- * that is a regression. The one narrow exception: a PR that adds a new,
- * independent durable key namespace (e.g. WFT-9/WFT-10's `catalog-entry:`/
- * `catalog-active:` prefixes) may regenerate fixtures to add records under
- * that new namespace, PROVIDED the diff is purely additive — every existing
- * key's value and every existing key's presence is byte-for-byte unchanged.
- * Verify with a line-by-line diff against the prior fixture, not by
- * inspection of the regeneration script's intent; any change beyond new
- * keys is still a regression and must be reverted or justified as a real
- * semantic change instead.
+ * that is a regression. Two narrow exceptions:
+ *
+ * 1. A PR that adds a new, independent durable key namespace (e.g.
+ *    WFT-9/WFT-10's `catalog-entry:`/`catalog-active:` prefixes) may
+ *    regenerate fixtures to add records under that new namespace, PROVIDED
+ *    the diff is purely additive — every existing key's value and every
+ *    existing key's presence is byte-for-byte unchanged.
+ * 2. A PR that adds a new field to an EXISTING `WorkflowState`-shaped
+ *    record (e.g. WFT-17's `revision` field, sibling to `versionTuple`) may
+ *    regenerate fixtures because every embedded `wf:{id}` record's
+ *    serialized value changes — PROVIDED every other field on that record,
+ *    every other key, and key/record ordering are byte-for-byte unchanged
+ *    apart from the one new field's addition.
+ *
+ * Verify either exception with a line-by-line diff against the prior
+ * fixture, not by inspection of the regeneration script's intent; any
+ * change beyond what the exception describes is still a regression and must
+ * be reverted or justified as a real semantic change instead.
  */
 
 import { afterEach, describe, expect, it } from 'bun:test';

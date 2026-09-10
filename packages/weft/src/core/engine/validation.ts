@@ -17,6 +17,7 @@ import type {
 import { DEFAULT_WORKFLOW_VERSION } from '../versioning.ts';
 import { isWorkflowTagArray } from '../workflow-tags.ts';
 import type { WorkflowVersionTuple } from '../workflow-version-tuple.ts';
+import { sanitizeDecodedRevision } from './decode-revision.ts';
 import {
   MAX_TIMELINE_COORDINATOR_DETAILS,
   MAX_TIMELINE_DETAIL_STRING_LENGTH,
@@ -56,6 +57,7 @@ const WORKFLOW_STATE_FIELD_NAMES = new Set<string>(
     'failureCategory',
     'terminationReason',
     'versionTuple',
+    'revision',
     'workflowExecutionToken',
     'executionStateOwnerId',
     'parentWorkflowId',
@@ -235,6 +237,7 @@ export function decodeWorkflowState(bytes: Uint8Array): WorkflowState {
   }
   sanitizeDecodedParentLineage(state);
   sanitizeDecodedRestartLineage(state);
+  sanitizeDecodedRevision(state);
   return decodedRecord === undefined
     ? state
     : stripUnknownWorkflowStateFields(state, decodedRecord);

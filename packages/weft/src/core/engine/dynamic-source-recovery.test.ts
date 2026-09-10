@@ -12,6 +12,7 @@ import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { ActivityRegistry } from '../activity-registry.ts';
+import { createCheckpoint, serializeCheckpoint } from '../checkpoint.ts';
 import { encode } from '../codec.ts';
 import { WorkflowRecoverySkippedEvent } from '../events.ts';
 import { buildWorkflowManifestFromDefinition } from '../registry-workflow-manifest.ts';
@@ -23,6 +24,7 @@ import { WorkflowTypeNotRegisteredForRecoveryError } from './errors.ts';
 import { Engine } from './index.ts';
 import { getInternals } from './internals.ts';
 import { buildRegistrationEntry } from './registration.ts';
+import { WorkflowRevisionUnavailableError } from './revision-errors.ts';
 
 async function waitForCheckpoint(storage: MemoryStorage, workflowId: string): Promise<void> {
   await waitForCondition(async () => (await storage.get(KEYS.checkpoint(workflowId))) !== null, {
@@ -42,6 +44,7 @@ async function seedRunningWorkflowState(
   storage: MemoryStorage,
   workflowId: string,
   workflowType: string,
+  revision?: string,
 ): Promise<void> {
   await storage.put(
     KEYS.workflow(workflowId),
@@ -51,9 +54,18 @@ async function seedRunningWorkflowState(
       status: 'running',
       input: null,
       versionTuple: { workflowVersion: DEFAULT_WORKFLOW_VERSION },
+      ...(revision !== undefined && { revision }),
       createdAt: 1,
       updatedAt: 1,
     }),
+  );
+  // `resume()` (the non-'missing' path every 'recoverable' preflight entry
+  // reaches) always loads a checkpoint — required for every seed except the
+  // "genuinely unregistered type" `missing`-classification callers, which
+  // never reach that far.
+  await storage.put(
+    KEYS.checkpoint(workflowId),
+    serializeCheckpoint(createCheckpoint(workflowId, DEFAULT_WORKFLOW_VERSION, 1)),
   );
 }
 
@@ -90,7 +102,7 @@ describe('recoverAll() — dynamic-source preload barrier (WFT-15/16)', () => {
     }
     started.length = 0;
 
-    const revision = await revisionFor(lazy as WorkflowDefinition);
+    const revision = await revisionFor(lazy);
 
     await using recovered = new Engine({ storage });
     const deferred = Promise.withResolvers<Record<string, unknown>>();
@@ -159,8 +171,8 @@ describe('recoverAll() — dynamic-source preload barrier (WFT-15/16)', () => {
       await waitForCheckpoint(storage, 'working-1');
     }
 
-    const failingRevision = await revisionFor(failing as WorkflowDefinition);
-    const workingRevision = await revisionFor(working as WorkflowDefinition);
+    const failingRevision = await revisionFor(failing);
+    const workingRevision = await revisionFor(working);
 
     await using recovered = new Engine({ storage });
     const failingLoader = mock(async (): Promise<Record<string, unknown>> => {
@@ -218,7 +230,7 @@ describe('recoverAll() — dynamic-source preload barrier (WFT-15/16)', () => {
       await waitForCheckpoint(storage, 'classified-1');
     }
 
-    const revision = await revisionFor(lazy as WorkflowDefinition);
+    const revision = await revisionFor(lazy);
 
     await using recovered = new Engine({ storage });
     recovered.registerSource(
@@ -265,7 +277,7 @@ describe('recoverAll() — dynamic-source preload barrier (WFT-15/16)', () => {
     // `engine.start()`, which would itself reject an unregistered type).
     await seedRunningWorkflowState(storage, 'unknown-1', 'totally-unknown');
 
-    const revision = await revisionFor(lazy as WorkflowDefinition);
+    const revision = await revisionFor(lazy);
 
     await using recovered = new Engine({ storage });
     recovered.registerSource(
@@ -308,7 +320,7 @@ describe('recoverAll() — dynamic-source preload barrier (WFT-15/16)', () => {
       await waitForCheckpoint(storage, 'resume-target-1');
     }
 
-    const revision = await revisionFor(lazy as WorkflowDefinition);
+    const revision = await revisionFor(lazy);
 
     await using engine = new Engine({ storage });
     const loader = mock(async () => ({ lazyResumeTarget: lazy }));
@@ -371,7 +383,7 @@ describe('recoverAll() — dynamic-source preload barrier (WFT-15/16)', () => {
       }
     }
 
-    const flakyRevision = await revisionFor(flaky as WorkflowDefinition);
+    const flakyRevision = await revisionFor(flaky);
 
     await using recovered = new Engine({ storage });
     recovered.register(filler);
@@ -431,5 +443,346 @@ describe('recoverAll() — dynamic-source preload barrier (WFT-15/16)', () => {
     expect(loaderCalls).toBeGreaterThanOrEqual(2);
     await concurrentHandle.signal('continue', 'ok');
     expect(await concurrentHandle.result()).toBe('ok');
+  });
+});
+
+describe('recoverAll() — per-(type, revision) preload barrier and exact revision pinning (WFT-17/WFT-18)', () => {
+  it('two non-terminal runs of the same dynamic-source type, pinned to two different registered revisions, both recover against their own pinned code', async () => {
+    // The core bug this batch fixes: before WFT-17/WFT-18, EVERY non-terminal
+    // run of a dynamic-source type resolved against whichever revision was
+    // currently ACTIVE, regardless of which one it actually started on. Two
+    // sibling runs pinned to two DIFFERENT revisions must each recover
+    // against their OWN code — proven here by each definition returning a
+    // distinct, revision-specific value. Deliberately activity-free (see
+    // module doc caveat): `activityRegistriesByWorkflow`/
+    // `lastResolvedRevisionByName` are keyed by TYPE alone (a WFT-19
+    // boundary this batch does not touch), so an activity call would be
+    // routed through whichever revision resolved last, not necessarily the
+    // handler's own.
+    const storage = new MemoryStorage();
+    // `deriveWorkflowRevision()` hashes the CONTRACT (name, workflowVersion,
+    // description, tags) — not the handler body — so distinct `description`
+    // values are what actually give A and B distinct revisions here.
+    const definitionA = workflow({ name: 'multi-rev', description: 'candidate A' }).execute(
+      async function* (ctx: WorkflowContext) {
+        const value = yield* ctx.waitForSignal<string>('continue');
+        return `A:${value}`;
+      },
+    );
+    const definitionB = workflow({ name: 'multi-rev', description: 'candidate B' }).execute(
+      async function* (ctx: WorkflowContext) {
+        const value = yield* ctx.waitForSignal<string>('continue');
+        return `B:${value}`;
+      },
+    );
+
+    // `workflowSource()`'s declared `revision` is cross-checked against the
+    // loaded module's own content-derived revision at resolve time — so
+    // each pin below must be the definition's REAL manifest revision, not
+    // an arbitrary string, or resolution fails validation
+    // (`artifact-revision-mismatch`) before ever reaching this batch's
+    // logic under test.
+    const revisionA = await revisionFor(definitionA);
+    const revisionB = await revisionFor(definitionB);
+    await seedRunningWorkflowState(storage, 'multi-rev-a', 'multi-rev', revisionA);
+    await seedRunningWorkflowState(storage, 'multi-rev-b', 'multi-rev', revisionB);
+
+    await using recovered = new Engine({ storage });
+    recovered.registerSource(
+      workflowSource(
+        { name: 'multi-rev', location: './a.ts', exportName: 'a', revision: revisionA },
+        async () => ({ a: definitionA }),
+      ),
+    );
+    recovered.registerSource(
+      workflowSource(
+        { name: 'multi-rev', location: './b.ts', exportName: 'b', revision: revisionB },
+        async () => ({ b: definitionB }),
+      ),
+    );
+
+    const handles = await recovered.recoverAll();
+    expect(handles.map((handle) => handle.id).toSorted()).toEqual(['multi-rev-a', 'multi-rev-b']);
+
+    const handleA = handles.find((handle) => handle.id === 'multi-rev-a')!;
+    const handleB = handles.find((handle) => handle.id === 'multi-rev-b')!;
+    await handleA.signal('continue', 'x');
+    await handleB.signal('continue', 'y');
+    expect(await handleA.result()).toBe('A:x');
+    expect(await handleB.result()).toBe('B:y');
+  });
+
+  it('a fork of a dynamic-source run inherits the source run\'s pinned revision, and recovers under it — not "legacy-ambiguous" — even with a second registered candidate present', async () => {
+    // Regression test for the fork-revision gap: `createForkedWorkflowState`
+    // used to omit `revision` entirely, so a forked child of a
+    // dynamic-source type with 2+ registered candidates would recover
+    // `legacy-ambiguous` (this describe block's own earlier test) even
+    // though the fork continues execution against the exact code its
+    // source run resolved. `fork-helpers.ts` now inherits
+    // `sourceState.revision` — proven here end to end: start under
+    // revision A (with only A registered), fork while running, then boot a
+    // FRESH engine with BOTH A and B registered and confirm the forked
+    // child recovers under A rather than failing ambiguous.
+    const storage = new MemoryStorage();
+    const definitionA = workflow({ name: 'fork-multi-rev', description: 'candidate A' }).execute(
+      async function* (ctx: WorkflowContext) {
+        const value = yield* ctx.waitForSignal<string>('continue');
+        return `A:${value}`;
+      },
+    );
+    const definitionB = workflow({ name: 'fork-multi-rev', description: 'candidate B' }).execute(
+      async function* () {
+        return 'unused';
+      },
+    );
+    const revisionA = await revisionFor(definitionA);
+    const revisionB = await revisionFor(definitionB);
+
+    let forkedId: string;
+    {
+      await using started = new Engine({ storage });
+      started.registerSource(
+        workflowSource(
+          { name: 'fork-multi-rev', location: './a.ts', exportName: 'a', revision: revisionA },
+          async () => ({ a: definitionA }),
+        ),
+      );
+      const original = await started.start('fork-multi-rev', null, {
+        id: 'fork-multi-rev-source',
+      });
+      const forked = await started.fork(original.id);
+      forkedId = forked.id;
+
+      const sourceState = await started.get(original.id);
+      const forkedState = await started.get(forked.id);
+      expect(sourceState?.revision).toBe(revisionA);
+      expect(forkedState?.revision).toBe(revisionA);
+    }
+
+    await using recovered = new Engine({ storage });
+    recovered.registerSource(
+      workflowSource(
+        { name: 'fork-multi-rev', location: './a.ts', exportName: 'a', revision: revisionA },
+        async () => ({ a: definitionA }),
+      ),
+    );
+    recovered.registerSource(
+      workflowSource(
+        { name: 'fork-multi-rev', location: './b.ts', exportName: 'b', revision: revisionB },
+        async () => ({ b: definitionB }),
+      ),
+    );
+
+    const handles = await recovered.recoverAll();
+    expect(handles.map((handle) => handle.id).toSorted()).toEqual(
+      ['fork-multi-rev-source', forkedId].toSorted(),
+    );
+
+    const forkedHandle = handles.find((handle) => handle.id === forkedId)!;
+    await forkedHandle.signal('continue', 'z');
+    expect(await forkedHandle.result()).toBe('A:z');
+  });
+
+  it("a run pinned to a revision this process never registered recovers unavailable — including when it is the type's sole registered candidate under a DIFFERENT revision (today's stale-sole-candidate bug) — without blocking a sibling pinned to a registered revision", async () => {
+    const storage = new MemoryStorage();
+    const definition = workflow({ name: 'partial-avail' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      return yield* ctx.waitForSignal<string>('continue');
+    });
+    // Pinned to a revision that is NOT among this process's registered
+    // candidates at all — and it also happens to be the ONLY candidate this
+    // process registers, simulating "the sole candidate changed since this
+    // run started": before this batch, `resolveExecutableRegistration`'s
+    // `byRevision.size === 1` fast path would silently resolve this run
+    // against the mismatched sole candidate. Now it must not. The ghost
+    // pin is never loaded (rejected before the loader runs), so it can stay
+    // an arbitrary string; the sibling's pin must be the real revision.
+    const okRevision = await revisionFor(definition);
+    await seedRunningWorkflowState(storage, 'partial-avail-ghost', 'partial-avail', 'rev-ghost');
+    await seedRunningWorkflowState(storage, 'partial-avail-ok', 'partial-avail', okRevision);
+
+    await using recovered = new Engine({ storage });
+    recovered.registerSource(
+      workflowSource(
+        { name: 'partial-avail', location: './x.ts', exportName: 'x', revision: okRevision },
+        async () => ({ x: definition }),
+      ),
+    );
+
+    const handles = await recovered.recoverAll();
+    expect(handles.map((handle) => handle.id)).toEqual(['partial-avail-ok']);
+
+    const ghostState = await recovered.get('partial-avail-ghost');
+    expect(ghostState?.status).toBe('failed');
+    expect(ghostState?.failureCategory).toBe('system');
+    expect(ghostState?.error).toContain('rev-ghost');
+
+    const okHandle = handles[0]!;
+    await okHandle.signal('continue', 'ok');
+    expect(await okHandle.result()).toBe('ok');
+  });
+
+  it('a legacy (revision-undefined) run on a dynamic-source type with 2+ registered candidates recovers unavailable ("legacy-ambiguous"), without blocking a sibling pinned run', async () => {
+    const storage = new MemoryStorage();
+    const definition = workflow({ name: 'legacy-ambiguous' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      return yield* ctx.waitForSignal<string>('continue');
+    });
+    // The legacy entry's own sibling candidate ('rev-1') is never resolved
+    // (the legacy-ambiguous classification short-circuits before any load),
+    // so it can stay an arbitrary string; the PINNED entry's candidate must
+    // be the real revision the loaded definition validates against.
+    const pinnedRevision = await revisionFor(definition);
+    await seedRunningWorkflowState(storage, 'legacy-ambiguous-old', 'legacy-ambiguous');
+    await seedRunningWorkflowState(
+      storage,
+      'legacy-ambiguous-pinned',
+      'legacy-ambiguous',
+      pinnedRevision,
+    );
+
+    await using recovered = new Engine({ storage });
+    recovered.registerSource(
+      workflowSource(
+        { name: 'legacy-ambiguous', location: './1.ts', exportName: 'a', revision: 'rev-1' },
+        async () => ({ a: definition }),
+      ),
+    );
+    recovered.registerSource(
+      workflowSource(
+        {
+          name: 'legacy-ambiguous',
+          location: './2.ts',
+          exportName: 'b',
+          revision: pinnedRevision,
+        },
+        async () => ({ b: definition }),
+      ),
+    );
+
+    const handles = await recovered.recoverAll();
+    expect(handles.map((handle) => handle.id)).toEqual(['legacy-ambiguous-pinned']);
+
+    const legacyState = await recovered.get('legacy-ambiguous-old');
+    expect(legacyState?.status).toBe('failed');
+    expect(legacyState?.failureCategory).toBe('system');
+    expect(legacyState?.error).toContain('predates revision pinning');
+
+    const pinnedHandle = handles[0]!;
+    await pinnedHandle.signal('continue', 'go');
+    expect(await pinnedHandle.result()).toBe('go');
+  });
+
+  it("a standalone engine.resume(id) on a run pinned to an unregistered revision throws WorkflowRevisionUnavailableError directly to its caller, unlike recoverAll()'s per-group isolation", async () => {
+    // `recoverAll()` above isolates this failure per-`(type, revision)`
+    // group — only the affected runs fail, via `failWorkflowForRevisionUnavailable`,
+    // and the error itself never reaches `recoverAll()`'s own caller. A
+    // standalone `engine.resume(workflowId)` has no group of siblings to
+    // isolate around — there is only the one run — so
+    // `resumeWorkflowFromStorage()` lets the same error propagate straight
+    // to its caller instead of catching and isolating it. This is the
+    // scenario `WorkflowRevisionUnavailableError`'s own `@example` JSDoc
+    // documents.
+    const storage = new MemoryStorage();
+    const definition = workflow({ name: 'standalone-resume-ghost' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      return yield* ctx.waitForSignal<string>('continue');
+    });
+    const registeredRevision = await revisionFor(definition);
+    await seedRunningWorkflowState(
+      storage,
+      'standalone-resume-ghost-1',
+      'standalone-resume-ghost',
+      'rev-ghost',
+    );
+
+    await using engine = new Engine({ storage });
+    engine.registerSource(
+      workflowSource(
+        {
+          name: 'standalone-resume-ghost',
+          location: './x.ts',
+          exportName: 'x',
+          revision: registeredRevision,
+        },
+        async () => ({ x: definition }),
+      ),
+    );
+
+    await expect(engine.resume('standalone-resume-ghost-1')).rejects.toThrow(
+      WorkflowRevisionUnavailableError,
+    );
+
+    // Unlike `recoverAll()`'s isolation path, a rejected standalone
+    // `resume()` never reaches `failWorkflowForRevisionUnavailable` — the
+    // workflow state is left exactly as it was, not transitioned to
+    // `failed`, so the caller can retry once the pinned revision is
+    // registered.
+    const state = await engine.get('standalone-resume-ghost-1');
+    expect(state?.status).toBe('running');
+  });
+
+  it('a corrupted (present but malformed) persisted revision on a single-candidate dynamic-source type is rejected as unavailable, never silently executed against the sole candidate', async () => {
+    // `decodeWorkflowState()`'s `sanitizeDecodedRevision()` never drops a
+    // present-but-malformed `revision` to `undefined` — doing so would make
+    // THIS exact scenario (a single registered candidate) fall through to
+    // the "legacy, unambiguous" fast path and silently execute the sole
+    // candidate against a checkpoint whose true originating revision is
+    // actually unknown, rather than rejecting the damaged identity. Instead
+    // it substitutes a deterministic corruption marker that cannot match
+    // any real registered candidate, so recovery classifies this group
+    // `unavailable` explicitly.
+    const storage = new MemoryStorage();
+    const definition = workflow({ name: 'corrupted-pin-single-candidate' }).execute(
+      async function* (ctx: WorkflowContext) {
+        return yield* ctx.waitForSignal<string>('continue');
+      },
+    );
+    const soleCandidateRevision = await revisionFor(definition);
+
+    // Written with a raw, non-string `revision` — bypassing `seedRunningWorkflowState`'s
+    // `string | undefined` parameter type, which cannot express storage-level
+    // corruption directly.
+    await storage.put(
+      KEYS.workflow('corrupted-pin-1'),
+      encode({
+        id: 'corrupted-pin-1',
+        type: 'corrupted-pin-single-candidate',
+        status: 'running',
+        input: null,
+        versionTuple: { workflowVersion: DEFAULT_WORKFLOW_VERSION },
+        revision: 42,
+        createdAt: 1,
+        updatedAt: 1,
+      }),
+    );
+    await storage.put(
+      KEYS.checkpoint('corrupted-pin-1'),
+      serializeCheckpoint(createCheckpoint('corrupted-pin-1', DEFAULT_WORKFLOW_VERSION, 1)),
+    );
+
+    await using recovered = new Engine({ storage });
+    recovered.registerSource(
+      workflowSource(
+        {
+          name: 'corrupted-pin-single-candidate',
+          location: './only.ts',
+          exportName: 'only',
+          revision: soleCandidateRevision,
+        },
+        async () => ({ only: definition }),
+      ),
+    );
+
+    const handles = await recovered.recoverAll();
+    expect(handles).toEqual([]);
+
+    const state = await recovered.get('corrupted-pin-1');
+    expect(state?.status).toBe('failed');
+    expect(state?.failureCategory).toBe('system');
+    expect(state?.error).toContain('not registered in this process');
   });
 });
