@@ -691,7 +691,7 @@ The values are the adapter's honest self-report; the server does not infer or st
 
 Read a value by key.
 
-- **Path parameter `:key`** — URL-encoded storage key. The server decodes it before lookup, so application keys can contain any characters except those forbidden in URL paths.
+- **Path parameter `:key`** — URL-encoded storage key. The server decodes it before lookup, so application keys can contain most characters. There is no admission-time validation on raw storage keys (unlike workflow or task-operation ids), but WHATWG URL path normalization collapses `.` and `..` path segments before this route ever sees them, so a key equal to the exact string `.` or `..` can never be addressed through this route regardless of encoding.
 - **Required scope** — `storage:admin`.
 - **Success response** — `200 OK`, `Content-Type: application/octet-stream`, body is the raw value bytes.
 - **Missing key** — `404 Not Found`, empty body.

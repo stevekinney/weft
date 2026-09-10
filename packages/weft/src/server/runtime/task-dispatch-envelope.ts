@@ -12,7 +12,11 @@
 import { isJSONValue } from '../../core/json.ts';
 import type { TaskDispatch } from '../index.ts';
 import type { CreateQueuedInput } from '../task-ledger-transitions.ts';
-import { isValidWorkflowRevision, REMOTE_TASK_RECORD_VERSION } from '../task-ledger.ts';
+import {
+  isValidOperationId,
+  isValidWorkflowRevision,
+  REMOTE_TASK_RECORD_VERSION,
+} from '../task-ledger.ts';
 
 /** The optional `CreateQueuedInput` fields a `TaskDispatch` may or may not carry. */
 function buildOptionalCreateQueuedFields(task: TaskDispatch): Partial<CreateQueuedInput> {
@@ -39,6 +43,19 @@ export function buildCreateQueuedInput(
   if (!isJSONValue(input)) {
     throw new Error(
       `TaskDispatch for operation "${task.operationId}" has a non-JSON-serializable "input" — the durable task ledger requires JSON-safe input.`,
+    );
+  }
+  // Reject an invalid caller-supplied operationId before it reaches a
+  // ledger write (WFT-95). `dispatchTask()` is a public same-process API
+  // taking a caller-controlled operationId; an id equal to the exact string
+  // "." or ".." can never be addressed again over REST (a single trailing
+  // `:operationId` path segment is collapsed away by WHATWG URL path
+  // normalization before the route matcher ever sees it), so admission
+  // rejects it up front instead of writing a ledger record that becomes
+  // unreachable by id.
+  if (!isValidOperationId(task.operationId)) {
+    throw new Error(
+      `TaskDispatch has an invalid "operationId" (${JSON.stringify(task.operationId)}) — it must be a non-empty, bounded identifier other than "." or "..".`,
     );
   }
   // Reject an invalid caller-supplied revision before it reaches a ledger

@@ -342,12 +342,14 @@ export const getTaskDetailOperation = defineOperation<GetTaskDetailInput, GetTas
 export const getTaskDetailRestBinding: UnknownRestBinding = {
   method: 'GET',
   // Deliberately not `/v1/tasks/:operationId`: a caller-controlled
-  // operationId is only required to be a nonempty bounded string, so it can
-  // legally equal an existing (or future) literal sibling segment under
-  // `/v1/tasks/` — "diagnostics" today. A bare :operationId route would make
-  // that task permanently unreachable over REST (the literal route always
-  // wins; see static-registrations.ts's registration-order comment). The
-  // `/detail/` segment reserves a namespace this operation owns outright.
+  // operationId is a nonempty, bounded identifier other than the exact
+  // string "." or ".." (WFT-95; enforced at dispatch admission in
+  // `buildCreateQueuedInput`, not here), so it can still legally equal an
+  // existing (or future) literal sibling segment under `/v1/tasks/` —
+  // "diagnostics" today. A bare :operationId route would make that task
+  // permanently unreachable over REST (the literal route always wins; see
+  // static-registrations.ts's registration-order comment). The `/detail/`
+  // segment reserves a namespace this operation owns outright.
   path: '/v1/tasks/detail/:operationId',
   pathParamNames: ['operationId'],
   operationName: 'weft.tasks.get',

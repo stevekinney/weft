@@ -56,6 +56,24 @@ describe('start workflow validation', () => {
     );
   });
 
+  it('rejects the exact strings "." and ".." as workflow ids (WFT-95)', () => {
+    const dotError = captureValidationError(() => coerceStartWorkflowId('.', 'options.id'));
+    expect(dotError).toEqual(
+      new StartWorkflowValidationError('options.id must not be "." or ".."'),
+    );
+
+    const dotDotError = captureValidationError(() => coerceStartWorkflowId('..', 'options.id'));
+    expect(dotDotError).toEqual(
+      new StartWorkflowValidationError('options.id must not be "." or ".."'),
+    );
+  });
+
+  it('allows a workflow id that merely contains a dot character (WFT-95)', () => {
+    expect(coerceStartWorkflowId('my.workflow.v2', 'options.id')).toBe('my.workflow.v2');
+    expect(coerceStartWorkflowId('...', 'options.id')).toBe('...');
+    expect(coerceStartWorkflowId('.hidden', 'options.id')).toBe('.hidden');
+  });
+
   it('validates idempotency keys as non-empty strings within the byte limit', () => {
     expect(coerceStartWorkflowIdempotencyKey('dedupe-key', 'options.idempotencyKey')).toBe(
       'dedupe-key',

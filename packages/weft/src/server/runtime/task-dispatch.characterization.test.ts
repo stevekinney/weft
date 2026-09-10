@@ -305,6 +305,48 @@ describe('dispatchTaskImpl', () => {
     ).rejects.toThrow('non-JSON-serializable');
   });
 
+  it('throws when operationId is the exact string "." (WFT-95)', async () => {
+    context = createMinimalContext();
+    options = createMinimalOptions();
+
+    await expect(
+      dispatchTaskImpl(context, options, {
+        operationId: '.',
+        activityName: 'doWork',
+        workflowType: 'testWorkflow',
+        input: null,
+      }),
+    ).rejects.toThrow('invalid "operationId"');
+  });
+
+  it('throws when operationId is the exact string ".." (WFT-95)', async () => {
+    context = createMinimalContext();
+    options = createMinimalOptions();
+
+    await expect(
+      dispatchTaskImpl(context, options, {
+        operationId: '..',
+        activityName: 'doWork',
+        workflowType: 'testWorkflow',
+        input: null,
+      }),
+    ).rejects.toThrow('invalid "operationId"');
+  });
+
+  it('allows an operationId that merely contains a dot character (WFT-95)', async () => {
+    context = createMinimalContext();
+    options = createMinimalOptions();
+
+    await expect(
+      dispatchTaskImpl(context, options, {
+        operationId: 'op.v2.retry',
+        activityName: 'doWork',
+        workflowType: 'testWorkflow',
+        input: null,
+      }),
+    ).resolves.toBe(true);
+  });
+
   it('throws when workflowRevision is an empty string (WFT-20)', async () => {
     context = createMinimalContext();
     options = createMinimalOptions();

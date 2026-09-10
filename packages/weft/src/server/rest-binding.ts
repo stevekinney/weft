@@ -148,6 +148,17 @@ export type RestBinding<Input, Output> = {
  * path param would propagate to the engine as a confusingly-shaped
  * "missing" identifier, and surfacing the shape error at the router
  * (404) produces a cleaner wire response than a downstream 400.
+ *
+ * WHATWG URL path normalization collapses `.` and `..` path segments (and
+ * their percent-encoded forms) before `handleRequest()` ever sees
+ * `url.pathname` — this function never observes those segments as literal
+ * text, so a single trailing `:id`/`:operationId` segment can never match a
+ * resource whose id is literally `.` or `..`, no matter how it is encoded.
+ * This is no longer just a documented gap: `assertValidWorkflowId` (WFT-95)
+ * and `isValidOperationId` reject those exact strings at admission, so a
+ * caller-facing workflow or operation id can never legitimately be `.` or
+ * `..` in the first place — this URL-normalization quirk is closed by
+ * validation rather than left as something callers must work around.
  */
 export function bindingPathMatches(
   pattern: string,
