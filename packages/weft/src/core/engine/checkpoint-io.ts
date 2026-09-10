@@ -42,7 +42,6 @@ import {
 import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
 import { getTimelineInputSummary, getTimelineOperationLabel } from './state-utilities.ts';
-import { loadWorkflowState } from './storage-io.ts';
 import { buildPendingTimelineOperation } from './termination.ts';
 import { notifyWorkflowFeedCommit } from './workflow-feed.ts';
 
@@ -211,17 +210,49 @@ async function persistWorkerCheckpoint(
 ): Promise<void> {
   const serialized = new Uint8Array(workerCheckpointBytes);
   const checkpoint = deserializeCheckpoint(serialized);
-  // Reattach the HOST's own authoritative `workflowExecutionToken` — never
-  // trust whatever the worker-returned bytes claim (WFT-21, Codex review
-  // round 4, P2). A pre-upgrade worker naturally omits the field entirely
-  // (the existing legacy fallback, unchanged); a worker that DOES include
-  // one must never be trusted to supply the correct value, since this is
-  // exactly the token `replayTo()`'s exact-match correlation relies on —
-  // silently accepting a worker-supplied token would let a compromised or
-  // stale worker defeat that correlation.
-  const workerCheckpointState = await loadWorkflowState(internals, workflowId);
-  if (workerCheckpointState?.workflowExecutionToken !== undefined) {
-    checkpoint.workflowExecutionToken = workerCheckpointState.workflowExecutionToken;
+  // Fence this commit to the CURRENT execution generation, comparing —
+  // never persisting — the worker's own claimed token (WFT-21, Codex
+  // review round 5, P1, superseding round 4's "reattach the host's token"
+  // with "reject when the generations disagree"). The worker's checkpoint
+  // bytes DO carry a trustworthy token for COMPARISON: the host itself
+  // stamped it into the initial checkpoint this run's worker was launched
+  // from (`createInitialCheckpoint`), and `advanceCheckpoint()` carries it
+  // forward unchanged on every subsequent step — so it names the exact
+  // generation THIS worker turn was dispatched for. Round 4 was right that
+  // it must never be TRUSTED AS THE VALUE TO PERSIST (a hostile or
+  // stale worker could forge it there) — this reads it only to detect a
+  // mismatch, then always persists the HOST's own copy.
+  //
+  // `internals.checkpoints.get(workflowId)` — read SYNCHRONOUSLY, no
+  // `await` — is the host's own in-memory record of the CURRENT
+  // generation, set by every launch (`start()`,
+  // `launchWorkflowFromCheckpoint()` for fork, `resume()`) before any
+  // worker could receive dispatched work for that generation, and cleared
+  // on terminal cleanup/suspend/purge. No entry at all means the live
+  // generation has already torn down entirely — reject outright.
+  const currentGeneration = internals.checkpoints.get(workflowId);
+  if (currentGeneration === undefined) {
+    throw new Error(
+      `Checkpoint commit for workflow "${workflowId}" targets a generation that no longer exists.`,
+    );
+  }
+  const hostToken = currentGeneration.workflowExecutionToken;
+  const workerToken = checkpoint.workflowExecutionToken;
+  // Both sides defined and disagreeing is the exact "worker turn dispatched
+  // against generation A, but generation A has since been replaced by a
+  // `start-new` generation B" case this fix closes — reject BEFORE any
+  // write, rather than silently reattaching B's token onto A's stale
+  // content. Either side `undefined` is the pre-existing legacy tolerance
+  // (a pre-upgrade worker, or a record predating this field) and proceeds
+  // — a bounded gap only within a mixed-version rolling upgrade, matching
+  // `LEGACY_DEAD_LETTER_HISTORY_TOKEN`'s own documented collision bound.
+  if (hostToken !== undefined && workerToken !== undefined && workerToken !== hostToken) {
+    throw new Error(
+      `Checkpoint commit for workflow "${workflowId}" targets a different execution generation.`,
+    );
+  }
+  if (hostToken !== undefined) {
+    checkpoint.workflowExecutionToken = hostToken;
   } else {
     delete checkpoint.workflowExecutionToken;
   }

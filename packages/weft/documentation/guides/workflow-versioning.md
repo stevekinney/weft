@@ -550,6 +550,17 @@ slot for the resolver's own resolved revision whenever it differs from
 `targetRevision`—exactly this legacy case—closing the gap under every
 ownership mode, released unconditionally alongside the first reservation.
 
+That second reservation now fires from INSIDE the resolver, not after it
+returns (Codex review round 5): reserving only once the whole resolve
+completed left the resolver's own loader await—when the sole candidate
+wasn't already locally cached—as a window where a concurrent
+`removeWorkflowRevision()` could delete and finalize it before the
+reservation ever ran. `resolveExecutableRegistrationForRevision()` accepts
+the same synchronous, before-any-await `onRevisionChosen` hook `start()`'s
+own resolver already used for the identical class of race, and `fork()`
+now reserves from inside it the instant the resolver picks the candidate's
+revision, closing the window entirely.
+
 The ADR 0002 workflow-lease reclaim-eligibility check
 (`isWorkflowTypeRegistered`) is source- and revision-aware for the same
 reason—see

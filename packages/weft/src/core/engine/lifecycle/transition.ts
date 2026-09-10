@@ -342,27 +342,24 @@ export async function fork(
   }
 
   // Resolve against the SOURCE run's own exact pinned revision (WFT-17's
-  // `WorkflowState.revision`), never the catalog's currently active pointer
-  // (WFT-19 review round 2): the active pointer can move between the
-  // source run's start and this fork call, and resolving via the
-  // active-pointer path would launch the FORKED run against the wrong code
-  // from the very first turn. `options.revision` (WFT-21) is an explicit,
-  // validated opt-in to fork against a DIFFERENT installed revision —
-  // validated before any checkpoint read. See `resolveForkTargetRevision()`'s doc.
+  // `WorkflowState.revision`), never the catalog's active pointer (WFT-19
+  // review round 2): the active pointer can move between the source run's
+  // start and this fork call, and resolving via it would launch the forked
+  // run against the wrong code from the first turn. `options.revision`
+  // (WFT-21) opts into a different installed revision explicitly — see
+  // `resolveForkTargetRevision()`'s doc.
   const targetRevision = resolveForkTargetRevision(internals, sourceState, options);
-  // Reserve an in-flight-start slot against `targetRevision` BEFORE any
+  // Reserve an in-flight-start slot against `targetRevision` before any
   // further async work (WFT-21, Codex review round 2, P1): closes the
-  // SAME-PROCESS race a concurrent `removeWorkflowRevision()` could
-  // otherwise win between this validation and the fork's own commit,
-  // regardless of ownership mode — a plain in-memory reservation needs no
-  // storage capability, so it protects `ownership: 'none'` too, unlike
-  // `buildForkCatalogEntryCondition()` below (which only fences the
-  // DURABLE, cross-process half under lease modes). Mirrors `start()`'s own
-  // `reserveInFlightStart`/`releaseInFlightStart` pairing exactly — see
-  // that function's own doc. Released, unconditionally, in this function's
-  // own outer `finally` below.
+  // same-process race a concurrent `removeWorkflowRevision()` could win
+  // between this validation and the fork's own commit, in any ownership
+  // mode — unlike `buildForkCatalogEntryCondition()` below (durable,
+  // cross-process fencing only under lease modes). Mirrors `start()`'s
+  // `reserveInFlightStart`/`releaseInFlightStart` pairing; released in
+  // this function's own outer `finally` below.
   const inFlightRevision = reserveInFlightStart(internals, sourceState.type, targetRevision);
-  // See `reserveLegacyForkTargetRevision()`'s doc (round 3, P1).
+  // Reserved via `onRevisionChosen` below, synchronously (WFT-21, Codex
+  // review round 5, P1) — see `reserveLegacyForkTargetRevision()`'s doc.
   let legacyResolvedInFlightRevision: string | undefined;
   try {
     // `revision` here is the resolver's OWN resolved revision — threaded
@@ -372,21 +369,24 @@ export async function fork(
     // candidate — see that call site's doc, WFT-19 review round 5).
     const { entry: registration, revision: resolvedRevision } =
       await resolveExecutableRegistrationOrRenamedNotFound(
-        (type) => callbacks.resolveExecutableRegistrationForRevision(type, targetRevision),
+        (type) =>
+          callbacks.resolveExecutableRegistrationForRevision(type, targetRevision, (chosen) => {
+            legacyResolvedInFlightRevision = reserveLegacyForkTargetRevision(
+              internals,
+              sourceState.type,
+              targetRevision,
+              chosen,
+            );
+          }),
         sourceState.type,
         () =>
           new Error(
             `No workflow registered with name "${sourceState.type}" (needed to fork "${sourceWorkflowId}")`,
           ),
       );
-    // The fork's own persisted `revision` — see `resolveForkPersistedRevision()`'s doc.
+    // The fork's own persisted `revision` — see `resolveForkPersistedRevision()`'s
+    // doc. Always equals `chosen` above when the hook fired, so no double-reserve.
     const persistedRevision = resolveForkPersistedRevision(options, sourceState, resolvedRevision);
-    legacyResolvedInFlightRevision = reserveLegacyForkTargetRevision(
-      internals,
-      sourceState.type,
-      targetRevision,
-      persistedRevision,
-    );
 
     const fromStep =
       options?.fromStep !== undefined ? normalizeForkStep(options.fromStep) : undefined;

@@ -545,7 +545,7 @@ describe('timeline and replay', () => {
     expect('revision' in (replay ?? {})).toBe(false);
   });
 
-  it('falls back to the `createdAt` comparison when a checkpoint history entry predates the `workflowExecutionToken` field (legacy checkpoint, WFT-21, Codex review round 3, P2)', async () => {
+  it('omits `revision` from a replay when a checkpoint history entry predates the `workflowExecutionToken` field, rather than falling back to a collision-prone `createdAt` comparison (legacy checkpoint, WFT-21, Codex review round 5, P2, tightening round 3)', async () => {
     const storage = new MemoryStorage();
     engine = new Engine({ storage, checkpointHistory: 10 });
     const legacyCheckpointWorkflow = workflow({ name: 'replay-legacy-checkpoint-token' }).execute(
@@ -565,9 +565,12 @@ describe('timeline and replay', () => {
 
     // Simulate a checkpoint history entry persisted before this field
     // existed by stripping `workflowExecutionToken` directly from the
-    // step-1 checkpoint history record — `resolveReplayRevision()` must
-    // fall back to its original `createdAt` comparison for this entry
-    // rather than treating the missing field as a mismatch.
+    // step-1 checkpoint history record. Round 3's own `createdAt >=`
+    // fallback for this case was itself vulnerable to the identical
+    // same-millisecond/backward-clock collision it fixed for the general
+    // case — round 5 removes that fallback entirely: `resolveReplayRevision()`
+    // now omits `revision` whenever either side lacks the token, rather
+    // than best-effort guessing via timestamps.
     const historyKey = KEYS.checkpointHistory(handle.id, 1);
     const historyBytes = await storage.get(historyKey);
     expect(historyBytes).not.toBeNull();
@@ -577,7 +580,7 @@ describe('timeline and replay', () => {
 
     const replay = await engine.replayTo(handle.id, 1);
     expect(replay).not.toBeNull();
-    expect(replay?.revision).toBe(state?.revision);
+    expect(replay?.revision).toBeUndefined();
   });
 
   it('ignores malformed stored timeline entries and returns results sorted by step', async () => {

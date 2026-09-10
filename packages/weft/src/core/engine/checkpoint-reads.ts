@@ -252,6 +252,21 @@ function resolveReplayRevision(
   state: WorkflowState | null,
 ): string | undefined {
   if (state === null) return undefined;
+  // Exact `workflowExecutionToken` correlation ONLY (WFT-21, Codex review
+  // round 5, P2, tightening round 3's own fix) — no `createdAt` timestamp
+  // fallback when either side predates this field. That fallback was
+  // itself vulnerable to the exact same-millisecond (or backward
+  // clock-adjustment) collision round 3 fixed for the general case: a
+  // concurrent `start-new` replacement created in the same millisecond as
+  // an old checkpoint history entry could still pass `createdAt >=` and
+  // misattribute the REPLACEMENT's `revision` onto a checkpoint the OLD
+  // generation's code actually produced. Since historical checkpoint
+  // records written before this field existed genuinely cannot carry it,
+  // this is a deliberate tightening: a pre-upgrade checkpoint loses
+  // best-effort `revision` attribution during replay (reports `undefined`
+  // rather than guessing) in exchange for NEVER misattributing it — the
+  // same trade-off already accepted for a legacy `WorkflowState.revision`
+  // itself (WFT-17).
   if (
     rawCheckpoint.workflowExecutionToken !== undefined &&
     state.workflowExecutionToken !== undefined
@@ -260,5 +275,5 @@ function resolveReplayRevision(
       ? state.revision
       : undefined;
   }
-  return rawCheckpoint.createdAt >= state.createdAt ? state.revision : undefined;
+  return undefined;
 }

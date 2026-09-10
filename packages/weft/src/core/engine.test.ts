@@ -6053,6 +6053,7 @@ describe('Engine', () => {
 
         const storage = new MemoryStorage();
         const originalBatch = storage.batch.bind(storage);
+        const originalConditionalBatch = storage.conditionalBatch.bind(storage);
         const checkpointFailure = Promise.withResolvers<void>();
         let engine;
 
@@ -6064,17 +6065,31 @@ describe('Engine', () => {
         // the second checkpoint and onto the terminal-completion write, letting both
         // checkpoints land. Only the second checkpoint's own batch carries
         // ckpt:0000000002; the completion batch does not.
+        //
+        // Intercept BOTH storage.batch AND storage.conditionalBatch (WFT-21,
+        // Codex review round 5, P1): a fresh start's checkpoint commits are
+        // now CAS-fenced against their own last-known bytes from the FIRST
+        // commit onward (start.ts primes the baseline), so every checkpoint
+        // commit routes through conditionalBatch on a backend that supports
+        // it — including this second one — never plain batch.
+        const checkpointCommitTwoFailure = (operations: { type: string; key: string }[]) =>
+          operations.some(
+            (operation) =>
+              operation.type === 'put' && operation.key === 'wf:wf-batch:ckpt:0000000002',
+          );
         storage.batch = async (operations) => {
-          if (
-            operations.some(
-              (operation) =>
-                operation.type === 'put' && operation.key === 'wf:wf-batch:ckpt:0000000002',
-            )
-          ) {
+          if (checkpointCommitTwoFailure(operations)) {
             checkpointFailure.resolve();
             throw new Error('simulated checkpoint batch failure');
           }
           return await originalBatch(operations);
+        };
+        storage.conditionalBatch = async (conditions, operations) => {
+          if (checkpointCommitTwoFailure(operations)) {
+            checkpointFailure.resolve();
+            throw new Error('simulated checkpoint batch failure');
+          }
+          return await originalConditionalBatch(conditions, operations);
         };
 
         engine = new Engine({ storage, checkpointHistory: 10 });

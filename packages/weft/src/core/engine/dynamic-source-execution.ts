@@ -242,12 +242,32 @@ export function canResolveRevisionLocally(
  * - `type` with neither an eager registration nor any registered source
  *   throws the pre-existing {@link WorkflowNotRegisteredError}, matching
  *   {@link resolveExecutableRegistration}.
+ *
+ * `onRevisionChosen` (WFT-21, Codex review round 5, P1) is forwarded,
+ * unchanged, to {@link resolveExecutableRegistration} for the
+ * `revision === undefined` legacy path ONLY — the same synchronous,
+ * before-any-await hook that function already documents. A caller resolving
+ * a fork's legacy (pre-revision-pinning) source run needs this to reserve
+ * an `inFlightStartsByRevision` slot the INSTANT the sole candidate's
+ * revision is chosen, not after this whole async call returns: reserving
+ * only afterward (as `fork()` did through round 4) leaves the resolver's
+ * own await — loading the source, when not already cached locally — as a
+ * window where a concurrent `removeWorkflowRevision()` can observe zero
+ * references, delete and finalize that sole candidate, and then have this
+ * same resolution's `loadAndInstallSourceRevision()` silently reinstall it
+ * via `catalog.install()`, papering over a removal that already reported
+ * success. The `revision !== undefined` (pinned) path never invokes this
+ * hook — a caller resolving a KNOWN revision already has it synchronously
+ * up front and can reserve before ever calling this function, exactly as
+ * `fork()`'s own early `reserveInFlightStart(internals, sourceState.type,
+ * targetRevision)` already does.
  */
 export async function resolveExecutableRegistrationForRevision(
   engine: Engine,
   internals: EngineInternals,
   type: string,
   revision: string | undefined,
+  onRevisionChosen?: (revision: string) => void,
 ): Promise<ExecutableRegistration> {
   const eager = internals.registrations.get(type);
   if (eager !== undefined) {
@@ -270,7 +290,7 @@ export async function resolveExecutableRegistrationForRevision(
   }
 
   if (revision === undefined) {
-    return resolveExecutableRegistration(engine, internals, type);
+    return resolveExecutableRegistration(engine, internals, type, onRevisionChosen);
   }
 
   return loadAndInstallSourceRevision(engine, internals, type, revision);

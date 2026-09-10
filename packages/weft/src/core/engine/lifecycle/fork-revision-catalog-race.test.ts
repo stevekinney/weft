@@ -49,7 +49,7 @@ import { getWorkflowCatalog, removeWorkflowRevision } from '../index.ts';
 import { getInternals } from '../internals.ts';
 import { buildRegistrationEntry } from '../registration.ts';
 import { WorkflowRevisionUnavailableError } from '../revision-errors.ts';
-import { buildForkCommitLostRaceError } from './fork-helpers.ts';
+import { buildForkCommitLostRaceError, reserveLegacyForkTargetRevision } from './fork-helpers.ts';
 
 async function revisionFor(name: string, definition: WorkflowDefinition): Promise<string> {
   const entry = buildRegistrationEntry(name, definition);
@@ -288,6 +288,116 @@ describe('fork() legacy-dynamic-source default fork — WFT-21 Codex review roun
   });
 });
 
+/**
+ * WFT-21, Codex review round 5, P1: round 3's fix above reserved
+ * `persistedRevision` only AFTER `resolveExecutableRegistrationOrRenamedNotFound()`
+ * returned — using the SAME engine that started the source, whose local
+ * definition cache was already populated, so that whole resolve never
+ * genuinely awaited a loader. A FRESH engine instance with an empty local
+ * cache exposes the real gap: `resolveExecutableRegistration()`'s own
+ * `loadAndInstallSourceRevision()` awaits the source's loader, and a
+ * concurrent `removeWorkflowRevision()` racing during THAT await could see
+ * zero references — the reservation had not happened yet — delete and
+ * finalize the sole candidate, and then have this same resolution's shared
+ * load silently reinstall it via `catalog.install()`, papering over a
+ * removal that already reported success.
+ *
+ * `resolveExecutableRegistrationForRevision()`'s new `onRevisionChosen` hook
+ * (threaded through `LifecycleCallbacks`) now fires SYNCHRONOUSLY, before
+ * that loader is ever awaited, and `fork()` reserves from inside it. This
+ * test proves the timing directly: gate the loader, prove the reservation
+ * is already visible to `removeWorkflowRevision()` while still parked
+ * inside that gate — the round-3 test above could not observe this, since
+ * its resolution never reached the loader at all.
+ */
+describe('fork() legacy-dynamic-source resolver race — WFT-21 Codex review round 5 P1', () => {
+  it("reserves the resolver-chosen revision BEFORE awaiting the source's own loader, not after — closing the window a concurrent removeWorkflowRevision() could otherwise win while the load is still in flight", async () => {
+    const storage = new MemoryStorage();
+    const type = 'fork-legacy-resolver-race';
+    const definitionV1 = workflow({ name: type, description: 'v1' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      return yield* ctx.waitForSignal<string>('go');
+    });
+    const revisionV1 = await revisionFor(type, definitionV1);
+
+    // Engine A starts (and durably installs) the source run, then this
+    // engine instance is disposed — engine B below shares only `storage`,
+    // never engine A's own in-memory local source cache.
+    const engineA = new Engine({ storage });
+    let sourceId: string;
+    try {
+      engineA.registerSource(
+        workflowSource(
+          { name: type, location: './v1.ts', exportName: 'v1', revision: revisionV1 },
+          async () => ({ v1: definitionV1 }),
+        ),
+      );
+      const sourceHandle = await engineA.start(type, null, { id: 'fork-legacy-resolver-source' });
+      sourceId = sourceHandle.id;
+
+      // Simulate a legacy (pre-revision-pinning) record, as round 3's test
+      // does, so no durable state reference protects `revisionV1` either —
+      // the in-flight reservation is the ONLY thing that can.
+      const stateBytes = await storage.get(KEYS.workflow(sourceId));
+      const legacyState = { ...(decode(stateBytes!) as Record<string, unknown>) };
+      delete legacyState['revision'];
+      await storage.put(KEYS.workflow(sourceId), encode(legacyState));
+    } finally {
+      engineA[Symbol.dispose]();
+    }
+
+    // A FRESH engine instance — its own empty `sources.resolved` cache
+    // forces a genuine loader await for the fork below, unlike round 3's
+    // same-engine test.
+    const engineB = new Engine({ storage });
+    try {
+      const gate = Promise.withResolvers<void>();
+      const entered = Promise.withResolvers<void>();
+      engineB.registerSource(
+        workflowSource(
+          { name: type, location: './v1.ts', exportName: 'v1', revision: revisionV1 },
+          async () => {
+            entered.resolve();
+            await gate.promise;
+            return { v1: definitionV1 };
+          },
+        ),
+      );
+
+      // Default fork — no `options.revision` — onto the legacy source's
+      // sole registered candidate.
+      const forkPromise = engineB.fork(sourceId);
+      await entered.promise;
+
+      // Parked exactly inside the resolver's own loader await. Before this
+      // fix, `legacyResolvedInFlightRevision` was assigned only after this
+      // whole resolve returned, so nothing reserved `revisionV1` yet here
+      // and this removal would have wrongly succeeded.
+      const refused = await removeWorkflowRevision(engineB, type, revisionV1);
+      expect(refused.removed).toBe(false);
+      if (!refused.removed && refused.reason === 'referenced') {
+        expect(refused.references.inFlightStarts).toBe(1);
+      } else {
+        throw new Error(`expected a "referenced" refusal, got ${JSON.stringify(refused)}`);
+      }
+
+      gate.resolve();
+      const forked = await forkPromise;
+      const forkedState = await engineB.get(forked.id);
+      expect(forkedState?.revision).toBe(revisionV1);
+
+      // Reservation released once the fork settles.
+      expect(getInternals(engineB).inFlightStartsByRevision.size).toBe(0);
+
+      await engineB.signal(forked.id, 'go', 'done');
+      await expect(forked.result()).resolves.toBe('done');
+    } finally {
+      engineB[Symbol.dispose]();
+    }
+  });
+});
+
 describe('buildForkCommitLostRaceError — WFT-21 Codex review round 4 P2', () => {
   it('throws the typed WorkflowRevisionUnavailableError when the fork carried a non-empty catalog-entry condition', () => {
     const error = buildForkCommitLostRaceError('wf-1', 'checkout', 'sha256:target', [
@@ -303,5 +413,28 @@ describe('buildForkCommitLostRaceError — WFT-21 Codex review round 4 P2', () =
     const error = buildForkCommitLostRaceError('wf-1', 'checkout', undefined, []);
     expect(error).not.toBeInstanceOf(WorkflowRevisionUnavailableError);
     expect(error.message).toContain('lost its CAS race');
+  });
+});
+
+describe('reserveLegacyForkTargetRevision — WFT-21 Codex review round 3 P1', () => {
+  it("reserves persistedRevision when it differs from targetRevision — fork()'s own onRevisionChosen hook call site, which only invokes this when targetRevision is undefined", () => {
+    const internals = { inFlightStartsByRevision: new Map() } as never;
+    const reserved = reserveLegacyForkTargetRevision(internals, 'checkout', undefined, 'sha256:v1');
+    expect(reserved).toBe('sha256:v1');
+  });
+
+  it("skips reserving (returns undefined, no increment) when persistedRevision already equals targetRevision — a defensive branch unreachable through fork()'s own onRevisionChosen call site (WFT-21, Codex review round 5, P1, which gated that call site to only fire when targetRevision is undefined) but exercised directly here so this function's own double-reservation guard stays covered independently of that one caller", () => {
+    const internals = { inFlightStartsByRevision: new Map() } as never;
+    const reserved = reserveLegacyForkTargetRevision(
+      internals,
+      'checkout',
+      'sha256:v1',
+      'sha256:v1',
+    );
+    expect(reserved).toBeUndefined();
+    expect(
+      (internals as { inFlightStartsByRevision: Map<string, unknown> }).inFlightStartsByRevision
+        .size,
+    ).toBe(0);
   });
 });

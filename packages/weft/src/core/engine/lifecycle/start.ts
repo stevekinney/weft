@@ -1,4 +1,5 @@
 import type { BatchOperation } from '../../../storage/interface.ts';
+import { serializeCheckpoint } from '../../checkpoint.ts';
 import { assertPayloadWithinLimit } from '../../payload-size.ts';
 import { normalizeStorageTimestamp } from '../../scheduler.ts';
 import {
@@ -13,7 +14,10 @@ import {
   releaseInFlightStart,
   resolveAndReserveExecutableRegistration,
 } from '../catalog-removal.ts';
-import { forgetCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
+import {
+  forgetCommittedCheckpointBytes,
+  rememberCommittedCheckpointBytes,
+} from '../checkpoint-commit-snapshots.ts';
 import { WorkflowAlreadyExistsError } from '../errors.ts';
 import { type WorkflowHandle } from '../handles.ts';
 import type { Engine } from '../index.ts';
@@ -321,6 +325,17 @@ export async function startWorkflow(
         : undefined;
 
     internals.checkpoints.set(workflowId, checkpoint);
+    // Prime the checkpoint-bytes CAS baseline synchronously, alongside the
+    // set above (WFT-21, Codex review round 5, P1; mirrors `resume.ts`'s own
+    // identical set+remember pairing) — without this, this generation's
+    // FIRST checkpoint commit (worker or inline) carries no `expectedSerialized`,
+    // so `commitCheckpoint()`'s checkpoint-key CAS condition is skipped
+    // entirely for it, leaving that first commit's own later awaits
+    // unfenced against a concurrent `start-new` replacement of this exact
+    // workflow ID. `rollbackTransientStartState()` already calls
+    // `forgetCommittedCheckpointBytes()` on any failed start below, so a
+    // start that never actually commits leaves nothing stale behind.
+    rememberCommittedCheckpointBytes(internals, workflowId, serializeCheckpoint(checkpoint));
     setWorkflowStartHeaders(internals, workflowId, workflowStartHeaders, callbacks);
 
     // Cache the workflow version tuple for forwarding to event-log entries.

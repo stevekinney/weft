@@ -193,6 +193,21 @@ export function buildForkCommitLostRaceError(
  * covers it, and a second reservation would double-count the fork's own
  * in-flight reference). See `fork-revision-catalog-race.test.ts`'s round-3
  * `describe` block for the full end-to-end race this closes.
+ *
+ * Called from `fork()`'s `resolveExecutableRegistrationForRevision()`
+ * `onRevisionChosen` hook (WFT-21, Codex review round 5, P1), not after that
+ * whole resolve returns as through round 4 — the resolver's own await
+ * (loading the source, when not already cached) was a window where a
+ * concurrent `removeWorkflowRevision()` could delete and finalize the sole
+ * candidate before a post-hoc reservation ever ran, letting a subsequent
+ * shared-load reinstall paper over a removal that already reported success.
+ * See `resolveExecutableRegistrationForRevision()`'s own doc for the full
+ * rationale; this function's own reservation logic is unchanged. Its
+ * `persistedRevision === targetRevision` guard is now defensive-only in
+ * practice — the sole call site only invokes it when `targetRevision` is
+ * already `undefined`, so a defined `persistedRevision` can never equal it
+ * — kept rather than removed so this function's own contract still holds
+ * independently of that one call site; exercised directly by a unit test.
  */
 export function reserveLegacyForkTargetRevision(
   internals: EngineInternals,
