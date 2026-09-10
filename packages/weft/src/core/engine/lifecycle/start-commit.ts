@@ -305,10 +305,30 @@ export async function buildAndCommitStartBatch(
     // duplicate id is terminal — re-entering the admission retry loop would
     // re-fail this same condition on every attempt and end in a misleading
     // `AtomicStateConflictError`.
-    if (await hasStartConditionConflict(internals, conditions, 'duplicate-id')) {
-      throw new WorkflowAlreadyExistsError(workflowId);
-    }
-    if (workflowConcurrency === undefined) {
+    if (context.duplicateIdCondition !== undefined) {
+      // Attribute by ELIMINATION whenever nothing else could have missed, rather
+      // than by re-reading the key. A re-read is not reliable here: the winning run
+      // can complete and be purged (or swept by retention) between the failed
+      // compare-and-swap and this check, restoring `wf:<id>` to the very value the
+      // condition expected. The conflict then reads as "no conflict" and the start
+      // would fall through to the `StartIdempotencyRaceLostError` sentinel below —
+      // which is internal and documented as never reaching a caller. With no
+      // workflow-concurrency conditions in this batch, the duplicate-id condition is
+      // the only base condition there was, so a `'precondition-lost'` outcome is
+      // proof enough on its own.
+      if (workflowConcurrency === undefined) {
+        throw new WorkflowAlreadyExistsError(workflowId);
+      }
+      // Both kinds of base condition are present, so the outcome alone cannot say
+      // which missed. Re-read only the duplicate-id key: a concurrency admission
+      // miss is retryable and must fall through to the loop, while a duplicate id is
+      // terminal. The purge race above still applies, but mis-reading it here costs
+      // a retry rather than a leaked sentinel — the admission loop ends in
+      // `AtomicStateConflictError`, which is a public error.
+      if (await hasStartConditionConflict(internals, conditions, 'duplicate-id')) {
+        throw new WorkflowAlreadyExistsError(workflowId);
+      }
+    } else if (workflowConcurrency === undefined) {
       throw new StartIdempotencyRaceLostError();
     }
   }

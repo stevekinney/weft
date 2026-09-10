@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 
 import type { ConditionalBatchCondition } from '../../../storage/interface.ts';
+import { KEYS } from '../../../storage/interface.ts';
 import { MemoryStorage } from '../../../storage/memory.ts';
 import { AtomicStateConflictError } from '../../atomic-state.ts';
 import type { Checkpoint, WorkflowState } from '../../types.ts';
+import { WorkflowAlreadyExistsError } from '../errors.ts';
 import { WorkflowClaimRegistry } from '../workflow-claim-registry.ts';
 import { buildAndCommitStartBatch } from './start-commit.ts';
 
@@ -155,6 +157,81 @@ describe('start-commit lifecycle helpers', () => {
         }),
       ),
     ).rejects.toThrow('start idempotency compare-and-swap lost to a concurrent caller');
+  });
+
+  it('attributes a lost duplicate-id CAS by elimination, even when the winner was purged', async () => {
+    // The purge race Codex flagged on #959: the winning run can complete and be
+    // purged (or swept by retention) between this start's failed compare-and-swap
+    // and any diagnostic re-read, restoring `wf:<id>` to exactly the value the
+    // condition expected. Re-reading would then see "no conflict" and leak the
+    // internal `StartIdempotencyRaceLostError`, which is documented as never
+    // reaching a caller. With no concurrency conditions in the batch, the
+    // duplicate-id condition is the only base condition there was, so the lost
+    // outcome alone is proof - no read required.
+    const storage = new MemoryStorage();
+    const context = createBaseContext(storage);
+    const workflowKey = KEYS.workflow('workflow-start-commit');
+
+    // Storage agrees with the condition (key absent) - as it would after a purge.
+    storage.conditionalBatch = async () => false;
+
+    await expect(
+      buildAndCommitStartBatch(
+        { ...context, duplicateIdCondition: { key: workflowKey, expectedValue: null } } as never,
+        undefined,
+      ),
+    ).rejects.toBeInstanceOf(WorkflowAlreadyExistsError);
+  });
+
+  it('still reports a duplicate id when concurrency admission is also present', async () => {
+    // Both kinds of base condition present, so the outcome alone cannot say which
+    // missed and the duplicate-id key is re-read to disambiguate.
+    const storage = new MemoryStorage();
+    const context = createBaseContext(storage);
+    const workflowKey = KEYS.workflow('workflow-start-commit');
+    await storage.put(workflowKey, new Uint8Array([9]));
+    storage.conditionalBatch = async () => false;
+
+    await expect(
+      buildAndCommitStartBatch(
+        {
+          ...context,
+          duplicateIdCondition: { key: workflowKey, expectedValue: null },
+          buildWorkflowConcurrencyStartOperations: async () => ({
+            conditions: [{ key: 'workflow-concurrency', expectedValue: null }],
+            operations: [],
+            stateKey: 'workflow-concurrency',
+          }),
+        } as never,
+        undefined,
+      ),
+    ).rejects.toBeInstanceOf(WorkflowAlreadyExistsError);
+  });
+
+  it('retries admission when the duplicate id is intact and only concurrency missed', async () => {
+    // The complement of the case above: the duplicate-id key still matches, so the
+    // miss belongs to concurrency admission, which is retryable - the start must
+    // fall through to the retry loop and end in the public `AtomicStateConflictError`
+    // rather than being misreported as a duplicate id.
+    const storage = new MemoryStorage();
+    const context = createBaseContext(storage);
+    const workflowKey = KEYS.workflow('workflow-start-commit');
+    storage.conditionalBatch = async () => false;
+
+    await expect(
+      buildAndCommitStartBatch(
+        {
+          ...context,
+          duplicateIdCondition: { key: workflowKey, expectedValue: null },
+          buildWorkflowConcurrencyStartOperations: async () => ({
+            conditions: [{ key: 'workflow-concurrency', expectedValue: null }],
+            operations: [],
+            stateKey: 'workflow-concurrency',
+          }),
+        } as never,
+        undefined,
+      ),
+    ).rejects.toBeInstanceOf(AtomicStateConflictError);
   });
 
   it('ADR 0002: folds acquire() into an idempotent start batch under ownership: "workflow-lease"', async () => {
