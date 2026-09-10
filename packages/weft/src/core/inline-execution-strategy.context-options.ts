@@ -144,12 +144,14 @@ function resolveLogSinkOption(dependencies: InlineExecutionDependencies): {
  * spreads do not tip that function over the cyclomatic-complexity cap.
  */
 export function optionalInlineDependencies(candidates: {
-  [Key in
-    | 'getComposedWorkflowInterceptor'
-    | 'registerCancelHandler'
-    | 'recordFinalizerState'
-    | 'getWorkflowServices'
-    | 'getLogSink']: InlineExecutionDependencies[Key] | undefined;
+  [
+    Key in
+      | 'getComposedWorkflowInterceptor'
+      | 'registerCancelHandler'
+      | 'recordFinalizerState'
+      | 'getWorkflowServices'
+      | 'getLogSink'
+  ]: InlineExecutionDependencies[Key] | undefined;
 }): Partial<InlineExecutionDependencies> {
   return {
     ...(candidates.getComposedWorkflowInterceptor !== undefined && {

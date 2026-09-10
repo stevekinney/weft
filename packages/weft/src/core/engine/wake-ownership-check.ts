@@ -64,9 +64,7 @@ export type WakeOwnershipCheckParams = {
 
 /** Why a re-read holder record failed to match the expected generation. */
 export type WakeOwnershipDiscardReason =
-  | 'holder-absent'
-  | 'holder-undecodable'
-  | 'generation-mismatch';
+  'holder-absent' | 'holder-undecodable' | 'generation-mismatch';
 
 /** Result of {@link wakeOwnershipCheck}. */
 export type WakeOwnershipCheckResult =

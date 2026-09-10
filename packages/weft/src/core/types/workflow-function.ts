@@ -180,9 +180,7 @@ export type WorkflowOperation<TResult> = Generator<unknown, TResult, unknown>;
  * ```
  */
 export type ChildWorkflowTarget<TInput = unknown, TOutput = unknown> =
-  | string
-  | WorkflowFunction<TInput, TOutput>
-  | StepWorkflowFunction<TInput, TOutput>;
+  string | WorkflowFunction<TInput, TOutput> | StepWorkflowFunction<TInput, TOutput>;
 
 /**
  * How a direct `ctx.startChild()` call relates the child workflow to the parent.
@@ -336,8 +334,7 @@ export interface WorkflowPipeStage<TInput = unknown, TOutput = unknown> {
  * ```
  */
 export type WorkflowPipeStageDefinition<TInput = unknown, TOutput = unknown> =
-  | WorkflowPipeStage<TInput, TOutput>
-  | ChildWorkflowTarget<TInput, TOutput>;
+  WorkflowPipeStage<TInput, TOutput> | ChildWorkflowTarget<TInput, TOutput>;
 
 /**
  * Options for `ctx.map(items, workflowType, options)`. Controls the maximum

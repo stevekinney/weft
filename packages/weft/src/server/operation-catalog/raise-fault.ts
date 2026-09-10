@@ -37,8 +37,7 @@ export const UNIVERSAL_FAULT_DEFAULTS: ReadonlySet<FaultCode> = new Set([
  */
 export function raiseFault(
   operation:
-    | ErasedOperation
-    | { readonly name: string; readonly producibleFaults?: readonly FaultCode[] },
+    ErasedOperation | { readonly name: string; readonly producibleFaults?: readonly FaultCode[] },
   fault: OperationFault,
 ): never {
   const declared = new Set<FaultCode>([

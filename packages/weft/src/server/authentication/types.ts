@@ -242,8 +242,7 @@ export type AuthContext = {
  * ```
  */
 export type AuthResult =
-  | ({ authenticated: true } & AuthContext)
-  | { authenticated: false; error: string };
+  ({ authenticated: true } & AuthContext) | { authenticated: false; error: string };
 
 /**
  * Decoded JWT claims payload — the JSON object between the JWT header and

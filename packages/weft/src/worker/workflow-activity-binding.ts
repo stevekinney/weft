@@ -57,8 +57,7 @@ export type RemoteWorkerActivityFunction = (
  * ```
  */
 export type RemoteWorkerActivityImplementation =
-  | RemoteWorkerActivityFunction
-  | { execute: RemoteWorkerActivityFunction };
+  RemoteWorkerActivityFunction | { execute: RemoteWorkerActivityFunction };
 
 /**
  * Minimal workflow shape the worker SDK consumes from a `workflows` map. Only

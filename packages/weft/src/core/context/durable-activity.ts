@@ -138,9 +138,7 @@ function getDurableActivityScopeStorage(): AsyncLocalStorageLike<DurableActivity
 }
 
 function currentDurableActivityScope():
-  | DurableActivityScope
-  | typeof AMBIGUOUS_FALLBACK_DURABLE_ACTIVITY_SCOPE
-  | undefined {
+  DurableActivityScope | typeof AMBIGUOUS_FALLBACK_DURABLE_ACTIVITY_SCOPE | undefined {
   const storage = getDurableActivityScopeStorage();
   if (storage !== null) {
     return storage.getStore();

@@ -25,8 +25,7 @@ const _activityKeysCheck: _ActivityKeysOnInterceptor = true;
 // 3. `Interceptor` must not have keys that don't appear in either narrow
 //    interface (catches accidental widening of the unified shape).
 type _InterceptorKeysSubsetOfNarrow = keyof Interceptor extends
-  | keyof WorkflowInterceptor
-  | keyof ActivityInterceptor
+  keyof WorkflowInterceptor | keyof ActivityInterceptor
   ? true
   : never;
 const _interceptorKeysCheck: _InterceptorKeysSubsetOfNarrow = true;

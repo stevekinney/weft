@@ -11,8 +11,7 @@ const getUpdateResultOutput = z.unknown();
 
 export type GetUpdateResultInput = z.infer<typeof getUpdateResultInput>;
 export type GetUpdateResultOutput =
-  | { status: 'pending' }
-  | { status: 'completed'; result: unknown; error?: string };
+  { status: 'pending' } | { status: 'completed'; result: unknown; error?: string };
 
 export const getUpdateResultOperation = defineOperation<
   GetUpdateResultInput,

@@ -115,12 +115,7 @@ export interface WorkflowBuilderOptions<
 // ---------------------------------------------------------------------------
 
 type ChainMethodName =
-  | 'activities'
-  | 'signals'
-  | 'updates'
-  | 'queries'
-  | 'searchAttributes'
-  | 'services';
+  'activities' | 'signals' | 'updates' | 'queries' | 'searchAttributes' | 'services';
 
 /**
  * Runtime implementation backing the {@link WorkflowBuilder} type. The class

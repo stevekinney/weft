@@ -138,9 +138,7 @@ export async function processWaitConditionOperation(
 }
 
 type ConditionWaitStepResult =
-  | { status: 'continue' }
-  | { status: 'stop' }
-  | { status: 'complete'; value: boolean | undefined };
+  { status: 'continue' } | { status: 'stop' } | { status: 'complete'; value: boolean | undefined };
 
 /**
  * One iteration of the condition wait loop: register the waiter, re-check the

@@ -130,10 +130,9 @@ function bunSqliteCheckpoint(databasePath: string): CheckpointResult {
   const database = new Database(databasePath);
   try {
     const rows = database
-      .prepare<
-        { busy: number; log: number; checkpointed: number },
-        []
-      >('PRAGMA wal_checkpoint(TRUNCATE)')
+      .prepare<{ busy: number; log: number; checkpointed: number }, []>(
+        'PRAGMA wal_checkpoint(TRUNCATE)',
+      )
       .all();
     const raw = rows[0];
     return { truncated: isFullyCheckpointed(raw, databasePath), raw };
@@ -190,8 +189,7 @@ const nodeSqliteSpec: BunOrNodeAdapterSpec = {
         const database = new BetterSqlite3Constructor(databasePath);
         try {
           const raw = database.pragma('wal_checkpoint(TRUNCATE)') as
-            | readonly BetterSqliteRow[]
-            | BetterSqliteRow;
+            readonly BetterSqliteRow[] | BetterSqliteRow;
           const row = Array.isArray(raw) ? raw[0] : raw;
           return { truncated: isFullyCheckpointed(row, databasePath), raw };
         } finally {

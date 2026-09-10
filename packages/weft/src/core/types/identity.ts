@@ -75,10 +75,4 @@ export type FailureCategory = 'application' | 'timeout' | 'cancellation' | 'reso
  * preemption, not a fault condition.
  */
 export type WorkflowStatus =
-  | 'pending'
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'cancelled'
-  | 'timed-out'
-  | 'suspended';
+  'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'suspended';

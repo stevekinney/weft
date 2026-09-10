@@ -161,9 +161,7 @@ const worker = new RemoteWorker({
   workflows: {
     media: {
       name: 'media',
-      activities: {
-        /* ... */
-      },
+      activities: {/* ... */},
     },
   },
   interceptors: [interceptor],

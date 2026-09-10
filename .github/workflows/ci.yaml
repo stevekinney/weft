@@ -7,6 +7,18 @@ on:
     branches: [main]
 
 jobs:
+  format-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile --linker=isolated
+      - run: bunx turbo run format:check --filter=@lostgradient/weft
+        env:
+          TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+          TURBO_TEAM: kinney
   lint:
     runs-on: ubuntu-latest
     steps:

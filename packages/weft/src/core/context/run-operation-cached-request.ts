@@ -10,8 +10,7 @@ import type { RunActivityRequest } from './run-operation.ts';
 type ActivityOperationRequest = Extract<ContextOperationRequest, { type: 'activity' }>;
 
 type CachedResultState<TResult> =
-  | { hasCachedResult: false }
-  | { cachedResult: TResult; hasCachedResult: true };
+  { hasCachedResult: false } | { cachedResult: TResult; hasCachedResult: true };
 
 type CachedRunActivityRequestConfiguration = {
   advanceStepIndexForCachedRetryState: boolean;

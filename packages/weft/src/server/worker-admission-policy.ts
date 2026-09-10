@@ -48,8 +48,7 @@ export type WorkerAdmissionRequest = Readonly<{
  * ```
  */
 export type WorkerAdmissionDecision =
-  | { readonly status: 'accepted' }
-  | { readonly status: 'rejected'; readonly reason: string };
+  { readonly status: 'accepted' } | { readonly status: 'rejected'; readonly reason: string };
 
 /**
  * Decide whether a worker registration attempt may proceed.

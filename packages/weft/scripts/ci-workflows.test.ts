@@ -64,6 +64,7 @@ describe('coverage workflow gates', () => {
   it('uses remote caching for deterministic jobs only', async () => {
     const workflow = await readWorkflow('ci.yaml');
     const cachedJobs = new Map([
+      ['format-check', 'bunx turbo run format:check --filter=@lostgradient/weft'],
       ['lint', 'bunx turbo run lint --filter=@lostgradient/weft'],
       ['typecheck', 'bunx turbo run typecheck --filter=@lostgradient/weft'],
       ['build', 'bunx turbo run build --filter=@lostgradient/weft'],

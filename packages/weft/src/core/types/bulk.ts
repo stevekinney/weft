@@ -17,12 +17,7 @@ export const MAX_BULK_CONFIRMATION_TOKEN_LENGTH = 256;
  * ```
  */
 export type BulkOperationAction =
-  | 'cancel'
-  | 'signal'
-  | 'delete'
-  | 'tag:add'
-  | 'tag:remove'
-  | 'retry-failed';
+  'cancel' | 'signal' | 'delete' | 'tag:add' | 'tag:remove' | 'retry-failed';
 
 /**
  * Credential-safe caller summary recorded on bulk audit events. Claims,

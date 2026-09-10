@@ -161,8 +161,7 @@ describe('AsyncAPI channel builders', () => {
       definitionSchemaToJsonSchema,
     );
     const terminated = messages['weft_workflows_events_terminated'] as
-      | { payload: Record<string, unknown> }
-      | undefined;
+      { payload: Record<string, unknown> } | undefined;
     expect(terminated).toBeDefined();
     const properties = terminated!.payload['properties'] as Record<string, unknown>;
     const params = properties['params'] as Record<string, unknown>;

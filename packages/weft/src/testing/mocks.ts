@@ -106,8 +106,7 @@ export interface MockedActivity {
 }
 
 type OneTimeOverride<TResult> =
-  | { type: 'return'; value: TResult }
-  | { type: 'reject'; error: Error };
+  { type: 'return'; value: TResult } | { type: 'reject'; error: Error };
 
 // ---------------------------------------------------------------------------
 // MockHandle implementation

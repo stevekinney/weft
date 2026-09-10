@@ -40,11 +40,7 @@
  * value set in ADR 0002 § Observability — five fixed values, nothing else.
  */
 export type WorkflowClaimAttemptOutcome =
-  | 'acquired'
-  | 'takeover'
-  | 'lost_race'
-  | 'deposed'
-  | 'backoff_skipped';
+  'acquired' | 'takeover' | 'lost_race' | 'deposed' | 'backoff_skipped';
 
 /**
  * Every {@link WorkflowClaimAttemptOutcome} value, in declaration order. The
