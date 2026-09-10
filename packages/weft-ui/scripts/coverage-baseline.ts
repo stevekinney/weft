@@ -174,9 +174,9 @@ const DARWIN_BASELINE: CoverageBaseline = {
   // the two (94.33% lines / 95.28% functions vs. the single higher-reading
   // run's 94.50%/95.30%) — the majority AND the conservative choice agree
   // here, unlike the `workflows`-area case above where they didn't. This
-  // measurement diverges from LINUX_BASELINE below (a Linux CI
-  // re-measurement is a separate follow-up commit — see that baseline's
-  // own note).
+  // tuple turned out to match LINUX_BASELINE's own 2026-09-10 re-measurement
+  // below exactly — see that entry's note for the CI-artifact download this
+  // was cross-checked against.
   measuredAt: '2026-09-10T23:22:00.000Z',
   overall: { linesFound: 37517, linesHit: 35392, functionsFound: 7274, functionsHit: 6931 },
   areas: {
@@ -396,8 +396,22 @@ const LINUX_BASELINE: CoverageBaseline = {
   // Re-measured 2026-08-30 for the monorepo conversion — see the darwin
   // note above; the linux CI artifact from run 33334402102 aggregates
   // identically after the package-local LCOV filter.
-  measuredAt: '2026-08-30T20:45:00.000Z',
-  overall: { linesFound: 36221, linesHit: 34086, functionsFound: 7006, functionsHit: 6662 },
+  //
+  // Re-measured again 2026-09-10 for WFT-115's third review pass (see
+  // DARWIN_BASELINE's matching note above for what changed). PR #975's
+  // `ui-coverage` job (run 34542778591, `ubuntu-latest`) uploaded its
+  // `coverage-lcov-linux` artifact even though the gate wasn't tripped
+  // (`if: always()`); downloaded and parsed with this file's own
+  // `parseLcov`/`aggregateByArea` rather than reconstructed from the
+  // percentages CI prints. The raw counts are IDENTICAL to the darwin
+  // tuple this file records above (37517/35392/7274/6931 overall,
+  // 6060/6031/1264/1241 for `src/routes/system`) — no Linux/darwin
+  // Svelte-compiled-output attribution divergence for this change, so
+  // both platform entries reuse the same measured tuple (same pattern as
+  // the 2026-08-30 note just above and the original 2026-09-10 WFT-115
+  // note further down this file).
+  measuredAt: '2026-09-10T23:40:00.000Z',
+  overall: { linesFound: 37517, linesHit: 35392, functionsFound: 7274, functionsHit: 6931 },
   areas: {
     fixtures: { linesFound: 698, linesHit: 321, functionsFound: 69, functionsHit: 12 },
     // The 2026-08-30 monorepo re-measurement note above applies here too:
@@ -447,11 +461,16 @@ const LINUX_BASELINE: CoverageBaseline = {
     // note for the full investigation (one real bug fixed, four real test
     // gaps closed, and the residual is a confirmed Svelte-5-compiled-output
     // line-attribution artifact in `workflow-revisions-panel.svelte`).
+    //
+    // Re-measured again 2026-09-10 for WFT-115's third review pass — see
+    // the `measuredAt` note above this baseline's `overall` field for the
+    // artifact-download methodology. 5850/5821/1224/1201 -> this tuple,
+    // matching DARWIN_BASELINE's `src/routes/system` entry exactly.
     'src/routes/system': {
-      linesFound: 5850,
-      linesHit: 5821,
-      functionsFound: 1224,
-      functionsHit: 1201,
+      linesFound: 6060,
+      linesHit: 6031,
+      functionsFound: 1264,
+      functionsHit: 1241,
     },
     'src/routes/workers': {
       linesFound: 5685,
