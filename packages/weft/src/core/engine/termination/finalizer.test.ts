@@ -22,7 +22,7 @@ import { decode, encode } from '../../codec.ts';
 import { Engine } from '../../engine.ts';
 import { buildWorkflowManifestFromDefinition } from '../../registry-workflow-manifest.ts';
 import { workflowSource } from '../../source/index.ts';
-import type { WorkflowContext, WorkflowState } from '../../types.ts';
+import type { WorkflowContext, WorkflowDefinition, WorkflowState } from '../../types.ts';
 import { activity, workflow } from '../../types.ts';
 import { copyWorkflowDefinition } from '../construction.ts';
 import { recordFinalizerState } from '../finalizer-state.ts';
@@ -33,7 +33,7 @@ import { runFinalizerActivity } from './finalizer-activity.ts';
 import type { TeardownDeadLetterRecord } from './finalizer-claim.ts';
 import { runWorkflowFinalizer, type FinalizerDriveCallbacks } from './finalizer.ts';
 
-function terminalState(id: string, type: string): WorkflowState {
+function terminalState(id: string, type: string, revision?: string): WorkflowState {
   return {
     id,
     type,
@@ -43,6 +43,7 @@ function terminalState(id: string, type: string): WorkflowState {
     updatedAt: 0,
     versionTuple: { workflowVersion: '0' },
     workflowExecutionToken: `execution-${id}`,
+    ...(revision !== undefined && { revision }),
   };
 }
 
@@ -546,6 +547,130 @@ describe('runWorkflowFinalizer — defensive bail-out branches', () => {
       workflowId,
       createTeardownTimerId(token),
       makeCallbacks(terminalState(workflowId, 'dynamic-teardown-load-fails')),
+    );
+
+    expect(await internals.storage.get(KEYS.teardownOwed(workflowId))).not.toBeNull();
+    expect(await teardownTimerCount(internals)).toBe(1);
+    engine[Symbol.dispose]();
+  });
+
+  it("runs the pinned revision's own finalizer, not a sibling run's more-recently-resolved revision of the same dynamic-source type (WFT-19)", async () => {
+    const destroyedA: unknown[] = [];
+    const destroyedB: unknown[] = [];
+    const destroySandboxA = activity({
+      name: 'destroy-sandbox-a',
+      execute: async (input: unknown) => {
+        destroyedA.push(input);
+      },
+    });
+    const destroySandboxB = activity({
+      name: 'destroy-sandbox-b',
+      execute: async (input: unknown) => {
+        destroyedB.push(input);
+      },
+    });
+    const type = 'multi-rev-teardown';
+    const definitionA = workflow({
+      name: type,
+      description: 'candidate A',
+      finalizer: destroySandboxA,
+    }).execute(async function* (ctx: WorkflowContext) {
+      ctx.setFinalizerState({ sandboxId: 'sbx-a' });
+      yield* ctx.waitForSignal('never');
+    });
+    const definitionB = workflow({
+      name: type,
+      description: 'candidate B',
+      finalizer: destroySandboxB,
+    }).execute(async function* (ctx: WorkflowContext) {
+      ctx.setFinalizerState({ sandboxId: 'sbx-b' });
+      yield* ctx.waitForSignal('never');
+    });
+    async function manifestFor(definition: WorkflowDefinition): Promise<string> {
+      const entry = buildRegistrationEntry(type, definition);
+      const registered = copyWorkflowDefinition(type, entry);
+      const manifest = await buildWorkflowManifestFromDefinition(
+        registered,
+        new ActivityRegistry().listDefinitions(),
+      );
+      return manifest.revision;
+    }
+    const revisionA = await manifestFor(definitionA);
+    const revisionB = await manifestFor(definitionB);
+
+    const engine = new Engine();
+    engine.registerSource(
+      workflowSource(
+        { name: type, location: './a.ts', exportName: 'a', revision: revisionA },
+        async () => ({ a: definitionA }),
+      ),
+    );
+    engine.registerSource(
+      workflowSource(
+        { name: type, location: './b.ts', exportName: 'b', revision: revisionB },
+        async () => ({ b: definitionB }),
+      ),
+    );
+    const internals = getInternals(engine);
+
+    // Activate B as the catalog's CURRENT active pointer (unrelated to the
+    // workflow under test) — before this fix, `resolveFinalizerRegistration`
+    // resolved a dynamic source via the active-pointer-based
+    // `resolveExecutableRegistration()`, so it would have resolved B here
+    // regardless of the workflow's own pin. Proving the drive resolves
+    // against the WORKFLOW'S OWN exact `revision` (via
+    // `resolveExecutableRegistrationForRevision()`) is the point of this test.
+    await engine.resolveWorkflowSource(type, revisionB);
+    await engine.workflows.activate(type, revisionB);
+
+    const workflowId = 'wf-multi-rev-finalizer';
+    const token = 'tok-multi-rev';
+    await internals.storage.put(KEYS.teardownOwed(workflowId), encode(owedClaim(token)));
+    await internals.storage.put(KEYS.finalizerState(workflowId), encode({ sandboxId: 'sbx-a' }));
+
+    await runWorkflowFinalizer(
+      internals,
+      workflowId,
+      createTeardownTimerId(token),
+      makeCallbacks(terminalState(workflowId, type, revisionA)),
+    );
+
+    expect(destroyedA).toEqual([{ sandboxId: 'sbx-a' }]);
+    expect(destroyedB).toEqual([]);
+    expect(await internals.storage.get(KEYS.teardownOwed(workflowId))).toBeNull();
+    expect(await teardownTimerCount(internals)).toBe(0);
+    engine[Symbol.dispose]();
+  });
+
+  it('leaves the marker and re-arms (rather than throwing) when the pinned revision cannot be resolved on this process', async () => {
+    // A run pinned to a revision this process never registered a candidate
+    // for — `resolveExecutableRegistrationForRevision()` throws
+    // `WorkflowRevisionUnavailableError(reason: 'not-registered')`, which
+    // `resolveFinalizerRegistration()` must catch and rearm, exactly like
+    // the pre-existing `DynamicWorkflowSourceUnavailableError` load-failure
+    // path above — the workflow is already terminal, so this must never
+    // propagate out of the finalizer drive.
+    const type = 'unresolvable-pin-teardown';
+    const definition = workflow({ name: type }).execute(async function* (ctx: WorkflowContext) {
+      yield* ctx.waitForSignal('never');
+    });
+    const engine = new Engine();
+    engine.registerSource(
+      workflowSource(
+        { name: type, location: './only.ts', exportName: 'only', revision: 'only-revision' },
+        async () => ({ only: definition }),
+      ),
+    );
+    const internals = getInternals(engine);
+    const workflowId = 'wf-unresolvable-pin';
+    const token = 'tok-unresolvable-pin';
+    await internals.storage.put(KEYS.teardownOwed(workflowId), encode(owedClaim(token)));
+
+    await runWorkflowFinalizer(
+      internals,
+      workflowId,
+      createTeardownTimerId(token),
+      makeCallbacks(terminalState(workflowId, type, 'a-revision-never-registered')),
     );
 
     expect(await internals.storage.get(KEYS.teardownOwed(workflowId))).not.toBeNull();

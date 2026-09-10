@@ -1,6 +1,6 @@
 import type { RetentionOverview, WorkflowTypeRetentionPolicy } from '../types.ts';
 import { purgeInternal } from './bulk-operations.ts';
-import { getResolvedDynamicRegistration } from './dynamic-source-execution.ts';
+import { resolveLastKnownDynamicRegistration } from './dynamic-source-execution.ts';
 import type { EngineInternals } from './internals.ts';
 
 type CleanupWaiters = (workflowId: string) => void;
@@ -106,11 +106,20 @@ export function resolveWorkflowTypeRetention(
   internals: EngineInternals,
   type: string,
 ): WorkflowTypeRetentionPolicy {
-  // Sync-only fallback: falls back to the most recently RESOLVED dynamic
-  // definition for `type` when there is no eager registration, matching
-  // the same last-resolved-revision-wins rule `finalizer.ts`/`constraints.ts`
-  // already rely on this helper for. Never triggers a new resolve.
-  const registration = getResolvedDynamicRegistration(internals, type);
+  // Sync-only, TYPE-level fallback: falls back to the most recently
+  // RESOLVED dynamic definition for `type` when there is no eager
+  // registration. Never triggers a new resolve.
+  //
+  // Uses `resolveLastKnownDynamicRegistration()`, not
+  // `getResolvedDynamicRegistration()` (WFT-19 review round 6, Codex): this
+  // is a TYPE-level overview API (`getRetentionOverview()`'s
+  // per-registered-type summary) with no single running instance's own pin
+  // to resolve against — unlike `getWorkflowRetentionDeadline()`'s
+  // per-instance resolve, which passes the run's own `state.revision` and
+  // must fail closed when 2+ candidates make that ambiguous.
+  // `resolveLastKnownDynamicRegistration()` is the one place that
+  // permissive, possibly-ambiguous answer is still correct to show.
+  const registration = resolveLastKnownDynamicRegistration(internals, type);
   if (registration?.retention) {
     return {
       type,

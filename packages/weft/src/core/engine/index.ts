@@ -147,7 +147,10 @@ import {
   type KnownWorkflowNames,
 } from './construction.ts';
 import { disposeEngine } from './disposal.ts';
-import { getResolvedDynamicRegistration } from './dynamic-source-execution.ts';
+import {
+  canResolveRevisionLocally,
+  getResolvedDynamicRegistration,
+} from './dynamic-source-execution.ts';
 import {
   type ActivityDefinitionName,
   type EngineCreateOptions,
@@ -683,16 +686,23 @@ export class Engine<
       maxNestingDepth: resolvedOptions.maxNestingDepth,
       development: resolvedOptions.development,
       broadcastEvents: resolvedOptions.broadcastEvents,
-      // Falls back to the most recently resolved dynamic-source definition
-      // (WFT-15/16) when `type` has no eager registration — the execution
-      // strategy's own launch path, separate from `startWorkflow()`'s own
-      // (already-awaited) `resolveExecutableRegistration()` call, which
-      // does not itself write to `internals.registrations`. By the time
-      // this runs the source has already resolved (`startWorkflow()`
-      // awaited it before ever reaching the strategy), so this stays a
-      // synchronous, no-resolve lookup — never a fresh loader invocation.
-      getRegistration: (workflowType) =>
-        getResolvedDynamicRegistration(getInternals(this), workflowType),
+      // Falls back to the EXACT `(type, revision)` this workflowId's own
+      // instance is pinned to (WFT-19, via `workflowTypeByWorkflowId` —
+      // already populated by `startWorkflowExecution()` before the inline
+      // strategy's `startWorkflow()` ever calls this) when `type` has no
+      // eager registration — the execution strategy's own launch path,
+      // separate from `startWorkflow()`'s own (already-awaited)
+      // `resolveExecutableRegistration()` call, which does not itself write
+      // to `internals.registrations`. By the time this runs the source has
+      // already resolved (`startWorkflow()` awaited it before ever reaching
+      // the strategy), so this stays a synchronous, no-resolve lookup —
+      // never a fresh loader invocation.
+      getRegistration: (workflowType, workflowId) =>
+        getResolvedDynamicRegistration(
+          getInternals(this),
+          workflowType,
+          getInternals(this).workflowTypeByWorkflowId.get(workflowId)?.revision,
+        ),
       listRegisteredWorkflowTypes: () =>
         new Set([
           ...getInternals(this).registrations.keys(),
@@ -1093,9 +1103,14 @@ export class Engine<
         // claim — `onReclaimed` below would deterministically throw on every
         // redrive attempt, and a failed drive is retried in place rather than
         // released, permanently stranding the workflow away from a capable
-        // engine.
-        isWorkflowTypeRegistered: (workflowType: string) =>
-          internals.workflowDefinitionsByName.has(workflowType),
+        // engine. Source+revision-aware (WFT-19, via `canResolveRevisionLocally`
+        // — shared with `resolveExecutableRegistrationForRevision()`'s own
+        // classification so the two decisions cannot drift): a
+        // `registerSource()`-registered-but-unresolved type, or one resolved
+        // under a DIFFERENT revision than the stranded run's own pin, used to
+        // read as ineligible here even though this engine genuinely can run it.
+        isWorkflowTypeRegistered: (workflowType: string, revision: string | undefined) =>
+          canResolveRevisionLocally(internals, workflowType, revision),
         // Reclaiming a stranded claim only moves ownership keys; without
         // driving the workflow it sits idle while this engine's renewal keeps
         // the claim alive, shielding it from any engine that would resume it.
@@ -1695,11 +1710,15 @@ export class Engine<
     return getInternals(this).activityRegistry.listDefinitions();
   }
   /**
-   * Resolve one activity's catalog metadata the same way dispatch resolves
-   * it for a running workflow of this type: the workflow's per-workflow
-   * `.activities({...})` registry first, falling back to the global registry
-   * — see `activity-resolution.ts`'s `resolveActivityViaRegistries`. Build
-   * tooling (`buildWorkerManifestFromRegistry`) uses this so a workflow-scoped
+   * Resolve one activity's catalog metadata against the EAGER per-workflow
+   * `.activities({...})` registry only, falling back to the global registry
+   * — never a `registerSource()`-registered type's dynamic-source revision,
+   * resolved or not (WFT-19: `internals.activityRegistriesByWorkflow` is
+   * eager-only as of this batch; a dynamic-source workflow's own activity
+   * dispatch resolves via the running instance's exact `(type, revision)`
+   * pin instead, in `activity-resolution.ts`, which this synchronous,
+   * type-only accessor has no instance to pin against). Build tooling
+   * (`buildWorkerManifestFromRegistry`) uses this so a workflow-scoped
    * activity's schema, not a same-named global activity's, feeds its
    * `contractHash` when both are registered.
    */
@@ -1723,11 +1742,13 @@ export class Engine<
    *
    * Companion to {@link getWorkflowActivityDefinition}: that resolves one
    * activity by name with the per-workflow-first, global-fallback dispatch
-   * order; this enumerates only the names the per-workflow registry itself
-   * declares — activities a workflow reaches solely through the global
-   * registry are deliberately excluded, since those are not part of what
-   * `.activities({...})` scoped to this workflow. Build tooling that needs a
-   * workflow's full scoped-activity contract set (`buildRegistrySnapshot`,
+   * order; this enumerates only the names the EAGER per-workflow registry
+   * itself declares — activities a workflow reaches solely through the
+   * global registry are deliberately excluded, and so (as of WFT-19) is
+   * every `registerSource()`-registered type regardless of whether a
+   * revision has been resolved (see {@link getWorkflowActivityDefinition}'s
+   * doc). Build tooling that needs a workflow's full scoped-activity
+   * contract set (`buildRegistrySnapshot`,
    * `worker/manifest/registry-contract-builder.ts`) uses this instead of
    * reaching into engine internals directly.
    */

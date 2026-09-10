@@ -8,11 +8,57 @@
 
 import { describe, expect, it, spyOn } from 'bun:test';
 
+import { ActivityRegistry } from '../activity-registry.ts';
 import type { ConstraintCheckState } from '../constraint.ts';
 import { constraint } from '../constraint.ts';
 import { Engine } from '../engine.ts';
+import { copyWorkflowDefinition } from '../engine/construction.ts';
+import { buildRegistrationEntry } from '../engine/registration.ts';
 import { ConstraintViolatedEvent } from '../events.ts';
-import { workflow, type ActivityDefinition, type WorkflowContext } from '../types.ts';
+import { buildWorkflowManifestFromDefinition } from '../registry-workflow-manifest.ts';
+import { workflowSource } from '../source/index.ts';
+import {
+  workflow,
+  type ActivityDefinition,
+  type WorkflowContext,
+  type WorkflowDefinition,
+} from '../types.ts';
+
+async function revisionFor(definition: WorkflowDefinition): Promise<string> {
+  const entry = buildRegistrationEntry(definition.name, definition);
+  const registered = copyWorkflowDefinition(definition.name, entry);
+  const manifest = await buildWorkflowManifestFromDefinition(
+    registered,
+    new ActivityRegistry().listDefinitions(),
+  );
+  return manifest.revision;
+}
+
+/**
+ * Move `type`'s catalog active pointer to `revision`, tolerating a
+ * revision-only content difference and supplying the required
+ * `expectedGeneration` once a prior active pointer exists — an omitted
+ * `expectedGeneration` on a second activation silently refuses with
+ * `expected-generation-required` rather than throwing, leaving the active
+ * pointer on the FIRST revision with no visible error. Throws loudly
+ * instead when activation is refused for any reason.
+ */
+async function activateDynamicSourceRevision(
+  engine: Engine,
+  type: string,
+  revision: string,
+): Promise<void> {
+  const active = await engine.workflows.getActive(type);
+  const result = await engine.workflows.activate(type, revision, {
+    ...(active !== null && { expectedGeneration: active.generation }),
+    policy: { requireExactRevision: false },
+  });
+  if (!result.applied) {
+    throw new Error(
+      `activateDynamicSourceRevision(${type}, ${revision}) was not applied: ${JSON.stringify(result)}`,
+    );
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -504,6 +550,70 @@ describe('constraint primitive', () => {
       });
       engine.register(inlineModeConstrainedWorkflow);
     }).not.toThrow();
+
+    engine[Symbol.dispose]();
+  });
+});
+
+describe("constraint resolution follows the running instance's own pinned revision (WFT-19)", () => {
+  it("a run pinned to revision A is unaffected by revision B's always-violating constraint, even after B resolves later in the same process", async () => {
+    const type = 'constraint-multi-rev';
+    const definitionA = workflow({ name: type, description: 'A - no constraints' }).execute(
+      async function* (ctx: WorkflowContext) {
+        yield* ctx.waitForSignal('go');
+        return 'A-done';
+      },
+    );
+    const alwaysViolates = constraint({
+      name: 'always-violates',
+      scope: 'transaction',
+      check: () => false,
+      onViolation: 'fail',
+    });
+    const definitionB = workflow({
+      name: type,
+      description: 'B - always-violating constraint',
+      constraints: [alwaysViolates],
+    }).execute(async function* () {
+      return 'B-done';
+    });
+
+    const revisionA = await revisionFor(definitionA);
+    const revisionB = await revisionFor(definitionB);
+
+    const engine = new Engine();
+    engine.registerSource(
+      workflowSource(
+        { name: type, location: './a.ts', exportName: 'a', revision: revisionA },
+        async () => ({ a: definitionA }),
+      ),
+    );
+    engine.registerSource(
+      workflowSource(
+        { name: type, location: './b.ts', exportName: 'b', revision: revisionB },
+        async () => ({ b: definitionB }),
+      ),
+    );
+
+    await engine.resolveWorkflowSource(type, revisionA);
+    await activateDynamicSourceRevision(engine, type, revisionA);
+    const runA = await engine.start(type, null, { id: 'constraint-multi-rev-a' });
+
+    // B resolves and installs AFTER A — this is what a pre-fix, type-only
+    // `getResolvedDynamicRegistration(internals, context.workflowType)` call
+    // would treat as "the current definition" for EVERY running instance of
+    // this type, A included.
+    await engine.resolveWorkflowSource(type, revisionB);
+    await activateDynamicSourceRevision(engine, type, revisionB);
+    const runB = await engine.start(type, null, { id: 'constraint-multi-rev-b' });
+    expect(await runB.result()).toBe('B-done');
+
+    // A's next checkpoint commit (on signal delivery) evaluates constraints
+    // strictly AFTER B has resolved/installed in this process. Pre-fix, this
+    // would incorrectly evaluate B's always-violating constraint against A's
+    // own instance and fail it.
+    await runA.signal('go');
+    expect(await runA.result()).toBe('A-done');
 
     engine[Symbol.dispose]();
   });

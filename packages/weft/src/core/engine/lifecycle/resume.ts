@@ -23,6 +23,7 @@ import {
   reprovideRecoveredServices,
   workflowServicesResolverInfoFromState,
 } from './recovered-services.ts';
+import { assertSameGeneration, deriveResumeGeneration } from './resume-generation-guard.ts';
 import {
   enforceHistoryPolicyBeforeReplay,
   loadTerminalCleanupTrackedState,
@@ -43,6 +44,14 @@ type SerializedResumeArgs = {
   restoredHead: EventHeadRecord;
   workflowStartHeaders: Map<string, string> | undefined;
   registration: RegistrationEntry;
+  /**
+   * The EXACT revision `registration` resolved against, NOT `state.revision`
+   * re-read independently (WFT-19 round 5): a legacy record with one registered
+   * candidate has `state.revision === undefined` even though the resolver
+   * resolved it — caching `state.revision` here would disable exact-revision lookup.
+   */
+  resolvedRevision: string | undefined;
+  expectedGeneration: ReturnType<typeof deriveResumeGeneration>;
   callbacks: LifecycleCallbacks;
 };
 
@@ -165,16 +174,28 @@ async function relaunchInlineWorkflowAfterResume(
   latestState: WorkflowState,
   args: Pick<
     SerializedResumeArgs,
-    'workflowId' | 'resumeCheckpoint' | 'registration' | 'callbacks'
+    'workflowId' | 'resumeCheckpoint' | 'registration' | 'resolvedRevision' | 'callbacks'
   >,
 ): Promise<void> {
-  const { workflowId, resumeCheckpoint, registration, callbacks } = args;
+  const { workflowId, resumeCheckpoint, registration, resolvedRevision, callbacks } = args;
   // Keep the final running-state check and the re-entry into user code
   // in the same serialized section so cancel/timeout cannot commit a
   // terminal state and still let a parked workflow continue.
   //
   const accumulatedResults = new Map<number, unknown>(resumeCheckpoint.accumulatedResults);
   const workflowAbort = new AbortController();
+
+  // Populate the per-instance identity cache BEFORE any possible activity
+  // dispatch (WFT-19) — the only place `workflowTypeByWorkflowId` was ever
+  // populated on ANY resume/recovery path before this fix (`start-exec.ts`'s
+  // `startWorkflowExecution()` is bypassed here entirely). Must land before
+  // `inlineStrategy.adoptWorkflow` below, which can trigger the first turn.
+  // Uses `resolvedRevision`, not `latestState.revision` — see
+  // `SerializedResumeArgs.resolvedRevision`'s doc (WFT-19 review round 5).
+  internals.workflowTypeByWorkflowId.set(workflowId, {
+    type: latestState.type,
+    revision: resolvedRevision,
+  });
 
   resetCancelHandlers(internals, workflowId);
   await rehydrateChildCancellationHandlers(internals, workflowId, callbacks);
@@ -229,10 +250,17 @@ async function relaunchWorkerWorkflowAfterResume(
   latestState: WorkflowState,
   args: Pick<
     SerializedResumeArgs,
-    'workflowId' | 'resumeCheckpoint' | 'workflowStartHeaders' | 'callbacks'
+    'workflowId' | 'resumeCheckpoint' | 'workflowStartHeaders' | 'resolvedRevision' | 'callbacks'
   >,
 ): Promise<void> {
-  const { workflowId, resumeCheckpoint, workflowStartHeaders, callbacks } = args;
+  const { workflowId, resumeCheckpoint, workflowStartHeaders, resolvedRevision, callbacks } = args;
+  // See `relaunchInlineWorkflowAfterResume()`'s matching comment: identity
+  // population (WFT-19), landed before `startWorkflow()` below, using
+  // `resolvedRevision` per `SerializedResumeArgs.resolvedRevision`'s doc.
+  internals.workflowTypeByWorkflowId.set(workflowId, {
+    type: latestState.type,
+    revision: resolvedRevision,
+  });
   resetCancelHandlers(internals, workflowId);
   await rehydrateChildCancellationHandlers(internals, workflowId, callbacks);
   const serialized = serializeCheckpoint(resumeCheckpoint);
@@ -276,6 +304,7 @@ async function performSerializedResume(
     );
   }
 
+  assertSameGeneration(workflowId, latestState, args.expectedGeneration);
   // A suspended workflow must be flipped back to 'running' durably as part of
   // this serialized section, before the generator is relaunched. If we
   // relaunched but left the persisted status 'suspended', a crash right after
@@ -389,15 +418,18 @@ export async function resumeWorkflowFromStorage(
   // `recoverAll()`'s batch (which reach this same call through
   // `resume()` -> `resumeWorkflowFromStorage()`). A genuinely unregistered
   // type keeps this function's own, more specific message (naming the
-  // resuming workflow) rather than the resolver's generic one.
-  const { entry: registration } = await resolveExecutableRegistrationOrRenamedNotFound(
-    (type) => callbacks.resolveExecutableRegistrationForRevision(type, state.revision),
-    state.type,
-    () =>
-      new Error(
-        `No workflow registered with name "${state.type}" (needed to resume "${workflowId}")`,
-      ),
-  );
+  // resuming workflow) rather than the resolver's generic one. `revision`
+  // is threaded through as `SerializedResumeArgs.resolvedRevision` — see
+  // that field's doc (WFT-19 review round 5).
+  const { entry: registration, revision: resolvedRevision } =
+    await resolveExecutableRegistrationOrRenamedNotFound(
+      (type) => callbacks.resolveExecutableRegistrationForRevision(type, state.revision),
+      state.type,
+      () =>
+        new Error(
+          `No workflow registered with name "${state.type}" (needed to resume "${workflowId}")`,
+        ),
+    );
 
   const preparedResumeState = await prepareResumeState(
     internals,
@@ -449,6 +481,8 @@ export async function resumeWorkflowFromStorage(
       restoredHead,
       workflowStartHeaders,
       registration,
+      resolvedRevision,
+      expectedGeneration: deriveResumeGeneration(state),
       callbacks,
     }),
   );

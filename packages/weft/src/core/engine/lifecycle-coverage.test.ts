@@ -884,11 +884,11 @@ describe('engine lifecycle coverage helpers', () => {
       'workflow-begin-worker',
       undefined,
       'workflow',
+      'revision-worker-begin',
       { value: 1 },
       checkpoint,
       25_000,
       'owner-workflow',
-      'revision-worker-begin',
       { version: '1' } as never,
       createLifecycleCallbacks({ dispatchEvent }) as never,
     );
@@ -920,6 +920,7 @@ describe('engine lifecycle coverage helpers', () => {
       'workflow-start-execution',
       undefined,
       'workflow',
+      undefined,
       null,
       checkpoint,
       0,
@@ -933,6 +934,7 @@ describe('engine lifecycle coverage helpers', () => {
       'workflow-start-execution-nested',
       undefined,
       'workflow',
+      undefined,
       null,
       checkpoint,
       3,
@@ -969,6 +971,7 @@ describe('engine lifecycle coverage helpers', () => {
       lineage,
       70_000,
       createLifecycleCallbacks() as never,
+      undefined,
     );
     const forkCheckpoint = {
       ...sourceCheckpoint,
@@ -1050,6 +1053,7 @@ describe('engine lifecycle coverage helpers', () => {
       registrations: new Map(),
       strategy: { startWorkflow: startWorkflowStrategy },
       workflowHeaders: new Map([['workflow-worker-launch', new Map([['x-test', '1']])]]),
+      workflowTypeByWorkflowId: new Map(),
       workflowVersionTuples: new Map(),
     };
     const checkpoint = createCheckpoint('workflow-worker-launch', {
@@ -1073,6 +1077,7 @@ describe('engine lifecycle coverage helpers', () => {
         },
         version: '1',
       },
+      state.revision,
       createLifecycleCallbacks({
         createWorkflowHandleWithResultPromise: () => handle,
         dispatchEvent,
@@ -1107,6 +1112,7 @@ describe('engine lifecycle coverage helpers', () => {
       options: { development: true, getNow: () => 1_000 },
       strategy: { startWorkflow: mock(() => {}) },
       workflowHeaders: new Map<string, Map<string, string>>(),
+      workflowTypeByWorkflowId: new Map(),
       workflowVersionTuples: new Map(),
     };
     const workflowId = 'workflow-inline-launch';
@@ -1125,6 +1131,7 @@ describe('engine lifecycle coverage helpers', () => {
         searchAttributes: { env: 'string' },
         version: '1',
       } as never,
+      undefined,
       createLifecycleCallbacks({
         createWorkflowHandleWithResultPromise: () => ({ id: workflowId }),
       }) as never,
@@ -1152,6 +1159,7 @@ describe('engine lifecycle coverage helpers', () => {
       },
       options: { development: false, getNow: () => 1_000 },
       strategy: { startWorkflow: mock(() => {}) },
+      workflowTypeByWorkflowId: new Map(),
       workflowVersionTuples: new Map(),
     };
     const workflowId = 'workflow-inline-inconsistent';
@@ -1168,6 +1176,7 @@ describe('engine lifecycle coverage helpers', () => {
           },
           version: '1',
         },
+        undefined,
         createLifecycleCallbacks() as never,
       ),
     ).toThrow('Inline workflow launch requested without an inline strategy.');
@@ -1362,6 +1371,65 @@ describe('engine lifecycle coverage helpers', () => {
         ) as never,
       ),
     ).rejects.toThrow(`Workflow "${workflowId}" not found in storage`);
+  });
+
+  it('resumeWorkflowFromStorage rejects a start-new replacement landing mid-resume instead of replaying its stale checkpoint (WFT-19 review round 7)', async () => {
+    // Reproduces the exact race `chatgpt-codex-connector`/`stevekinney` flagged
+    // on `workflow-claim-reclaim-target.ts`: `onReclaimed` (bound to this same
+    // `resumeWorkflowFromStorage`) reads state/registration/checkpoint against
+    // one generation, then a `start-new` replacement lands at the SAME
+    // workflowId before the serialized section's fresh read — new
+    // `workflowExecutionToken`, here also a new `type`. Before the
+    // `expectedGeneration` check existed, `performSerializedResume` only
+    // re-validated `status`, so this replacement's fresh 'running' state would
+    // have silently passed and the stale handler/checkpoint would have been
+    // driven against it.
+    const storage = new MemoryStorage();
+    const workflowId = 'workflow-resume-replaced-mid-flight';
+    const startWorkflowStrategy = mock(() => {});
+
+    await storage.put(
+      KEYS.workflow(workflowId),
+      encode(createWorkflowState(workflowId, { workflowExecutionToken: 'token-original' })),
+    );
+    await storage.put(
+      KEYS.checkpoint(workflowId),
+      serializeCheckpoint(createCheckpoint(workflowId)),
+    );
+
+    await expect(
+      resumeWorkflowFromStorage(
+        createResumeWorkflowFromStorageInternals({
+          storage,
+          strategy: { startWorkflow: startWorkflowStrategy },
+        }),
+        workflowId,
+        true,
+        createLifecycleCallbacks(
+          {
+            getHandle: () => ({ id: workflowId }),
+            runSerializedWorkflowStateWrite: async <Result>(
+              _workflowId: string,
+              writeOperation: () => Promise<Result>,
+            ) => {
+              // The replacement: same id, fresh token — as every `start()`
+              // mints (`start-state.ts`'s `buildInitialIdentitySlice`).
+              await storage.put(
+                KEYS.workflow(workflowId),
+                encode(
+                  createWorkflowState(workflowId, { workflowExecutionToken: 'token-replacement' }),
+                ),
+              );
+              return writeOperation();
+            },
+          },
+          RESUME_TEST_REGISTRATIONS,
+        ) as never,
+      ),
+    ).rejects.toThrow('changed generation');
+
+    // The stale handler must never have been driven against the replacement.
+    expect(startWorkflowStrategy).not.toHaveBeenCalled();
   });
 
   it('resumeWorkflowFromStorage replays worker-mode workflows through the execution strategy', async () => {

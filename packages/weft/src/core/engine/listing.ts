@@ -15,7 +15,11 @@ import type {
 import { normalizeWorkflowTags } from '../workflow-tags.ts';
 import { mutateWorkflowTags, validateAttributeValueSizes } from './attributes-tags.ts';
 import { CONSTRAINED_ID_CHUNK_SIZE } from './candidate-read-batching.ts';
-import { getResolvedDynamicRegistration } from './dynamic-source-execution.ts';
+import {
+  getResolvedDynamicRegistration,
+  resolveExecutableRegistrationForRevision,
+} from './dynamic-source-execution.ts';
+import type { Engine } from './index.ts';
 import type { EngineInternals } from './internals.ts';
 import { resolveListCandidateIds } from './list-candidate-resolution.ts';
 import {
@@ -320,22 +324,59 @@ export async function getAttributes(
   return decoded as Record<string, SearchAttributeValue>;
 }
 
+/**
+ * Resolve `state`'s own registration for schema validation — the running
+ * instance's EXACT pinned `revision` (WFT-17/WFT-19), never a sibling run's
+ * more-recently-resolved revision. Awaits a full dynamic-source resolve
+ * when the pin is `registerSource()`-registered but not yet locally
+ * resolved (WFT-19 review round 1): `getResolvedDynamicRegistration()`'s
+ * sync-only lookup cannot close that gap, and silently treating a miss as
+ * "no schema to validate against" here would accept arbitrary,
+ * unvalidated attributes for a workflow whose pinned revision genuinely
+ * does declare a schema — a data-integrity hole, not just a stale read.
+ * Unlike `workflow-retention-deadline.ts`'s matching helper, a
+ * `WorkflowRevisionUnavailableError`/`DynamicWorkflowSourceUnavailableError`
+ * here is NOT caught: it propagates, rejecting the mutation outright
+ * rather than silently accepting unvalidated attributes.
+ */
+async function resolveAttributeSchemaRegistration(
+  internals: EngineInternals,
+  state: WorkflowState,
+) {
+  const eagerOrAlreadyResolved = getResolvedDynamicRegistration(
+    internals,
+    state.type,
+    state.revision,
+  );
+  if (eagerOrAlreadyResolved !== undefined) {
+    return eagerOrAlreadyResolved;
+  }
+  if (!internals.sources.byName.has(state.type)) {
+    return undefined;
+  }
+  const { entry } = await resolveExecutableRegistrationForRevision(
+    internals.engine as unknown as Engine,
+    internals,
+    state.type,
+    state.revision,
+  );
+  return entry;
+}
+
 /** Merge search attributes into a workflow's existing attributes, updating the index. */
 export async function setAttributes(
   internals: EngineInternals,
   workflowId: string,
   attributes: Record<string, SearchAttributeValue>,
 ): Promise<void> {
-  // Validate against the registration's schema if one exists. Falls back
-  // to the most recently RESOLVED dynamic definition for a
-  // `registerSource()`-registered type — an eager-only lookup here silently
-  // skipped schema validation for every dynamic workflow's search
-  // attributes (never triggers a new resolve; see
-  // `getResolvedDynamicRegistration()`).
+  // Validate against the registration's schema if one exists — the
+  // workflow's own pinned revision, resolving a registered-but-unresolved
+  // dynamic source rather than silently skipping validation (see
+  // `resolveAttributeSchemaRegistration()`).
   const stateBytes = await internals.storage.get(KEYS.workflow(workflowId));
   if (stateBytes) {
     const state = decodeWorkflowState(stateBytes);
-    const registration = getResolvedDynamicRegistration(internals, state.type);
+    const registration = await resolveAttributeSchemaRegistration(internals, state);
     if (registration?.searchAttributes) {
       const schema = registration.searchAttributes;
       for (const [key, value] of Object.entries(attributes)) {

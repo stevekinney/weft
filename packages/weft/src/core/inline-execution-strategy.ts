@@ -61,7 +61,10 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
   }
 
   startWorkflow(parameters: InlineStartWorkflowParameters): void {
-    const registration = this.#dependencies.getRegistration(parameters.workflowType);
+    const registration = this.#dependencies.getRegistration(
+      parameters.workflowType,
+      parameters.workflowId,
+    );
     if (!registration) {
       this.#emit({
         type: 'failed',

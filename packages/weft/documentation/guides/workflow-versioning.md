@@ -405,6 +405,78 @@ correct even after activation moves on—see
 [Recovery and deploys](recovery-and-deploys.md) for the full recovery-time
 grouping and classification this pin drives.
 
+### Activity, finalizer, constraint, and retention routing follow the pin too (WFT-19)
+
+WFT-17/18 pinned `WorkflowState.revision` for start and recovery, but left a
+boundary open, named explicitly in that release's own notes: everything
+downstream of a running instance—activity dispatch, finalizer resolution,
+constraint evaluation, retention-deadline computation, and
+search-attribute-schema validation—still resolved a dynamic-source type by
+`type` alone, via whichever revision this process most recently resolved.
+For a single revision per type that distinction never mattered; for two or
+more revisions of the same `registerSource()`-registered type live in one
+process at once (two concurrent runs pinned to different revisions, or a
+redeploy with an old run still in flight), it meant a running instance
+could silently execute against a **sibling run's** revision instead of its
+own.
+
+That boundary is closed as of this release. Every one of those resolvers
+now reads the running instance's own exact pin from a per-instance identity
+cache (`workflowId → { type, revision }`), populated the moment a workflow
+begins executing—fresh start, delayed-start fire, resume, recovery, or an
+`ownership: 'workflow-lease'` reclaim redrive—and consulted instead of a
+type-only, last-resolved-wins lookup:
+
+- **Activity dispatch** (`ctx.run('name')`) resolves a dynamic-source
+  workflow's per-workflow `.activities({...})` registry via the instance's
+  own `(type, revision)`, never a sibling run's more-recently-loaded
+  revision.
+- **Finalizer resolution** (the `wf-teardown:` drive) resolves the
+  `finalizer` declared on the exact revision a `cancelled`/`timed-out` run
+  was pinned to.
+- **Constraint evaluation** checks the pinned revision's own `constraints`
+  array at every checkpoint commit.
+- **Retention-deadline computation** (`getWorkflowRetentionDeadline()`)
+  applies the pinned revision's own `retention` policy, not the engine
+  default a sibling run's more-recently-resolved revision happened to
+  share.
+- **Search-attribute-schema validation** (`setAttributes()`) validates
+  against the pinned revision's own declared schema.
+
+`getWorkflowActivityDefinition()`/`listWorkflowActivityDefinitions()` are
+the one deliberate narrowing this closes rather than widens: their
+per-workflow lookup is now eager-only for any `registerSource()`-registered
+type, resolved or not, instead of possibly reflecting a stale or mismatched
+revision's data—these two accessors have no running instance to pin
+against, so eager-only is the only answer that cannot silently be wrong.
+The two are not quite symmetric, though: `getWorkflowActivityDefinition()`
+still falls back to the same-named **global** activity registry when the
+per-workflow lookup misses, so a dynamic-source workflow requesting an
+activity that is also registered globally still gets that metadata back,
+never `undefined`, for that case. `listWorkflowActivityDefinitions()` has
+no such fallback—it enumerates only the eager per-workflow registry's own
+names.
+
+This also closes a related, independently-reproducible latent gap: a
+resumed or recovered workflow's per-instance identity cache was never
+populated on ANY resume/recovery path before this release, so a builder
+workflow's string-named `ctx.run('name')` activity call could fail to
+resolve at all on its first turn after a fresh-process recovery, even for
+an eagerly-registered type. `engine.fork()`'s checkpoint-launched run had
+the same identity-cache gap—and, separately and more severely, resolved
+its HANDLER against the catalog's currently active pointer rather than the
+source run's own pinned revision, so a fork taken after the active pointer
+moved could launch against a different revision's code entirely, not just
+mis-route a downstream lookup. Both are fixed the same way every other
+launch path already was: the identity is set, and the handler resolved
+against the source's own `revision`, before the fork can drive its first
+turn. See the `Fixed` entries in the changelog.
+
+The ADR 0002 workflow-lease reclaim-eligibility check
+(`isWorkflowTypeRegistered`) is source- and revision-aware for the same
+reason—see
+[0002-multiengine-per-workflow-ownership.md](../contributing/architecture-decisions/0002-multiengine-per-workflow-ownership.md).
+
 ## Schedule revision policy (WFT-20)
 
 A recurring schedule's future occurrences can resolve the workflow's

@@ -20,6 +20,18 @@ import type {
   WorkflowTimelineEntry,
 } from '../types.ts';
 
+/**
+ * The identity a running workflow instance was launched under, cached by
+ * `EngineInternals.workflowTypeByWorkflowId` for the lifetime of its
+ * execution (WFT-19). `revision` is the exact `WorkflowState.revision` this
+ * instance is pinned to (WFT-17) — `undefined` for an eager registration or
+ * a legacy (pre-pinning) record — so a process-local lookup keyed by
+ * `workflowId` can resolve THIS instance's own dynamic-source revision
+ * rather than falling back to whichever revision this process resolved
+ * last.
+ */
+export type WorkflowExecutionIdentity = { type: string; revision: string | undefined };
+
 export interface RegistrationEntry {
   handler: WorkflowFunction;
   version: string;
@@ -127,6 +139,8 @@ export type QueuedInlineWorkflowExecutionStart = {
   nestingDepth: number;
   executionDeadline: number | undefined;
   executionStateOwnerId: string;
+  /** The exact revision this queued start is pinned to (WFT-17/WFT-19). */
+  revision: string | undefined;
   /**
    * Liveness callback invoked once this queued start has actually begun
    * executing (its generator has been driven). Set only for `defer: false`

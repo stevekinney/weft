@@ -17,6 +17,17 @@ import { ensureDelayedStartClaimAndCleanupBeforeFailure } from './standalone-cla
  * never the catalog's active pointer, so a delayed-start fire honors the
  * exact revision this run was created against, matching
  * `resumeWorkflowFromStorage()`'s use of the same resolver.
+ *
+ * Returns the FULL `{ entry, revision }` pair, not just `entry` — mirroring
+ * `resolveExecutableRegistrationOrRenamedNotFound()`'s shape used by
+ * `resume.ts`/`transition.ts`. For a legacy, pre-revision-pinning pending
+ * record with exactly one registered `registerSource()` candidate, the
+ * resolver can unambiguously resolve that candidate even though the input
+ * `revision` was `undefined` — the caller MUST thread this returned
+ * `revision` (not the input `revision` or the persisted state's own,
+ * still-`undefined` `revision`) through the pending→running transition and
+ * into `beginWorkflowExecution`, or the per-instance identity cache ends up
+ * stamped with the wrong (missing) revision (WFT-19 review round 7).
  */
 export async function resolveDelayedStartRegistrationOrFail(
   internals: EngineInternals,
@@ -27,10 +38,9 @@ export async function resolveDelayedStartRegistrationOrFail(
     TimeOperationCallbacks,
     'failWorkflow' | 'resolveExecutableRegistrationForRevision'
   >,
-): Promise<ExecutableRegistration['entry'] | null> {
+): Promise<ExecutableRegistration | null> {
   try {
-    const resolved = await callbacks.resolveExecutableRegistrationForRevision(type, revision);
-    return resolved.entry;
+    return await callbacks.resolveExecutableRegistrationForRevision(type, revision);
   } catch (error) {
     await ensureDelayedStartClaimAndCleanupBeforeFailure(internals, entry.workflowId);
     const asError = error instanceof Error ? error : new Error(String(error));

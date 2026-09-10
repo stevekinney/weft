@@ -107,8 +107,34 @@ export function launchWorkflowFromCheckpoint(
   state: WorkflowState,
   checkpoint: Checkpoint,
   registration: RegistrationEntry,
+  /**
+   * The EXACT revision `registration` was resolved against — from the same
+   * `resolveExecutableRegistrationForRevision()` call that produced
+   * `registration`, threaded through explicitly rather than re-read off
+   * `state.revision` (WFT-19 review round 5, Codex, mirroring the identical
+   * fix in `lifecycle/resume.ts`). `fork()`'s own `forkState.revision` is
+   * now stamped with this same resolved value too (WFT-19 review round 6,
+   * Codex — `createForkedWorkflowState()`'s matching fix, so a legacy
+   * fork's durable pin agrees with this in-memory one), so `state.revision`
+   * and `resolvedRevision` coincide for every current caller; kept as an
+   * explicit parameter regardless, since this function's identity-cache
+   * write must never depend on that invariant holding at a future call
+   * site.
+   */
+  resolvedRevision: string | undefined,
   callbacks: LifecycleCallbacks,
 ): WorkflowHandle {
+  // Cache the launched run's own exact (type, revision) pin for synchronous
+  // per-instance registry lookup on the dispatch hot path (WFT-19), BEFORE
+  // either checkpoint-launch strategy below can drive the generator's first
+  // turn — a fork/launch-from-checkpoint run is a fresh live instance the
+  // same as a start/resume/recovery launch, and a string-named scoped
+  // activity dispatched on its first turn needs this populated already.
+  // Cleared on terminal cleanup (see termination/cleanup.ts).
+  internals.workflowTypeByWorkflowId.set(workflowId, {
+    type: state.type,
+    revision: resolvedRevision,
+  });
   // Store checkpoint for future persistence
   internals.checkpoints.set(workflowId, checkpoint);
   internals.workflowVersionTuples.set(

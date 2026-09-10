@@ -158,10 +158,56 @@ async function loadAndInstallSourceRevision(
 
   assertConstraintsSupported(internals, type, resolved.definition);
   const entry = buildRegistrationEntry(type, resolved.definition);
-  internals.activityRegistriesByWorkflow.set(type, resolved.activityRegistry);
+  // Deliberately does NOT mirror `resolved.activityRegistry` into
+  // `internals.activityRegistriesByWorkflow` (WFT-19): that map is keyed by
+  // TYPE alone, so a second revision of the same dynamic-source type loaded
+  // in this process (two concurrent runs, or a redeploy with an old run
+  // still in flight) would silently clobber the first revision's entry —
+  // every subsequent `ctx.run('activityName')` call from EITHER instance
+  // would then resolve through whichever revision loaded last, not
+  // necessarily its own. `internals.sources.resolved.get(type)?.get(revision)`
+  // (already populated above, by `resolveWorkflowSourceForExecution`) is the
+  // exact-`(type, revision)`-keyed structure `activity-resolution.ts` reads
+  // instead, via the running instance's own pinned identity.
   internals.workflowTypesByHandler.set(resolved.definition.handler, type);
   internals.sources.lastResolvedRevisionByName.set(type, revision);
   return { entry, revision };
+}
+
+/**
+ * The shared classification `resolveExecutableRegistrationForRevision()`'s
+ * throw-vs-proceed decision and the ADR-0002 workflow-lease reclaim-
+ * eligibility gate (`index.ts`'s `isWorkflowTypeRegistered`) both delegate
+ * to, so the two decisions can never drift out of sync — an engine that
+ * cannot locally resolve a run's exact pin must never win that run's claim
+ * either (see `workflow-claim-reclaim-target.ts`'s own doc for why that
+ * would strand the run under a permanently-failing `onReclaimed` drive).
+ *
+ * - An eager registration is always resolvable, regardless of `revision`
+ *   (eager has no ambiguity to pin against).
+ * - `type` with no eager registration and no registered source at all is
+ *   never resolvable.
+ * - A dynamic source with `revision === undefined` (legacy/pre-pinning) is
+ *   resolvable only when it has exactly one registered candidate —
+ *   unambiguous by construction. Two or more is ambiguous; zero is
+ *   impossible (an empty `byRevision` map does not exist — the type
+ *   wouldn't be in `sources.byName` at all).
+ * - A dynamic source with a defined `revision` is resolvable exactly when
+ *   that revision is among this process's currently registered candidates.
+ */
+export function canResolveRevisionLocally(
+  internals: EngineInternals,
+  type: string,
+  revision: string | undefined,
+): boolean {
+  if (internals.registrations.has(type)) return true;
+
+  const byRevision = internals.sources.byName.get(type);
+  if (byRevision === undefined) return false;
+
+  if (revision === undefined) return byRevision.size === 1;
+
+  return byRevision.has(revision);
 }
 
 /**
@@ -213,15 +259,18 @@ export async function resolveExecutableRegistrationForRevision(
     throw new WorkflowNotRegisteredError(type);
   }
 
-  if (revision === undefined) {
-    if (byRevision.size <= 1) {
-      return resolveExecutableRegistration(engine, internals, type);
+  // Delegates the throw-vs-proceed decision to `canResolveRevisionLocally()`
+  // (shared with the ADR-0002 reclaim-eligibility gate — see its doc) while
+  // keeping each of the two distinct failure reasons an explicit throw here.
+  if (!canResolveRevisionLocally(internals, type, revision)) {
+    if (revision === undefined) {
+      throw new WorkflowRevisionUnavailableError(type, undefined, 'legacy-ambiguous');
     }
-    throw new WorkflowRevisionUnavailableError(type, undefined, 'legacy-ambiguous');
+    throw new WorkflowRevisionUnavailableError(type, revision, 'not-registered');
   }
 
-  if (!byRevision.has(revision)) {
-    throw new WorkflowRevisionUnavailableError(type, revision, 'not-registered');
+  if (revision === undefined) {
+    return resolveExecutableRegistration(engine, internals, type);
   }
 
   return loadAndInstallSourceRevision(engine, internals, type, revision);
@@ -287,27 +336,80 @@ export async function resolveExecutableRegistrationForRetry(
 }
 
 /**
- * Sync-only fallback lookup for call sites that run after a workflow is
- * already executing and must never trigger a new resolve —
- * `termination/finalizer.ts` and `constraints.ts`. Reads the eager
- * registration first, then falls back to building a `RegistrationEntry`
- * from the most recently resolved dynamic-source definition for `type`
- * (`internals.sources.lastResolvedRevisionByName` /
- * `internals.sources.resolved`), matching the same last-resolved-revision-wins
- * rule {@link resolveExecutableRegistration} applies when writing those
- * fields. Returns `undefined` when neither source has an entry.
+ * Sync-only fallback lookup for PER-INSTANCE call sites that run after a
+ * workflow is already executing (or is being swept from storage) and must
+ * never trigger a new resolve — finalizer, constraint, retention, and
+ * search-attribute-schema resolution (`termination/finalizer-registration.ts`,
+ * `constraints.ts`, `workflow-retention-deadline.ts`, `listing.ts`). Reads
+ * the eager registration first (an eager type resolves the same regardless
+ * of `revision` — see {@link canResolveRevisionLocally}'s doc). Otherwise:
+ *
+ * - A defined `revision` reads `internals.sources.resolved.get(type)?.get(revision)`
+ *   directly — the running instance's OWN exact pin — with NO fallback to a
+ *   different revision when that exact one is not locally resolved (returns
+ *   `undefined` instead, matching {@link resolveExecutableRegistrationForRevision}'s
+ *   "never silently substitute a different revision" contract).
+ * - `revision === undefined` (a legacy pre-pinning record) falls back to
+ *   `internals.sources.lastResolvedRevisionByName` ONLY when
+ *   {@link canResolveRevisionLocally} classifies that as unambiguous —
+ *   exactly one registered candidate for `type`. With two or more
+ *   registered candidates this is genuinely ambiguous for a SPECIFIC
+ *   instance (WFT-19 review round 6, Codex, P1): silently substituting
+ *   whichever sibling revision this process last resolved could validate
+ *   `setAttributes()` against a sibling's schema, run a sibling's
+ *   finalizer, or — worst, since purge is irreversible — purge a run early
+ *   under a sibling's shorter retention window. Returns `undefined` in that
+ *   case instead, forcing the caller's async fallback
+ *   (`resolveExecutableRegistrationForRevision()`) to reach the
+ *   `legacy-ambiguous` classification and fail closed the same way it
+ *   already does for resume/recovery. {@link resolveLastKnownDynamicRegistration}
+ *   is the deliberate exception for the one genuinely TYPE-level caller
+ *   that wants the permissive last-resolved-wins answer even when
+ *   ambiguous.
+ *
+ * Returns `undefined` when no source has a matching entry.
  */
 export function getResolvedDynamicRegistration(
+  internals: EngineInternals,
+  type: string,
+  revision: string | undefined,
+): RegistrationEntry | undefined {
+  const eager = internals.registrations.get(type);
+  if (eager !== undefined) return eager;
+
+  if (revision !== undefined) {
+    const resolved = internals.sources.resolved.get(type)?.get(revision);
+    if (resolved === undefined) return undefined;
+    return buildRegistrationEntry(type, resolved.definition);
+  }
+
+  if (!canResolveRevisionLocally(internals, type, undefined)) return undefined;
+  return resolveLastKnownDynamicRegistration(internals, type);
+}
+
+/**
+ * TYPE-level, sync-only "whatever this process last resolved" lookup —
+ * used ONLY by `retention.ts`'s `resolveWorkflowTypeRetention()`, an
+ * across-all-registered-types OVERVIEW API (`getRetentionOverview()`) with
+ * no single running instance to pin against, unlike every caller of
+ * {@link getResolvedDynamicRegistration} above. Deliberately does NOT fail
+ * closed when 2+ candidates are registered for `type`: for an overview,
+ * showing the last-resolved candidate's policy is a more useful signal
+ * than showing nothing, and — unlike `getResolvedDynamicRegistration`'s
+ * per-instance callers — no irreversible action (purge, finalizer run,
+ * schema validation) hangs off this call (WFT-19 review round 6, Codex).
+ */
+export function resolveLastKnownDynamicRegistration(
   internals: EngineInternals,
   type: string,
 ): RegistrationEntry | undefined {
   const eager = internals.registrations.get(type);
   if (eager !== undefined) return eager;
 
-  const revision = internals.sources.lastResolvedRevisionByName.get(type);
-  if (revision === undefined) return undefined;
+  const targetRevision = internals.sources.lastResolvedRevisionByName.get(type);
+  if (targetRevision === undefined) return undefined;
 
-  const resolved = internals.sources.resolved.get(type)?.get(revision);
+  const resolved = internals.sources.resolved.get(type)?.get(targetRevision);
   if (resolved === undefined) return undefined;
 
   return buildRegistrationEntry(type, resolved.definition);

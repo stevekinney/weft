@@ -336,14 +336,29 @@ export async function fork(
     throw new Error(`Workflow "${sourceWorkflowId}" not found`);
   }
 
-  const { entry: registration } = await resolveExecutableRegistrationOrRenamedNotFound(
-    callbacks.resolveExecutableRegistration,
-    sourceState.type,
-    () =>
-      new Error(
-        `No workflow registered with name "${sourceState.type}" (needed to fork "${sourceWorkflowId}")`,
-      ),
-  );
+  // Resolve against the SOURCE run's own exact pinned revision (WFT-17's
+  // `WorkflowState.revision`), never the catalog's currently active pointer
+  // (WFT-19 review round 2, found while proving the identity-cache fix
+  // below): the active pointer can move between the source run's start and
+  // this fork call, and resolving via `resolveExecutableRegistration`
+  // (active-pointer-based) would launch the FORKED run against a different
+  // revision's handler entirely — not just a routing mismatch downstream of
+  // execution, but the wrong code running from the very first turn. Mirrors
+  // `resolveExecutableRegistrationForRetry()`'s identical fix for bulk retry.
+  // `revision` here is the resolver's OWN resolved revision — threaded
+  // through to `launchWorkflowFromCheckpoint()`'s identity-cache population
+  // below, NOT re-derived from `forkState.revision` (which is `undefined`
+  // for a legacy record even when this resolve found a real sole
+  // candidate — see that call site's doc, WFT-19 review round 5).
+  const { entry: registration, revision: resolvedRevision } =
+    await resolveExecutableRegistrationOrRenamedNotFound(
+      (type) => callbacks.resolveExecutableRegistrationForRevision(type, sourceState.revision),
+      sourceState.type,
+      () =>
+        new Error(
+          `No workflow registered with name "${sourceState.type}" (needed to fork "${sourceWorkflowId}")`,
+        ),
+    );
 
   const fromStep =
     options?.fromStep !== undefined ? normalizeForkStep(options.fromStep) : undefined;
@@ -404,6 +419,7 @@ export async function fork(
     lineage,
     forkedAt,
     callbacks,
+    resolvedRevision,
   );
 
   let forkStarted = false;
@@ -435,6 +451,7 @@ export async function fork(
       forkState,
       forkCheckpoint,
       registration,
+      resolvedRevision,
       callbacks,
     );
     forkStarted = true;

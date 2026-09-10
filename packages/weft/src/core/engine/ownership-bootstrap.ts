@@ -97,7 +97,7 @@ export type WorkflowLeaseOwnershipBootstrapOptions = {
    * doc for why an engine that cannot execute a candidate's registered type
    * must never win its claim in the first place.
    */
-  isWorkflowTypeRegistered?: (workflowType: string) => boolean;
+  isWorkflowTypeRegistered?: (workflowType: string, revision: string | undefined) => boolean;
 };
 
 /**

@@ -822,6 +822,37 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       },
     ],
     [
+      'scripts/check-revision-keyed-lookups.ts',
+      // New script (WFT-19). Its own test file drives every code path
+      // (`parseArguments`/`printUsage`'s `--help`/`--root`/unknown-argument
+      // branches, `scanViolations()`'s comment-stripping and allowlist
+      // exclusion, `runEnforcement()`'s pass/fail reporting, and the
+      // `import.meta.main` CLI entry) exclusively via `Bun.spawnSync(['bun',
+      // 'run', scriptPath, ...])` — the same child-process pattern
+      // `check-lint-disables.test.ts` already uses for its own script, so
+      // none of those hits attribute back to this parent Bun LCOV report.
+      // `functions: 7` (of 8 total, 1 hit): Bun's LCOV omits per-function
+      // FN:/FNDA: detail for this file — confirmed via the raw aggregate,
+      // FNF:8/FNH:1 — the same omission already documented for
+      // `pre-commit.ts` below.
+      {
+        reason:
+          'Process-entry and failure-exit behavior runs in child processes whose hits are not attributed to the parent Bun LCOV report. Re-derived from a fresh coverage/lcov.info (WFT-19 review round 3) after the declarationSites rewrite shifted every line below parseArguments() again.',
+        functions: 7,
+        lines: createMergedLineSet(
+          createLineSet(146, 159),
+          createLineSet(163, 182),
+          createLineSet(227, 231),
+          createLineSet(236, 240),
+          createLineSet(244, 270),
+          createLineSet(274, 296),
+          createLineSet(300, 301),
+          createLineSet(306, 307),
+        ),
+        requireUncoveredLines: true,
+      },
+    ],
+    [
       'scripts/husky/pre-commit.ts',
       // reportTestOutcome was hoisted out of main() to module scope, landing
       // immediately before it (229-268), to fix an
@@ -830,13 +861,15 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       // scoping it to staged files only (PR #904). reportTestOutcome is only
       // ever called from inside main(), which pre-commit.test.ts never
       // invokes, so it is exactly as uncoverable as main() itself — the range
-      // now runs 229-474 (was 229-451) to cover both as one contiguous span,
-      // matching main()'s new end boundary. Lines before 227 (the pre-main()
-      // stash-lifecycle helpers) are untouched.
+      // now runs 229-484 (was 229-474) to cover both as one contiguous span,
+      // matching main()'s new end boundary after WFT-19 added a 7b)
+      // revision-keyed-lookups check step (12 lines) alongside the existing
+      // numbered steps. Lines before 227 (the pre-main() stash-lifecycle
+      // helpers) are untouched.
       // `requireUncoveredLines` is intentionally omitted now: `return false;`
       // / the closing `}` of reportTestOutcome (267, 268) and main()'s final
-      // `process.exit(0)` (473) read as hit on this run despite neither
-      // function being invoked by pre-commit.test.ts — a boundary coverage-
+      // `process.exit(0)` read as hit on this run despite neither function
+      // being invoked by pre-commit.test.ts — a boundary coverage-
       // attribution artifact matching the same class already documented for
       // `task-ledger-recovery.ts`'s case-label/brace lines elsewhere in this
       // file, not a real reachability signal. `functions` bumped 8 -> 9: the
@@ -853,7 +886,7 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
             54, 55, 84, 85, 86, 99, 100, 101, 112, 123, 124, 125, 131, 132, 133, 151, 152, 153, 160,
             161, 162, 165, 167, 168, 169, 172, 200, 201, 202, 203, 204, 205, 206, 207,
           ]),
-          createLineSet(229, 474),
+          createLineSet(229, 484),
         ),
       },
     ],
@@ -1343,9 +1376,9 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
         // already documented for `catalog-removal.ts`'s exhaustiveness
         // guard above: a coverage-instrumentation quirk, not a real gap.
         reason:
-          "Bun reports the catch clause's own line as missed although the surrounding failWorkflowForRecoveryHook call and this catch's own handleCleanupError body both show real hit counts — the same brace-line attribution artifact documented for catalog-removal.ts's exhaustiveness guard. Also reports one enclosing closure as missed for the same reason.",
+          "Bun reports the catch clause's own line as missed although the surrounding failWorkflowForRecoveryHook call and this catch's own handleCleanupError body both show real hit counts — the same brace-line attribution artifact documented for catalog-removal.ts's exhaustiveness guard. Also reports one enclosing closure as missed for the same reason. (Line moved from 93 to 102 when the WFT-19 review round 5 fix's doc comments were added.)",
         functions: 1,
-        lines: new Set([93]),
+        lines: new Set([102]),
         requireUncoveredLines: true,
       },
     ],
@@ -1366,22 +1399,23 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       },
     ],
     [
-      'src/core/engine/listing.ts',
-      {
-        reason:
-          'The remaining line is the equality tiebreaker after both strict id-order branches have been exercised; distinct workflow ids cannot reach it. ' +
-          'Realigned to 238 after the WFT-15/16 review round 2 fix routed setAttributes() through the sync-only dynamic-registration fallback. ' +
-          'Realigned to 239 after WFT-17/WFT-18 added the `revision` field to summaryFromState() above it.',
-        lines: new Set([239]),
-        requireUncoveredLines: true,
-      },
-    ],
-    [
       'src/core/engine/pending-updates.ts',
       {
         reason:
           'Bun reports pending-update callbacks as missed although enqueue, replace, apply, and teardown behavior is covered.',
         functions: 2,
+      },
+    ],
+    [
+      'src/core/engine/listing.ts',
+      {
+        reason:
+          'The remaining line is the equality tiebreaker after both strict id-order branches have been exercised; distinct workflow ids in existing tests never happen to need it. ' +
+          'Realigned to 238 after the WFT-15/16 review round 2 fix routed setAttributes() through the sync-only dynamic-registration fallback. ' +
+          'Realigned to 239 after WFT-17/WFT-18 added the `revision` field to summaryFromState() above it. ' +
+          'Realigned to 243 after WFT-19 review round 1 widened the import block (resolveExecutableRegistrationForRevision, Engine type) above it.',
+        lines: new Set([243]),
+        requireUncoveredLines: true,
       },
     ],
     [
@@ -1397,8 +1431,8 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/core/engine/termination/finalizer-registration.ts',
       {
         reason:
-          'Bun maps the closing braces after `return undefined` in the DynamicWorkflowSourceUnavailableError catch branch as uncovered although finalizer.test.ts directly exercises that return (a load-failure dynamic finalizer resolve).',
-        lines: new Set([43, 44]),
+          "Bun maps the closing brace after the DynamicWorkflowSourceUnavailableError/WorkflowRevisionUnavailableError catch branch's `return undefined` and the trailing `throw error;` rethrow as uncovered, although finalizer.test.ts directly exercises the return (both a load-failure and an unresolvable-pinned-revision dynamic finalizer resolve) — only the unmatched-error rethrow itself has no reachable test (WFT-19 shifted these two lines from 43-44 to 56-57 when the catch grew a second error type).",
+        lines: new Set([56, 57]),
         requireUncoveredLines: true,
       },
     ],
@@ -1429,6 +1463,15 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
           57, 58, 59, 60, 61, 62, 63, 64, 65, 67, 68, 69, 70, 110, 111, 112, 131, 138, 139, 206,
           207,
         ]),
+        requireUncoveredLines: true,
+      },
+    ],
+    [
+      'src/core/engine/workflow-retention-deadline.ts',
+      {
+        reason:
+          "New async resolve path (WFT-19 review round 1, re-derived in round 2 after the fail-closed rewrite shifted this line from 59 to 72): Bun maps the closing brace after the DynamicWorkflowSourceUnavailableError/WorkflowRevisionUnavailableError catch branch's `return { kind: 'unresolvable' }` as uncovered, the same brace-attribution artifact already documented for `termination/finalizer-registration.ts`'s identical catch shape — although workflow-retention.test.ts directly exercises both that return (an unresolvable-pinned-revision, now asserted NOT-purged rather than default-purged) and the success path (an async-resolved entry's own policy), and the suite's own `throw error;` rethrow line reads as hit from an unrelated disposal-race elsewhere in the full run.",
+        lines: new Set([72]),
         requireUncoveredLines: true,
       },
     ],

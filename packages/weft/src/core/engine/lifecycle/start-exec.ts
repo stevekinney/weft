@@ -46,13 +46,18 @@ export function startWorkflowExecution(
   workflowId: string,
   workflowExecutionToken: string | undefined,
   workflowType: string,
+  /**
+   * The starting run's persisted `WorkflowState.revision` (WFT-19/WFT-20):
+   * populates the per-instance identity cache readers use for revision-scoped
+   * routing, and is echoed to the strategy's `startWorkflow` for worker-protocol
+   * revision validation.
+   */
+  revision: string | undefined,
   input: unknown,
   checkpoint: Checkpoint,
   nestingDepth: number,
   executionDeadline: number | undefined,
   executionStateOwnerId: string,
-  /** The starting run's persisted `WorkflowState.revision` (WFT-20). */
-  revision: string | undefined,
   _callbacks?: LifecycleCallbacks,
 ): void {
   // Skip the map entry for the common non-nested case — readers fall back
@@ -60,9 +65,10 @@ export function startWorkflowExecution(
   if (nestingDepth !== 0) {
     internals.workflowNestingDepths.set(workflowId, nestingDepth);
   }
-  // Cache the workflow type for synchronous activity-registry lookup on the
-  // dispatch hot path. Cleared on terminal cleanup (see termination/cleanup.ts).
-  internals.workflowTypeByWorkflowId.set(workflowId, workflowType);
+  // Cache the workflow type/revision for synchronous per-instance registry
+  // lookup on the dispatch hot path (WFT-19). Cleared on terminal cleanup
+  // (see termination/cleanup.ts).
+  internals.workflowTypeByWorkflowId.set(workflowId, { type: workflowType, revision });
   internals.strategy.startWorkflow({
     workflowId,
     ...(workflowExecutionToken !== undefined && { workflowExecutionToken }),
@@ -86,18 +92,19 @@ export function beginWorkflowExecution(
   workflowId: string,
   workflowExecutionToken: string | undefined,
   workflowType: string,
+  /**
+   * The starting run's persisted `WorkflowState.revision` (WFT-19/WFT-20).
+   * Threaded into both the queued-inline path below (which also re-reads
+   * `revision` off the RELOADED `WorkflowState` at flush time —
+   * `inline-launch-queue.ts` — exactly like it already does for
+   * `workflowExecutionToken`) and the non-inline `startWorkflowExecution`
+   * branch, which populates the per-instance identity cache with it directly.
+   */
+  revision: string | undefined,
   input: unknown,
   checkpoint: Checkpoint,
   executionDeadline: number | undefined,
   executionStateOwnerId: string,
-  /**
-   * The starting run's persisted `WorkflowState.revision` (WFT-20). Threaded
-   * only into the non-inline (`startWorkflowExecution`) branch below — the
-   * inline queued path instead re-reads `revision` off the RELOADED
-   * `WorkflowState` at flush time (`inline-launch-queue.ts`), exactly like it
-   * already does for `workflowExecutionToken`.
-   */
-  revision: string | undefined,
   _registration: RegistrationEntry,
   callbacks: LifecycleCallbacks,
   onStarted?: () => void,
@@ -110,6 +117,7 @@ export function beginWorkflowExecution(
       workflowId,
       ...(workflowExecutionToken !== undefined && { workflowExecutionToken }),
       workflowType,
+      revision,
       input,
       checkpoint,
       nestingDepth,
@@ -129,12 +137,12 @@ export function beginWorkflowExecution(
     workflowId,
     workflowExecutionToken,
     workflowType,
+    revision,
     input,
     checkpoint,
     nestingDepth,
     executionDeadline,
     executionStateOwnerId,
-    revision,
     callbacks,
   );
   // Worker/non-inline path executes synchronously above, so liveness is already
@@ -216,11 +224,11 @@ export async function beginExecutionAwaitingLiveness(
     workflowId,
     params.state.workflowExecutionToken,
     params.type,
+    params.state.revision,
     params.input,
     params.checkpoint,
     params.state.executionDeadline,
     params.state.executionStateOwnerId ?? workflowId,
-    params.state.revision,
     params.registration,
     callbacks,
     liveness ? () => liveness.resolve() : undefined,

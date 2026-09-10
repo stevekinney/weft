@@ -33,6 +33,7 @@ import {
 } from './engine.ts';
 import { copyWorkflowDefinition } from './engine/construction.ts';
 import { buildRegistrationEntry } from './engine/registration.ts';
+import { WorkflowRevisionUnavailableError } from './engine/revision-errors.ts';
 import {
   CheckpointSizeWarningEvent,
   CleanupWarningEvent,
@@ -53,14 +54,17 @@ import {
 import { buildWorkflowManifestFromDefinition } from './registry-workflow-manifest.ts';
 import { workflowSource } from './source/index.ts';
 import { WorkflowTimeoutError } from './timeouts.ts';
-import type {
-  DefinitionSchema,
-  TimerEntry,
-  WorkerOutboundMessage,
-  WorkflowContext,
-  WorkflowState,
+import {
+  activity,
+  signal,
+  workflow,
+  type DefinitionSchema,
+  type TimerEntry,
+  type WorkerOutboundMessage,
+  type WorkflowContext,
+  type WorkflowDefinition,
+  type WorkflowState,
 } from './types.ts';
-import { activity, signal, workflow } from './types.ts';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -4959,6 +4963,243 @@ describe('Engine', () => {
     await expect(engine.setAttributes(handle.id, { region: 'us-east' })).resolves.toBeUndefined();
     const attributesAfterSet = await engine.getAttributes(handle.id);
     expect(attributesAfterSet?.['region']).toBe('us-east');
+
+    engine[Symbol.dispose]();
+  });
+
+  it("engine.setAttributes() validates against the pinned revision's own schema, not a sibling run's more-recently-resolved revision (WFT-19)", async () => {
+    // Regression: `setAttributes()` fell back to the most recently RESOLVED
+    // dynamic-source definition for `type` (last-resolved-wins), so a run's
+    // search-attribute schema could silently reflect a SIBLING run's more-
+    // recently-resolved revision instead of its own pinned one.
+    const type = 'multi-rev-attrs';
+    const definitionA = workflow({ name: type, description: 'A' })
+      .searchAttributes({ region: { type: 'string' } })
+      .execute(async function* (ctx: WorkflowContext) {
+        yield* ctx.waitForSignal('never');
+      });
+    const definitionB = workflow({ name: type, description: 'B' })
+      .searchAttributes({ priority: { type: 'number' } })
+      .execute(async function* () {
+        return 'B-done';
+      });
+    async function manifestRevisionFor(definition: WorkflowDefinition): Promise<string> {
+      const entry = buildRegistrationEntry(type, definition);
+      const registered = copyWorkflowDefinition(type, entry);
+      const manifest = await buildWorkflowManifestFromDefinition(
+        registered,
+        new ActivityRegistry().listDefinitions(),
+      );
+      return manifest.revision;
+    }
+    const revisionA = await manifestRevisionFor(definitionA);
+    const revisionB = await manifestRevisionFor(definitionB);
+
+    const engine = new Engine();
+    engine.registerSource(
+      workflowSource(
+        { name: type, location: './a.ts', exportName: 'a', revision: revisionA },
+        async () => ({ a: definitionA }),
+      ),
+    );
+    engine.registerSource(
+      workflowSource(
+        { name: type, location: './b.ts', exportName: 'b', revision: revisionB },
+        async () => ({ b: definitionB }),
+      ),
+    );
+
+    // Moves `type`'s catalog active pointer to `revision`, tolerating a
+    // revision-only content difference and supplying the required
+    // `expectedGeneration` once a prior active pointer exists — an omitted
+    // `expectedGeneration` on a second activation silently refuses with
+    // `expected-generation-required` rather than throwing, leaving the
+    // active pointer on the FIRST revision with no visible error. Throws
+    // loudly instead when activation is refused for any reason.
+    async function activateDynamicSourceRevision(revision: string): Promise<void> {
+      const active = await engine.workflows.getActive(type);
+      const result = await engine.workflows.activate(type, revision, {
+        ...(active !== null && { expectedGeneration: active.generation }),
+        policy: { requireExactRevision: false },
+      });
+      if (!result.applied) {
+        throw new Error(
+          `activateDynamicSourceRevision(${type}, ${revision}) was not applied: ${JSON.stringify(result)}`,
+        );
+      }
+    }
+
+    await engine.resolveWorkflowSource(type, revisionA);
+    await activateDynamicSourceRevision(revisionA);
+    const handleA = await engine.start(type, null, { id: 'multi-rev-attrs-a' });
+
+    // B resolves and installs AFTER A — the pre-fix, last-resolved-wins
+    // lookup would now validate A's `setAttributes()` calls against B's
+    // schema instead of A's own.
+    await engine.resolveWorkflowSource(type, revisionB);
+    await activateDynamicSourceRevision(revisionB);
+    const handleB = await engine.start(type, null, { id: 'multi-rev-attrs-b' });
+    await handleB.result();
+
+    await expect(engine.setAttributes(handleA.id, { priority: 5 })).rejects.toThrow(
+      'Unknown search attribute "priority". Registered attributes: region',
+    );
+    await expect(engine.setAttributes(handleA.id, { region: 'us-east' })).resolves.toBeUndefined();
+
+    engine[Symbol.dispose]();
+  });
+
+  it('engine.setAttributes() resolves a registered-but-unresolved pinned revision before validating, rather than silently skipping validation (review round 1)', async () => {
+    // Regression flagged in first-round review of the WFT-19 fix above:
+    // `getResolvedDynamicRegistration()`'s sync-only lookup returns
+    // `undefined` for a pinned revision this process has never resolved —
+    // even when it IS a registered candidate. Before this fix, `undefined`
+    // was read as "no schema to validate against", silently accepting
+    // ARBITRARY attributes for a workflow whose pinned revision genuinely
+    // declares one. `setAttributes()` must instead resolve the pin (like
+    // `resolveFinalizerRegistration()` already does for finalizers) before
+    // deciding there is nothing to validate.
+    const type = 'unresolved-pin-attrs';
+    const definitionA = workflow({ name: type, description: 'A' })
+      .searchAttributes({ region: { type: 'string' } })
+      .execute(async function* (ctx: WorkflowContext) {
+        yield* ctx.waitForSignal('never');
+      });
+    const definitionB = workflow({ name: type, description: 'B' })
+      .searchAttributes({ priority: { type: 'number' } })
+      .execute(async function* () {
+        return 'B-done';
+      });
+    async function manifestRevisionFor(definition: WorkflowDefinition): Promise<string> {
+      const entry = buildRegistrationEntry(type, definition);
+      const registered = copyWorkflowDefinition(type, entry);
+      const manifest = await buildWorkflowManifestFromDefinition(
+        registered,
+        new ActivityRegistry().listDefinitions(),
+      );
+      return manifest.revision;
+    }
+    const revisionA = await manifestRevisionFor(definitionA);
+    const revisionB = await manifestRevisionFor(definitionB);
+
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+    engine.registerSource(
+      workflowSource(
+        { name: type, location: './a.ts', exportName: 'a', revision: revisionA },
+        async () => ({ a: definitionA }),
+      ),
+    );
+    engine.registerSource(
+      workflowSource(
+        { name: type, location: './b.ts', exportName: 'b', revision: revisionB },
+        async () => ({ b: definitionB }),
+      ),
+    );
+
+    // Resolve, activate, and complete B ONLY — A is a registered candidate
+    // this process has never called `resolveWorkflowSource`/`start` for.
+    await engine.resolveWorkflowSource(type, revisionB);
+    const activation = await engine.workflows.activate(type, revisionB, {
+      policy: { requireExactRevision: false },
+    });
+    if (!activation.applied) {
+      throw new Error(`Failed to activate ${type}@${revisionB}: ${JSON.stringify(activation)}`);
+    }
+    const handleB = await engine.start(type, null, { id: 'unresolved-pin-attrs-b' });
+    await handleB.result();
+
+    // Seed a terminal WorkflowState pinned to A directly (mirrors a
+    // recovered run — A was never started or resolved by THIS process).
+    const workflowId = 'unresolved-pin-attrs-a';
+    const seededState: WorkflowState = {
+      createdAt: 1_000,
+      id: workflowId,
+      input: null,
+      result: 'A-done',
+      startedAt: 1_000,
+      status: 'completed',
+      type,
+      revision: revisionA,
+      updatedAt: 1_000,
+      versionTuple: { workflowVersion: '1' },
+    };
+    await storage.put(KEYS.workflow(workflowId), encode(seededState));
+
+    // A's own schema (region) is accepted — proving the async resolve ran
+    // and validated against A, not B, and not "no schema at all".
+    await expect(engine.setAttributes(workflowId, { region: 'us-east' })).resolves.toBeUndefined();
+    // B's schema key is still rejected as unknown under A's own schema.
+    await expect(engine.setAttributes(workflowId, { priority: 5 })).rejects.toThrow(
+      'Unknown search attribute "priority". Registered attributes: region',
+    );
+
+    engine[Symbol.dispose]();
+  });
+
+  it('engine.setAttributes() rejects the mutation when the pinned revision cannot be resolved on this process, rather than silently accepting unvalidated attributes (review round 1)', async () => {
+    const type = 'unresolvable-pin-attrs';
+    const definition = workflow({ name: type })
+      .searchAttributes({ region: { type: 'string' } })
+      .execute(async function* (ctx: WorkflowContext) {
+        yield* ctx.waitForSignal('never');
+      });
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+    engine.registerSource(
+      workflowSource(
+        { name: type, location: './only.ts', exportName: 'only', revision: 'only-revision' },
+        async () => ({ only: definition }),
+      ),
+    );
+
+    const workflowId = 'unresolvable-pin-attrs-run';
+    const seededState: WorkflowState = {
+      createdAt: 1_000,
+      id: workflowId,
+      input: null,
+      result: 'done',
+      startedAt: 1_000,
+      status: 'completed',
+      type,
+      revision: 'a-revision-never-registered',
+      updatedAt: 1_000,
+      versionTuple: { workflowVersion: '1' },
+    };
+    await storage.put(KEYS.workflow(workflowId), encode(seededState));
+
+    await expect(engine.setAttributes(workflowId, { anything: 'value' })).rejects.toBeInstanceOf(
+      WorkflowRevisionUnavailableError,
+    );
+
+    engine[Symbol.dispose]();
+  });
+
+  it('engine.setAttributes() writes without validation for a terminal run whose type has no registration at all (eager or source)', async () => {
+    // Distinct from the "unresolvable pin" case above: `state.type` here is
+    // not a `registerSource()`-registered type at all, so
+    // `resolveAttributeSchemaRegistration()`'s `!internals.sources.byName.has(...)`
+    // guard returns `undefined` synchronously (no resolve attempted, no
+    // rejection) — matching the pre-WFT-19 behavior for a type this engine
+    // never heard of.
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+    const workflowId = 'unregistered-type-attrs-run';
+    const seededState: WorkflowState = {
+      createdAt: 1_000,
+      id: workflowId,
+      input: null,
+      result: 'done',
+      startedAt: 1_000,
+      status: 'completed',
+      type: 'never-registered-anywhere',
+      updatedAt: 1_000,
+      versionTuple: { workflowVersion: '1' },
+    };
+    await storage.put(KEYS.workflow(workflowId), encode(seededState));
+
+    await expect(engine.setAttributes(workflowId, { anything: 'value' })).resolves.toBeUndefined();
+    expect(await engine.getAttributes(workflowId)).toEqual({ anything: 'value' });
 
     engine[Symbol.dispose]();
   });

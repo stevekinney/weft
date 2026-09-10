@@ -28,6 +28,7 @@ describe('inline launch queue', () => {
       {
         workflowId: 'queued-inline-timeout',
         workflowType: 'timeout-flush',
+        revision: undefined,
         input: null,
         checkpoint: {
           workflowId: 'queued-inline-timeout',
@@ -110,6 +111,7 @@ describe('inline launch queue', () => {
         {
           workflowId: 'wf-successor-owned',
           workflowType: 'inline-launch-queue-ownership-parked',
+          revision: undefined,
           input: null,
           checkpoint: {
             workflowId: 'wf-successor-owned',
@@ -184,6 +186,7 @@ describe('inline launch queue', () => {
           workflowId: 'wf-replaced-run',
           workflowExecutionToken: 'stale-pre-replacement-token',
           workflowType: 'inline-launch-queue-ownership-parked',
+          revision: undefined,
           input: null,
           checkpoint: {
             workflowId: 'wf-replaced-run',

@@ -13,7 +13,10 @@ import type { WorkflowLogRecord } from './types/workflow-log.ts';
 
 /** Capabilities the engine injects into the inline strategy at construction. */
 export interface InlineExecutionDependencies {
-  getRegistration: (workflowType: string) =>
+  getRegistration: (
+    workflowType: string,
+    workflowId: string,
+  ) =>
     | {
         handler: WorkflowFunction;
         version: string;
