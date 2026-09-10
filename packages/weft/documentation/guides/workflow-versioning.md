@@ -508,17 +508,27 @@ surfaces as a `Conflict` (409) fault carrying `data.reason` over JSON-RPC
 (REST discloses the reason in the error message text rather than
 structured `data`, per the existing WFT-11 REST/JSON-RPC fidelity split).
 
-Under `ownership: 'lease'` or `'workflow-lease'`, the fork's own commit is
-fenced against a concurrent `removeWorkflowRevision()` targeting the fork's
-persisted revision—the same `buildCatalogEntryRevisionCondition` fence a
-fresh `start()` carries. Without it, an explicit-revision fork onto a
-revision other than the source run's own pin would perform only a
-process-local availability check with no durable reservation, so a
-concurrent removal could see zero references, delete the catalog entry, and
-still let the fork's own commit land right behind it—durably persisting a
-reference to a revision the catalog now claims is gone. The fenced fork
-loses its own CAS instead, the identical "whichever operation lands second
-loses" guarantee `start()` already provides.
+The fork's own commit is fenced against a concurrent
+`removeWorkflowRevision()` targeting the fork's persisted revision through
+two layers, mirroring `start()`'s own defense exactly. Under `ownership:
+'lease'` or `'workflow-lease'`, the commit fences on the target revision's
+durable catalog entry—the same `buildCatalogEntryRevisionCondition` fence a
+fresh `start()` carries—so a concurrent removal that lands first makes the
+fork's own commit lose its CAS. Regardless of ownership mode, `fork()` also
+reserves an in-memory `inFlightStartsByRevision` slot for its target
+revision as soon as validation resolves it, released unconditionally once
+the commit settles (mirroring `start()`'s own `reserveInFlightStart`/
+`releaseInFlightStart` pairing)—this closes the same-process race two
+overlapping async calls on one engine instance can still hit even under the
+default `ownership: 'none'`, where the durable catalog-entry fence is
+deliberately skipped (no `conditionalBatch` capability requirement for the
+common single-writer-by-contract case). Without either layer, an
+explicit-revision fork onto a revision other than the source run's own pin
+would perform only a process-local availability check with no reservation
+of any kind, so a concurrent removal could see zero references, delete the
+catalog entry, and still let the fork's own commit land right behind
+it—durably persisting a reference to a revision the catalog now claims is
+gone.
 
 The ADR 0002 workflow-lease reclaim-eligibility check
 (`isWorkflowTypeRegistered`) is source- and revision-aware for the same

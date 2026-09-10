@@ -94,6 +94,9 @@ export async function forkWorkflowRequest(
   if (options?.fromStep !== undefined) {
     body['fromStep'] = options.fromStep;
   }
+  if (options?.revision !== undefined) {
+    body['revision'] = options.revision;
+  }
 
   const response = await request<{ id: string }>(
     context.baseUrl,

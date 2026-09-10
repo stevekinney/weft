@@ -1,10 +1,12 @@
 import type { BatchOperation, ConditionalBatchCondition } from '../../../storage/interface.ts';
 import { KEYS } from '../../../storage/interface.ts';
+import { deserializeCheckpoint } from '../../checkpoint.ts';
 import { encode } from '../../codec.ts';
 import { buildIndexOperations } from '../../search-attributes.ts';
 import type { Checkpoint, ForkLineage, SearchAttributeValue, WorkflowState } from '../../types.ts';
 import type { ForkOptions } from '../../types/options.ts';
 import { type WorkflowVersionTuple } from '../../workflow-version-tuple.ts';
+import { hydrateCheckpointReplayState } from '../checkpoint-replay.ts';
 import { canResolveRevisionLocally } from '../dynamic-source-execution.ts';
 import type { EngineInternals } from '../internals.ts';
 import { WorkflowRevisionUnavailableError } from '../revision-errors.ts';
@@ -12,6 +14,35 @@ import { encodeWorkflowStartHeaders } from '../state-utilities.ts';
 import { buildWorkflowVisibilityIndexOperations } from '../workflow-indexes.ts';
 import { EMPTY_STORAGE_VALUE, FORK_LINEAGE_ATTRIBUTE, type LifecycleCallbacks } from './shared.ts';
 import { buildCatalogEntryRevisionCondition } from './start-commit.ts';
+
+/**
+ * Load and hydrate the source run's checkpoint for a fork — a specific
+ * historical step (`fromStep`) or its latest — throwing when the requested
+ * step doesn't exist. Extracted out of `fork()` itself purely to keep
+ * `transition.ts` under the repository's implementation-file-size ceiling;
+ * no behavior change from what was previously inlined there.
+ */
+export async function loadForkSourceCheckpoint(
+  internals: EngineInternals,
+  sourceWorkflowId: string,
+  fromStep: number | undefined,
+): Promise<Checkpoint> {
+  const checkpointKey =
+    fromStep !== undefined
+      ? KEYS.checkpointHistory(sourceWorkflowId, fromStep)
+      : KEYS.checkpoint(sourceWorkflowId);
+  const checkpointBytes = await internals.storage.get(checkpointKey);
+  if (!checkpointBytes) {
+    if (fromStep !== undefined) {
+      throw new Error(
+        `Checkpoint not found at step ${String(fromStep)} for workflow "${sourceWorkflowId}"`,
+      );
+    }
+    throw new Error(`Checkpoint not found for workflow "${sourceWorkflowId}"`);
+  }
+  const storedSourceCheckpoint = deserializeCheckpoint(checkpointBytes);
+  return hydrateCheckpointReplayState(internals.storage, sourceWorkflowId, storedSourceCheckpoint);
+}
 
 /**
  * Validate an explicit `ForkOptions.revision` request (WFT-21) against what

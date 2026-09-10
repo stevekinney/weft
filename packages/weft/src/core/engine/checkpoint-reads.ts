@@ -163,12 +163,24 @@ export async function replayTo(
     return null;
   }
 
+  const rawCheckpoint = deserializeCheckpoint(bytes);
+  // Read `state` immediately after decoding the checkpoint — before the
+  // slower event-log replay and checkpoint hydration below — to keep this
+  // independent read as close as possible to the checkpoint's own read
+  // (WFT-21, Codex review round 2, P2). This narrows, but cannot fully
+  // close, the window where a concurrent `start(..., { id: workflowId,
+  // onTerminalConflict: 'start-new' })` replaces a terminal run between
+  // this checkpoint history read and the state read — see the consistency
+  // check below, right before the return, for how that residual window is
+  // detected and closed.
+  const state = await loadWorkflowState(internals, workflowId);
+
   const eventLog = new EventLog(internals.storage, workflowId);
   const entries = await eventLog.replay(Math.max(step - 1, -1));
   const checkpoint = await hydrateCheckpointReplayState(
     internals.storage,
     workflowId,
-    deserializeCheckpoint(bytes),
+    rawCheckpoint,
   );
 
   // `replay` reconstructs from sequence 0, so whenever compaction has truncated
@@ -176,12 +188,22 @@ export async function replayTo(
   // `events` regardless of the requested step. Surface the boundary so callers
   // can tell an incomplete replay from a complete one.
   const watermark = await readEventLogWatermark(internals.storage, workflowId);
-  // The run's own pinned revision (WFT-21) — a SEPARATE read from `checkpoint`
-  // (which carries no revision of its own): `state` can be `null` when the
-  // workflow record has since been purged, and `state.revision` can be
-  // `undefined` for a legacy record that predates revision pinning — either
-  // way `revision` is simply omitted below, never persisted as `undefined`.
-  const state = await loadWorkflowState(internals, workflowId);
+  // The run's own pinned revision (WFT-21): omitted when the workflow
+  // record has since been purged (`state === null`), when it predates
+  // revision pinning (`state.revision === undefined`), OR — closing the
+  // `state`-vs-`checkpoint` consistency gap above (Codex review round 2,
+  // P2) — when `state` belongs to a DIFFERENT, later execution than this
+  // checkpoint. `advanceCheckpoint()` (`core/checkpoint/lifecycle.ts`)
+  // re-stamps `createdAt` to "now" on every single step save, so for the
+  // run this checkpoint actually came from, `checkpoint.createdAt` is
+  // ALWAYS `>= state.createdAt` (that run's own fixed start time — steps
+  // can only be saved after their run starts). A `start-new` replacement
+  // stamps a BRAND NEW `WorkflowState.createdAt` at replacement time,
+  // strictly later than any checkpoint the DISPLACED run ever saved — so
+  // `checkpoint.createdAt < state.createdAt` reliably means `state` is
+  // that replacement, not this checkpoint's own run.
+  const revision =
+    state !== null && rawCheckpoint.createdAt >= state.createdAt ? state.revision : undefined;
 
   return {
     checkpoint: sanitizeCheckpointState({
@@ -201,6 +223,6 @@ export async function replayTo(
       data: sanitizeWorkflowEventPayload(entry.payload),
     })),
     ...(watermark !== null ? { compactedBefore: watermark.sequence } : {}),
-    ...(state?.revision !== undefined ? { revision: state.revision } : {}),
+    ...(revision !== undefined ? { revision } : {}),
   };
 }

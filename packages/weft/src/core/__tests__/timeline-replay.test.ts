@@ -466,6 +466,42 @@ describe('timeline and replay', () => {
     expect('revision' in (replay ?? {})).toBe(false);
   });
 
+  it('omits `revision` from a replay when the workflow record has since been replaced by a later execution under the same id (WFT-21, Codex review round 2, P2)', async () => {
+    const storage = new MemoryStorage();
+    engine = new Engine({ storage, checkpointHistory: 10 });
+    const replaceableWorkflow = workflow({ name: 'replay-replaced' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      yield* ctx.run(async () => 'step-one');
+      return 'done';
+    });
+    engine.register(replaceableWorkflow);
+
+    const handle = await engine.start('replay-replaced', null, { id: 'wf-replay-replaced' });
+    await handle.result();
+    const originalState = await engine.get(handle.id);
+    expect(originalState?.revision).toBeDefined();
+
+    // Simulate exactly what `onTerminalConflict: 'start-new'` produces
+    // durably — a fresh `WorkflowState` under the SAME id, with a LATER
+    // `createdAt` and a DIFFERENT `revision` — without needing to race the
+    // real timing window `replayTo()`'s own two independent reads leave
+    // open. This is the state a concurrent replacement would have already
+    // committed by the time `replayTo()`'s own state read lands.
+    const stateBytes = await storage.get(KEYS.workflow(handle.id));
+    const replacedState = { ...(decode(stateBytes!) as Record<string, unknown>) };
+    replacedState['revision'] = 'sha256:replacement-revision-that-never-produced-this-checkpoint';
+    replacedState['createdAt'] = (replacedState['createdAt'] as number) + 1_000_000;
+    await storage.put(KEYS.workflow(handle.id), encode(replacedState));
+
+    // The checkpoint at step 1 still belongs to the ORIGINAL execution —
+    // `revision` must be omitted rather than misattributed to the
+    // replacement's own revision.
+    const replay = await engine.replayTo(handle.id, 1);
+    expect(replay).not.toBeNull();
+    expect('revision' in (replay ?? {})).toBe(false);
+  });
+
   it('ignores malformed stored timeline entries and returns results sorted by step', async () => {
     const storage = new MemoryStorage();
     engine = new Engine({ storage, checkpointHistory: 10 });
