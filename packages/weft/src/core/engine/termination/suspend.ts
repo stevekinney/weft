@@ -80,6 +80,12 @@ export async function suspendWorkflow(
   workflowId: string,
   callbacks: TerminationCallbacks,
 ): Promise<void> {
+  // Captured synchronously alongside the flip inside the serialized section
+  // below (see the inline comment at the capture site) — WFT-134: forgetting
+  // the wrong generation's local claim entry would corrupt an unrelated
+  // acquire that raced in between.
+  let capturedClaimEpochForForget: number | null = null;
+
   const suspended = await callbacks.runSerializedWorkflowStateWrite(workflowId, async () => {
     const state = await callbacks.loadWorkflowState(workflowId);
     if (!state || state.status !== 'running') {
@@ -148,11 +154,35 @@ export async function suspendWorkflow(
       ...buildDeadlineTimerDeleteOperations(workflowId, state.executionDeadline),
     ]);
 
+    // Captured synchronously, immediately after the commit resolved — no
+    // intervening `await` — mirroring `complete.ts`'s
+    // `captureCurrentClaimEpoch`/`releaseWorkflowClaimAfterTerminalSettlement`
+    // pattern. The commit above just durably deleted `wf-owner-holder:<id>`
+    // (folded in via `commitExternalTerminalWorkflowStateOperations` ->
+    // `buildExternalTerminalRotationFragment`), so this engine's LOCAL claim
+    // cache entry, if any, is now stale; forgetting it below (after this
+    // function's own `await callbacks.runSerializedWorkflowStateWrite(...)`
+    // resolves) closes WFT-134's same-engine-resume race regardless of
+    // renewal-tick timing. Guarded on the exact captured epoch so a claim
+    // acquired by an unrelated concurrent `start-new` replacement for this
+    // same workflow id is never forgotten in its place.
+    capturedClaimEpochForForget = internals.workflowClaimRegistry?.currentEpoch(workflowId) ?? null;
+
     return true;
   });
 
   if (!suspended) {
     return;
+  }
+
+  // See the capture site's comment above for why this is epoch-guarded
+  // rather than an unconditional `forgetLocalClaim`.
+  if (
+    internals.workflowClaimRegistry !== null &&
+    capturedClaimEpochForForget !== null &&
+    internals.workflowClaimRegistry.currentEpoch(workflowId) === capturedClaimEpochForForget
+  ) {
+    internals.workflowClaimRegistry.forgetLocalClaim(workflowId);
   }
 
   const event = new WorkflowSuspendedEvent(workflowId);

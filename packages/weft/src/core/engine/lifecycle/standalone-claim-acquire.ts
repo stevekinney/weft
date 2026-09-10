@@ -27,6 +27,18 @@
  * re-check (it can win the CAS against a still-valid claim), so only the
  * durable holder is re-read (no write) and compared.
  *
+ * **`'holder-absent'` falls through to a fresh `acquire()` instead of hard-
+ * failing (WFT-134).** `suspendWorkflow`'s external terminal rotation
+ * durably deletes `wf-owner-holder:<id>` as part of its suspend commit, which
+ * can outpace this engine's own local cache correction
+ * (`WorkflowClaimRegistry.forgetLocalClaim`). A same-engine `resume()`
+ * landing in that gap must not be treated as a real conflict — it is
+ * exactly the "no other holder to lose to" case a fresh `acquire()` handles
+ * safely. `'holder-undecodable'` and `'generation-mismatch'` remain hard
+ * failures: both mean a holder record IS present and either corrupt or
+ * naming a different generation, a real conflict this function must not
+ * paper over.
+ *
  * @module core/engine/lifecycle/standalone-claim-acquire
  */
 
@@ -51,10 +63,25 @@ export async function acquireStandaloneClaimBeforeResume(
       expectedEngineId: registry.engineId,
       expectedEpoch: cachedEpoch,
     });
-    if (check.status === 'discarded') {
+    if (check.status === 'match') {
+      return;
+    }
+    // WFT-134: `'holder-absent'` specifically — NOT `'holder-undecodable'` or
+    // `'generation-mismatch'`, both of which stay hard failures below, since
+    // they mean a real foreign holder or corrupt record is present — is the
+    // signature of `suspendWorkflow`'s external terminal rotation
+    // (`buildWorkflowClaimExternalTerminalRotationTransition`), which
+    // durably deletes `wf-owner-holder:<id>` as part of the suspend commit
+    // while leaving THIS cache possibly still populated (a stale entry that
+    // `WorkflowClaimRegistry.forgetLocalClaim` may not have cleared yet, or a
+    // different engine's cache that never held the id at all). Treat an
+    // absent holder as "nothing to fast-path against" and fall through to a
+    // fresh `registry.acquire()`, the same path a never-before-seen claim
+    // takes below — rather than hard-failing a legitimate same-engine
+    // resume immediately after its own suspend.
+    if (check.reason !== 'holder-absent') {
       throw new WorkflowClaimUnavailableError(workflowId, check.observedEngineId);
     }
-    return;
   }
   const result = await registry.acquire(workflowId);
   if (result.status === 'lost-race') {

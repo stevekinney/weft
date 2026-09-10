@@ -27,7 +27,11 @@ import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { workflow, type WorkflowContext } from '../types.ts';
-import { Engine, WorkflowClaimUnavailableError } from './index.ts';
+import {
+  ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING,
+  Engine,
+  WorkflowClaimUnavailableError,
+} from './index.ts';
 import { getInternals } from './internals.ts';
 import { encodeEpoch } from './lease-codec.ts';
 import { encodeWorkflowClaimHolder } from './workflow-claim-codec.ts';
@@ -249,5 +253,157 @@ describe('WFT-78: two engines sharing one store under ownership: "workflow-lease
     expect(getInternals(engine).workflowClaimRegistry?.currentEpoch('explicit-resume-race')).toBe(
       null,
     );
+  });
+});
+
+describe('WFT-134: engine.suspend() does not strand a same-engine resume() under ownership: "workflow-lease"', () => {
+  it('suspend forgets the LOCAL claim cache entry, and a same-engine resume() re-acquires and runs to completion', async () => {
+    const storage = new MemoryStorage();
+    const workflows: ClaimWorkflows = { 'claim-race-recovery': claimRaceRecoveryWorkflow };
+    await using engine = await createClaimEngine(storage, 'engine-a', workflows);
+    const workflowId = 'suspend-resume-same-engine';
+
+    // Start through the first committed step: `start()` folds `acquire` into
+    // its own commit (WFT-78 test 1 above), so by the time the run parks on
+    // `waitForSignal` this engine's registry tracks a real, non-null epoch —
+    // the exact precondition the root-cause analysis requires.
+    const handle = await engine.start('claim-race-recovery', null, { id: workflowId });
+    await waitForCondition(() => engine[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]() === 1, {
+      label: 'inline workflow parked on waitForSignal',
+    });
+    const registry = getInternals(engine).workflowClaimRegistry;
+    expect(registry).not.toBeNull();
+    expect(registry?.currentEpoch(workflowId)).not.toBeNull();
+
+    await handle.suspend();
+
+    // Durable invariant (mirrors `termination/suspend.test.ts`'s rotation
+    // assertion): the external terminal rotation folded into suspend's commit
+    // deletes the durable holder record — suspend leaves the workflow
+    // genuinely unowned, not owned-by-this-engine.
+    expect(await storage.get(KEYS.workflowOwnerHolder(workflowId))).toBeNull();
+    // Local invariant this fix adds (Part 2, `WorkflowClaimRegistry.forgetLocalClaim`):
+    // this engine's local cache no longer disagrees with that durable fact.
+    // Before the fix this stayed non-null, which routed the resume below onto
+    // `acquireStandaloneClaimBeforeResume`'s stale-cache fast path instead of
+    // a fresh `acquire()`.
+    expect(registry?.currentEpoch(workflowId)).toBeNull();
+
+    // The regression itself: resuming on the SAME engine instance must
+    // succeed, not throw WorkflowClaimUnavailableError.
+    const resumedHandle = await engine.resume(workflowId);
+    expect(registry?.currentEpoch(workflowId)).not.toBeNull();
+
+    await engine.signal(workflowId, 'go');
+    const result = await resumedHandle.result();
+    expect(result).toBe('ran');
+    expect(activityRunCounts.get(workflowId)).toBe(1);
+  });
+
+  it('two engines racing to resume the same suspended workflow: exactly one wins (the fence is not weakened)', async () => {
+    const storage = new MemoryStorage();
+    const workflows: ClaimWorkflows = { 'claim-race-recovery': claimRaceRecoveryWorkflow };
+    await using engineA = await createClaimEngine(storage, 'engine-a', workflows);
+    await using engineB = await createClaimEngine(storage, 'engine-b', workflows);
+    const workflowId = 'suspend-resume-two-engine-race';
+
+    const handle = await engineA.start('claim-race-recovery', null, { id: workflowId });
+    await waitForCondition(() => engineA[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]() === 1, {
+      label: 'inline workflow parked on waitForSignal',
+    });
+    await handle.suspend();
+    expect(await storage.get(KEYS.workflowOwnerHolder(workflowId))).toBeNull();
+
+    // Both engines race a fresh `acquire()` against the now-holderless
+    // workflow: neither has a cached epoch (engineA's was cleared by Part 2's
+    // `forgetLocalClaim` inside `suspend()` — see the previous test; engineB
+    // never held one), so BOTH skip `acquireStandaloneClaimBeforeResume`'s
+    // cached-epoch branch entirely and go straight to `registry.acquire()`.
+    // This is a DIFFERENT path from Part 1's `holder-absent` fall-through
+    // (exercised by the dedicated test below, where a cache is deliberately
+    // left stale); this test instead proves the ordinary `acquire()` CAS
+    // itself still fences correctly here. Exactly one wins the durable CAS.
+    const [outcomeA, outcomeB] = await Promise.allSettled([
+      engineA.resume(workflowId),
+      engineB.resume(workflowId),
+    ]);
+    const outcomes = [outcomeA, outcomeB];
+    const fulfilled = outcomes.filter((outcome) => outcome.status === 'fulfilled');
+    const rejected = outcomes.filter((outcome) => outcome.status === 'rejected');
+
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    const rejection = rejected[0] as PromiseRejectedResult;
+    expect(rejection.reason).toBeInstanceOf(WorkflowClaimUnavailableError);
+    expect((rejection.reason as WorkflowClaimUnavailableError).workflowId).toBe(workflowId);
+
+    const winnerEngine = fulfilled[0] === outcomeA ? engineA : engineB;
+    await winnerEngine.signal(workflowId, 'go');
+    const winnerHandle = (
+      fulfilled[0] as PromiseFulfilledResult<Awaited<ReturnType<typeof engineA.resume>>>
+    ).value;
+    expect(await winnerHandle.result()).toBe('ran');
+    expect(activityRunCounts.get(workflowId)).toBe(1);
+  });
+
+  it('Part 1: a stale local cache entry ("held") against an absent durable holder still resumes via a fresh acquire', async () => {
+    // Deliberately reproduces the exact race Part 1 closes WITHOUT going
+    // through `suspendWorkflow`'s own `forgetLocalClaim` call (Part 2), so
+    // this test exercises `acquireStandaloneClaimBeforeResume`'s
+    // `wakeOwnershipCheck` `'holder-absent'` fall-through in isolation: the
+    // OTHER two tests above never enter that branch at all, because Part 2
+    // already clears the cache before either of them calls `resume()` (see
+    // the previous test's comment) — cachedEpoch is null there, so the whole
+    // `if (cachedEpoch !== null)` block, and the fall-through inside it, is
+    // never reached. This test manufactures "cache says held" independently
+    // of suspend to prove Part 1 itself, not just Part 1-and-2-together.
+    const storage = new MemoryStorage();
+    const workflows: ClaimWorkflows = { 'claim-race-recovery': claimRaceRecoveryWorkflow };
+    const workflowId = 'suspend-resume-stale-cache';
+
+    // Seed a durably suspended workflow via a throwaway plain engine —
+    // mirrors `seedParkedWorkflow`'s pattern, but suspends before dispose so
+    // the persisted status is 'suspended', not 'running'.
+    {
+      await using seedEngine = await Engine.create({ storage, workflows, recover: false });
+      const seedHandle = await seedEngine.start('claim-race-recovery', null, { id: workflowId });
+      await waitForCondition(
+        async () => (await storage.get(KEYS.checkpoint(workflowId))) !== null,
+        { label: `checkpoint for seeded workflow "${workflowId}"` },
+      );
+      await seedHandle.suspend();
+    }
+    expect(await storage.get(KEYS.workflowOwnerHolder(workflowId))).toBeNull();
+
+    await using engine = await createClaimEngine(storage, 'engine-a', workflows);
+    const registry = getInternals(engine).workflowClaimRegistry;
+    expect(registry).not.toBeNull();
+
+    // Populate this engine's LOCAL cache as though it already held the
+    // claim — `acquire()` durably writes BOTH the epoch and holder keys and
+    // records them in the registry's cache.
+    const acquireResult = await registry?.acquire(workflowId);
+    expect(acquireResult?.status).toBe('acquired');
+    expect(registry?.currentEpoch(workflowId)).not.toBeNull();
+
+    // Now delete ONLY the durable holder record directly — WITHOUT going
+    // through `release()`/`forgetLocalClaim` — reproducing "the cache still
+    // says held, but the durable holder is gone" independently of suspend's
+    // own rotation. The epoch key is left in place, matching what a real
+    // external terminal rotation does (rotate epoch, delete holder only).
+    await storage.delete(KEYS.workflowOwnerHolder(workflowId));
+    expect(registry?.currentEpoch(workflowId)).not.toBeNull();
+
+    // Before Part 1: `wakeOwnershipCheck` would return `{ status: 'discarded',
+    // reason: 'holder-absent' }` and this threw WorkflowClaimUnavailableError
+    // immediately. After Part 1: 'holder-absent' falls through to a fresh
+    // `registry.acquire()`, which succeeds because nothing else holds the
+    // (now genuinely unclaimed) workflow.
+    const resumedHandle = await engine.resume(workflowId);
+    expect(registry?.currentEpoch(workflowId)).not.toBeNull();
+
+    await engine.signal(workflowId, 'go');
+    expect(await resumedHandle.result()).toBe('ran');
+    expect(activityRunCounts.get(workflowId)).toBe(1);
   });
 });

@@ -466,6 +466,20 @@ export class WorkflowClaimRegistry {
   }
 
   /**
+   * Forget this engine's LOCAL tracking entry for `workflowId` — no durable
+   * write, just `this.#claims.delete`. Sole caller: `suspendWorkflow`
+   * (WFT-134), whose commit already durably deletes `wf-owner-holder:<id>`,
+   * leaving only this stale cache entry — else {@link currentEpoch} stays
+   * non-null for a gone holder, routing a same-engine `resume()` onto the
+   * stale-cache fast path in `acquireStandaloneClaimBeforeResume`, which
+   * hard-fails on the absent holder. No-op on an untracked id; check
+   * {@link currentEpoch} first to avoid clobbering a newer generation.
+   */
+  forgetLocalClaim(workflowId: string): void {
+    this.#claims.delete(workflowId);
+  }
+
+  /**
    * Best-effort release of every claim this engine currently tracks, for
    * graceful shutdown. A failed release (thrown or lost-race) is swallowed
    * per workflow so shutdown proceeds — the reclaim scan (a later stage)
