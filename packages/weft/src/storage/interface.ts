@@ -450,12 +450,19 @@ export {
  * zero-padded to 16 digits for lexicographic ordering.
  *
  * The registry itself is assembled from feature-specific modules — `KEYS` is
- * the single spread merge of `WORKFLOW_RECORD_KEYS`, `WORKFLOW_LIFECYCLE_KEYS`,
- * `SIGNAL_KEYS`, `LEASE_KEYS`, `MAILBOX_KEYS`, `OUTBOX_KEYS`,
- * `OWNERSHIP_CLAIM_KEYS`, and `WORKFLOW_CATALOG_KEYS` — so this file stays
- * under the repository's default 500-line ceiling (WFT-90). Prefer adding a
- * new key family as its own module spread into `KEYS` (see
- * `ownership-keys.ts`) over growing this file directly.
+ * the spread merge of the workflow record, lifecycle, signal, lease, mailbox,
+ * outbox, ownership, and catalog key modules — so this file stays under the
+ * repository's default 500-line ceiling (WFT-90). Prefer adding a new key
+ * family as its own module spread into `KEYS` (see `ownership-keys.ts`) over
+ * growing this file directly.
+ *
+ * `KEYS` is typed as an explicit intersection of each source module's own
+ * `typeof` type rather than left to plain spread inference: TypeScript's
+ * declaration emit does not propagate per-member JSDoc through an inferred
+ * spread type, so hovering `KEYS.scheduleRunLink` would otherwise lose the
+ * documentation on `scheduleRunLink` itself. The intersection keeps each
+ * module's per-member docs as the single source of truth while still
+ * surfacing them through `KEYS`.
  *
  * @example
  * ```ts
@@ -467,7 +474,16 @@ export {
 // order from before the module split (see interface.test.ts's characterization
 // test): each *_CORE / *_EXTENDED pair is split at the point where another
 // module's keys were interleaved in the original single-object literal.
-export const KEYS = {
+export const KEYS: typeof WORKFLOW_RECORD_KEYS_CORE &
+  typeof SIGNAL_KEYS &
+  typeof WORKFLOW_LIFECYCLE_KEYS_CORE &
+  typeof WORKFLOW_RECORD_KEYS_EXTENDED &
+  typeof LEASE_KEYS &
+  typeof MAILBOX_KEYS &
+  typeof OUTBOX_KEYS &
+  typeof OWNERSHIP_CLAIM_KEYS &
+  typeof WORKFLOW_CATALOG_KEYS &
+  typeof WORKFLOW_LIFECYCLE_KEYS_EXTENDED = {
   ...WORKFLOW_RECORD_KEYS_CORE,
   ...SIGNAL_KEYS,
   ...WORKFLOW_LIFECYCLE_KEYS_CORE,
@@ -478,4 +494,4 @@ export const KEYS = {
   ...OWNERSHIP_CLAIM_KEYS,
   ...WORKFLOW_CATALOG_KEYS,
   ...WORKFLOW_LIFECYCLE_KEYS_EXTENDED,
-} as const;
+};
