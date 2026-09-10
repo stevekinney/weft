@@ -62,8 +62,18 @@ export function assertFreshDispatchOperationIdAdmissible(
   redispatch: boolean,
 ): void {
   if (redispatch || isValidOperationId(task.operationId)) return;
+  // `JSON.stringify()` itself throws for a `bigint` or a cyclic object, so a
+  // direct-JS caller passing one of those as `operationId` would otherwise
+  // escape this admission check as an unrelated raw TypeError instead of
+  // the intended validation error (WFT-95 review). Format defensively.
+  let formattedOperationId: string;
+  try {
+    formattedOperationId = JSON.stringify(task.operationId) ?? String(task.operationId);
+  } catch {
+    formattedOperationId = `<${typeof task.operationId}>`;
+  }
   throw new Error(
-    `TaskDispatch has an invalid "operationId" (${JSON.stringify(task.operationId)}) — it must be a non-empty, bounded identifier other than "." or "..".`,
+    `TaskDispatch has an invalid "operationId" (${formattedOperationId}) — it must be a non-empty, bounded identifier other than "." or "..".`,
   );
 }
 

@@ -73,14 +73,9 @@ export function isValidScheduleIdentifier(value: unknown): value is string {
  * reach.
  */
 export function coerceScheduleId(scheduleId: unknown, fieldName: string): string {
-  // Explicit typeof guard (WFT-95 review): `assertDecodableWorkflowId` assumes
-  // a string and would otherwise throw a raw TypeError (or, for an
-  // array-like object with a `length`, silently pass) for a non-string
-  // direct-JS-API caller; mirrors the check `coerceStartWorkflowId` used to
-  // perform before this switched to the decode-compatible predicate.
-  if (typeof scheduleId !== 'string') {
-    throw new Error(`${fieldName} must be a string`);
-  }
+  // `assertDecodableWorkflowId` now takes `unknown`, guards `typeof` itself,
+  // and narrows via `asserts id is string` (WFT-95 review), so this no
+  // longer needs its own check or cast.
   assertDecodableWorkflowId(scheduleId, fieldName);
   return scheduleId;
 }

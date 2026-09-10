@@ -390,6 +390,24 @@ describe('dispatchTaskImpl', () => {
     ).resolves.toBe(true);
   });
 
+  // Regression (WFT-95 review, fourth round): `JSON.stringify()` itself
+  // throws for a `bigint`, so a direct-JS caller passing one as
+  // `operationId` must still surface the intended validation error, not an
+  // unrelated raw TypeError from the error-formatting code itself.
+  it('rejects a bigint operationId with the validation error, not a raw TypeError (WFT-95 review regression)', async () => {
+    context = createMinimalContext();
+    options = createMinimalOptions();
+
+    await expect(
+      dispatchTaskImpl(context, options, {
+        operationId: 1n as never,
+        activityName: 'doWork',
+        workflowType: 'testWorkflow',
+        input: null,
+      }),
+    ).rejects.toThrow('invalid "operationId"');
+  });
+
   it('throws when workflowRevision is an empty string (WFT-20)', async () => {
     context = createMinimalContext();
     options = createMinimalOptions();

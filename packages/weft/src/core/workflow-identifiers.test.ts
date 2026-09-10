@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'bun:test';
 
-import { assertValidWorkflowId, isDecodableWorkflowId } from './workflow-identifiers.ts';
+import {
+  assertDecodableWorkflowId,
+  assertValidWorkflowId,
+  isDecodableWorkflowId,
+} from './workflow-identifiers.ts';
 
 describe('assertValidWorkflowId', () => {
   it('accepts an ordinary id', () => {
@@ -55,5 +59,26 @@ describe('isDecodableWorkflowId', () => {
 
   it('rejects an id containing a control character', () => {
     expect(isDecodableWorkflowId('bad\tid')).toBe(false);
+  });
+
+  // Regression (WFT-95 review, fourth round): a decoded field's static type
+  // (`WorkflowState.executionStateOwnerId: string`, etc.) does not guarantee
+  // its runtime shape — a corrupted persisted record could carry an array.
+  // Without an explicit `typeof` guard, a non-empty array of strings would
+  // pass (`.length`, iteration, and `containsControlCharacter()`'s
+  // per-element `codePointAt()` all succeed on an array), silently accepting
+  // a malformed field instead of dropping it.
+  it('rejects non-string values, including a string array', () => {
+    expect(isDecodableWorkflowId(42)).toBe(false);
+    expect(isDecodableWorkflowId(null)).toBe(false);
+    expect(isDecodableWorkflowId(undefined)).toBe(false);
+    expect(isDecodableWorkflowId(['a', 'b'])).toBe(false);
+  });
+});
+
+describe('assertDecodableWorkflowId', () => {
+  it('narrows to string and rejects a string array with a clear error', () => {
+    expect(() => assertDecodableWorkflowId(['a'], 'x')).toThrow('x must be a string');
+    expect(() => assertDecodableWorkflowId(42, 'x')).toThrow('x must be a string');
   });
 });

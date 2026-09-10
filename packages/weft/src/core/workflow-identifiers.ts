@@ -15,19 +15,37 @@ function containsControlCharacter(value: string): boolean {
 }
 
 /**
- * Assert every workflow-id constraint that predates WFT-95: non-empty, at
- * most {@link MAX_WORKFLOW_ID_LENGTH} characters, and free of control
- * characters. Deliberately does NOT reject the exact strings `.` or `..` —
- * those were valid workflow ids before WFT-95 and may already be durably
- * persisted (a schedule id, a persisted `currentWorkflowId`, a queued run's
- * `workflowId`, schedule-run metadata, an `executionStateOwnerId` or
- * `parentWorkflowId`/`restartedFrom.workflowId` on a decoded `WorkflowState`).
- * Decode and schedule-control (lookup, pause, resume, cancel, update) paths
- * must keep accepting them so an upgrade doesn't strand pre-existing data or
- * make a pre-existing schedule/workflow unmanageable; only fresh admission
- * ({@link assertValidWorkflowId}) adds the `.`/`..` rejection.
+ * Assert every workflow-id constraint that predates WFT-95: a string,
+ * non-empty, at most {@link MAX_WORKFLOW_ID_LENGTH} characters, and free of
+ * control characters. Deliberately does NOT reject the exact strings `.` or
+ * `..` — those were valid workflow ids before WFT-95 and may already be
+ * durably persisted (a schedule id, a persisted `currentWorkflowId`, a
+ * queued run's `workflowId`, schedule-run metadata, an `executionStateOwnerId`
+ * or `parentWorkflowId`/`restartedFrom.workflowId` on a decoded
+ * `WorkflowState`). Decode and schedule-control (lookup, pause, resume,
+ * cancel, update) paths must keep accepting them so an upgrade doesn't
+ * strand pre-existing data or make a pre-existing schedule/workflow
+ * unmanageable; only fresh admission ({@link assertValidWorkflowId}) adds
+ * the `.`/`..` rejection.
+ *
+ * Takes `unknown`, not `string` (WFT-95 review): every caller passes an
+ * already-decoded field whose static `WorkflowState`/`ScheduleState` type
+ * says `string` but whose runtime shape is untrusted — the storage record
+ * could be corrupted. Without an explicit `typeof` guard here, a decoded
+ * array of strings would pass (`.length`, iteration, and
+ * `containsControlCharacter()`'s per-element `codePointAt()` all succeed on
+ * an array too), silently accepting a malformed field instead of dropping
+ * it — the same guard `coerceStartWorkflowId()` performed before this
+ * predicate existed.
  */
-export function assertDecodableWorkflowId(id: string, fieldName: string = 'options.id'): void {
+export function assertDecodableWorkflowId(
+  id: unknown,
+  fieldName: string = 'options.id',
+): asserts id is string {
+  if (typeof id !== 'string') {
+    throw new Error(`${fieldName} must be a string`);
+  }
+
   if (id.length === 0) {
     throw new Error(`${fieldName} must not be an empty string`);
   }
@@ -42,7 +60,7 @@ export function assertDecodableWorkflowId(id: string, fieldName: string = 'optio
 }
 
 /** Whether `id` satisfies {@link assertDecodableWorkflowId}. */
-export function isDecodableWorkflowId(id: string): boolean {
+export function isDecodableWorkflowId(id: unknown): boolean {
   try {
     assertDecodableWorkflowId(id);
     return true;
