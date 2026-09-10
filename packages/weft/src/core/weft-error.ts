@@ -77,7 +77,8 @@ export type WeftErrorCode =
   | 'WorkflowSourceValidationError'
   | 'WorkflowSourceNotRegisteredError'
   | 'DynamicWorkflowSourceUnavailableError'
-  | 'WorkflowRevisionUnavailableError';
+  | 'WorkflowRevisionUnavailableError'
+  | 'ForkSourceReplacedError';
 
 /**
  * Generic abstract base for all Weft library errors. The `TCode` parameter
@@ -165,6 +166,7 @@ const publicWeftErrorCodeMap = {
   WorkflowSourceNotRegisteredError: true,
   DynamicWorkflowSourceUnavailableError: true,
   WorkflowRevisionUnavailableError: true,
+  ForkSourceReplacedError: true,
 } satisfies Record<WeftErrorCode, true>;
 
 const PUBLIC_WEFT_ERROR_CODES = new Set<string>(Object.keys(publicWeftErrorCodeMap));

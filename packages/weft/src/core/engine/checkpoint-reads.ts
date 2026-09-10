@@ -190,16 +190,31 @@ export async function replayTo(
   // `events` regardless of the requested step. Surface the boundary so callers
   // can tell an incomplete replay from a complete one.
   const watermark = await readEventLogWatermark(internals.storage, workflowId);
+  // Revalidate `state` after the slower event-log/hydration/watermark
+  // reads above (Codex review, item 5): those reads are independent of the
+  // early `state` read and each other, so a concurrent `start(..., { id:
+  // workflowId, onTerminalConflict: 'start-new' })` replacement landing
+  // AFTER the early `state` read but before these later reads complete
+  // would leave `rawCheckpoint`/`state` agreeing on the OLD run's token
+  // (both captured before the replacement) while `entries`/`checkpoint`/
+  // `watermark` could already reflect the REPLACEMENT's own data — the
+  // response would misattribute the OLD run's `revision` to (some of) the
+  // NEW run's content. A second `state` read here, required to match the
+  // first read's token before `revision` is trusted, catches that window
+  // without needing to rebuild the whole response from one snapshot.
+  const revalidatedState = await loadWorkflowState(internals, workflowId);
+  const stillConsistent =
+    revalidatedState !== null &&
+    revalidatedState.workflowExecutionToken === state?.workflowExecutionToken;
+
   // The run's own pinned revision (WFT-21): omitted when the workflow
   // record has since been purged (`state === null`), when it predates
-  // revision pinning (`state.revision === undefined`), OR — closing the
-  // `state`-vs-`checkpoint` consistency gap between this checkpoint's own
-  // independent read and the `state` read above (Codex review round 2,
-  // P2) — when `state` belongs to a DIFFERENT, later execution than this
-  // checkpoint (a concurrent `start(..., { id: workflowId,
-  // onTerminalConflict: 'start-new' })` landing between the two reads).
-  // See `resolveReplayRevision()`'s own doc for how that's detected.
-  const revision = resolveReplayRevision(rawCheckpoint, state);
+  // revision pinning (`state.revision === undefined`), when `state`
+  // belonged to a DIFFERENT, later execution than this checkpoint (Codex
+  // review round 2, P2 — see `resolveReplayRevision()`'s own doc), or when
+  // the revalidation above detected a replacement landing after the early
+  // `state` read (Codex review, item 5).
+  const revision = stillConsistent ? resolveReplayRevision(rawCheckpoint, state) : undefined;
 
   return {
     checkpoint: sanitizeCheckpointState({

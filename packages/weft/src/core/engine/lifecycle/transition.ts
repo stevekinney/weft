@@ -2,7 +2,7 @@ import { serializeCheckpoint } from '../../checkpoint.ts';
 import { RegExpExtensionDecodeError } from '../../codec/extension-codec.ts';
 import { EMPTY_EVENT_HEAD } from '../../event-log.ts';
 import { WorkflowRecoverySkippedEvent } from '../../events.ts';
-import type { Checkpoint, ForkOptions, WorkflowState } from '../../types.ts';
+import type { ForkOptions, WorkflowState } from '../../types.ts';
 import { VersionMismatchError } from '../../versioning.ts';
 import { releaseInFlightStart, reserveInFlightStart } from '../catalog-removal.ts';
 import { forgetCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
@@ -21,8 +21,8 @@ import { launchWorkflowFromCheckpoint } from './checkpoint-launch.ts';
 import {
   buildForkBatchOperations,
   buildForkCatalogEntryCondition,
+  buildForkCheckpoint,
   buildForkCommitLostRaceError,
-  buildForkSearchAttributes,
   createForkLineage,
   createForkedWorkflowState,
   loadForkSourceCheckpoint,
@@ -30,6 +30,10 @@ import {
   resolveForkPersistedRevision,
   resolveForkTargetRevision,
 } from './fork-helpers.ts';
+import {
+  assertForkSourceCheckpointMatchesState,
+  assertForkSourceNotReplacedBeforeCommit,
+} from './fork-source-replacement-guards.ts';
 import { derivePreparedExecutionState } from './persist.ts';
 import {
   buildRecoveryRevisionGroups,
@@ -391,6 +395,8 @@ export async function fork(
     const fromStep =
       options?.fromStep !== undefined ? normalizeForkStep(options.fromStep) : undefined;
     const sourceCheckpoint = await loadForkSourceCheckpoint(internals, sourceWorkflowId, fromStep);
+    // See this function's own doc (WFT-21, Codex review, item 6).
+    assertForkSourceCheckpointMatchesState(sourceWorkflowId, sourceState, sourceCheckpoint);
     const preparedExecutionState = derivePreparedExecutionState(
       internals,
       sourceWorkflowId,
@@ -408,8 +414,6 @@ export async function fork(
     const workflowId = crypto.randomUUID();
     const forkedAt = internals.options.getNow();
     const lineage = createForkLineage(internals, sourceWorkflowId, sourceCheckpoint, callbacks);
-    const { accumulatedResultReplayWatermark: _sourceReplayWatermark, ...sourceCheckpointForFork } =
-      preparedExecutionState.checkpoint;
     const forkState = createForkedWorkflowState(
       internals,
       workflowId,
@@ -420,21 +424,15 @@ export async function fork(
       callbacks,
       persistedRevision,
     );
-    const forkCheckpoint: Checkpoint = {
-      ...sourceCheckpointForFork,
-      createdAt: forkedAt,
+    const forkCheckpoint = buildForkCheckpoint(
+      internals,
       workflowId,
-      // The fork's own fresh token, never the source's.
-      ...(forkState.workflowExecutionToken !== undefined && {
-        workflowExecutionToken: forkState.workflowExecutionToken,
-      }),
-      searchAttributes: buildForkSearchAttributes(
-        internals,
-        preparedExecutionState.checkpoint,
-        lineage,
-        callbacks,
-      ),
-    };
+      forkedAt,
+      preparedExecutionState.checkpoint,
+      forkState,
+      lineage,
+      callbacks,
+    );
 
     // Fences the commit below against a concurrent removeWorkflowRevision()
     // (WFT-21 round 1, P1) — see `buildForkCatalogEntryCondition()`'s doc.
@@ -444,6 +442,8 @@ export async function fork(
       persistedRevision,
     );
 
+    // See this function's own doc (WFT-21, Codex review, item 6).
+    await assertForkSourceNotReplacedBeforeCommit(internals, sourceWorkflowId, sourceState);
     let forkStarted = false;
     try {
       const forkCheckpointBytes = serializeCheckpoint(forkCheckpoint);

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import type { Engine } from '../../core/engine.ts';
+import { ForkSourceReplacedError } from '../../core/engine/errors.ts';
 import type { ForkOptions } from '../../core/types.ts';
 import { VersionMismatchError } from '../../core/versioning.ts';
 import type { OperationFault } from '../operation-fault.ts';
@@ -100,6 +101,20 @@ export function resolveForkAccess(error: unknown): never {
   // branches for the same reason the revision check above is: its own
   // message text must never accidentally match one of them.
   if (error instanceof VersionMismatchError) {
+    const fault: OperationFault = {
+      code: 'Conflict',
+      message: error.message,
+      data: { reason: error.message, weftCode: error.code },
+    };
+    throw fault;
+  }
+
+  // WFT-21, Codex review, item 6: the source run was replaced by a
+  // concurrent `start-new` while this fork was still resolving or
+  // committing — a legitimate, retryable race, not an engine failure.
+  // Checked before the substring branches below for the same reason the
+  // two typed checks above are.
+  if (error instanceof ForkSourceReplacedError) {
     const fault: OperationFault = {
       code: 'Conflict',
       message: error.message,

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import { Engine } from '../../core/engine.ts';
+import { ForkSourceReplacedError } from '../../core/engine/fork-source-replaced-error.ts';
 import { WorkflowRevisionUnavailableError } from '../../core/engine/revision-errors.ts';
 import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
@@ -227,6 +228,57 @@ describe('weft.workflows.fork', () => {
       if (result.ok) throw new Error('expected a fault');
       expect(result.fault.code).toBe('Conflict');
       expect(result.fault.data).toMatchObject({ weftCode: 'VersionMismatchError' });
+    } finally {
+      engine.fork = originalFork;
+    }
+  });
+
+  it('maps a ForkSourceReplacedError from engine.fork() to a Conflict (409) fault over REST, not the generic 500 EngineFailure (WFT-21, Codex review, item 6)', async () => {
+    engine = createEngine();
+    const originalFork = engine.fork.bind(engine);
+
+    try {
+      engine.fork = async () => {
+        throw new ForkSourceReplacedError('workflow-123');
+      };
+
+      const response = await handleRequest(
+        jsonRequest('POST', '/v1/workflows/workflow-123/fork', {}),
+        engine,
+        { operationRegistry: registry, restBindings: bindings },
+      );
+
+      expect(response.status).toBe(409);
+    } finally {
+      engine.fork = originalFork;
+    }
+  });
+
+  it('maps a ForkSourceReplacedError from engine.fork() to a Conflict fault with data.weftCode over JSON-RPC (full fidelity, WFT-21, Codex review, item 6)', async () => {
+    engine = createEngine();
+    const originalFork = engine.fork.bind(engine);
+    const liveRegistry = createLiveOperationRegistry();
+
+    try {
+      engine.fork = async () => {
+        throw new ForkSourceReplacedError('workflow-123');
+      };
+
+      const result = await executeOperation(
+        'weft.workflows.fork',
+        { workflowId: 'workflow-123' },
+        {
+          principal: anonymousPrincipal(),
+          engine,
+          transport: 'jsonRpcStdio',
+          registry: liveRegistry,
+        },
+      );
+
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error('expected a fault');
+      expect(result.fault.code).toBe('Conflict');
+      expect(result.fault.data).toMatchObject({ weftCode: 'ForkSourceReplacedError' });
     } finally {
       engine.fork = originalFork;
     }

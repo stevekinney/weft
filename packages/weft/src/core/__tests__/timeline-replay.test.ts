@@ -584,6 +584,87 @@ describe('timeline and replay', () => {
     expect(replay?.revision).toBeUndefined();
   });
 
+  it('omits `revision` from a replay when a `start-new` replacement lands AFTER the state read but before the later event-log/hydration/watermark reads (WFT-21, Codex review, item 5)', async () => {
+    /**
+     * A `MemoryStorage` whose `scan()` performs the `start-new` replacement
+     * write on its FIRST call after arming — `replayTo()`'s own
+     * `eventLog.replay()` call is the first `scan()` it makes after its
+     * early `state` read (WFT-21, Codex review round 2, P2), so arming
+     * immediately before `engine.replayTo(...)` lands the replacement
+     * exactly in the window between that early read and the later
+     * event-log/hydration/watermark reads this fix must revalidate against.
+     */
+    class RaceInjectingStorage extends MemoryStorage {
+      #armed = false;
+      #fired = false;
+      #onFire: (() => Promise<void>) | null = null;
+
+      arm(onFire: () => Promise<void>): void {
+        this.#armed = true;
+        this.#fired = false;
+        this.#onFire = onFire;
+      }
+
+      override async *scan(
+        prefix: string,
+        options?: Parameters<MemoryStorage['scan']>[1],
+      ): AsyncIterable<[string, Uint8Array]> {
+        if (this.#armed && !this.#fired) {
+          this.#fired = true;
+          await this.#onFire?.();
+        }
+        yield* super.scan(prefix, options);
+      }
+    }
+
+    const raceStorage = new RaceInjectingStorage();
+    // `backgroundTasks: 'manual'` — no scheduler/cleanup/retention interval
+    // may call `storage.scan()` on its own timing and consume the armed
+    // first-scan hook before `replayTo()`'s own `eventLog.replay()` call
+    // does, which would fire the race at the wrong point and flake this
+    // test under load (e.g. coverage instrumentation's added overhead).
+    engine = new Engine({
+      storage: raceStorage,
+      checkpointHistory: 10,
+      backgroundTasks: 'manual',
+    });
+    const raceWorkflow = workflow({ name: 'replay-race-after-state-read' }).execute(
+      async function* (ctx: WorkflowContext) {
+        yield* ctx.run(async () => 'step-one');
+        return 'done';
+      },
+    );
+    engine.register(raceWorkflow);
+
+    const handle = await engine.start('replay-race-after-state-read', null, {
+      id: 'wf-replay-race-after-state-read',
+    });
+    await handle.result();
+    const originalState = await engine.get(handle.id);
+    expect(originalState?.revision).toBeDefined();
+
+    // Arm the race immediately before the call under test — engine
+    // construction and the workflow's own start/run already perform
+    // plenty of unrelated `scan()` calls that must not trigger this.
+    raceStorage.arm(async () => {
+      const stateBytes = await raceStorage.get(KEYS.workflow(handle.id));
+      const replacedState = { ...(decode(stateBytes!) as Record<string, unknown>) };
+      replacedState['revision'] = 'sha256:replacement-revision-that-never-produced-this-checkpoint';
+      replacedState['workflowExecutionToken'] = 'replacement-run-token-mid-replay';
+      await raceStorage.put(KEYS.workflow(handle.id), encode(replacedState));
+    });
+
+    const replay = await engine.replayTo(handle.id, 1);
+    expect(replay).not.toBeNull();
+    // Before this fix, `revision` was resolved from the EARLY `state` read
+    // (still the original run, since the replacement landed after it) and
+    // never revalidated against the replacement that landed before the
+    // later event-log/hydration/watermark reads completed — so `revision`
+    // was wrongly attributed to the original run even though those later
+    // reads could already reflect the replacement.
+    expect('revision' in (replay ?? {})).toBe(false);
+  });
+
   it('seeds `workflowExecutionToken` onto a recovered pre-upgrade checkpoint, so a post-recovery checkpoint converges and `replayTo().revision` attribution works again (WFT-21, Codex review, item 4)', async () => {
     const storage = new MemoryStorage();
     const recoveryWorkflow = workflow({ name: 'replay-recovery-token-seed' }).execute(
