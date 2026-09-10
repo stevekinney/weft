@@ -1367,6 +1367,151 @@ describe('createWorkflowClaimReclaimTarget · running-state/acquire TOCTOU (WFT-
     expect(registry.currentEpoch('wf-expired')).toBeNull();
     expect(await base.get(KEYS.workflowOwnerHolder('wf-expired'))).toBeNull();
   });
+
+  it("handleTakeoverAcquired releases (and does not drive) a claim whose workflow was replaced (onTerminalConflict: 'start-new') by a revision this engine is not eligible for, between the pre-CAS eligibility read and the CAS landing (WFT-19 review round 4, Codex)", async () => {
+    const clock = makeClock();
+    const base = new MemoryStorage();
+    await putHolder(base, 'wf-revision-swap', 'engine-b');
+    // Pinned to 'rev-a' at the moment `isEligibleForFreshTakeover` reads it —
+    // this engine is eligible for 'rev-a' only (see `isTypeRegistered` below).
+    await putWorkflowState(base, 'wf-revision-swap', { type: 'dyn', revision: 'rev-a' });
+    clock.advance(TTL_MS * 10); // far past any grace-adjusted expiry
+    let signalReached!: () => void;
+    const reached = new Promise<void>((resolve) => {
+      signalReached = resolve;
+    });
+    const { storage: gatedStorage, release } = createHolderReadGatedStorage(
+      base,
+      'wf-revision-swap',
+      signalReached,
+    );
+    const registry = new WorkflowClaimRegistry({
+      storage: gatedStorage,
+      engineId: 'engine-a',
+      getNow: clock.now,
+      claimTtlMs: TTL_MS,
+      claimRenewIntervalMs: RENEW_MS,
+    });
+    const driven: string[] = [];
+    const reclaimTarget = createWorkflowClaimReclaimTarget(
+      registry,
+      gatedStorage,
+      new WorkflowClaimMetricsCollector(),
+      async (workflowId) => {
+        driven.push(workflowId);
+      },
+      // Eligible for 'rev-a' only — mirrors an engine that has registered
+      // (and can resolve) exactly one revision of a dynamic-source type.
+      (workflowType, revision) => workflowType === 'dyn' && revision === 'rev-a',
+    );
+
+    const attemptPromise = reclaimTarget.attemptWorkflowClaimTakeover('wf-revision-swap');
+    await reached;
+
+    // An `onTerminalConflict: 'start-new'` replacement lands on the SAME
+    // workflow id while the takeover CAS's own holder read is gated in
+    // flight — pinned to 'rev-b', a revision this engine is NOT eligible
+    // for. The pre-CAS `isEligibleForFreshTakeover` read (already performed
+    // before this call started) cannot see this.
+    await putWorkflowState(base, 'wf-revision-swap', { type: 'dyn', revision: 'rev-b' });
+    release();
+
+    const result = await attemptPromise;
+
+    expect(result).toEqual({ status: 'not-eligible' });
+    expect(driven).toEqual([]);
+    // The claim landed by the takeover CAS, then was released by the fresh
+    // post-acquire eligibility re-check — never left held and renewed
+    // indefinitely against a revision this engine cannot actually run,
+    // which would otherwise strand the workflow forever (a failed
+    // `onReclaimed` drive is retried in place, never released).
+    expect(registry.currentEpoch('wf-revision-swap')).toBeNull();
+    expect(await base.get(KEYS.workflowOwnerHolder('wf-revision-swap'))).toBeNull();
+  });
+
+  it('handleTakeoverAcquired still drives when the pre-CAS-eligible revision is UNCHANGED at the post-CAS re-check (no false-positive release)', async () => {
+    const clock = makeClock();
+    const base = new MemoryStorage();
+    await putHolder(base, 'wf-revision-stable', 'engine-b');
+    await putWorkflowState(base, 'wf-revision-stable', { type: 'dyn', revision: 'rev-a' });
+    clock.advance(TTL_MS * 10);
+    const registry = new WorkflowClaimRegistry({
+      storage: base,
+      engineId: 'engine-a',
+      getNow: clock.now,
+      claimTtlMs: TTL_MS,
+      claimRenewIntervalMs: RENEW_MS,
+    });
+    const driven: string[] = [];
+    const reclaimTarget = createWorkflowClaimReclaimTarget(
+      registry,
+      base,
+      new WorkflowClaimMetricsCollector(),
+      async (workflowId) => {
+        driven.push(workflowId);
+      },
+      (workflowType, revision) => workflowType === 'dyn' && revision === 'rev-a',
+    );
+
+    const result = await reclaimTarget.attemptWorkflowClaimTakeover('wf-revision-stable');
+
+    expect(result).toEqual({ status: 'reclaimed' });
+    expect(driven).toEqual(['wf-revision-stable']);
+    expect(registry.currentEpoch('wf-revision-stable')).not.toBeNull();
+  });
+
+  it('handleTakeoverAcquired releases (and does not drive) a claim whose workflow record decodes as corrupt at the post-CAS re-check', async () => {
+    const clock = makeClock();
+    const base = new MemoryStorage();
+    await putHolder(base, 'wf-corrupt-post-cas', 'engine-b');
+    await putWorkflowState(base, 'wf-corrupt-post-cas', { type: 'dyn', revision: 'rev-a' });
+    clock.advance(TTL_MS * 10);
+    let signalReached!: () => void;
+    const reached = new Promise<void>((resolve) => {
+      signalReached = resolve;
+    });
+    const { storage: gatedStorage, release } = createHolderReadGatedStorage(
+      base,
+      'wf-corrupt-post-cas',
+      signalReached,
+    );
+    const registry = new WorkflowClaimRegistry({
+      storage: gatedStorage,
+      engineId: 'engine-a',
+      getNow: clock.now,
+      claimTtlMs: TTL_MS,
+      claimRenewIntervalMs: RENEW_MS,
+    });
+    const driven: string[] = [];
+    const reclaimTarget = createWorkflowClaimReclaimTarget(
+      registry,
+      gatedStorage,
+      new WorkflowClaimMetricsCollector(),
+      async (workflowId) => {
+        driven.push(workflowId);
+      },
+      (workflowType, revision) => workflowType === 'dyn' && revision === 'rev-a',
+    );
+
+    const attemptPromise = reclaimTarget.attemptWorkflowClaimTakeover('wf-corrupt-post-cas');
+    await reached;
+
+    // The workflow record is overwritten with undecodable bytes while the
+    // takeover CAS's own holder read is gated in flight — mirrors the
+    // pre-CAS corrupt-state fixtures elsewhere in this file
+    // (`wf-corrupt`/`wf-corrupt-type-check`), but for the POST-CAS
+    // `isWorkflowStillRunningAndEligible` re-check specifically: fail closed
+    // (release, never drive) exactly like an absent or terminal record.
+    await base.put(KEYS.workflow('wf-corrupt-post-cas'), new Uint8Array([0xff, 0xfe, 0x00]));
+    release();
+
+    const result = await attemptPromise;
+
+    expect(result).toEqual({ status: 'not-eligible' });
+    expect(driven).toEqual([]);
+    expect(registry.currentEpoch('wf-corrupt-post-cas')).toBeNull();
+    expect(await base.get(KEYS.workflowOwnerHolder('wf-corrupt-post-cas'))).toBeNull();
+  });
 });
 
 describe('buildOwnerSideSignalPollTarget (WFT-79 Finding 1)', () => {

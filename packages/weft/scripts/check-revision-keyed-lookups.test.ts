@@ -144,7 +144,7 @@ describe('check-revision-keyed-lookups', () => {
 
   it('passes when a match is exactly on its audited declaration-site line, in a file with no whole-file allowance', async () => {
     const guarded = GUARDED_FIELDS.find((field) => field.name === 'lastResolvedRevisionByName')!;
-    const site = guarded.declarationSites[0]!;
+    const site = guarded.declarationSites[0];
     // Pad so the real reference lands EXACTLY on the audited declaration-site
     // line number, not just somewhere in the file.
     const padding = '\n'.repeat(site.line - 1);
@@ -159,7 +159,7 @@ describe('check-revision-keyed-lookups', () => {
 
   it('fails when a match is in a declaration-site FILE but on a DIFFERENT line — line-exactness, not whole-file exemption (WFT-19 review round 2, Codex)', async () => {
     const guarded = GUARDED_FIELDS.find((field) => field.name === 'lastResolvedRevisionByName')!;
-    const site = guarded.declarationSites[0]!;
+    const site = guarded.declarationSites[0];
     // Pad with blank lines so the real reference lands one line AFTER the
     // audited declaration-site line number — a future unrelated addition to
     // this same file must still be caught, not silently pass because the

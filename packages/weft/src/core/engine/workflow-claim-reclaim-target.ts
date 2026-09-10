@@ -77,6 +77,44 @@ async function isWorkflowTypeRegistered(
 }
 
 /**
+ * Fresh, SINGLE-read combination of {@link isWorkflowStillRunning} and
+ * {@link isWorkflowTypeRegistered} — used strictly AFTER a takeover/acquire
+ * CAS has already landed, to close a TOCTOU `isEligibleForFreshTakeover`
+ * alone cannot: that pre-CAS eligibility read and the CAS itself are two
+ * separate storage operations, so an `onTerminalConflict: 'start-new'`
+ * replacement landing in between can swap the SAME workflow id onto a
+ * DIFFERENT `(type, revision)` this engine is not actually eligible to run
+ * — `registry.takeover`/`registry.acquire` fence only the holder/epoch
+ * keys, never workflow identity, so the CAS lands regardless of which
+ * generation is now live underneath it. Without this post-acquisition
+ * re-check, an engine eligible only for the OLD revision would durably
+ * hold the claim for the NEW one; `onReclaimed` would then deterministically
+ * fail to resolve/replay it, and — since a failed drive is retried in
+ * place, never released, per this module's doc — the workflow would be
+ * permanently stranded away from any engine that could actually run it
+ * (WFT-19 review round 4, Codex). A single read (not two separate calls to
+ * the functions above) so the running-status and eligibility checks are
+ * evaluated against the exact same generation, never two different ones.
+ * Absent or corrupt state reads as "not eligible" (fail closed, matching
+ * both functions above).
+ */
+async function isWorkflowStillRunningAndEligible(
+  storage: Storage,
+  workflowId: string,
+  isTypeRegistered: ((workflowType: string, revision: string | undefined) => boolean) | undefined,
+): Promise<boolean> {
+  const bytes = await storage.get(KEYS.workflow(workflowId));
+  if (bytes === null) return false;
+  try {
+    const state = decodeWorkflowState(bytes);
+    if (state.status !== 'running') return false;
+    return isTypeRegistered === undefined || isTypeRegistered(state.type, state.revision);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * A {@link WorkflowClaimReclaimTarget} with one additional, non-interface
  * method: {@link markDisposing}. Structurally still a valid
  * `WorkflowClaimReclaimTarget` (every caller that only knows that narrower
@@ -230,24 +268,38 @@ export function createWorkflowClaimReclaimTarget(
   }
 
   /**
-   * Close the running-state/acquire(or takeover) TOCTOU: `isWorkflowStillRunning`
-   * is checked before the CAS, but a terminal transition (external cancel,
-   * timeout, or a normal completion racing this reclaim attempt) can commit
-   * between that check and the CAS landing. `registry.acquire`/`registry.takeover`
-   * only fence on the holder/epoch keys, not workflow status, so the CAS
-   * happily lands for a workflow that is no longer running. Re-check status
-   * AFTER the claim is held; if it is no longer running, release it —
-   * generation-safely, only when `registry.currentEpoch(workflowId)` is still
-   * the exact epoch this call just acquired, so a claim someone else already
-   * took over out from under a stale local read is never released — and never
-   * drive a terminal workflow. Returns `true` when the caller should proceed
+   * Close two TOCTOU windows between the pre-CAS reads and the CAS landing,
+   * in one post-acquisition re-check:
+   *
+   * - **Running status**: `isWorkflowStillRunning` is checked before the
+   *   CAS, but a terminal transition (external cancel, timeout, or a normal
+   *   completion racing this reclaim attempt) can commit between that check
+   *   and the CAS landing.
+   * - **Type/revision eligibility** (WFT-19 review round 4, Codex):
+   *   `isEligibleForFreshTakeover` is likewise checked before the CAS
+   *   against whatever `(type, revision)` this workflow id was pinned to at
+   *   that moment — but an `onTerminalConflict: 'start-new'` replacement
+   *   landing between that read and the CAS can swap the SAME id onto a
+   *   DIFFERENT revision this engine is not actually eligible to run.
+   *
+   * `registry.acquire`/`registry.takeover` fence only the holder/epoch keys
+   * — never workflow status or identity — so the CAS happily lands
+   * regardless of either race. Re-check BOTH, via one single fresh read
+   * ({@link isWorkflowStillRunningAndEligible}), AFTER the claim is held; if
+   * either fails, release it — generation-safely, only when
+   * `registry.currentEpoch(workflowId)` is still the exact epoch this call
+   * just acquired, so a claim someone else already took over out from under
+   * a stale local read is never released — and never drive a terminal or
+   * now-ineligible workflow. Returns `true` when the caller should proceed
    * to drive the claim it just landed.
    */
   async function confirmStillRunningOrReleaseFreshClaim(
     workflowId: string,
     acquiredEpoch: number,
   ): Promise<boolean> {
-    if (await isWorkflowStillRunning(storage, workflowId)) return true;
+    if (await isWorkflowStillRunningAndEligible(storage, workflowId, isTypeRegistered)) {
+      return true;
+    }
     if (registry.currentEpoch(workflowId) === acquiredEpoch) {
       await registry.release(workflowId);
     }
