@@ -36,13 +36,17 @@ export type ChildWorkflowOperationCallbacks = {
    * is NEVER part of the public `StartOptions` a caller passes; only
    * `dispatchChildWorkflowStart`'s crash-reattach retry sets it, and only
    * after confirming a matching persisted child record already exists for
-   * `childWorkflowId`.
+   * `childWorkflowId`. This retry always passes the literal `'reattach-only'`,
+   * not `true`: the confirming read here is separate from
+   * `startWorkflow`'s own atomic re-check, so `'reattach-only'` fences the
+   * bypass to that re-check actually finding a match to reattach to (see
+   * `startWorkflow`'s doc comment for the full TOCTOU race this closes).
    */
   start: (
     type: string,
     input: unknown,
     options?: StartOptions,
-    skipAdmissionIdCheck?: boolean,
+    skipAdmissionIdCheck?: boolean | 'reattach-only',
   ) => Promise<WorkflowHandle>;
   loadWorkflowState: (workflowId: string) => Promise<WorkflowState | null>;
   getHandle: (workflowId: string) => WorkflowHandle;
@@ -244,7 +248,7 @@ async function reattachLegacyReservedChildOrRethrow(
       operation.workflowType,
       operation.input,
       { id: childWorkflowId },
-      true,
+      'reattach-only',
     );
   } catch (retryError) {
     if (!(retryError instanceof WorkflowAlreadyExistsError)) {

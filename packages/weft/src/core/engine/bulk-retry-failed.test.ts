@@ -4,7 +4,7 @@ import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { ActivityRegistry } from '../activity-registry.ts';
-import { decode } from '../codec.ts';
+import { decode, encode } from '../codec.ts';
 import { buildWorkflowManifestFromDefinition } from '../registry-workflow-manifest.ts';
 import { workflowSource } from '../source/index.ts';
 import type { WorkflowContext, WorkflowDefinition, WorkflowState } from '../types.ts';
@@ -123,6 +123,50 @@ describe('bulk failed-workflow retry', () => {
     expect(result).toEqual({ retried: 1, failed: 0, errors: [] });
     const retriedState = await waitForWorkflowStatus(engine, handle.id, 'completed');
     expect(retriedState.result).toBe('restarted:from-input');
+  });
+
+  it('restarts a failed workflow from persisted input for a legacy "." id when no checkpoint exists (WFT-95)', async () => {
+    const storage = new MemoryStorage();
+    await using engine = new Engine({ storage });
+    let shouldFailBeforeCheckpoint = true;
+    const legacyDotRetryWorkflow = workflow({ name: 'legacy-dot-retry' }).execute(async function* (
+      _ctx: WorkflowContext,
+      input: { value: string },
+    ) {
+      if (shouldFailBeforeCheckpoint) {
+        throw new Error('first attempt failed before checkpoint');
+      }
+      return `restarted:${input.value}`;
+    });
+    engine.register(legacyDotRetryWorkflow);
+
+    // Seed a failed run persisted under the reserved id "." directly (not
+    // through `engine.start()`, which now rejects "." at strict admission) —
+    // standing in for a pre-WFT-95 workflow that failed before its first
+    // checkpoint. `retryFailedWorkflow()`'s checkpoint-absent fallback must
+    // still be able to rebuild and restart it via the internal
+    // `skipAdmissionIdCheck: true` replay path (issue 2 of the WFT-95 TOCTOU
+    // follow-up), not just the checkpoint-backed reactivation path.
+    const failedLegacyState: WorkflowState = {
+      createdAt: 1,
+      error: 'first attempt failed before checkpoint',
+      id: '.',
+      input: { value: 'from-legacy-dot' },
+      startedAt: 1,
+      status: 'failed',
+      type: 'legacy-dot-retry',
+      updatedAt: 1,
+      versionTuple: { workflowVersion: '1' },
+    };
+    await storage.put(KEYS.workflow('.'), encode(failedLegacyState));
+    expect(await storage.get(KEYS.checkpoint('.'))).toBeNull();
+
+    shouldFailBeforeCheckpoint = false;
+    const result = await engine.retryFailedAll({ status: 'failed' });
+
+    expect(result).toEqual({ retried: 1, failed: 0, errors: [] });
+    const retriedState = await waitForWorkflowStatus(engine, '.', 'completed');
+    expect(retriedState.result).toBe('restarted:from-legacy-dot');
   });
 
   it('only retries failed workflows that match the supplied filter', async () => {

@@ -1,5 +1,6 @@
 import type { BatchOperation, ConditionalBatchCondition } from '../../../storage/interface.ts';
 import { KEYS, storageHas } from '../../../storage/interface.ts';
+import { coerceStartWorkflowId } from '../../start-workflow-validation.ts';
 import type { StartWorkflowOptions, WorkflowState } from '../../types.ts';
 import {
   clearPurgedWorkflowInMemoryState,
@@ -130,6 +131,45 @@ export async function resolveTerminalConflictForRestart(
     terminalRunToPurge: existingState,
     duplicateIdCondition: { key, expectedValue: existingBytes },
   };
+}
+
+/**
+ * The `'reattach-only'` fence for `startWorkflow`'s `skipAdmissionIdCheck`
+ * parameter (WFT-95 TOCTOU fix). Call immediately after
+ * {@link resolveTerminalConflictForRestart} resolves.
+ *
+ * `dispatchChildWorkflowStart()`'s crash-reattach retry only reaches
+ * `startWorkflow` after a separate, non-atomic `loadWorkflowState()` read
+ * confirmed a matching persisted child record — but that confirmation and
+ * `resolveTerminalConflictForRestart`'s own atomic read are not the same
+ * read. Under `ownership: 'workflow-lease'`, another engine can purge the
+ * matched record in the window between them. Because that retry always
+ * leaves `options.onTerminalConflict` unset, `resolveTerminalConflictForRestart`
+ * has exactly two outcomes: the record is still there (it throws
+ * {@link WorkflowAlreadyExistsError} and this function is never reached —
+ * the expected, unraced reattach) or it is gone (`terminalRunToPurge: null`,
+ * the ordinary fresh-create branch). Being called with
+ * `skipAdmissionIdCheck === 'reattach-only'` and a `null` `terminalRunToPurge`
+ * therefore means the race happened: there is nothing left to reattach to, so
+ * this re-runs strict admission rather than let a bypassed `.`/`..` id fall
+ * through into a genuinely fresh create. `coerceStartWorkflowId` throws the
+ * same `StartWorkflowValidationError` strict admission would have thrown on
+ * the caller's very first (non-retry) attempt — a clean, deterministic
+ * rejection instead of a silently created reserved-id run.
+ *
+ * A no-op for every other `skipAdmissionIdCheck` value: `true` (schedule
+ * drain, bulk retry) applies unconditionally and never calls this, and
+ * `undefined` (every public start surface) already went through strict
+ * admission in `prepareStartWorkflow`.
+ */
+export function enforceReattachOnlyIdFence(
+  skipAdmissionIdCheck: boolean | 'reattach-only' | undefined,
+  workflowId: string,
+  terminalRunToPurge: WorkflowState | null,
+): void {
+  if (skipAdmissionIdCheck === 'reattach-only' && terminalRunToPurge === null) {
+    coerceStartWorkflowId(workflowId, 'options.id');
+  }
 }
 
 /**

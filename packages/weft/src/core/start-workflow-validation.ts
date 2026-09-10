@@ -50,13 +50,14 @@ export const coerceStartWorkflowId = (value: unknown, fieldName: string): string
  * that was already accepted once before (WFT-95). Deliberately uses the
  * decode-compatible {@link assertDecodableWorkflowId}, not the strict
  * `.`/`..`-rejecting {@link assertValidWorkflowId} that
- * {@link coerceStartWorkflowId} enforces: this path exists only for the two
+ * {@link coerceStartWorkflowId} enforces: this path exists only for the three
  * internal callers that replay an id which was already durably admitted
- * before strict admission existed (a drained schedule queued-run, or a
- * child-workflow crash-reattach) — see `startWorkflow`'s
- * `skipAdmissionIdCheck` parameter. It must never be reachable from a public
- * start surface (REST, JSON-RPC, `engine.start`, `ctx.startChild`), because
- * that would let a genuinely fresh caller admit `.`/`..` again.
+ * before strict admission existed (a drained schedule queued-run, a bulk
+ * failed-workflow retry rebuilding from persisted input, or a child-workflow
+ * crash-reattach) — see `startWorkflow`'s `skipAdmissionIdCheck` parameter.
+ * It must never be reachable from a public start surface (REST, JSON-RPC,
+ * `engine.start`, `ctx.startChild`), because that would let a genuinely
+ * fresh caller admit `.`/`..` again.
  */
 export const coerceReplayWorkflowId = (value: unknown, fieldName: string): string => {
   if (typeof value !== 'string') {

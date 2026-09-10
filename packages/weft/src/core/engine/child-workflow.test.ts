@@ -320,8 +320,9 @@ describe('engine child workflow helpers', () => {
               expect(skipAdmissionIdCheck).toBeUndefined();
               throw admissionError;
             }
-            // Only the confirmed-reattach retry may bypass strict admission.
-            expect(skipAdmissionIdCheck).toBe(true);
+            // Only the confirmed-reattach retry may bypass strict admission,
+            // and only via the reattach-fenced variant (WFT-95 TOCTOU fix).
+            expect(skipAdmissionIdCheck).toBe('reattach-only');
             throw new WorkflowAlreadyExistsError('.');
           },
         },
@@ -530,6 +531,106 @@ describe('WFT-95: real engine child-workflow crash-reattach replay', () => {
       status: 'completed',
       result: 'legacy-child-result',
     });
+
+    await engine.signal(parentHandle.id, 'release');
+  });
+
+  it('does not create a fresh reserved-id child when the matched legacy record is purged between the reattach confirmation and the retry (WFT-95 TOCTOU)', async () => {
+    const storage = new MemoryStorage();
+    const childWorkflow = workflow({ name: 'wft-95-race-child' }).execute(async function* () {
+      return 'legacy-child-result';
+    });
+    const parentWorkflow = workflow({ name: 'wft-95-race-parent' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      yield* ctx.waitForSignal('release');
+      return 'parent-done';
+    });
+    const workflows = {
+      'wft-95-race-parent': parentWorkflow,
+      'wft-95-race-child': childWorkflow,
+    };
+
+    await using engine = await Engine.create({ storage, workflows });
+    const parentHandle = await engine.start('wft-95-race-parent', null, {
+      id: 'wft-95-race-parent-1',
+    });
+    await waitForCondition(
+      async () => {
+        const parentState = await engine.get(parentHandle.id);
+        return parentState?.status === 'running';
+      },
+      { label: 'parent running' },
+    );
+
+    // Same legacy-record shape as the test above — a completed child persisted
+    // under the reserved id "." from before strict admission existed.
+    const legacyChildState: WorkflowState = {
+      createdAt: 1,
+      executionStateOwnerId: parentHandle.id,
+      id: '.',
+      input: null,
+      result: 'legacy-child-result',
+      startedAt: 1,
+      status: 'completed',
+      type: 'wft-95-race-child',
+      updatedAt: 1,
+      versionTuple: { workflowVersion: '1' },
+    };
+    await storage.put(KEYS.workflow('.'), encode(legacyChildState));
+
+    // `reattachLegacyReservedChildOrRethrow()` reads `KEYS.workflow('.')` once
+    // to confirm the match (read #1: `loadWorkflowState`), then its retry's
+    // own `resolveTerminalConflictForRestart()` reads the SAME key again,
+    // atomically with its duplicate-id decision (read #2). Gate that second
+    // read and, while it is paused, simulate another engine (under
+    // `ownership: 'workflow-lease'`) purging the matched record in the
+    // window between the two reads — the exact race the `'reattach-only'`
+    // fence exists to close.
+    const workflowKey = KEYS.workflow('.');
+    const originalGet = storage.get.bind(storage);
+    let readCount = 0;
+    const secondReadStarted = Promise.withResolvers<void>();
+    const releaseSecondRead = Promise.withResolvers<void>();
+    storage.get = async (key: string): Promise<Uint8Array | null> => {
+      if (key === workflowKey) {
+        readCount += 1;
+        if (readCount === 2) {
+          secondReadStarted.resolve();
+          await releaseSecondRead.promise;
+        }
+      }
+      return await originalGet(key);
+    };
+
+    const executePromise = executeChildWorkflow(
+      getInternals(engine),
+      parentHandle.id,
+      {
+        input: null,
+        operationId: 'child:legacy-dot-race',
+        options: { id: '.' },
+        type: 'child-workflow',
+        workflowType: 'wft-95-race-child',
+      },
+      0,
+      createChildWorkflowOperationCallbacks(engine),
+    );
+
+    await secondReadStarted.promise;
+    await storage.delete(workflowKey);
+    releaseSecondRead.resolve();
+
+    // The fence rejects the retry with the same strict-admission error a
+    // genuinely fresh `ctx.startChild({ id: '.' })` would get — a clean
+    // rejection, not a silently created fresh run under the reserved id.
+    await expect(executePromise).rejects.toThrow('options.id must not be "." or ".."');
+
+    // No replacement run was created under "." — the race left it absent,
+    // and it must STAY absent rather than get backfilled by a bypassed create.
+    await expect(engine.get('.')).resolves.toBeNull();
+    // `pendingStarts`/`inFlightRevision` bookkeeping unwound via `finally`.
+    expect(getInternals(engine).pendingStarts.has('.')).toBe(false);
 
     await engine.signal(parentHandle.id, 'release');
   });

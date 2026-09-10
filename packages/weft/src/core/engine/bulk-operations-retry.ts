@@ -32,9 +32,15 @@ import {
   validateBulkConfirmation,
   withBulkAuditEvent,
 } from './bulk-operations-shared.ts';
+import { ensureWorkflowCatalogReady, isWorkflowCatalogReady } from './catalog-readiness.ts';
 import { resolveExecutableRegistrationForRetry } from './dynamic-source-execution.ts';
-import { commitFencedEngineWriteAllowingPreconditionFailure } from './fenced-write.ts';
+import {
+  assertLeaseHeldForEngineWork,
+  commitFencedEngineWriteAllowingPreconditionFailure,
+} from './fenced-write.ts';
+import type { Engine } from './index.ts';
 import type { EngineInternals } from './internals.ts';
+import { startWorkflow, type LifecycleCallbacks } from './lifecycle.ts';
 import { buildCatalogEntryRevisionCondition } from './lifecycle/start-commit.ts';
 import { createTerminalCleanupTimerId } from './state-utilities.ts';
 import { loadWorkflowState, runSerializedWorkflowStateWrite } from './storage-io.ts';
@@ -60,6 +66,20 @@ export async function runBulkFailedWorkflowRetry(
   internals: EngineInternals,
   filter: ListFilter,
   options: BulkOperationOptions = {},
+  /**
+   * Threaded down from `Engine#retryFailedAll()`'s own `#createLifecycleCallbacks()`
+   * (WFT-95 issue 2 follow-up). Needed only by `retryFailedWorkflow()`'s
+   * checkpoint-absent fallback, which must call the internal `startWorkflow()`
+   * directly (see its doc comment) rather than the public `engine.start()`.
+   * Sourced this way — as a parameter, rather than this module importing
+   * `createLifecycleCallbacks` from `callback-creators-core.ts` itself — to avoid
+   * introducing a `bulk-operations-retry.ts` -> `callback-creators-core.ts` ->
+   * `termination.ts` -> `termination/complete.ts` -> `bulk-operations.ts` ->
+   * `bulk-operations-retry.ts` import cycle. Optional so direct-internals test
+   * harnesses that never reach the checkpoint-absent fallback (e.g.
+   * `bulk-operations-retry-direct.test.ts`) do not need to construct one.
+   */
+  callbacks?: LifecycleCallbacks,
 ): Promise<BulkRetryFailedResult | BulkOperationDryRunResult> {
   options = normalizeBulkOperationOptions(options);
   assertScopedBulkWorkflowFilter(filter);
@@ -87,7 +107,7 @@ export async function runBulkFailedWorkflowRetry(
     preparation.workflowIds,
     bulkConcurrency,
     async (workflowId) => {
-      await retryFailedWorkflow(internals, workflowId);
+      await retryFailedWorkflow(internals, workflowId, callbacks);
       return { status: 'retried' as const };
     },
   );
@@ -106,7 +126,11 @@ export async function runBulkFailedWorkflowRetry(
   return withBulkAuditEvent(internals, preparation, options, result, retried);
 }
 
-async function retryFailedWorkflow(internals: EngineInternals, workflowId: string): Promise<void> {
+async function retryFailedWorkflow(
+  internals: EngineInternals,
+  workflowId: string,
+  callbacks: LifecycleCallbacks | undefined,
+): Promise<void> {
   const state = await loadWorkflowState(internals, workflowId);
   if (state === null) {
     throw new Error('Workflow no longer exists');
@@ -122,11 +146,52 @@ async function retryFailedWorkflow(internals: EngineInternals, workflowId: strin
     return;
   }
 
-  await internals.engine.start(state.type, state.input, {
+  const restartOptions = {
     id: workflowId,
-    onTerminalConflict: 'start-new',
+    onTerminalConflict: 'start-new' as const,
     ...(state.tags !== undefined ? { tags: state.tags } : {}),
-  });
+  };
+
+  if (callbacks === undefined) {
+    // No `LifecycleCallbacks` available (a direct-internals caller that never
+    // constructed one, e.g. a test harness) — fall back to the pre-WFT-95
+    // public `engine.start()` path, which enforces strict `.`/`..` admission.
+    // Every production caller (`Engine#retryFailedAll()`) supplies `callbacks`
+    // and takes the branch below instead.
+    await internals.engine.start(state.type, state.input, restartOptions);
+    return;
+  }
+
+  // Internal replay call site #3 (WFT-95), alongside schedule drain and child
+  // reattach: this rebuilds an already-persisted, already-validated-at-the-time
+  // `workflowId` from its stored input via `onTerminalConflict: 'start-new'`,
+  // which purges-then-replaces a KNOWN existing terminal record rather than
+  // speculatively matching one — there is no "fresh create" ambiguity here the
+  // way there is for child-reattach, so the bypass applies unconditionally. A
+  // pre-WFT-95 failed workflow whose id is "." or ".." and whose checkpoint is
+  // absent must still be retryable through this fallback, so this calls the
+  // internal `startWorkflow` directly (with `skipAdmissionIdCheck: true`)
+  // instead of the public `engine.start()`, which enforces strict admission.
+  //
+  // `engine.start()` and `engine.resume()` (used by the checkpoint-backed
+  // branch above) both assert the lease is held and the workflow catalog is
+  // ready before doing anything else. Bypassing `engine.start()` here must not
+  // silently drop those preconditions, so they are re-asserted explicitly.
+  assertLeaseHeldForEngineWork(internals);
+  if (!isWorkflowCatalogReady(internals.engine as unknown as Engine)) {
+    await ensureWorkflowCatalogReady(internals.engine as unknown as Engine);
+  }
+  await startWorkflow(
+    internals,
+    state.type,
+    state.input,
+    restartOptions,
+    undefined,
+    callbacks,
+    undefined,
+    undefined,
+    true,
+  );
 }
 
 type ReactivatedFailedWorkflow = {
