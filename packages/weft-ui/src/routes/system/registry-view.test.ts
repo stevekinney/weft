@@ -6,6 +6,7 @@ import {
   isRegistryEmpty,
   registryActivityRows,
   registryWorkflowRows,
+  schemaTypeLabel,
   type RegistrySnapshotSource,
 } from './registry-view.ts';
 
@@ -122,6 +123,14 @@ const SNAPSHOT: RegistrySnapshotSource = {
   },
 };
 
+describe('schemaTypeLabel', () => {
+  test('labels a root object schema, a root primitive schema, and an unrecognized fragment', () => {
+    expect(schemaTypeLabel({ type: 'object', properties: {} })).toBe('object');
+    expect(schemaTypeLabel({ type: 'string' })).toBe('string');
+    expect(schemaTypeLabel({})).toBe('unknown');
+  });
+});
+
 describe('registryWorkflowRows', () => {
   test('sorts by type (codepoint order) and maps schema presence', () => {
     const rows = registryWorkflowRows(SNAPSHOT);
@@ -132,10 +141,13 @@ describe('registryWorkflowRows', () => {
     expect(orderProcessing?.inputFields).toEqual([
       { name: 'orderId', type: 'string', required: true, description: undefined },
     ]);
+    expect(orderProcessing?.inputSchemaRootType).toBe('object');
     expect(orderProcessing?.hasOutputSchema).toBe(false);
+    expect(orderProcessing?.outputSchemaRootType).toBeUndefined();
 
     const auditSweep = rows[0];
     expect(auditSweep?.hasInputSchema).toBe(false);
+    expect(auditSweep?.inputSchemaRootType).toBeUndefined();
     expect(auditSweep?.tags).toEqual([]);
   });
 
@@ -170,9 +182,11 @@ describe('registryWorkflowRows', () => {
             children: [],
           },
         ],
+        inputSchemaRootType: 'object',
         hasOutputSchema: false,
         outputFields: [],
         outputSchemaTree: [],
+        outputSchemaRootType: undefined,
       },
     ]);
   });
@@ -193,6 +207,7 @@ describe('registryWorkflowRows', () => {
             children: [],
           },
         ],
+        inputSchemaRootType: 'object',
         hasOutputSchema: true,
         outputFields: [{ name: 'ok', type: 'boolean', required: false, description: undefined }],
         outputSchemaTree: [
@@ -205,8 +220,36 @@ describe('registryWorkflowRows', () => {
             children: [],
           },
         ],
+        outputSchemaRootType: 'object',
       },
     ]);
+  });
+
+  test('a root schema that is not `type: object` (e.g. a bare string schema) surfaces its root type even though the tree is empty', () => {
+    const withRootStringSchema: RegistrySnapshotSource = {
+      ...SNAPSHOT,
+      workflows: SNAPSHOT.workflows.map((manifest) =>
+        manifest.name === 'order-processing'
+          ? {
+              ...manifest,
+              contract: {
+                ...manifest.contract,
+                queries: {
+                  ping: { outputSchema: { type: 'string' } },
+                },
+              },
+            }
+          : manifest,
+      ),
+    };
+    const rows = registryWorkflowRows(withRootStringSchema);
+    const ping = rows.find((row) => row.type === 'order-processing')?.queries[0];
+    expect(ping).toMatchObject({
+      name: 'ping',
+      hasOutputSchema: true,
+      outputSchemaTree: [],
+      outputSchemaRootType: 'string',
+    });
   });
 
   test('surfaces query contracts', () => {

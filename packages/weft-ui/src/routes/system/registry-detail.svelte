@@ -53,6 +53,9 @@
           false,
           'weft-schema-node__requirement',
         )}
+        {#if node.description}
+          <span class="weft-schema-node__description">{node.description}</span>
+        {/if}
       </span>
     {/snippet}
     {#each node.children as child (child.id)}
@@ -61,18 +64,27 @@
   </Tree.Item>
 {/snippet}
 
-{#snippet schemaTree(schema: readonly SchemaTreeNode[], emptyLabel: string)}
-  {#if schema.length === 0}
-    <div class="weft-registry-detail__no-schema">
-      <FileQuestion aria-hidden="true" size={17} />
-      <span>{emptyLabel}</span>
-    </div>
-  {:else}
+{#snippet schemaTree(
+  schema: readonly SchemaTreeNode[],
+  rootType: string | undefined,
+  emptyLabel: string,
+)}
+  {#if schema.length > 0}
     <Tree aria-label="Schema fields">
       {#each schema as node (node.id)}
         {@render schemaNode(node)}
       {/each}
     </Tree>
+  {:else if rootType !== undefined}
+    <div class="weft-registry-detail__no-schema">
+      <FileQuestion aria-hidden="true" size={17} />
+      <span>Declared as <code>{rootType}</code> — no object fields to list.</span>
+    </div>
+  {:else}
+    <div class="weft-registry-detail__no-schema">
+      <FileQuestion aria-hidden="true" size={17} />
+      <span>{emptyLabel}</span>
+    </div>
   {/if}
 {/snippet}
 
@@ -100,11 +112,19 @@
             <div class="weft-registry-detail__message-body">
               <div>
                 <h4 class="weft-registry-detail__message-schema-title">Input</h4>
-                {@render schemaTree(entry.inputSchemaTree, 'No input schema declared.')}
+                {@render schemaTree(
+                  entry.inputSchemaTree,
+                  entry.inputSchemaRootType,
+                  'No input schema declared.',
+                )}
               </div>
               <div>
                 <h4 class="weft-registry-detail__message-schema-title">Output</h4>
-                {@render schemaTree(entry.outputSchemaTree, 'No output schema declared.')}
+                {@render schemaTree(
+                  entry.outputSchemaTree,
+                  entry.outputSchemaRootType,
+                  'No output schema declared.',
+                )}
               </div>
             </div>
           </details>
@@ -154,6 +174,7 @@
       </h3>
       {@render schemaTree(
         row.inputSchemaTree,
+        row.inputSchemaRootType,
         'No input schema declared — this definition accepts an untyped payload.',
       )}
     </section>
@@ -165,6 +186,7 @@
       </h3>
       {@render schemaTree(
         row.outputSchemaTree,
+        row.outputSchemaRootType,
         'No output schema declared — this definition returns an untyped result.',
       )}
     </section>
@@ -308,6 +330,8 @@
     font-family: var(--cinder-font-mono);
     font-size: var(--cinder-text-sm);
     font-weight: 600;
+    overflow-wrap: anywhere;
+    min-width: 0;
   }
 
   .weft-registry-detail__message-body {
@@ -375,6 +399,15 @@
     font-family: var(--cinder-font-mono);
     font-size: var(--cinder-text-sm);
     font-weight: 600;
+    overflow-wrap: anywhere;
+    min-width: 0;
+  }
+
+  .weft-schema-node__description {
+    flex-basis: 100%;
+    font-size: var(--cinder-text-xs);
+    color: var(--cinder-text-subtle);
+    overflow-wrap: anywhere;
   }
 
   :global(.weft-schema-node__requirement) {

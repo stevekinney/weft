@@ -10,6 +10,7 @@ import {
   describeActivationOutcome,
   KNOWN_COMPATIBILITY_REASONS,
   readActivationConflictData,
+  resolveExpectedGeneration,
 } from './compatibility-verdict.ts';
 
 describe('KNOWN_COMPATIBILITY_REASONS', () => {
@@ -80,6 +81,32 @@ describe('readActivationConflictData', () => {
       data: { reason: 'conflict' },
     });
     expect(readActivationConflictData(error)).toBeUndefined();
+  });
+});
+
+describe('resolveExpectedGeneration', () => {
+  test('returns undefined when neither source has a generation (never activated)', () => {
+    expect(resolveExpectedGeneration(null, undefined)).toBeUndefined();
+  });
+
+  test('returns the pending generation when active is unknown', () => {
+    expect(resolveExpectedGeneration(4, undefined)).toBe(4);
+  });
+
+  test('returns the active generation when there is no pending refusal', () => {
+    expect(resolveExpectedGeneration(null, 7)).toBe(7);
+  });
+
+  test('prefers the NEWER of the two when both are known, even when that is `active` — a stale refusal stored generation 4, then a refresh observed a newer generation 5 from another process activating in between', () => {
+    expect(resolveExpectedGeneration(4, 5)).toBe(5);
+  });
+
+  test('prefers the NEWER of the two when that is `pending` (active has not caught up yet)', () => {
+    expect(resolveExpectedGeneration(6, 5)).toBe(6);
+  });
+
+  test('either source alone at the same value is idempotent', () => {
+    expect(resolveExpectedGeneration(5, 5)).toBe(5);
   });
 });
 

@@ -304,6 +304,82 @@ describe('WorkflowRevisionsPanel activation', () => {
     expect(lastActivateExpectedGeneration()).toBe(9);
   });
 
+  test('after a stale refusal reports a generation OLDER than what activeQuery already has cached, the next attempt still submits the newer cached value', async () => {
+    scripted = new ScriptedFetch();
+    scripted.routeJsonRpcMethod('weft.workflows.revisions.list', [
+      revisionRecord('order-processing-rev-1'),
+      revisionRecord('order-processing-rev-2'),
+    ]);
+    // `activeQuery` is already resolved at generation 5 for the whole test
+    // — no refetch race to win: this scenario isolates the pure
+    // max-of-two-known-generations logic (`resolveExpectedGeneration`)
+    // from any query-refetch timing.
+    scripted.routeJsonRpcMethod(
+      'weft.workflows.active.get',
+      activePointer('order-processing-rev-1', 5),
+    );
+    // The refusal itself reports `currentGeneration: 4` — LOWER than what
+    // `activeQuery` already has. A naive "always prefer the refusal's
+    // pending value" rule would downgrade to 4 and keep resubmitting a
+    // stale generation forever; the fix takes the max of the two known
+    // values instead.
+    scripted.routeJsonRpcError('weft.workflows.revisions.activate', {
+      code: -32021,
+      message: 'Stale expectedGeneration: the current durable generation is 4',
+      data: {
+        weftCode: 'Conflict',
+        httpStatus: 409,
+        reason: 'stale-generation',
+        currentGeneration: 4,
+      },
+    });
+
+    const { getByRole, findByText } = await renderPanel();
+    const activateButton = await waitFor(() => getByRole('button', { name: 'Activate' }));
+    await fireEvent.click(activateButton);
+    const dialog = await waitFor(() => getByRole('dialog'));
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Activate' }));
+    await findByText(/current generation 4/);
+
+    scripted.routeJsonRpcMethod('weft.workflows.revisions.activate', {
+      applied: true,
+      pointer: activePointer('order-processing-rev-2', 6),
+    });
+
+    function lastActivateExpectedGeneration(): unknown {
+      const activateCalls = (scripted?.calls ?? []).filter((call) => {
+        if (typeof call.init?.body !== 'string') return false;
+        try {
+          return (
+            (JSON.parse(call.init.body) as { method?: string }).method ===
+            'weft.workflows.revisions.activate'
+          );
+        } catch {
+          return false;
+        }
+      });
+      const last = activateCalls[activateCalls.length - 1];
+      if (!last || typeof last.init?.body !== 'string') return undefined;
+      const parsed = JSON.parse(last.init.body) as { params?: { expectedGeneration?: unknown } };
+      return parsed.params?.expectedGeneration;
+    }
+
+    // The FIRST attempt (before any refusal exists) used `activeQuery`'s
+    // own generation, 5 — confirm that baseline before checking the
+    // post-refusal attempt below.
+    expect(lastActivateExpectedGeneration()).toBe(5);
+
+    const activateAgain = await waitFor(() => getByRole('button', { name: 'Activate' }));
+    await fireEvent.click(activateAgain);
+    const dialogAgain = await waitFor(() => getByRole('dialog'));
+    await fireEvent.click(within(dialogAgain).getByRole('button', { name: 'Activate' }));
+    await findByText('Compatible');
+
+    // Still 5 — the pending refusal's OLDER value (4) never overrides the
+    // newer one already known from `activeQuery`.
+    expect(lastActivateExpectedGeneration()).toBe(5);
+  });
+
   test('activating the already-active revision (labeled Refresh) opens a re-stamp-worded confirm dialog and applies, reporting "Refreshed" not "Activated"', async () => {
     scripted = new ScriptedFetch();
     scripted.routeJsonRpcMethod('weft.workflows.revisions.list', [

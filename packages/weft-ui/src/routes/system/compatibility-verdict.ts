@@ -130,6 +130,33 @@ export type WorkflowActivationOutcome =
  * normal fault handling (the shared mutation `onError` toast) reports it,
  * rather than this module silently swallowing an unrecognized failure.
  */
+/**
+ * The `expectedGeneration` the next `weft.workflows.revisions.activate`
+ * attempt should send: the NEWER of two known generations, never simply
+ * "prefer the pending one."
+ *
+ * `pending` is the `currentGeneration` a `stale` refusal most recently
+ * reported; `active` is `weft.workflows.active.get`'s own cached
+ * generation. Catalog generations increase monotonically, so whichever of
+ * the two is higher is the more current durable truth. Naively preferring
+ * `pending` unconditionally is wrong: `weft.workflows.active.get`'s
+ * documented contract is in-memory-only, so a `Refresh` after a stale
+ * refusal CAN legitimately return a newer generation than the one that
+ * refusal reported (another process activated in between) — always
+ * resubmitting the older `pending` value would then guarantee the next
+ * attempt is refused as stale too, even though a correct generation was
+ * sitting right there in `active`. Returns `undefined` only when neither
+ * source has a generation yet (this workflow has never been activated).
+ */
+export function resolveExpectedGeneration(
+  pending: number | null,
+  active: number | undefined,
+): number | undefined {
+  if (pending === null) return active;
+  if (active === undefined) return pending;
+  return Math.max(pending, active);
+}
+
 export function describeActivationOutcome(attempt: ActivationAttempt): WorkflowActivationOutcome {
   if (attempt.applied) return { kind: 'applied', pointer: attempt.pointer };
 

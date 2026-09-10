@@ -45,7 +45,7 @@
   import Button from '@lostgradient/cinder/button';
   import ConfirmDialog from '@lostgradient/cinder/confirm-dialog';
   import CopyButton from '@lostgradient/cinder/copy-button';
-  import { AlertTriangle, Ban, CheckCircle2, RefreshCw } from 'lucide-svelte';
+  import { AlertTriangle } from 'lucide-svelte';
   import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
   import { toStore } from 'svelte/store';
   import { HttpClientError } from '@lostgradient/weft/client';
@@ -54,9 +54,10 @@
   import { formatRelativeTime, truncateId } from '../../lib/format/index.ts';
   import { queryKeys } from '../../lib/query.ts';
   import { getPrincipalStore, scopeGate } from '../../lib/scopes.svelte.ts';
+  import ActivationOutcomeBanner from './activation-outcome-banner.svelte';
   import {
-    compatibilityReasonLabel,
     describeActivationOutcome,
+    resolveExpectedGeneration,
     type ActivationAttempt,
     type WorkflowActivationOutcome,
   } from './compatibility-verdict.ts';
@@ -133,17 +134,25 @@
     return Array.isArray(data) ? data : undefined;
   });
 
-  const rows = $derived(workflowRevisionRows(revisionsArray ?? [], $activeQuery.data ?? null));
+  /**
+   * `undefined` when `revisionsArray` itself is undefined (not an array at
+   * all) OR when `workflowRevisionRows` rejected it because at least one
+   * entry failed its structural guard — either way, an explicit malformed
+   * response this panel must not render as a partial list (see
+   * `workflow-revisions-view.ts`'s doc on why a partial list is unsafe
+   * here).
+   */
+  const rows = $derived(
+    revisionsArray === undefined
+      ? undefined
+      : workflowRevisionRows(revisionsArray, $activeQuery.data ?? null),
+  );
 
   const isLoading = $derived(canRead && ($revisionsQuery.isPending || $activeQuery.isPending));
   const isRefreshing = $derived(
     ($revisionsQuery.isFetching && $revisionsQuery.data !== undefined) ||
       ($activeQuery.isFetching && $activeQuery.data !== undefined),
   );
-  const isMalformed = $derived(
-    !$revisionsQuery.isPending && !$revisionsQuery.isError && revisionsArray === undefined,
-  );
-
   function invalidateAfterActivation(): void {
     void queryClient.invalidateQueries({ queryKey: queryKeys.catalog.revisions(workflowName) });
     void queryClient.invalidateQueries({ queryKey: queryKeys.catalog.active(workflowName) });
@@ -186,7 +195,10 @@
   const activateMutation = createMutation<WorkflowActivationOutcome, unknown, string>({
     mutationFn: async (candidateRevision: string) => {
       const activePointer = $activeQuery.data ?? null;
-      const expectedGeneration = pendingExpectedGeneration ?? activePointer?.generation;
+      const expectedGeneration = resolveExpectedGeneration(
+        pendingExpectedGeneration,
+        activePointer?.generation,
+      );
       let attempt: ActivationAttempt;
       try {
         const raw = await client.operations['weft.workflows.revisions.activate']({
@@ -252,32 +264,6 @@
     ];
   }
 
-  /**
-   * Outcome-banner copy, built as plain script-level string functions
-   * rather than inline multi-part template expressions — one interpolation
-   * per rendered line. `appliedOutcomeMessage` reads `confirmIsRefresh` as
-   * it stood when the confirm dialog was opened (not reset on success), so
-   * a same-revision re-stamp reports "Refreshed", never "Activated" — an
-   * operator must never read a generation re-stamp as a new revision going
-   * live.
-   */
-  function appliedOutcomeMessage(
-    outcome: Extract<WorkflowActivationOutcome, { kind: 'applied' }>,
-  ): string {
-    const verb = confirmIsRefresh ? 'Refreshed' : 'Activated';
-    return `${verb} revision "${outcome.pointer.revision}" (generation ${outcome.pointer.generation}).`;
-  }
-
-  function staleOutcomeMessage(
-    outcome: Extract<WorkflowActivationOutcome, { kind: 'stale' }>,
-  ): string {
-    return `The active revision changed (current generation ${outcome.currentGeneration}). Refresh and try again.`;
-  }
-
-  function reasonListItem(reason: string): string {
-    return `${compatibilityReasonLabel(reason)} (${reason})`;
-  }
-
   function refetchAll(): void {
     void $revisionsQuery.refetch();
     void $activeQuery.refetch();
@@ -302,7 +288,7 @@
     <QueryFaultBanner error={$revisionsQuery.error} onRetry={() => $revisionsQuery.refetch()} />
   {:else if $activeQuery.isError}
     <QueryFaultBanner error={$activeQuery.error} onRetry={() => $activeQuery.refetch()} />
-  {:else if isMalformed}
+  {:else if rows === undefined}
     <div class="weft-revisions-panel__malformed" role="alert">
       <AlertTriangle aria-hidden="true" size={16} />
       <span
@@ -354,43 +340,11 @@
   {/if}
 
   {#if $activateMutation.isSuccess}
-    {@const outcome = $activateMutation.data}
-    {#if outcome.kind === 'applied'}
-      <div
-        class="weft-revisions-panel__outcome weft-revisions-panel__outcome--applied"
-        role="status"
-      >
-        <CheckCircle2 aria-hidden="true" size={16} />
-        <div>
-          <Badge variant="success">Compatible</Badge>
-          <p>{appliedOutcomeMessage(outcome)}</p>
-        </div>
-      </div>
-    {:else if outcome.kind === 'incompatible'}
-      <div
-        class="weft-revisions-panel__outcome weft-revisions-panel__outcome--incompatible"
-        role="alert"
-      >
-        <Ban aria-hidden="true" size={16} />
-        <div>
-          <Badge variant="danger">Incompatible</Badge>
-          <ul>
-            {#each outcome.reasons as reason (reason)}
-              <li>{reasonListItem(reason)}</li>
-            {/each}
-          </ul>
-        </div>
-      </div>
-    {:else}
-      <div class="weft-revisions-panel__outcome weft-revisions-panel__outcome--stale" role="alert">
-        <RefreshCw aria-hidden="true" size={16} />
-        <div>
-          <Badge variant="warning">Conflict</Badge>
-          <p>{staleOutcomeMessage(outcome)}</p>
-          <Button size="sm" variant="secondary" label="Refresh" onclick={refetchAll} />
-        </div>
-      </div>
-    {/if}
+    <ActivationOutcomeBanner
+      outcome={$activateMutation.data}
+      verb={confirmIsRefresh ? 'Refreshed' : 'Activated'}
+      onRefresh={refetchAll}
+    />
   {/if}
 </section>
 
@@ -502,40 +456,5 @@
 
   .weft-revisions-panel__mono {
     font-family: var(--cinder-font-mono);
-  }
-
-  .weft-revisions-panel__outcome {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    padding: 12px 14px;
-    border-radius: var(--cinder-radius-lg);
-    border: 1px solid var(--cinder-border);
-  }
-
-  .weft-revisions-panel__outcome p {
-    margin: 6px 0 0;
-    font-size: var(--cinder-text-sm);
-  }
-
-  .weft-revisions-panel__outcome ul {
-    margin: 6px 0 0;
-    padding-inline-start: 1.1rem;
-    font-size: var(--cinder-text-sm);
-  }
-
-  .weft-revisions-panel__outcome--applied {
-    background: var(--cinder-color-success-bg);
-    border-color: var(--cinder-color-success-border);
-  }
-
-  .weft-revisions-panel__outcome--incompatible {
-    background: var(--cinder-color-danger-bg);
-    border-color: var(--cinder-color-danger-border);
-  }
-
-  .weft-revisions-panel__outcome--stale {
-    background: var(--cinder-color-warning-bg);
-    border-color: var(--cinder-color-warning-border);
   }
 </style>

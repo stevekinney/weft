@@ -10,8 +10,11 @@
  * Both wire operations type their output `unknown` (the generated client's
  * `weft.workflows.revisions.list`/`weft.workflows.active.get` entries —
  * their zod schemas use `z.unknown()`, same as the registry snapshot), so
- * every record is runtime-guarded rather than cast — a malformed or
- * unsupported record is dropped, never fabricated into a row.
+ * every record is runtime-guarded rather than cast. `workflowRevisionRows`
+ * treats even one malformed entry as a malformed RESPONSE (returns
+ * `undefined`) rather than silently dropping just that entry — see that
+ * function's own doc for why a partial, silently-filtered list is unsafe
+ * here specifically.
  */
 
 /** Mirrors `WorkflowRevisionManifest` (`@lostgradient/weft`) structurally — only the identity fields this panel renders. */
@@ -92,20 +95,34 @@ function compareCodepoint(a: string, b: string): number {
 }
 
 /**
- * Sorted (codepoint order, by revision), render-ready rows for every
- * structurally valid entry in `records` — a record that fails
- * {@link isWorkflowRevisionRecordLike} is dropped rather than rendered as a
- * guessed-at row. `active` is `null` for a workflow name that has never
- * been activated (a legitimate state — `weft.workflows.active.get` faults
- * `NotFound` there, which the panel renders as "no active revision" rather
- * than propagating the fault into this pure module).
+ * Sorted (codepoint order, by revision), render-ready rows for `records` —
+ * or `undefined` when even ONE entry fails {@link isWorkflowRevisionRecordLike}.
+ *
+ * An earlier version of this function silently filtered out malformed
+ * entries and rendered the rest as a (misleadingly complete-looking)
+ * revisions list. That is unsafe specifically when the malformed record IS
+ * the one the active pointer names: the surviving rows would all render as
+ * "Installed" with no "Active" badge, AND the panel's "no active
+ * revision — never activated" note would stay suppressed (the pointer
+ * itself is still non-null) — silently telling an operator the workflow
+ * has installed-but-unactivated revisions when it actually has an active
+ * one this console just couldn't parse. Treating ANY malformed entry as a
+ * malformed RESPONSE (same "reject, don't guess" contract
+ * `weft.workflows.active.get`'s own malformed-pointer handling in
+ * `workflow-revisions-panel.svelte` already uses) removes that failure
+ * mode entirely — the panel renders its explicit malformed-response state
+ * instead of a partial, mislabeled list.
  */
 export function workflowRevisionRows(
   records: readonly unknown[],
   active: WorkflowCatalogActivePointerLike | null,
-): readonly WorkflowRevisionRow[] {
-  return records
-    .filter(isWorkflowRevisionRecordLike)
+): readonly WorkflowRevisionRow[] | undefined {
+  const validated: WorkflowRevisionRecordSource[] = [];
+  for (const record of records) {
+    if (!isWorkflowRevisionRecordLike(record)) return undefined;
+    validated.push(record);
+  }
+  return validated
     .map((record): WorkflowRevisionRow => ({
       revision: record.manifest.revision,
       workflowVersion: record.manifest.workflowVersion,

@@ -56,6 +56,28 @@ describe('WorkflowRevisionsPanel', () => {
     expect(await findByText(/revisions list this console doesn't recognize/)).not.toBeNull();
   });
 
+  test('shows the malformed-response state when the array has a mix of valid and malformed records — never a silently partial list', async () => {
+    scripted = new ScriptedFetch();
+    // Regression: an earlier version filtered per-record, so a malformed
+    // entry for the workflow's OWN active revision left every surviving
+    // row reading "Installed" (no Active badge) — the array shape is valid
+    // JSON, but one entry fails the structural guard, and that alone must
+    // make the whole response malformed rather than a plausible-looking
+    // partial list.
+    scripted.routeJsonRpcMethod('weft.workflows.revisions.list', [
+      revisionRecord('order-processing-rev-1'),
+      { manifest: 'not-an-object', installedAt: 1 },
+    ]);
+    scripted.routeJsonRpcMethod(
+      'weft.workflows.active.get',
+      activePointer('order-processing-rev-1'),
+    );
+    const { findByText, queryByText } = await renderPanel();
+    expect(await findByText(/revisions list this console doesn't recognize/)).not.toBeNull();
+    expect(queryByText('Installed')).toBeNull();
+    expect(queryByText('Active')).toBeNull();
+  });
+
   test('shows the explicit empty state when no revisions are installed', async () => {
     scripted = new ScriptedFetch();
     scripted.routeJsonRpcMethod('weft.workflows.revisions.list', []);

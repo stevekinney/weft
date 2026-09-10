@@ -66,13 +66,26 @@ describe('isWorkflowRevisionRecordLike', () => {
 });
 
 describe('workflowRevisionRows', () => {
-  test('drops malformed records rather than fabricating a row', () => {
+  test('rejects the whole response — returns undefined, not a partial list — when any record is malformed', () => {
     const rows = workflowRevisionRows([record(), { not: 'a record' }, null, 42], {
       revision: 'order-processing-rev-1',
       generation: 1,
       activatedAt: 1,
     });
-    expect(rows).toHaveLength(1);
+    expect(rows).toBeUndefined();
+  });
+
+  test('a malformed entry that happens to share the name of the active revision is still rejected wholesale, never silently mislabeling the surviving rows as "Installed" only', () => {
+    // Regression case: an earlier version filtered per-record, so a
+    // malformed entry for the ACTIVE revision left every surviving row
+    // "Installed" (no Active badge) and suppressed the "never activated"
+    // note — because the pointer itself was still non-null. Any malformed
+    // entry anywhere in the array must now reject the whole response.
+    const rows = workflowRevisionRows(
+      [record({ manifest: manifest({ revision: 'rev-a' }) }), { manifest: 'not-an-object' }],
+      { revision: 'rev-a', generation: 1, activatedAt: 1 },
+    );
+    expect(rows).toBeUndefined();
   });
 
   test('flags exactly one row active per the active pointer', () => {
@@ -84,13 +97,18 @@ describe('workflowRevisionRows', () => {
       ],
       { revision: 'rev-b', generation: 2, activatedAt: 1_700_000_000_000 },
     );
-    expect(rows.filter((row) => row.isActive)).toHaveLength(1);
-    expect(rows.find((row) => row.isActive)?.revision).toBe('rev-b');
+    expect(rows).toBeDefined();
+    expect(rows?.filter((row) => row.isActive)).toHaveLength(1);
+    expect(rows?.find((row) => row.isActive)?.revision).toBe('rev-b');
   });
 
   test('no row is active when the active pointer is null', () => {
     const rows = workflowRevisionRows([record()], null);
-    expect(rows.every((row) => !row.isActive)).toBe(true);
+    expect(rows?.every((row) => !row.isActive)).toBe(true);
+  });
+
+  test('an empty array is a valid (not malformed) empty response', () => {
+    expect(workflowRevisionRows([], null)).toEqual([]);
   });
 
   test('sorts rows by revision, codepoint order', () => {
@@ -102,7 +120,7 @@ describe('workflowRevisionRows', () => {
       ],
       null,
     );
-    expect(rows.map((row) => row.revision)).toEqual(['rev-a', 'rev-b', 'rev-c']);
+    expect(rows?.map((row) => row.revision)).toEqual(['rev-a', 'rev-b', 'rev-c']);
   });
 
   test('projects workflowVersion, contractHash, manifestVersion, and installedAt verbatim', () => {
@@ -115,7 +133,7 @@ describe('workflowRevisionRows', () => {
       ],
       null,
     );
-    expect(rows[0]).toEqual({
+    expect(rows?.[0]).toEqual({
       revision: 'order-processing-rev-1',
       workflowVersion: '2.0.0',
       contractHash: 'sha256:h2',

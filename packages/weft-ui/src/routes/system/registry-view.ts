@@ -122,9 +122,13 @@ export interface RegistryWorkflowRow {
   readonly inputFields: readonly RegistrySchemaField[];
   /** Recursive tree for the `Tree`-based detail view (§ REGISTRY DEFINITION DETAIL). */
   readonly inputSchemaTree: readonly SchemaTreeNode[];
+  /** `schemaTypeLabel` of the declared root input schema — `undefined` when none is declared. Lets the detail view distinguish "declared as a non-object type, so the tree is legitimately empty" from "nothing declared" when `inputSchemaTree` is `[]`. */
+  readonly inputSchemaRootType: string | undefined;
   readonly hasOutputSchema: boolean;
   readonly outputFields: readonly RegistrySchemaField[];
   readonly outputSchemaTree: readonly SchemaTreeNode[];
+  /** `schemaTypeLabel` of the declared root output schema — `undefined` when none is declared. Same purpose as {@link RegistryWorkflowRow.inputSchemaRootType}. */
+  readonly outputSchemaRootType: string | undefined;
   /** Signal contracts, sorted by name. */
   readonly signals: readonly RegistryContractMessageRow[];
   /** Update contracts, sorted by name. */
@@ -143,9 +147,13 @@ export interface RegistryContractMessageRow {
   readonly hasInputSchema: boolean;
   readonly inputFields: readonly RegistrySchemaField[];
   readonly inputSchemaTree: readonly SchemaTreeNode[];
+  /** See {@link RegistryWorkflowRow.inputSchemaRootType}. */
+  readonly inputSchemaRootType: string | undefined;
   readonly hasOutputSchema: boolean;
   readonly outputFields: readonly RegistrySchemaField[];
   readonly outputSchemaTree: readonly SchemaTreeNode[];
+  /** See {@link RegistryWorkflowRow.outputSchemaRootType}. */
+  readonly outputSchemaRootType: string | undefined;
 }
 
 export interface RegistryActivityRow {
@@ -170,8 +178,18 @@ function isJsonSchemaTypeString(value: unknown): value is string {
   return typeof value === 'string';
 }
 
-/** Best-effort "type" label for one JSON Schema property fragment — a compact summary, not a full schema renderer. */
-function schemaTypeLabel(fragment: unknown): string {
+/**
+ * Best-effort "type" label for one JSON Schema property fragment — a
+ * compact summary, not a full schema renderer. Also used at the schema
+ * ROOT (not just for a `properties` entry): a declared root schema that
+ * isn't `type: 'object'` — a bare `{ type: 'string' }` input/output/
+ * message schema, which Weft permits — has no `properties` to walk, so
+ * {@link buildSchemaTree} legitimately returns `[]` for it. That empty
+ * tree must never be read as "no schema declared" when a schema WAS
+ * declared; callers pair an empty tree with this root-type label so the
+ * detail view can say what the schema actually is.
+ */
+export function schemaTypeLabel(fragment: unknown): string {
   if (typeof fragment !== 'object' || fragment === null) return 'unknown';
   const record = fragment as Record<string, unknown>;
 
@@ -283,9 +301,13 @@ function toContractMessageRow(
     hasInputSchema: entry.inputSchema !== undefined,
     inputFields: extractSchemaFields(entry.inputSchema),
     inputSchemaTree: buildSchemaTree(entry.inputSchema, `${idPrefix}.input`),
+    inputSchemaRootType:
+      entry.inputSchema === undefined ? undefined : schemaTypeLabel(entry.inputSchema),
     hasOutputSchema: entry.outputSchema !== undefined,
     outputFields: extractSchemaFields(entry.outputSchema),
     outputSchemaTree: buildSchemaTree(entry.outputSchema, `${idPrefix}.output`),
+    outputSchemaRootType:
+      entry.outputSchema === undefined ? undefined : schemaTypeLabel(entry.outputSchema),
   };
 }
 
@@ -320,9 +342,13 @@ function toWorkflowRow(manifest: WorkflowRevisionManifestSource): RegistryWorkfl
     hasInputSchema: contract.inputSchema !== undefined,
     inputFields: extractSchemaFields(contract.inputSchema),
     inputSchemaTree: buildSchemaTree(contract.inputSchema, `${type}.input`),
+    inputSchemaRootType:
+      contract.inputSchema === undefined ? undefined : schemaTypeLabel(contract.inputSchema),
     hasOutputSchema: contract.outputSchema !== undefined,
     outputFields: extractSchemaFields(contract.outputSchema),
     outputSchemaTree: buildSchemaTree(contract.outputSchema, `${type}.output`),
+    outputSchemaRootType:
+      contract.outputSchema === undefined ? undefined : schemaTypeLabel(contract.outputSchema),
     signals: toContractMessageRows(contract.signals, `${type}.signals`),
     updates: toContractMessageRows(contract.updates, `${type}.updates`),
     queries: toContractMessageRows(contract.queries, `${type}.queries`),

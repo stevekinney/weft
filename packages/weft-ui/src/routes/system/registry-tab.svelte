@@ -210,7 +210,7 @@
                     )}
                   {/if}
                 {/if}
-                {#if activity.timeout}
+                {#if activity.timeout !== undefined}
                   {@render registryBadge(
                     `timeout: ${formatActivityTimeout(activity.timeout)}`,
                     'neutral',

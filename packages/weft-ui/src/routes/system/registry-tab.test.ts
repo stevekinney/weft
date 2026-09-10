@@ -289,11 +289,61 @@ describe('RegistryTab', () => {
     expect(await findByText('No finalizer declared.')).not.toBeNull();
   });
 
+  test('renders an activity timeout of exactly 0 — a valid Duration, not the same as "no timeout"', async () => {
+    scripted = new ScriptedFetch();
+    scripted.enqueueJsonRpcResult(
+      registrySnapshot([manifestFixture('order-processing')], {
+        chargeCard: { queue: 'default', timeout: 0 },
+      }),
+    );
+    const { findByText } = await renderRegistryTab();
+    // A truthy-only guard on `activity.timeout` would suppress this badge
+    // for a genuinely configured (if unusual) zero-millisecond timeout.
+    expect(await findByText('timeout: 0ms')).not.toBeNull();
+  });
+
   test('shows the honest "no activities" note when the engine has none registered', async () => {
     scripted = new ScriptedFetch();
     scripted.enqueueJsonRpcResult(registrySnapshot([manifestFixture('heartbeat')]));
     const { findByText } = await renderRegistryTab();
     expect(await findByText('No activities registered for this engine.')).not.toBeNull();
+  });
+
+  test('a declared root schema that is not `type: object` renders its root type, not "no schema declared"', async () => {
+    scripted = new ScriptedFetch();
+    scripted.enqueueJsonRpcResult(
+      registrySnapshot([
+        manifestFixture('order-processing', {
+          inputSchema: { type: 'string' },
+        }),
+      ]),
+    );
+    const { container, findByRole, queryByText } = await renderRegistryTab();
+    await fireEvent.click(await findByRole('button', { name: /order-processing/ }));
+
+    expect(container.textContent).toContain('Declared as string — no object fields to list.');
+    expect(
+      queryByText('No input schema declared — this definition accepts an untyped payload.'),
+    ).toBeNull();
+  });
+
+  test('renders a schema field description, when the fragment declares one', async () => {
+    scripted = new ScriptedFetch();
+    scripted.enqueueJsonRpcResult(
+      registrySnapshot([
+        manifestFixture('order-processing', {
+          inputSchema: {
+            type: 'object',
+            properties: {
+              orderId: { type: 'string', description: 'The order identifier to process.' },
+            },
+          },
+        }),
+      ]),
+    );
+    const { findByRole, findByText } = await renderRegistryTab();
+    await fireEvent.click(await findByRole('button', { name: /order-processing/ }));
+    expect(await findByText('The order identifier to process.')).not.toBeNull();
   });
 
   test('renders a nested object field as an expandable schema tree branch', async () => {

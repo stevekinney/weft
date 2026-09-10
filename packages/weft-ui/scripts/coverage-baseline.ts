@@ -152,8 +152,33 @@ const DARWIN_BASELINE: CoverageBaseline = {
   // passing). Darwin and the linux CI artifact from run 33334402102
   // aggregate identically at area level after the package-local filter, so
   // both platform entries record the same measured tuples.
-  measuredAt: '2026-08-30T20:45:00.000Z',
-  overall: { linesFound: 36221, linesHit: 34086, functionsFound: 7006, functionsHit: 6662 },
+  //
+  // Re-measured again 2026-09-10 for WFT-115's third review pass (root-vs-
+  // object schema type labels on an otherwise-empty tree, schema field
+  // descriptions rendered in the Tree, `resolveExpectedGeneration`'s
+  // newest-of-two-known-generations fix, and `workflowRevisionRows`
+  // rejecting a whole response — not just the malformed entry — when any
+  // record fails its structural guard). `overall` bumped alongside
+  // `src/routes/system` — the OVERALL rollup crosses every area, not just
+  // this PR's, so it must move with `src/routes/system` or a later PR's
+  // unrelated area could quietly slip under a stale overall floor.
+  //
+  // Three consecutive `bun run check:coverage`/`test:coverage` runs against
+  // the SAME commit produced two different OVERALL tuples (37506/35445/
+  // 7284/6942 once, then 37517/35392/7274/6931 twice) — the same class of
+  // non-deterministic Bun LCOV merge noise this file's own DARWIN_BASELINE
+  // history documents above (`--parallel` note) and cites the upstream
+  // filing for. Per this file's established "record the SAFE (lower-
+  // percentage) floor" rule for exactly this situation, this baseline uses
+  // the tuple that reproduced twice out of three and is also the lower of
+  // the two (94.33% lines / 95.28% functions vs. the single higher-reading
+  // run's 94.50%/95.30%) — the majority AND the conservative choice agree
+  // here, unlike the `workflows`-area case above where they didn't. This
+  // measurement diverges from LINUX_BASELINE below (a Linux CI
+  // re-measurement is a separate follow-up commit — see that baseline's
+  // own note).
+  measuredAt: '2026-09-10T23:22:00.000Z',
+  overall: { linesFound: 37517, linesHit: 35392, functionsFound: 7274, functionsHit: 6931 },
   areas: {
     fixtures: { linesFound: 698, linesHit: 321, functionsFound: 69, functionsHit: 12 },
     // The 2026-08-30 monorepo re-measurement note above applies here too:
@@ -246,11 +271,31 @@ const DARWIN_BASELINE: CoverageBaseline = {
     // (durable-generation reuse after a stale refusal, the full
     // `RetryPolicy` badge, and the docs-only preload-operation fix) —
     // 5904/5875/1236/1213 -> this tuple.
+    //
+    // Re-measured a third time within WFT-115: `activation-outcome-banner.svelte`
+    // was extracted from `workflow-revisions-panel.svelte` (the 500-line
+    // implementation-file ceiling — the panel was at 541 lines combined
+    // with the fixes below), `resolveExpectedGeneration` and its "reject
+    // the whole revisions list on any malformed record" sibling change
+    // each added a pure-function unit-test surface, and two new template
+    // branches (a declared-but-non-object root schema type label; a schema
+    // field's `description` rendered in the Tree) got dedicated component
+    // tests. Investigated the residual gap before bumping: the ONLY
+    // remaining uncovered lines after this pass are (1) `registry-view.ts`'s
+    // pre-existing `compareCodepoint` tie-return branch (unrelated,
+    // untouched by this PR, already noted above) and (2) a handful of
+    // `.svelte` compiled-output DA lines inside blocks this PR's own
+    // passing tests directly exercise (the revisions-list row-identity
+    // block and the ConfirmDialog title/description ternaries) — the same
+    // "covered code reports DA:0" Svelte-compiled-output attribution
+    // pattern this file already documents for `scopes.svelte.ts` and
+    // `src/routes/dashboard`'s Linux floor, not a real gap. 5973/5944/
+    // 1248/1225 -> this tuple.
     'src/routes/system': {
-      linesFound: 5973,
-      linesHit: 5944,
-      functionsFound: 1248,
-      functionsHit: 1225,
+      linesFound: 6060,
+      linesHit: 6031,
+      functionsFound: 1264,
+      functionsHit: 1241,
     },
     'src/routes/workers': {
       linesFound: 5685,
