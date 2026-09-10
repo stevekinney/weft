@@ -6854,8 +6854,25 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     // entry's deadline value — so injecting an already-expired heap entry
     // deterministically drives the exact decision under test: does the scan
     // see the heartbeat-extended persisted deadline and skip reassignment?
+    const originalAdd = DeadlineTracker.prototype.add;
     const originalDrainExpired = DeadlineTracker.prototype.drainExpired;
     let injectedStaleEntry = false;
+    let addCountForOperation = 0;
+
+    const restoreAdd = overrideProperty(
+      DeadlineTracker.prototype,
+      'add',
+      function (
+        this: DeadlineTracker,
+        entry: Parameters<DeadlineTracker['add']>[0],
+      ): ReturnType<DeadlineTracker['add']> {
+        if (entry.operationId === 'heartbeat-stale-heap-op') {
+          addCountForOperation++;
+        }
+        return originalAdd.call(this, entry);
+      },
+    );
+
     const restoreDrainExpired = overrideProperty(
       DeadlineTracker.prototype,
       'drainExpired',
@@ -6873,18 +6890,29 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     );
 
     try {
-      await waitFor(() => injectedStaleEntry, {
-        label: 'stale heap scan to run for heartbeat-extended task',
-      });
-      // The reconciliation loop awaits `restoreExtendedDeadlineIfStillActive`
-      // synchronously for this operation within the same scan tick that
-      // drains the injected entry, so once `injectedStaleEntry` is observed
-      // true the reassign-or-skip decision has already been made —
-      // `isAssigned` staying true here is the invariant under test, not a
-      // race against a later event.
-      await waitFor(() => server.registry.isAssigned('heartbeat-stale-heap-op'), {
-        label: 'task remains assigned after stale heap scan',
-      });
+      // Observing `injectedStaleEntry === true` only proves the scan tick
+      // started — `drainExpired` is invoked synchronously at the very start
+      // of `scanExpiredTasks`, before the `await storage.get(...)` and the
+      // `restoreExtendedDeadlineIfStillActive` skip/reassign decision. And
+      // because the task is already assigned before injection,
+      // `isAssigned()` is satisfied immediately regardless of whether the
+      // decision has run yet, so on its own it proves nothing either. The
+      // skip path re-adds the operation's entry back onto the deadline heap
+      // (see `restoreExtendedDeadlineIfStillActive`), so waiting for the
+      // *second* `.add()` call for this operation — the same technique the
+      // "keeps an in-flight task when the expiry scan encounters a stale
+      // heap entry" sibling test uses — is what actually proves the
+      // reconciliation decision completed and chose to skip reassignment
+      // rather than dispatch a new task.
+      await waitFor(
+        () =>
+          injectedStaleEntry &&
+          addCountForOperation >= 2 &&
+          server.registry.isAssigned('heartbeat-stale-heap-op'),
+        { label: 'stale heap entry re-added after skip decision while task remains assigned' },
+      );
+
+      expect(addCountForOperation).toBeGreaterThanOrEqual(2);
 
       const afterScanTaskCount = received.filter((message) => message.type === 'task').length;
       expect(afterScanTaskCount).toBe(beforeScanTaskCount);
@@ -6901,6 +6929,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
       expect(persisted.leaseDeadline).toBeGreaterThanOrEqual(extendedDeadline);
     } finally {
       restoreDrainExpired();
+      restoreAdd();
       ws.close();
       await waitForRealTimersForTesting(50);
     }
