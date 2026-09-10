@@ -180,11 +180,30 @@ describe('countTeardownDeadLettersForRevision', () => {
     expect(await countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')).toBe(1);
   });
 
-  it('conservatively pins a legacy single-slot record with no workflowExecutionToken for every queried revision of the matching type, since it cannot be reliably correlated to a history sibling (WFT-21, Codex review, item 7)', async () => {
+  it('conservatively pins a pre-upgrade single-slot orphan with a workflowExecutionToken but NO revision field for every queried revision of the matching type (WFT-21, Codex review, item 7 — the realistic pre-upgrade shape: workflowExecutionToken predates this PR, revision does not)', async () => {
+    const storage = new MemoryStorage();
+    // The realistic pre-upgrade record: `workflowExecutionToken` already
+    // existed (added well before this PR), but `revision` did not — this
+    // PR adds that field. A record this old still has NO history sibling
+    // at all (the history write is also this PR's round 3), so it is
+    // still a provable orphan by the "no history sibling" test, even
+    // though it carries a token.
+    await storage.put(
+      KEYS.teardownDeadLetter('wf-preupgrade-token-no-revision'),
+      encode(makeDeadLetter({ type: 'checkout', workflowExecutionToken: 'tok-preupgrade' })),
+    );
+
+    expect(await countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')).toBe(1);
+    expect(await countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-b')).toBe(1);
+    // A different type must still be excluded.
+    expect(await countTeardownDeadLettersForRevision(storage, 'other', 'rev-a')).toBe(0);
+  });
+
+  it('conservatively pins a legacy single-slot record with no workflowExecutionToken and no revision for every queried revision of the matching type', async () => {
     const storage = new MemoryStorage();
     await storage.put(
       KEYS.teardownDeadLetter('wf-preupgrade-no-token'),
-      encode(makeDeadLetter({ type: 'checkout', revision: 'rev-a' })),
+      encode(makeDeadLetter({ type: 'checkout' })),
     );
 
     expect(await countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')).toBe(1);

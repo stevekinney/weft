@@ -68,26 +68,35 @@ import { LEGACY_DEAD_LETTER_HISTORY_TOKEN } from './termination/finalizer-claim.
  *
  * Also scans {@link KEYS.teardownDeadLetterPrefix}, the legacy single-slot
  * namespace (Codex review, item 7): `deadLetterTeardown()` writes the
- * single-slot key and its history sibling TOGETHER on every current write,
- * but a record written by a pre-upgrade process (before the history sibling
- * existed at all) survives ONLY under the single-slot key. Once that run's
- * `WorkflowState` is purged, such a record is the sole remaining evidence
- * the revision was ever referenced — without this second scan, reference
+ * single-slot key and its history sibling TOGETHER, in the same batch, on
+ * EVERY write since round 3. A single-slot record whose computed history
+ * key does NOT exist is therefore PROVABLY pre-upgrade — written before
+ * that history write existed at all — regardless of whether it happens to
+ * carry a `workflowExecutionToken` (that field predates this PR) or a
+ * `revision` (added by this PR, so a pre-upgrade record may well have a
+ * token but no revision at all). Once such a run's `WorkflowState` is
+ * purged, its single-slot record is the sole remaining evidence the
+ * revision was ever referenced — without this second scan, reference
  * accounting would silently read zero and let `removeWorkflowRevision()`
  * remove a revision this exact dead letter still pins, defeating this
  * module's own permanent-pin contract. A single-slot record whose computed
- * history key already exists is skipped here — it is a current-format write
- * already counted by the history scan above, so counting it again here
- * would double-count it. A record with NO `workflowExecutionToken` is
- * pinned conservatively: `deadLetterTeardown()`'s own fixed
- * {@link LEGACY_DEAD_LETTER_HISTORY_TOKEN} fallback segment means a second
- * token-less generation for the same workflow id can silently overwrite an
- * earlier one at that same sentinel slot (see that constant's own doc), so
- * the single "does a history sibling exist" check is not reliable evidence
- * for a token-less record the way it is for a token-bearing one — such a
- * record counts toward EVERY queried revision of the matching type, rather
- * than risking an under-count from a revision comparison this scan cannot
- * fully trust.
+ * history key already exists is skipped here — it is a current-format
+ * write already counted by the history scan above, so counting it again
+ * here would double-count it. Among the provable orphans, one with a
+ * `revision` field uses an exact match (the field exists and can be
+ * trusted); one WITHOUT a `revision` field is pinned conservatively —
+ * counted toward EVERY queried revision of the matching type — since its
+ * true revision cannot be determined at all, and under-counting it would
+ * risk permitting removal of a revision it still durably pins.
+ *
+ * Buffers the single-slot scan into an array before doing any
+ * `storage.get()` lookups, rather than awaiting inside the `for await`
+ * loop directly: an `IndexedDBStorage.scan()` iterator holds its
+ * transaction open only across synchronous iteration, and awaiting other
+ * storage calls between `next()` calls exposes the SAME class of
+ * `TransactionInactiveError` risk tracked (pre-existing, out of this PR's
+ * scope) as WFT-160 — this scan does not need to add a fresh instance of
+ * it.
  */
 export async function countTeardownDeadLettersForRevision(
   storage: Storage,
@@ -102,7 +111,11 @@ export async function countTeardownDeadLettersForRevision(
     count += 1;
   }
 
-  for await (const [key, bytes] of storage.scan(KEYS.teardownDeadLetterPrefix())) {
+  const singleSlotEntries: Array<[string, Uint8Array]> = [];
+  for await (const entry of storage.scan(KEYS.teardownDeadLetterPrefix())) {
+    singleSlotEntries.push(entry);
+  }
+  for (const [key, bytes] of singleSlotEntries) {
     if (await countLegacySingleSlotDeadLetter(storage, key, bytes, type, revision)) {
       count += 1;
     }
@@ -139,9 +152,10 @@ async function countLegacySingleSlotDeadLetter(
   const alreadyCountedViaHistory = (await storage.get(historyKey)) !== null;
   if (alreadyCountedViaHistory) return false;
 
-  // Conservative pin: cannot reliably correlate a token-less record to a
-  // specific revision (see the doc above), so it counts for every query.
-  if (token === undefined) return true;
+  // No history sibling exists at all: this single-slot record is provably
+  // pre-upgrade (see the module doc above), regardless of the presence of
+  // `token`. Pin conservatively when its own `revision` is unknown.
+  if (decoded['revision'] === undefined) return true;
 
   return decoded['revision'] === revision;
 }
