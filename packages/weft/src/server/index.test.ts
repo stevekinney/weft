@@ -6843,26 +6843,67 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     expect(extendedDeadline).toBeGreaterThan(initialRecord.leaseDeadline);
 
     const beforeScanTaskCount = received.filter((message) => message.type === 'task').length;
-    const staleDeadlineDelay = Math.max(0, initialRecord.leaseDeadline - Date.now()) + 100;
-    expect(Date.now() + staleDeadlineDelay).toBeLessThan(extendedDeadline);
-    await waitForRealTimersForTesting(staleDeadlineDelay);
-    expect(Date.now()).toBeGreaterThanOrEqual(initialRecord.leaseDeadline);
-    const afterScanTaskCount = received.filter((message) => message.type === 'task').length;
 
-    expect(afterScanTaskCount).toBe(beforeScanTaskCount);
-    expect(server.registry.isAssigned('heartbeat-stale-heap-op')).toBe(true);
+    // Instead of racing real wall-clock time until the heap's real deadline
+    // entry goes stale (the previous approach — flaky under CPU contention,
+    // see WFT-89), inject a synthetic stale heap entry for this operation
+    // directly, the same technique the
+    // "keeps an in-flight task when the expiry scan encounters a stale heap
+    // entry" sibling test uses. `restoreExtendedDeadlineIfStillActive` reads
+    // the *persisted* ledger record's current `leaseDeadline` — not the heap
+    // entry's deadline value — so injecting an already-expired heap entry
+    // deterministically drives the exact decision under test: does the scan
+    // see the heartbeat-extended persisted deadline and skip reassignment?
+    const originalDrainExpired = DeadlineTracker.prototype.drainExpired;
+    let injectedStaleEntry = false;
+    const restoreDrainExpired = overrideProperty(
+      DeadlineTracker.prototype,
+      'drainExpired',
+      function (
+        this: DeadlineTracker,
+        now: Parameters<DeadlineTracker['drainExpired']>[0],
+      ): ReturnType<DeadlineTracker['drainExpired']> {
+        const expired = originalDrainExpired.call(this, now);
+        if (!injectedStaleEntry) {
+          injectedStaleEntry = true;
+          return [...expired, { operationId: 'heartbeat-stale-heap-op', deadline: now - 1 }];
+        }
+        return expired;
+      },
+    );
 
-    const persisted = await readLedgerRecord(storage, 'heartbeat-stale-heap-op');
-    if (persisted === null || persisted.state !== 'leased') {
-      throw new Error('Expected "heartbeat-stale-heap-op" to still have a leased ledger record');
+    try {
+      await waitFor(() => injectedStaleEntry, {
+        label: 'stale heap scan to run for heartbeat-extended task',
+      });
+      // The reconciliation loop awaits `restoreExtendedDeadlineIfStillActive`
+      // synchronously for this operation within the same scan tick that
+      // drains the injected entry, so once `injectedStaleEntry` is observed
+      // true the reassign-or-skip decision has already been made —
+      // `isAssigned` staying true here is the invariant under test, not a
+      // race against a later event.
+      await waitFor(() => server.registry.isAssigned('heartbeat-stale-heap-op'), {
+        label: 'task remains assigned after stale heap scan',
+      });
+
+      const afterScanTaskCount = received.filter((message) => message.type === 'task').length;
+      expect(afterScanTaskCount).toBe(beforeScanTaskCount);
+      expect(server.registry.isAssigned('heartbeat-stale-heap-op')).toBe(true);
+
+      const persisted = await readLedgerRecord(storage, 'heartbeat-stale-heap-op');
+      if (persisted === null || persisted.state !== 'leased') {
+        throw new Error('Expected "heartbeat-stale-heap-op" to still have a leased ledger record');
+      }
+      // The deadline may advance further if another heartbeat fires during
+      // the wait above — the only invariant is that it never regresses to
+      // the stale initialRecord.leaseDeadline value the expiry scan would
+      // pick up.
+      expect(persisted.leaseDeadline).toBeGreaterThanOrEqual(extendedDeadline);
+    } finally {
+      restoreDrainExpired();
+      ws.close();
+      await waitForRealTimersForTesting(50);
     }
-    // The deadline may advance further if another heartbeat fires during the
-    // sleep above — the only invariant is that it never regresses to the
-    // stale initialRecord.leaseDeadline value that the expiry scan would pick up.
-    expect(persisted.leaseDeadline).toBeGreaterThanOrEqual(extendedDeadline);
-
-    ws.close();
-    await waitForRealTimersForTesting(50);
   });
 
   it('keeps an in-flight task when the expiry scan encounters a stale heap entry', async () => {
@@ -7790,12 +7831,20 @@ describe('retry policy respected on reassignment', () => {
       { label: 'within-limit task initially dispatched' },
     );
 
-    // Wait for the visibility timeout to expire and the scanner to re-dispatch
+    // Wait for the visibility timeout to expire and the scanner to
+    // re-dispatch. WFT-91: this test was one of four in "retry policy
+    // respected on reassignment" observed timing out at
+    // `waitForParityCondition`'s default 2000ms budget in CI across
+    // otherwise-unrelated pull requests (see the WFT-91 Linear issue) — same
+    // describe-block-wide tight-margin exposure (100ms visibility timeout +
+    // 100ms initial backoff) as the "applies backoff delay" tests, whose
+    // comment records the local baseline measurement and the reasoning for
+    // the 8000ms figure used here too.
     await waitFor(
       () =>
         received.filter((m) => m.type === 'task' && m.operationId === 'within-limit-expiry-op')
           .length >= 2,
-      { label: 'within-limit task re-dispatched after visibility expiry' },
+      { label: 'within-limit task re-dispatched after visibility expiry', timeoutMs: 8000 },
     );
 
     const taskMessages = received.filter(
@@ -7850,9 +7899,27 @@ describe('retry policy respected on reassignment', () => {
       retryPolicy: { ...testRetryPolicy, maxAttempts: 3, initialBackoff: 100 },
     });
 
-    // Wait long enough for: visibility timeout (80ms) + backoff (100ms) + scanner intervals
+    // Wait long enough for: visibility timeout (80ms) + backoff (100ms) + scanner intervals.
+    // WFT-91: this describe block observed real CI failures at
+    // `waitForParityCondition`'s default 2000ms budget across multiple
+    // otherwise-unrelated pull requests (see the WFT-91 Linear issue).
+    // Locally this test's actual work completes in ~270-320ms even under
+    // background load (measured via 15 repeated junit-timed runs), so the
+    // 2000ms default already has a wide nominal margin — the CI failures are
+    // evidence of GitHub Actions runner-side scheduling stalls, not a tight
+    // configured delay. `scheduleDelayedDispatch` has no test-injectable
+    // clock seam (see `src/server/runtime/task-dispatch.ts`), and adding one
+    // is out of scope for this test-only pull request, so raise the budget
+    // for this test only rather than the shared default: 8000ms is 4x the
+    // previous 2000ms budget, giving substantial headroom over the measured
+    // ~300ms baseline without matching the repo's known worst-case outlier
+    // (WFT-89 observed a 26.7s stall on an unrelated test under severe CI
+    // contention) — if 8000ms still proves insufficient that is itself
+    // evidence for the broader over-subscribed-runner investigation WFT-89
+    // and WFT-96 both flag, not a reason to keep inflating this number.
     await waitFor(() => timestamps.length >= 2, {
       label: 'backoff expiry redispatch received',
+      timeoutMs: 8000,
     });
 
     // Should have received both dispatches
@@ -7903,9 +7970,19 @@ describe('retry policy respected on reassignment', () => {
     // Disconnect w1 — should apply backoff before re-dispatching to w2
     ws1.close();
 
-    // Wait for the backoff delay to complete
+    // Wait for the backoff delay to complete. WFT-91: this is the tightest
+    // test in the describe block (150ms configured backoff, zero configured
+    // slack), and was one of four distinct tests in this block observed
+    // timing out at the 2000ms default in CI across separate pull requests
+    // (see the WFT-91 Linear issue). Locally this test's actual work
+    // completes in ~435-450ms even under background load (measured via 15
+    // repeated junit-timed runs), so raise the budget for this test only —
+    // same reasoning and the same 8000ms figure as the sibling
+    // "applies backoff delay before re-dispatch on visibility timeout
+    // expiry" test above.
     await waitFor(() => timestamps.length === 1, {
       label: 'backoff disconnect redispatch received',
+      timeoutMs: 8000,
     });
 
     expect(timestamps.length).toBe(1);
@@ -7975,12 +8052,19 @@ describe('retry policy respected on reassignment', () => {
       // pre-commit full-suite run. The poll adapts to the real timing, and the
       // full `toHaveBeenCalledWith` contract (including the Error argument) is
       // still asserted afterward so polling can't mask a wrong-shaped call.
+      // WFT-91: this test was one of four in "retry policy respected on
+      // reassignment" observed timing out at `waitForParityCondition`'s
+      // default 2000ms budget in CI across otherwise-unrelated pull
+      // requests (see the WFT-91 Linear issue) — same describe-block-wide
+      // tight-margin exposure as the "applies backoff delay" tests above,
+      // whose comment records the local baseline measurement and the
+      // reasoning for the 8000ms figure used here too.
       await waitFor(
         () =>
           errorSpy.mock.calls.some(
             (call) => call[0] === `[weft] Delayed redispatch failed for "${operationId}":`,
           ),
-        { label: 'delayed redispatch error log' },
+        { label: 'delayed redispatch error log', timeoutMs: 8000 },
       );
 
       expect(errorSpy).toHaveBeenCalledWith(
