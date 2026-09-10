@@ -2,18 +2,27 @@
   /**
    * Registry → workflow definition detail (plan §9.7 T7.2; design `Weft
    * Console.dc.html` "System" § REGISTRY DEFINITION DETAIL). Renders the
-   * expandable input/output schema `Tree` plus everything the wire snapshot
-   * actually carries — see `registry-view.ts`'s module doc for the
-   * signal/update/query-handler and activity-retry gap this panel is
-   * honest about instead of fabricating.
+   * expandable input/output schema `Tree`, the revision identity
+   * (revision/manifestVersion/contractHash), the full contract surface
+   * (signals/updates/queries/activities/finalizer — sourced for real as of
+   * WFT-115, see `registry-view.ts`'s module doc), and the installed-
+   * revisions panel with its Activate/compatibility flow
+   * (`workflow-revisions-panel.svelte`).
    */
   import DescriptionList from '@lostgradient/cinder/description-list';
   import { Tree } from '@lostgradient/cinder/tree';
   import Badge from '@lostgradient/cinder/badge';
   import Button from '@lostgradient/cinder/button';
+  import CopyButton from '@lostgradient/cinder/copy-button';
   import { ArrowLeft, FileQuestion } from 'lucide-svelte';
 
-  import type { RegistryWorkflowRow, SchemaTreeNode } from './registry-view.ts';
+  import { truncateId } from '../../lib/format/index.ts';
+  import type {
+    RegistryContractMessageRow,
+    RegistryWorkflowRow,
+    SchemaTreeNode,
+  } from './registry-view.ts';
+  import WorkflowRevisionsPanel from './workflow-revisions-panel.svelte';
 
   interface Props {
     row: RegistryWorkflowRow;
@@ -67,6 +76,32 @@
   {/if}
 {/snippet}
 
+{#snippet contractMessageList(entries: readonly RegistryContractMessageRow[], emptyLabel: string)}
+  {#if entries.length === 0}
+    <p class="weft-registry-detail__gap-note">{emptyLabel}</p>
+  {:else}
+    <ul class="weft-registry-detail__message-list">
+      {#each entries as entry (entry.name)}
+        <li class="weft-registry-detail__message">
+          <div class="weft-registry-detail__message-header">
+            <span class="weft-registry-detail__message-name">{entry.name}</span>
+            {@render schemaBadge(
+              entry.hasInputSchema ? `${entry.inputFields.length} in` : 'no input',
+              entry.hasInputSchema ? 'neutral' : 'warning',
+              true,
+            )}
+            {@render schemaBadge(
+              entry.hasOutputSchema ? `${entry.outputFields.length} out` : 'no output',
+              entry.hasOutputSchema ? 'neutral' : 'warning',
+              true,
+            )}
+          </div>
+        </li>
+      {/each}
+    </ul>
+  {/if}
+{/snippet}
+
 <div class="weft-registry-detail">
   <Button variant="secondary" size="sm" label="Workflow definitions" onclick={onBack}>
     {#snippet leadingIcon()}<ArrowLeft aria-hidden="true" size={14} />{/snippet}
@@ -82,6 +117,22 @@
     <p class="weft-registry-detail__description">{row.description}</p>
   {/if}
 
+  <div class="weft-registry-detail__identity">
+    <span class="weft-registry-detail__identity-item" title={row.revision}>
+      rev {truncateId(row.revision)}
+      <CopyButton value={row.revision} iconOnly label={`Copy revision ${row.revision}`} />
+    </span>
+    <span class="weft-registry-detail__identity-item" title={row.contractHash}>
+      contract {truncateId(row.contractHash)}
+      <CopyButton
+        value={row.contractHash}
+        iconOnly
+        label={`Copy contract hash ${row.contractHash}`}
+      />
+    </span>
+    <span class="weft-registry-detail__identity-item">manifest v{row.manifestVersion}</span>
+  </div>
+
   <div class="weft-registry-detail__grid">
     <section class="weft-registry-detail__panel">
       <h3 class="weft-registry-detail__panel-title">
@@ -95,14 +146,55 @@
     </section>
 
     <section class="weft-registry-detail__panel">
-      <h3 class="weft-registry-detail__panel-title">Handlers</h3>
-      <p class="weft-registry-detail__gap-note">
-        Signal, update, and query handler names aren't exposed by the registry snapshot yet, even
-        though the workflow builder registers them statically — filed upstream:
-        <a href="https://github.com/stevekinney/weft/issues/736" target="_blank" rel="noreferrer">
-          stevekinney/weft#736
-        </a>.
-      </p>
+      <h3 class="weft-registry-detail__panel-title">
+        Output schema
+        <span class="weft-registry-detail__panel-meta">{row.outputFields.length} fields</span>
+      </h3>
+      {@render schemaTree(
+        row.outputSchemaTree,
+        'No output schema declared — this definition returns an untyped result.',
+      )}
+    </section>
+
+    <section class="weft-registry-detail__panel">
+      <h3 class="weft-registry-detail__panel-title">
+        Signals
+        <span class="weft-registry-detail__panel-meta">{row.signals.length}</span>
+      </h3>
+      {@render contractMessageList(row.signals, 'No signals declared.')}
+    </section>
+
+    <section class="weft-registry-detail__panel">
+      <h3 class="weft-registry-detail__panel-title">
+        Updates
+        <span class="weft-registry-detail__panel-meta">{row.updates.length}</span>
+      </h3>
+      {@render contractMessageList(row.updates, 'No updates declared.')}
+    </section>
+
+    <section class="weft-registry-detail__panel">
+      <h3 class="weft-registry-detail__panel-title">
+        Queries
+        <span class="weft-registry-detail__panel-meta">{row.queries.length}</span>
+      </h3>
+      {@render contractMessageList(row.queries, 'No queries declared.')}
+    </section>
+
+    <section class="weft-registry-detail__panel">
+      <h3 class="weft-registry-detail__panel-title">
+        Activities
+        <span class="weft-registry-detail__panel-meta">{row.activities.length}</span>
+      </h3>
+      {@render contractMessageList(row.activities, 'No activities declared.')}
+    </section>
+
+    <section class="weft-registry-detail__panel">
+      <h3 class="weft-registry-detail__panel-title">Finalizer</h3>
+      {#if row.finalizer}
+        {@render contractMessageList([row.finalizer], 'No finalizer declared.')}
+      {:else}
+        <p class="weft-registry-detail__gap-note">No finalizer declared.</p>
+      {/if}
     </section>
 
     <section class="weft-registry-detail__panel">
@@ -119,6 +211,8 @@
       />
     </section>
   </div>
+
+  <WorkflowRevisionsPanel workflowName={row.type} />
 </div>
 
 <style>
@@ -151,11 +245,49 @@
     text-wrap: pretty;
   }
 
+  .weft-registry-detail__identity {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+    font-family: var(--cinder-font-mono);
+    font-size: var(--cinder-text-xs);
+    color: var(--cinder-text-subtle);
+  }
+
+  .weft-registry-detail__identity-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
   .weft-registry-detail__grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
     gap: 14px;
     align-items: start;
+  }
+
+  .weft-registry-detail__message-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .weft-registry-detail__message-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .weft-registry-detail__message-name {
+    font-family: var(--cinder-font-mono);
+    font-size: var(--cinder-text-sm);
+    font-weight: 600;
   }
 
   .weft-registry-detail__panel {

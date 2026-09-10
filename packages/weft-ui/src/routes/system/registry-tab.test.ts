@@ -67,6 +67,17 @@ async function renderRegistryTab(
   if (manifestFixtures.diagnostics !== undefined) {
     scripted?.routeJsonRpcMethod('weft.workers.diagnostics', manifestFixtures.diagnostics);
   }
+  // Drilling into a definition's detail panel now also mounts
+  // `<WorkflowRevisionsPanel>` (WFT-115), which queries these two catalog
+  // operations regardless of which workflow type was clicked — a standing
+  // empty-by-default route here keeps every pre-existing drill-in test
+  // working without each one having to know about the Revisions panel.
+  scripted?.routeJsonRpcMethod('weft.workflows.revisions.list', []);
+  scripted?.routeJsonRpcError('weft.workflows.active.get', {
+    code: -32020,
+    message: 'never activated',
+    data: { weftCode: 'NotFound', httpStatus: 404 },
+  });
   return render(SystemRouteTestHarness, {
     props: { client: realClient(), queryClient: createQueryClient(), component: RegistryTab },
   });
@@ -159,6 +170,16 @@ describe('RegistryTab', () => {
                 note: { type: 'string' },
               },
             },
+            signals: { cancel: { inputSchema: { type: 'object', properties: {} } } },
+            updates: {
+              expedite: {
+                inputSchema: { type: 'object', properties: {} },
+                outputSchema: { type: 'object', properties: {} },
+              },
+            },
+            queries: { status: { outputSchema: { type: 'object', properties: {} } } },
+            activities: { chargeCard: { inputSchema: { type: 'object', properties: {} } } },
+            finalizer: { inputSchema: { type: 'object', properties: {} } },
           }),
           manifestFixture('heartbeat'),
         ],
@@ -170,12 +191,19 @@ describe('RegistryTab', () => {
               required: ['amount'],
               properties: { amount: { type: 'number' } },
             },
+            retry: {
+              maxAttempts: 3,
+              initialBackoff: '200ms',
+              backoffMultiplier: 2,
+              maxBackoff: '2s',
+            },
+            timeout: '30s',
           },
         },
       ),
     );
 
-    const { findByText, findAllByText, getByRole } = await renderRegistryTab();
+    const { findByText, findAllByText, findByTitle, getByRole } = await renderRegistryTab();
 
     expect(await findByText('order-processing')).not.toBeNull();
     expect(await findByText('chargeCard')).not.toBeNull();
@@ -195,9 +223,25 @@ describe('RegistryTab', () => {
     expect(activityFieldCountBadge.getAttribute('data-cinder-variant')).toBe('success');
     expect(activityFieldCountBadge.getAttribute('data-cinder-size')).toBe('md');
 
+    expect(await findByText('retry: 3x')).not.toBeNull();
+    expect(await findByText('timeout: 30s')).not.toBeNull();
+
     await fireEvent.click(getByRole('button', { name: /order-processing/ }));
 
     expect(await findByText('Processes an order end to end.')).not.toBeNull();
+
+    // Revision identity (WFT-115): the exact revision/contractHash are on
+    // the element's `title` (hover-full convention, plan §10.8) even
+    // though the visible text is truncated; manifest version verbatim.
+    expect(await findByTitle('order-processing-rev')).not.toBeNull();
+    expect(await findByTitle('order-processing-hash')).not.toBeNull();
+    expect(await findByText('manifest v1')).not.toBeNull();
+
+    // The full contract surface (WFT-115) — no longer the #736 gap note.
+    expect(await findAllByText('cancel')).not.toHaveLength(0);
+    expect(await findAllByText('expedite')).not.toHaveLength(0);
+    expect(await findAllByText('status')).not.toHaveLength(0);
+    expect(await findAllByText('finalizer')).not.toHaveLength(0);
     const paymentElements = await findAllByText('payments');
     const tagBadge = paymentElements.find(
       (element) => element.getAttribute('data-cinder-variant') !== null,

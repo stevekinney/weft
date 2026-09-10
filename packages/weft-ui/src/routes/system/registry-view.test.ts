@@ -75,6 +75,24 @@ const SNAPSHOT: RegistrySnapshotSource = {
           required: ['orderId'],
           properties: { orderId: { type: 'string' } },
         },
+        signals: {
+          cancel: { inputSchema: { type: 'object', properties: { reason: {} } } },
+        },
+        updates: {
+          expedite: {
+            inputSchema: { type: 'object', properties: { rush: { type: 'boolean' } } },
+            outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } } },
+          },
+        },
+        queries: {
+          status: { outputSchema: { type: 'object', properties: { state: { type: 'string' } } } },
+        },
+        activities: {
+          chargeCard: {
+            inputSchema: { type: 'object', properties: { amountCents: { type: 'number' } } },
+          },
+        },
+        finalizer: { inputSchema: { type: 'object', properties: { orderId: { type: 'string' } } } },
       },
     },
     {
@@ -98,6 +116,8 @@ const SNAPSHOT: RegistrySnapshotSource = {
         type: 'object',
         properties: { orderId: { type: 'string' } },
       },
+      retry: { maxAttempts: 3, initialBackoff: '200ms', backoffMultiplier: 2, maxBackoff: '2s' },
+      timeout: '30s',
     },
   },
 };
@@ -113,11 +133,107 @@ describe('registryWorkflowRows', () => {
       { name: 'orderId', type: 'string', required: true, description: undefined },
     ]);
     expect(orderProcessing?.hasOutputSchema).toBe(false);
-    expect(orderProcessing?.handlers).toBeUndefined();
 
     const auditSweep = rows[0];
     expect(auditSweep?.hasInputSchema).toBe(false);
     expect(auditSweep?.tags).toEqual([]);
+  });
+
+  test('surfaces revision identity fields (revision, manifestVersion, contractHash)', () => {
+    const rows = registryWorkflowRows(SNAPSHOT);
+    const orderProcessing = rows.find((row) => row.type === 'order-processing');
+    expect(orderProcessing?.revision).toBe('sha256:order-processing-revision');
+    expect(orderProcessing?.manifestVersion).toBe(1);
+    expect(orderProcessing?.contractHash).toBe('sha256:order-processing-hash');
+  });
+
+  function orderProcessingRow() {
+    const rows = registryWorkflowRows(SNAPSHOT);
+    const row = rows.find((entry) => entry.type === 'order-processing');
+    if (!row) throw new Error('fixture invariant: order-processing row must exist');
+    return row;
+  }
+
+  test('surfaces signal contracts, schema-treed', () => {
+    expect(orderProcessingRow().signals).toEqual([
+      {
+        name: 'cancel',
+        hasInputSchema: true,
+        inputFields: [{ name: 'reason', type: 'unknown', required: false, description: undefined }],
+        inputSchemaTree: [
+          {
+            id: 'order-processing.signals.cancel.input.reason',
+            name: 'reason',
+            type: 'unknown',
+            required: false,
+            description: undefined,
+            children: [],
+          },
+        ],
+        hasOutputSchema: false,
+        outputFields: [],
+        outputSchemaTree: [],
+      },
+    ]);
+  });
+
+  test('surfaces update contracts, both input and output schema-treed', () => {
+    expect(orderProcessingRow().updates).toEqual([
+      {
+        name: 'expedite',
+        hasInputSchema: true,
+        inputFields: [{ name: 'rush', type: 'boolean', required: false, description: undefined }],
+        inputSchemaTree: [
+          {
+            id: 'order-processing.updates.expedite.input.rush',
+            name: 'rush',
+            type: 'boolean',
+            required: false,
+            description: undefined,
+            children: [],
+          },
+        ],
+        hasOutputSchema: true,
+        outputFields: [{ name: 'ok', type: 'boolean', required: false, description: undefined }],
+        outputSchemaTree: [
+          {
+            id: 'order-processing.updates.expedite.output.ok',
+            name: 'ok',
+            type: 'boolean',
+            required: false,
+            description: undefined,
+            children: [],
+          },
+        ],
+      },
+    ]);
+  });
+
+  test('surfaces query contracts', () => {
+    const queries = orderProcessingRow().queries;
+    expect(queries.map((entry) => entry.name)).toEqual(['status']);
+    expect(queries[0]).toMatchObject({ hasOutputSchema: true });
+  });
+
+  test('surfaces activity contracts', () => {
+    const activities = orderProcessingRow().activities;
+    expect(activities.map((entry) => entry.name)).toEqual(['chargeCard']);
+    expect(activities[0]).toMatchObject({ hasInputSchema: true });
+  });
+
+  test('surfaces the finalizer contract', () => {
+    const finalizer = orderProcessingRow().finalizer;
+    expect(finalizer).toMatchObject({ name: 'finalizer', hasInputSchema: true });
+  });
+
+  test('a manifest with no signals/updates/queries/activities/finalizer surfaces empty arrays and an undefined finalizer, never fabricated', () => {
+    const rows = registryWorkflowRows(SNAPSHOT);
+    const auditSweep = rows.find((row) => row.type === 'audit-sweep');
+    expect(auditSweep?.signals).toEqual([]);
+    expect(auditSweep?.updates).toEqual([]);
+    expect(auditSweep?.queries).toEqual([]);
+    expect(auditSweep?.activities).toEqual([]);
+    expect(auditSweep?.finalizer).toBeUndefined();
   });
 
   test('excludes a manifest whose revision is not the active one', () => {
@@ -142,11 +258,29 @@ describe('registryWorkflowRows', () => {
 });
 
 describe('registryActivityRows', () => {
-  test('sorts by name and never fabricates retry/timeout', () => {
+  test('sorts by name', () => {
     const rows = registryActivityRows(SNAPSHOT);
     expect(rows.map((row) => row.name)).toEqual(['chargeCard', 'reserveInventory']);
-    expect(rows.every((row) => row.retry === undefined && row.timeout === undefined)).toBe(true);
     expect(rows[1]?.hasInputSchema).toBe(true);
+  });
+
+  test('surfaces retry/timeout when the wire snapshot supplies them', () => {
+    const rows = registryActivityRows(SNAPSHOT);
+    const reserveInventory = rows.find((row) => row.name === 'reserveInventory');
+    expect(reserveInventory?.retry).toEqual({
+      maxAttempts: 3,
+      initialBackoff: '200ms',
+      backoffMultiplier: 2,
+      maxBackoff: '2s',
+    });
+    expect(reserveInventory?.timeout).toBe('30s');
+  });
+
+  test('omits retry/timeout — never fabricated — when the wire snapshot has none', () => {
+    const rows = registryActivityRows(SNAPSHOT);
+    const chargeCard = rows.find((row) => row.name === 'chargeCard');
+    expect(chargeCard?.retry).toBeUndefined();
+    expect(chargeCard?.timeout).toBeUndefined();
   });
 });
 

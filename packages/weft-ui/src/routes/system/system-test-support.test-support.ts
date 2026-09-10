@@ -145,6 +145,34 @@ export class ScriptedFetch {
     });
   }
 
+  /**
+   * Standing route: any JSON-RPC request for `method` gets a JSON-RPC ERROR
+   * envelope back, regardless of call order — the error-response sibling of
+   * `routeJsonRpcMethod`. Shape mirrors what `httpClientCatalogTransport`
+   * (`@lostgradient/weft/client`, `http-operations.ts`) actually parses:
+   * `error.data.httpStatus` drives `HttpClientError.status`, `error.data.weftCode`
+   * (a coarse `FaultCode`, e.g. `'Conflict'`) drives `.faultCode`, and the full
+   * `error.data` object is forwarded verbatim as `.data` — so a caller wanting a
+   * `WorkflowCatalogActivationResult` refusal's `compatibilityReasons`/
+   * `currentGeneration` on `HttpClientError.data` passes them here as `data`.
+   */
+  routeJsonRpcError(
+    method: string,
+    error: { code: number; message: string; data?: Record<string, unknown> },
+  ): void {
+    this.#routes.push({
+      matches: (call) => {
+        if (typeof call.init?.body !== 'string') return false;
+        try {
+          return (JSON.parse(call.init.body) as { method?: string }).method === method;
+        } catch {
+          return false;
+        }
+      },
+      respond: () => Response.json({ jsonrpc: '2.0', id: 1, error }),
+    });
+  }
+
   restore(): void {
     globalThis.fetch = this.#original;
   }

@@ -171,6 +171,12 @@
                     'success',
                   )}
                 {/if}
+                {#if activity.retry}
+                  {@render registryBadge(`retry: ${activity.retry.maxAttempts}x`, 'neutral')}
+                {/if}
+                {#if activity.timeout}
+                  {@render registryBadge(`timeout: ${activity.timeout}`, 'neutral')}
+                {/if}
               </div>
             </div>
           {/each}
