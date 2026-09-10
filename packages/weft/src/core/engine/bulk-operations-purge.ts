@@ -29,7 +29,7 @@ import { decodeScheduleRunMetadata } from './schedule-run-metadata.ts';
 import { createTerminalCleanupTimerId } from './state-utilities.ts';
 import { buildExternalTerminalRotationFragment } from './storage-io.ts';
 import { decodeWorkflowState, isTerminalWorkflowStatus } from './validation.ts';
-import { buildWorkflowGenerationBumpOperationForPurge } from './workflow-generation-fence.ts';
+import { foldWorkflowGenerationBumpForPurge } from './workflow-generation-fence.ts';
 import { buildWorkflowVisibilityIndexTransition } from './workflow-indexes.ts';
 import { getWorkflowRetentionDeadline } from './workflow-retention-deadline.ts';
 
@@ -211,11 +211,11 @@ export async function purgeWorkflow(
   cleanupWaiters: CleanupWaiters,
 ): Promise<void> {
   const deleteOperations = await collectWorkflowPurgeDeleteOperations(internals, state);
-  // Rotates wf-owner-epoch under `workflow-lease` (ADR 0002); no-op elsewhere.
+  // Rotates wf-owner-epoch (workflow-lease); folds in the wf-gen:<id> bump (WFT-153) too.
   const rotation = await buildExternalTerminalRotationFragment(internals, state.id);
-  const generationBump = await buildWorkflowGenerationBumpOperationForPurge(internals, state.id); // WFT-153, unconditioned every mode
-  const operations = [...deleteOperations, ...rotation.operations, generationBump];
-  await commitFencedEngineWrite(internals, null, operations, rotation.conditions, () => {
+  const fenced = await foldWorkflowGenerationBumpForPurge(internals, state.id, rotation);
+  const operations = [...deleteOperations, ...fenced.operations];
+  await commitFencedEngineWrite(internals, null, operations, fenced.conditions, () => {
     return new Error(`Purge commit for workflow "${state.id}" lost its precondition.`);
   });
   clearPurgedWorkflowInMemoryState(internals, state.id, cleanupWaiters);

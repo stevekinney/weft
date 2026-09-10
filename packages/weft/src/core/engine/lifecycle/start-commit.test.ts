@@ -5,6 +5,7 @@ import { MemoryStorage } from '../../../storage/memory.ts';
 import { AtomicStateConflictError } from '../../atomic-state.ts';
 import type { Checkpoint, WorkflowState } from '../../types.ts';
 import { WorkflowAlreadyExistsError } from '../errors.ts';
+import { encodeGeneration } from '../generation-codec.ts';
 import { WorkflowRevisionUnavailableError } from '../revision-errors.ts';
 import { WorkflowClaimRegistry } from '../workflow-claim-registry.ts';
 import { buildAndCommitStartBatch } from './start-commit.ts';
@@ -304,7 +305,10 @@ describe('start-commit lifecycle helpers', () => {
     // `wf:<id>` is absent, matching `duplicateIdCondition`'s expectation.
     // `wf-gen:<id>` was bumped by a purge that happened after this attempt's
     // own read, so it no longer matches `duplicateIdGenerationCondition`.
-    await storage.put(generationKey, new Uint8Array(8).fill(1));
+    // Encoded as a valid generation (1), not an arbitrary byte pattern — a
+    // real `wf-gen:<id>` value is always `decodeGeneration`-valid, so the
+    // fixture should be too.
+    await storage.put(generationKey, encodeGeneration(1));
     // The workflow-concurrency condition also mismatches on re-read.
     await storage.put('workflow-concurrency', new Uint8Array([9]));
 

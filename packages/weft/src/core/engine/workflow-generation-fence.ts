@@ -15,6 +15,7 @@
 import { KEYS, type BatchOperation } from '../../storage/interface.ts';
 import { decodeGeneration, encodeGeneration } from './generation-codec.ts';
 import type { EngineInternals } from './internals.ts';
+import type { WorkflowClaimTransitionFragment } from './workflow-claim-transitions.ts';
 
 /** Mint the next generation from bytes just read: `(decode(bytes) ?? 0) + 1`, never a literal. */
 export function nextGenerationFromObservedBytes(
@@ -49,34 +50,60 @@ export function buildWorkflowGenerationBumpOperation(
 }
 
 /**
- * Read the current `wf-gen:<id>` value and build its bump PUT operation, for
- * a STANDALONE purge/retention commit that — unlike the `'start-new'`
- * restart path above — has no pre-existing duplicate-id-style condition to
- * piggyback on. Meant to be folded (via `[...operations]`) into the caller's
- * own operations, alongside `buildExternalTerminalRotationFragment`'s usage
- * in `purgeWorkflow`.
+ * Read the current `wf-gen:<id>` value, build its bump PUT operation and (CAS
+ * condition permitting) fold BOTH into `base` — the caller's own fragment, in
+ * `purgeWorkflow` the `wf-owner-epoch` rotation fragment
+ * `buildExternalTerminalRotationFragment` already built — for a STANDALONE
+ * purge/retention commit that, unlike the `'start-new'` restart path above,
+ * has no pre-existing duplicate-id-style condition of its own to piggyback
+ * on. Folding happens HERE, not at the call site, so `purgeWorkflow` stays a
+ * flat read-then-commit without its own merge step.
  *
- * Deliberately carries NO `conditionalBatch` precondition of its own — unlike
- * the epoch rotation fragment, which conditions its rotation because a lost
- * update there could let a deposed owner's write slip through. A lost update
- * HERE (two concurrent purges of the very same id racing this read) is
- * harmless for what this key exists to guarantee: either purge's bump still
- * moves the value away from whatever an earlier duplicate-id read observed,
- * which is all a later `duplicateIdGenerationCondition` re-check needs to see
- * a mismatch. Keeping this unconditioned also means purge does not newly
- * require the `conditionalBatch` capability under `ownership: 'none'` with no
- * other conditions in play — it stays on the plain `batch()` path exactly as
- * before this key existed.
+ * RESOLVED (chatgpt-codex-connector review, WFT-153): this bump PUT was
+ * previously unconditioned, on the theory that a lost update between two
+ * concurrent purges of the same id was harmless — either purge's bump moves
+ * the value away from whatever an earlier duplicate-id read observed. That
+ * theory misses a THIRD purge landing in between: purge A reads generation
+ * N and (slowly) prepares a bump to N+1; purge B — a later purge of the
+ * SAME id, after the id was reused and purged again — reads the CURRENT
+ * value N+1 and commits a bump to N+2; if A's stale N+1 write then commits
+ * UNCONDITIONED, it overwrites B's N+2 with A's own N+1, rolling the
+ * "monotonic" counter backward. A cross-engine start that captured the
+ * intermediate absent/N+1 pair during the window before B's purge could then
+ * pass its `duplicateIdGenerationCondition` re-check after the rollback, even
+ * though a run genuinely executed and was purged in between — reopening the
+ * exact ABA this key exists to close.
+ *
+ * The condition folded in now closes that: `expectedValue` is the SAME
+ * `observedGenerationBytes` the bump amount is minted from, so a lost race
+ * (another purge already changed `wf-gen:<id>` since this read) fails the
+ * CAS instead of overwriting a newer generation with a stale one. Gated on
+ * `internals.storage.capabilities().conditionalBatch` (the same
+ * capability-conditioned pattern `buildWorkflowStateCommit` uses in
+ * `storage-io.ts`) rather than required unconditionally: a backend that
+ * honestly reports no `conditionalBatch` support keeps the pre-existing
+ * unconditioned bump (a residual, capability-limited ABA window, not a new
+ * regression) instead of newly requiring a capability purge never required
+ * before this fix — purge must keep working, degraded, on such backends.
  *
  * Runs under EVERY ownership mode — unlike the `wf-owner-epoch` rotation
  * fragment, which is a no-op outside `ownership: 'workflow-lease'`, this
  * always reads and bumps: the ABA hole it closes exists under `'none'` and
  * `'lease'` too.
  */
-export async function buildWorkflowGenerationBumpOperationForPurge(
+export async function foldWorkflowGenerationBumpForPurge(
   internals: EngineInternals,
   workflowId: string,
-): Promise<BatchOperation> {
-  const observedGenerationBytes = await internals.storage.get(KEYS.workflowGeneration(workflowId));
-  return buildWorkflowGenerationBumpOperation(workflowId, observedGenerationBytes);
+  base: WorkflowClaimTransitionFragment,
+): Promise<WorkflowClaimTransitionFragment> {
+  const key = KEYS.workflowGeneration(workflowId);
+  const observedGenerationBytes = await internals.storage.get(key);
+  const operation = buildWorkflowGenerationBumpOperation(workflowId, observedGenerationBytes);
+  const condition = internals.storage.capabilities().conditionalBatch
+    ? { key, expectedValue: observedGenerationBytes }
+    : undefined;
+  return {
+    operations: [...base.operations, operation],
+    conditions: base.conditions.concat(condition ?? []),
+  };
 }

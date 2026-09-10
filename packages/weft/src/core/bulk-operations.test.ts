@@ -119,16 +119,32 @@ async function readWorkflowState(
 class FailOneWorkflowDeleteStorage extends MemoryStorage {
   failedWorkflowId: string | null = null;
 
-  override async batch(operations: BatchOperation[]): Promise<void> {
+  #shouldFail(operations: BatchOperation[]): boolean {
     const failedWorkflowId = this.failedWorkflowId;
-    if (
+    return (
       failedWorkflowId !== null &&
       operations.some((operation) => operation.key === KEYS.workflow(failedWorkflowId))
-    ) {
-      throw new Error(`refused to delete ${failedWorkflowId}`);
-    }
+    );
+  }
 
+  override async batch(operations: BatchOperation[]): Promise<void> {
+    if (this.#shouldFail(operations)) {
+      throw new Error(`refused to delete ${this.failedWorkflowId}`);
+    }
     await super.batch(operations);
+  }
+
+  // WFT-153: purge's generation-fence CAS condition now routes its commit
+  // through `conditionalBatch` (this backend reports that capability), not
+  // the plain `batch()` this class originally intercepted exclusively.
+  override async conditionalBatch(
+    conditions: ConditionalBatchCondition[],
+    operations: BatchOperation[],
+  ): Promise<boolean> {
+    if (this.#shouldFail(operations)) {
+      throw new Error(`refused to delete ${this.failedWorkflowId}`);
+    }
+    return super.conditionalBatch(conditions, operations);
   }
 }
 
