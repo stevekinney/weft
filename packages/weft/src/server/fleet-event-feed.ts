@@ -194,10 +194,21 @@ export function createFleetEventFeed(
       throw new PersistedDataCorruptError(KEYS.fleetEventTail());
     if (isTailRecord(decodedTail)) return decodedTail.sequence;
 
-    for await (const [key] of storage.scan(KEYS.fleetEventPrefix(), { reverse: true })) {
-      const sequence = parseFleetEventSequenceFromKey(key);
-      if (sequence !== null) return sequence;
-      throw new PersistedDataCorruptError(key);
+    // `append()` writes the tail record atomically with the first event, so an absent tail
+    // normally means this feed is virgin; the bounded scan guards the tail-less-but-populated
+    // case as corruption. An empty scan means genuinely virgin: persist a `{ sequence: -1 }`
+    // sentinel so later calls answer from `storage.get()` alone. The persist is best-effort — a
+    // lost CAS race or a thrown storage error both leave the already-correct `-1` unaffected.
+    const highest = await highestFleetEventSequence(storage);
+    if (highest !== -1) return highest;
+    try {
+      await storageConditionalBatch(
+        storage,
+        [{ key: KEYS.fleetEventTail(), expectedValue: null }],
+        [{ type: 'put', key: KEYS.fleetEventTail(), value: encode({ sequence: -1 }) }],
+      );
+    } catch {
+      /* best-effort sentinel persist; virgin feed still reports -1 */
     }
     return -1;
   }
