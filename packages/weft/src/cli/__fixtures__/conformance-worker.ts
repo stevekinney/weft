@@ -12,6 +12,10 @@ type InFlightTask = {
   // cannot overwrite an earlier attempt's token — echoing the wrong token would
   // mask the very stale-attempt bug the conformance suite exists to catch.
   attemptToken: string;
+  // The workflowRevision (WFT-20) captured from THIS dispatch, echoed back
+  // unchanged on the eventual taskResult. Undefined when the dispatch did
+  // not carry one.
+  workflowRevision?: string;
 };
 
 const serverUrl = Bun.env['WEFT_WORKER_URL'];
@@ -45,7 +49,12 @@ function startHeartbeats(): void {
   }, heartbeatIntervalMs);
 }
 
-function complete(operationId: string, value: unknown, attemptToken: string): void {
+function complete(
+  operationId: string,
+  value: unknown,
+  attemptToken: string,
+  workflowRevision?: string,
+): void {
   inFlightTasks.delete(operationId);
   send({
     type: 'taskResult',
@@ -53,10 +62,16 @@ function complete(operationId: string, value: unknown, attemptToken: string): vo
     status: 'completed',
     value: value === undefined ? null : value,
     attemptToken,
+    ...(workflowRevision !== undefined && { workflowRevision }),
   });
 }
 
-function fail(operationId: string, error: string, attemptToken: string): void {
+function fail(
+  operationId: string,
+  error: string,
+  attemptToken: string,
+  workflowRevision?: string,
+): void {
   inFlightTasks.delete(operationId);
   send({
     type: 'taskResult',
@@ -64,6 +79,7 @@ function fail(operationId: string, error: string, attemptToken: string): void {
     status: 'failed',
     error,
     attemptToken,
+    ...(workflowRevision !== undefined && { workflowRevision }),
   });
 }
 
@@ -80,8 +96,10 @@ function cancel(operationId: string): void {
     status: 'cancelled',
     cancelled: true,
     error: 'Task cancelled',
-    // Echo the token captured on THIS dispatch's in-flight task object.
+    // Echo the token (and revision, if any) captured on THIS dispatch's
+    // in-flight task object.
     attemptToken: task.attemptToken,
+    ...(task.workflowRevision !== undefined && { workflowRevision: task.workflowRevision }),
   });
 }
 
@@ -105,17 +123,20 @@ function handleTask(message: Record<string, unknown>): void {
   // task object for the deferred ones. Never looked up later by operationId.
   const attemptToken = message['attemptToken'];
   if (typeof attemptToken !== 'string' || attemptToken.length === 0) return;
+  const rawWorkflowRevision = message['workflowRevision'];
+  const workflowRevision =
+    typeof rawWorkflowRevision === 'string' ? rawWorkflowRevision : undefined;
 
   if (activityName === 'conformance.echo') {
-    complete(operationId, message['input'], attemptToken);
+    complete(operationId, message['input'], attemptToken, workflowRevision);
     return;
   }
 
-  const tokenField = { attemptToken };
+  const tokenField = { attemptToken, ...(workflowRevision !== undefined && { workflowRevision }) };
 
   if (activityName === 'conformance.sleep') {
     const timeout = setTimeout(
-      () => complete(operationId, message['input'], attemptToken),
+      () => complete(operationId, message['input'], attemptToken, workflowRevision),
       millisecondsFromInput(message['input']),
     );
     inFlightTasks.set(operationId, { activityName, timeout, ...tokenField });
@@ -124,14 +145,14 @@ function handleTask(message: Record<string, unknown>): void {
 
   if (activityName === 'conformance.cancel') {
     const timeout = setTimeout(
-      () => fail(operationId, 'Cancel was not delivered', attemptToken),
+      () => fail(operationId, 'Cancel was not delivered', attemptToken, workflowRevision),
       millisecondsFromInput(message['input']),
     );
     inFlightTasks.set(operationId, { activityName, timeout, ...tokenField });
     return;
   }
 
-  fail(operationId, `Unknown activity: ${activityName}`, attemptToken);
+  fail(operationId, `Unknown activity: ${activityName}`, attemptToken, workflowRevision);
 }
 
 socket.addEventListener('open', () => {

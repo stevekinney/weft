@@ -6,17 +6,23 @@ import { coerceStartWorkflowId } from '../../start-workflow-validation.ts';
 import type {
   ScheduleFilter,
   ScheduleOverlapPolicy,
+  ScheduleRevisionPolicy,
   ScheduleSpec,
   ScheduleState,
   ScheduleStatus,
 } from '../../types.ts';
-import { SCHEDULE_OVERLAP_POLICIES } from './schedule-options.ts';
+import { decodeScheduleCadence } from './schedule-cadence.ts';
+import { SCHEDULE_OVERLAP_POLICIES, SCHEDULE_REVISION_POLICIES } from './schedule-options.ts';
+import { decodeScheduleRevisionPolicyFields } from './schedule-revision.ts';
+import { rejectInvalidScheduleRecord } from './schedule-warnings.ts';
 
 export {
   normalizeScheduleOptions,
   normalizeScheduleUpdateOptions,
   SCHEDULE_OVERLAP_POLICIES,
+  SCHEDULE_REVISION_POLICIES,
 } from './schedule-options.ts';
+export { rejectInvalidScheduleRecord } from './schedule-warnings.ts';
 
 export const SCHEDULE_STATUSES = new Set<ScheduleStatus>(['active', 'paused', 'cancelled']);
 
@@ -30,6 +36,12 @@ export function isValidScheduleStatus(value: unknown): value is ScheduleStatus {
 
 export function isValidScheduleOverlapPolicy(value: unknown): value is ScheduleOverlapPolicy {
   return typeof value === 'string' && SCHEDULE_OVERLAP_POLICIES.has(value as ScheduleOverlapPolicy);
+}
+
+export function isValidScheduleRevisionPolicy(value: unknown): value is ScheduleRevisionPolicy {
+  return (
+    typeof value === 'string' && SCHEDULE_REVISION_POLICIES.has(value as ScheduleRevisionPolicy)
+  );
 }
 
 export function isValidScheduleIdentifier(value: unknown): value is string {
@@ -54,8 +66,7 @@ export function coerceScheduleId(scheduleId: string, fieldName: string): string 
  * engine persists. Interval periods are resolved to whole milliseconds.
  */
 export type NormalizedScheduleSpec =
-  | { kind: 'cron'; cronExpression: string }
-  | { kind: 'interval'; intervalMs: number };
+  { kind: 'cron'; cronExpression: string } | { kind: 'interval'; intervalMs: number };
 
 function normalizeIntervalEvery(every: unknown): { kind: 'interval'; intervalMs: number } {
   if (typeof every !== 'string' && typeof every !== 'number') {
@@ -151,49 +162,6 @@ export function normalizeScheduleFilter(
   validateScheduleFilterBound(filter.offset, 'offset');
 
   return filter;
-}
-
-export function rejectInvalidScheduleRecord(scheduleId: string | undefined, message: string): null {
-  const prefix =
-    scheduleId === undefined
-      ? '[weft] Ignoring malformed schedule record'
-      : `[weft] Ignoring malformed schedule "${scheduleId}"`;
-  console.warn(`${prefix} ${message}.`);
-  return null;
-}
-
-function decodeScheduleCadence(
-  decoded: Record<string, unknown>,
-  scheduleId: string,
-): { cronExpression?: string; intervalMs?: number } | null {
-  const cronExpression = decoded['cronExpression'];
-  const intervalMs = decoded['intervalMs'];
-  const hasCron = cronExpression !== undefined;
-  const hasInterval = intervalMs !== undefined;
-
-  if (hasCron === hasInterval) {
-    return rejectInvalidScheduleRecord(
-      scheduleId,
-      'with conflicting or missing cadence (expected exactly one of cronExpression or intervalMs)',
-    );
-  }
-
-  if (hasInterval) {
-    if (typeof intervalMs !== 'number' || !Number.isSafeInteger(intervalMs) || intervalMs <= 0) {
-      return rejectInvalidScheduleRecord(scheduleId, 'with invalid intervalMs');
-    }
-    return { intervalMs };
-  }
-
-  if (typeof cronExpression !== 'string') {
-    return rejectInvalidScheduleRecord(scheduleId, 'with invalid cronExpression');
-  }
-  try {
-    parseCronExpression(cronExpression);
-  } catch {
-    return rejectInvalidScheduleRecord(scheduleId, 'with invalid cronExpression');
-  }
-  return { cronExpression };
 }
 
 export function decodeScheduleIdentityFields(decoded: Record<string, unknown>):
@@ -492,9 +460,15 @@ export function decodeScheduleState(bytes: Uint8Array): ScheduleState | null {
     return null;
   }
 
+  const revisionFields = decodeScheduleRevisionPolicyFields(decoded, identity.id);
+  if (!revisionFields) {
+    return null;
+  }
+
   return {
     ...identity,
     input: decoded['input'],
     ...runtime,
+    ...revisionFields,
   };
 }

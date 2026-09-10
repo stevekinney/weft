@@ -1119,16 +1119,21 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
         reason:
           'Process-entry and failure-exit behavior runs in child processes whose hits are not attributed to the parent Bun LCOV report.',
         functions: 1,
-        lines: new Set([50, 101, 123, 136, 146, 147, 163, 164, 219, 292, 344]),
+        lines: new Set([50, 101, 123, 136, 146, 147, 163, 164, 221, 294, 362]),
         requireUncoveredLines: true,
       },
     ],
     [
       'src/cli/parse-schedule-arguments.ts',
       {
+        // WFT-20's own `--revision-policy` unit tests now exercise
+        // `parseScheduleArguments`'s 'create' branch in-process, so the
+        // OUTER `if (values.every !== undefined) {` check itself is
+        // genuinely covered now — only the `--every`-with-exactly-one-
+        // positional branch's own body remains untested.
         reason:
           'Process-entry and failure-exit behavior runs in child processes whose hits are not attributed to the parent Bun LCOV report.',
-        lines: new Set([196, 197, 198, 199, 200, 201]),
+        lines: new Set([220, 221, 222, 223, 224, 225]),
         requireUncoveredLines: true,
       },
     ],
@@ -1242,11 +1247,14 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       // rework (`resolveCatalogTombstoneIfPresent` pre-check, and
       // `tombstoneBytes`-based restore/finalize) added above this
       // function — the switch and default guard themselves are otherwise
-      // unchanged.
+      // unchanged. Lines realigned to 290-293 by WFT-20's `pinnedSchedules`
+      // wiring (the new `countPinnedSchedulesForRevision` call and its
+      // doc-comment update) added above this function — the switch and
+      // default guard themselves are otherwise unchanged.
       {
         reason:
           'Compile-time exhaustiveness guard for a closed discriminated union has no reachable runtime path to test without an unsafe cast.',
-        lines: new Set([285, 286, 287, 288]),
+        lines: new Set([290, 291, 292, 293]),
       },
     ],
     [
@@ -1293,23 +1301,32 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       },
     ],
     [
-      'src/core/engine/lifecycle/start.ts',
+      // WFT-20: `resolveCachedStartRevision`/`resolveStartRevisionUncached`
+      // were extracted out of `lifecycle/start.ts` into their own module
+      // (`lifecycle/start-revision-resolution.ts`) so both `start.ts` and
+      // the new pinned-schedule-revision resolver can import the same
+      // logic instead of duplicating it — this allowance moved with them.
+      'src/core/engine/lifecycle/start-revision-resolution.ts',
       {
-        // `resolveStartRevisionUncached()`'s own doc marks this "Unreachable
-        // in practice": every call site resolved `type` to a real
-        // `registration` first, so `registeredCatalogRevisions` is always
-        // populated by the time `ensureWorkflowCatalogReady()` here
-        // settles — either because `type` is an eager registration (which
-        // that call always assigns a revision to) or a resolved dynamic
-        // source (handled entirely by the sync `resolveCachedStartRevision()`
-        // fast path and never reaching this fallback at all). Line 188 is
-        // the `if (afterReadiness !== undefined) { return … }` block's
-        // fallthrough when the readiness re-check still finds nothing —
-        // the same unreachable condition the throw two lines later guards;
-        // 196-197 are that throw statement's own first two lines.
+        // `resolveStartRevisionUncached()`'s own doc marks its FINAL throw
+        // "Unreachable in practice": every call site resolved `type` to a
+        // real `registration` first, so `registeredCatalogRevisions` is
+        // always populated once `ensureWorkflowCatalogReady()` here settles.
+        // The success path immediately above it (the
+        // `if (afterReadiness !== undefined) { return … }` block, WFT-20)
+        // IS genuinely reachable and covered now — `resolveScheduleRevisionForPin()`/
+        // `resolveScheduleCreationRevision()` call this uncached fallback
+        // from `schedule()`, a caller that (unlike `engine.start()`'s
+        // top-level entry gates) does not already await
+        // `ensureWorkflowCatalogReady()` beforehand, so the cache-miss
+        // fallback is a real, exercised path there. Only the throw
+        // statement's own two lines remain unreachable. (This allowance's
+        // key moved from `lifecycle/start.ts` to this extracted file in
+        // WFT-20; WFT-152's unrelated `lifecycle/start.ts` edit no longer
+        // applies here since the function itself moved out.)
         reason:
           'Defensive fail-loud guard for an invariant every call site of resolveStartRevisionUncached() already guarantees; has no reachable runtime path to test without corrupting registeredCatalogRevisions via an unsafe cast.',
-        lines: new Set([188, 196, 197]),
+        lines: new Set([53, 61, 62, 65]),
         requireUncoveredLines: true,
       },
     ],
@@ -1566,11 +1583,13 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       // `requireUncoveredLines` is intentionally omitted here rather than
       // chasing whichever subset happens to be 0 in a given run. (Line
       // numbers shifted +9 from the WFT-23 baseline when WFT-24's dead-letter
-      // dispatch import and call sites were added above this switch.)
+      // dispatch import and call sites were added above this switch; shifted
+      // a further +17 by WFT-20's `taskResult` revision-authorization gate
+      // added above this switch.)
       {
         reason:
           'Transport disconnect and concurrency exits are behaviorally tested, but Bun does not deterministically attribute these residual paths.',
-        lines: new Set([349, 350, 353, 354, 357, 358]),
+        lines: new Set([366, 367, 370, 371, 374, 375]),
       },
     ],
     [
@@ -1589,7 +1608,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
         reason:
           'Transport disconnect and concurrency exits are behaviorally tested, but Bun does not deterministically attribute these residual paths.',
         functions: 1,
-        lines: new Set([500]),
+        lines: new Set([524]),
         requireUncoveredLines: true,
       },
     ],

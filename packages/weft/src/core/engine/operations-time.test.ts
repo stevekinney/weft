@@ -299,6 +299,7 @@ describe('engine time operation helpers', () => {
       checkpoint,
       2_500,
       'owner-workflow',
+      state.revision,
       registration,
     );
     expect(setWorkflowStartHeaders).toHaveBeenCalledWith(

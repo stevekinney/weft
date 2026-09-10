@@ -269,6 +269,87 @@ describe('RemoteWorker protocol contract', () => {
     });
   });
 
+  it('round-trips the optional workflowRevision echo (WFT-20) on task and every taskResult variant', () => {
+    const taskInput = {
+      type: 'task',
+      operationId: 'op-revision',
+      attemptToken: 'attempt-token',
+      activityName: 'charge',
+      input: null,
+      workflowRevision: 'revision-1',
+    } as const;
+    expect(parseServerToWorkerMessage(taskInput)).toMatchObject({
+      ok: true,
+      message: taskInput,
+    });
+
+    const completedInput = {
+      type: 'taskResult',
+      operationId: 'op-revision',
+      attemptToken: 'attempt-token',
+      status: 'completed',
+      value: null,
+      workflowRevision: 'revision-1',
+    } as const;
+    expect(parseWorkerToServerMessage(completedInput)).toMatchObject({
+      ok: true,
+      message: completedInput,
+    });
+
+    const failedInput = {
+      type: 'taskResult',
+      operationId: 'op-revision',
+      attemptToken: 'attempt-token',
+      status: 'failed',
+      error: 'boom',
+      workflowRevision: 'revision-1',
+    } as const;
+    expect(parseWorkerToServerMessage(failedInput)).toMatchObject({
+      ok: true,
+      message: failedInput,
+    });
+
+    const cancelledInput = {
+      type: 'taskResult',
+      operationId: 'op-revision',
+      attemptToken: 'attempt-token',
+      status: 'cancelled',
+      cancelled: true,
+      error: 'cancelled',
+      workflowRevision: 'revision-1',
+    } as const;
+    expect(parseWorkerToServerMessage(cancelledInput)).toMatchObject({
+      ok: true,
+      message: cancelledInput,
+    });
+  });
+
+  it('accepts a taskResult with no workflowRevision (back-compat) and rejects a non-string one', () => {
+    expect(
+      parseWorkerToServerMessage({
+        type: 'taskResult',
+        operationId: 'op-1',
+        attemptToken: 'attempt-token',
+        status: 'completed',
+        value: null,
+      }),
+    ).toMatchObject({ ok: true });
+
+    expect(
+      parseWorkerToServerMessage({
+        type: 'taskResult',
+        operationId: 'op-1',
+        attemptToken: 'attempt-token',
+        status: 'completed',
+        value: null,
+        workflowRevision: 12345,
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: { code: 'invalid_message' },
+    });
+  });
+
   it('rejects malformed task results and unknown worker message types', () => {
     expect(
       parseWorkerToServerMessage({

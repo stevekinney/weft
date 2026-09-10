@@ -51,6 +51,8 @@ export function startWorkflowExecution(
   nestingDepth: number,
   executionDeadline: number | undefined,
   executionStateOwnerId: string,
+  /** The starting run's persisted `WorkflowState.revision` (WFT-20). */
+  revision: string | undefined,
   _callbacks?: LifecycleCallbacks,
 ): void {
   // Skip the map entry for the common non-nested case — readers fall back
@@ -64,6 +66,7 @@ export function startWorkflowExecution(
   internals.strategy.startWorkflow({
     workflowId,
     ...(workflowExecutionToken !== undefined && { workflowExecutionToken }),
+    ...(revision !== undefined && { revision }),
     workflowType,
     input,
     checkpoint: serializeCheckpoint(checkpoint),
@@ -87,6 +90,14 @@ export function beginWorkflowExecution(
   checkpoint: Checkpoint,
   executionDeadline: number | undefined,
   executionStateOwnerId: string,
+  /**
+   * The starting run's persisted `WorkflowState.revision` (WFT-20). Threaded
+   * only into the non-inline (`startWorkflowExecution`) branch below — the
+   * inline queued path instead re-reads `revision` off the RELOADED
+   * `WorkflowState` at flush time (`inline-launch-queue.ts`), exactly like it
+   * already does for `workflowExecutionToken`.
+   */
+  revision: string | undefined,
   _registration: RegistrationEntry,
   callbacks: LifecycleCallbacks,
   onStarted?: () => void,
@@ -123,6 +134,7 @@ export function beginWorkflowExecution(
     nestingDepth,
     executionDeadline,
     executionStateOwnerId,
+    revision,
     callbacks,
   );
   // Worker/non-inline path executes synchronously above, so liveness is already
@@ -208,6 +220,7 @@ export async function beginExecutionAwaitingLiveness(
     params.checkpoint,
     params.state.executionDeadline,
     params.state.executionStateOwnerId ?? workflowId,
+    params.state.revision,
     params.registration,
     callbacks,
     liveness ? () => liveness.resolve() : undefined,

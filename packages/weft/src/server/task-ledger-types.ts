@@ -54,6 +54,15 @@ export type RemoteTaskBase = Readonly<{
   workflowId?: string;
   workflowType: string;
   workflowExecutionToken?: string;
+  /**
+   * The dispatching workflow run's persisted revision (WFT-20), when the
+   * `TaskDispatch` caller supplied one. Same optionality rationale as
+   * `workflowExecutionToken` above — NOT the same field as
+   * `executionRequirement.workflowRevision` (a client-declared routing
+   * constraint carried by `WorkerExecutionRequirementInput`, unrelated to
+   * this plain wire echo/validation field).
+   */
+  workflowRevision?: string;
   activityName: string;
   queue: string;
   input: JSONValue;
@@ -254,9 +263,7 @@ export type RemoteTaskTerminalRetryExhausted = RemoteTaskTerminalCommon &
   }>;
 
 export type RemoteTaskTerminal =
-  | RemoteTaskTerminalResolved
-  | RemoteTaskTerminalCancelled
-  | RemoteTaskTerminalRetryExhausted;
+  RemoteTaskTerminalResolved | RemoteTaskTerminalCancelled | RemoteTaskTerminalRetryExhausted;
 
 // ---------------------------------------------------------------------------
 // Dead-lettered

@@ -127,6 +127,7 @@ function baseEnvelopeFields(record: RemoteTaskRecord) {
     ...(record.workflowExecutionToken !== undefined
       ? { workflowExecutionToken: record.workflowExecutionToken }
       : {}),
+    ...(record.workflowRevision !== undefined ? { workflowRevision: record.workflowRevision } : {}),
     workflowType: record.workflowType,
     activityName: record.activityName,
     queue: record.queue,

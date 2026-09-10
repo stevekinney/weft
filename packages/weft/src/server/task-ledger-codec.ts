@@ -168,6 +168,7 @@ function isValidTaskIdentityFields(value: Record<string, unknown>): boolean {
     isBoundedOptionalIdentifier(value['workflowId']) &&
     isBoundedIdentifier(value['workflowType']) &&
     isBoundedOptionalIdentifier(value['workflowExecutionToken']) &&
+    isBoundedOptionalIdentifier(value['workflowRevision']) &&
     isBoundedIdentifier(value['activityName']) &&
     isBoundedIdentifier(value['queue'])
   );

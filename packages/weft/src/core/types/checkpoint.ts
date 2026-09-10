@@ -206,8 +206,7 @@ export interface OperationRequest {
 }
 
 export type OperationOutcome =
-  | { status: 'completed'; value: unknown }
-  | WorkerReplayOperationFailure;
+  { status: 'completed'; value: unknown } | WorkerReplayOperationFailure;
 
 // ---------------------------------------------------------------------------
 // Timer entry for scheduler
@@ -258,6 +257,14 @@ export type WorkerInboundMessage =
       maxProtocolMessageBytes?: number;
       workflowId: WorkflowId;
       workflowExecutionToken?: string;
+      /**
+       * The dispatching run's persisted `WorkflowState.revision` (WFT-20),
+       * when known. Captured worker-side and re-stamped on every outbound
+       * message for this workflow's remaining turns (including `resume`
+       * turns, which never resend this field) — see
+       * `workers/workflow-runner.ts`'s `workflowRevisions` map.
+       */
+      workflowRevision?: string;
       workflowType: string;
       checkpoint: ArrayBuffer;
       input: unknown;
@@ -294,6 +301,8 @@ export type WorkerOutboundMessage =
       workflowId: WorkflowId;
       checkpoint: ArrayBuffer;
       operationRequest: OperationRequest | ContextOperationRequest;
+      /** Echo of the captured `run.workflowRevision` (WFT-20) — see that field's doc. */
+      workflowRevision?: string;
     }
   | {
       type: 'completed';
@@ -301,6 +310,8 @@ export type WorkerOutboundMessage =
       turnId?: number;
       workflowId: WorkflowId;
       result: unknown;
+      /** Echo of the captured `run.workflowRevision` (WFT-20) — see that field's doc. */
+      workflowRevision?: string;
     }
   | {
       type: 'failed';
@@ -311,6 +322,8 @@ export type WorkerOutboundMessage =
       errorStack?: string;
       /** Populated when the execution strategy can classify the failure cause. */
       failureCategory?: FailureCategory;
+      /** Echo of the captured `run.workflowRevision` (WFT-20) — see that field's doc. */
+      workflowRevision?: string;
     }
   | {
       /**

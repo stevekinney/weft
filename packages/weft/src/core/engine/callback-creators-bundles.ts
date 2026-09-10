@@ -203,6 +203,7 @@ export function createTimeOperationCallbacks<TWorkflows extends object, TActivit
       checkpoint,
       executionDeadline,
       executionStateOwnerId,
+      revision,
       registration,
     ) =>
       beginWorkflowExecution(
@@ -214,6 +215,7 @@ export function createTimeOperationCallbacks<TWorkflows extends object, TActivit
         checkpoint,
         executionDeadline,
         executionStateOwnerId,
+        revision,
         registration,
         createLifecycleCallbacks(engine),
       ),

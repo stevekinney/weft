@@ -1418,4 +1418,168 @@ describe('handleWorkerWebSocketMessage', () => {
       expect(context.workerSockets.get('w-sync') as unknown).toBe(ws);
     });
   });
+
+  // ---------------------------------------------------------------------
+  // WFT-20: taskResult workflowRevision authorization (additive policy)
+  // ---------------------------------------------------------------------
+  describe('taskResult revision authorization (WFT-20)', () => {
+    it('rejects a taskResult whose workflowRevision disagrees with the in-flight entry', async () => {
+      const context = minimalServerContext();
+      const storage = new MemoryStorage();
+      const options = minimalServeOptions(storage);
+      const ws = createFakeWs();
+
+      handleWorkerWebSocketMessage(
+        context,
+        options,
+        ws as never,
+        registerMessageJson('w-revision-mismatch', ['doWork'], { concurrency: 5 }),
+        NOOP_CLEANUP,
+      );
+      await waitForRegistrationSideEffect(
+        () => context.registry.getWorker('w-revision-mismatch') !== undefined,
+      );
+
+      context.registry.assignTask(
+        'w-revision-mismatch',
+        'op-revision-mismatch',
+        30_000,
+        undefined,
+        'attempt-token',
+        'revision-expected',
+      );
+      await writeLeasedLedgerRecord(storage, {
+        operationId: 'op-revision-mismatch',
+        workerSessionId: 'w-revision-mismatch',
+      });
+
+      handleWorkerWebSocketMessage(
+        context,
+        options,
+        ws as never,
+        JSON.stringify({
+          type: 'taskResult',
+          operationId: 'op-revision-mismatch',
+          attemptToken: 'attempt-token',
+          status: 'completed',
+          value: 'done',
+          workflowRevision: 'revision-wrong',
+        }),
+        NOOP_CLEANUP,
+      );
+
+      // Still assigned — the completion was rejected, not applied.
+      expect(context.registry.isAssigned('op-revision-mismatch')).toBe(true);
+      const protocolErrors = ws.sentMessages
+        .map((raw) => JSON.parse(raw))
+        .filter((msg) => msg.type === 'protocolError');
+      expect(protocolErrors).toHaveLength(1);
+      expect(protocolErrors[0].message).toContain('revision');
+      // Distinct message text from the attempt-token-mismatch rejection.
+      expect(protocolErrors[0].message).not.toContain('stale attempt token');
+    });
+
+    it('accepts a taskResult with a matching workflowRevision echo', async () => {
+      const context = minimalServerContext();
+      const storage = new MemoryStorage();
+      const options = minimalServeOptions(storage);
+      const ws = createFakeWs();
+
+      handleWorkerWebSocketMessage(
+        context,
+        options,
+        ws as never,
+        registerMessageJson('w-revision-match', ['doWork'], { concurrency: 5 }),
+        NOOP_CLEANUP,
+      );
+      await waitForRegistrationSideEffect(
+        () => context.registry.getWorker('w-revision-match') !== undefined,
+      );
+
+      context.registry.assignTask(
+        'w-revision-match',
+        'op-revision-match',
+        30_000,
+        undefined,
+        'attempt-token',
+        'revision-expected',
+      );
+      await writeLeasedLedgerRecord(storage, {
+        operationId: 'op-revision-match',
+        workerSessionId: 'w-revision-match',
+      });
+
+      handleWorkerWebSocketMessage(
+        context,
+        options,
+        ws as never,
+        JSON.stringify({
+          type: 'taskResult',
+          operationId: 'op-revision-match',
+          attemptToken: 'attempt-token',
+          status: 'completed',
+          value: 'done',
+          workflowRevision: 'revision-expected',
+        }),
+        NOOP_CLEANUP,
+      );
+
+      expect(context.registry.isAssigned('op-revision-match')).toBe(false);
+      const protocolErrors = ws.sentMessages
+        .map((raw) => JSON.parse(raw))
+        .filter((msg) => msg.type === 'protocolError');
+      expect(protocolErrors).toHaveLength(0);
+    });
+
+    it('accepts a taskResult with a missing workflowRevision echo when the in-flight entry has none', async () => {
+      const context = minimalServerContext();
+      const storage = new MemoryStorage();
+      const options = minimalServeOptions(storage);
+      const ws = createFakeWs();
+
+      handleWorkerWebSocketMessage(
+        context,
+        options,
+        ws as never,
+        registerMessageJson('w-revision-none', ['doWork'], { concurrency: 5 }),
+        NOOP_CLEANUP,
+      );
+      await waitForRegistrationSideEffect(
+        () => context.registry.getWorker('w-revision-none') !== undefined,
+      );
+
+      // assignTask with NO workflowRevision (6th argument omitted).
+      context.registry.assignTask(
+        'w-revision-none',
+        'op-revision-none',
+        30_000,
+        undefined,
+        'attempt-token',
+      );
+      await writeLeasedLedgerRecord(storage, {
+        operationId: 'op-revision-none',
+        workerSessionId: 'w-revision-none',
+      });
+
+      handleWorkerWebSocketMessage(
+        context,
+        options,
+        ws as never,
+        JSON.stringify({
+          type: 'taskResult',
+          operationId: 'op-revision-none',
+          attemptToken: 'attempt-token',
+          status: 'completed',
+          value: 'done',
+        }),
+        NOOP_CLEANUP,
+      );
+
+      expect(context.registry.isAssigned('op-revision-none')).toBe(false);
+      const protocolErrors = ws.sentMessages
+        .map((raw) => JSON.parse(raw))
+        .filter((msg) => msg.type === 'protocolError');
+      expect(protocolErrors).toHaveLength(0);
+    });
+  });
 });

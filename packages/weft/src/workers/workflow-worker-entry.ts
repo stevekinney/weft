@@ -138,7 +138,14 @@ function postOutboundMessage(
   message: WorkerOutboundMessage,
   inboundMessage: Extract<WorkerInboundMessage, { type: 'run' | 'resume' }>,
 ): void {
-  const outboundMessage = attachWorkerProtocol(message, inboundMessage);
+  const outboundMessage = attachWorkerProtocol(runnerContext, message, inboundMessage);
+  // The captured revision (WFT-20) is consumed here — `cleanupWorkflowRunnerState`
+  // deliberately leaves `workflowRevisions` alone (see its own doc comment) so
+  // this stamp can still read it for a workflow that completed/failed on this
+  // very turn; once the terminal message has been stamped, forget it.
+  if (outboundMessage.type === 'completed' || outboundMessage.type === 'failed') {
+    runnerContext.workflowRevisions.delete(inboundMessage.workflowId);
+  }
   try {
     assertWorkerProtocolMessageWithinLimit(outboundMessage, inboundMessage.maxProtocolMessageBytes);
     if (outboundMessage.type === 'checkpoint') {
@@ -163,12 +170,19 @@ function postOutboundMessage(
 }
 
 function attachWorkerProtocol(
+  runnerContext: ReturnType<typeof createWorkflowRunnerContext>,
   message: WorkerOutboundMessage,
   inboundMessage: Extract<WorkerInboundMessage, { type: 'run' | 'resume' }>,
 ): WorkerOutboundMessage {
+  // The captured revision (WFT-20) survives across turns in
+  // `runnerContext.workflowRevisions` — a `resume` inbound message never
+  // re-sends it, so this reads the value `handleRunMessage` captured at the
+  // workflow's `run` turn, not `inboundMessage` itself.
+  const workflowRevision = runnerContext.workflowRevisions.get(inboundMessage.workflowId);
   return {
     ...message,
     protocolVersion: WORKER_PROTOCOL_VERSION,
     ...(inboundMessage.turnId === undefined ? {} : { turnId: inboundMessage.turnId }),
+    ...(workflowRevision === undefined ? {} : { workflowRevision }),
   };
 }

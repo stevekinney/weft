@@ -615,6 +615,43 @@ describe('countWorkflowRevisionReferences', () => {
     await engine.getHandle('checkout-parked-2')?.signal('go', 'done');
     await engine.getHandle('checkout-parked-2')?.result();
   });
+
+  // WFT-20: `pinnedSchedules` is now a real signal (was a permanent `0` stub).
+  it('counts a pinned schedule referencing the exact revision, and removeWorkflowRevision() refuses with reason "referenced"', async () => {
+    await using storage = new MemoryStorage();
+    await using engine = new Engine({ storage, backgroundTasks: 'manual' });
+    engine.register(noopWorkflow('checkout'));
+
+    const handle = await engine.schedule('checkout', null, '* * * * *', {
+      revisionPolicy: 'pinned',
+    });
+    const pinnedDescription = await handle.describe();
+    const revision = pinnedDescription.pinnedRevision!;
+    expect(typeof revision).toBe('string');
+
+    const references = await countWorkflowRevisionReferences(engine, 'checkout', revision);
+    expect(references.pinnedSchedules).toBe(1);
+
+    // Move the active pointer away and clear the process's own
+    // `registeredDefinitions` reference so `pinnedSchedules` is the sole
+    // thing standing between this call and a (wrongly) successful removal.
+    const manifestB = await manifestFor('checkout', '1.0.0', {
+      description: 'a later revision for the pinned-schedule test',
+    });
+    await activateCatalogRevisionCandidate(engine, 'checkout', manifestB, {
+      expectedGeneration: 1,
+      policy: { requireExactRevision: false },
+    });
+    getInternals(engine).registeredCatalogRevisions.delete('checkout');
+
+    const result = await removeWorkflowRevision(engine, 'checkout', revision);
+    expect(result.removed).toBe(false);
+    if (!result.removed && result.reason === 'referenced') {
+      expect(result.references.pinnedSchedules).toBe(1);
+    } else {
+      throw new Error(`expected a "referenced" refusal, got ${JSON.stringify(result)}`);
+    }
+  });
 });
 
 // WFT-15/16: `WorkflowRevisionDiagnostics.source` and the `revisionOverride`

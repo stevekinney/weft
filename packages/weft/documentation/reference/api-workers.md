@@ -368,6 +368,9 @@ interface InFlightTask {
   deadline: number; // absolute timestamp
   visibilityTimeout: number;
   fairShareKey?: string;
+  attemptToken: string;
+  /** The dispatching workflow run's persisted revision (WFT-20), when the `TaskDispatch` carried one. */
+  workflowRevision?: string;
 }
 ```
 

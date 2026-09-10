@@ -113,6 +113,12 @@ export type CompletedTaskResultMessage = {
   readonly value: RemoteWorkerJsonValue;
   /** Required per-dispatch token echoed from the {@link TaskMessage}. */
   readonly attemptToken: string;
+  /**
+   * Echo of {@link TaskMessage.workflowRevision} (WFT-20), when the dispatch
+   * carried one. Missing-or-mismatched echo authorization is transport-specific
+   * — see `remote-worker-protocol.md`'s revision-staleness section.
+   */
+  readonly workflowRevision?: string;
 };
 
 /**
@@ -138,6 +144,8 @@ export type FailedTaskResultMessage = {
   readonly error: string;
   /** Required per-dispatch token echoed from the {@link TaskMessage}. */
   readonly attemptToken: string;
+  /** Echo of {@link TaskMessage.workflowRevision} (WFT-20) — see {@link CompletedTaskResultMessage.workflowRevision}. */
+  readonly workflowRevision?: string;
 };
 
 /**
@@ -165,6 +173,8 @@ export type CancelledTaskResultMessage = {
   readonly cancelled?: true;
   /** Required per-dispatch token echoed from the {@link TaskMessage}. */
   readonly attemptToken: string;
+  /** Echo of {@link TaskMessage.workflowRevision} (WFT-20) — see {@link CompletedTaskResultMessage.workflowRevision}. */
+  readonly workflowRevision?: string;
 };
 
 /**
@@ -254,10 +264,7 @@ export type RegisterErrorMessage = {
 export type ProtocolErrorMessage = {
   readonly type: 'protocolError';
   readonly code:
-    | 'invalid_json'
-    | 'invalid_message'
-    | 'unknown_message_type'
-    | 'registration_required';
+    'invalid_json' | 'invalid_message' | 'unknown_message_type' | 'registration_required';
   readonly message: string;
 };
 
@@ -286,6 +293,13 @@ export type TaskMessage = {
   readonly headers?: Readonly<Record<string, string>>;
   /** Durable token for the workflow run that launched this activity, when known. */
   readonly workflowExecutionToken?: string;
+  /**
+   * The dispatching workflow run's persisted revision (WFT-20), when known.
+   * A worker echoes this back on the resulting `taskResult`; the server
+   * rejects a completion whose echoed revision disagrees with the run's
+   * persisted revision as stale.
+   */
+  readonly workflowRevision?: string;
   /** Unique, unguessable token identifying this dispatch attempt. */
   readonly attemptToken: string;
 };

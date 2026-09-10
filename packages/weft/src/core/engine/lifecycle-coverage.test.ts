@@ -888,6 +888,7 @@ describe('engine lifecycle coverage helpers', () => {
       checkpoint,
       25_000,
       'owner-workflow',
+      'revision-worker-begin',
       { version: '1' } as never,
       createLifecycleCallbacks({ dispatchEvent }) as never,
     );
@@ -898,6 +899,7 @@ describe('engine lifecycle coverage helpers', () => {
         deadline: 25_000,
         headers: [['traceparent', '00-worker']],
         nestingDepth: 2,
+        revision: 'revision-worker-begin',
       }),
     );
     expect(internals.pendingNestingDepth).toBeUndefined();

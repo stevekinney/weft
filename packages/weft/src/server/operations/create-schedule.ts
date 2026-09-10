@@ -42,6 +42,12 @@ const createScheduleInput = z.object({
   overlap: z.unknown().optional(),
   backfill: z.unknown().optional(),
   jitter: z.unknown().optional(),
+  revisionPolicy: z
+    .unknown()
+    .optional()
+    .describe(
+      'Revision policy (WFT-20). Runtime validation requires "active-at-fire" or "pinned"; defaults to "active-at-fire".',
+    ),
 });
 
 const createScheduleOutput = z.object({
@@ -59,6 +65,7 @@ type ValidatedCreateScheduleInput = {
   overlap: NonNullable<ScheduleOptions['overlap']> | undefined;
   backfill: boolean | undefined;
   jitter: ScheduleOptions['jitter'] | undefined;
+  revisionPolicy: ScheduleOptions['revisionPolicy'] | undefined;
 };
 
 /** Validate the required `type` field and the mutually exclusive cadence (cronExpression or every). */
@@ -88,6 +95,7 @@ function validateOptionalScheduleFields(input: CreateScheduleInput): {
   overlap: NonNullable<ScheduleOptions['overlap']> | undefined;
   backfill: boolean | undefined;
   jitter: ScheduleOptions['jitter'] | undefined;
+  revisionPolicy: ScheduleOptions['revisionPolicy'] | undefined;
 } {
   const validatedId = validateScheduleId(input.id);
   const validatedOptions = validateScheduleMutableOptions(input);
@@ -98,20 +106,22 @@ function validateOptionalScheduleFields(input: CreateScheduleInput): {
     overlap: validatedOptions.overlap,
     backfill: validatedOptions.backfill,
     jitter: validatedOptions.jitter,
+    revisionPolicy: validatedOptions.revisionPolicy,
   };
 }
 
 /**
  * Validate `CreateScheduleInput` fields in order:
- * type → cadence (cronExpression or every) → id → description → overlap → backfill → jitter.
+ * type → cadence (cronExpression or every) → id → description → overlap → backfill → jitter → revisionPolicy.
  *
  * Throws an `InvalidParams` fault on the first invalid field so both REST and
  * JSON-RPC callers receive the same error messages.
  */
 function validateCreateScheduleInput(input: CreateScheduleInput): ValidatedCreateScheduleInput {
   const { type, spec } = validateRequiredScheduleFields(input);
-  const { id, description, overlap, backfill, jitter } = validateOptionalScheduleFields(input);
-  return { type, spec, id, description, overlap, backfill, jitter };
+  const { id, description, overlap, backfill, jitter, revisionPolicy } =
+    validateOptionalScheduleFields(input);
+  return { type, spec, id, description, overlap, backfill, jitter, revisionPolicy };
 }
 
 export const createScheduleOperation = defineOperation<CreateScheduleInput, CreateScheduleOutput>({
@@ -146,6 +156,9 @@ export const createScheduleOperation = defineOperation<CreateScheduleInput, Crea
       ...(validated.overlap !== undefined ? { overlap: validated.overlap } : {}),
       ...(validated.backfill !== undefined ? { backfill: validated.backfill } : {}),
       ...(validated.jitter !== undefined ? { jitter: validated.jitter } : {}),
+      ...(validated.revisionPolicy !== undefined
+        ? { revisionPolicy: validated.revisionPolicy }
+        : {}),
     };
 
     try {
@@ -179,6 +192,7 @@ export const createScheduleRestBinding: UnknownRestBinding = {
     overlap: { kind: 'body-field', bodyField: 'overlap' },
     backfill: { kind: 'body-field', bodyField: 'backfill' },
     jitter: { kind: 'body-field', bodyField: 'jitter' },
+    revisionPolicy: { kind: 'body-field', bodyField: 'revisionPolicy' },
   },
   extractInput: async (request, _pathParams, context) => {
     const record = await parseScheduleRestBodyRequestRecord(request, context);

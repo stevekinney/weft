@@ -22,6 +22,7 @@ const metadata: ScheduleSummary = {
   status: 'active',
   overlap: 'skip',
   backfill: false,
+  revisionPolicy: 'active-at-fire',
   createdAt: 1,
   updatedAt: 1,
   missedFireCount: 0,

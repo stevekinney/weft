@@ -7,7 +7,7 @@
 
 import { parseArgs } from 'node:util';
 
-import type { ScheduleOverlapPolicy } from '../core/types.ts';
+import type { ScheduleOverlapPolicy, ScheduleRevisionPolicy } from '../core/types.ts';
 import { parsePersistentStorageBackend } from './storage-backend-arguments.ts';
 import type {
   CliCommand,
@@ -19,6 +19,7 @@ import type {
 
 const SCHEDULE_ACTIONS = new Set(['list', 'create', 'pause', 'resume', 'cancel']);
 const VALID_SCHEDULE_OVERLAP_POLICIES = new Set(['skip', 'queue', 'cancel-running', 'allow']);
+const VALID_SCHEDULE_REVISION_POLICIES = new Set(['active-at-fire', 'pinned']);
 
 function parseScheduleCliValues(args: string[]) {
   return parseArgs({
@@ -33,6 +34,7 @@ function parseScheduleCliValues(args: string[]) {
       overlap: { type: 'string' },
       backfill: { type: 'boolean', default: false },
       jitter: { type: 'string' },
+      'revision-policy': { type: 'string' },
       help: { type: 'boolean', short: 'h', default: false },
       json: { type: 'boolean', short: 'j', default: false },
     },
@@ -130,15 +132,35 @@ function requireScheduleAction(positionals: string[]): ScheduleAction {
   return action;
 }
 
+function isScheduleRevisionPolicy(value: string): value is ScheduleRevisionPolicy {
+  return VALID_SCHEDULE_REVISION_POLICIES.has(value);
+}
+
+function parseScheduleRevisionPolicy(
+  value: string | undefined,
+): ScheduleRevisionPolicy | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!isScheduleRevisionPolicy(value)) {
+    throw new Error(`Invalid revision policy '${value}'. Must be one of: active-at-fire, pinned`);
+  }
+
+  return value;
+}
+
 function buildScheduleCreateOptionalFields(
   values: ReturnType<typeof parseScheduleCliValues>['values'],
-): Partial<Pick<ScheduleCreateCommand, 'id' | 'overlap' | 'jitter'>> {
+): Partial<Pick<ScheduleCreateCommand, 'id' | 'overlap' | 'jitter' | 'revisionPolicy'>> {
   const overlap = parseScheduleOverlapPolicy(values.overlap);
+  const revisionPolicy = parseScheduleRevisionPolicy(values['revision-policy']);
 
   return {
     ...(values.id !== undefined ? { id: values.id } : {}),
     ...(overlap !== undefined ? { overlap } : {}),
     ...(values.jitter !== undefined ? { jitter: values.jitter } : {}),
+    ...(revisionPolicy !== undefined ? { revisionPolicy } : {}),
   };
 }
 

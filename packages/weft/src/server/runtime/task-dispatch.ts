@@ -19,6 +19,7 @@ import {
   type RemoteTaskRecord,
 } from '../task-ledger.ts';
 import type { ServerContext } from './context.ts';
+import { assertDispatchTargetsFreshRevision } from './task-dispatch-revision.ts';
 import { commitTaskLedgerTransition } from './task-ledger-runtime.ts';
 import {
   recordTaskBacklogMetric,
@@ -140,6 +141,7 @@ function buildOptionalCreateQueuedFields(task: TaskDispatch): Partial<CreateQueu
     ...(task.workflowExecutionToken !== undefined
       ? { workflowExecutionToken: task.workflowExecutionToken }
       : {}),
+    ...(task.workflowRevision !== undefined ? { workflowRevision: task.workflowRevision } : {}),
     ...(task.priority !== undefined ? { priority: task.priority } : {}),
     ...(task.fairShareKey !== undefined ? { fairShareKey: task.fairShareKey } : {}),
     ...(task.sticky && task.workflowId !== undefined ? { stickyWorkflowId: task.workflowId } : {}),
@@ -274,6 +276,7 @@ async function selectAndReserveWorker(
     visibilityTimeout,
     task.fairShareKey,
     attemptToken,
+    task.workflowRevision,
   );
 
   let result;
@@ -317,6 +320,7 @@ async function selectAndReserveWorker(
       ...(task.workflowExecutionToken !== undefined && {
         workflowExecutionToken: task.workflowExecutionToken,
       }),
+      ...(task.workflowRevision !== undefined && { workflowRevision: task.workflowRevision }),
       ...(task.headers ? { headers: task.headers } : {}),
     }),
   );
@@ -386,6 +390,7 @@ async function enqueueTaskForLongPoll(
     visibilityTimeout,
     workflowId: task.workflowId,
     workflowExecutionToken: task.workflowExecutionToken,
+    workflowRevision: task.workflowRevision,
     firstQueuedAt: queuedRecord.firstQueuedAt,
     lastQueuedAt: queuedRecord.lastQueuedAt,
     lastDispatchedAt: queuedRecord.lastDispatchedAt,
@@ -427,6 +432,15 @@ export async function dispatchTaskImpl(
       `TaskDispatch for operation "${task.operationId}" is missing required field "workflowType".`,
     );
   }
+  // Dispatch-time staleness gate (WFT-20): when the caller supplies BOTH
+  // `workflowId` and `workflowRevision`, reject up front — before any worker
+  // capacity is reserved or ledger record written — if the persisted run has
+  // since moved to a different revision (e.g. displaced by a `start-new`
+  // restart since this revision was captured). A pure additional gate: it
+  // never replaces `buildCreateThenClaimTransition`'s own CAS-based
+  // concurrency control below, and reads storage before any reservation so a
+  // rejected dispatch never leaks one.
+  await assertDispatchTargetsFreshRevision(options, task);
   // A qualified activityName's prefix must agree with workflowType — a
   // mismatch would still resolve a manifest lookup (against the WRONG
   // workflow) and persist incorrect provenance rather than failing loudly.

@@ -11,10 +11,14 @@ import type {
   ScheduleUpdateOptions,
   WorkflowState,
 } from '../types.ts';
-import { resolveExecutableRegistration } from './dynamic-source-execution.ts';
 import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { Engine } from './index.ts';
 import type { EngineInternals } from './internals.ts';
+import {
+  buildPinnedRevisionWriteOptions,
+  resolveScheduleCreationRevision,
+  resolveScheduleRevisionForPin,
+} from './pinned-schedule-revision.ts';
 import { ScheduleHandle } from './schedule-handle.ts';
 import { resolveEffectiveScheduleFireAt } from './schedule-jitter.ts';
 import { getNextScheduleOccurrence } from './schedule-occurrence.ts';
@@ -52,11 +56,13 @@ export type RefreshedScheduleState = {
 };
 
 export type ScheduleCallbacks = {
+  /** `revisionOverride` (WFT-20) is the exact revision a `revisionPolicy: 'pinned'` occurrence must resolve against; `undefined` for an `'active-at-fire'` schedule. */
   startWorkflow: (
     type: string,
     input: unknown,
     options: { id: string },
     additionalStartOperations?: BatchOperation[],
+    revisionOverride?: string,
   ) => Promise<void>;
   loadWorkflowState: (workflowId: string) => Promise<WorkflowState | null | undefined>;
   cancelWorkflow: (workflowId: string) => Promise<void>;
@@ -86,13 +92,8 @@ export async function schedule(
   const normalizedSpec = normalizeScheduleSpec(spec);
   const normalizedOptions = normalizeScheduleOptions(options);
   const scheduleId = normalizedOptions.id ?? crypto.randomUUID();
-  // Eager types resolve synchronously and never touch `internals.sources`;
-  // a `registerSource()`-registered type resolves (and invokes its loader
-  // exactly once) HERE, at schedule-creation time — not deferred to the
-  // schedule's first fire.
-  if (!internals.registrations.has(type)) {
-    await resolveExecutableRegistration(internals.engine as unknown as Engine, internals, type);
-  }
+  const revisionPolicy = normalizedOptions.revisionPolicy ?? 'active-at-fire';
+  const pinnedRevision = await resolveScheduleCreationRevision(internals, type, revisionPolicy);
   if (internals.pendingScheduleCreations.has(scheduleId)) {
     throw new Error(`Schedule with id "${scheduleId}" already exists`);
   }
@@ -118,13 +119,19 @@ export async function schedule(
       overlap: normalizedOptions.overlap,
       backfill: normalizedOptions.backfill,
       ...(normalizedOptions.jitterMs !== undefined && { jitterMs: normalizedOptions.jitterMs }),
+      revisionPolicy,
+      ...(pinnedRevision !== undefined && { pinnedRevision }),
       createdAt: now,
       updatedAt: now,
       nextFireAt: getNextScheduleOccurrence({ ...cadenceFields, createdAt: now }, now),
       missedFireCount: 0,
       queuedRuns: [],
     };
-    await writeScheduleState(internals, state);
+    await writeScheduleState(
+      internals,
+      state,
+      await buildPinnedRevisionWriteOptions(internals, type, pinnedRevision),
+    );
     return new ScheduleHandle(scheduleId, internals.engine);
   } finally {
     internals.pendingScheduleCreations.delete(scheduleId);
@@ -271,13 +278,15 @@ export async function updateSchedule(
     const now = internals.options.getNow();
     // Replace the cadence wholesale so switching kinds (cron <-> interval) never
     // leaves a stale field behind. Interval cadence re-anchors at the update time.
-    // Strip both cadence fields from the carried-over state first, then attach
-    // only the one the new spec selects (exactOptionalPropertyTypes forbids
-    // carrying an explicit `undefined`).
+    // Strip both cadence fields, and `pinnedRevision`, from the carried-over
+    // state first, then attach only what the new spec/revision decision
+    // selects (exactOptionalPropertyTypes forbids carrying an explicit
+    // `undefined`).
     const {
       cronExpression: _droppedCron,
       intervalMs: _droppedInterval,
-      ...stateWithoutCadence
+      pinnedRevision: _droppedPinnedRevision,
+      ...stateWithoutCadenceOrPin
     } = state;
     const cadenceFields =
       normalizedSpec.kind === 'interval'
@@ -289,11 +298,34 @@ export async function updateSchedule(
     // the first fire after the update is correct but later fires drift back to the
     // original creation-time grid.
     const anchorFields = normalizedSpec.kind === 'interval' ? { createdAt: now } : {};
+    // Omitting `revisionPolicy` preserves the schedule's current policy AND
+    // its captured pin unchanged. Passing `'pinned'` — even when already
+    // pinned — always RE-resolves and re-captures against the revision
+    // active RIGHT NOW; it is never a no-op. Passing `'active-at-fire'`
+    // clears any previously captured pin.
+    let pinnedRevision: string | undefined;
+    let revisionFields: Pick<ScheduleState, 'revisionPolicy' | 'pinnedRevision'>;
+    if (normalizedOptions.revisionPolicy === undefined) {
+      revisionFields = {
+        revisionPolicy: state.revisionPolicy,
+        ...(state.pinnedRevision !== undefined && { pinnedRevision: state.pinnedRevision }),
+      };
+    } else if (normalizedOptions.revisionPolicy === 'pinned') {
+      pinnedRevision = await resolveScheduleRevisionForPin(
+        internals.engine as unknown as Engine,
+        internals,
+        state.workflowType,
+      );
+      revisionFields = { revisionPolicy: 'pinned', pinnedRevision };
+    } else {
+      revisionFields = { revisionPolicy: 'active-at-fire' };
+    }
     const updatedState: ScheduleState = {
-      ...stateWithoutCadence,
+      ...stateWithoutCadenceOrPin,
       ...normalizedOptions,
       ...cadenceFields,
       ...anchorFields,
+      ...revisionFields,
       updatedAt: now,
       nextFireAt:
         state.status === 'cancelled'
@@ -303,6 +335,7 @@ export async function updateSchedule(
     await writeScheduleState(internals, updatedState, {
       includeTimer: state.status === 'active',
       replaceTimerFrom: state,
+      ...(await buildPinnedRevisionWriteOptions(internals, state.workflowType, pinnedRevision)),
     });
   });
 }

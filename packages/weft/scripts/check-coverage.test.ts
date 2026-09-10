@@ -177,7 +177,7 @@ describe('parseLcov', () => {
         'SF:src/workers/workflow-runner.ts',
         'FNF:1',
         'FNH:0',
-        'DA:500,0',
+        'DA:524,0',
         'DA:999,1',
         'end_of_record',
       ].join('\n'),

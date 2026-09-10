@@ -304,6 +304,7 @@ function createScheduleState(overrides: Partial<ScheduleState> = {}): ScheduleSt
     status: 'active',
     overlap: 'skip',
     backfill: false,
+    revisionPolicy: 'active-at-fire',
     missedFireCount: 0,
     queuedRuns: [],
     updatedAt: 1,

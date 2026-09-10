@@ -86,6 +86,19 @@ export class WorkerProtocolGuard {
     if (messageTurnId !== turn.turnId || message.workflowId !== turn.workflowId) {
       throw new WorkerProtocolError('Worker message did not match the active turn');
     }
+    // Revision validation (WFT-20): only checkpoint/completed/failed carry an
+    // echo; `log` never reaches this gate (see above). Fully internal,
+    // same-release channel — unlike the RemoteWorker wire protocol, there is
+    // no long-poll/websocket back-compat asymmetry to preserve here: when
+    // `turn.revision` is defined, the echo must match it exactly, missing or
+    // mismatched both reject. `turn.revision === undefined` never fails on
+    // this axis (byte-for-byte pre-WFT-20 behavior).
+    if (turn.revision !== undefined) {
+      const messageRevision = message.type === 'log' ? undefined : message.workflowRevision;
+      if (messageRevision !== turn.revision) {
+        throw new WorkerProtocolError('Worker message revision did not match the active turn');
+      }
+    }
   }
 }
 

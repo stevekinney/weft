@@ -31,6 +31,28 @@ export type ScheduleStatus = 'active' | 'paused' | 'cancelled';
 export type ScheduleOverlapPolicy = 'skip' | 'queue' | 'cancel-running' | 'allow';
 
 /**
+ * Which persisted workflow revision a schedule's future occurrences resolve
+ * against (WFT-20). `'active-at-fire'` (the default) resolves whatever
+ * revision is currently active at the moment each occurrence fires — this is
+ * the schedule's pre-WFT-20 behavior, unchanged. `'pinned'` captures the
+ * revision that would run right now at create/update time
+ * ({@link ScheduleMetadata.pinnedRevision}) and forces every future
+ * occurrence to resolve against exactly that revision, pausing the schedule
+ * (see `guides/workflow-versioning.md`'s "Schedule revision policy" section)
+ * if that revision later becomes unavailable rather than silently falling
+ * back to whatever is active.
+ *
+ * @example
+ * ```ts
+ * import type { ScheduleRevisionPolicy } from '@lostgradient/weft';
+ *
+ * const policy: ScheduleRevisionPolicy = 'pinned';
+ * void policy;
+ * ```
+ */
+export type ScheduleRevisionPolicy = 'active-at-fire' | 'pinned';
+
+/**
  * One occurrence waiting behind the active run of a `queue` overlap schedule.
  * `workflowId` is reserved when the occurrence enters the durable queue and is
  * used when it eventually starts. No workflow record exists for that id until
@@ -120,12 +142,27 @@ export interface ScheduleOptions {
    * pre-jitter occurrence timestamp.
    */
   jitter?: Duration;
+  /**
+   * Which revision future occurrences resolve against. Defaults to
+   * `'active-at-fire'`. Passing `'pinned'` captures the revision that would
+   * run right now — see {@link ScheduleRevisionPolicy}. This is a
+   * per-schedule revision override; `StartOptions` (a one-shot
+   * `engine.start()` call) has no equivalent per-call revision override.
+   */
+  revisionPolicy?: ScheduleRevisionPolicy;
 }
 
 /**
  * Mutable options accepted when updating an existing schedule. Omitted fields
  * retain their persisted values. Schedule identity, workflow type, and input
  * are intentionally excluded.
+ *
+ * Omitting `revisionPolicy` preserves the schedule's current policy AND its
+ * captured {@link ScheduleMetadata.pinnedRevision} unchanged. Passing
+ * `revisionPolicy: 'pinned'` — even when the schedule is already pinned —
+ * always RE-resolves and re-captures the pin against the revision active
+ * right now; it is never a no-op. Passing `revisionPolicy: 'active-at-fire'`
+ * clears any previously captured pin.
  *
  * @example
  * ```ts
@@ -141,7 +178,7 @@ export interface ScheduleOptions {
  */
 export type ScheduleUpdateOptions = Pick<
   ScheduleOptions,
-  'description' | 'overlap' | 'backfill' | 'jitter'
+  'description' | 'overlap' | 'backfill' | 'jitter' | 'revisionPolicy'
 >;
 
 /**
@@ -176,6 +213,7 @@ export type ScheduleDefinition<TInput = unknown> = ScheduleSpec & {
   overlapPolicy?: ScheduleOverlapPolicy;
   backfill?: boolean;
   jitter?: Duration;
+  revisionPolicy?: ScheduleRevisionPolicy;
 };
 
 /**
@@ -220,6 +258,20 @@ export interface ScheduleMetadata {
   backfill: boolean;
   /** Normalized deterministic jitter window in milliseconds. */
   jitterMs?: number;
+  /**
+   * Which revision future occurrences resolve against. Required on every
+   * record this package writes; a legacy record persisted before WFT-20
+   * decodes as `'active-at-fire'` (see `validation/schedule-revision.ts`) —
+   * absence never means "unset," it means "pre-pinning."
+   */
+  revisionPolicy: ScheduleRevisionPolicy;
+  /**
+   * The exact revision every future occurrence resolves against, captured at
+   * the moment this schedule was created or last switched to (or re-pinned
+   * under) `revisionPolicy: 'pinned'`. Present only when `revisionPolicy ===
+   * 'pinned'`.
+   */
+  pinnedRevision?: string;
   createdAt: number;
   updatedAt: number;
   /** Most recent occurrence that started a scheduled workflow. */

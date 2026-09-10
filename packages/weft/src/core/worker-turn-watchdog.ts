@@ -4,6 +4,13 @@ export interface WorkerTurnState {
   turnId: number;
   kind: 'run' | 'resume';
   timeoutMs: number | undefined;
+  /**
+   * The workflow's captured revision (WFT-20), when known — carried forward
+   * on every turn for this workflow (including `resume`, which never
+   * re-supplies it), for `WorkerProtocolGuard` to validate the outbound
+   * echo against.
+   */
+  revision?: string;
 }
 
 export type WorkerTurnTimeoutResolverForTesting = (
@@ -31,6 +38,7 @@ export class WorkerTurnWatchdog {
     turnId: number,
     kind: WorkerTurnState['kind'],
     timeoutMs = this.#timeoutMs,
+    revision?: string,
   ): void {
     this.clear(worker);
     const resolvedTimeoutMs = this.#timeoutResolverForTesting?.({ workflowId, kind }) ?? timeoutMs;
@@ -41,6 +49,7 @@ export class WorkerTurnWatchdog {
       kind,
       timeoutMs: resolvedTimeoutMs,
       timeout: null,
+      ...(revision !== undefined && { revision }),
     };
 
     if (resolvedTimeoutMs !== undefined) {

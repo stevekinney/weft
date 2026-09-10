@@ -201,6 +201,7 @@ const TASK_FIELD_SPECS: readonly FieldSpec[] = [
     isNonEmptyString,
     'task.workflowExecutionToken must be a non-empty string',
   ],
+  ['workflowRevision', false, isNonEmptyString, 'task.workflowRevision must be a non-empty string'],
   ['attemptToken', true, isNonEmptyString, 'task.attemptToken must be a non-empty string'],
 ];
 

@@ -36,9 +36,7 @@ import type {
  * ```
  */
 export type TaskResultMessage =
-  | CompletedTaskResultMessage
-  | FailedTaskResultMessage
-  | CancelledTaskResultMessage;
+  CompletedTaskResultMessage | FailedTaskResultMessage | CancelledTaskResultMessage;
 
 type TaskResultStatus = TaskResultMessage['status'];
 
@@ -53,6 +51,29 @@ function parseEchoedAttemptToken(
   return { ok: true, message: { attemptToken } };
 }
 
+/**
+ * Validate and extract the OPTIONAL echoed `workflowRevision` from a
+ * taskResult record (WFT-20). Absent is valid (a worker whose SDK predates
+ * this field, or a dispatch that never carried one); present-but-non-string
+ * is rejected the same way every other bounded field on this trust boundary
+ * is.
+ */
+function parseEchoedWorkflowRevision(
+  record: Record<string, unknown>,
+): RemoteWorkerProtocolParseResult<{ workflowRevision?: string }> {
+  const workflowRevision = record['workflowRevision'];
+  if (workflowRevision === undefined) {
+    return { ok: true, message: {} };
+  }
+  if (!isNonEmptyString(workflowRevision)) {
+    return protocolFailure(
+      'invalid_message',
+      'taskResult.workflowRevision must be a non-empty string when present',
+    );
+  }
+  return { ok: true, message: { workflowRevision } };
+}
+
 function parseCompletedTaskResult(
   operationId: string,
   record: Record<string, unknown>,
@@ -63,9 +84,18 @@ function parseCompletedTaskResult(
   }
   const token = parseEchoedAttemptToken(record);
   if (!token.ok) return token;
+  const revision = parseEchoedWorkflowRevision(record);
+  if (!revision.ok) return revision;
   return {
     ok: true,
-    message: { type: 'taskResult', operationId, status: 'completed', value, ...token.message },
+    message: {
+      type: 'taskResult',
+      operationId,
+      status: 'completed',
+      value,
+      ...token.message,
+      ...revision.message,
+    },
   };
 }
 
@@ -79,9 +109,18 @@ function parseFailedTaskResult(
   }
   const token = parseEchoedAttemptToken(record);
   if (!token.ok) return token;
+  const revision = parseEchoedWorkflowRevision(record);
+  if (!revision.ok) return revision;
   return {
     ok: true,
-    message: { type: 'taskResult', operationId, status: 'failed', error, ...token.message },
+    message: {
+      type: 'taskResult',
+      operationId,
+      status: 'failed',
+      error,
+      ...token.message,
+      ...revision.message,
+    },
   };
 }
 
@@ -99,6 +138,8 @@ function parseCancelledTaskResult(
   }
   const token = parseEchoedAttemptToken(record);
   if (!token.ok) return token;
+  const revision = parseEchoedWorkflowRevision(record);
+  if (!revision.ok) return revision;
   return {
     ok: true,
     message: {
@@ -108,6 +149,7 @@ function parseCancelledTaskResult(
       error,
       ...(cancelled === true ? { cancelled } : {}),
       ...token.message,
+      ...revision.message,
     },
   };
 }
