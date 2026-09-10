@@ -344,6 +344,40 @@ describe('checkpoint commit compare-and-swap guard', () => {
     );
   });
 
+  it("rejects a worker-returned checkpoint that OMITS workflowExecutionToken entirely while the host has one, rather than silently treating the omission as legacy tolerance and stamping the host's token onto it (WFT-21, Codex review round 7, P1, tightening round 5's own fix)", async () => {
+    const storage = new MemoryStorage();
+    const checkpoint = createCheckpoint(
+      'checkpoint-workflow-omitted-token',
+      '1',
+      1_000,
+      'host-owned-token',
+    );
+    const internals = createCheckpointInternals(storage, checkpoint);
+    await seedCheckpoint(storage, checkpoint);
+
+    // A stale or hostile worker that simply OMITS the field entirely —
+    // indistinguishable on the wire from a genuinely pre-upgrade worker,
+    // but the host itself already has a token, which is strong enough
+    // evidence this is NOT a legacy generation to extend that tolerance to.
+    const workerCheckpointNoToken = { ...checkpoint, step: 1 } as Checkpoint;
+    delete (workerCheckpointNoToken as { workflowExecutionToken?: string }).workflowExecutionToken;
+    expect(workerCheckpointNoToken.workflowExecutionToken).toBeUndefined();
+
+    await expect(
+      persistCheckpoint(
+        internals,
+        checkpoint.workflowId,
+        checkpointOperation,
+        serializeCheckpointBuffer(workerCheckpointNoToken),
+        createPersistCallbacks(),
+      ),
+    ).rejects.toThrow('targets a different execution generation');
+
+    expect(await storage.get(KEYS.checkpoint('checkpoint-workflow-omitted-token'))).toEqual(
+      serializeCheckpoint(checkpoint),
+    );
+  });
+
   it('proceeds and persists the host copy when the worker-claimed workflowExecutionToken agrees with the host, never trusting the worker bytes as the value to persist even on agreement', async () => {
     const storage = new MemoryStorage();
     const checkpoint = createCheckpoint('checkpoint-workflow-agree', '1', 1_000, 'shared-token');

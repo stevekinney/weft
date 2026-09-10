@@ -238,15 +238,25 @@ async function persistWorkerCheckpoint(
   }
   const hostToken = currentGeneration.workflowExecutionToken;
   const workerToken = checkpoint.workflowExecutionToken;
-  // Both sides defined and disagreeing is the exact "worker turn dispatched
-  // against generation A, but generation A has since been replaced by a
-  // `start-new` generation B" case this fix closes — reject BEFORE any
-  // write, rather than silently reattaching B's token onto A's stale
-  // content. Either side `undefined` is the pre-existing legacy tolerance
-  // (a pre-upgrade worker, or a record predating this field) and proceeds
-  // — a bounded gap only within a mixed-version rolling upgrade, matching
-  // `LEGACY_DEAD_LETTER_HISTORY_TOKEN`'s own documented collision bound.
-  if (hostToken !== undefined && workerToken !== undefined && workerToken !== hostToken) {
+  // Whenever the HOST has a token, require an EXACT worker-token match —
+  // including the worker's own token being `undefined` (WFT-21, Codex
+  // review round 7, P1, tightening round 5's own fix). The original
+  // both-sides-defined-and-disagreeing guard left exactly the gap round 4
+  // existed to close: a stale or hostile worker that simply OMITS the
+  // field entirely (indistinguishable on the wire from a genuinely
+  // pre-upgrade worker that has never heard of it) skipped this check
+  // completely and fell through to being silently stamped with the HOST's
+  // current token regardless — after a cancel + `start-new` replacement of
+  // this same workflow ID, that stale-content-now-wearing-the-replacement's-
+  // token checkpoint could pass the replacement's own checkpoint-bytes CAS
+  // and overwrite it. A host with a token is strong enough evidence this is
+  // NOT a genuinely legacy generation to omit for, so any worker-side
+  // disagreement — including silence — is now rejected. The remaining
+  // legacy tolerance is narrower and safe: BOTH sides `undefined` (a host
+  // generation that itself predates this field, paired with an equally
+  // pre-upgrade worker) still proceeds, since there is no "current"
+  // identity such a worker could spoof away from in the first place.
+  if (hostToken !== undefined && workerToken !== hostToken) {
     throw new Error(
       `Checkpoint commit for workflow "${workflowId}" targets a different execution generation.`,
     );
