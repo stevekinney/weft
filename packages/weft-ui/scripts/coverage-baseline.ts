@@ -376,11 +376,25 @@ const LINUX_BASELINE: CoverageBaseline = {
       functionsFound: 532,
       functionsHit: 520,
     },
+    // Re-measured 2026-09-10 for WFT-115. CI run 34533944807's `ui-coverage`
+    // job (`ubuntu-latest`) printed `src/routes/system` at exactly 99.50%
+    // lines / 98.12% functions — identical, to two decimal places, to the
+    // darwin measurement above across EVERY one of the 13 areas (OVERALL
+    // 94.30%/95.26%, `src/lib` 99.26%/97.99%, etc.), which is only
+    // plausible if the underlying raw integers are themselves identical
+    // (no Linux/darwin Svelte-compiled-output attribution divergence for
+    // this particular change, unlike some earlier PRs this file documents).
+    // CI's `check:coverage` prints percentages only, never raw counts, so
+    // this reuses `DARWIN_BASELINE`'s newly-measured tuple for the same
+    // area rather than a separate reconstruction — see that entry's own
+    // note for the full investigation (one real bug fixed, four real test
+    // gaps closed, and the residual is a confirmed Svelte-5-compiled-output
+    // line-attribution artifact in `workflow-revisions-panel.svelte`).
     'src/routes/system': {
-      linesFound: 4901,
-      linesHit: 4881,
-      functionsFound: 1022,
-      functionsHit: 1005,
+      linesFound: 5850,
+      linesHit: 5821,
+      functionsFound: 1224,
+      functionsHit: 1201,
     },
     'src/routes/workers': {
       linesFound: 5685,
