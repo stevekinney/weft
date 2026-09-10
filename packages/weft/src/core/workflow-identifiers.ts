@@ -69,6 +69,19 @@ export function isDecodableWorkflowId(id: unknown): boolean {
   }
 }
 
+/**
+ * Whether `id` is exactly `.` or `..` — the two literals
+ * {@link assertValidWorkflowId} rejects at fresh admission (WFT-95). Exported
+ * so callers that need to recognize "this id is the one strict admission
+ * would reject" without re-running the full assertion (for example, to
+ * decide whether a caller-facing id MIGHT be a legacy pre-WFT-95 record
+ * worth checking storage for) share one definition instead of re-deriving
+ * the literal comparison.
+ */
+export function isReservedWorkflowIdLiteral(id: string): boolean {
+  return id === '.' || id === '..';
+}
+
 export function assertValidWorkflowId(id: string, fieldName: string = 'options.id'): void {
   // WHATWG URL path normalization collapses `.` and `..` path segments (and
   // their percent-encoded forms) before `handleRequest()` ever sees
@@ -85,7 +98,7 @@ export function assertValidWorkflowId(id: string, fieldName: string = 'options.i
   // schedule or workflow by id (see {@link assertDecodableWorkflowId}),
   // because a record written before WFT-95 may legitimately carry `id: '.'`
   // or `'..'` and must remain decodable — and manageable — on upgrade.
-  if (id === '.' || id === '..') {
+  if (isReservedWorkflowIdLiteral(id)) {
     throw new Error(`${fieldName} must not be "." or ".."`);
   }
 

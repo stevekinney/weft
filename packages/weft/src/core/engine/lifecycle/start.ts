@@ -5,6 +5,7 @@ import {
   StartWorkflowValidationError,
   assertExclusiveStartWorkflowOptions,
   assertValidOnTerminalConflict,
+  coerceReplayWorkflowId,
   coerceStartWorkflowId,
   coerceStartWorkflowTimestamp,
 } from '../../start-workflow-validation.ts';
@@ -78,11 +79,21 @@ function prepareStartWorkflow(
   internals: EngineInternals,
   options: StartOptions | undefined,
   callbacks: LifecycleCallbacks,
+  /**
+   * Internal-only (WFT-95): when true, `options.id` is validated with the
+   * decode-compatible {@link coerceReplayWorkflowId} instead of the strict
+   * {@link coerceStartWorkflowId}. See `startWorkflow`'s `skipAdmissionIdCheck`
+   * parameter for the full contract — this must stay unreachable from any
+   * public start surface.
+   */
+  skipAdmissionIdCheck: boolean,
 ): StartWorkflowPreparation {
   const callerProvidedId = options?.id !== undefined;
   const workflowId =
     options?.id !== undefined
-      ? coerceStartWorkflowId(options.id, 'options.id')
+      ? skipAdmissionIdCheck
+        ? coerceReplayWorkflowId(options.id, 'options.id')
+        : coerceStartWorkflowId(options.id, 'options.id')
       : crypto.randomUUID();
 
   // Capture and clear pending parent headers immediately, before any async
@@ -223,13 +234,47 @@ export async function startWorkflow(
    * the pre-WFT-20 admission path.
    */
   revisionOverride?: string,
+  /**
+   * Internal-only, never part of the public `StartOptions` type (WFT-95).
+   * When true, `options.id` skips strict fresh-admission validation
+   * (`assertValidWorkflowId`'s `.`/`..` rejection) and is instead validated
+   * with the decode-compatible `assertDecodableWorkflowId`. This exists
+   * ONLY to replay an id that was already durably accepted before strict
+   * admission existed — never to let a genuinely fresh caller admit `.`/`..`.
+   *
+   * Set to `true` from exactly two internal call sites, both replaying an
+   * already-persisted id rather than admitting a new one:
+   *   - `drainQueuedScheduleRun()` (via `ScheduledRunStartOptions.skipAdmissionIdCheck`,
+   *     threaded through `startScheduledRun()`), which restarts a schedule's
+   *     persisted `queuedRuns[].workflowId` — safe unconditionally, since a
+   *     queued run created after this fix was already validated as non-`.`/`..`
+   *     at schedule-admission time, so relaxing the check here is a no-op for
+   *     it and only matters for a legacy pre-WFT-95 queued run.
+   *   - `dispatchChildWorkflowStart()`'s crash-reattach retry, which is only
+   *     reached after confirming a matching persisted child record already
+   *     exists for this id; a genuinely fresh `ctx.startChild({ id: '.' })`
+   *     never reaches that retry and still gets the strict check on its
+   *     first (and only) `callbacks.start()` call.
+   *
+   * Every other caller (REST, JSON-RPC, direct `engine.start()`,
+   * `engine.startOrSignal()`, a fresh `ctx.startChild()`) omits this
+   * parameter and gets the strict check, because it is not part of
+   * `StartOptions`/`StartWorkflowOptions` and therefore cannot be set from
+   * any public surface.
+   */
+  skipAdmissionIdCheck?: boolean,
 ): Promise<WorkflowHandle> {
   assertServicesSupportedForMode(internals, options);
   assertValidOnTerminalConflict(options);
 
   // `prepareStartWorkflow`'s sync capture of pendingParent* MUST run before any
   // await, or a concurrent same-tick `ctx.startChild()` could overwrite it.
-  const preparation = prepareStartWorkflow(internals, options, callbacks);
+  const preparation = prepareStartWorkflow(
+    internals,
+    options,
+    callbacks,
+    Boolean(skipAdmissionIdCheck),
+  );
   const {
     workflowId,
     callerProvidedId,

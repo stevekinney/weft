@@ -29,7 +29,14 @@ export function createScheduleCallbacks<TWorkflows extends object, TActivities e
   engine: Engine<TWorkflows, TActivities>,
 ): ScheduleCallbacks {
   return {
-    startWorkflow: async (type, input, options, additionalStartOperations, revisionOverride) => {
+    startWorkflow: async (
+      type,
+      input,
+      options,
+      additionalStartOperations,
+      revisionOverride,
+      skipAdmissionIdCheck,
+    ) => {
       await startWorkflow(
         getInternals(engine),
         type,
@@ -39,6 +46,7 @@ export function createScheduleCallbacks<TWorkflows extends object, TActivities e
         createLifecycleCallbacks(engine),
         undefined,
         revisionOverride,
+        skipAdmissionIdCheck,
       );
     },
     loadWorkflowState: (workflowId) => loadWorkflowState(getInternals(engine), workflowId),

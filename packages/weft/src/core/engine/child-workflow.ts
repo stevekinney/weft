@@ -1,12 +1,16 @@
 import type { ContextOperationRequest } from '../context.ts';
 import type { ComposedWorkflowInterceptor } from '../interceptor.ts';
-import { assertOnTerminalConflictUnsupported } from '../start-workflow-validation.ts';
+import {
+  assertOnTerminalConflictUnsupported,
+  StartWorkflowValidationError,
+} from '../start-workflow-validation.ts';
 import type {
   ChildWorkflowHandle,
   ChildWorkflowParentClosePolicy,
   StartOptions,
   WorkflowState,
 } from '../types.ts';
+import { isReservedWorkflowIdLiteral } from '../workflow-identifiers.ts';
 import { stageAtomicWorkflowCommitSideEffects } from './checkpoint-side-effects.ts';
 import {
   buildChildCancellationOperations,
@@ -26,7 +30,20 @@ export type ChildWorkflowOperationCallbacks = {
     operation: ChildWorkflowOperation,
     execute: () => Promise<unknown>,
   ) => Promise<void>;
-  start: (type: string, input: unknown, options?: StartOptions) => Promise<WorkflowHandle>;
+  /**
+   * `skipAdmissionIdCheck` (WFT-95, internal only) is threaded straight through
+   * to `startWorkflow`'s parameter of the same name — see its doc comment. It
+   * is NEVER part of the public `StartOptions` a caller passes; only
+   * `dispatchChildWorkflowStart`'s crash-reattach retry sets it, and only
+   * after confirming a matching persisted child record already exists for
+   * `childWorkflowId`.
+   */
+  start: (
+    type: string,
+    input: unknown,
+    options?: StartOptions,
+    skipAdmissionIdCheck?: boolean,
+  ) => Promise<WorkflowHandle>;
   loadWorkflowState: (workflowId: string) => Promise<WorkflowState | null>;
   getHandle: (workflowId: string) => WorkflowHandle;
   getComposedWorkflowInterceptor: () => ComposedWorkflowInterceptor | null;
@@ -166,6 +183,85 @@ async function resolveCollisionChildHandle(
   return callbacks.getHandle(childWorkflowId);
 }
 
+/**
+ * Handle a `StartWorkflowValidationError` thrown for `childWorkflowId` being
+ * exactly `.` or `..` (WFT-95). Before strict admission existed, that was a
+ * legal id, so a parent workflow created before the upgrade may have a
+ * pre-existing child persisted under it; crash recovery replays this same
+ * `ctx.startChild()` operation and must reattach to it rather than re-reject
+ * it. A genuinely fresh `ctx.startChild({ id: '.' })` has no persisted child
+ * to reattach to, so it must still be rejected — this is what distinguishes
+ * the two: check storage for a matching persisted record BEFORE deciding to
+ * bypass strict admission on retry, rather than bypassing unconditionally.
+ */
+async function reattachLegacyReservedChildOrRethrow(
+  childWorkflowId: string,
+  operation: ChildWorkflowOperation,
+  context: PendingChildExecutionContext,
+  callbacks: Pick<ChildWorkflowOperationCallbacks, 'getHandle' | 'loadWorkflowState' | 'start'>,
+  originalError: StartWorkflowValidationError,
+): Promise<WorkflowHandle> {
+  const existingState = await callbacks.loadWorkflowState(childWorkflowId);
+  if (
+    !existingState ||
+    !existingChildMatchesRequest(
+      existingState,
+      operation,
+      context.pendingExecutionStateOwnerId ?? undefined,
+      context.pendingParentWorkflowId,
+      context.pendingParentWorkflowExecutionToken,
+    )
+  ) {
+    // No matching persisted child: this is a genuinely fresh admission, so the
+    // strict `.`/`..` rejection stands.
+    throw originalError;
+  }
+
+  try {
+    // A matching persisted record was just confirmed, so this retry (with
+    // strict id admission bypassed) is expected to hit the engine's ordinary
+    // duplicate-id conflict below, not actually create a new run.
+    //
+    // There IS an `await` (the `loadWorkflowState` above) between
+    // `dispatchChildWorkflowStart`'s single `applyPendingChildExecutionContext`
+    // call and this retry — unlike every other `startWorkflow` caller, whose
+    // `prepareStartWorkflow` capture of `internals.pendingParent*` is documented
+    // to run synchronously right after it is set, with no intervening await. So
+    // by the time this call's own `prepareStartWorkflow` reads
+    // `internals.pendingParent*`, a same-tick concurrent `ctx.startChild()` may
+    // already have consumed (and cleared) or overwritten it. That is harmless
+    // here specifically: this retry is only reached after confirming a matching
+    // persisted child already exists, so `resolveTerminalConflictForRestart`
+    // deterministically throws `WorkflowAlreadyExistsError` before the captured
+    // parent-linkage fields are ever used to build a NEW `WorkflowState` — they
+    // are read and discarded, never applied. If the matched record were instead
+    // purged by another engine in this same window, this call would proceed to
+    // actually start a fresh run under stale lineage; that is the same
+    // pre-existing "point-in-time observation" limitation
+    // `resolveTerminalConflictForRestart` already documents for every
+    // caller-id start, not something new to this path.
+    return await callbacks.start(
+      operation.workflowType,
+      operation.input,
+      { id: childWorkflowId },
+      true,
+    );
+  } catch (retryError) {
+    if (!(retryError instanceof WorkflowAlreadyExistsError)) {
+      throw retryError;
+    }
+    return resolveCollisionChildHandle(
+      childWorkflowId,
+      operation,
+      context.pendingExecutionStateOwnerId ?? undefined,
+      context.pendingParentWorkflowId,
+      context.pendingParentWorkflowExecutionToken,
+      retryError,
+      callbacks,
+    );
+  }
+}
+
 async function dispatchChildWorkflowStart(
   internals: EngineInternals,
   childWorkflowId: string,
@@ -185,18 +281,30 @@ async function dispatchChildWorkflowStart(
       id: childWorkflowId,
     });
   } catch (error) {
-    if (!(error instanceof WorkflowAlreadyExistsError)) {
-      throw error;
+    if (error instanceof WorkflowAlreadyExistsError) {
+      return resolveCollisionChildHandle(
+        childWorkflowId,
+        operation,
+        context.pendingExecutionStateOwnerId ?? undefined,
+        context.pendingParentWorkflowId,
+        context.pendingParentWorkflowExecutionToken,
+        error,
+        callbacks,
+      );
     }
-    return resolveCollisionChildHandle(
-      childWorkflowId,
-      operation,
-      context.pendingExecutionStateOwnerId ?? undefined,
-      context.pendingParentWorkflowId,
-      context.pendingParentWorkflowExecutionToken,
-      error,
-      callbacks,
-    );
+    if (
+      error instanceof StartWorkflowValidationError &&
+      isReservedWorkflowIdLiteral(childWorkflowId)
+    ) {
+      return reattachLegacyReservedChildOrRethrow(
+        childWorkflowId,
+        operation,
+        context,
+        callbacks,
+        error,
+      );
+    }
+    throw error;
   } finally {
     clearPendingChildExecutionContext(internals, context);
   }
