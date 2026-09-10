@@ -1,7 +1,7 @@
 import { decode } from '../codec.ts';
 import { isRecord } from '../debug-output.ts';
 import { normalizeFailureCategory } from '../failure-categories.ts';
-import { coerceStartWorkflowId, parseStartWorkflowDuration } from '../start-workflow-validation.ts';
+import { parseStartWorkflowDuration } from '../start-workflow-validation.ts';
 import type {
   HistoryPolicy,
   NormalizedHistoryPolicy,
@@ -15,6 +15,7 @@ import type {
   WorkflowTimelineStatus,
 } from '../types.ts';
 import { DEFAULT_WORKFLOW_VERSION } from '../versioning.ts';
+import { isDecodableWorkflowId } from '../workflow-identifiers.ts';
 import { isWorkflowTagArray } from '../workflow-tags.ts';
 import type { WorkflowVersionTuple } from '../workflow-version-tuple.ts';
 import { sanitizeDecodedRevision } from './decode-revision.ts';
@@ -223,17 +224,21 @@ export function decodeWorkflowState(bytes: Uint8Array): WorkflowState {
       state.failureCategory = normalizedFailureCategory;
     }
   }
-  if (state.executionStateOwnerId !== undefined) {
-    try {
-      coerceStartWorkflowId(state.executionStateOwnerId, 'executionStateOwnerId');
-    } catch {
-      console.warn(
-        `[weft] Decoded workflow state for "${state.id}" has an invalid ` +
-          'executionStateOwnerId field; falling back to the workflow id as the execution owner. ' +
-          'This usually indicates corruption or tampering of the storage record.',
-      );
-      delete state.executionStateOwnerId;
-    }
+  // Decode-facing check (WFT-95 review): use `isDecodableWorkflowId`, not
+  // `coerceStartWorkflowId`. A workflow persisted before WFT-95 may
+  // legitimately carry `executionStateOwnerId: '.'` or `'..'` — decoding
+  // must not drop that field just because the admission-only "."/".."
+  // rejection would reject a *fresh* value like it.
+  if (
+    state.executionStateOwnerId !== undefined &&
+    !isDecodableWorkflowId(state.executionStateOwnerId)
+  ) {
+    console.warn(
+      `[weft] Decoded workflow state for "${state.id}" has an invalid ` +
+        'executionStateOwnerId field; falling back to the workflow id as the execution owner. ' +
+        'This usually indicates corruption or tampering of the storage record.',
+    );
+    delete state.executionStateOwnerId;
   }
   sanitizeDecodedParentLineage(state);
   sanitizeDecodedRestartLineage(state);
@@ -244,12 +249,12 @@ export function decodeWorkflowState(bytes: Uint8Array): WorkflowState {
 }
 
 function sanitizeDecodedParentLineage(state: WorkflowState): void {
-  if (state.parentWorkflowId !== undefined) {
-    try {
-      coerceStartWorkflowId(state.parentWorkflowId, 'parentWorkflowId');
-    } catch {
-      delete state.parentWorkflowId;
-    }
+  // Decode-facing check (WFT-95 review) — see the `executionStateOwnerId`
+  // comment above `decodeWorkflowState`; a pre-WFT-95 parent id of `.`/`..`
+  // must survive decode instead of severing the parent lineage (and, via the
+  // `parentWorkflowId === undefined` check below, the execution token too).
+  if (state.parentWorkflowId !== undefined && !isDecodableWorkflowId(state.parentWorkflowId)) {
+    delete state.parentWorkflowId;
   }
   if (
     typeof state.parentWorkflowExecutionToken !== 'string' ||
@@ -266,9 +271,12 @@ function sanitizeDecodedRestartLineage(state: WorkflowState): void {
     delete state.restartedFrom;
     return;
   }
-  try {
-    coerceStartWorkflowId(restartedFrom['workflowId'], 'restartedFrom.workflowId');
-  } catch {
+  // Decode-facing check (WFT-95 review) — same reasoning as
+  // `sanitizeDecodedParentLineage`: a pre-WFT-95 `restartedFrom.workflowId`
+  // of `.`/`..` must remain decodable rather than dropping the whole
+  // restart-lineage record.
+  const restartWorkflowId = restartedFrom['workflowId'];
+  if (typeof restartWorkflowId !== 'string' || !isDecodableWorkflowId(restartWorkflowId)) {
     delete state.restartedFrom;
     return;
   }

@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, mock } from 'bun:test';
 import { encode } from '../../core/codec.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import {
   TEST_ACCEPTED_MANIFEST_DIGEST,
   testWorkerManifest,
@@ -633,11 +634,12 @@ describe('scheduleDelayedDispatch', () => {
         0,
       );
 
-      // Let the zero-delay timer's callback (an async IIFE) settle.
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      // Wait for the zero-delay timer's async callback to settle, rather
+      // than a fixed sleep — deterministic on the observable outcome
+      // instead of racing the callback's own internal awaits.
+      await waitForCondition(() => context.taskQueue.isTracked('.'));
 
       expect(errors).toEqual([]);
-      expect(context.taskQueue.isTracked('.')).toBe(true);
     } finally {
       console.error = originalError;
     }

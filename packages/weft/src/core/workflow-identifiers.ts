@@ -15,32 +15,43 @@ function containsControlCharacter(value: string): boolean {
 }
 
 /**
- * Whether `id` satisfies every workflow-id constraint that predates WFT-95:
- * non-empty, at most {@link MAX_WORKFLOW_ID_LENGTH} characters, and free of
- * control characters. Deliberately does NOT reject the exact strings `.` or
- * `..` — those were valid workflow ids before WFT-95 and may already be
- * durably persisted (a schedule id, a persisted `currentWorkflowId`, a
- * queued run's `workflowId`, schedule-run metadata). Decode paths must keep
- * accepting them so an upgrade doesn't strand pre-existing data; only fresh
- * admission ({@link assertValidWorkflowId}) adds the `.`/`..` rejection.
+ * Assert every workflow-id constraint that predates WFT-95: non-empty, at
+ * most {@link MAX_WORKFLOW_ID_LENGTH} characters, and free of control
+ * characters. Deliberately does NOT reject the exact strings `.` or `..` —
+ * those were valid workflow ids before WFT-95 and may already be durably
+ * persisted (a schedule id, a persisted `currentWorkflowId`, a queued run's
+ * `workflowId`, schedule-run metadata, an `executionStateOwnerId` or
+ * `parentWorkflowId`/`restartedFrom.workflowId` on a decoded `WorkflowState`).
+ * Decode and schedule-control (lookup, pause, resume, cancel, update) paths
+ * must keep accepting them so an upgrade doesn't strand pre-existing data or
+ * make a pre-existing schedule/workflow unmanageable; only fresh admission
+ * ({@link assertValidWorkflowId}) adds the `.`/`..` rejection.
  */
-export function isDecodableWorkflowId(id: string): boolean {
-  if (id.length === 0) {
-    return false;
-  }
-
-  if (id.length > MAX_WORKFLOW_ID_LENGTH) {
-    return false;
-  }
-
-  return !containsControlCharacter(id);
-}
-
-export function assertValidWorkflowId(id: string, fieldName: string = 'options.id'): void {
+export function assertDecodableWorkflowId(id: string, fieldName: string = 'options.id'): void {
   if (id.length === 0) {
     throw new Error(`${fieldName} must not be an empty string`);
   }
 
+  if (id.length > MAX_WORKFLOW_ID_LENGTH) {
+    throw new Error(`${fieldName} must be at most ${MAX_WORKFLOW_ID_LENGTH} characters`);
+  }
+
+  if (containsControlCharacter(id)) {
+    throw new Error(`${fieldName} must not contain control characters`);
+  }
+}
+
+/** Whether `id` satisfies {@link assertDecodableWorkflowId}. */
+export function isDecodableWorkflowId(id: string): boolean {
+  try {
+    assertDecodableWorkflowId(id);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function assertValidWorkflowId(id: string, fieldName: string = 'options.id'): void {
   // WHATWG URL path normalization collapses `.` and `..` path segments (and
   // their percent-encoded forms) before `handleRequest()` ever sees
   // `url.pathname`, so a REST route with a single trailing `:id` segment
@@ -52,18 +63,13 @@ export function assertValidWorkflowId(id: string, fieldName: string = 'options.i
   // not reject ids that merely contain a dot character (e.g. `my.workflow.v2`).
   //
   // This is an admission-only check: it must not be reused to decode
-  // already-persisted data (see `isDecodableWorkflowId`), because a schedule
-  // or run record written before WFT-95 may legitimately carry `id: '.'` or
-  // `'..'` and must remain decodable on upgrade.
+  // already-persisted data, or to look up/control an already-persisted
+  // schedule or workflow by id (see {@link assertDecodableWorkflowId}),
+  // because a record written before WFT-95 may legitimately carry `id: '.'`
+  // or `'..'` and must remain decodable — and manageable — on upgrade.
   if (id === '.' || id === '..') {
     throw new Error(`${fieldName} must not be "." or ".."`);
   }
 
-  if (id.length > MAX_WORKFLOW_ID_LENGTH) {
-    throw new Error(`${fieldName} must be at most ${MAX_WORKFLOW_ID_LENGTH} characters`);
-  }
-
-  if (containsControlCharacter(id)) {
-    throw new Error(`${fieldName} must not contain control characters`);
-  }
+  assertDecodableWorkflowId(id, fieldName);
 }
