@@ -15,8 +15,7 @@ export type McpListFilterParseResult =
   | { readonly ok: false; readonly message: string };
 
 type FieldParseResult<TValue> =
-  | { readonly ok: true; readonly value?: TValue }
-  | { readonly ok: false; readonly message: string };
+  { readonly ok: true; readonly value?: TValue } | { readonly ok: false; readonly message: string };
 
 export function parseMcpListFilter(value: unknown): McpListFilterParseResult {
   if (!isRecord(value)) return { ok: false, message: 'List filter must be a JSON object' };

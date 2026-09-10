@@ -139,9 +139,7 @@ describe('review helpers', () => {
     const review = createReviewRequest();
     const waiterKey = `${review.workflowId}:${review.reviewId}`;
     let timeoutResult:
-      | { ok: false; error: Error }
-      | { ok: true; value: HumanReviewResult }
-      | undefined;
+      { ok: false; error: Error } | { ok: true; value: HumanReviewResult } | undefined;
     const resolve = (
       result: { ok: false; error: Error } | { ok: true; value: HumanReviewResult },
     ) => {

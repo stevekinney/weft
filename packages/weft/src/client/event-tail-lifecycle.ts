@@ -2,10 +2,7 @@ import type { WorkflowEvent } from '../core/types.ts';
 
 /** Reason a workflow event tail terminated. */
 export type StreamCloseReason =
-  | 'workflow-terminal'
-  | 'client-closed'
-  | 'reconnect-exhausted'
-  | 'server-error';
+  'workflow-terminal' | 'client-closed' | 'reconnect-exhausted' | 'server-error';
 
 export type WorkflowEventTailLifecycleOptions = {
   readonly bufferForIteration?: boolean;

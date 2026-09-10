@@ -23,8 +23,7 @@ import {
 } from './types.ts';
 
 export type PipelineParseOutcome =
-  | { kind: 'ok'; input: unknown }
-  | { kind: 'failure'; fault: OperationFault };
+  { kind: 'ok'; input: unknown } | { kind: 'failure'; fault: OperationFault };
 
 type PreParseOutcome =
   | {

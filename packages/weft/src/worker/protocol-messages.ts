@@ -254,10 +254,7 @@ export type RegisterErrorMessage = {
 export type ProtocolErrorMessage = {
   readonly type: 'protocolError';
   readonly code:
-    | 'invalid_json'
-    | 'invalid_message'
-    | 'unknown_message_type'
-    | 'registration_required';
+    'invalid_json' | 'invalid_message' | 'unknown_message_type' | 'registration_required';
   readonly message: string;
 };
 

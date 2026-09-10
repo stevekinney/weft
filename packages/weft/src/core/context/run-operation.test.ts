@@ -402,8 +402,7 @@ describe('#449 scheduleToCloseTimeout retry-state anchor', () => {
     generator.next();
 
     const slot = internals.checkpointLocals[ACTIVITY_RETRY_STATE_LOCAL_KEY] as
-      | { dispatchedAt?: Record<string, number> }
-      | undefined;
+      { dispatchedAt?: Record<string, number> } | undefined;
     // No anchor written — the slot is absent entirely on a clean first dispatch.
     expect(slot?.dispatchedAt).toBeUndefined();
   });

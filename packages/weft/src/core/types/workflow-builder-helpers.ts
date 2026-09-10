@@ -73,8 +73,7 @@ type HasExecuteProperty<T> = T extends { execute: unknown } ? true : false;
  * ```
  */
 export type ActivityEntryInput =
-  | ((...arguments_: never[]) => unknown)
-  | { readonly execute: (...arguments_: never[]) => unknown };
+  ((...arguments_: never[]) => unknown) | { readonly execute: (...arguments_: never[]) => unknown };
 
 /**
  * The map shape `.activities({ ... })` accepts. Each value is an

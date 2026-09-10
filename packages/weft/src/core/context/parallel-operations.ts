@@ -134,13 +134,11 @@ function buildFulfilledAllEntry(
 ): ParallelOperationCacheEntry {
   return createParallelOperationCacheEntry(
     'all',
-    values.map(
-      (value, i): ParallelBranchSlot => ({
-        status: 'fulfilled',
-        value,
-        operationId: `${operationId}:${i}`,
-      }),
-    ),
+    values.map((value, i): ParallelBranchSlot => ({
+      status: 'fulfilled',
+      value,
+      operationId: `${operationId}:${i}`,
+    })),
     subOperationCount,
   );
 }
@@ -433,13 +431,11 @@ function buildFulfilledRunAllEntry(
 ): ParallelOperationCacheEntry {
   return createParallelOperationCacheEntry(
     'run-all',
-    branchNames.map(
-      (name): ParallelBranchSlot => ({
-        status: 'fulfilled',
-        value: record[name],
-        operationId: `${operationId}:${name}`,
-      }),
-    ),
+    branchNames.map((name): ParallelBranchSlot => ({
+      status: 'fulfilled',
+      value: record[name],
+      operationId: `${operationId}:${name}`,
+    })),
     branchNames.length,
     branchNames,
   );

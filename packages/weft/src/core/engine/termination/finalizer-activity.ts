@@ -41,8 +41,7 @@ export interface RunnableFinalizer {
 
 /** Outcome of a single finalizer attempt. */
 export type FinalizerAttemptResult =
-  | { ok: true }
-  | { ok: false; error: unknown; abortedByShutdown: boolean };
+  { ok: true } | { ok: false; error: unknown; abortedByShutdown: boolean };
 
 /**
  * Run one attempt of a workflow's finalizer activity against the recorded finalizer

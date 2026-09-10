@@ -68,8 +68,7 @@ type SessionIO = {
 };
 
 type AdmissionOutcome =
-  | { kind: 'ok'; remainder: string }
-  | { kind: 'fail'; result: StdioSessionResult };
+  { kind: 'ok'; remainder: string } | { kind: 'fail'; result: StdioSessionResult };
 
 export async function runStdioSession(options: StdioSessionOptions): Promise<StdioSessionResult> {
   if (options.admission.kind === 'require-one') {
@@ -355,9 +354,7 @@ async function runMainReadLoop(
 }
 
 type ReadOneFrameResult =
-  | { kind: 'ok'; line: string; remainder: string }
-  | { kind: 'closed' }
-  | { kind: 'overflow' };
+  { kind: 'ok'; line: string; remainder: string } | { kind: 'closed' } | { kind: 'overflow' };
 
 /**
  * Read exactly one complete newline-terminated frame from `reader`,

@@ -31,8 +31,7 @@ A minimal client looks like this:
 ```ts partial
 type JsonRpcError = { code: number; data?: unknown; message: string };
 type JsonRpcEnvelope =
-  | { error: JsonRpcError; result?: never }
-  | { error?: never; result: { id: string } };
+  { error: JsonRpcError; result?: never } | { error?: never; result: { id: string } };
 
 function isJsonRpcError(value: unknown): value is JsonRpcError {
   if (typeof value !== 'object' || value === null) return false;

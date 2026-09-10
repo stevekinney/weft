@@ -36,9 +36,7 @@ import type {
  * ```
  */
 export type TaskResultMessage =
-  | CompletedTaskResultMessage
-  | FailedTaskResultMessage
-  | CancelledTaskResultMessage;
+  CompletedTaskResultMessage | FailedTaskResultMessage | CancelledTaskResultMessage;
 
 type TaskResultStatus = TaskResultMessage['status'];
 

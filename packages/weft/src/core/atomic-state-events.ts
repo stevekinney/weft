@@ -58,8 +58,7 @@ export interface AtomicStateOptions<T = unknown> {
  * ```
  */
 export type AtomicStateScope =
-  | { type: 'execution'; ownerWorkflowId: string }
-  | { type: 'workflow'; workflowType: string };
+  { type: 'execution'; ownerWorkflowId: string } | { type: 'workflow'; workflowType: string };
 
 /**
  * Point-in-time read result for an {@link AtomicState} slot.
@@ -108,9 +107,7 @@ export interface AtomicStateCommitResult<T = unknown> extends AtomicStateSnapsho
  * ```
  */
 export type AtomicStateEvent<T = unknown> =
-  | AtomicStateChangeEvent<T>
-  | AtomicStateConflictEvent
-  | AtomicStateExhaustedEvent;
+  AtomicStateChangeEvent<T> | AtomicStateConflictEvent | AtomicStateExhaustedEvent;
 
 /**
  * Observer shape accepted by the {@link AtomicState} observable projection.

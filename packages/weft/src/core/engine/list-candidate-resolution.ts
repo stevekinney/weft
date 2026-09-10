@@ -30,12 +30,7 @@ import {
  * visibility watermark is stale — see {@link resolveListCandidateIds}.
  */
 type ListFilterDimension =
-  | 'status'
-  | 'type'
-  | 'createdAt'
-  | 'updatedAt'
-  | 'executionDeadline'
-  | 'idPrefix';
+  'status' | 'type' | 'createdAt' | 'updatedAt' | 'executionDeadline' | 'idPrefix';
 
 type VisibilityQueryHelper<TDimension extends ListFilterDimension> = (
   internals: EngineInternals,

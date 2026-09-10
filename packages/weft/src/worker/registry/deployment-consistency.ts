@@ -23,8 +23,7 @@
 
 /** Outcome of {@link DeploymentConsistencyGuard.checkAndRecord}. */
 export type DeploymentConsistencyResult =
-  | { readonly ok: true }
-  | { readonly ok: false; readonly existingArtifactDigest: string };
+  { readonly ok: true } | { readonly ok: false; readonly existingArtifactDigest: string };
 
 /**
  * Tracks the artifact digest first seen for each `(deploymentName, buildId)`

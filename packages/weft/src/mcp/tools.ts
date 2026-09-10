@@ -56,8 +56,7 @@ type WorkflowToolArguments = {
 };
 
 type WorkflowToolResultWaitOutcome =
-  | { readonly status: 'completed'; readonly result: unknown }
-  | { readonly status: 'timed-out' };
+  { readonly status: 'completed'; readonly result: unknown } | { readonly status: 'timed-out' };
 
 type ResultHandle = {
   readonly id: string;
