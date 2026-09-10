@@ -86,7 +86,11 @@ const maximumUnpackedBytes = 12 * 1024 * 1024;
 // and task-dispatch responsibilities into focused implementation modules.
 // Those merged changes add 60 shipped `.js`/`.d.ts` entries; `npm pack
 // --dry-run --json --ignore-scripts` reports 1725 on the resulting tree.
-const maximumEntryCount = 1725;
+// WFT-90 splits `storage/interface.ts` into four extracted key modules
+// (`workflow-record-keys.ts`, `workflow-lifecycle-keys.ts`, `signal-keys.ts`,
+// `lease-keys.ts`), each shipping as a `.js`/`.d.ts` pair: +8 entries. `npm
+// pack --dry-run --json --ignore-scripts` reports 1733 on the resulting tree.
+const maximumEntryCount = 1733;
 
 type PackFile = {
   path: string;

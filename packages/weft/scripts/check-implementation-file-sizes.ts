@@ -45,12 +45,6 @@ export const CLASSIFIED_OVERSIZED_IMPLEMENTATION_FILES = [
       'The Engine declaration surface is tracked by local task 3765ffa6-1430-4be5-970c-c0f984ff34df; this issue excludes that refactor.',
   },
   {
-    path: 'src/storage/interface.ts',
-    classification: 'justified-exception',
-    rationale:
-      'The storage interface is a public type and helper surface where splitting would scatter one import contract across multiple subpaths.',
-  },
-  {
     path: 'src/client/client-contract.test-support.ts',
     classification: 'justified-exception',
     rationale:

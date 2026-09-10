@@ -72,7 +72,6 @@
     },
     {
       "files": [
-        "src/storage/interface.ts",
         "src/client/interface.ts",
         "src/client/http-client.ts",
         "src/core/context/index.ts",
@@ -108,7 +107,6 @@
         "src/server/operations/storage.ts",
         "src/server/task-state.ts",
         "src/storage/indexeddb.ts",
-        "src/storage/interface.ts",
         "src/storage/web-extension.ts",
         "src/workers/workflow-runner.ts"
       ],
