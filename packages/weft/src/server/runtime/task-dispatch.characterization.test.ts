@@ -6,11 +6,12 @@
  * refactor cannot silently change behavior.
  */
 
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, mock } from 'bun:test';
 
 import { encode } from '../../core/codec.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import {
   TEST_ACCEPTED_MANIFEST_DIGEST,
   testWorkerManifest,
@@ -305,6 +306,108 @@ describe('dispatchTaskImpl', () => {
     ).rejects.toThrow('non-JSON-serializable');
   });
 
+  it('throws when operationId is the exact string "." (WFT-95)', async () => {
+    context = createMinimalContext();
+    options = createMinimalOptions();
+
+    await expect(
+      dispatchTaskImpl(context, options, {
+        operationId: '.',
+        activityName: 'doWork',
+        workflowType: 'testWorkflow',
+        input: null,
+      }),
+    ).rejects.toThrow('invalid "operationId"');
+  });
+
+  it('throws when operationId is the exact string ".." (WFT-95)', async () => {
+    context = createMinimalContext();
+    options = createMinimalOptions();
+
+    await expect(
+      dispatchTaskImpl(context, options, {
+        operationId: '..',
+        activityName: 'doWork',
+        workflowType: 'testWorkflow',
+        input: null,
+      }),
+    ).rejects.toThrow('invalid "operationId"');
+  });
+
+  // Regression (WFT-95 review): the operationId "."/".." admission check is
+  // fresh-dispatch-only. `scheduleDelayedDispatch` always redispatches an
+  // already-decoded, previously persisted ledger record built by
+  // `taskDispatchFromLedgerRecord()` — such a record's operationId was valid
+  // under the pre-WFT-95 decode contract and may already be durably
+  // persisted as "." or "..". Redispatch must not re-apply the admission
+  // check to that data, or a pre-upgrade task is stranded in `queued`/
+  // `leased` state forever (startup recovery and expired-lease requeue both
+  // route through this `{ redispatch: true }` path).
+  it('does not throw for a redispatch whose operationId is exactly "." or ".." (WFT-95 review regression)', async () => {
+    context = createMinimalContext();
+    options = createMinimalOptions();
+
+    const dotResult = await dispatchTaskImpl(
+      context,
+      options,
+      {
+        operationId: '.',
+        activityName: 'doWork',
+        workflowType: 'testWorkflow',
+        input: null,
+      },
+      { redispatch: true },
+    );
+    expect(dotResult).toBe(true);
+    expect(context.taskQueue.isTracked('.')).toBe(true);
+
+    const dotDotResult = await dispatchTaskImpl(
+      context,
+      options,
+      {
+        operationId: '..',
+        activityName: 'doWork',
+        workflowType: 'testWorkflow',
+        input: null,
+      },
+      { redispatch: true },
+    );
+    expect(dotDotResult).toBe(true);
+    expect(context.taskQueue.isTracked('..')).toBe(true);
+  });
+
+  it('allows an operationId that merely contains a dot character (WFT-95)', async () => {
+    context = createMinimalContext();
+    options = createMinimalOptions();
+
+    await expect(
+      dispatchTaskImpl(context, options, {
+        operationId: 'op.v2.retry',
+        activityName: 'doWork',
+        workflowType: 'testWorkflow',
+        input: null,
+      }),
+    ).resolves.toBe(true);
+  });
+
+  // Regression (WFT-95 review, fourth round): `JSON.stringify()` itself
+  // throws for a `bigint`, so a direct-JS caller passing one as
+  // `operationId` must still surface the intended validation error, not an
+  // unrelated raw TypeError from the error-formatting code itself.
+  it('rejects a bigint operationId with the validation error, not a raw TypeError (WFT-95 review regression)', async () => {
+    context = createMinimalContext();
+    options = createMinimalOptions();
+
+    await expect(
+      dispatchTaskImpl(context, options, {
+        operationId: 1n as never,
+        activityName: 'doWork',
+        workflowType: 'testWorkflow',
+        input: null,
+      }),
+    ).rejects.toThrow('invalid "operationId"');
+  });
+
   it('throws when workflowRevision is an empty string (WFT-20)', async () => {
     context = createMinimalContext();
     options = createMinimalOptions();
@@ -517,6 +620,47 @@ describe('scheduleDelayedDispatch', () => {
     );
 
     expect(context.pendingTimers.size).toBe(0);
+  });
+
+  // Regression (WFT-95 review): drives the actual redispatch entry point —
+  // not just `dispatchTaskImpl`'s `{ redispatch: true }` option directly —
+  // to prove startup recovery and expired-lease requeue (both of which call
+  // `scheduleDelayedDispatch` with a `taskDispatchFromLedgerRecord()` task)
+  // successfully redispatch a pre-upgrade record whose persisted
+  // operationId is "." or "..", instead of logging "Delayed redispatch
+  // failed" and leaving the task stranded.
+  it('successfully redispatches a task whose operationId is exactly "." or ".." (WFT-95 review regression)', async () => {
+    context = createMinimalContext();
+    options = createMinimalOptions();
+
+    const errors: unknown[] = [];
+    const originalError = console.error;
+    console.error = mock((...args: unknown[]) => {
+      errors.push(args);
+    });
+
+    try {
+      scheduleDelayedDispatch(
+        context,
+        options,
+        {
+          operationId: '.',
+          activityName: 'doWork',
+          workflowType: 'testWorkflow',
+          input: null,
+        },
+        0,
+      );
+
+      // Wait for the zero-delay timer's async callback to settle, rather
+      // than a fixed sleep — deterministic on the observable outcome
+      // instead of racing the callback's own internal awaits.
+      await waitForCondition(() => context.taskQueue.isTracked('.'));
+
+      expect(errors).toEqual([]);
+    } finally {
+      console.error = originalError;
+    }
   });
 });
 

@@ -302,4 +302,40 @@ describe('bulk retry direct coverage', () => {
       ],
     });
   });
+
+  it('falls back to the public engine.start() when no LifecycleCallbacks are supplied and no checkpoint exists', async () => {
+    // `retryFailedAll()` called without its optional `callbacks` argument (as
+    // this direct-internals harness always does) exercises
+    // `retryFailedWorkflow()`'s `callbacks === undefined` branch: a
+    // checkpoint-absent failed workflow must restart through the public,
+    // strict-admission `engine.start()` rather than the internal
+    // `startWorkflow` bypass, which only production's `Engine#retryFailedAll()`
+    // (via its own `#createLifecycleCallbacks()`) ever reaches.
+    const workflowId = 'retry-direct-no-checkpoint-no-callbacks';
+    const storage = new MemoryStorage();
+    const failedState = createFailedState(workflowId, { tags: ['no-checkpoint-fallback'] });
+    await storage.put(KEYS.workflow(workflowId), encode(failedState));
+
+    const internals = createInternals(storage);
+    const observedInternals = internals as {
+      engine: { start: ReturnType<typeof mock> };
+    };
+
+    await expect(retryFailedAll(internals, { status: 'failed' })).resolves.toEqual({
+      retried: 1,
+      failed: 0,
+      errors: [],
+    });
+
+    expect(observedInternals.engine.start).toHaveBeenCalledTimes(1);
+    expect(observedInternals.engine.start).toHaveBeenCalledWith(
+      failedState.type,
+      failedState.input,
+      {
+        id: workflowId,
+        onTerminalConflict: 'start-new',
+        tags: ['no-checkpoint-fallback'],
+      },
+    );
+  });
 });

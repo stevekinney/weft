@@ -45,10 +45,15 @@ export const CLASSIFIED_OVERSIZED_IMPLEMENTATION_FILES = [
       'The Engine declaration surface is tracked by local task 3765ffa6-1430-4be5-970c-c0f984ff34df; this issue excludes that refactor.',
   },
   {
-    path: 'src/storage/interface.ts',
+    path: 'src/core/engine/lifecycle/start.ts',
     classification: 'justified-exception',
     rationale:
-      'The storage interface is a public type and helper surface where splitting would scatter one import contract across multiple subpaths.',
+      "Fresh-workflow admission, terminal-conflict handling, and this generation's checkpoint " +
+      'commit priming stay in one lifecycle entry point. Two independent, concurrently-landing ' +
+      "PRs each added a bounded slice of documented behavior here (WFT-95's replay-only id-" +
+      "admission fence, WFT-21's checkpoint-bytes CAS-baseline priming) and merged additively, " +
+      'pushing the file narrowly over the ceiling; splitting either slice out on its own would ' +
+      'scatter one admission flow across files for a 12-line overage.',
   },
   {
     path: 'src/core/types/options.ts',
@@ -56,8 +61,8 @@ export const CLASSIFIED_OVERSIZED_IMPLEMENTATION_FILES = [
     rationale:
       'Every engine and lifecycle options interface (StartOptions, ForkOptions, EngineOptions, ' +
       'and their siblings) lives here as one public import surface with runnable @example JSDoc ' +
-      'per field — the same "splitting would scatter one import contract" rationale as ' +
-      'storage/interface.ts. WFT-21 pushed it over the ceiling by ~19 lines documenting ' +
+      'per field — splitting would scatter one import contract across multiple subpaths. ' +
+      'WFT-21 pushed it over the ceiling by ~19 lines documenting ' +
       'ForkOptions.revision; the file was already at 498/500 lines before that addition.',
   },
   {

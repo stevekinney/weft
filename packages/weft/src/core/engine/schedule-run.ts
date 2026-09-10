@@ -18,6 +18,16 @@ export type ScheduledRunStartOptions = {
   scheduleStateAfterStart?: ScheduleState;
   /** Prior terminal run whose transient schedule metadata is now settled. */
   completedWorkflowId?: string;
+  /**
+   * Internal only (WFT-95). Set by `drainQueuedScheduleRun()` when `workflowId`
+   * is a persisted `queuedRuns[].workflowId` being replayed, not a freshly
+   * minted one — safe unconditionally, since a post-fix queued run was already
+   * validated as non-`.`/`..` at schedule-admission time (relaxing the check
+   * here is then a no-op), and it is what lets a legacy pre-WFT-95 queued run
+   * whose id is `.`/`..` keep draining instead of pausing the schedule.
+   * Threaded straight through to `startWorkflow`'s `skipAdmissionIdCheck`.
+   */
+  skipAdmissionIdCheck?: boolean;
 };
 
 /**
@@ -115,6 +125,7 @@ export async function startScheduledRun(
     { id: workflowId },
     scheduleRunOperations,
     buildPinnedRevisionOverride(state),
+    options.skipAdmissionIdCheck,
   );
 
   // The run launched, so the occurrence fired. Emit before the unavailable

@@ -81,6 +81,9 @@ export async function drainQueuedScheduleRun(
     ...(queuedRun.occurrence !== undefined && { occurrence: queuedRun.occurrence }),
     scheduleStateAfterStart: stateAfterStart,
     ...(completedWorkflowId !== undefined && { completedWorkflowId }),
+    // WFT-95: this replays an already-persisted queued-run id rather than
+    // admitting a fresh one — see ScheduledRunStartOptions.skipAdmissionIdCheck.
+    skipAdmissionIdCheck: true,
   });
   return stateAfterStart;
 }

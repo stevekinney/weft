@@ -79,7 +79,7 @@ export function createChildWorkflowOperationCallbacks<
   return {
     runOperationWithResult: (workflowId, operation, execute) =>
       runOperationWithResultForEngine(engine, workflowId, operation, execute),
-    start: (type, input, options) =>
+    start: (type, input, options, skipAdmissionIdCheck) =>
       startWorkflow(
         getInternals(engine),
         type,
@@ -87,6 +87,9 @@ export function createChildWorkflowOperationCallbacks<
         options,
         undefined,
         createLifecycleCallbacks(engine),
+        undefined,
+        undefined,
+        skipAdmissionIdCheck,
       ),
     loadWorkflowState: (workflowId) => loadWorkflowState(getInternals(engine), workflowId),
     getHandle: (workflowId) => engine.getHandle(workflowId),

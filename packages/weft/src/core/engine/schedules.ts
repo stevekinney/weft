@@ -56,13 +56,23 @@ export type RefreshedScheduleState = {
 };
 
 export type ScheduleCallbacks = {
-  /** `revisionOverride` (WFT-20) is the exact revision a `revisionPolicy: 'pinned'` occurrence must resolve against; `undefined` for an `'active-at-fire'` schedule. */
+  /**
+   * `revisionOverride` (WFT-20) is the exact revision a `revisionPolicy: 'pinned'`
+   * occurrence must resolve against; `undefined` for an `'active-at-fire'` schedule.
+   *
+   * `skipAdmissionIdCheck` (WFT-95, internal only) is threaded straight through to
+   * `startWorkflow`'s parameter of the same name — see its doc comment. Set only when
+   * replaying a schedule's already-persisted `queuedRuns[].workflowId` via
+   * `drainQueuedScheduleRun()`; every other schedule-run start (a fresh cadence tick,
+   * a `cancel-running` replacement) omits it and gets strict id admission.
+   */
   startWorkflow: (
     type: string,
     input: unknown,
     options: { id: string },
     additionalStartOperations?: BatchOperation[],
     revisionOverride?: string,
+    skipAdmissionIdCheck?: boolean,
   ) => Promise<void>;
   loadWorkflowState: (workflowId: string) => Promise<WorkflowState | null | undefined>;
   cancelWorkflow: (workflowId: string) => Promise<void>;
