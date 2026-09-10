@@ -165,6 +165,7 @@ describe('KEYS insertion order', () => {
       'catalogActive',
       'catalogTombstone',
       'catalogTombstonePrefix',
+      'workflowGeneration',
       'budget',
       'review',
       'workflowHeaders',

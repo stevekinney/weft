@@ -1,13 +1,9 @@
 import type { BatchOperation } from '../../../storage/interface.ts';
 import { assertPayloadWithinLimit } from '../../payload-size.ts';
-import { normalizeStorageTimestamp } from '../../scheduler.ts';
 import {
-  assertExclusiveStartWorkflowOptions,
   assertValidOnTerminalConflict,
   coerceReplayWorkflowId,
   coerceStartWorkflowId,
-  coerceStartWorkflowTimestamp,
-  StartWorkflowValidationError,
 } from '../../start-workflow-validation.ts';
 import type { StartOptions, StartWorkflowOptions, TimerEntry } from '../../types.ts';
 import {
@@ -41,6 +37,7 @@ import {
   resolveCachedStartRevision,
   resolveStartRevisionUncached,
 } from './start-revision-resolution.ts';
+import { resolveScheduledStartAt } from './start-schedule-timing.ts';
 import {
   applyRestartLineage,
   createInitialCheckpoint,
@@ -474,38 +471,4 @@ export async function startWorkflow(
       rollbackTransientStartState(internals, workflowId);
     }
   }
-}
-
-export function resolveScheduledStartAt(
-  internals: EngineInternals,
-  options: StartOptions | undefined,
-  submissionTime: number,
-  callbacks: LifecycleCallbacks,
-): number | undefined {
-  assertExclusiveStartWorkflowOptions(options?.startAt, options?.startAfter);
-
-  if (options?.startAt !== undefined) {
-    return coerceStartWorkflowTimestamp(options.startAt, 'options.startAt');
-  }
-
-  if (options?.startAfter !== undefined) {
-    const startAfterMilliseconds = parseStartOptionDuration(
-      internals,
-      options.startAfter,
-      'options.startAfter',
-      callbacks,
-    );
-    try {
-      return normalizeStorageTimestamp(
-        submissionTime + startAfterMilliseconds,
-        'options.startAfter',
-      );
-    } catch {
-      throw new StartWorkflowValidationError(
-        'options.startAfter must resolve to a finite, non-negative start time',
-      );
-    }
-  }
-
-  return undefined;
 }
