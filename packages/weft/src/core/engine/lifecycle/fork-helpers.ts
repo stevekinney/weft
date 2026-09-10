@@ -264,9 +264,25 @@ export function buildForkCommitLostRaceError(
  * tombstone-aware `catalog.install()` that refuses to resurrect a revision
  * concurrently removed — either is a genuine architectural addition, not a
  * bounded review-response fix, and warrants a follow-up rather than a
- * rushed change here. Scoped narrowly: only a legacy (pre-revision-pinning)
- * dynamic-source fork, under `workflow-lease` specifically, racing a
- * sibling engine's own concurrent removal of that exact sole candidate.
+ * rushed change here.
+ *
+ * **Scope corrected (Codex review round 9, P1): the limitation above is NOT
+ * confined to the legacy path this function itself covers.** `fork()`'s own
+ * EARLY reservation of `targetRevision` (`reserveInFlightStart`, called
+ * synchronously in `fork()` before this function or any resolve is ever
+ * reached — see `transition.ts`) is exactly as process-local as the
+ * reservation this function takes; an explicit-revision fork
+ * (`ForkOptions.revision`, this PR's own new API) reserves just as early
+ * and just as locally, then awaits the same
+ * `resolveExecutableRegistrationForRevision()` load/install pipeline for
+ * its OWN `revision`-defined branch. A sibling engine's
+ * `removeWorkflowRevision()` — seeing only durable references, never
+ * either process-local map — can win the identical race against an
+ * explicit-revision target exactly as it can against a legacy one. The
+ * root cause, the affected step, and the two candidate fixes are all
+ * unchanged from round 6 above; only the earlier "scoped narrowly to
+ * legacy forks" claim was wrong; every dynamic-source fork under
+ * `workflow-lease` whose target requires a resolver load is exposed.
  */
 export function reserveLegacyForkTargetRevision(
   internals: EngineInternals,

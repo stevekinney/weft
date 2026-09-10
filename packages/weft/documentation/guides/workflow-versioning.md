@@ -578,6 +578,16 @@ tombstone-aware `catalog.install()`, not a bounded review-response fix—see
 `reserveLegacyForkTargetRevision()`'s own doc comment for the full
 explanation.
 
+**Scope corrected one round later (Codex review round 9): this gap is not
+limited to legacy forks.** An explicit-revision fork
+(`ForkOptions.revision`) reserves just as early and just as
+process-locally as the legacy path, then awaits the identical load/install
+pipeline for its own resolved revision—a sibling engine's concurrent
+removal wins the same race against an explicit target exactly as it can
+against a legacy one. Every dynamic-source fork under `workflow-lease`
+whose target requires a resolver load is exposed, not only a legacy one;
+the root cause and candidate fixes are unchanged.
+
 **A second, narrower residual, also documented rather than fixed (Codex
 review round 8)—this one live even under the single-process `'none'` mode
 `buildForkCatalogEntryCondition()` deliberately leaves unfenced.**
