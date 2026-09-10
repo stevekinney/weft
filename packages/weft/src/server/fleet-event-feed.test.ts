@@ -712,6 +712,25 @@ describe('createFleetEventFeed', () => {
     feed.dispose();
   });
 
+  it('self-heals a virgin feed so only the first snapshot scans storage', async () => {
+    const storage = new RecordingScanStorage();
+    const feed = createFleetEventFeed(storage);
+
+    expect(await feed.snapshotTailSequence()).toBe(-1);
+    const scansAfterFirstCall = storage.scanCalls.length;
+    expect(scansAfterFirstCall).toBe(1);
+    expect(storage.scanCalls[0]).toEqual({
+      prefix: KEYS.fleetEventPrefix(),
+      options: { reverse: true, limit: 1 },
+    });
+    expect(await storage.get(KEYS.fleetEventTail())).not.toBeNull();
+
+    expect(await feed.snapshotTailSequence()).toBe(-1);
+    expect(storage.scanCalls.length).toBe(scansAfterFirstCall);
+
+    feed.dispose();
+  });
+
   it('rejects malformed event keys, retained records, and watermarks', async () => {
     const malformedKeyStorage = new MemoryStorage();
     await malformedKeyStorage.put(`${KEYS.fleetEventPrefix()}bad`, encode({}));
