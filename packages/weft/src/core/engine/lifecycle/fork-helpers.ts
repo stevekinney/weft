@@ -219,14 +219,15 @@ export function buildForkCommitLostRaceError(
  * `targetRevision` reservation cannot cover: a legacy (pre-revision-pinning)
  * source run on a dynamic-source type with exactly one registered candidate
  * has `sourceState.revision` genuinely `undefined`, so `targetRevision`
- * (`options.revision ?? sourceState.revision`) is `undefined` too and the
- * early reservation is a no-op — yet the resolver still resolves, and the
- * fork still persists against, that sole candidate's real revision
- * (`persistedRevision`). Reserves that real revision instead, but ONLY when
- * it differs from `targetRevision` (otherwise the early reservation already
- * covers it, and a second reservation would double-count the fork's own
- * in-flight reference). See `fork-revision-catalog-race.test.ts`'s round-3
- * `describe` block for the full end-to-end race this closes.
+ * (`options.revision ?? sourceState.revision`) is `undefined` too and
+ * `fork()`'s own `reserveInFlightStart(..., targetRevision)` falls back to
+ * the catalog's active pointer for `type` — which can itself already equal
+ * the sole candidate's real revision the resolver is about to resolve. This
+ * function reserves that real revision, but ONLY when it differs from what
+ * the early reservation actually reserved (otherwise the early reservation
+ * already covers it, and a second reservation would double-count the fork's
+ * own in-flight reference). See `fork-revision-catalog-race.test.ts`'s
+ * round-3 `describe` block for the full end-to-end race this closes.
  *
  * Called from `fork()`'s `resolveExecutableRegistrationForRevision()`
  * `onRevisionChosen` hook (WFT-21, Codex review round 5, P1), not after that
@@ -236,12 +237,19 @@ export function buildForkCommitLostRaceError(
  * candidate before a post-hoc reservation ever ran, letting a subsequent
  * shared-load reinstall paper over a removal that already reported success.
  * See `resolveExecutableRegistrationForRevision()`'s own doc for the full
- * rationale; this function's own reservation logic is unchanged. Its
- * `persistedRevision === targetRevision` guard is now defensive-only in
- * practice — the sole call site only invokes it when `targetRevision` is
- * already `undefined`, so a defined `persistedRevision` can never equal it
- * — kept rather than removed so this function's own contract still holds
- * independently of that one call site; exercised directly by a unit test.
+ * rationale; this function's own reservation logic is unchanged. The call
+ * site passes `fork()`'s own `inFlightRevision` — what the early reservation
+ * ACTUALLY reserved (the fallback-resolved value, not the pre-fallback
+ * `targetRevision`) — as this function's `reservedRevision` parameter
+ * (Codex review round 13, P2): passing the pre-fallback `targetRevision`
+ * instead let this guard compare against `undefined` even when the early
+ * reservation had already fallen back to a real revision equal to
+ * `persistedRevision`, silently double-reserving that revision (both sides
+ * still released correctly in `fork()`'s own `finally`, so nothing leaked —
+ * just a transient over-count for the fork's duration). The guard now
+ * compares `persistedRevision` against what was actually reserved, so it
+ * correctly no-ops whenever the early reservation already covers the
+ * resolved revision.
  *
  * **Known residual limitation, documented rather than fixed (Codex review
  * round 6, P1):** this reservation is `inFlightStartsByRevision` —
@@ -287,10 +295,10 @@ export function buildForkCommitLostRaceError(
 export function reserveLegacyForkTargetRevision(
   internals: EngineInternals,
   type: string,
-  targetRevision: string | undefined,
+  reservedRevision: string | undefined,
   persistedRevision: string | undefined,
 ): string | undefined {
-  if (persistedRevision === targetRevision) {
+  if (persistedRevision === reservedRevision) {
     return undefined;
   }
   return reserveInFlightStart(internals, type, persistedRevision);

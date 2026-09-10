@@ -374,7 +374,7 @@ export async function fork(
             legacyResolvedInFlightRevision = reserveLegacyForkTargetRevision(
               internals,
               sourceState.type,
-              targetRevision,
+              inFlightRevision,
               chosen,
             );
           }),

@@ -398,6 +398,110 @@ describe('fork() legacy-dynamic-source resolver race — WFT-21 Codex review rou
   });
 });
 
+/**
+ * WFT-21, Codex review round 13, P2: neither round 3's nor round 5's test
+ * above exercises the case `reserveLegacyForkTargetRevision`'s own guard
+ * exists to catch — the catalog's active pointer for `type` ALREADY equal
+ * to the resolver's chosen sole candidate before `fork()`'s early
+ * `reserveInFlightStart(internals, sourceState.type, targetRevision)` runs.
+ * `targetRevision` itself is `undefined` (legacy source, no `options.revision`),
+ * but `reserveInFlightStart`'s own `revisionOverride ?? resolveActive(type)?.revision`
+ * fallback resolves it to the active pointer's revision — the common case
+ * once a type has been activated at all.
+ *
+ * Before this fix, `fork()` passed that same pre-fallback `targetRevision`
+ * (still `undefined`) — not `inFlightRevision`, what the early reservation
+ * actually reserved — into `reserveLegacyForkTargetRevision()`. Its
+ * `persistedRevision === targetRevision` guard then compared a real,
+ * defined revision against `undefined`, which is never equal, so it
+ * reserved `revisionV1` a SECOND time even though the early reservation
+ * already covered it — a transient over-count for the fork's duration
+ * (both reservations are released correctly in `fork()`'s own `finally`,
+ * so nothing leaks or under-counts once the fork settles).
+ */
+describe('fork() legacy-dynamic-source double-reservation — WFT-21 Codex review round 13 P2', () => {
+  it('reserves the resolved revision only ONCE when the catalog active pointer already equals it, not twice', async () => {
+    const storage = new MemoryStorage();
+    const type = 'fork-legacy-active-pointer-match';
+    const definitionV1 = workflow({ name: type, description: 'v1' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      return yield* ctx.waitForSignal<string>('go');
+    });
+    const revisionV1 = await revisionFor(type, definitionV1);
+
+    const engine = new Engine({ storage });
+    try {
+      engine.registerSource(
+        workflowSource(
+          { name: type, location: './v1.ts', exportName: 'v1', revision: revisionV1 },
+          async () => ({ v1: definitionV1 }),
+        ),
+      );
+      const sourceHandle = await engine.start(type, null, { id: 'fork-legacy-active-source' });
+
+      // Activate `revisionV1` as the catalog's advertised active pointer for
+      // `type` — the common real-world state once a type has been deployed
+      // at all — so `fork()`'s early `reserveInFlightStart` fallback
+      // resolves to the SAME revision the resolver below will choose.
+      const activation = await engine.workflows.activate(type, revisionV1);
+      expect(activation.applied).toBe(true);
+
+      // Simulate a legacy (pre-revision-pinning) record, as the round-3/5
+      // tests above do, so `targetRevision` really is `undefined` and only
+      // the active-pointer fallback (not a pinned `sourceState.revision`)
+      // supplies a revision to the early reservation.
+      const stateBytes = await storage.get(KEYS.workflow(sourceHandle.id));
+      const legacyState = { ...(decode(stateBytes!) as Record<string, unknown>) };
+      delete legacyState['revision'];
+      await storage.put(KEYS.workflow(sourceHandle.id), encode(legacyState));
+
+      const originalBatch = storage.batch.bind(storage);
+      const gate = Promise.withResolvers<void>();
+      const entered = Promise.withResolvers<void>();
+      let paused = false;
+      storage.batch = async (operations) => {
+        if (!paused) {
+          paused = true;
+          entered.resolve();
+          await gate.promise;
+        }
+        return originalBatch(operations);
+      };
+
+      const forkPromise = engine.fork(sourceHandle.id);
+      await entered.promise;
+
+      // Parked at the fork's own commit: both the early reservation (via
+      // the active-pointer fallback) and, before this fix, a SECOND
+      // erroneous reservation from `reserveLegacyForkTargetRevision` would
+      // already have run. Read the reservation count directly — unlike the
+      // round-3/5 tests above, `revisionV1` is also the ACTIVE revision
+      // here, so `removeWorkflowRevision()` would refuse with `reason:
+      // 'active'` before ever reaching the `inFlightStarts` check, masking
+      // the exact count this test needs to observe.
+      expect(getInternals(engine).inFlightStartsByRevision.get(type)?.get(revisionV1)).toBe(1);
+
+      storage.batch = originalBatch;
+      gate.resolve();
+      const forked = await forkPromise;
+      const forkedState = await engine.get(forked.id);
+      expect(forkedState?.revision).toBe(revisionV1);
+
+      // Both reservations (early + legacy-hook, whichever fired) released
+      // cleanly once the fork settles — no leaked count either way.
+      expect(getInternals(engine).inFlightStartsByRevision.size).toBe(0);
+
+      await engine.signal(sourceHandle.id, 'go', 'done');
+      await engine.signal(forked.id, 'go', 'done');
+      await expect(sourceHandle.result()).resolves.toBe('done');
+      await expect(forked.result()).resolves.toBe('done');
+    } finally {
+      engine[Symbol.dispose]();
+    }
+  });
+});
+
 describe('buildForkCommitLostRaceError — WFT-21 Codex review round 4 P2', () => {
   it('throws the typed WorkflowRevisionUnavailableError when the fork carried a non-empty catalog-entry condition', () => {
     const error = buildForkCommitLostRaceError('wf-1', 'checkout', 'sha256:target', [
@@ -417,13 +521,13 @@ describe('buildForkCommitLostRaceError — WFT-21 Codex review round 4 P2', () =
 });
 
 describe('reserveLegacyForkTargetRevision — WFT-21 Codex review round 3 P1', () => {
-  it("reserves persistedRevision when it differs from targetRevision — fork()'s own onRevisionChosen hook call site, which only invokes this when targetRevision is undefined", () => {
+  it("reserves persistedRevision when it differs from reservedRevision — fork()'s own onRevisionChosen hook call site, passing what the early reservation actually reserved (undefined when the catalog has no active pointer for the type yet)", () => {
     const internals = { inFlightStartsByRevision: new Map() } as never;
     const reserved = reserveLegacyForkTargetRevision(internals, 'checkout', undefined, 'sha256:v1');
     expect(reserved).toBe('sha256:v1');
   });
 
-  it("skips reserving (returns undefined, no increment) when persistedRevision already equals targetRevision — a defensive branch unreachable through fork()'s own onRevisionChosen call site (WFT-21, Codex review round 5, P1, which gated that call site to only fire when targetRevision is undefined) but exercised directly here so this function's own double-reservation guard stays covered independently of that one caller", () => {
+  it("skips reserving (returns undefined, no increment) when persistedRevision already equals reservedRevision — reachable through fork()'s own call site whenever the catalog's active pointer for the type already resolves to the resolver's chosen revision (Codex review round 13, P2 — see the end-to-end double-reservation regression test above); exercised directly here too so this function's own double-reservation guard stays covered independently of that caller", () => {
     const internals = { inFlightStartsByRevision: new Map() } as never;
     const reserved = reserveLegacyForkTargetRevision(
       internals,
