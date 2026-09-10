@@ -72,7 +72,15 @@ export function isValidScheduleIdentifier(value: unknown): value is string {
  * having every control operation reject a schedule they can't otherwise
  * reach.
  */
-export function coerceScheduleId(scheduleId: string, fieldName: string): string {
+export function coerceScheduleId(scheduleId: unknown, fieldName: string): string {
+  // Explicit typeof guard (WFT-95 review): `assertDecodableWorkflowId` assumes
+  // a string and would otherwise throw a raw TypeError (or, for an
+  // array-like object with a `length`, silently pass) for a non-string
+  // direct-JS-API caller; mirrors the check `coerceStartWorkflowId` used to
+  // perform before this switched to the decode-compatible predicate.
+  if (typeof scheduleId !== 'string') {
+    throw new Error(`${fieldName} must be a string`);
+  }
   assertDecodableWorkflowId(scheduleId, fieldName);
   return scheduleId;
 }

@@ -205,6 +205,20 @@ describe('engine validation helpers', () => {
     );
   });
 
+  // Regression (WFT-95 review, third round): a direct, untyped same-process
+  // caller (e.g. `engine.getSchedule(null)`) must get a clear validation
+  // error, not a raw TypeError from the decode-compatible predicate
+  // assuming a string, and an array-like object carrying a `length` must
+  // not silently pass.
+  it('rejects a non-string scheduleId with a clear error (WFT-95 review regression)', () => {
+    expect(() => coerceScheduleId(null, 'scheduleId')).toThrow('scheduleId must be a string');
+    expect(() => coerceScheduleId(undefined, 'scheduleId')).toThrow('scheduleId must be a string');
+    expect(() => coerceScheduleId(42, 'scheduleId')).toThrow('scheduleId must be a string');
+    expect(() => coerceScheduleId({ length: 3 }, 'scheduleId')).toThrow(
+      'scheduleId must be a string',
+    );
+  });
+
   it('normalizes schedule options', () => {
     expect(normalizeScheduleOptions(undefined)).toEqual({ overlap: 'skip', backfill: false });
     expect(() => normalizeScheduleOptions(null as never)).toThrow(
