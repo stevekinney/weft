@@ -12,11 +12,19 @@
  *
  * Deliberately lives in `core/engine/`, not alongside the tombstone
  * primitives in `core/catalog/`: resolving an orphan needs a FRESH
- * reference count, and the only reference signal meaningful for a
- * crashed peer's tombstone is the durable one —
- * `nonterminal-revision-count.ts`'s `wf:`-prefix scan (in-process signals
- * like `registeredDefinitions`/`inFlightStarts` are per-engine-instance and
- * say nothing about what a DIFFERENT, crashed process was doing).
+ * reference count, and the only reference signals meaningful for a
+ * crashed peer's tombstone are the durable ones —
+ * `nonterminal-revision-count.ts`'s `wf:`-prefix scan (both the
+ * non-terminal AND terminal-but-unpurged buckets, WFT-17/WFT-21),
+ * `pinned-schedule-revision-count.ts`'s `schedule:`-prefix scan (WFT-20),
+ * and `retained-recovery-record-count.ts`'s `wf-teardown-deadletter:`-prefix
+ * scan (WFT-21) — in-process signals like
+ * `registeredDefinitions`/`inFlightStarts` are per-engine-instance and say
+ * nothing about what a DIFFERENT, crashed process was doing. Before WFT-21
+ * this sweep checked ONLY `nonTerminalRuns`, silently ignoring a pinned
+ * schedule or a terminal/dead-lettered reference — a pre-existing gap
+ * fixed alongside this batch's own `retainedRecoveryRecords` wiring, since
+ * both are the same class of durable-reference check.
  * `core/catalog/**` never imports from `core/engine/**` — a directional
  * boundary `check-import-cycles.ts` enforces — so this orchestration has to
  * live on the engine side of that line.
@@ -39,7 +47,9 @@ import {
   finalizeCatalogTombstone,
   restoreCatalogEntryFromTombstone,
 } from '../catalog/index.ts';
-import { countNonTerminalRunsForRevision } from './nonterminal-revision-count.ts';
+import { countWorkflowStateRevisionsByStatus } from './nonterminal-revision-count.ts';
+import { countPinnedSchedulesForRevision } from './pinned-schedule-revision-count.ts';
+import { countTeardownDeadLettersForRevision } from './retained-recovery-record-count.ts';
 
 function splitCatalogTombstoneKey(key: string): { name: string; revision: string } | null {
   const parts = key.split(':');
@@ -51,9 +61,14 @@ function splitCatalogTombstoneKey(key: string): { name: string; revision: string
 }
 
 /**
- * Resolve one tombstone from a fresh durable reference count: zero
- * non-terminal runs pinned to `(name, revision)` finalizes it (completes
- * the removal); one or more restores the entry. CAS'd on `tombstoneBytes`
+ * Resolve one tombstone from a fresh durable reference count across all
+ * three storage-scan-backed reference kinds `removeWorkflowRevision()`
+ * itself checks (WFT-21 — see `catalog-removal.ts`'s own doc for why these,
+ * and only these, are meaningful for a crashed peer): zero non-terminal
+ * runs, zero pinned schedules, and zero retained recovery records
+ * (terminal-but-unpurged runs plus dead letters) pinned to `(name,
+ * revision)` finalizes the tombstone (completes the removal); any of the
+ * three being nonzero restores the entry instead. CAS'd on `tombstoneBytes`
  * in both directions, so losing the race to a concurrent resolver (this
  * process's own targeted check, another process's boot sweep, or the
  * original caller finishing normally) is a harmless no-op — never an
@@ -65,8 +80,15 @@ async function resolveCatalogTombstone(
   revision: string,
   tombstoneBytes: Uint8Array,
 ): Promise<void> {
-  const nonTerminalRuns = await countNonTerminalRunsForRevision(storage, name, revision);
-  if (nonTerminalRuns > 0) {
+  const { nonTerminalRuns, terminalRuns } = await countWorkflowStateRevisionsByStatus(
+    storage,
+    name,
+    revision,
+  );
+  const pinnedSchedules = await countPinnedSchedulesForRevision(storage, name, revision);
+  const deadLetters = await countTeardownDeadLettersForRevision(storage, name, revision);
+  const referenced = nonTerminalRuns + pinnedSchedules + terminalRuns + deadLetters > 0;
+  if (referenced) {
     await restoreCatalogEntryFromTombstone(storage, name, revision, tombstoneBytes);
   } else {
     await finalizeCatalogTombstone(storage, name, revision, tombstoneBytes);

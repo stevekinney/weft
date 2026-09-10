@@ -121,6 +121,18 @@ export interface TeardownDeadLetterRecord {
   workflowExecutionToken?: string;
   /** The decoded `ctx.setFinalizerState` payload, when it was still recoverable. */
   finalizerInput?: unknown;
+  /**
+   * The dead-lettering run's own pinned {@link import('../../types/state.ts').WorkflowState.revision}
+   * (WFT-21) — additive, optional field: absent on a record written before
+   * this field existed, or for a legacy run with no persisted `revision`,
+   * in which case it never counts against any specific revision in
+   * {@link import('../retained-recovery-record-count.ts').countTeardownDeadLettersForRevision}'s
+   * scan, mirroring `WorkflowState.revision`'s own legacy-record precedent.
+   * No persisted-data schema-version bump — decode already tolerates its
+   * absence (`finalizer-status.ts`'s field-presence checks, not an
+   * exhaustive-key check).
+   */
+  revision?: string;
 }
 
 /** Build the operations that arm a fresh `wf-teardown:` timer at `fireAt` (same token). */
@@ -262,6 +274,7 @@ export async function deadLetterTeardown(
   expectedBytes: Uint8Array,
   details: { lastError: string; finalizerInput: unknown },
   workflowExecutionToken?: string,
+  revision?: string,
 ): Promise<boolean> {
   const deadLetter: TeardownDeadLetterRecord = {
     type: workflowType,
@@ -272,6 +285,7 @@ export async function deadLetterTeardown(
     // Omit `finalizerInput` entirely when absent rather than persisting `undefined`,
     // so the record's shape stays clean under `exactOptionalPropertyTypes`. (typescript MF.)
     ...(details.finalizerInput === undefined ? {} : { finalizerInput: details.finalizerInput }),
+    ...(revision === undefined ? {} : { revision }),
   };
   return settleOnRunningClaim(internals, workflowId, expectedBytes, [
     { type: 'delete', key: KEYS.teardownOwed(workflowId) },

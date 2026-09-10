@@ -890,6 +890,11 @@ describe('KEYS', () => {
 
   it('encodes successful teardown outcomes by workflow id', () => {
     expect(KEYS.teardownSucceeded('workflow:id')).toBe('wf-teardown-succeeded:workflow%3Aid');
+    expect(KEYS.teardownDeadLetterPrefix()).toBe('wf-teardown-deadletter:');
+    expect(KEYS.teardownDeadLetter('workflow:id')).toBe('wf-teardown-deadletter:workflow%3Aid');
+    expect(KEYS.teardownDeadLetter('workflow:id').startsWith(KEYS.teardownDeadLetterPrefix())).toBe(
+      true,
+    );
   });
 
   it('encodes parent run lineage reverse-index dimensions independently', () => {

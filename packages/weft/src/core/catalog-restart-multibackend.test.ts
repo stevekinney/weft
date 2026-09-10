@@ -6,7 +6,11 @@ import {
   waitForWorkflowStatus,
 } from '../testing/storage-backends.test-support.ts';
 import { Engine } from './engine.ts';
-import { getWorkflowCatalog, removeWorkflowRevision } from './engine/index.ts';
+import {
+  getWorkflowCatalog,
+  getWorkflowRevisionDiagnostics,
+  removeWorkflowRevision,
+} from './engine/index.ts';
 import { buildRegistrySnapshot } from './registry-snapshot.ts';
 import { workflow, type WorkflowContext } from './types.ts';
 
@@ -197,3 +201,115 @@ for (const backend of storageBackends) {
     });
   });
 }
+
+/**
+ * WFT-21: `retainedRecoveryRecords` wires a terminal-but-unpurged run as a
+ * real, durable reference — end to end: register v1 -> start a run pinned
+ * to v1 -> activate v2 -> the run completes terminal -> diagnostics report
+ * removable:false with retainedRecoveryRecords:1 -> purge deletes the
+ * terminal WorkflowState -> removable:true -> removeWorkflowRevision
+ * succeeds.
+ *
+ * Excludes `IndexedDBStorage` — independently discovered, pre-existing bug
+ * unrelated to WFT-21: `engine.purge()` throws
+ * `TransactionInactiveError: A request was placed against a transaction
+ * which is currently not active, or which is finished.` on
+ * `IndexedDBStorage`. Root cause: `IndexedDBStorage.scan()`
+ * (`storage/indexeddb.ts`'s `iterateCursor()`) yields lazily from a LIVE
+ * IndexedDB cursor/transaction, one item per `yield`, calling
+ * `cursor.continue()` only after the consumer resumes the generator. Per
+ * the IndexedDB spec, a transaction auto-commits once the microtask queue
+ * drains with no pending request against it — so ANY `await` a `for await
+ * (... of storage.scan(...))` consumer performs inside its loop body (e.g.
+ * `bulk-operations-purge.ts`'s several `for await` loops over
+ * `storage.scan()`/`storageKeys()`) risks the transaction going stale
+ * mid-iteration. This is systemic to every `IndexedDBStorage.scan()`
+ * consumer with async loop-body work, not a one-function bug isolated to
+ * purge, and is out of WFT-21's scope to fix (a storage-layer redesign of
+ * `iterateCursor()`, e.g. buffering cursor results before yielding, or
+ * consumers restructuring to collect keys before their own awaits). Filed
+ * as a follow-up rather than fixed here — see the batch's structured
+ * output `deviations` for the exact repro this test's own body doubles as.
+ */
+const purgeCapableBackends = storageBackends.filter(
+  (backend) => backend.name !== 'IndexedDBStorage',
+);
+
+describe('WFT-21: retainedRecoveryRecords release via purge', () => {
+  for (const backend of purgeCapableBackends) {
+    it(`releases the retainedRecoveryRecords reference so a terminal-unpurged revision becomes removable [${backend.name}]`, async () => {
+      const result = backend.factory();
+      let engine: Engine | undefined;
+      try {
+        const engineA = (await Engine.create({
+          storage: result.storage,
+          workflows: { alpha: makeWorkflow('alpha', '1.0.0') },
+        })) as unknown as Engine;
+        const v1 = getWorkflowCatalog(engineA).resolveActive('alpha')?.revision;
+        expect(v1).toBeDefined();
+
+        const handle = await engineA.start('alpha', null, {
+          id: `multibackend-retained-${backend.name}`,
+        });
+        await waitForWorkflowStatus(engineA, handle.id, 'running');
+        const beforeState = await engineA.get(handle.id);
+        expect(beforeState?.revision).toBe(v1);
+
+        // A genuinely different revision, activated AFTER the run above
+        // started — v1 stays installed but not active. Kept alive (not
+        // disposed) as the engine that runs every diagnostics/removal
+        // check below: engineA's own `registeredCatalogRevisions` names v1
+        // forever (eager, this-process-only), so calling
+        // `removeWorkflowRevision` from engineA itself would report
+        // "referenced" via `registeredDefinitions` regardless of purge —
+        // engineB's own registration names v2, so it has no such
+        // self-reference against v1.
+        engine = (await Engine.create({
+          storage: result.storage,
+          workflows: { alpha: makeWorkflow('alpha', '2.0.0') },
+          recover: false,
+        })) as unknown as Engine;
+        const v2 = getWorkflowCatalog(engine).resolveActive('alpha')?.revision;
+        expect(v2).not.toBe(v1);
+
+        // Complete the run — its `WorkflowState` remains present
+        // (unpurged), still pinned to v1.
+        await engineA.signal(handle.id, 'go', 'done');
+        await expect(handle.result()).resolves.toBe('done:done');
+        engineA[Symbol.dispose]();
+        const terminalState = await engine.get(handle.id);
+        expect(terminalState?.status).toBe('completed');
+        expect(terminalState?.revision).toBe(v1);
+
+        const diagnosticsBeforePurge = await getWorkflowRevisionDiagnostics(engine, 'alpha', v1!);
+        expect(diagnosticsBeforePurge.removable).toBe(false);
+        expect(diagnosticsBeforePurge.references.retainedRecoveryRecords).toBe(1);
+        expect(diagnosticsBeforePurge.references.registeredDefinitions).toBe(0);
+
+        const refused = await removeWorkflowRevision(engine, 'alpha', v1!);
+        expect(refused.removed).toBe(false);
+        if (!refused.removed && refused.reason === 'referenced') {
+          expect(refused.references.retainedRecoveryRecords).toBe(1);
+        } else {
+          throw new Error(`expected a "referenced" refusal, got ${JSON.stringify(refused)}`);
+        }
+
+        // Purge the terminal run — its existing fenced delete of the
+        // `wf:` state IS the release for this component; no new write
+        // path exists.
+        const purgeResult = await engine.purge({ idPrefix: handle.id });
+        expect(purgeResult.deleted).toBeGreaterThan(0);
+
+        const diagnosticsAfterPurge = await getWorkflowRevisionDiagnostics(engine, 'alpha', v1!);
+        expect(diagnosticsAfterPurge.references.retainedRecoveryRecords).toBe(0);
+        expect(diagnosticsAfterPurge.removable).toBe(true);
+
+        const removed = await removeWorkflowRevision(engine, 'alpha', v1!);
+        expect(removed).toEqual({ removed: true });
+      } finally {
+        engine?.[Symbol.dispose]();
+        await result.cleanup();
+      }
+    });
+  }
+});

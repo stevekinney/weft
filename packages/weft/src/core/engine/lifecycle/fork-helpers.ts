@@ -3,11 +3,85 @@ import { KEYS } from '../../../storage/interface.ts';
 import { encode } from '../../codec.ts';
 import { buildIndexOperations } from '../../search-attributes.ts';
 import type { Checkpoint, ForkLineage, SearchAttributeValue, WorkflowState } from '../../types.ts';
+import type { ForkOptions } from '../../types/options.ts';
 import { type WorkflowVersionTuple } from '../../workflow-version-tuple.ts';
+import { canResolveRevisionLocally } from '../dynamic-source-execution.ts';
 import type { EngineInternals } from '../internals.ts';
+import { WorkflowRevisionUnavailableError } from '../revision-errors.ts';
 import { encodeWorkflowStartHeaders } from '../state-utilities.ts';
 import { buildWorkflowVisibilityIndexOperations } from '../workflow-indexes.ts';
 import { EMPTY_STORAGE_VALUE, FORK_LINEAGE_ATTRIBUTE, type LifecycleCallbacks } from './shared.ts';
+
+/**
+ * Validate an explicit `ForkOptions.revision` request (WFT-21) against what
+ * THIS process can actually run, BEFORE `fork()` reads any checkpoint bytes
+ * — a wasted storage read for a revision this process could never launch
+ * anyway. Deliberately stricter than {@link canResolveRevisionLocally} for
+ * an eager registration: that helper treats every eager type as always
+ * resolvable regardless of the requested `revision` (correct for
+ * ordinary resume/recovery, where a process only ever runs the one
+ * revision it loaded, so a stale pin is harmless) — but an EXPLICIT fork
+ * request naming a revision this process did NOT load must fail rather
+ * than silently launching the loaded code under the requested revision's
+ * name. Mirrors `pinned-schedule-revision.ts`'s identical
+ * `resolvePinnedExecutableRegistration()` eager-exact-match rule, which
+ * faces the same "an explicit revision commitment must not silently
+ * degrade" requirement for a pinned schedule's fire-time launch.
+ */
+export function assertForkRevisionResolvable(
+  internals: EngineInternals,
+  type: string,
+  revision: string,
+): void {
+  if (internals.registrations.has(type)) {
+    if (internals.registeredCatalogRevisions.get(type) !== revision) {
+      throw new WorkflowRevisionUnavailableError(type, revision, 'not-registered');
+    }
+    return;
+  }
+  if (!canResolveRevisionLocally(internals, type, revision)) {
+    throw new WorkflowRevisionUnavailableError(type, revision, 'not-registered');
+  }
+}
+
+/**
+ * Compute the revision `fork()` resolves the new run's registration
+ * against (WFT-21) — `options.revision` when supplied (after validating it
+ * via {@link assertForkRevisionResolvable}), otherwise the source run's own
+ * pin, unchanged from before this field existed. Extracted out of `fork()`
+ * itself to keep that function's cyclomatic complexity under the
+ * repository's ceiling — this single call site replaces what would
+ * otherwise be two separate branches (the `??` fallback and the validation
+ * `if`) inline in `fork()`.
+ */
+export function resolveForkTargetRevision(
+  internals: EngineInternals,
+  sourceState: WorkflowState,
+  options: ForkOptions | undefined,
+): string | undefined {
+  if (options?.revision === undefined) {
+    return sourceState.revision;
+  }
+  assertForkRevisionResolvable(internals, sourceState.type, options.revision);
+  return options.revision;
+}
+
+/**
+ * Compute the fork's own persisted `revision` (WFT-21): an explicit
+ * `options.revision` request wins, then the source run's own pin, then
+ * whatever the resolver itself resolved (the legacy-dynamic-source-with-
+ * one-candidate case — see {@link createForkedWorkflowState}'s own doc for
+ * why this precedence exists). Extracted out of `fork()` alongside
+ * {@link resolveForkTargetRevision} to keep that function's cyclomatic
+ * complexity under the repository's ceiling.
+ */
+export function resolveForkPersistedRevision(
+  options: ForkOptions | undefined,
+  sourceState: WorkflowState,
+  resolvedRevision: string | undefined,
+): string | undefined {
+  return options?.revision ?? sourceState.revision ?? resolvedRevision;
+}
 
 export function createForkLineage(
   _internals: EngineInternals,
@@ -42,39 +116,34 @@ export function createForkedWorkflowState(
   forkedAt: number,
   _callbacks: LifecycleCallbacks,
   /**
-   * `fork()`'s own resolver-returned revision — used to fill in the fork's
-   * persisted `revision` ONLY when `sourceState.revision` is itself
-   * `undefined` (WFT-19 review round 6, Codex, P1). Never overrides an
-   * already-defined `sourceState.revision`: `resolveExecutableRegistrationForRevision()`
-   * ALWAYS returns `revision: undefined` for an eager registration (eager
-   * has no ambiguity to resolve against — see `canResolveRevisionLocally`'s
-   * doc), even though the eager source run's own `sourceState.revision` is
-   * a real, independently-meaningful value (`resolveCachedStartRevision()`'s
-   * `registeredCatalogRevisions` fallback stamps it at ordinary start time,
-   * for every registration kind). Blindly preferring `resolvedRevision`
-   * here would have dropped that real value for every eager-type fork —
+   * The fork's own persisted `revision` — computed by the CALLER (`fork()`
+   * in `transition.ts`), not here, as
+   * `options.revision ?? sourceState.revision ?? resolvedRevision` (WFT-21).
+   * Renamed from the pre-WFT-21 `resolvedRevision` parameter (which used to
+   * carry only the resolver's own answer, and this function itself computed
+   * `sourceState.revision ?? resolvedRevision`) so the precedence chain
+   * lives in ONE place — `fork()` — rather than split across two functions,
+   * now that a THIRD input (`options.revision`, an explicit diagnostic
+   * opt-in) joins the chain ahead of both.
+   *
+   * The two lower-precedence terms preserve WFT-19 review round 6's fix
+   * byte-for-byte: `sourceState.revision` wins whenever it is defined —
+   * `resolveExecutableRegistrationForRevision()` ALWAYS returns
+   * `revision: undefined` for an eager registration (eager has no ambiguity
+   * to resolve against), even though the eager source run's own
+   * `sourceState.revision` is a real, independently-meaningful value
+   * (`resolveCachedStartRevision()`'s `registeredCatalogRevisions` fallback
+   * stamps it at ordinary start time, for every registration kind); only a
+   * legacy (pre-revision-pinning) source run on a dynamic-source type with
+   * exactly one registered candidate has `sourceState.revision` genuinely
+   * `undefined`, falling through to the resolver's own answer instead —
    * caught by `tests/replay-fixtures/fork-from-checkpoint.json`'s golden
-   * byte comparison. For a legacy (pre-revision-pinning) source run on a
-   * dynamic-source type with exactly one registered candidate,
-   * `sourceState.revision` genuinely IS `undefined` even though the
-   * resolver resolved — and the fork launches against — that sole
-   * candidate's code; `sourceState.revision ?? resolvedRevision` falls
-   * through to the resolver's answer only in that case. Stamping the fork's
-   * persisted `revision` with the raw `undefined` legacy pin (as this
-   * function did before this fix existed) left the fork durably unpinned:
-   * it would run correctly until the next restart, but a fresh-process
-   * `recoverAll()` after a second candidate is later registered would
-   * classify the fork `legacy-ambiguous` and refuse to resume it, even
-   * though the fork's own resolver already knew exactly which revision it
-   * belonged to at creation time. Mirrors the identical fix already applied
-   * to the process-local identity cache in `checkpoint-launch.ts`'s
-   * `launchWorkflowFromCheckpoint()` (WFT-19 review round 5) — that fix
-   * closed the in-memory gap; this one closes the matching durable-state
-   * gap the same bug left behind, for the one case it actually applies to.
+   * byte comparison. Mirrors the identical fix already applied to the
+   * process-local identity cache in `checkpoint-launch.ts`'s
+   * `launchWorkflowFromCheckpoint()` (WFT-19 review round 5).
    */
-  resolvedRevision: string | undefined,
+  persistedRevision: string | undefined,
 ): WorkflowState {
-  const forkRevision = sourceState.revision ?? resolvedRevision;
   return {
     id: workflowId,
     type: sourceState.type,
@@ -82,7 +151,7 @@ export function createForkedWorkflowState(
     input: sourceState.input,
     workflowExecutionToken: crypto.randomUUID(),
     versionTuple,
-    ...(forkRevision !== undefined && { revision: forkRevision }),
+    ...(persistedRevision !== undefined && { revision: persistedRevision }),
     executionStateOwnerId: workflowId,
     createdAt: forkedAt,
     startedAt: forkedAt,

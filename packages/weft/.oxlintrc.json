@@ -76,7 +76,8 @@
         "src/client/interface.ts",
         "src/client/http-client.ts",
         "src/core/context/index.ts",
-        "src/worker/registry.ts"
+        "src/worker/registry.ts",
+        "src/core/types/options.ts"
       ],
       "rules": {
         "max-lines": ["error", { "max": 600, "skipBlankLines": false, "skipComments": false }]

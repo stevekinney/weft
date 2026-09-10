@@ -4,7 +4,10 @@ import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { encode } from '../codec.ts';
 import type { WorkflowState } from '../types.ts';
-import { countNonTerminalRunsForRevision } from './nonterminal-revision-count.ts';
+import {
+  countNonTerminalRunsForRevision,
+  countWorkflowStateRevisionsByStatus,
+} from './nonterminal-revision-count.ts';
 
 function makeWorkflowState(overrides: Partial<WorkflowState> & { id: string }): WorkflowState {
   return {
@@ -103,5 +106,102 @@ describe('countNonTerminalRunsForRevision', () => {
     );
 
     expect(await countNonTerminalRunsForRevision(storage, 'checkout', 'rev-nonexistent')).toBe(0);
+  });
+});
+
+describe('countWorkflowStateRevisionsByStatus', () => {
+  it('is the one wf: scan countNonTerminalRunsForRevision now delegates to — byte-identical nonTerminalRuns for every existing case', async () => {
+    const storage = new MemoryStorage();
+    await seedWorkflow(
+      storage,
+      makeWorkflowState({ id: 'wf-1', revision: 'rev-a', status: 'running' }),
+    );
+    await seedWorkflow(
+      storage,
+      makeWorkflowState({ id: 'wf-2', revision: 'rev-a', status: 'pending' }),
+    );
+    await seedWorkflow(
+      storage,
+      makeWorkflowState({ id: 'wf-3', revision: 'rev-a', status: 'suspended' }),
+    );
+    await seedWorkflow(
+      storage,
+      makeWorkflowState({ id: 'wf-4', revision: 'rev-b', status: 'running' }),
+    );
+    await seedWorkflow(
+      storage,
+      makeWorkflowState({ id: 'wf-5', revision: 'rev-a', status: 'completed' }),
+    );
+    await seedWorkflow(
+      storage,
+      makeWorkflowState({ id: 'wf-6', type: 'other', revision: 'rev-a', status: 'running' }),
+    );
+    await seedWorkflow(storage, makeWorkflowState({ id: 'wf-7', status: 'running' }));
+
+    const combined = await countWorkflowStateRevisionsByStatus(storage, 'checkout', 'rev-a');
+    const wrapped = await countNonTerminalRunsForRevision(storage, 'checkout', 'rev-a');
+    expect(combined.nonTerminalRuns).toBe(3);
+    expect(wrapped).toBe(combined.nonTerminalRuns);
+  });
+
+  it('counts completed/failed/cancelled/timed-out states pinned to the exact (type, revision) as terminalRuns, excluding non-terminal and mismatched (type, revision)', async () => {
+    const storage = new MemoryStorage();
+    await seedWorkflow(
+      storage,
+      makeWorkflowState({ id: 'wf-completed', revision: 'rev-a', status: 'completed' }),
+    );
+    await seedWorkflow(
+      storage,
+      makeWorkflowState({ id: 'wf-failed', revision: 'rev-a', status: 'failed' }),
+    );
+    await seedWorkflow(
+      storage,
+      makeWorkflowState({ id: 'wf-cancelled', revision: 'rev-a', status: 'cancelled' }),
+    );
+    await seedWorkflow(
+      storage,
+      makeWorkflowState({ id: 'wf-timed-out', revision: 'rev-a', status: 'timed-out' }),
+    );
+    // Non-terminal on the exact revision — must not count as terminal.
+    await seedWorkflow(
+      storage,
+      makeWorkflowState({ id: 'wf-running', revision: 'rev-a', status: 'running' }),
+    );
+    // Terminal, but a different revision — must not count.
+    await seedWorkflow(
+      storage,
+      makeWorkflowState({ id: 'wf-other-rev', revision: 'rev-b', status: 'completed' }),
+    );
+    // Terminal, but a different type — must not count.
+    await seedWorkflow(
+      storage,
+      makeWorkflowState({
+        id: 'wf-other-type',
+        type: 'other',
+        revision: 'rev-a',
+        status: 'completed',
+      }),
+    );
+    // Legacy record with no persisted revision — must never match a defined revision.
+    await seedWorkflow(storage, makeWorkflowState({ id: 'wf-legacy', status: 'completed' }));
+
+    const counts = await countWorkflowStateRevisionsByStatus(storage, 'checkout', 'rev-a');
+    expect(counts.terminalRuns).toBe(4);
+    expect(counts.nonTerminalRuns).toBe(1);
+  });
+
+  it('returns zeros for a revision no workflow references', async () => {
+    const storage = new MemoryStorage();
+    await seedWorkflow(
+      storage,
+      makeWorkflowState({ id: 'wf-1', revision: 'rev-a', status: 'completed' }),
+    );
+
+    const counts = await countWorkflowStateRevisionsByStatus(
+      storage,
+      'checkout',
+      'rev-nonexistent',
+    );
+    expect(counts).toEqual({ nonTerminalRuns: 0, terminalRuns: 0 });
   });
 });

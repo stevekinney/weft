@@ -28,8 +28,9 @@ import { ensureWorkflowCatalogReady, getWorkflowCatalog } from './catalog-readin
 import { resolveCatalogTombstoneIfPresent } from './catalog-tombstone-recovery.ts';
 import type { Engine } from './index.ts';
 import { getInternals, type EngineInternals } from './internals.ts';
-import { countNonTerminalRunsForRevision } from './nonterminal-revision-count.ts';
+import { countWorkflowStateRevisionsByStatus } from './nonterminal-revision-count.ts';
 import { countPinnedSchedulesForRevision } from './pinned-schedule-revision-count.ts';
+import { countTeardownDeadLettersForRevision } from './retained-recovery-record-count.ts';
 import { readSourceLoadDiagnostics, readSourceWaiterCount } from './source-diagnostics.ts';
 import type { SourceLoadDiagnostics } from './source-runtime-state.ts';
 
@@ -145,11 +146,16 @@ export function releaseInFlightStart(
  * wiring `removeWorkflowRevision()` into an automated cleanup path on a
  * large durable store, rather than the operator-triggered use this batch
  * assumes. `pinnedSchedules` is ALSO an unbounded, full `schedule:`-prefix
- * durable scan (WFT-20 — see {@link countPinnedSchedulesForRevision}), so
- * this function now pays for two bounded-but-unbounded-in-store-size scans
- * per call. The remaining two fields of {@link WorkflowRevisionReferenceCounts}
- * stay `0` — the dispatch ledger and execution realms are out of this
- * batch's scope.
+ * durable scan (WFT-20 — see {@link countPinnedSchedulesForRevision}), and
+ * `retainedRecoveryRecords` (WFT-21) adds a THIRD unbounded scan (its
+ * `TeardownDeadLetterRecord` component — see
+ * {@link countTeardownDeadLettersForRevision}), while its OTHER component
+ * (a terminal-but-unpurged `WorkflowState`) rides the same `wf:` scan
+ * `nonTerminalRuns` already pays for — see
+ * {@link countWorkflowStateRevisionsByStatus}, which returns both buckets
+ * from one pass. The remaining two fields of
+ * {@link WorkflowRevisionReferenceCounts} stay `0` — the dispatch ledger
+ * and execution realms are out of this batch's scope.
  */
 export async function countWorkflowRevisionReferences(
   engine: Engine,
@@ -157,8 +163,13 @@ export async function countWorkflowRevisionReferences(
   revision: string,
 ): Promise<WorkflowRevisionReferenceCounts> {
   const internals = getInternals(engine);
-  const nonTerminalRuns = await countNonTerminalRunsForRevision(internals.storage, name, revision);
+  const { nonTerminalRuns, terminalRuns } = await countWorkflowStateRevisionsByStatus(
+    internals.storage,
+    name,
+    revision,
+  );
   const pinnedSchedules = await countPinnedSchedulesForRevision(internals.storage, name, revision);
+  const deadLetters = await countTeardownDeadLettersForRevision(internals.storage, name, revision);
   return {
     registeredDefinitions: internals.registeredCatalogRevisions.get(name) === revision ? 1 : 0,
     inFlightStarts: readNestedRevisionCount(internals.inFlightStartsByRevision, name, revision),
@@ -166,7 +177,7 @@ export async function countWorkflowRevisionReferences(
     pinnedSchedules,
     pendingDispatches: 0,
     activeExecutionRealms: 0,
-    retainedRecoveryRecords: 0,
+    retainedRecoveryRecords: terminalRuns + deadLetters,
   };
 }
 

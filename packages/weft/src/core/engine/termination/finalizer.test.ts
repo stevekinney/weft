@@ -721,6 +721,9 @@ describe('runWorkflowFinalizer — defensive bail-out branches', () => {
     expect(record.lastError).toContain('finalizer state missing');
     expect(record.workflowExecutionToken).toBe(`execution-${workflowId}`);
     expect('finalizerInput' in record).toBe(false);
+    // WFT-21: a legacy (revision-undefined) run writes a dead letter with
+    // `revision` omitted entirely, not persisted as `undefined`.
+    expect('revision' in record).toBe(false);
     // The dead-lettered event fires for symmetry with the retry-horizon path, and carries
     // the `error` reason (present for every 'failed'/'dead-lettered' status — Copilot). It
     // matches the dead-letter record's `lastError`.
@@ -731,6 +734,86 @@ describe('runWorkflowFinalizer — defensive bail-out branches', () => {
       attempts: 2,
       error: record.lastError,
     });
+    engine[Symbol.dispose]();
+  });
+
+  it("dead-letters the missing-finalizer-state path with the run's own pinned revision (WFT-21)", async () => {
+    const engine = new Engine();
+    const provision = workflow({
+      name: 'teardown-missing-state-revisioned',
+      finalizer: activity({
+        name: 'destroy-missing-state-revisioned',
+        execute: async () => {},
+      }),
+    }).execute(async function* (ctx: WorkflowContext) {
+      yield* ctx.waitForSignal('never');
+    });
+    engine.register(provision);
+    const internals = getInternals(engine);
+
+    const workflowId = 'wf-missing-state-revisioned';
+    const token = 'tok-missing-revisioned';
+    await internals.storage.put(KEYS.teardownOwed(workflowId), encode(owedClaim(token, 2)));
+    // Note: no KEYS.finalizerState written.
+
+    await runWorkflowFinalizer(
+      internals,
+      workflowId,
+      createTeardownTimerId(token),
+      makeCallbacks(terminalState(workflowId, 'teardown-missing-state-revisioned', 'rev-pinned')),
+    );
+
+    const deadLetterBytes = await internals.storage.get(KEYS.teardownDeadLetter(workflowId));
+    expect(deadLetterBytes).not.toBeNull();
+    const record = decode(deadLetterBytes!) as TeardownDeadLetterRecord;
+    expect(record.revision).toBe('rev-pinned');
+    engine[Symbol.dispose]();
+  });
+
+  it("dead-letters at the retry horizon with the run's own pinned revision (WFT-21)", async () => {
+    // Drive `settleTeardownFailure`'s attempt-exhausted dead-letter path (as
+    // opposed to the missing-finalizer-state path above) through a real
+    // finalizer failure at MAX_TEARDOWN_ATTEMPTS, and assert the durable
+    // record carries the terminal run's own pinned revision.
+    const engine = new Engine();
+    const provision = workflow({
+      name: 'teardown-horizon-revisioned',
+      finalizer: activity({
+        name: 'destroy-horizon-revisioned',
+        execute: async () => {
+          throw new Error('finalizer boom');
+        },
+      }),
+    }).execute(async function* (ctx: WorkflowContext) {
+      yield* ctx.waitForSignal('never');
+    });
+    engine.register(provision);
+    const internals = getInternals(engine);
+
+    const workflowId = 'wf-horizon-revisioned';
+    const token = 'tok-horizon-revisioned';
+    // Start at attempt 7 so this attempt (8) hits MAX_TEARDOWN_ATTEMPTS.
+    await internals.storage.put(KEYS.teardownOwed(workflowId), encode(owedClaim(token, 7)));
+    await internals.storage.put(KEYS.finalizerState(workflowId), encode({ sandboxId: 'sbx' }));
+
+    const events: Event[] = [];
+    await runWorkflowFinalizer(
+      internals,
+      workflowId,
+      createTeardownTimerId(token),
+      makeCallbacks(
+        terminalState(workflowId, 'teardown-horizon-revisioned', 'rev-horizon'),
+        events,
+      ),
+    );
+
+    const deadLetterBytes = await internals.storage.get(KEYS.teardownDeadLetter(workflowId));
+    expect(deadLetterBytes).not.toBeNull();
+    const record = decode(deadLetterBytes!) as TeardownDeadLetterRecord;
+    expect(record.attempts).toBe(8);
+    expect(record.revision).toBe('rev-horizon');
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ status: 'dead-lettered', attempts: 8 });
     engine[Symbol.dispose]();
   });
 

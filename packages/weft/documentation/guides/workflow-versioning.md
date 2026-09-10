@@ -472,6 +472,42 @@ launch path already was: the identity is set, and the handler resolved
 against the source's own `revision`, before the fork can drive its first
 turn. See the `Fixed` entries in the changelog.
 
+### Forking against a different revision (WFT-21)
+
+By default, `engine.fork()` takes no `revision` opinion at all: it resolves
+and persists the SOURCE run's own pinned revision, exactly as described
+above, so a fork's differences from its source come only from `fromStep`,
+input, or history choices—never a silently different revision of the code.
+
+`ForkOptions.revision?: string` is an explicit, validated opt-in to fork
+against a DIFFERENT installed revision instead—a genuine diagnostic need
+("does this input fail on v1 or only on v2?"). It is validated against what
+THIS process can actually run, before any checkpoint is ever read:
+
+- For an **eager-registered** workflow type, `revision` must exactly equal
+  the revision this process loaded. An eager type has no other revision
+  available to fork against, so this is the one call site in the codebase
+  where an eager type does NOT get to ignore a pin (the same exception
+  `pinned-schedule-revision.ts`'s fire-time launch already makes, for the
+  same reason: an explicit commitment must not silently degrade).
+- For a **dynamic-source** type, `revision` must name one of this process's
+  currently registered, resolvable candidates.
+
+Either mismatch throws `WorkflowRevisionUnavailableError` with
+`reason: 'not-registered'`, before any storage read for the checkpoint—so a
+request for a revision this process cannot run leaves no partial write. A
+`revision` whose registered `version` is semver-incompatible with the source
+checkpoint still throws `VersionMismatchError`, via the same
+`derivePreparedExecutionState()` compatibility gate every other fork
+already goes through: forking against a different revision never bypasses
+ordinary version compatibility checking.
+
+The `weft.workflows.fork` operation accepts a matching optional `revision`
+input field (REST body field, JSON-RPC param); an unresolvable request
+surfaces as a `Conflict` (409) fault carrying `data.reason` over JSON-RPC
+(REST discloses the reason in the error message text rather than
+structured `data`, per the existing WFT-11 REST/JSON-RPC fidelity split).
+
 The ADR 0002 workflow-lease reclaim-eligibility check
 (`isWorkflowTypeRegistered`) is source- and revision-aware for the same
 reason—see
@@ -655,7 +691,7 @@ relying on it. `WorkflowRevisionReferenceCounts` is the bounded accounting
 interface a removal decision is gated on: seven fields, always present, so
 a caller never special-cases an "unknown" reference kind.
 
-Four fields are wired to real signals now:
+Five fields are wired to real signals now:
 
 - **`registeredDefinitions`**: `1` when this process's own
   `engine.register()`-drain path most recently activated exactly this
@@ -695,14 +731,31 @@ Four fields are wired to real signals now:
   holds no standing reference to any one revision. A `'cancelled'` pinned
   schedule is excluded too (it will never fire again); a `'paused'` one
   still counts (it can be resumed).
+- **`retainedRecoveryRecords`** (WFT-21): the sum of two durable-reference
+  components, both pinned to exactly this revision. First, a terminal
+  (`completed`/`failed`/`cancelled`/`timed-out`) `WorkflowState` still
+  present in storage—not yet purged. A completed run is forkable against
+  the exact revision it ran, and a failed run is retryable against it, so
+  both durably pin the revision until purge or a retention sweep releases
+  them; that release rides the SAME fenced `wf:` delete purge already
+  performs, so no new write path was needed. Second, a
+  `TeardownDeadLetterRecord`—a workflow whose finalizer permanently
+  failed—pinned to this revision. Unlike the first component, a dead letter
+  is **never** auto-released: it is deliberately excluded from the purge
+  delete-set as permanent leak evidence, so a revision that ever
+  dead-lettered stays non-removable indefinitely, with no acknowledge/clear
+  API yet to reclaim it. Both components are bounded storage scans—the
+  terminal-run component rides the exact same `storage.scan('wf:')` pass
+  `nonTerminalRuns` already pays for (one scan classifies each record into
+  exactly one of the two buckets); the dead-letter component is its own
+  bounded `storage.scan('wf-teardown-deadletter:')`.
 
-The remaining three fields—`pendingDispatches`, `activeExecutionRealms`,
-and `retainedRecoveryRecords`—stay structurally present but always `0`.
-Each awaits revision identity threaded through a different, later-owned
-subsystem—the dispatch ledger, execution realms, and retained recovery
-records respectively—none of which are scheduled yet. Until each lands,
-its field exists as forward-compatible plumbing rather than a promise the
-engine cannot keep.
+The remaining two fields—`pendingDispatches` and `activeExecutionRealms`—
+stay structurally present but always `0`. Each awaits revision identity
+threaded through a different, later-owned subsystem—the dispatch ledger and
+execution realms respectively—neither of which is scheduled yet. Until each
+lands, its field exists as forward-compatible plumbing rather than a
+promise the engine cannot keep.
 
 Removal itself is a plain, root-exported async function—not an
 `engine.workflows.*` method, and not (yet) a wire operation:

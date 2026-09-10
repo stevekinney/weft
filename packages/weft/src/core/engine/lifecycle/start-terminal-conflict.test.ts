@@ -10,10 +10,25 @@ import {
 import { MemoryStorage } from '../../../storage/memory.ts';
 import { flushMicrotasks, waitForCondition } from '../../../testing/fake-timers.test-support.ts';
 import { TestEngine } from '../../../testing/test-engine.ts';
+import { ActivityRegistry } from '../../activity-registry.ts';
 import { Engine } from '../../engine.ts';
+import { buildWorkflowManifestFromDefinition } from '../../registry-workflow-manifest.ts';
+import { workflowSource } from '../../source/index.ts';
 import { StartWorkflowValidationError } from '../../start-workflow-validation.ts';
-import { type WorkflowContext, workflow } from '../../types.ts';
+import { type WorkflowContext, type WorkflowDefinition, workflow } from '../../types.ts';
+import { copyWorkflowDefinition } from '../construction.ts';
 import { WorkflowAlreadyExistsError } from '../errors.ts';
+import { buildRegistrationEntry } from '../registration.ts';
+
+async function revisionFor(name: string, definition: WorkflowDefinition): Promise<string> {
+  const entry = buildRegistrationEntry(name, definition);
+  const registered = copyWorkflowDefinition(name, entry);
+  const manifest = await buildWorkflowManifestFromDefinition(
+    registered,
+    new ActivityRegistry().listDefinitions(),
+  );
+  return manifest.revision;
+}
 
 /**
  * `onTerminalConflict: 'start-new'` is Weft's `WorkflowIdReusePolicy.ALLOW_DUPLICATE`
@@ -447,7 +462,7 @@ describe("engine.start onTerminalConflict: 'start-new'", () => {
               }
               // MemoryStorage always provides it; `Storage.conditionalBatch` is
               // optional only because capability-gated backends may omit it.
-              return target.conditionalBatch!(conditions, operations);
+              return target.conditionalBatch(conditions, operations);
             };
           }
           const value = Reflect.get(target, property, receiver);
@@ -577,6 +592,80 @@ describe("engine.start onTerminalConflict: 'start-new'", () => {
     expect(state?.status).toBe('pending');
     // The checkpoint key the start batch wrote survived the same-key delete too.
     expect(await storage.get(KEYS.checkpoint('atomic-restart'))).not.toBeNull();
+
+    engine[Symbol.dispose]();
+  });
+
+  it("resolves the replacement run's revision to the ACTIVE revision at replacement time, never the displaced run's own revision, and still commits the purge-delete-set + create batch atomically (WFT-21)", async () => {
+    // An eager registration can't distinguish two revisions within one
+    // process (`resolveCachedStartRevision()` always resolves this
+    // process's own `registeredCatalogRevisions` entry, never the catalog's
+    // durable active pointer — see that module's own doc) — a
+    // dynamic-source type with two registered candidates is what actually
+    // exercises "the active revision at replacement time", so this test
+    // uses `workflowSource()` instead of this file's usual eager helpers.
+    const type = 'terminal-conflict-revision';
+    const definitionV1 = workflow({ name: type, description: 'v1' }).execute(async function* (
+      _ctx: WorkflowContext,
+      input: unknown,
+    ) {
+      return input;
+    });
+    const definitionV2 = workflow({ name: type, description: 'v2' }).execute(async function* (
+      _ctx: WorkflowContext,
+      input: unknown,
+    ) {
+      return input;
+    });
+    const revisionV1 = await revisionFor(type, definitionV1);
+    const revisionV2 = await revisionFor(type, definitionV2);
+
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+    engine.registerSource(
+      workflowSource(
+        { name: type, location: './v1.ts', exportName: 'v1', revision: revisionV1 },
+        async () => ({ v1: definitionV1 }),
+      ),
+    );
+
+    const first = await engine.start(type, 'old-input', {
+      id: 'terminal-conflict-revision-id',
+    });
+    await expect(first.result()).resolves.toBe('old-input');
+    const firstSummary = await engine.get(first.id);
+    expect(firstSummary?.revision).toBe(revisionV1);
+
+    // Register AND activate v2 as the catalog's current pointer — AFTER the
+    // displaced run above already completed pinned to v1.
+    engine.registerSource(
+      workflowSource(
+        { name: type, location: './v2.ts', exportName: 'v2', revision: revisionV2 },
+        async () => ({ v2: definitionV2 }),
+      ),
+    );
+    await engine.resolveWorkflowSource(type, revisionV2);
+    await engine.workflows.activate(type, revisionV2);
+
+    // `defer: true` parks the replacement at `pending` WITHOUT executing —
+    // same atomicity-isolation technique as the eager test above (reading
+    // the parked state reflects the START BATCH directly, before any
+    // workflow-completion commit could rewrite `wf:{id}`).
+    await engine.start(type, 'new-input', {
+      id: 'terminal-conflict-revision-id',
+      onTerminalConflict: 'start-new',
+      defer: true,
+    });
+
+    const state = await engine.get('terminal-conflict-revision-id');
+    expect(state?.input).toBe('new-input');
+    expect(state?.status).toBe('pending');
+    // The replacement pins to v2 (active at replacement time) — never v1
+    // (the displaced run's own revision).
+    expect(state?.revision).toBe(revisionV2);
+    // Same atomic-commit proof as the eager test above: the checkpoint key
+    // the start batch wrote survived the same-key delete.
+    expect(await storage.get(KEYS.checkpoint('terminal-conflict-revision-id'))).not.toBeNull();
 
     engine[Symbol.dispose]();
   });

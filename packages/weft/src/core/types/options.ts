@@ -204,6 +204,25 @@ export interface StartOrSignalOptions<TServices = unknown> extends StartOptions<
  */
 export interface ForkOptions {
   fromStep?: number;
+  /**
+   * Fork against a DIFFERENT installed revision than the source run's own
+   * pin (WFT-21) — an explicit, validated opt-in for diagnostic use (e.g.
+   * "does this input fail on v1 or only on v2?"). Omitted (the default):
+   * the fork resolves and persists the source run's own
+   * {@link import('./state.ts').WorkflowState.revision} — differences from
+   * input or history choices only, never a silently different code
+   * revision.
+   *
+   * Validated before any checkpoint is read: for an eager-registered type,
+   * `revision` must exactly equal the revision this process loaded (its
+   * only option); for a dynamic-source type, it must name one of this
+   * process's currently registered, resolvable candidates. Either mismatch
+   * throws {@link import('../engine/revision-errors.ts').WorkflowRevisionUnavailableError}
+   * (`reason: 'not-registered'`). A semver-incompatible target `version`
+   * still throws {@link import('../versioning.ts').VersionMismatchError} —
+   * an explicit revision never bypasses ordinary compatibility checking.
+   */
+  revision?: string;
 }
 
 // ---------------------------------------------------------------------------

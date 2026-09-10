@@ -8,6 +8,7 @@ import { buildWorkflowContract } from '../../core/contract/build.ts';
 import { buildWorkflowRevisionManifest } from '../../core/contract/manifest.ts';
 import { Engine } from '../../core/engine.ts';
 import { activateCatalogRevisionCandidate } from '../../core/engine/catalog-activation.ts';
+import { ensureWorkflowCatalogReady } from '../../core/engine/catalog-readiness.ts';
 import { getWorkflowCatalog } from '../../core/engine/index.ts';
 import { workflow, type WorkflowContext } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
@@ -148,7 +149,11 @@ describe('weft.catalog.diagnostics — REST GET /v1/catalog/:name/revisions/:rev
     const storage = new MemoryStorage();
     await using engineA = new Engine({ storage });
     engineA.register(noopWorkflow('checkout'));
-    await engineA.start('checkout', null);
+    // Activate via the register-drain path WITHOUT starting a real run: a
+    // completed-but-unpurged run pinned to revA would itself be a durable
+    // reference (WFT-21's retainedRecoveryRecords), which is not what this
+    // "unreferenced" scenario is testing.
+    await ensureWorkflowCatalogReady(engineA);
     const revA = getWorkflowCatalog(engineA).resolveActive('checkout')!.revision;
     const manifestB = await manifestFor('checkout', '1.0.0', 'a later revision');
     await activateCatalogRevisionCandidate(engineA, 'checkout', manifestB, {

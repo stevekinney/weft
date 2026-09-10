@@ -1156,9 +1156,13 @@ export type ClientOperationTypes = {
     readonly faults: never;
   };
   'weft.workflows.fork': {
-    readonly input: { readonly fromStep?: unknown; readonly workflowId: string };
+    readonly input: {
+      readonly fromStep?: unknown;
+      readonly revision?: string;
+      readonly workflowId: string;
+    };
     readonly output: { readonly id: string };
-    readonly faults: 'NotFound';
+    readonly faults: 'Conflict' | 'NotFound';
   };
   'weft.workflows.get': {
     readonly input: { readonly workflowId: string };

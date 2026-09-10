@@ -51,6 +51,16 @@ export const CLASSIFIED_OVERSIZED_IMPLEMENTATION_FILES = [
       'The storage interface is a public type and helper surface where splitting would scatter one import contract across multiple subpaths.',
   },
   {
+    path: 'src/core/types/options.ts',
+    classification: 'justified-exception',
+    rationale:
+      'Every engine and lifecycle options interface (StartOptions, ForkOptions, EngineOptions, ' +
+      'and their siblings) lives here as one public import surface with runnable @example JSDoc ' +
+      'per field — the same "splitting would scatter one import contract" rationale as ' +
+      'storage/interface.ts. WFT-21 pushed it over the ceiling by ~19 lines documenting ' +
+      'ForkOptions.revision; the file was already at 498/500 lines before that addition.',
+  },
+  {
     path: 'src/client/client-contract.test-support.ts',
     classification: 'justified-exception',
     rationale:

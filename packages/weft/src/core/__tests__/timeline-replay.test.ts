@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
-import { encode } from '../codec.ts';
+import { decode, encode } from '../codec.ts';
 import { Engine } from '../engine.ts';
 import { activity, workflow, type ActivityContext, type WorkflowContext } from '../types.ts';
 
@@ -375,6 +375,95 @@ describe('timeline and replay', () => {
       'workflow:checkpoint',
     ]);
     expect(replay?.events).toHaveLength(2);
+    // WFT-21: `replayTo()` reports the run's own pinned revision.
+    const state = await engine.get('wf-replay');
+    expect(state?.revision).toBeDefined();
+    expect(replay?.revision).toBe(state?.revision);
+  });
+
+  it("acceptance criterion: engine.replayTo(workflowId, step) reports the run's ORIGINAL revision, not the newly active one, after a later activation", async () => {
+    const storage = new MemoryStorage();
+    engine = new Engine({ storage, checkpointHistory: 10 });
+    const olderRevisionWorkflow = workflow({ name: 'replay-revision', version: '1.0.0' }).execute(
+      async function* (ctx: WorkflowContext) {
+        yield* ctx.run(async () => 'step-one');
+        return 'done';
+      },
+    );
+    engine.register(olderRevisionWorkflow);
+
+    const handle = await engine.start('replay-revision', null, { id: 'wf-replay-revision' });
+    await handle.result();
+    const originalRevisionSummary = await engine.get(handle.id);
+    const originalRevision = originalRevisionSummary?.revision;
+    expect(originalRevision).toBeDefined();
+
+    // Activate a genuinely different revision for the same name — the run
+    // above is pinned to the ORIGINAL revision and must stay that way.
+    engine[Symbol.dispose]();
+    engine = new Engine({ storage, checkpointHistory: 10 });
+    engine.register(
+      workflow({ name: 'replay-revision', version: '2.0.0' }).execute(async function* (
+        ctx: WorkflowContext,
+      ) {
+        yield* ctx.run(async () => 'step-one');
+        return 'done';
+      }),
+    );
+
+    const replay = await engine.replayTo(handle.id, 1);
+    expect(replay?.revision).toBe(originalRevision);
+  });
+
+  it('omits `revision` from a replay when the workflow record has since been purged', async () => {
+    const storage = new MemoryStorage();
+    engine = new Engine({ storage, checkpointHistory: 10 });
+    const purgedReplayWorkflow = workflow({ name: 'replay-purged' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      yield* ctx.run(async () => 'step-one');
+      return 'done';
+    });
+    engine.register(purgedReplayWorkflow);
+
+    const handle = await engine.start('replay-purged', null, { id: 'wf-replay-purged' });
+    await handle.result();
+    // Delete only the top-level `WorkflowState` record directly — a real
+    // `engine.purge()` also deletes the checkpoint history `replayTo()`
+    // itself reads, which would make it return `null` outright rather than
+    // exercising the "record gone, checkpoint history still readable"
+    // branch `WorkflowReplay.revision`'s own doc describes.
+    await storage.delete(KEYS.workflow(handle.id));
+
+    const replay = await engine.replayTo(handle.id, 1);
+    expect(replay).not.toBeNull();
+    expect('revision' in (replay ?? {})).toBe(false);
+  });
+
+  it('omits `revision` from a replay when the workflow record predates revision pinning (legacy, no persisted revision)', async () => {
+    const storage = new MemoryStorage();
+    engine = new Engine({ storage, checkpointHistory: 10 });
+    const legacyReplayWorkflow = workflow({ name: 'replay-legacy' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      yield* ctx.run(async () => 'step-one');
+      return 'done';
+    });
+    engine.register(legacyReplayWorkflow);
+
+    const handle = await engine.start('replay-legacy', null, { id: 'wf-replay-legacy' });
+    await handle.result();
+
+    // Simulate a legacy record (written before revision pinning existed) by
+    // stripping the persisted `revision` field directly in storage.
+    const stateBytes = await storage.get(KEYS.workflow(handle.id));
+    const state = { ...(decode(stateBytes!) as Record<string, unknown>) };
+    delete state['revision'];
+    await storage.put(KEYS.workflow(handle.id), encode(state));
+
+    const replay = await engine.replayTo(handle.id, 1);
+    expect(replay).not.toBeNull();
+    expect('revision' in (replay ?? {})).toBe(false);
   });
 
   it('ignores malformed stored timeline entries and returns results sorted by step', async () => {

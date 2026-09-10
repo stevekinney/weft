@@ -718,6 +718,13 @@ export const KEYS = {
    */
   teardownDeadLetter: (workflowId: string) =>
     `wf-teardown-deadletter:${encodeStorageKeyComponent(workflowId)}`,
+  /**
+   * Prefix over every {@link teardownDeadLetter} record, for the bounded
+   * `retainedRecoveryRecords` reference-count scan (WFT-21) — see
+   * {@link import('../core/engine/retained-recovery-record-count.ts').countTeardownDeadLettersForRevision}.
+   * Mirrors {@link terminalWorkflowPrefix}'s existing bare-prefix convention.
+   */
+  teardownDeadLetterPrefix: () => 'wf-teardown-deadletter:',
   offload: (workflowId: string, key: string) =>
     `offload:${encodeStorageKeyComponent(workflowId)}:${key}`,
   archive: (workflowId: string, key: string) =>

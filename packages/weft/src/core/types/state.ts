@@ -383,4 +383,13 @@ export type WorkflowReplay = {
    * slice is bounded.
    */
   compactedBefore?: number;
+  /**
+   * The revision of the code that produced this replay (WFT-21) — the
+   * run's own persisted `WorkflowState.revision`, unrelated to whichever
+   * revision is currently active. Omitted when the workflow record has
+   * since been purged (no `WorkflowState` left to read), or when it
+   * predates revision pinning (a legacy record with no persisted
+   * `revision`).
+   */
+  revision?: string;
 };

@@ -8,12 +8,14 @@ import { encode } from '../codec.ts';
 import { buildWorkflowContract } from '../contract/build.ts';
 import { buildWorkflowRevisionManifest } from '../contract/manifest.ts';
 import type { WorkflowRevisionManifest } from '../contract/types.ts';
+import type { ScheduleState } from '../types/schedules.ts';
 import type { RegisteredWorkflowDefinition } from '../types/workflow-registry.ts';
 import { DEFAULT_WORKFLOW_VERSION } from '../versioning.ts';
 import {
   resolveCatalogTombstoneIfPresent,
   resolveOrphanedCatalogTombstones,
 } from './catalog-tombstone-recovery.ts';
+import type { TeardownDeadLetterRecord } from './termination/finalizer-claim.ts';
 
 function fakeDefinition(type: string): RegisteredWorkflowDefinition {
   return { type, version: '1.0.0', tags: [] };
@@ -104,6 +106,102 @@ describe('resolveOrphanedCatalogTombstones', () => {
         updatedAt: 1,
       }),
     );
+
+    await simulateCrashedRemoval(storage, 'checkout', v1.revision);
+
+    await resolveOrphanedCatalogTombstones(storage);
+
+    expect(await storage.get(KEYS.catalogTombstone('checkout', v1.revision))).toBeNull();
+    const restoredBytes = await storage.get(KEYS.catalogEntry('checkout', v1.revision));
+    expect(restoredBytes).not.toBeNull();
+  });
+
+  it('restores an orphaned tombstone still referenced by a PINNED SCHEDULE — the pre-existing pinnedSchedules-blind gap this batch fixes (WFT-21)', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const v1 = await manifestFor('checkout', '1.0.0');
+    const v2 = await manifestFor('checkout', '2.0.0');
+    await catalog.activateRegistered('checkout', v1, fakeDefinition('checkout'));
+    await catalog.activateRegistered('checkout', v2, fakeDefinition('checkout'));
+
+    // A pinned schedule referencing v1 — no non-terminal run and no
+    // terminal/dead-lettered record exist, so before this batch's fix the
+    // sweep (checking only `nonTerminalRuns`) would have wrongly finalized
+    // this tombstone out from under the still-live pinned schedule.
+    const scheduleState: ScheduleState = {
+      id: 'sched-pinned-v1',
+      workflowType: 'checkout',
+      input: null,
+      cronExpression: '* * * * *',
+      status: 'active',
+      overlap: 'skip',
+      backfill: false,
+      revisionPolicy: 'pinned',
+      pinnedRevision: v1.revision,
+      createdAt: 1,
+      updatedAt: 1,
+      nextFireAt: 60_000,
+      missedFireCount: 0,
+      queuedRuns: [],
+    };
+    await storage.put(KEYS.schedule(scheduleState.id), encode(scheduleState));
+
+    await simulateCrashedRemoval(storage, 'checkout', v1.revision);
+
+    await resolveOrphanedCatalogTombstones(storage);
+
+    expect(await storage.get(KEYS.catalogTombstone('checkout', v1.revision))).toBeNull();
+    const restoredBytes = await storage.get(KEYS.catalogEntry('checkout', v1.revision));
+    expect(restoredBytes).not.toBeNull();
+  });
+
+  it('restores an orphaned tombstone still referenced by a terminal, unpurged run (retainedRecoveryRecords, WFT-21)', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const v1 = await manifestFor('checkout', '1.0.0');
+    const v2 = await manifestFor('checkout', '2.0.0');
+    await catalog.activateRegistered('checkout', v1, fakeDefinition('checkout'));
+    await catalog.activateRegistered('checkout', v2, fakeDefinition('checkout'));
+
+    await storage.put(
+      KEYS.workflow('checkout-terminal'),
+      encode({
+        id: 'checkout-terminal',
+        type: 'checkout',
+        status: 'completed',
+        input: null,
+        versionTuple: { workflowVersion: DEFAULT_WORKFLOW_VERSION },
+        revision: v1.revision,
+        createdAt: 1,
+        updatedAt: 1,
+      }),
+    );
+
+    await simulateCrashedRemoval(storage, 'checkout', v1.revision);
+
+    await resolveOrphanedCatalogTombstones(storage);
+
+    expect(await storage.get(KEYS.catalogTombstone('checkout', v1.revision))).toBeNull();
+    const restoredBytes = await storage.get(KEYS.catalogEntry('checkout', v1.revision));
+    expect(restoredBytes).not.toBeNull();
+  });
+
+  it('restores an orphaned tombstone still referenced by a dead-lettered finalizer record (retainedRecoveryRecords, WFT-21)', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const v1 = await manifestFor('checkout', '1.0.0');
+    const v2 = await manifestFor('checkout', '2.0.0');
+    await catalog.activateRegistered('checkout', v1, fakeDefinition('checkout'));
+    await catalog.activateRegistered('checkout', v2, fakeDefinition('checkout'));
+
+    const deadLetter: TeardownDeadLetterRecord = {
+      type: 'checkout',
+      lastError: 'resource leaked',
+      attempts: 8,
+      deadLetteredAt: 1,
+      revision: v1.revision,
+    };
+    await storage.put(KEYS.teardownDeadLetter('checkout-dead-lettered'), encode(deadLetter));
 
     await simulateCrashedRemoval(storage, 'checkout', v1.revision);
 

@@ -24,6 +24,8 @@ import {
   buildForkSearchAttributes,
   createForkLineage,
   createForkedWorkflowState,
+  resolveForkPersistedRevision,
+  resolveForkTargetRevision,
 } from './fork-helpers.ts';
 import { derivePreparedExecutionState } from './persist.ts';
 import {
@@ -345,6 +347,15 @@ export async function fork(
   // revision's handler entirely — not just a routing mismatch downstream of
   // execution, but the wrong code running from the very first turn. Mirrors
   // `resolveExecutableRegistrationForRetry()`'s identical fix for bulk retry.
+  //
+  // `options.revision` (WFT-21) is an explicit, validated opt-in to fork
+  // against a DIFFERENT installed revision than the source run's own pin —
+  // validated BEFORE the checkpoint is ever read, so an unresolvable
+  // request fails fast with no partial write. When absent, `targetRevision`
+  // is exactly `sourceState.revision`, preserving this fork's pre-WFT-21
+  // behavior byte-for-byte. See `resolveForkTargetRevision()`'s own doc for
+  // why this is extracted rather than inlined here.
+  const targetRevision = resolveForkTargetRevision(internals, sourceState, options);
   // `revision` here is the resolver's OWN resolved revision — threaded
   // through to `launchWorkflowFromCheckpoint()`'s identity-cache population
   // below, NOT re-derived from `forkState.revision` (which is `undefined`
@@ -352,13 +363,16 @@ export async function fork(
   // candidate — see that call site's doc, WFT-19 review round 5).
   const { entry: registration, revision: resolvedRevision } =
     await resolveExecutableRegistrationOrRenamedNotFound(
-      (type) => callbacks.resolveExecutableRegistrationForRevision(type, sourceState.revision),
+      (type) => callbacks.resolveExecutableRegistrationForRevision(type, targetRevision),
       sourceState.type,
       () =>
         new Error(
           `No workflow registered with name "${sourceState.type}" (needed to fork "${sourceWorkflowId}")`,
         ),
     );
+  // The fork's own persisted `revision` (WFT-21) — see
+  // `resolveForkPersistedRevision()`'s own doc for the precedence chain.
+  const persistedRevision = resolveForkPersistedRevision(options, sourceState, resolvedRevision);
 
   const fromStep =
     options?.fromStep !== undefined ? normalizeForkStep(options.fromStep) : undefined;
@@ -419,7 +433,7 @@ export async function fork(
     lineage,
     forkedAt,
     callbacks,
-    resolvedRevision,
+    persistedRevision,
   );
 
   let forkStarted = false;

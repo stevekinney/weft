@@ -26,6 +26,7 @@ import {
   sanitizeTimelineSummary,
   sanitizeWorkflowEventPayload,
 } from './state-utilities.ts';
+import { loadWorkflowState } from './storage-io.ts';
 import { isWorkflowTimelineEntry } from './validation.ts';
 
 /** Retrieve the event history for a workflow. */
@@ -175,6 +176,12 @@ export async function replayTo(
   // `events` regardless of the requested step. Surface the boundary so callers
   // can tell an incomplete replay from a complete one.
   const watermark = await readEventLogWatermark(internals.storage, workflowId);
+  // The run's own pinned revision (WFT-21) — a SEPARATE read from `checkpoint`
+  // (which carries no revision of its own): `state` can be `null` when the
+  // workflow record has since been purged, and `state.revision` can be
+  // `undefined` for a legacy record that predates revision pinning — either
+  // way `revision` is simply omitted below, never persisted as `undefined`.
+  const state = await loadWorkflowState(internals, workflowId);
 
   return {
     checkpoint: sanitizeCheckpointState({
@@ -194,5 +201,6 @@ export async function replayTo(
       data: sanitizeWorkflowEventPayload(entry.payload),
     })),
     ...(watermark !== null ? { compactedBefore: watermark.sequence } : {}),
+    ...(state?.revision !== undefined ? { revision: state.revision } : {}),
   };
 }

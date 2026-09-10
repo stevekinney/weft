@@ -226,7 +226,7 @@ const BASE_COVERAGE_ALLOWANCES = buildAllowanceLayer('BASE_COVERAGE_ALLOWANCES',
       reason:
         'Process-entry and failure-exit behavior runs in child processes whose hits are not attributed to the parent Bun LCOV report.',
       functions: 1,
-      lines: new Set([377, 378]),
+      lines: new Set([387, 388]),
       requireUncoveredLines: true,
     },
   ],
@@ -1285,11 +1285,15 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       // unchanged. Lines realigned to 290-293 by WFT-20's `pinnedSchedules`
       // wiring (the new `countPinnedSchedulesForRevision` call and its
       // doc-comment update) added above this function — the switch and
-      // default guard themselves are otherwise unchanged.
+      // default guard themselves are otherwise unchanged. Lines realigned
+      // to 301-304 by WFT-21's `retainedRecoveryRecords` wiring (the new
+      // `countWorkflowStateRevisionsByStatus`/`countTeardownDeadLettersForRevision`
+      // calls and doc-comment updates) added above this function — the
+      // switch and default guard themselves are otherwise unchanged.
       {
         reason:
           'Compile-time exhaustiveness guard for a closed discriminated union has no reachable runtime path to test without an unsafe cast.',
-        lines: new Set([290, 291, 292, 293]),
+        lines: new Set([301, 302, 303, 304]),
       },
     ],
     [
