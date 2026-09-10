@@ -335,6 +335,54 @@ describe('resolveOrphanedCatalogTombstones', () => {
     expect(await storage.get(KEYS.catalogEntry('checkout', v1.revision))).not.toBeNull();
     expect(isolated).toEqual([{ name: 'checkout', revision: v1.revision }]);
   });
+
+  it('swallows a genuine storage failure during the conservative restore attempt itself, rather than letting it propagate out of the sweep (WFT-21, Codex review, item 8)', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const v1 = await manifestFor('checkout', '1.0.0');
+    const v2 = await manifestFor('checkout', '2.0.0');
+    await catalog.activateRegistered('checkout', v1, fakeDefinition('checkout'));
+    await catalog.activateRegistered('checkout', v2, fakeDefinition('checkout'));
+
+    await simulateCrashedRemoval(storage, 'checkout', v1.revision);
+
+    // Force the reference-count scan to fail (same shape as the sibling
+    // test above), so `resolveOneOrphanedCatalogTombstone` reaches its
+    // conservative-restore attempt.
+    await storage.put(
+      KEYS.teardownDeadLetterHistory('wf-corrupt', 'corrupt-token'),
+      new Uint8Array([0xc1]),
+    );
+
+    const entryKey = KEYS.catalogEntry('checkout', v1.revision);
+    const tombstoneKey = KEYS.catalogTombstone('checkout', v1.revision);
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+    storage.conditionalBatch = (conditions, operations) => {
+      const isRestoreAttempt =
+        operations.some((op) => op.type === 'put' && op.key === entryKey) &&
+        operations.some((op) => op.type === 'delete' && op.key === tombstoneKey);
+      if (isRestoreAttempt) {
+        throw new Error('simulated storage failure during restore');
+      }
+      return originalConditionalBatch(conditions, operations);
+    };
+
+    const isolated: Array<{ name: string; revision: string }> = [];
+    // The genuine storage throw during the restore attempt must not
+    // propagate out of the sweep — it is swallowed, the tombstone stays
+    // exactly as it was (neither restored nor finalized), and the sweep
+    // still reports the isolated failure and completes normally.
+    await expect(
+      resolveOrphanedCatalogTombstones(storage, (name, revision) => {
+        isolated.push({ name, revision });
+      }),
+    ).resolves.toBeUndefined();
+
+    storage.conditionalBatch = originalConditionalBatch;
+    expect(await storage.get(tombstoneKey)).not.toBeNull();
+    expect(await storage.get(entryKey)).toBeNull();
+    expect(isolated).toEqual([{ name: 'checkout', revision: v1.revision }]);
+  });
 });
 
 describe('resolveCatalogTombstoneIfPresent', () => {

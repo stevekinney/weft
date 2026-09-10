@@ -222,10 +222,16 @@ async function resolveOneOrphanedCatalogTombstone(
     // scan failing here means an UNRELATED record elsewhere in the store
     // could not be read. Restore conservatively rather than leave the
     // tombstone in limbo — this trusted entry can always be re-swept and
-    // finalized later once the unrelated record is repaired.
+    // finalized later once the unrelated record is repaired. A `false`
+    // return (lost CAS — a concurrent resolver already handled this exact
+    // tombstone) is intentionally ignored, not an error condition. The
+    // `.catch()` below guards only a genuine THROW from the restore
+    // attempt itself (e.g. a storage error) — best-effort, since this
+    // tombstone can always be re-swept later.
     await restoreCatalogEntryFromTombstone(storage, name, revision, bytes).catch(() => {
-      // Lost CAS: a concurrent resolver already handled this tombstone.
-      // Harmless — nothing left to restore.
+      // Best-effort: nothing further to do if the restore attempt itself
+      // failed to even run its CAS. Re-swept on the next boot or targeted
+      // check either way.
     });
     onIsolatedFailure?.(name, revision, error);
   }
