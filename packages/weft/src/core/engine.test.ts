@@ -5897,13 +5897,24 @@ describe('Engine', () => {
 
         const storage = new MemoryStorage();
         const originalBatch = storage.batch.bind(storage);
-        let batchCount = 0;
         const checkpointFailure = Promise.withResolvers<void>();
         let engine;
 
+        // Fail the SECOND checkpoint commit, identified by the checkpoint-history
+        // record it writes rather than by a batch call count. A count is fragile:
+        // it silently retargets whenever the number of preceding storage.batch
+        // calls changes, and it did — since WFT-152 an explicit-id start commits
+        // through conditionalBatch, so counting batch calls moved the injection off
+        // the second checkpoint and onto the terminal-completion write, letting both
+        // checkpoints land. Only the second checkpoint's own batch carries
+        // ckpt:0000000002; the completion batch does not.
         storage.batch = async (operations) => {
-          batchCount++;
-          if (batchCount === 3) {
+          if (
+            operations.some(
+              (operation) =>
+                operation.type === 'put' && operation.key === 'wf:wf-batch:ckpt:0000000002',
+            )
+          ) {
             checkpointFailure.resolve();
             throw new Error('simulated checkpoint batch failure');
           }

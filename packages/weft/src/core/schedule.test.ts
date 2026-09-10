@@ -96,7 +96,13 @@ class ScheduleRunStartFailureStorage extends MemoryStorage {
   failQueuedScheduleRunStart = false;
   queuedScheduleRunStartFailed = false;
 
-  override async batch(operations: BatchOperation[]): Promise<void> {
+  /**
+   * A queued schedule occurrence starts under its own reserved workflow id, so
+   * since WFT-152 its create batch commits through `conditionalBatch` rather than
+   * `batch` — overriding only `batch` injected nothing and the start succeeded.
+   * Both commit paths share one predicate so the injection follows the write.
+   */
+  #failIfQueuedScheduleRunStart(operations: BatchOperation[]): void {
     if (
       this.failQueuedScheduleRunStart &&
       operations.some(
@@ -106,8 +112,19 @@ class ScheduleRunStartFailureStorage extends MemoryStorage {
       this.queuedScheduleRunStartFailed = true;
       throw new Error('simulated queued schedule start failure');
     }
+  }
 
+  override async batch(operations: BatchOperation[]): Promise<void> {
+    this.#failIfQueuedScheduleRunStart(operations);
     return super.batch(operations);
+  }
+
+  override async conditionalBatch(
+    conditions: ConditionalBatchCondition[],
+    operations: BatchOperation[],
+  ): Promise<boolean> {
+    this.#failIfQueuedScheduleRunStart(operations);
+    return super.conditionalBatch(conditions, operations);
   }
 }
 
@@ -2363,13 +2380,25 @@ describe('recurring schedules', () => {
     const storage = new MemoryStorage();
     const recordedBatchKeys: string[][] = [];
     const originalBatch = storage.batch.bind(storage);
-    storage.batch = async (operations) => {
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+    const recordPutKeys = (operations: BatchOperation[]): void => {
       recordedBatchKeys.push(
         operations
           .filter((operation) => operation.type === 'put')
           .map((operation) => operation.key),
       );
+    };
+    storage.batch = async (operations) => {
+      recordPutKeys(operations);
       return await originalBatch(operations);
+    };
+    // Record conditional commits too. The assertion below is about ATOMICITY — that
+    // the queued run's create and the schedule-state update land in one commit — and
+    // since WFT-152 a start under a reserved (explicit) id commits through
+    // `conditionalBatch`, so watching only `batch` would never observe that commit.
+    storage.conditionalBatch = async (conditions, operations) => {
+      recordPutKeys(operations);
+      return await originalConditionalBatch(conditions, operations);
     };
 
     const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };

@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS, type Storage, storageKeys } from '../../../storage/interface.ts';
+import {
+  type BatchOperation,
+  type ConditionalBatchCondition,
+  KEYS,
+  type Storage,
+  storageKeys,
+} from '../../../storage/interface.ts';
 import { MemoryStorage } from '../../../storage/memory.ts';
 import { flushMicrotasks, waitForCondition } from '../../../testing/fake-timers.test-support.ts';
 import { TestEngine } from '../../../testing/test-engine.ts';
@@ -403,26 +409,45 @@ describe("engine.start onTerminalConflict: 'start-new'", () => {
       // prior terminal run is untouched.
       const backing = new MemoryStorage();
       let failNextStatePut = false;
-      // Wrap only `batch`; delegate every other method to `backing`. Bind each
-      // method to `backing` in the trap — MemoryStorage uses private fields, so a
-      // method invoked with the Proxy as `this` would throw. The create commit
-      // carries the new run's `wf:commit-fail` state put — fail that one batch once
+      // Wrap both commit methods; delegate every other method to `backing`. Bind
+      // each method to `backing` in the trap — MemoryStorage uses private fields, so
+      // a method invoked with the Proxy as `this` would throw. The create commit
+      // carries the new run's `wf:commit-fail` state put — fail that one commit once
       // to simulate a mid-commit storage error.
+      //
+      // `conditionalBatch` must be wrapped too, not just `batch`: this restart
+      // supplies an explicit `id`, and since WFT-152 such a start commits through
+      // `conditionalBatch` (conditioned on the bytes its duplicate-id read observed)
+      // rather than the plain `batch` a generated-id start uses. Wrapping only
+      // `batch` would inject nothing, the restart would succeed, and the assertion
+      // below would never see the prior run it is checking for.
+      const carriesRestartStatePut = (operations: Parameters<Storage['batch']>[0]): boolean =>
+        operations.some(
+          (operation) => operation.type === 'put' && operation.key === KEYS.workflow('commit-fail'),
+        );
       const storage: Storage = new Proxy(backing, {
         get(target, property, receiver) {
           if (property === 'batch') {
             return async (operations: Parameters<Storage['batch']>[0]) => {
-              if (
-                failNextStatePut &&
-                operations.some(
-                  (operation) =>
-                    operation.type === 'put' && operation.key === KEYS.workflow('commit-fail'),
-                )
-              ) {
+              if (failNextStatePut && carriesRestartStatePut(operations)) {
                 failNextStatePut = false;
                 throw new Error('injected create-batch failure');
               }
               return target.batch(operations);
+            };
+          }
+          if (property === 'conditionalBatch') {
+            return async (
+              conditions: ConditionalBatchCondition[],
+              operations: BatchOperation[],
+            ) => {
+              if (failNextStatePut && carriesRestartStatePut(operations)) {
+                failNextStatePut = false;
+                throw new Error('injected create-batch failure');
+              }
+              // MemoryStorage always provides it; `Storage.conditionalBatch` is
+              // optional only because capability-gated backends may omit it.
+              return target.conditionalBatch!(conditions, operations);
             };
           }
           const value = Reflect.get(target, property, receiver);

@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 
 import { CompressedStorage } from '../../storage/compressed-storage.ts';
-import type { BatchOperation, Storage } from '../../storage/interface.ts';
+import type {
+  BatchOperation,
+  ConditionalBatchCondition,
+  Storage,
+} from '../../storage/interface.ts';
 import { encodeStorageKeyComponent, KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { flushMicrotasks } from '../../testing/fake-timers.test-support.ts';
@@ -193,28 +197,71 @@ function storageWithAbortingFirstConditionalBatch(
   });
 }
 
-function storageWithInjectedBatchFailure(inner: Storage): Storage & { failNextBatch(): void } {
-  let shouldFailBatch = false;
+/**
+ * Fail the PLAIN create commit for `workflowId` — the one
+ * `plainCreateBufferedSignalOrResolve` issues after the signal-folded create has
+ * already lost to a pre-buffered `sigres:` marker.
+ *
+ * Targeted by key rather than by "the next commit". A one-shot next-commit trip is
+ * fragile: `startOrSignal` issues several commits before that create (catalog
+ * install, catalog activate, then the signal-folded create attempt), so the arming
+ * lands on whichever happens to be intercepted first. That is exactly what went
+ * wrong once — with only `batch` wrapped, the plain create was coincidentally the
+ * sole plain `batch` call, and widening the wrapper to `conditionalBatch` (which
+ * WFT-152 made the plain create use, since it now carries a duplicate-id condition)
+ * silently retargeted the injection onto the catalog write. The assertion still
+ * passed on the error message while no longer exercising the rethrow branch it
+ * exists to cover.
+ *
+ * The plain create is the only commit that puts the workflow record WITHOUT also
+ * putting a `sigres:` marker: the signal-folded attempt carries both, and the
+ * catalog commits carry neither.
+ */
+function storageWithInjectedBatchFailure(
+  inner: Storage,
+): Storage & { failNextPlainCreate(workflowId: string): void } {
+  let targetWorkflowId: string | null = null;
+  const failIfPlainCreate = (operations: BatchOperation[]): void => {
+    if (targetWorkflowId === null) return;
+    const putsWorkflowRecord = operations.some(
+      (operation) => operation.type === 'put' && operation.key === KEYS.workflow(targetWorkflowId!),
+    );
+    const foldsSignal = operations.some(
+      (operation) => operation.type === 'put' && operation.key.startsWith('sigres:'),
+    );
+    if (putsWorkflowRecord && !foldsSignal) {
+      targetWorkflowId = null;
+      throw new Error('injected plain create batch failure');
+    }
+  };
   return new Proxy(inner, {
     get(target, property, receiver) {
       if (property === 'batch') {
         return async (operations: BatchOperation[]): Promise<void> => {
-          if (shouldFailBatch) {
-            shouldFailBatch = false;
-            throw new Error('injected plain create batch failure');
-          }
+          failIfPlainCreate(operations);
           return target.batch(operations);
         };
       }
-      if (property === 'failNextBatch') {
-        return () => {
-          shouldFailBatch = true;
+      if (property === 'conditionalBatch') {
+        return async (
+          conditions: ConditionalBatchCondition[],
+          operations: BatchOperation[],
+        ): Promise<boolean> => {
+          failIfPlainCreate(operations);
+          // MemoryStorage always provides it; `Storage.conditionalBatch` is optional
+          // only because capability-gated backends may omit it.
+          return target.conditionalBatch!(conditions, operations);
+        };
+      }
+      if (property === 'failNextPlainCreate') {
+        return (workflowId: string) => {
+          targetWorkflowId = workflowId;
         };
       }
       const value = Reflect.get(target, property, receiver);
       return typeof value === 'function' ? value.bind(target) : value;
     },
-  }) as Storage & { failNextBatch(): void };
+  }) as Storage & { failNextPlainCreate(workflowId: string): void };
 }
 
 /**
@@ -1767,13 +1814,69 @@ describe('engine.startOrSignal', () => {
     }
   });
 
+  it('converges onto a durable caller-id winner that lands during the buffered-signal create', async () => {
+    // The buffered-signal path classifies with no `wf:` record present, then commits
+    // its plain create. A concurrent engine can create the same caller-supplied id in
+    // that window — since WFT-152 the plain create's duplicate-id condition catches
+    // it and raises `WorkflowAlreadyExistsError`, which this path must answer by
+    // CONVERGING onto the winner and signalling it, not by starting a second run.
+    const storage = new MemoryStorage();
+    const winnerEngine = createEngine(storage);
+    const loserEngine = createEngine(storage);
+    const workflowId = 'buffered-converge';
+
+    try {
+      // Buffer the start-signal while no run exists for the id.
+      await loserEngine.signal(workflowId, 'release', 'winner', { signalId: 'sig-converge' });
+
+      // Land the winner's durable create DURING the loser's own plain-create commit:
+      // the first conditional commit carrying the loser's workflow-record put without
+      // a folded signal is preceded by the winner committing the same id, so the
+      // loser's duplicate-id compare-and-swap loses.
+      const sharedStorage = getInternals(loserEngine).storage;
+      const originalConditionalBatch = sharedStorage.conditionalBatch!.bind(sharedStorage);
+      let raced = false;
+      sharedStorage.conditionalBatch = async (conditions, operations) => {
+        const isPlainCreate =
+          operations.some(
+            (operation) => operation.type === 'put' && operation.key === KEYS.workflow(workflowId),
+          ) &&
+          !operations.some(
+            (operation) => operation.type === 'put' && operation.key.startsWith('sigres:'),
+          );
+        if (!raced && isPlainCreate) {
+          raced = true;
+          await winnerEngine.start('wait-for-release', null, { id: workflowId });
+        }
+        return originalConditionalBatch(conditions, operations);
+      };
+
+      const result = await loserEngine.startOrSignal(
+        'wait-for-release',
+        null,
+        { name: 'release', payload: 'loser', signalId: 'sig-converge' },
+        { id: workflowId },
+      );
+
+      expect(raced).toBe(true);
+      expect(result.outcome).toBe('signalled');
+      expect(result.handle.id).toBe(workflowId);
+
+      // Exactly one run exists under the id — the winner's, not a second one.
+      expect(await countWorkflowRecords(loserEngine)).toBe(1);
+    } finally {
+      await loserEngine[Symbol.asyncDispose]();
+      await winnerEngine[Symbol.asyncDispose]();
+    }
+  });
+
   it('rethrows non-collision errors from the buffered-signal plain create path', async () => {
     const storage = storageWithInjectedBatchFailure(new MemoryStorage());
     const engine = createEngine(storage);
 
     try {
       await engine.signal('buffered-batch-failure', 'release', 'winner', { signalId: 'sig-batch' });
-      storage.failNextBatch();
+      storage.failNextPlainCreate('buffered-batch-failure');
 
       await expect(
         engine.startOrSignal(

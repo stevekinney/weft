@@ -368,7 +368,27 @@ class BulkWorkflowReorderingScanStorage extends MemoryStorage {
 
   override async batch(operations: BatchOperation[]): Promise<void> {
     await super.batch(operations);
+    this.#recordBatchedWorkflowWrites(operations);
+  }
 
+  /**
+   * Track writes committed conditionally as well as plainly. Since WFT-152 a start
+   * with an explicit `id` commits through `conditionalBatch`, so a double that
+   * recorded only `batch` writes never saw the create writes at all — the custom
+   * `wf:` scan order below then stayed empty and every status scan came back short.
+   */
+  override async conditionalBatch(
+    conditions: ConditionalBatchCondition[],
+    operations: BatchOperation[],
+  ): Promise<boolean> {
+    const committed = await super.conditionalBatch(conditions, operations);
+    if (committed) {
+      this.#recordBatchedWorkflowWrites(operations);
+    }
+    return committed;
+  }
+
+  #recordBatchedWorkflowWrites(operations: BatchOperation[]): void {
     for (const operation of operations) {
       if (!this.#isTopLevelWorkflowStateKey(operation.key)) {
         continue;
