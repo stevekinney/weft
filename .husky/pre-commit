@@ -5,7 +5,16 @@
 # PATH (the workspace uses Bun's isolated linker, so binaries live per
 # package). A package's hook runs only when the commit stages files under
 # that package.
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+#
+# REPO_ROOT must come from git, not from this script's own path. `core.hooksPath`
+# is the relative `.husky/_`, so when a commit is made from a linked worktree,
+# `$0` still resolves through the main checkout and `dirname "$0"/..` lands there
+# instead of the worktree being committed to. Every package hook then ran against
+# the main checkout's files and its `git diff --cached --relative` guard scoped to
+# the wrong tree — so a worktree commit touching only one package ran the OTHER
+# package's checks too, against a tree that may not even be built. Ask git for the
+# top level of the worktree this commit actually belongs to.
+REPO_ROOT="$(git rev-parse --show-toplevel)"
 STATUS=0
 
 run_package_hook() {

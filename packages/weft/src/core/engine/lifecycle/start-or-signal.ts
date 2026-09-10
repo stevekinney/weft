@@ -10,7 +10,7 @@ import { IdempotencyKeyPurgedError, StartOrSignalConflictError } from '../errors
 import { type WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
 import { type LifecycleCallbacks } from './shared.ts';
-import { StartIdempotencyRaceLostError } from './start-commit.ts';
+import { StartIdempotencyRaceLostError } from './start-commit-errors.ts';
 import {
   createWithSignalOrFallback,
   idempotentStartOperationsFor,

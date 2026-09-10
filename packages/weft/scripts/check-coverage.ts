@@ -1302,14 +1302,14 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
         // settles — either because `type` is an eager registration (which
         // that call always assigns a revision to) or a resolved dynamic
         // source (handled entirely by the sync `resolveCachedStartRevision()`
-        // fast path and never reaching this fallback at all). Line 187 is
+        // fast path and never reaching this fallback at all). Line 188 is
         // the `if (afterReadiness !== undefined) { return … }` block's
         // fallthrough when the readiness re-check still finds nothing —
         // the same unreachable condition the throw two lines later guards;
-        // 195-196 are that throw statement's own first two lines.
+        // 196-197 are that throw statement's own first two lines.
         reason:
           'Defensive fail-loud guard for an invariant every call site of resolveStartRevisionUncached() already guarantees; has no reachable runtime path to test without corrupting registeredCatalogRevisions via an unsafe cast.',
-        lines: new Set([187, 195, 196]),
+        lines: new Set([188, 196, 197]),
         requireUncoveredLines: true,
       },
     ],

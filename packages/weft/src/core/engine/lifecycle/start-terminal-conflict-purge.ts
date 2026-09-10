@@ -1,4 +1,4 @@
-import type { BatchOperation } from '../../../storage/interface.ts';
+import type { BatchOperation, ConditionalBatchCondition } from '../../../storage/interface.ts';
 import { KEYS, storageHas } from '../../../storage/interface.ts';
 import type { StartWorkflowOptions, WorkflowState } from '../../types.ts';
 import {
@@ -11,6 +11,69 @@ import type { EngineInternals } from '../internals.ts';
 import { cleanupWaiters } from '../termination/cleanup.ts';
 import { decodeWorkflowState, isTerminalWorkflowStatus } from '../validation.ts';
 import { type LifecycleCallbacks } from './shared.ts';
+
+/**
+ * What the duplicate-id read decided about a caller-supplied workflow id.
+ */
+export type StartDuplicateIdDecision = {
+  /** A prior terminal run this start will displace, or `null` for a fresh id. */
+  terminalRunToPurge: WorkflowState | null;
+  /**
+   * Compare-and-swap precondition that makes the duplicate-id check atomic with
+   * the create commit (WFT-152).
+   *
+   * The check below reads `KEYS.workflow(workflowId)` and decides whether the id
+   * is free, but that read and the create batch are separated by every build step
+   * in between. Within ONE engine `pendingStarts` holds the id across that window;
+   * two engines sharing a store share no such memory, so both previously committed
+   * blind and the second silently overwrote the first — leaving the loser with a
+   * run whose terminal transition happens on the other engine and therefore never
+   * settles its `result()` waiter. Conditioning the batch on the exact value seen
+   * here collapses that window: the loser's batch does not commit, and
+   * `buildAndCommitStartBatch` surfaces {@link WorkflowAlreadyExistsError} — the
+   * same error the in-engine `pendingStarts` guard already throws for the same
+   * collision.
+   *
+   * `expectedValue` is the RAW observed bytes, deliberately not a re-encoding of
+   * the decoded state: re-encoding is not guaranteed to round-trip byte-identically,
+   * and a condition built from one would fail against a record nothing had touched.
+   * `null` (id absent) and a prior terminal run's bytes (an
+   * `onTerminalConflict: 'start-new'` restart) are both valid expected values, so a
+   * restart is equally protected against a concurrent engine displacing the same
+   * terminal run.
+   *
+   * No `conditionalBatch` capability gate is needed. Reaching this code means a
+   * workflow is registered, and registration drains through
+   * `WorkflowCatalog#activateRegistered`, which already hard-requires that
+   * capability at `Engine.create()`. A store that cannot honour this condition
+   * cannot host an engine that could start a workflow in the first place.
+   *
+   * KNOWN LIMITATION (PR #959 review). The condition compares a VALUE, so it cannot
+   * distinguish "this id was never used" from "a run existed here and was purged".
+   * If a racing winner commits, completes, and is purged or swept by retention
+   * before this batch commits, `wf:<id>` is absent again, `expectedValue: null`
+   * matches, and both starts execute. Closing that needs durable per-id generation
+   * or tombstone state a purge cannot restore — a new persisted mechanism, out of
+   * scope here. The window is narrow (a winner's whole lifecycle plus a purge inside
+   * one loser's read-to-commit gap) and the outcome is a duplicate run rather than
+   * the indefinite hang this fence exists to remove.
+   */
+  duplicateIdCondition: ConditionalBatchCondition;
+};
+
+/**
+ * The decision for a start whose id was GENERATED rather than caller-supplied. A
+ * v4 UUID is effectively unique, so the duplicate-id read is skipped entirely and
+ * there is no observed value to condition on — the start keeps the unconditioned
+ * single-write hot path.
+ */
+export const GENERATED_ID_START_DECISION = {
+  terminalRunToPurge: null,
+  duplicateIdCondition: undefined,
+} as const satisfies {
+  terminalRunToPurge: WorkflowState | null;
+  duplicateIdCondition: ConditionalBatchCondition | undefined;
+};
 
 /**
  * Decide what a caller-supplied workflow id that already has a persisted record
@@ -33,16 +96,25 @@ import { type LifecycleCallbacks } from './shared.ts';
  *   delete the finalizer payload before the resource is torn down, leaking it, so
  *   the restart is refused until teardown settles (which clears the marker).
  *
- * Returns `null` when there is no existing record (the create proceeds normally).
+ * This read is only a point-in-time observation: another engine sharing the store
+ * can commit a create for the same id in the window between it and the create
+ * batch. The returned {@link StartDuplicateIdDecision} therefore carries a
+ * `duplicateIdCondition` holding the exact bytes seen here, so that batch can be
+ * conditioned on them — turning that window into a lost compare-and-swap rather
+ * than a blind overwrite (WFT-152).
  */
 export async function resolveTerminalConflictForRestart(
   internals: EngineInternals,
   workflowId: string,
   options: StartWorkflowOptions | undefined,
-): Promise<WorkflowState | null> {
-  const existingBytes = await internals.storage.get(KEYS.workflow(workflowId));
+): Promise<StartDuplicateIdDecision> {
+  const key = KEYS.workflow(workflowId);
+  const existingBytes = await internals.storage.get(key);
   if (existingBytes === null) {
-    return null;
+    return {
+      terminalRunToPurge: null,
+      duplicateIdCondition: { key, expectedValue: null },
+    };
   }
   if (options?.onTerminalConflict !== 'start-new') {
     throw new WorkflowAlreadyExistsError(workflowId);
@@ -54,7 +126,10 @@ export async function resolveTerminalConflictForRestart(
   if (await storageHas(internals.storage, KEYS.teardownOwed(workflowId))) {
     throw new WorkflowTeardownPendingError(workflowId);
   }
-  return existingState;
+  return {
+    terminalRunToPurge: existingState,
+    duplicateIdCondition: { key, expectedValue: existingBytes },
+  };
 }
 
 /**

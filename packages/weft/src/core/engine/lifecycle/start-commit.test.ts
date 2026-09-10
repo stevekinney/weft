@@ -4,6 +4,7 @@ import { KEYS, type ConditionalBatchCondition } from '../../../storage/interface
 import { MemoryStorage } from '../../../storage/memory.ts';
 import { AtomicStateConflictError } from '../../atomic-state.ts';
 import type { Checkpoint, WorkflowState } from '../../types.ts';
+import { WorkflowAlreadyExistsError } from '../errors.ts';
 import { WorkflowRevisionUnavailableError } from '../revision-errors.ts';
 import { WorkflowClaimRegistry } from '../workflow-claim-registry.ts';
 import { buildAndCommitStartBatch } from './start-commit.ts';
@@ -50,6 +51,10 @@ function createBaseContext(storage: MemoryStorage) {
     persistedWorkflowStartHeaders: undefined,
     additionalStartOperations: undefined,
     purgeDeleteOperations: undefined,
+    // These cases exercise the idempotency and workflow-concurrency conditions in
+    // isolation; the duplicate-id condition has its own coverage in
+    // `start-duplicate-id-race.test.ts`.
+    duplicateIdCondition: undefined,
     callbacks: {} as never,
     internals: {
       deposed: false,
@@ -152,6 +157,125 @@ describe('start-commit lifecycle helpers', () => {
         }),
       ),
     ).rejects.toThrow('start idempotency compare-and-swap lost to a concurrent caller');
+  });
+
+  it('reports a duplicate id ahead of the signal sentinel when both conditions conflict', async () => {
+    // PR #959 review (P1). On a caller-supplied id the `start-precondition`
+    // conditions are `startOrSignal`'s `sigres:` marker, not an idempotency mapping
+    // — `id` and `idempotencyKey` are mutually exclusive. Raising the sentinel first
+    // sends `startOrSignal` down its `signal-already-buffered` path, which under
+    // `onTerminalConflict: 'start-new'` purges the concurrent winner and starts a
+    // successor with no signal folded in, parking it forever. The duplicate id must
+    // win the attribution so the caller converges onto the winner instead.
+    const storage = new MemoryStorage();
+    const context = createBaseContext(storage);
+    const workflowKey = KEYS.workflow('workflow-start-commit');
+    const signalCondition: ConditionalBatchCondition = {
+      key: 'sigres:v1:workflow-start-commit:release:sig-race',
+      expectedValue: null,
+    };
+
+    // BOTH conditions genuinely conflict: a concurrent winner created the run and
+    // its start-signal was consumed.
+    await storage.put(workflowKey, new Uint8Array([1]));
+    await storage.put(signalCondition.key, new Uint8Array([2]));
+    storage.conditionalBatch = async () => false;
+
+    await expect(
+      buildAndCommitStartBatch(
+        {
+          ...context,
+          duplicateIdCondition: { key: workflowKey, expectedValue: null },
+        } as never,
+        () => ({ conditions: [signalCondition], operations: [] }),
+      ),
+    ).rejects.toBeInstanceOf(WorkflowAlreadyExistsError);
+  });
+
+  it('attributes a lost duplicate-id CAS by elimination, even when the winner was purged', async () => {
+    // The purge race Codex flagged on #959: the winning run can complete and be
+    // purged (or swept by retention) between this start's failed compare-and-swap
+    // and any diagnostic re-read, restoring `wf:<id>` to exactly the value the
+    // condition expected. Re-reading would then see "no conflict" and leak the
+    // internal `StartIdempotencyRaceLostError`, which is documented as never
+    // reaching a caller. With no concurrency conditions in the batch, the
+    // duplicate-id condition is the only base condition there was, so the lost
+    // outcome alone is proof - no read required.
+    const storage = new MemoryStorage();
+    const context = createBaseContext(storage);
+    const workflowKey = KEYS.workflow('workflow-start-commit');
+
+    // Storage agrees with the condition (key absent) - as it would after a purge.
+    storage.conditionalBatch = async () => false;
+
+    await expect(
+      buildAndCommitStartBatch(
+        { ...context, duplicateIdCondition: { key: workflowKey, expectedValue: null } } as never,
+        undefined,
+      ),
+    ).rejects.toBeInstanceOf(WorkflowAlreadyExistsError);
+  });
+
+  it('fails closed when a lost batch shows no retryable cause at all', async () => {
+    // Both base conditions still match on re-read, so nothing retryable explains the
+    // miss. Attribution must not invent a retry; it reports the duplicate id, which
+    // is public, non-destructive, and retryable by the caller.
+    //
+    // Note this deliberately does NOT model "a winner acquired and released the
+    // concurrency slot": that condition is a monotonic atomic-state VERSION key
+    // (`buildWorkflowConcurrencyStartOperations` conditions on `snapshot.version`
+    // and writes `version + 1`; release increments again), so it can never return to
+    // the loser's expected value. An earlier revision of this test asserted exactly
+    // that impossible state — see the sibling test below for the real shape.
+    const storage = new MemoryStorage();
+    const context = createBaseContext(storage);
+    const workflowKey = KEYS.workflow('workflow-start-commit');
+    storage.conditionalBatch = async () => false;
+
+    await expect(
+      buildAndCommitStartBatch(
+        {
+          ...context,
+          duplicateIdCondition: { key: workflowKey, expectedValue: null },
+          buildWorkflowConcurrencyStartOperations: async () => ({
+            conditions: [{ key: 'workflow-concurrency', expectedValue: null }],
+            operations: [],
+            stateKey: 'workflow-concurrency',
+          }),
+        } as never,
+        undefined,
+      ),
+    ).rejects.toBeInstanceOf(WorkflowAlreadyExistsError);
+  });
+
+  it('retries admission only on positive evidence that concurrency is what missed', async () => {
+    // The retryable shape, modelled the way production actually looks: the
+    // concurrency condition is a monotonic atomic-state version key, so once it has
+    // moved it stays mismatched. Retrying is safe here only because the caller's
+    // earlier positive duplicate-id check already ran and found the workflow record
+    // still matching — the id is free right now, so the retry re-conditions on that
+    // same value and ends in the public `AtomicStateConflictError` rather than
+    // committing a second run. The purged-winner residual is WFT-153.
+    const storage = new MemoryStorage();
+    const context = createBaseContext(storage);
+    const workflowKey = KEYS.workflow('workflow-start-commit');
+    await storage.put('workflow-concurrency', new Uint8Array([7]));
+    storage.conditionalBatch = async () => false;
+
+    await expect(
+      buildAndCommitStartBatch(
+        {
+          ...context,
+          duplicateIdCondition: { key: workflowKey, expectedValue: null },
+          buildWorkflowConcurrencyStartOperations: async () => ({
+            conditions: [{ key: 'workflow-concurrency', expectedValue: null }],
+            operations: [],
+            stateKey: 'workflow-concurrency',
+          }),
+        } as never,
+        undefined,
+      ),
+    ).rejects.toBeInstanceOf(AtomicStateConflictError);
   });
 
   it('ADR 0002: folds acquire() into an idempotent start batch under ownership: "workflow-lease"', async () => {

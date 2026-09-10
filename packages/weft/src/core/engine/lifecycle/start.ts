@@ -42,6 +42,7 @@ import {
   parseStartOptionDuration,
 } from './start-state.ts';
 import {
+  GENERATED_ID_START_DECISION,
   prepareTerminalRunPurge,
   resolveTerminalConflictForRestart,
 } from './start-terminal-conflict-purge.ts';
@@ -253,15 +254,14 @@ export async function startWorkflow(
       resolveCachedStartRevision(internals, type, resolvedRevision) ??
       (await resolveStartRevisionUncached(internals, type));
 
-    // Only caller-supplied ids can collide; a generated UUID skips the read.
-    // Decide the duplicate-id outcome up front (throws for a non-terminal or
-    // default-policy collision), but DEFER any destructive purge until just
-    // before the create commit below, so a `'start-new'` restart rejected by
-    // later validation leaves the prior terminal run intact — `pendingStarts`
-    // stays reserved across the whole window against a racing same-id start.
-    const terminalRunToPurge = callerProvidedId
+    // Only caller-supplied ids can collide; a generated UUID skips the read. Decide the
+    // duplicate-id outcome up front (throws for a non-terminal or default-policy collision),
+    // but DEFER any destructive purge until just before the create commit below, so a
+    // `'start-new'` restart rejected by later validation leaves the prior terminal run intact.
+    // `pendingStarts` covers that window in-engine, `duplicateIdCondition` across engines.
+    const { terminalRunToPurge, duplicateIdCondition } = callerProvidedId
       ? await resolveTerminalConflictForRestart(internals, workflowId, options)
-      : null;
+      : GENERATED_ID_START_DECISION;
 
     const versionTuple = createWorkflowVersionTuple(internals, registration, callbacks);
 
@@ -343,6 +343,7 @@ export async function startWorkflow(
                 ),
         callbacks,
         purgeDeleteOperations,
+        duplicateIdCondition,
       },
       buildIdempotentStartOperations,
     );

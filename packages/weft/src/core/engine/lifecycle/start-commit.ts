@@ -7,6 +7,7 @@ import {
 } from '../../../storage/interface.ts';
 import { AtomicStateConflictError } from '../../atomic-state.ts';
 import type { Checkpoint, StartOptions, TimerEntry, WorkflowState } from '../../types.ts';
+import { WorkflowAlreadyExistsError } from '../errors.ts';
 import {
   commitFencedEngineWrite,
   commitFencedEngineWriteAllowingPreconditionFailure,
@@ -22,6 +23,8 @@ import {
 import type { WorkflowConcurrencyStartOperations } from '../workflow-concurrency.ts';
 import { type LifecycleCallbacks, type RegistrationEntry } from './shared.ts';
 import { buildStartBatchOperations } from './start-batch.ts';
+import { StartIdempotencyRaceLostError } from './start-commit-errors.ts';
+import { attributeLostStartPreconditionOrRetry } from './start-precondition-attribution.ts';
 
 /**
  * Builds the id-dependent operations and compare-and-swap preconditions for an
@@ -37,22 +40,10 @@ export type BuildIdempotentStartOperations = (workflowId: string) => {
   conditions: ConditionalBatchCondition[];
 };
 
-/**
- * Internal sentinel: the idempotent create batch lost its compare-and-swap to a
- * concurrent caller holding the same idempotency key. Never surfaced to users —
- * `start` / `startOrSignal` catch it and resolve to the winning run's handle.
- */
-export class StartIdempotencyRaceLostError extends Error {
-  constructor() {
-    super('start idempotency compare-and-swap lost to a concurrent caller');
-    this.name = 'StartIdempotencyRaceLostError';
-  }
-}
-
 const WORKFLOW_CONCURRENCY_ADMISSION_MAX_ATTEMPTS = 5;
 
 type TaggedStartCondition = {
-  source: 'workflow-concurrency' | 'start-precondition' | 'catalog-entry';
+  source: 'workflow-concurrency' | 'start-precondition' | 'duplicate-id' | 'catalog-entry';
   condition: ConditionalBatchCondition;
 };
 
@@ -241,12 +232,21 @@ async function persistStartBatch(
   return committed ? 'committed' : 'precondition-lost';
 }
 
-async function hasStartPreconditionConflict(
+/**
+ * Re-read the conditions tagged `source` and report whether any no longer matches.
+ * A `conditionalBatch` returning `false` says only that SOME condition missed, so
+ * this is how the caller attributes the miss to one specific cause — an idempotency
+ * race, a duplicate id, or a workflow-concurrency admission slip — each of which
+ * the caller answers with a different, caller-visible outcome. Returns `false`
+ * immediately when no condition carries `source`.
+ */
+async function hasStartConditionConflict(
   internals: EngineInternals,
   conditions: TaggedStartCondition[],
+  source: TaggedStartCondition['source'],
 ): Promise<boolean> {
   for (const entry of conditions) {
-    if (entry.source !== 'start-precondition') continue;
+    if (entry.source !== source) continue;
     const currentValue = await internals.storage.get(entry.condition.key);
     if (!storageValuesEqual(currentValue, entry.condition.expectedValue)) {
       return true;
@@ -286,6 +286,12 @@ function tagStartPreconditions(
     source: 'start-precondition' as const,
     condition,
   }));
+}
+
+function tagDuplicateIdCondition(
+  condition: ConditionalBatchCondition | undefined,
+): TaggedStartCondition[] {
+  return condition === undefined ? [] : [{ source: 'duplicate-id' as const, condition }];
 }
 
 function tagWorkflowConcurrencyConditions(
@@ -329,6 +335,15 @@ export type StartBatchContext = {
    * {@link buildStartBatchOperations}). Undefined for an ordinary start.
    */
   purgeDeleteOperations: BatchOperation[] | undefined;
+  /**
+   * Compare-and-swap precondition making the caller-supplied-id duplicate check
+   * atomic with this commit (WFT-152). Built by `resolveTerminalConflictForRestart`
+   * from the exact bytes its duplicate-id read observed, and carried here as the
+   * `duplicateIdCondition` of the `StartDuplicateIdDecision` it returns. Undefined
+   * for a generated id, which cannot collide and so keeps the unconditioned hot
+   * path.
+   */
+  duplicateIdCondition: ConditionalBatchCondition | undefined;
 };
 
 /**
@@ -387,6 +402,7 @@ export async function buildAndCommitStartBatch(
     );
     const conditions = [
       ...tagStartPreconditions(idempotent?.conditions),
+      ...tagDuplicateIdCondition(context.duplicateIdCondition),
       ...tagWorkflowConcurrencyConditions(workflowConcurrency?.conditions ?? []),
       ...(catalogEntryPrecondition === undefined ? [] : [catalogEntryPrecondition]),
     ];
@@ -412,7 +428,31 @@ export async function buildAndCommitStartBatch(
     if (outcome === 'committed') {
       return;
     }
-    if (await hasStartPreconditionConflict(internals, conditions)) {
+    // A conflicting duplicate-id condition outranks the signal/idempotency sentinel
+    // (PR #959 review). On a caller-supplied id the `start-precondition` conditions
+    // are `startOrSignal`'s `sigres:` marker, never an idempotency mapping — `id`
+    // and `idempotencyKey` are mutually exclusive — so raising the sentinel first
+    // sends `startOrSignal` down its `signal-already-buffered` path, which under
+    // `onTerminalConflict: 'start-new'` PURGES the concurrent winner (deleting the
+    // `sig:`/`sigres:` records with it) and starts a successor with no signal folded
+    // in, leaving that successor parked forever. Reporting the duplicate id instead
+    // makes `resolveCreateRaceOutcome` take its `lost-caller-id` branch and converge
+    // onto the winner, which is what this race should do.
+    //
+    // Positive evidence only. The purge ABA can make this read a false negative,
+    // which simply falls through to the elimination-based attribution below — it
+    // never turns a non-conflict into a spurious duplicate.
+    // Skipped for a `'claim-lost'` outcome: a `workflow-lease` loser fails its claim
+    // fold AND this condition, and must keep reporting `WorkflowClaimUnavailableError`
+    // (WFT-78). Gating on the outcome rather than reordering the checks leaves the
+    // existing idempotency-before-claim precedence untouched.
+    if (
+      outcome !== 'claim-lost' &&
+      (await hasStartConditionConflict(internals, conditions, 'duplicate-id'))
+    ) {
+      throw new WorkflowAlreadyExistsError(workflowId);
+    }
+    if (await hasStartConditionConflict(internals, conditions, 'start-precondition')) {
       throw new StartIdempotencyRaceLostError();
     }
     if (await hasCatalogEntryConflict(internals, conditions)) {
@@ -421,9 +461,12 @@ export async function buildAndCommitStartBatch(
     if (outcome === 'claim-lost') {
       return throwWorkflowClaimUnavailable(internals, workflowId);
     }
-    if (workflowConcurrency === undefined) {
-      throw new StartIdempotencyRaceLostError();
-    }
+    await attributeLostStartPreconditionOrRetry(
+      workflowId,
+      context.duplicateIdCondition !== undefined,
+      workflowConcurrency !== undefined,
+      () => hasStartConditionConflict(internals, conditions, 'workflow-concurrency'),
+    );
   }
 
   throw new AtomicStateConflictError(
