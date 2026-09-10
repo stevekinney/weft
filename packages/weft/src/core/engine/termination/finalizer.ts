@@ -3,28 +3,26 @@
  * Dispatched by the scheduler when a `wf-teardown:` timer fires, it drives a
  * workflow's definition-level `finalizer` to durable completion after a
  * `cancelled`/`timed-out` terminal — claiming the durable teardown marker, running
- * the finalizer activity (via {@link runFinalizerActivity}), and then clearing,
- * backing off, or dead-lettering based on the outcome. The byte-level claim mechanics
- * (CAS, settle, re-arm, dead-letter, the stale horizon and backoff) live in
- * `./finalizer-claim.ts`; this module is the orchestration that decides which to call.
+ * the finalizer activity (via {@link runFinalizerActivity}), and then clearing, backing
+ * off, or dead-lettering based on the outcome. The byte-level claim mechanics (CAS,
+ * settle, re-arm, dead-letter, stale horizon, backoff) live in `./finalizer-claim.ts`;
+ * this module is the orchestration that decides which to call.
  *
- * Concurrency model — a single durable, TIME-based claim:
- * the durable `teardownOwed` marker carries a `{ status, attempts, token, claimedAt }`
- * claim ({@link TeardownClaim}). A holder fenced-CAS's `owed → running` (stamping
- * `claimedAt`) before running, and settle-CAS's the exact `running` bytes it wrote when
- * clearing or rescheduling — so a concurrent reclaimer can never clobber a fresher
- * claim. Liveness is decided purely by the clock: a `running` claim is reclaimable once
- * `claimedAt` is older than {@link teardownStaleThresholdMs} (the finalizer's per-attempt
- * timeout plus a margin). There is NO in-memory liveness set and NO epoch in the record;
- * crash recovery is an ordinary stale-claim retry driven by the timer that survived the
- * terminal batch. The tradeoff is that a finalizer running past the stale threshold may
- * be re-driven concurrently, which is why workflow finalizers must be idempotent (a
- * contract of the #446 design).
+ * Concurrency model — a single durable, TIME-based claim: the durable `teardownOwed`
+ * marker carries a `{ status, attempts, token, claimedAt }` claim ({@link TeardownClaim}).
+ * A holder fenced-CAS's `owed → running` (stamping `claimedAt`) before running, and
+ * settle-CAS's the exact `running` bytes it wrote when clearing or rescheduling — so a
+ * concurrent reclaimer can never clobber a fresher claim. Liveness is decided purely by
+ * the clock: a `running` claim is reclaimable once `claimedAt` is older than
+ * {@link teardownStaleThresholdMs}. There is NO in-memory liveness set and NO epoch in
+ * the record; crash recovery is an ordinary stale-claim retry driven by the timer that
+ * survived the terminal batch — the tradeoff is a finalizer running past the stale
+ * threshold may be re-driven concurrently, which is why finalizers must be idempotent.
  *
  * Self-heal invariant: every exit that does NOT settle the claim (a lost claim CAS, a
  * presumed-live `running` claim, a shutdown-aborted attempt, or a missing registration)
- * re-arms a future `wf-teardown:` timer before returning — the scheduler deletes the
- * fired timer on return, so a non-settling exit that forgot to re-arm strands the marker.
+ * re-arms a future `wf-teardown:` timer before returning — the scheduler deletes the fired
+ * timer on return, so a non-settling exit that forgot to re-arm strands the marker.
  *
  * @module core/engine/termination/finalizer
  */
@@ -207,18 +205,17 @@ async function resolveTeardownDrive(
     return clearOrRearm(internals, workflowId, token, markerBytes);
   }
 
-  const registeredFinalizer = await resolveFinalizerRegistration(internals, state.type);
-  if (registeredFinalizer === undefined) {
+  // `resolveFinalizerRegistration` already narrows a registration's `finalizer` (stored
+  // as `AnyActivityDefinition`, whose `execute` is typed `ActivityFunction<never>`) to
+  // the structural `RunnableFinalizer` the drive relies on — trusted by construction,
+  // only `activity()` populates this field.
+  const finalizer = await resolveFinalizerRegistration(internals, state.type, state.revision);
+  if (finalizer === undefined) {
     // A node that recovers without this workflow type registered cannot run the
     // finalizer yet — but the resource is still owed. Leave the marker and re-arm so a
     // node that DOES register the type can run it. (Junior MF1 / Codex MF1.)
     return { kind: 'rearm', token };
   }
-  // `resolveFinalizerRegistration` already narrows a registration's `finalizer`
-  // (stored as `AnyActivityDefinition`, whose `execute` is typed
-  // `ActivityFunction<never>`) to the structural `RunnableFinalizer` the drive
-  // relies on. Trusted by construction: only `activity()` populates this field.
-  const finalizer = registeredFinalizer;
 
   if (!runningClaimIsStale(internals, claim, finalizer)) {
     return { kind: 'rearm', token }; // a genuine live sibling drive owns it — back off and self-heal.

@@ -176,6 +176,19 @@ async function relaunchInlineWorkflowAfterResume(
   const accumulatedResults = new Map<number, unknown>(resumeCheckpoint.accumulatedResults);
   const workflowAbort = new AbortController();
 
+  // Populate the per-instance identity cache BEFORE any possible activity
+  // dispatch (WFT-19) — this is the only place `workflowTypeByWorkflowId`
+  // was ever populated on ANY resume/recovery path before this fix
+  // (`lifecycle/start-exec.ts`'s `startWorkflowExecution()` is bypassed
+  // here entirely), so a builder workflow's string-named `ctx.run('name')`
+  // activity call on the very first turn after a fresh-process resume could
+  // not resolve at all. Must land before `inlineStrategy.adoptWorkflow`
+  // below, which is what can trigger that first turn.
+  internals.workflowTypeByWorkflowId.set(workflowId, {
+    type: latestState.type,
+    revision: latestState.revision,
+  });
+
   resetCancelHandlers(internals, workflowId);
   await rehydrateChildCancellationHandlers(internals, workflowId, callbacks);
   const context = new Context({
@@ -233,6 +246,14 @@ async function relaunchWorkerWorkflowAfterResume(
   >,
 ): Promise<void> {
   const { workflowId, resumeCheckpoint, workflowStartHeaders, callbacks } = args;
+  // See `relaunchInlineWorkflowAfterResume()`'s matching comment: this is
+  // the resume-time identity population fix (WFT-19), landed before the
+  // worker strategy's `startWorkflow()` call below — the point after which
+  // an activity dispatch could otherwise arrive with no cached identity.
+  internals.workflowTypeByWorkflowId.set(workflowId, {
+    type: latestState.type,
+    revision: latestState.revision,
+  });
   resetCancelHandlers(internals, workflowId);
   await rehydrateChildCancellationHandlers(internals, workflowId, callbacks);
   const serialized = serializeCheckpoint(resumeCheckpoint);

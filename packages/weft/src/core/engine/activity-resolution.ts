@@ -1,4 +1,5 @@
 import type { ContextOperationRequest } from '../context.ts';
+import type { WorkflowExecutionIdentity } from './engine-internal-types.ts';
 import { ActivityResolutionError } from './errors.ts';
 import type { EngineInternals } from './internals.ts';
 import type { ActivityFunctionWithMetadata } from './operations-activity.ts';
@@ -8,13 +9,26 @@ type ActivityOperation = Extract<ContextOperationRequest, { type: 'activity' }>;
 /**
  * Look up `activityName` for the workflow identified by `workflowId`.
  *
- * Resolution rules:
+ * Resolution rules, tried in order:
  *
- * - When a workflow declares activities inline through `.activities()`, it owns
- *   a per-workflow `ActivityRegistry`, which is consulted first.
- * - The global `ActivityRegistry` is the fallback, so a builder workflow can
- *   share an activity that lives in the global pool. A workflow with no
- *   per-workflow registry resolves entirely against the global registry.
+ * - The EAGER per-workflow registry (`internals.activityRegistriesByWorkflow`,
+ *   populated only by `engine.register()` as of WFT-19). Tried first
+ *   regardless of the instance's pinned `revision`: an eager registration
+ *   resolves the same no matter what a legacy or dynamic-source-shaped
+ *   `revision` happens to be pinned (mirrors
+ *   `resolveExecutableRegistrationForRevision()`'s own "eager always wins"
+ *   rule), so a dynamic-source type later re-registered eagerly is never
+ *   skipped in favor of a stale revision-keyed lookup.
+ * - When the instance's identity carries a defined `revision`, the EXACT
+ *   `(type, revision)`-keyed per-workflow registry
+ *   (`internals.sources.resolved.get(type)?.get(revision)?.activityRegistry`)
+ *   — the running instance's own pin, never a sibling run's more-recently-
+ *   resolved revision of the same type (WFT-19; see
+ *   `dynamic-source-execution.ts`'s `loadAndInstallSourceRevision()` doc for
+ *   the clobber this replaces).
+ * - The global `ActivityRegistry`, so a builder workflow can share an
+ *   activity that lives in the global pool. A workflow with no per-workflow
+ *   registry (of either kind above) resolves entirely against the global one.
  *
  * Both `getActivityFunctionWithMetadata` and `resolveActivityFunction` route
  * through this single resolver so metadata (compensation, verification) and
@@ -26,35 +40,50 @@ type ActivityOperation = Extract<ContextOperationRequest, { type: 'activity' }>;
  * whether to throw `ActivityResolutionError` (the dispatch path) or treat the
  * miss as advisory (the metadata path).
  */
+/**
+ * The three-tier resolve order for a workflow this process has a cached
+ * identity for: eager per-workflow registry, then the exact
+ * `(type, revision)`-keyed per-workflow registry, then the global registry.
+ * Split out of {@link resolveActivityViaRegistries} purely to keep that
+ * function's own cyclomatic complexity under the repository's ceiling.
+ */
+function resolveViaKnownIdentity(
+  internals: EngineInternals,
+  identity: WorkflowExecutionIdentity,
+  activityName: string,
+): { fn: (...arguments_: unknown[]) => unknown; workflowType: string } | undefined {
+  const eagerFn = internals.activityRegistriesByWorkflow.get(identity.type)?.resolve(activityName);
+  if (eagerFn) {
+    return { fn: eagerFn, workflowType: identity.type };
+  }
+
+  if (identity.revision !== undefined) {
+    const revisionFn = internals.sources.resolved
+      .get(identity.type)
+      ?.get(identity.revision)
+      ?.activityRegistry.resolve(activityName);
+    if (revisionFn) {
+      return { fn: revisionFn, workflowType: identity.type };
+    }
+  }
+
+  const globalFn = internals.activityRegistry.resolve(activityName);
+  return globalFn ? { fn: globalFn, workflowType: identity.type } : undefined;
+}
+
 function resolveActivityViaRegistries(
   internals: EngineInternals,
   workflowId: string,
   activityName: string,
 ): { fn: (...arguments_: unknown[]) => unknown; workflowType: string } | undefined {
-  const workflowType = internals.workflowTypeByWorkflowId.get(workflowId);
-  if (workflowType !== undefined) {
-    const perWorkflow = internals.activityRegistriesByWorkflow.get(workflowType);
-    if (perWorkflow !== undefined) {
-      // Per-workflow registry wins; fall back to global to support the
-      // mixed-registration pattern (builder workflow + shared global activity).
-      const perWorkflowFn = perWorkflow.resolve(activityName);
-      if (perWorkflowFn) {
-        return { fn: perWorkflowFn, workflowType };
-      }
-    }
-    const globalFn = internals.activityRegistry.resolve(activityName);
-    if (globalFn) {
-      return { fn: globalFn, workflowType };
-    }
-    return undefined;
+  const identity = internals.workflowTypeByWorkflowId.get(workflowId);
+  if (identity !== undefined) {
+    return resolveViaKnownIdentity(internals, identity, activityName);
   }
   // Unknown workflow type (lifecycle edge — e.g. activity dispatched outside
   // an active workflow execution). Only the global registry can answer.
   const globalFn = internals.activityRegistry.resolve(activityName);
-  if (globalFn) {
-    return { fn: globalFn, workflowType: '<unknown>' };
-  }
-  return undefined;
+  return globalFn ? { fn: globalFn, workflowType: '<unknown>' } : undefined;
 }
 
 /**
@@ -99,6 +128,6 @@ export function resolveActivityFunction(
   const resolved = resolveActivityViaRegistries(internals, workflowId, operation.activityName);
   if (resolved) return resolved.fn;
   if (operation.fn) return operation.fn;
-  const workflowType = internals.workflowTypeByWorkflowId.get(workflowId) ?? '<unknown>';
+  const workflowType = internals.workflowTypeByWorkflowId.get(workflowId)?.type ?? '<unknown>';
   throw new ActivityResolutionError(workflowType, operation.activityName);
 }

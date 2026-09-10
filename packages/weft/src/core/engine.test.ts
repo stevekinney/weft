@@ -53,14 +53,17 @@ import {
 import { buildWorkflowManifestFromDefinition } from './registry-workflow-manifest.ts';
 import { workflowSource } from './source/index.ts';
 import { WorkflowTimeoutError } from './timeouts.ts';
-import type {
-  DefinitionSchema,
-  TimerEntry,
-  WorkerOutboundMessage,
-  WorkflowContext,
-  WorkflowState,
+import {
+  activity,
+  signal,
+  workflow,
+  type DefinitionSchema,
+  type TimerEntry,
+  type WorkerOutboundMessage,
+  type WorkflowContext,
+  type WorkflowDefinition,
+  type WorkflowState,
 } from './types.ts';
-import { activity, signal, workflow } from './types.ts';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -4959,6 +4962,88 @@ describe('Engine', () => {
     await expect(engine.setAttributes(handle.id, { region: 'us-east' })).resolves.toBeUndefined();
     const attributesAfterSet = await engine.getAttributes(handle.id);
     expect(attributesAfterSet?.['region']).toBe('us-east');
+
+    engine[Symbol.dispose]();
+  });
+
+  it("engine.setAttributes() validates against the pinned revision's own schema, not a sibling run's more-recently-resolved revision (WFT-19)", async () => {
+    // Regression: `setAttributes()` fell back to the most recently RESOLVED
+    // dynamic-source definition for `type` (last-resolved-wins), so a run's
+    // search-attribute schema could silently reflect a SIBLING run's more-
+    // recently-resolved revision instead of its own pinned one.
+    const type = 'multi-rev-attrs';
+    const definitionA = workflow({ name: type, description: 'A' })
+      .searchAttributes({ region: { type: 'string' } })
+      .execute(async function* (ctx: WorkflowContext) {
+        yield* ctx.waitForSignal('never');
+      });
+    const definitionB = workflow({ name: type, description: 'B' })
+      .searchAttributes({ priority: { type: 'number' } })
+      .execute(async function* () {
+        return 'B-done';
+      });
+    async function manifestRevisionFor(definition: WorkflowDefinition): Promise<string> {
+      const entry = buildRegistrationEntry(type, definition);
+      const registered = copyWorkflowDefinition(type, entry);
+      const manifest = await buildWorkflowManifestFromDefinition(
+        registered,
+        new ActivityRegistry().listDefinitions(),
+      );
+      return manifest.revision;
+    }
+    const revisionA = await manifestRevisionFor(definitionA);
+    const revisionB = await manifestRevisionFor(definitionB);
+
+    const engine = new Engine();
+    engine.registerSource(
+      workflowSource(
+        { name: type, location: './a.ts', exportName: 'a', revision: revisionA },
+        async () => ({ a: definitionA }),
+      ),
+    );
+    engine.registerSource(
+      workflowSource(
+        { name: type, location: './b.ts', exportName: 'b', revision: revisionB },
+        async () => ({ b: definitionB }),
+      ),
+    );
+
+    // Moves `type`'s catalog active pointer to `revision`, tolerating a
+    // revision-only content difference and supplying the required
+    // `expectedGeneration` once a prior active pointer exists — an omitted
+    // `expectedGeneration` on a second activation silently refuses with
+    // `expected-generation-required` rather than throwing, leaving the
+    // active pointer on the FIRST revision with no visible error. Throws
+    // loudly instead when activation is refused for any reason.
+    async function activateDynamicSourceRevision(revision: string): Promise<void> {
+      const active = await engine.workflows.getActive(type);
+      const result = await engine.workflows.activate(type, revision, {
+        ...(active !== null && { expectedGeneration: active.generation }),
+        policy: { requireExactRevision: false },
+      });
+      if (!result.applied) {
+        throw new Error(
+          `activateDynamicSourceRevision(${type}, ${revision}) was not applied: ${JSON.stringify(result)}`,
+        );
+      }
+    }
+
+    await engine.resolveWorkflowSource(type, revisionA);
+    await activateDynamicSourceRevision(revisionA);
+    const handleA = await engine.start(type, null, { id: 'multi-rev-attrs-a' });
+
+    // B resolves and installs AFTER A — the pre-fix, last-resolved-wins
+    // lookup would now validate A's `setAttributes()` calls against B's
+    // schema instead of A's own.
+    await engine.resolveWorkflowSource(type, revisionB);
+    await activateDynamicSourceRevision(revisionB);
+    const handleB = await engine.start(type, null, { id: 'multi-rev-attrs-b' });
+    await handleB.result();
+
+    await expect(engine.setAttributes(handleA.id, { priority: 5 })).rejects.toThrow(
+      'Unknown search attribute "priority". Registered attributes: region',
+    );
+    await expect(engine.setAttributes(handleA.id, { region: 'us-east' })).resolves.toBeUndefined();
 
     engine[Symbol.dispose]();
   });

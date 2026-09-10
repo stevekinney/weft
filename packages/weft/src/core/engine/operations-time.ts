@@ -298,6 +298,7 @@ export async function startDelayedWorkflow(
     entry.workflowId,
     runningState.workflowExecutionToken,
     runningState.type,
+    runningState.revision,
     runningState.input,
     checkpoint,
     executionDeadline,

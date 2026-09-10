@@ -64,12 +64,13 @@ async function isWorkflowStillRunning(storage: Storage, workflowId: string): Pro
 async function isWorkflowTypeRegistered(
   storage: Storage,
   workflowId: string,
-  isTypeRegistered: (workflowType: string) => boolean,
+  isTypeRegistered: (workflowType: string, revision: string | undefined) => boolean,
 ): Promise<boolean> {
   const bytes = await storage.get(KEYS.workflow(workflowId));
   if (bytes === null) return false;
   try {
-    return isTypeRegistered(decodeWorkflowState(bytes).type);
+    const state = decodeWorkflowState(bytes);
+    return isTypeRegistered(state.type, state.revision);
   } catch {
     return false;
   }
@@ -165,7 +166,7 @@ export function createWorkflowClaimReclaimTarget(
    * every existing caller/test that does not care about mixed workflow-type
    * fleets keeps working unchanged.
    */
-  isTypeRegistered?: (workflowType: string) => boolean,
+  isTypeRegistered?: (workflowType: string, revision: string | undefined) => boolean,
 ): WorkflowClaimReclaimTargetHandle {
   // Workflow ids whose reclaim succeeded (this engine durably holds the
   // claim) but whose `onReclaimed` drive most recently threw. Reclaim

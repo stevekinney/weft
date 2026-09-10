@@ -26,6 +26,7 @@ export type TimeOperationCallbacks = {
     workflowId: string,
     workflowExecutionToken: string | undefined,
     workflowType: string,
+    revision: string | undefined,
     input: unknown,
     checkpoint: Checkpoint,
     executionDeadline: number | undefined,

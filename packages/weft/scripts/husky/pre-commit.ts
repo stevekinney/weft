@@ -391,6 +391,18 @@ export async function main(): Promise<void> {
     ok = false;
   }
 
+  // 7b) revision-keyed-lookups allowlist check (mirrors the gate in `bun run lint`)
+  info('Running revision-keyed-lookups check…');
+  try {
+    await $`bun scripts/check-revision-keyed-lookups.ts`;
+    success('revision-keyed-lookups check passed');
+  } catch {
+    error(
+      "revision-keyed-lookups check failed — see scripts/check-revision-keyed-lookups.ts: a process-local lookup keyed by workflow type alone must key by the running instance's exact (type, revision) pin instead.",
+    );
+    ok = false;
+  }
+
   // 8) JSDoc manifest audit (only when source/scripts/package.json changed)
   const stagedTouchesPublicSurface = staged.some(
     (file) =>

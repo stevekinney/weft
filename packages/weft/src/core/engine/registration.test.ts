@@ -6,12 +6,21 @@ import { buildWorkflowContract } from '../contract/build.ts';
 import { buildWorkflowRevisionManifest } from '../contract/manifest.ts';
 import type { WorkflowRevisionManifest } from '../contract/types.ts';
 import { Engine } from '../engine.ts';
-import { activity, workflow } from '../types.ts';
+import { buildWorkflowManifestFromDefinition } from '../registry-workflow-manifest.ts';
+import { workflowSource } from '../source/index.ts';
+import { activity, workflow, type WorkflowContext } from '../types.ts';
 import { DEFAULT_WORKFLOW_VERSION } from '../versioning.ts';
 import { activateCatalogRevisionCandidate } from './catalog-activation.ts';
 import { ensureWorkflowCatalogReady } from './catalog-readiness.ts';
+import { copyWorkflowDefinition } from './construction.ts';
 import { getInternals, getWorkflowCatalog } from './internals.ts';
-import { resolveWorkflowTypeTarget, type RegistrationCallbacks } from './registration.ts';
+import {
+  buildPerWorkflowActivityRegistry,
+  buildRegistrationEntry,
+  isBuilderWorkflowDefinition,
+  resolveWorkflowTypeTarget,
+  type RegistrationCallbacks,
+} from './registration.ts';
 
 const callbacks: RegistrationCallbacks = {
   ensureRetentionSweepInterval: () => undefined,
@@ -386,7 +395,7 @@ describe('WFT-17: persisted WorkflowState.revision at start admission', () => {
       },
       description: 'first candidate',
     } as never);
-    await ensureWorkflowCatalogReady(engine as unknown as Engine);
+    await ensureWorkflowCatalogReady(engine);
     const revisionV1 = internals.registeredCatalogRevisions.get(name);
     expect(revisionV1).toBeDefined();
 
@@ -402,9 +411,77 @@ describe('WFT-17: persisted WorkflowState.revision at start admission', () => {
     // already be gone, not silently served to a synchronous reader.
     expect(internals.registeredCatalogRevisions.has(name)).toBe(false);
 
-    await ensureWorkflowCatalogReady(engine as unknown as Engine);
+    await ensureWorkflowCatalogReady(engine);
     const revisionV2 = internals.registeredCatalogRevisions.get(name);
     expect(revisionV2).toBeDefined();
     expect(revisionV2).not.toBe(revisionV1);
+  });
+});
+
+describe('getWorkflowActivityDefinition() / listWorkflowActivityDefinitions() — eager-only scope (WFT-19)', () => {
+  it('returns undefined/[] for a resolved registerSource()-registered type, never a stale or mismatched dynamic-source revision', async () => {
+    // Regression: before this fix, `loadAndInstallSourceRevision()` mirrored
+    // a resolved dynamic source's activity registry into the TYPE-keyed
+    // `internals.activityRegistriesByWorkflow` — the exact map these two
+    // accessors read. That mirror-write is removed (WFT-19: it is what
+    // clobbered across revisions), so a `registerSource()`-registered type
+    // — resolved or not — now correctly returns "nothing here", not a
+    // possibly-stale-or-wrong-revision reflection of it.
+    const type = 'dynamic-activity-scope';
+    const definition = workflow({ name: type })
+      .activities({ ping: async () => 'pong' })
+      .execute(async function* (ctx: WorkflowContext) {
+        yield* ctx.waitForSignal('never');
+      });
+    const entry = buildRegistrationEntry(type, definition);
+    const registered = copyWorkflowDefinition(type, entry);
+    // The workflow's own `.activities({...})` contract is part of the
+    // manifest hash — feed the SAME per-workflow activity definitions
+    // registration would build, not an empty registry.
+    const activityDefinitions = isBuilderWorkflowDefinition(definition)
+      ? buildPerWorkflowActivityRegistry(definition.activities).listDefinitions()
+      : [];
+    const manifest = await buildWorkflowManifestFromDefinition(registered, activityDefinitions);
+
+    const engine = new Engine();
+    engine.registerSource(
+      workflowSource(
+        {
+          name: type,
+          location: './dynamic-activity-scope.ts',
+          exportName: 'dyn',
+          revision: manifest.revision,
+        },
+        async () => ({ dyn: definition }),
+      ),
+    );
+
+    // Not yet resolved: both accessors already read empty/undefined.
+    expect(engine.getWorkflowActivityDefinition(type, 'ping')).toBeUndefined();
+    expect(engine.listWorkflowActivityDefinitions(type)).toEqual([]);
+
+    // Resolve it (via a real start) — the pre-fix mirror-write would have
+    // populated `activityRegistriesByWorkflow` here.
+    const handle = await engine.start(type, null, { id: 'dynamic-activity-scope-run' });
+    expect(engine.getWorkflowActivityDefinition(type, 'ping')).toBeUndefined();
+    expect(engine.listWorkflowActivityDefinitions(type)).toEqual([]);
+
+    await handle.cancel();
+    engine[Symbol.dispose]();
+  });
+
+  it('returns the eager registration for a same-named eager type unaffected by a resolved dynamic-source sibling', async () => {
+    const eagerDefinition = workflow({ name: 'eager-activity-scope' })
+      .activities({ pong: async () => 'ping' })
+      .execute(async function* (ctx: WorkflowContext) {
+        yield* ctx.waitForSignal('never');
+      });
+    const engine = new Engine();
+    engine.register(eagerDefinition);
+
+    expect(engine.getWorkflowActivityDefinition('eager-activity-scope', 'pong')).toBeDefined();
+    expect(engine.listWorkflowActivityDefinitions('eager-activity-scope')).toHaveLength(1);
+
+    engine[Symbol.dispose]();
   });
 });

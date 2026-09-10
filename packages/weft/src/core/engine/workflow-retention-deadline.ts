@@ -18,7 +18,8 @@ export function getWorkflowRetentionDeadline(
   if (!isTerminalWorkflowStatus(state.status)) return null;
 
   const policy =
-    getResolvedDynamicRegistration(internals, state.type)?.retention ?? internals.options.retention;
+    getResolvedDynamicRegistration(internals, state.type, state.revision)?.retention ??
+    internals.options.retention;
   const retentionMs = resolveRetentionForStatus(policy, state.status);
   if (retentionMs === undefined) return null;
 

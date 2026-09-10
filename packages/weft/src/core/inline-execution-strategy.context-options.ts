@@ -13,7 +13,10 @@ import type { WorkflowLogRecord } from './types/workflow-log.ts';
 
 /** Capabilities the engine injects into the inline strategy at construction. */
 export interface InlineExecutionDependencies {
-  getRegistration: (workflowType: string) =>
+  getRegistration: (
+    workflowType: string,
+    workflowId: string,
+  ) =>
     | {
         handler: WorkflowFunction;
         version: string;
@@ -144,12 +147,14 @@ function resolveLogSinkOption(dependencies: InlineExecutionDependencies): {
  * spreads do not tip that function over the cyclomatic-complexity cap.
  */
 export function optionalInlineDependencies(candidates: {
-  [Key in
-    | 'getComposedWorkflowInterceptor'
-    | 'registerCancelHandler'
-    | 'recordFinalizerState'
-    | 'getWorkflowServices'
-    | 'getLogSink']: InlineExecutionDependencies[Key] | undefined;
+  [
+    Key in
+      | 'getComposedWorkflowInterceptor'
+      | 'registerCancelHandler'
+      | 'recordFinalizerState'
+      | 'getWorkflowServices'
+      | 'getLogSink'
+  ]: InlineExecutionDependencies[Key] | undefined;
 }): Partial<InlineExecutionDependencies> {
   return {
     ...(candidates.getComposedWorkflowInterceptor !== undefined && {

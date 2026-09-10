@@ -295,6 +295,7 @@ describe('engine time operation helpers', () => {
       workflowId,
       state.workflowExecutionToken,
       state.type,
+      state.revision,
       state.input,
       checkpoint,
       2_500,

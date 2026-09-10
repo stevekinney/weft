@@ -93,7 +93,15 @@ class MemoDurableActivityScope implements DurableActivityScope {
     this.#identityPrefix = `memo:${operation.step}:${hashString(operation.key)}`;
     // Recovery can replay a memo callback before lifecycle/start-exec has
     // repopulated the workflow-id lookup used by string activity resolution.
-    this.#internals.workflowTypeByWorkflowId.set(workflowId, context.workflowType);
+    // Non-destructive of an already-populated `revision` (WFT-19): resume.ts
+    // now populates this cache with the instance's own exact pin before any
+    // activity dispatch, so a bare `context.workflowType` re-set here must
+    // not blow that pin away with `undefined` when this constructor runs on
+    // a LATER turn of the same already-resumed instance.
+    this.#internals.workflowTypeByWorkflowId.set(workflowId, {
+      type: context.workflowType,
+      revision: this.#internals.workflowTypeByWorkflowId.get(workflowId)?.revision,
+    });
   }
 
   async run(execute: () => unknown): Promise<unknown> {

@@ -172,6 +172,14 @@ The audit scans `src/`, `scripts/`, and `tests/` TypeScript/Svelte implementatio
 | `src/client/http-client-requests.ts`            | Justified exception | HTTP request helpers are grouped by one client transport and mostly sit just above the threshold; splitting would add routing noise.                                                                                                                                         |
 | `scripts/generate-operation-client.ts`          | Justified exception | The operation-client generator keeps schema normalization, alias selection, rendering, formatting, and drift output together.                                                                                                                                                |
 
+A process-local `EngineInternals` lookup keyed by workflow `type` alone is a bug whenever a dynamic-source type can have 2+ registered revisions live in one process at once — two concurrent runs of different revisions, or a redeploy with an old run still in flight. Run the revision-keyed-lookups audit before opening a pull request:
+
+```bash
+bun run scripts/check-revision-keyed-lookups.ts
+```
+
+The audit scans `src/` for a property access on either of two fields prone to this class of bug, `internals.activityRegistriesByWorkflow` and `internals.sources.lastResolvedRevisionByName`, and fails when one is referenced from a file outside that field's exhaustive, audited allowlist (exported as `GUARDED_FIELDS`). A doc comment that merely names a guarded field does not count — only an actual property access does; comments are stripped before matching. Widen a field's allowlist only when the new call site is itself provably eager-only or revision-gated the same way the field's existing allowed files are; otherwise key the lookup by the running instance's exact `(type, revision)` pin (`EngineInternals.workflowTypeByWorkflowId`) instead.
+
 To clean build artifacts, coverage output, and caches:
 
 ```bash

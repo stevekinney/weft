@@ -409,7 +409,7 @@ export function createExecutionStrategyBundle(parameters: {
   maxNestingDepth: number;
   development: boolean;
   broadcastEvents: boolean;
-  getRegistration: (workflowType: string) => RegistrationEntry | undefined;
+  getRegistration: (workflowType: string, workflowId: string) => RegistrationEntry | undefined;
   /** Live accessor for registered workflow type names (WFT-28); registrations are still empty here. */
   listRegisteredWorkflowTypes: () => Iterable<string>;
   getComposedWorkflowInterceptor?: () => ComposedWorkflowInterceptor | null;

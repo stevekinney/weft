@@ -110,7 +110,13 @@ export function resolveWorkflowTypeRetention(
   // definition for `type` when there is no eager registration, matching
   // the same last-resolved-revision-wins rule `finalizer.ts`/`constraints.ts`
   // already rely on this helper for. Never triggers a new resolve.
-  const registration = getResolvedDynamicRegistration(internals, type);
+  //
+  // Deliberately passes `revision: undefined` (WFT-19): this is a TYPE-level
+  // overview API (`getRetentionOverview()`'s per-registered-type summary),
+  // with no single running instance's own pin to resolve against — unlike
+  // `getWorkflowRetentionDeadline()`'s per-instance resolve, which passes
+  // the run's own `state.revision`.
+  const registration = getResolvedDynamicRegistration(internals, type, undefined);
   if (registration?.retention) {
     return {
       type,

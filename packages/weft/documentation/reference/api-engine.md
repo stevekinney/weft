@@ -197,13 +197,21 @@ listActivityDefinitions(): ActivityMetadata[]
 
 Return read-only metadata for all registered activity names. Activity definition introspection is name-based, so aliases are reported separately even when they point at the same function.
 
+### `getWorkflowActivityDefinition()`
+
+```ts partial
+getWorkflowActivityDefinition(workflowType: string, activityName: string): ActivityMetadata | undefined
+```
+
+Resolve one activity's catalog metadata the same way dispatch resolves it for a running workflow of `workflowType`: the workflow's per-workflow `.activities({...})` registry first, falling back to the global registry. Scoped to eagerly `engine.register()`-ed types only (WFT-19): a `registerSource()`-registered type returns `undefined` here regardless of whether any revision has been resolved on this process — this accessor is synchronous and type-only, with no running instance to resolve a specific revision against, so it never risks reflecting a stale or mismatched revision's schema.
+
 ### `listWorkflowActivityDefinitions()`
 
 ```ts partial
 listWorkflowActivityDefinitions(workflowType: string): ActivityMetadata[]
 ```
 
-Return read-only metadata for every activity registered on `workflowType`'s own `.activities({...})` step — never a same-named global activity, and never a handler function. Returns an empty array for a workflow with no `.activities({...})` step, including an unknown `workflowType`. `buildRegistrySnapshot()` (`GET /v1/registry`) uses this to fold a workflow's scoped activity schemas into its manifest contract, so a scoped activity's schema change moves that workflow's `contractHash` and `revision`.
+Return read-only metadata for every activity registered on `workflowType`'s own `.activities({...})` step — never a same-named global activity, and never a handler function. Returns an empty array for a workflow with no `.activities({...})` step, including an unknown `workflowType` and, as of WFT-19, a `registerSource()`-registered type regardless of resolution state (same eager-only scope as [`getWorkflowActivityDefinition()`](#getworkflowactivitydefinition) above). `buildRegistrySnapshot()` (`GET /v1/registry`) uses this to fold a workflow's scoped activity schemas into its manifest contract, so a scoped activity's schema change moves that workflow's `contractHash` and `revision`.
 
 ### `workflows` (getter)
 

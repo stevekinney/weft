@@ -46,6 +46,7 @@ export function startWorkflowExecution(
   workflowId: string,
   workflowExecutionToken: string | undefined,
   workflowType: string,
+  revision: string | undefined,
   input: unknown,
   checkpoint: Checkpoint,
   nestingDepth: number,
@@ -58,9 +59,10 @@ export function startWorkflowExecution(
   if (nestingDepth !== 0) {
     internals.workflowNestingDepths.set(workflowId, nestingDepth);
   }
-  // Cache the workflow type for synchronous activity-registry lookup on the
-  // dispatch hot path. Cleared on terminal cleanup (see termination/cleanup.ts).
-  internals.workflowTypeByWorkflowId.set(workflowId, workflowType);
+  // Cache the workflow type/revision for synchronous per-instance registry
+  // lookup on the dispatch hot path (WFT-19). Cleared on terminal cleanup
+  // (see termination/cleanup.ts).
+  internals.workflowTypeByWorkflowId.set(workflowId, { type: workflowType, revision });
   internals.strategy.startWorkflow({
     workflowId,
     ...(workflowExecutionToken !== undefined && { workflowExecutionToken }),
@@ -83,6 +85,7 @@ export function beginWorkflowExecution(
   workflowId: string,
   workflowExecutionToken: string | undefined,
   workflowType: string,
+  revision: string | undefined,
   input: unknown,
   checkpoint: Checkpoint,
   executionDeadline: number | undefined,
@@ -99,6 +102,7 @@ export function beginWorkflowExecution(
       workflowId,
       ...(workflowExecutionToken !== undefined && { workflowExecutionToken }),
       workflowType,
+      revision,
       input,
       checkpoint,
       nestingDepth,
@@ -118,6 +122,7 @@ export function beginWorkflowExecution(
     workflowId,
     workflowExecutionToken,
     workflowType,
+    revision,
     input,
     checkpoint,
     nestingDepth,
@@ -204,6 +209,7 @@ export async function beginExecutionAwaitingLiveness(
     workflowId,
     params.state.workflowExecutionToken,
     params.type,
+    params.state.revision,
     params.input,
     params.checkpoint,
     params.state.executionDeadline,

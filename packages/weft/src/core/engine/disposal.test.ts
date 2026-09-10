@@ -45,6 +45,7 @@ function seedQueuedInlineStart(
   const queued: QueuedInlineWorkflowExecutionStart = {
     workflowId,
     workflowType: 'seeded',
+    revision: undefined,
     input: null,
     checkpoint,
     nestingDepth: 0,
@@ -578,6 +579,7 @@ describe('dropQueuedInlineWorkflowStart settles defer:false awaiters', () => {
     const queued: QueuedInlineWorkflowExecutionStart = {
       workflowId: 'cancelled-while-queued',
       workflowType: 'whatever',
+      revision: undefined,
       input: null,
       // The checkpoint shape is irrelevant to drop — it is filtered by id before
       // ever being read, so a minimal stand-in is sufficient for this unit.

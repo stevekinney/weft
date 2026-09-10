@@ -823,6 +823,37 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       },
     ],
     [
+      'scripts/check-revision-keyed-lookups.ts',
+      // New script (WFT-19). Its own test file drives every code path
+      // (`parseArguments`/`printUsage`'s `--help`/`--root`/unknown-argument
+      // branches, `scanViolations()`'s comment-stripping and allowlist
+      // exclusion, `runEnforcement()`'s pass/fail reporting, and the
+      // `import.meta.main` CLI entry) exclusively via `Bun.spawnSync(['bun',
+      // 'run', scriptPath, ...])` — the same child-process pattern
+      // `check-lint-disables.test.ts` already uses for its own script, so
+      // none of those hits attribute back to this parent Bun LCOV report.
+      // `functions: 7` (of 8 total, 1 hit): Bun's LCOV omits per-function
+      // FN:/FNDA: detail for this file — confirmed via the raw aggregate,
+      // FNF:8/FNH:1 — the same omission already documented for
+      // `pre-commit.ts` below.
+      {
+        reason:
+          'Process-entry and failure-exit behavior runs in child processes whose hits are not attributed to the parent Bun LCOV report.',
+        functions: 7,
+        lines: createMergedLineSet(
+          createLineSet(108, 121),
+          createLineSet(125, 141),
+          createLineSet(186, 190),
+          createLineSet(195, 199),
+          createLineSet(203, 225),
+          createLineSet(229, 250),
+          createLineSet(254, 255),
+          createLineSet(260, 261),
+        ),
+        requireUncoveredLines: true,
+      },
+    ],
+    [
       'scripts/husky/pre-commit.ts',
       // reportTestOutcome was hoisted out of main() to module scope, landing
       // immediately before it (229-268), to fix an
@@ -831,13 +862,15 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       // scoping it to staged files only (PR #904). reportTestOutcome is only
       // ever called from inside main(), which pre-commit.test.ts never
       // invokes, so it is exactly as uncoverable as main() itself — the range
-      // now runs 229-474 (was 229-451) to cover both as one contiguous span,
-      // matching main()'s new end boundary. Lines before 227 (the pre-main()
-      // stash-lifecycle helpers) are untouched.
+      // now runs 229-484 (was 229-474) to cover both as one contiguous span,
+      // matching main()'s new end boundary after WFT-19 added a 7b)
+      // revision-keyed-lookups check step (12 lines) alongside the existing
+      // numbered steps. Lines before 227 (the pre-main() stash-lifecycle
+      // helpers) are untouched.
       // `requireUncoveredLines` is intentionally omitted now: `return false;`
       // / the closing `}` of reportTestOutcome (267, 268) and main()'s final
-      // `process.exit(0)` (473) read as hit on this run despite neither
-      // function being invoked by pre-commit.test.ts — a boundary coverage-
+      // `process.exit(0)` read as hit on this run despite neither function
+      // being invoked by pre-commit.test.ts — a boundary coverage-
       // attribution artifact matching the same class already documented for
       // `task-ledger-recovery.ts`'s case-label/brace lines elsewhere in this
       // file, not a real reachability signal. `functions` bumped 8 -> 9: the
@@ -854,7 +887,7 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
             54, 55, 84, 85, 86, 99, 100, 101, 112, 123, 124, 125, 131, 132, 133, 151, 152, 153, 160,
             161, 162, 165, 167, 168, 169, 172, 200, 201, 202, 203, 204, 205, 206, 207,
           ]),
-          createLineSet(229, 474),
+          createLineSet(229, 484),
         ),
       },
     ],
@@ -1378,8 +1411,8 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/core/engine/termination/finalizer-registration.ts',
       {
         reason:
-          'Bun maps the closing braces after `return undefined` in the DynamicWorkflowSourceUnavailableError catch branch as uncovered although finalizer.test.ts directly exercises that return (a load-failure dynamic finalizer resolve).',
-        lines: new Set([43, 44]),
+          "Bun maps the closing brace after the DynamicWorkflowSourceUnavailableError/WorkflowRevisionUnavailableError catch branch's `return undefined` and the trailing `throw error;` rethrow as uncovered, although finalizer.test.ts directly exercises the return (both a load-failure and an unresolvable-pinned-revision dynamic finalizer resolve) — only the unmatched-error rethrow itself has no reachable test (WFT-19 shifted these two lines from 43-44 to 56-57 when the catch grew a second error type).",
+        lines: new Set([56, 57]),
         requireUncoveredLines: true,
       },
     ],

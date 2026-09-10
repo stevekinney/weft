@@ -335,7 +335,7 @@ export async function setAttributes(
   const stateBytes = await internals.storage.get(KEYS.workflow(workflowId));
   if (stateBytes) {
     const state = decodeWorkflowState(stateBytes);
-    const registration = getResolvedDynamicRegistration(internals, state.type);
+    const registration = getResolvedDynamicRegistration(internals, state.type, state.revision);
     if (registration?.searchAttributes) {
       const schema = registration.searchAttributes;
       for (const [key, value] of Object.entries(attributes)) {

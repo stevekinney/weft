@@ -30,6 +30,19 @@ export type ConstraintCallbacks = {
  * `!context` guard here only fires for benign cases (e.g. the workflow has
  * already terminated or the context was cleared mid-evaluation).
  */
+/**
+ * The running instance's own pinned revision (WFT-19), or `undefined` for
+ * an eager registration / legacy record. Split out purely to keep
+ * `evaluateConstraints`'s own cyclomatic complexity under the repository's
+ * ceiling.
+ */
+function resolveRunningInstanceRevision(
+  internals: EngineInternals,
+  workflowId: string,
+): string | undefined {
+  return internals.workflowTypeByWorkflowId.get(workflowId)?.revision;
+}
+
 export async function evaluateConstraints(
   internals: EngineInternals,
   workflowId: string,
@@ -38,7 +51,8 @@ export async function evaluateConstraints(
   const context = internals.inlineStrategy?.getContext(workflowId);
   if (!context) return false;
 
-  const registration = getResolvedDynamicRegistration(internals, context.workflowType);
+  const revision = resolveRunningInstanceRevision(internals, workflowId);
+  const registration = getResolvedDynamicRegistration(internals, context.workflowType, revision);
   const constraints = registration?.constraints;
   if (!constraints || constraints.length === 0) return false;
 

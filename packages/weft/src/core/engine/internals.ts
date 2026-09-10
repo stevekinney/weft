@@ -46,6 +46,7 @@ import type {
   RegistrationEntry,
   ResolvedOptions,
   TrackedWaiterKeys,
+  WorkflowExecutionIdentity,
   WorkflowResultWaiter,
 } from './engine-internal-types.ts';
 import type { EngineCleanupIntervalDisposalTracker } from './engine-leak-warnings.ts';
@@ -171,15 +172,15 @@ export interface EngineInternals {
   /**
    * Per-workflow activity registries built from
    * `workflow({ name }).activities({ ... }).execute(...)`, indexed by workflow
-   * type. Activity lookup is per-activity: it consults the workflow's
-   * `activityRegistriesByWorkflow.get(type)` registry first and, for any activity
-   * that registry does not contain, falls back to the engine-wide
-   * {@link EngineInternals.activityRegistry}. Both sources are first-class — a
-   * workflow can resolve some activities from its own `activities(...)` map and
-   * others (shared/globally-registered) from the global registry, and a workflow
-   * with no per-workflow map resolves entirely from the global one. Each
-   * per-workflow registry is a defensive deep clone+freeze of the workflow's
-   * `activities` map so post-registration mutation cannot reach the engine.
+   * type. Lookup consults `activityRegistriesByWorkflow.get(type)` first,
+   * falling back to {@link EngineInternals.activityRegistry} for any activity
+   * that registry lacks. Each entry is a defensive deep clone+freeze of the
+   * workflow's `activities` map. EAGER-ONLY as of WFT-19: only `registration.ts`
+   * writes here (never a `registerSource()` load), so a dynamic-source type's
+   * per-revision activities resolve instead via
+   * `internals.sources.resolved.get(type)?.get(revision)?.activityRegistry`
+   * (`activity-resolution.ts`), keyed by the running instance's own pin —
+   * never this type-only map, which would clobber across revisions.
    */
   activityRegistriesByWorkflow: Map<string, ActivityRegistry>;
   /**
@@ -191,12 +192,13 @@ export interface EngineInternals {
    */
   workflowDefinitionsByName: Map<string, object>;
   /**
-   * In-memory cache of `workflowId -> workflowType` populated when a workflow
-   * starts executing (see lifecycle/start-exec.ts) and cleared on terminal
-   * cleanup. Lets the activity-dispatch hot path resolve the correct
-   * per-workflow registry synchronously without re-reading storage.
+   * In-memory cache of `workflowId -> {type, revision}`, populated whenever a
+   * workflow begins executing in THIS process (fresh start, delayed-start
+   * fire, resume, recovery, workflow-lease reclaim redrive — WFT-19) and
+   * cleared on terminal cleanup. Lets the activity-dispatch hot path, and any
+   * other lookup needing an instance's own exact pin, resolve synchronously.
    */
-  workflowTypeByWorkflowId: Map<string, string>;
+  workflowTypeByWorkflowId: Map<string, WorkflowExecutionIdentity>;
   activityWorkerDispatcher: ActivityWorkerDispatcher | null;
   checkpoints: Map<string, Checkpoint>;
   broadcastChannel: BroadcastChannel | null;

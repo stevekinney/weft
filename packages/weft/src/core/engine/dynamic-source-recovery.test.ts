@@ -23,7 +23,11 @@ import { copyWorkflowDefinition } from './construction.ts';
 import { WorkflowTypeNotRegisteredForRecoveryError } from './errors.ts';
 import { Engine } from './index.ts';
 import { getInternals } from './internals.ts';
-import { buildRegistrationEntry } from './registration.ts';
+import {
+  buildPerWorkflowActivityRegistry,
+  buildRegistrationEntry,
+  isBuilderWorkflowDefinition,
+} from './registration.ts';
 import { WorkflowRevisionUnavailableError } from './revision-errors.ts';
 
 async function waitForCheckpoint(storage: MemoryStorage, workflowId: string): Promise<void> {
@@ -72,10 +76,17 @@ async function seedRunningWorkflowState(
 async function revisionFor(definition: WorkflowDefinition): Promise<string> {
   const entry = buildRegistrationEntry(definition.name, definition);
   const registered = copyWorkflowDefinition(definition.name, entry);
-  const manifest = await buildWorkflowManifestFromDefinition(
-    registered,
-    new ActivityRegistry().listDefinitions(),
-  );
+  // A builder workflow's `.activities({...})` map is part of its contract —
+  // `buildWorkflowManifestFromDefinition` hashes the workflow-scoped activity
+  // set alongside the handler contract, so a caller here must feed it the
+  // SAME per-workflow activity definitions `registerWorkflowDefinition()`
+  // would build (`buildPerWorkflowActivityRegistry`), not an empty registry,
+  // or the manifest computed here will not match the one the engine derives
+  // when it actually resolves and installs this definition.
+  const activityDefinitions = isBuilderWorkflowDefinition(definition)
+    ? buildPerWorkflowActivityRegistry(definition.activities).listDefinitions()
+    : new ActivityRegistry().listDefinitions();
+  const manifest = await buildWorkflowManifestFromDefinition(registered, activityDefinitions);
   return manifest.revision;
 }
 
@@ -453,28 +464,33 @@ describe('recoverAll() — per-(type, revision) preload barrier and exact revisi
     // currently ACTIVE, regardless of which one it actually started on. Two
     // sibling runs pinned to two DIFFERENT revisions must each recover
     // against their OWN code — proven here by each definition returning a
-    // distinct, revision-specific value. Deliberately activity-free (see
-    // module doc caveat): `activityRegistriesByWorkflow`/
-    // `lastResolvedRevisionByName` are keyed by TYPE alone (a WFT-19
-    // boundary this batch does not touch), so an activity call would be
-    // routed through whichever revision resolved last, not necessarily the
-    // handler's own.
+    // distinct, revision-specific value AND by each recovered instance's
+    // `ctx.run('whoami')` call resolving its OWN per-workflow `.activities()`
+    // implementation, not whichever revision this process resolved last
+    // (WFT-19: `activityRegistriesByWorkflow`/`lastResolvedRevisionByName`
+    // are keyed by type alone, so this also exercises the resume-time
+    // `workflowTypeByWorkflowId` identity population fix — without it, a
+    // recovered run's string-named `ctx.run('whoami')` cannot resolve at
+    // all, since neither run was ever started in this process via
+    // `startWorkflowExecution()`).
     const storage = new MemoryStorage();
     // `deriveWorkflowRevision()` hashes the CONTRACT (name, workflowVersion,
     // description, tags) — not the handler body — so distinct `description`
     // values are what actually give A and B distinct revisions here.
-    const definitionA = workflow({ name: 'multi-rev', description: 'candidate A' }).execute(
-      async function* (ctx: WorkflowContext) {
+    const definitionA = workflow({ name: 'multi-rev', description: 'candidate A' })
+      .activities({ whoami: async () => 'activity-A' })
+      .execute(async function* (ctx: WorkflowContext) {
         const value = yield* ctx.waitForSignal<string>('continue');
-        return `A:${value}`;
-      },
-    );
-    const definitionB = workflow({ name: 'multi-rev', description: 'candidate B' }).execute(
-      async function* (ctx: WorkflowContext) {
+        const who = yield* ctx.run('whoami');
+        return `A:${value}:${String(who)}`;
+      });
+    const definitionB = workflow({ name: 'multi-rev', description: 'candidate B' })
+      .activities({ whoami: async () => 'activity-B' })
+      .execute(async function* (ctx: WorkflowContext) {
         const value = yield* ctx.waitForSignal<string>('continue');
-        return `B:${value}`;
-      },
-    );
+        const who = yield* ctx.run('whoami');
+        return `B:${value}:${String(who)}`;
+      });
 
     // `workflowSource()`'s declared `revision` is cross-checked against the
     // loaded module's own content-derived revision at resolve time — so
@@ -508,8 +524,8 @@ describe('recoverAll() — per-(type, revision) preload barrier and exact revisi
     const handleB = handles.find((handle) => handle.id === 'multi-rev-b')!;
     await handleA.signal('continue', 'x');
     await handleB.signal('continue', 'y');
-    expect(await handleA.result()).toBe('A:x');
-    expect(await handleB.result()).toBe('B:y');
+    expect(await handleA.result()).toBe('A:x:activity-A');
+    expect(await handleB.result()).toBe('B:y:activity-B');
   });
 
   it('a fork of a dynamic-source run inherits the source run\'s pinned revision, and recovers under it — not "legacy-ambiguous" — even with a second registered candidate present', async () => {

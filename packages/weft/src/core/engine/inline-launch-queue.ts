@@ -260,6 +260,7 @@ async function startQueuedInlineWorkflowExecution(
       start.workflowId,
       state.workflowExecutionToken,
       start.workflowType,
+      start.revision,
       start.input,
       start.checkpoint,
       start.nestingDepth,

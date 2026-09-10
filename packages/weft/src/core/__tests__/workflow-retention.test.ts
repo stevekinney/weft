@@ -22,6 +22,32 @@ import {
   type WorkflowDefinition,
 } from '../types.ts';
 
+/**
+ * Move `type`'s catalog active pointer to `revision`, tolerating a
+ * revision-only content difference and supplying the required
+ * `expectedGeneration` once a prior active pointer exists — an omitted
+ * `expectedGeneration` on a second activation silently refuses with
+ * `expected-generation-required` rather than throwing, leaving the active
+ * pointer on the FIRST revision with no visible error. Throws loudly
+ * instead when activation is refused for any reason.
+ */
+async function activateDynamicSourceRevision(
+  engine: Engine,
+  type: string,
+  revision: string,
+): Promise<void> {
+  const active = await engine.workflows.getActive(type);
+  const result = await engine.workflows.activate(type, revision, {
+    ...(active !== null && { expectedGeneration: active.generation }),
+    policy: { requireExactRevision: false },
+  });
+  if (!result.applied) {
+    throw new Error(
+      `activateDynamicSourceRevision(${type}, ${revision}) was not applied: ${JSON.stringify(result)}`,
+    );
+  }
+}
+
 async function waitForWorkflowPresence(
   engine: Engine,
   workflowId: string,
@@ -422,7 +448,7 @@ describe('workflow retention', () => {
         return 'dynamic';
       },
     );
-    const entry = buildRegistrationEntry(type, definition as WorkflowDefinition);
+    const entry = buildRegistrationEntry(type, definition);
     const registered = copyWorkflowDefinition(type, entry);
     const manifest = await buildWorkflowManifestFromDefinition(
       registered,
@@ -445,6 +471,76 @@ describe('workflow retention', () => {
 
     now += 1_500;
     await waitForWorkflowPresence(engine, handle.id, false);
+
+    engine[Symbol.dispose]();
+  });
+
+  it("a run pinned to revision B's own (shorter) retention deadline expires at B's window, not a more-recently-resolved revision A's (longer, engine-default) one (WFT-19)", async () => {
+    // Regression: `getWorkflowRetentionDeadline` used to resolve a dynamic
+    // source's retention policy via the TYPE-only, last-resolved-wins
+    // `getResolvedDynamicRegistration(internals, state.type)` — so a
+    // terminal run's deadline could silently reflect a SIBLING run's more-
+    // recently-resolved revision's policy instead of its own pinned one.
+    let now = 5_000;
+    const engine = new Engine({
+      storage: new MemoryStorage(),
+      getNow: () => now,
+      retention: { completed: '10s' },
+      retentionSweepInterval: '10ms',
+    });
+    const type = 'multi-rev-retention';
+    // A has no override — resolves to the engine-wide 10s default.
+    const definitionA = workflow({
+      name: type,
+      description: 'A - engine default retention',
+    }).execute(async function* () {
+      return 'A-done';
+    });
+    const definitionB = workflow({
+      name: type,
+      description: 'B - short retention',
+      retention: { completed: '1s' },
+    }).execute(async function* () {
+      return 'B-done';
+    });
+    async function manifestRevisionFor(definition: WorkflowDefinition): Promise<string> {
+      const entry = buildRegistrationEntry(type, definition);
+      const registered = copyWorkflowDefinition(type, entry);
+      const manifest = await buildWorkflowManifestFromDefinition(
+        registered,
+        new ActivityRegistry().listDefinitions(),
+      );
+      return manifest.revision;
+    }
+    const revisionA = await manifestRevisionFor(definitionA);
+    const revisionB = await manifestRevisionFor(definitionB);
+
+    engine.registerSource(
+      workflowSource(
+        { name: type, location: './a.ts', exportName: 'a', revision: revisionA },
+        async () => ({ a: definitionA }),
+      ),
+    );
+    engine.registerSource(
+      workflowSource(
+        { name: type, location: './b.ts', exportName: 'b', revision: revisionB },
+        async () => ({ b: definitionB }),
+      ),
+    );
+
+    await engine.resolveWorkflowSource(type, revisionB);
+    await activateDynamicSourceRevision(engine, type, revisionB);
+    const handleB = await engine.start(type, null, { id: 'multi-rev-retention-b' });
+    await handleB.result();
+
+    // Resolve and activate A AFTER B completes — the pre-fix, last-resolved-
+    // wins lookup would now apply A's (engine-default, 10s) policy to B's
+    // already-terminal run.
+    await engine.resolveWorkflowSource(type, revisionA);
+    await activateDynamicSourceRevision(engine, type, revisionA);
+
+    now += 1_500; // past B's own 1s deadline, well under the 10s engine default
+    await waitForWorkflowPresence(engine, handleB.id, false);
 
     engine[Symbol.dispose]();
   });
