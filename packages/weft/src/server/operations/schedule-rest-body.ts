@@ -9,6 +9,7 @@ export type SharedScheduleRestFields = {
   readonly overlap: unknown;
   readonly backfill: unknown;
   readonly jitter: unknown;
+  readonly revisionPolicy: unknown;
 };
 
 function isJsonObjectLikeRecord(value: unknown): value is Record<string, unknown> {
@@ -44,5 +45,6 @@ export function extractSharedScheduleRestFields(
     overlap: record['overlap'],
     backfill: record['backfill'],
     jitter: record['jitter'],
+    revisionPolicy: record['revisionPolicy'],
   };
 }

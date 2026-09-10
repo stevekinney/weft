@@ -1194,6 +1194,40 @@ interface WorkflowSummary {
 }
 ```
 
+### `ScheduleRevisionPolicy` and `ScheduleMetadata`
+
+Which persisted revision a recurring schedule's future occurrences resolve against (WFT-20) — see [Schedule revision policy](../guides/workflow-versioning.md#schedule-revision-policy-wft-20).
+
+```ts partial
+type ScheduleRevisionPolicy = 'active-at-fire' | 'pinned';
+
+interface ScheduleMetadata {
+  id: string;
+  workflowType: string;
+  description?: string;
+  cronExpression?: string;
+  intervalMs?: number;
+  status: ScheduleStatus;
+  overlap: ScheduleOverlapPolicy;
+  backfill: boolean;
+  jitterMs?: number;
+  /** Which revision future occurrences resolve against (WFT-20). Absent on a pre-WFT-20 record, which decodes as `'active-at-fire'`. */
+  revisionPolicy: ScheduleRevisionPolicy;
+  /** The exact revision every future occurrence resolves against, captured when this schedule was created or last (re-)pinned. Present only when `revisionPolicy === 'pinned'`. */
+  pinnedRevision?: string;
+  createdAt: number;
+  updatedAt: number;
+  lastFireAt?: number;
+  lastMissedFireAt?: number;
+  missedFireCount: number;
+  nextFireAt: number | null;
+  currentWorkflowId?: string;
+  queuedRuns: ScheduleQueuedRun[];
+}
+```
+
+`ScheduleState` (returned by `engine.getSchedule(id)`) extends `ScheduleMetadata` with `input: unknown`; `ScheduleSummary` (returned by `engine.listSchedules()`) extends it with no additional fields. `ScheduleOptions.revisionPolicy` and `ScheduleUpdateOptions.revisionPolicy` accept the same `ScheduleRevisionPolicy` — see the guide linked above for capture and update semantics.
+
 ---
 
 ## Event Types

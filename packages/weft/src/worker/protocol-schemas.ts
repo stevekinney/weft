@@ -81,6 +81,7 @@ export const REMOTE_WORKER_MESSAGE_SCHEMAS = {
           status: { const: 'completed' },
           value: jsonValueSchema,
           attemptToken: { type: 'string', minLength: 1 },
+          workflowRevision: { type: 'string', minLength: 1 },
         },
       },
       {
@@ -93,6 +94,7 @@ export const REMOTE_WORKER_MESSAGE_SCHEMAS = {
           status: { const: 'failed' },
           error: { type: 'string' },
           attemptToken: { type: 'string', minLength: 1 },
+          workflowRevision: { type: 'string', minLength: 1 },
         },
       },
       {
@@ -106,6 +108,7 @@ export const REMOTE_WORKER_MESSAGE_SCHEMAS = {
           error: { type: 'string' },
           cancelled: { const: true },
           attemptToken: { type: 'string', minLength: 1 },
+          workflowRevision: { type: 'string', minLength: 1 },
         },
       },
     ],
@@ -122,6 +125,7 @@ export const REMOTE_WORKER_MESSAGE_SCHEMAS = {
       attempt: { type: 'number', minimum: 1 },
       headers: stringMapSchema,
       workflowExecutionToken: { type: 'string', minLength: 1 },
+      workflowRevision: { type: 'string', minLength: 1 },
       attemptToken: { type: 'string', minLength: 1 },
     },
   },

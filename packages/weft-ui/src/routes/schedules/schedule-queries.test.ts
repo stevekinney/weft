@@ -30,6 +30,7 @@ const SUMMARY: ScheduleSummary = {
   status: 'active',
   overlap: 'skip',
   backfill: false,
+  revisionPolicy: 'active-at-fire',
   createdAt: 0,
   updatedAt: 0,
   missedFireCount: 0,

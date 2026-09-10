@@ -64,6 +64,7 @@ function createScheduleState(overrides: Partial<ScheduleState> = {}): ScheduleSt
     nextFireAt: 2_000,
     overlap: 'skip',
     queuedRuns: [],
+    revisionPolicy: 'active-at-fire',
     status: 'active',
     updatedAt: 1_000,
     workflowType: 'workflow',
@@ -194,6 +195,50 @@ describe('storage I/O helpers', () => {
       ),
     ).rejects.toThrow(
       'Schedule state commit for schedule "schedule-fenced" lost its precondition.',
+    );
+  });
+
+  // WFT-20: writeScheduleState's `extraConditions` branch.
+  it('applies the caller-supplied extraConditions fence and reports the typed error when they disagree on re-read', async () => {
+    const storage = new MemoryStorage();
+    storage.conditionalBatch = async () => false;
+
+    const rejection = await writeScheduleState(
+      { deposed: false, leaseManager: null, options: { ownershipMode: 'none' }, storage } as never,
+      createScheduleState({ id: 'schedule-extra-fenced' }),
+      {
+        extraConditions: [{ key: 'catalog-entry:checkout:rev-a', expectedValue: encode('was') }],
+        onExtraConditionsLost: () => new Error('typed revision-unavailable error'),
+      },
+    ).catch((error: unknown) => error);
+
+    expect(rejection).toBeInstanceOf(Error);
+    expect((rejection as Error).message).toBe('typed revision-unavailable error');
+  });
+
+  it('falls back to the generic lost-precondition error when no extra condition itself disagrees on re-read', async () => {
+    const storage = new MemoryStorage();
+    storage.conditionalBatch = async () => false;
+
+    await expect(
+      writeScheduleState(
+        {
+          deposed: false,
+          leaseManager: null,
+          options: { ownershipMode: 'none' },
+          storage,
+        } as never,
+        createScheduleState({ id: 'schedule-extra-fenced-2' }),
+        {
+          // The key is genuinely absent, and `expectedValue: null` matches
+          // that — the re-check finds nothing stale, so the lost CAS must
+          // have come from some OTHER precondition (e.g. a lease-epoch
+          // fence), and the generic error is correct.
+          extraConditions: [{ key: 'catalog-entry:checkout:rev-b', expectedValue: null }],
+        },
+      ),
+    ).rejects.toThrow(
+      'Schedule state commit for schedule "schedule-extra-fenced-2" lost its precondition.',
     );
   });
 });

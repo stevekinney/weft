@@ -87,6 +87,13 @@ export interface ExecutionStrategy extends Disposable, AsyncDisposable {
   startWorkflow(parameters: {
     workflowId: string;
     workflowExecutionToken?: string;
+    /**
+     * The starting run's persisted `WorkflowState.revision` (WFT-20). Threaded
+     * through to the worker strategy's outbound echo/validation; an inline
+     * strategy accepts and ignores it — inline execution crosses no trust
+     * boundary this field needs to police.
+     */
+    revision?: string;
     workflowType: string;
     input: unknown;
     checkpoint: ArrayBuffer | Uint8Array;

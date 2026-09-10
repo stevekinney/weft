@@ -49,6 +49,7 @@ function makeScheduleState(
     status: 'active',
     overlap: options.overlap ?? 'skip',
     backfill: false,
+    revisionPolicy: 'active-at-fire',
     createdAt: 1,
     updatedAt: 1,
     nextFireAt: options.nextFireAt ?? 60_001,

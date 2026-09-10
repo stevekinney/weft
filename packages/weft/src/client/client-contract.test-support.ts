@@ -586,9 +586,24 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
           id: `${idPrefix}-schedule`,
           jitterMs: 10_000,
           overlap: 'queue',
+          revisionPolicy: 'active-at-fire',
           status: 'active',
           workflowType: workflowTypes.echo,
         }),
+      );
+
+      // revisionPolicy round-trips across both transports (WFT-20): omitted
+      // defaults to 'active-at-fire'; 'pinned' captures a pinnedRevision.
+      await schedule.update('0 * * * *', { revisionPolicy: 'pinned' });
+      await expect(schedule.describe()).resolves.toEqual(
+        expect.objectContaining({
+          revisionPolicy: 'pinned',
+          pinnedRevision: expect.any(String),
+        }),
+      );
+      await schedule.update('0 * * * *', { revisionPolicy: 'active-at-fire' });
+      await expect(schedule.describe()).resolves.toEqual(
+        expect.objectContaining({ revisionPolicy: 'active-at-fire' }),
       );
       await expect(client.getSchedule(schedule.id)).resolves.toEqual(
         expect.objectContaining({ id: schedule.id }),

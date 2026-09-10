@@ -8,6 +8,8 @@
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { encode } from '../../core/codec.ts';
+import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import {
   TEST_ACCEPTED_MANIFEST_DIGEST,
@@ -303,6 +305,84 @@ describe('dispatchTaskImpl', () => {
     ).rejects.toThrow('non-JSON-serializable');
   });
 
+  it('throws when workflowRevision is an empty string (WFT-20)', async () => {
+    context = createMinimalContext();
+    options = createMinimalOptions();
+
+    await expect(
+      dispatchTaskImpl(context, options, {
+        operationId: 'op-empty-revision',
+        activityName: 'doWork',
+        workflowType: 'testWorkflow',
+        input: null,
+        workflowRevision: '',
+      }),
+    ).rejects.toThrow('invalid "workflowRevision"');
+  });
+
+  it('throws when workflowRevision exceeds the bounded identifier byte limit (WFT-20)', async () => {
+    context = createMinimalContext();
+    options = createMinimalOptions();
+
+    await expect(
+      dispatchTaskImpl(context, options, {
+        operationId: 'op-oversized-revision',
+        activityName: 'doWork',
+        workflowType: 'testWorkflow',
+        input: null,
+        workflowRevision: 'x'.repeat(10_000),
+      }),
+    ).rejects.toThrow('invalid "workflowRevision"');
+  });
+
+  it("reuses the durable ledger record's revision, not the caller's, for an already-queued long-poll hint (WFT-20)", async () => {
+    // A concurrent dispatch for the same operationId may have already
+    // written a `queued` ledger record carrying a DIFFERENT revision than
+    // this caller supplies. The long-poll match hint must reflect the
+    // durable record a worker will actually claim and be authorized to
+    // complete against — not whichever caller happened to reuse it.
+    const operationId = 'op-reuse-ledger-revision';
+    const storage = new MemoryStorage();
+    const existing: RemoteTaskQueued = {
+      recordVersion: 1,
+      operationId,
+      workflowType: 'testWorkflow',
+      activityName: 'doWork',
+      queue: 'default',
+      input: null,
+      headers: {},
+      visibilityTimeoutMilliseconds: 30_000,
+      createdAt: Date.now(),
+      generation: 0,
+      state: 'queued',
+      attempt: 1,
+      availableAt: Date.now(),
+      firstQueuedAt: Date.now(),
+      lastQueuedAt: Date.now(),
+      retryCount: 0,
+      requeueCount: 0,
+      workflowRevision: 'ledger-revision',
+    };
+    await storage.put(taskLedgerKey(operationId), encodeRemoteTaskRecord(existing));
+
+    context = createMinimalContext();
+    options = createMinimalOptions(storage);
+
+    const dispatched = await dispatchTaskImpl(context, options, {
+      operationId,
+      activityName: 'doWork',
+      workflowType: 'testWorkflow',
+      queue: 'default',
+      input: null,
+      workflowRevision: 'caller-revision',
+    });
+
+    expect(dispatched).toBe(true);
+    const [pending] = context.taskQueue.peekPending('default');
+    expect(pending?.operationId).toBe(operationId);
+    expect(pending?.workflowRevision).toBe('ledger-revision');
+  });
+
   it('falls back to the winning record when the durable create races a concurrent dispatch', async () => {
     /**
      * Simulates the TOCTOU gap `enqueueTaskForLongPoll` documents: its own
@@ -437,5 +517,130 @@ describe('scheduleDelayedDispatch', () => {
     );
 
     expect(context.pendingTimers.size).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WFT-20: dispatch-time revision staleness gate
+// ---------------------------------------------------------------------------
+
+describe('dispatchTaskImpl revision staleness (WFT-20)', () => {
+  let context: ServerContext;
+
+  afterEach(() => {
+    for (const timer of context.pendingTimers) {
+      clearTimeout(timer);
+    }
+  });
+
+  function minimalWorkflowState(overrides: { id: string; revision?: string }): unknown {
+    return {
+      id: overrides.id,
+      type: 'testWorkflow',
+      status: 'running',
+      input: null,
+      createdAt: 1,
+      updatedAt: 1,
+      startedAt: 1,
+      versionTuple: { workflowVersion: '1' },
+      ...(overrides.revision !== undefined && { revision: overrides.revision }),
+    };
+  }
+
+  it('rejects a dispatch whose workflowRevision disagrees with the persisted run, before any reservation or ledger write', async () => {
+    context = createMinimalContext();
+    const storage = new MemoryStorage();
+    const options = createMinimalOptions(storage);
+    await storage.put(
+      KEYS.workflow('wf-stale'),
+      encode(minimalWorkflowState({ id: 'wf-stale', revision: 'revision-current' })),
+    );
+
+    await expect(
+      dispatchTaskImpl(context, options, {
+        operationId: 'op-stale-revision',
+        activityName: 'doWork',
+        workflowType: 'testWorkflow',
+        queue: 'default',
+        input: null,
+        workflowId: 'wf-stale',
+        workflowRevision: 'revision-stale',
+      }),
+    ).rejects.toThrow(/revision "revision-stale".*revision "revision-current"|stale/i);
+
+    // No worker capacity reserved, no ledger record created.
+    expect(context.registry.isAssigned('op-stale-revision')).toBe(false);
+    expect(context.taskQueue.isTracked('op-stale-revision')).toBe(false);
+    expect(await storage.get(taskLedgerKey('op-stale-revision'))).toBeNull();
+  });
+
+  it('accepts a dispatch whose workflowRevision matches the persisted run', async () => {
+    context = createMinimalContext();
+    const storage = new MemoryStorage();
+    const options = createMinimalOptions(storage);
+    await storage.put(
+      KEYS.workflow('wf-fresh'),
+      encode(minimalWorkflowState({ id: 'wf-fresh', revision: 'revision-current' })),
+    );
+
+    const result = await dispatchTaskImpl(context, options, {
+      operationId: 'op-fresh-revision',
+      activityName: 'doWork',
+      workflowType: 'testWorkflow',
+      queue: 'default',
+      input: null,
+      workflowId: 'wf-fresh',
+      workflowRevision: 'revision-current',
+    });
+
+    expect(result).toBe(true);
+    expect(context.taskQueue.isTracked('op-fresh-revision')).toBe(true);
+  });
+
+  it('accepts a dispatch with workflowRevision when no persisted run exists yet', async () => {
+    context = createMinimalContext();
+    const options = createMinimalOptions();
+
+    const result = await dispatchTaskImpl(context, options, {
+      operationId: 'op-no-persisted-run',
+      activityName: 'doWork',
+      workflowType: 'testWorkflow',
+      queue: 'default',
+      input: null,
+      workflowId: 'wf-never-persisted',
+      workflowRevision: 'revision-anything',
+    });
+
+    expect(result).toBe(true);
+  });
+
+  it('carries workflowRevision through to the WebSocket task message', async () => {
+    context = createMinimalContext();
+    const options = createMinimalOptions();
+    const sentMessages: string[] = [];
+    context.registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'worker-revision',
+      queue: 'default',
+      activities: ['doWork'],
+      concurrency: 5,
+    });
+    context.workerSockets.set('worker-revision', {
+      send: (msg: string) => sentMessages.push(msg),
+    } as never);
+
+    await dispatchTaskImpl(context, options, {
+      operationId: 'op-ws-revision',
+      activityName: 'doWork',
+      workflowType: 'testWorkflow',
+      queue: 'default',
+      input: null,
+      workflowRevision: 'revision-echoed',
+    });
+
+    expect(sentMessages).toHaveLength(1);
+    const msg = JSON.parse(sentMessages[0]!);
+    expect(msg.workflowRevision).toBe('revision-echoed');
   });
 });

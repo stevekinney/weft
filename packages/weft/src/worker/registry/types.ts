@@ -140,6 +140,8 @@ export interface InFlightTask {
   fairShareKey?: string;
   /** Unique, unguessable token for this dispatch attempt. */
   attemptToken: string;
+  /** The dispatching workflow run's persisted revision (WFT-20), when the `TaskDispatch` carried one. */
+  workflowRevision?: string;
 }
 
 export interface WorkerRegistryOptions {

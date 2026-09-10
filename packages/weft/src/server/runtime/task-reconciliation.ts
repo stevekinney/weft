@@ -148,6 +148,7 @@ export function taskDispatchFromLedgerRecord(record: RemoteTaskBase): TaskDispat
     queue: record.queue,
     visibilityTimeout: record.visibilityTimeoutMilliseconds,
     workflowExecutionToken: record.workflowExecutionToken,
+    workflowRevision: record.workflowRevision,
   };
   if (record.workflowId !== undefined) {
     taskDispatch.workflowId = record.workflowId;

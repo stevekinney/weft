@@ -422,6 +422,7 @@ export type ClientOperationTypes = {
       readonly input?: unknown;
       readonly jitter?: unknown;
       readonly overlap?: unknown;
+      readonly revisionPolicy?: unknown;
       readonly type: unknown;
     };
     readonly output: { readonly id: string };
@@ -460,6 +461,7 @@ export type ClientOperationTypes = {
       readonly every?: unknown;
       readonly jitter?: unknown;
       readonly overlap?: unknown;
+      readonly revisionPolicy?: unknown;
       readonly scheduleId: string;
     };
     readonly output: null;
@@ -663,6 +665,7 @@ export type ClientOperationTypes = {
           readonly visibilityTimeoutMilliseconds: number;
           readonly workflowExecutionToken?: string;
           readonly workflowId?: string;
+          readonly workflowRevision?: string;
           readonly workflowType: string;
         }
       | {
@@ -690,6 +693,7 @@ export type ClientOperationTypes = {
           readonly visibilityTimeoutMilliseconds: number;
           readonly workflowExecutionToken?: string;
           readonly workflowId?: string;
+          readonly workflowRevision?: string;
           readonly workflowType: string;
         }
       | {
@@ -719,6 +723,7 @@ export type ClientOperationTypes = {
           readonly visibilityTimeoutMilliseconds: number;
           readonly workflowExecutionToken?: string;
           readonly workflowId?: string;
+          readonly workflowRevision?: string;
           readonly workflowType: string;
         }
       | {
@@ -748,6 +753,7 @@ export type ClientOperationTypes = {
           readonly visibilityTimeoutMilliseconds: number;
           readonly workflowExecutionToken?: string;
           readonly workflowId?: string;
+          readonly workflowRevision?: string;
           readonly workflowType: string;
         }
       | {
@@ -774,6 +780,7 @@ export type ClientOperationTypes = {
           readonly visibilityTimeoutMilliseconds: number;
           readonly workflowExecutionToken?: string;
           readonly workflowId?: string;
+          readonly workflowRevision?: string;
           readonly workflowType: string;
         }
       | {
@@ -798,6 +805,7 @@ export type ClientOperationTypes = {
           readonly visibilityTimeoutMilliseconds: number;
           readonly workflowExecutionToken?: string;
           readonly workflowId?: string;
+          readonly workflowRevision?: string;
           readonly workflowType: string;
         }
       | {
@@ -822,6 +830,7 @@ export type ClientOperationTypes = {
           readonly visibilityTimeoutMilliseconds: number;
           readonly workflowExecutionToken?: string;
           readonly workflowId?: string;
+          readonly workflowRevision?: string;
           readonly workflowType: string;
         }
       | {
@@ -849,6 +858,7 @@ export type ClientOperationTypes = {
           readonly visibilityTimeoutMilliseconds: number;
           readonly workflowExecutionToken?: string;
           readonly workflowId?: string;
+          readonly workflowRevision?: string;
           readonly workflowType: string;
         };
     readonly faults: 'NotFound';

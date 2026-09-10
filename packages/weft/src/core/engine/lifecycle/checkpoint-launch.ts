@@ -109,6 +109,17 @@ export function launchWorkflowFromCheckpoint(
   registration: RegistrationEntry,
   callbacks: LifecycleCallbacks,
 ): WorkflowHandle {
+  // Cache the launched run's own exact (type, revision) pin for synchronous
+  // per-instance registry lookup on the dispatch hot path (WFT-19), BEFORE
+  // either checkpoint-launch strategy below can drive the generator's first
+  // turn — a fork/launch-from-checkpoint run is a fresh live instance the
+  // same as a start/resume/recovery launch, and a string-named scoped
+  // activity dispatched on its first turn needs this populated already.
+  // Cleared on terminal cleanup (see termination/cleanup.ts).
+  internals.workflowTypeByWorkflowId.set(workflowId, {
+    type: state.type,
+    revision: state.revision,
+  });
   // Store checkpoint for future persistence
   internals.checkpoints.set(workflowId, checkpoint);
   internals.workflowVersionTuples.set(

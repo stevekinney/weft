@@ -444,23 +444,115 @@ type-only, last-resolved-wins lookup:
   against the pinned revision's own declared schema.
 
 `getWorkflowActivityDefinition()`/`listWorkflowActivityDefinitions()` are
-the one deliberate narrowing this closes rather than widens: they now
-return `undefined`/`[]` for any `registerSource()`-registered type,
-resolved or not, instead of possibly reflecting a stale or mismatched
+the one deliberate narrowing this closes rather than widens: their
+per-workflow lookup is now eager-only for any `registerSource()`-registered
+type, resolved or not, instead of possibly reflecting a stale or mismatched
 revision's data—these two accessors have no running instance to pin
 against, so eager-only is the only answer that cannot silently be wrong.
+The two are not quite symmetric, though: `getWorkflowActivityDefinition()`
+still falls back to the same-named **global** activity registry when the
+per-workflow lookup misses, so a dynamic-source workflow requesting an
+activity that is also registered globally still gets that metadata back,
+never `undefined`, for that case. `listWorkflowActivityDefinitions()` has
+no such fallback—it enumerates only the eager per-workflow registry's own
+names.
 
 This also closes a related, independently-reproducible latent gap: a
 resumed or recovered workflow's per-instance identity cache was never
 populated on ANY resume/recovery path before this release, so a builder
 workflow's string-named `ctx.run('name')` activity call could fail to
 resolve at all on its first turn after a fresh-process recovery, even for
-an eagerly-registered type. See the `Fixed` entries in the changelog.
+an eagerly-registered type. `engine.fork()`'s checkpoint-launched run had
+the same identity-cache gap—and, separately and more severely, resolved
+its HANDLER against the catalog's currently active pointer rather than the
+source run's own pinned revision, so a fork taken after the active pointer
+moved could launch against a different revision's code entirely, not just
+mis-route a downstream lookup. Both are fixed the same way every other
+launch path already was: the identity is set, and the handler resolved
+against the source's own `revision`, before the fork can drive its first
+turn. See the `Fixed` entries in the changelog.
 
 The ADR 0002 workflow-lease reclaim-eligibility check
 (`isWorkflowTypeRegistered`) is source- and revision-aware for the same
 reason—see
 [0002-multiengine-per-workflow-ownership.md](../contributing/architecture-decisions/0002-multiengine-per-workflow-ownership.md).
+
+## Schedule revision policy (WFT-20)
+
+A recurring schedule's future occurrences can resolve the workflow's
+revision two ways, chosen via `ScheduleOptions.revisionPolicy` /
+`ScheduleUpdateOptions.revisionPolicy`:
+
+- **`'active-at-fire'`** (the default, and the pre-WFT-20 behavior,
+  byte-for-byte unchanged): each occurrence resolves whichever revision is
+  active—or, for an eagerly-registered type, whatever this process has
+  currently loaded—at the moment it actually fires. A redeploy between
+  ticks changes what the next tick runs.
+- **`'pinned'`**: `engine.schedule(...)`/`schedule.update(...)` captures the
+  revision that WOULD run right now (reusing the same resolver a fresh
+  `engine.start()` call would use) and stores it as
+  `ScheduleMetadata.pinnedRevision`. Every future occurrence resolves that
+  exact revision, never whatever happens to be active at fire time, and the
+  fired workflow's own persisted `WorkflowState.revision` equals the pin.
+
+```ts
+import { Engine, workflow, type WorkflowContext } from '@lostgradient/weft';
+
+const engine = new Engine();
+engine.register(
+  workflow({ name: 'nightly-close' }).execute(async function* (_ctx: WorkflowContext) {
+    return 'closed';
+  }),
+);
+
+const handle = await engine.schedule('nightly-close', null, '0 2 * * *', {
+  revisionPolicy: 'pinned',
+});
+const pinned = await handle.describe();
+console.log(pinned.revisionPolicy, pinned.pinnedRevision); // 'pinned', 'sha256:…'
+```
+
+**Eager types get a real, checkable commitment.** A pin is not a hint for
+an eagerly-registered type—capturing one requires this process's own
+`registeredCatalogRevisions` entry, and every future fire re-checks that
+the process's currently-loaded revision matches the pin EXACTLY. This is
+the one place in the codebase where an eager type does **not** silently
+ignore a stale pin the way recovery does (see
+[Per-run revision pinning](#per-run-revision-pinning-wft-17) above,
+"eager is always ready regardless of pin")—recovery's fallback is correct
+because a process only ever runs the code it has loaded, but a schedule's
+pin is a forward-looking promise about a specific artifact, and silently
+degrading it to active-at-fire behavior would make that promise (and the
+`pinnedSchedules` reference count backing it—see
+[Reference Accounting and Removal](#reference-accounting-and-removal)
+above) a lie.
+
+**Unavailable pin pauses the schedule.** If a pinned revision later becomes
+unavailable—removed via `removeWorkflowRevision()`, or an eager type
+redeployed to a different revision—the next fire throws
+`WorkflowRevisionUnavailableError` and the schedule transitions to
+`'paused'` through the same `pauseScheduleAfterTimerFailure` path any other
+fire-time failure already uses (a `WorkflowNotRegisteredError` for a
+renamed workflow type, for example). This is a structural condition, not a
+transient one skipped occurrence-by-occurrence: an operator sees the
+schedule stop and pause, rather than the schedule silently reporting
+`'active'` while never actually firing again.
+
+**Updating the policy.** `ScheduleUpdateOptions.revisionPolicy` follows the
+same "omitted fields retain their persisted value" rule every other update
+option does, with one nuance: passing `revisionPolicy: 'pinned'` ALWAYS
+re-resolves and re-captures the pin against whatever is active right
+now—even when the schedule is already pinned—giving an operator an
+explicit re-pin lever rather than a no-op. Passing
+`revisionPolicy: 'active-at-fire'` clears any previously captured pin.
+
+**Persisted shape.** `ScheduleMetadata` gains a required `revisionPolicy`
+field and an optional `pinnedRevision` (present only when
+`revisionPolicy === 'pinned'`). A schedule record persisted before WFT-20
+has no `revisionPolicy` field at all; it decodes as `'active-at-fire'`, the
+same "absent means legacy, not corrupt" treatment
+[`WorkflowState.revision`](#per-run-revision-pinning-wft-17) got—this is
+additive and does **not** bump `CURRENT_PERSISTED_DATA_SCHEMA_VERSION`.
 
 ## `engine.workflows`: public catalog control
 
@@ -563,7 +655,7 @@ relying on it. `WorkflowRevisionReferenceCounts` is the bounded accounting
 interface a removal decision is gated on: seven fields, always present, so
 a caller never special-cases an "unknown" reference kind.
 
-Three fields are wired to real signals now:
+Four fields are wired to real signals now:
 
 - **`registeredDefinitions`**: `1` when this process's own
   `engine.register()`-drain path most recently activated exactly this
@@ -593,16 +685,24 @@ Three fields are wired to real signals now:
   still needed, because nothing counted non-terminal runs against it at
   all. A legacy run with no persisted `revision` never counts against any
   specific revision here.
+- **`pinnedSchedules`** (WFT-20): the count of non-cancelled schedules with
+  `revisionPolicy: 'pinned'` whose captured `pinnedRevision` names exactly
+  this revision—see
+  [Schedule revision policy](#schedule-revision-policy-wft-20) below. A
+  bounded `storage.scan('schedule:')`, the same shape `nonTerminalRuns`
+  uses. An `'active-at-fire'` schedule never counts, regardless of
+  `workflowType`—it resolves whatever is active at each future fire, so it
+  holds no standing reference to any one revision. A `'cancelled'` pinned
+  schedule is excluded too (it will never fire again); a `'paused'` one
+  still counts (it can be resumed).
 
-The remaining four fields—`pinnedSchedules`, `pendingDispatches`,
-`activeExecutionRealms`, and `retainedRecoveryRecords`—stay structurally
-present but always `0`. Each awaits revision identity in a different,
-later-owned subsystem: `pinnedSchedules` needs schedule-level revision
-pinning (WFT-20); the other three need revision identity threaded through
-the dispatch ledger, execution realms, and retained recovery records
-respectively, none of which are scheduled yet. Until each lands, its field
-exists as forward-compatible plumbing rather than a promise the engine
-cannot keep.
+The remaining three fields—`pendingDispatches`, `activeExecutionRealms`,
+and `retainedRecoveryRecords`—stay structurally present but always `0`.
+Each awaits revision identity threaded through a different, later-owned
+subsystem—the dispatch ledger, execution realms, and retained recovery
+records respectively—none of which are scheduled yet. Until each lands,
+its field exists as forward-compatible plumbing rather than a promise the
+engine cannot keep.
 
 Removal itself is a plain, root-exported async function—not an
 `engine.workflows.*` method, and not (yet) a wire operation:
@@ -979,9 +1079,13 @@ when it names one of the registered candidates; with no active pointer set
 and more than one candidate registered, resolution throws
 `DynamicWorkflowSourceUnavailableError` with `reason: 'ambiguous-revision'`
 rather than guessing—call `engine.workflows.activate()` first, or register
-only one revision at a time. There is no per-call revision override on
-`StartOptions`/`ScheduleOptions` this batch; that is intentionally out of
-scope (see the recovery limitation below).
+only one revision at a time. `StartOptions` still has no per-call revision
+override—a one-shot `engine.start()` always resolves whatever is active (or
+unambiguous) at that instant. `ScheduleOptions` gained one in WFT-20:
+`revisionPolicy: 'pinned'` captures the revision active at schedule
+create/update time and forces every future occurrence to resolve exactly
+that revision—see
+[Schedule revision policy](#schedule-revision-policy-wft-20) below.
 
 **Concurrency and cancellation:** concurrent `engine.start()` calls (or a
 `start()` racing an explicit `engine.resolveWorkflowSource()` call) for the

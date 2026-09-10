@@ -28,8 +28,17 @@
  * Comments are stripped (`//` to end of line, `/* ... *`+`/` spanning
  * lines) before matching, so a doc comment that merely NAMES a guarded
  * field (as this file's own sibling modules' JSDoc does, to explain the
- * boundary) never counts as a reference — only an actual property access
- * (`.fieldName`, e.g. `.get(...)`/`.set(...)`/`.clear()`/`.keys()`) does.
+ * boundary) never counts as a reference. What DOES count: the match is a
+ * bare word-boundary token (`\bfieldName\b`), not just a leading-dot
+ * property access — this deliberately also catches a destructured binding
+ * (`const { fieldName } = internals`) and a bracket-string access
+ * (`internals['fieldName']`), two forms a new call site could use to read
+ * or write a guarded field while evading a dot-only pattern (WFT-19 review
+ * round 2, Codex: the original dot-only regex missed exactly these). The
+ * tradeoff is a handful of expected non-access matches — each guarded
+ * field's own type declaration and initial-value construction — which are
+ * allowlisted explicitly per field rather than narrowing the pattern back
+ * down and reopening the gap.
  *
  * `--root <path>` sets the directory the scanner walks. Defaults to the
  * repository root. Used by the script's own tests to point at fixture trees
@@ -68,29 +77,33 @@ export const GUARDED_FIELDS: readonly GuardedField[] = [
   {
     name: 'activityRegistriesByWorkflow',
     allowedFiles: [
+      'src/core/engine/internals.ts',
       'src/core/engine/registration.ts',
       'src/core/engine/activity-resolution.ts',
       'src/core/engine/index.ts',
       'src/core/engine/disposal.ts',
     ],
     rationale:
-      'Eager-only per-workflow activity registry: registration.ts writes it (engine.register()), ' +
-      'activity-resolution.ts reads it as the eager-first branch of dispatch resolution, index.ts ' +
-      'reads it for the documented eager-only getWorkflowActivityDefinition()/listWorkflowActivityDefinitions() ' +
-      'accessors (and initializes it at construction), and disposal.ts clears it.',
+      "internals.ts declares the field itself (EngineInternals' own type), registration.ts writes it " +
+      '(engine.register()), activity-resolution.ts reads it as the eager-first branch of dispatch ' +
+      'resolution, index.ts reads it for the documented eager-only ' +
+      'getWorkflowActivityDefinition()/listWorkflowActivityDefinitions() accessors (and initializes it ' +
+      'at construction), and disposal.ts clears it.',
   },
   {
     name: 'lastResolvedRevisionByName',
     allowedFiles: [
+      'src/core/engine/source-runtime-state.ts',
       'src/core/engine/dynamic-source-execution.ts',
       'src/core/engine/index.ts',
       'src/core/engine/disposal.ts',
     ],
     rationale:
-      'Last-resolved-revision-wins fallback, valid ONLY when a caller has no running instance to pin ' +
-      'against: dynamic-source-execution.ts writes it on every dynamic-source resolve and reads it as ' +
-      "getResolvedDynamicRegistration()'s revision:undefined fallback, index.ts reads it for type " +
-      'enumeration (listRegisteredWorkflowTypes()), and disposal.ts clears it.',
+      "source-runtime-state.ts declares the field itself (WorkflowSourceRuntimeState's own type and " +
+      'its empty-state factory). Last-resolved-revision-wins fallback, valid ONLY when a caller has no ' +
+      'running instance to pin against: dynamic-source-execution.ts writes it on every dynamic-source ' +
+      "resolve and reads it as getResolvedDynamicRegistration()'s revision:undefined fallback, index.ts " +
+      'reads it for type enumeration (listRegisteredWorkflowTypes()), and disposal.ts clears it.',
   },
 ];
 
@@ -210,9 +223,9 @@ async function scanViolations(root: string): Promise<Violation[]> {
     const rawLines = source.split('\n');
     for (const guarded of GUARDED_FIELDS) {
       if (guarded.allowedFiles.includes(relativePath)) continue;
-      const propertyAccessRegex = new RegExp(`\\.${guarded.name}\\b`);
+      const identifierTokenRegex = new RegExp(`\\b${guarded.name}\\b`);
       for (const [index, lineText] of lines.entries()) {
-        if (propertyAccessRegex.test(lineText)) {
+        if (identifierTokenRegex.test(lineText)) {
           violations.push({
             field: guarded.name,
             file: relativePath,

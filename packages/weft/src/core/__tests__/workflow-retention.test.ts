@@ -637,15 +637,25 @@ describe('workflow retention', () => {
     engine[Symbol.dispose]();
   });
 
-  it('a terminal run pinned to a revision this process has never registered as a candidate falls back to the engine default retention, rather than hanging (review round 1)', async () => {
+  it('a terminal run pinned to a revision this process has never registered as a candidate is NOT purged under the engine default — it stays until its own pin becomes resolvable (review round 2)', async () => {
     // Exercises `getWorkflowRetentionDeadline()`'s `WorkflowRevisionUnavailableError`
     // catch branch directly: `type` IS a registered dynamic source (so
     // `resolveExecutableRegistrationForRevision()` is actually invoked, not
     // short-circuited by the earlier `!internals.sources.byName.has(...)`
     // guard), but the run's own pinned revision is not among the
-    // registered candidates — the resolve throws, the deadline calculation
-    // must fall back to the engine default rather than propagating the
-    // error and leaving the run stuck un-purgeable forever.
+    // registered candidates — the resolve throws.
+    //
+    // Review round 1 had this fall back to the engine default so the run
+    // would not hang un-purgeable forever — but review round 2 (Codex,
+    // fresh evidence after that fix) correctly flagged that as its own
+    // regression: purge is irreversible, and the run's own (unresolvable)
+    // policy might be LONGER than the engine default, so silently purging
+    // under someone else's shorter policy risks an early, wrong purge. The
+    // deadline calculation must instead treat "unresolvable" as "not
+    // purge-eligible this sweep" (`getWorkflowRetentionDeadline` returns
+    // `null`), re-examined on a later sweep once the pin becomes resolvable
+    // — never hanging (the run is still discoverable and simply not purged
+    // yet), and never purged under a policy that is not its own.
     let now = 5_000;
     const storage = new MemoryStorage();
     const type = 'never-registered-pin-retention';
@@ -668,7 +678,7 @@ describe('workflow retention', () => {
     const engine = new Engine({
       storage,
       getNow: () => now,
-      retention: { completed: '1s' }, // short engine default — proves the fallback actually applies
+      retention: { completed: '1s' }, // short engine default — proves it is NOT applied to this pin
       retentionSweepInterval: '10ms',
     });
     engine.registerSource(
@@ -694,8 +704,15 @@ describe('workflow retention', () => {
     persisted['revision'] = 'a-revision-never-registered';
     await storage.put(KEYS.workflow(workflowId), encode(persisted));
 
-    now += 1_500; // past the 1s engine default
-    await waitForWorkflowPresence(engine, workflowId, false);
+    now += 1_500; // past the 1s engine default — must NOT matter for this pin
+    // Proving the sweep does NOT purge this workflow across several real
+    // sweep intervals (`retentionSweepInterval: '10ms'`); there is no
+    // observable "purge did not happen" event to await, so a fixed real-time
+    // window is the only way to give the (would-be regression)
+    // default-fallback purge a fair chance to have already run.
+    // fixed delay: negative assertion
+    await waitForRealTimersForTesting(80);
+    expect(await engine.get(workflowId)).not.toBeNull();
 
     engine[Symbol.dispose]();
   });

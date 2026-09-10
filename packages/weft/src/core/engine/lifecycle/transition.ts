@@ -336,8 +336,17 @@ export async function fork(
     throw new Error(`Workflow "${sourceWorkflowId}" not found`);
   }
 
+  // Resolve against the SOURCE run's own exact pinned revision (WFT-17's
+  // `WorkflowState.revision`), never the catalog's currently active pointer
+  // (WFT-19 review round 2, found while proving the identity-cache fix
+  // below): the active pointer can move between the source run's start and
+  // this fork call, and resolving via `resolveExecutableRegistration`
+  // (active-pointer-based) would launch the FORKED run against a different
+  // revision's handler entirely — not just a routing mismatch downstream of
+  // execution, but the wrong code running from the very first turn. Mirrors
+  // `resolveExecutableRegistrationForRetry()`'s identical fix for bulk retry.
   const { entry: registration } = await resolveExecutableRegistrationOrRenamedNotFound(
-    callbacks.resolveExecutableRegistration,
+    (type) => callbacks.resolveExecutableRegistrationForRevision(type, sourceState.revision),
     sourceState.type,
     () =>
       new Error(

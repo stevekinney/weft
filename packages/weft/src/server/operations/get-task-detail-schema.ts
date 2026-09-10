@@ -55,6 +55,10 @@ const taskDetailBaseFields = {
   // operator correlate a retained task with the exact workflow run that
   // owns it, distinguishing runs when start-new reuses a workflow ID.
   workflowExecutionToken: z.string().optional(),
+  // The dispatching run's persisted revision (WFT-20) — NOT the same field
+  // as the nested `executionRequirement.workflowRevision` below (a
+  // client-declared routing constraint).
+  workflowRevision: z.string().optional(),
   workflowType: z.string(),
   activityName: z.string(),
   queue: z.string(),

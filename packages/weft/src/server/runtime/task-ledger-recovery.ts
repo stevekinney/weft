@@ -99,6 +99,7 @@ function rehydrateWorkerOwnership(
     remaining,
     record.fairShareKey,
     record.attemptToken,
+    record.workflowRevision,
   );
   // assignTask's `visibilityTimeout` parameter doubles as the stored task's
   // future heartbeat-extension duration — passing the shortened `remaining`

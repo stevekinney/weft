@@ -614,3 +614,75 @@ describe('activity dispatch does not clobber across revisions (WFT-19)', () => {
     engine[Symbol.dispose]();
   });
 });
+
+describe("engine.fork() populates the forked run's own identity before its first dispatch (WFT-19 review round 2)", () => {
+  it("a checkpoint-launched fork resolves its own pinned revision's per-workflow activity, not a sibling revision's, on its first live turn", async () => {
+    // Regression for a gap the batch's own launch-path audit missed the first
+    // time (Codex, review round 2): `launchWorkflowFromCheckpoint()` (the
+    // shared tail `fork()` drives) never populated `workflowTypeByWorkflowId`
+    // before this fix, unlike every other launch path (start/resume/recovery).
+    // Before the fix, a fork's live-frontier `ctx.run('name')` call has no
+    // cached identity, falls through to the `<unknown>`/global-registry-only
+    // branch, and throws `ActivityResolutionError` for a per-workflow-scoped
+    // activity like `whoami` below — it never silently resolves a sibling
+    // revision's implementation, but it does fail outright, which is its own
+    // real bug this proves fixed.
+    const storage = new MemoryStorage();
+    const definitionA = workflow({ name: 'clobber-fork', description: 'candidate A' })
+      .activities({ whoami: async () => 'activity-A' })
+      .execute(async function* (ctx: WorkflowContext) {
+        yield* ctx.waitForSignal<string>('go');
+        const who = yield* ctx.run('whoami');
+        return who;
+      });
+    const definitionB = workflow({ name: 'clobber-fork', description: 'candidate B' })
+      .activities({ whoami: async () => 'activity-B' })
+      .execute(async function* () {
+        return 'unused';
+      });
+    const revisionA = await revisionFor(definitionA);
+    const revisionB = await revisionFor(definitionB);
+
+    await using engine = new Engine({ storage, backgroundTasks: 'manual' });
+    engine.registerSource(
+      workflowSource(
+        { name: 'clobber-fork', location: './a.ts', exportName: 'a', revision: revisionA },
+        async () => ({ a: definitionA }),
+      ),
+    );
+    engine.registerSource(
+      workflowSource(
+        { name: 'clobber-fork', location: './b.ts', exportName: 'b', revision: revisionB },
+        async () => ({ b: definitionB }),
+      ),
+    );
+
+    // Source run pinned to revision A, parked on the signal wait — its own
+    // checkpoint has NOT yet cached an activity result, so the fork below
+    // must dispatch a genuinely fresh call rather than replaying a cached one.
+    await engine.resolveWorkflowSource('clobber-fork', revisionA);
+    await activateDynamicSourceRevision(engine, 'clobber-fork', revisionA);
+    const source = await engine.start('clobber-fork', null, { id: 'clobber-fork-source' });
+
+    // Resolve sibling revision B in the SAME process after A's source run has
+    // already started — this is what a type-only, last-resolved-wins lookup
+    // would get wrong; the fork's own pin must still win.
+    await engine.resolveWorkflowSource('clobber-fork', revisionB);
+    await activateDynamicSourceRevision(engine, 'clobber-fork', revisionB);
+    const siblingB = await engine.start('clobber-fork', null, { id: 'clobber-fork-sibling-b' });
+    expect(await siblingB.result()).toBe('unused');
+
+    // Fork the still-parked source run. `createForkedWorkflowState` inherits
+    // the source's own pinned revision (A), unaffected by B resolving after.
+    const forked = await engine.fork('clobber-fork-source');
+    await forked.signal('go', 'forked');
+    expect(await forked.result()).toBe('activity-A');
+
+    // The original, still-parked source run is unaffected — release it too,
+    // proving its own identity (set at ordinary start time) still resolves A.
+    await source.signal('go', 'source');
+    expect(await source.result()).toBe('activity-A');
+
+    engine[Symbol.dispose]();
+  });
+});

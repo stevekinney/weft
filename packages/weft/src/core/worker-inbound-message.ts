@@ -25,6 +25,7 @@ export function buildRunMessage(
   parameters: {
     workflowId: string;
     workflowExecutionToken?: string;
+    revision?: string;
     workflowType: string;
     input: unknown;
     checkpoint: ArrayBuffer;
@@ -42,6 +43,7 @@ export function buildRunMessage(
     ...(parameters.workflowExecutionToken !== undefined && {
       workflowExecutionToken: parameters.workflowExecutionToken,
     }),
+    ...(parameters.revision !== undefined && { workflowRevision: parameters.revision }),
     workflowType: parameters.workflowType,
     checkpoint: parameters.checkpoint,
     input: parameters.input,

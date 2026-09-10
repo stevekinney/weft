@@ -268,6 +268,7 @@ export class WorkerRegistry {
     visibilityTimeout: number,
     fairShareKey: string | undefined,
     attemptToken: string,
+    workflowRevision?: string,
   ): void {
     const deadline = Date.now() + visibilityTimeout;
 
@@ -281,6 +282,9 @@ export class WorkerRegistry {
     if (fairShareKey !== undefined) {
       task.fairShareKey = fairShareKey;
       this.#fairShareCounts.increment(workerId, fairShareKey);
+    }
+    if (workflowRevision !== undefined) {
+      task.workflowRevision = workflowRevision;
     }
     this.#inFlightTasks.set(operationId, task);
 

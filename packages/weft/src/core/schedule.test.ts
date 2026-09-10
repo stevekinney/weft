@@ -304,6 +304,7 @@ function createScheduleState(overrides: Partial<ScheduleState> = {}): ScheduleSt
     status: 'active',
     overlap: 'skip',
     backfill: false,
+    revisionPolicy: 'active-at-fire',
     missedFireCount: 0,
     queuedRuns: [],
     updatedAt: 1,
@@ -340,6 +341,9 @@ describe('schedule validation helpers', () => {
     );
     expect(() => normalizeScheduleUpdateOptions({ jitter: null as never })).toThrow(
       'options.jitter must be a duration string or a number of milliseconds',
+    );
+    expect(() => normalizeScheduleUpdateOptions({ revisionPolicy: 'whenever' as never })).toThrow(
+      'options.revisionPolicy must be one of active-at-fire, pinned',
     );
   });
 
@@ -455,6 +459,88 @@ describe('schedule record decoding', () => {
     expect(decoded).toBeNull();
     expect(warnSpy).toHaveBeenCalledWith(
       '[weft] Ignoring malformed schedule "schedule-state" with invalid description.',
+    );
+  });
+
+  it('rejects schedule records with an unrecognized revisionPolicy (WFT-20)', () => {
+    using warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+
+    const state = createScheduleState();
+    const decoded = decodeScheduleState(
+      encode({
+        ...state,
+        revisionPolicy: 'whenever',
+      }),
+    );
+
+    expect(decoded).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[weft] Ignoring malformed schedule "schedule-state" with invalid revisionPolicy.',
+    );
+  });
+
+  it('rejects a "pinned" schedule record with a missing pinnedRevision (WFT-20)', () => {
+    using warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+
+    const state = createScheduleState({ revisionPolicy: 'pinned' });
+    const decoded = decodeScheduleState(encode(state));
+
+    expect(decoded).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[weft] Ignoring malformed schedule "schedule-state" with revisionPolicy "pinned" but a missing or invalid pinnedRevision.',
+    );
+  });
+
+  it('rejects a non-"pinned" schedule record that still carries a pinnedRevision (WFT-20)', () => {
+    using warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+
+    const state = createScheduleState({ revisionPolicy: 'active-at-fire' });
+    const decoded = decodeScheduleState(
+      encode({
+        ...state,
+        pinnedRevision: 'stray-revision',
+      }),
+    );
+
+    expect(decoded).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[weft] Ignoring malformed schedule "schedule-state" with a pinnedRevision but revisionPolicy is not "pinned".',
+    );
+  });
+
+  it('accepts a legacy schedule record with no revisionPolicy field, defaulting to "active-at-fire" (WFT-20)', () => {
+    const state = createScheduleState();
+    const { revisionPolicy: _omitted, ...legacyState } = state;
+    void _omitted;
+
+    const decoded = decodeScheduleState(encode(legacyState));
+
+    expect(decoded).not.toBeNull();
+    expect(decoded?.revisionPolicy).toBe('active-at-fire');
+  });
+
+  it('rejects a schedule record with a stray pinnedRevision but no revisionPolicy field at all (WFT-20)', () => {
+    using warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+
+    const state = createScheduleState();
+    const { revisionPolicy: _omitted, ...legacyState } = state;
+    void _omitted;
+
+    // No writer in this codebase persists a `pinnedRevision` without also
+    // persisting `revisionPolicy: 'pinned'` — a record with the former but
+    // not even the latter field is malformed (or externally tampered), not
+    // a legacy pre-WFT-20 record. It must not silently decode as
+    // 'active-at-fire' and ignore the pin.
+    const decoded = decodeScheduleState(
+      encode({
+        ...legacyState,
+        pinnedRevision: 'stray-revision',
+      }),
+    );
+
+    expect(decoded).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[weft] Ignoring malformed schedule "schedule-state" with a pinnedRevision but no revisionPolicy.',
     );
   });
 });

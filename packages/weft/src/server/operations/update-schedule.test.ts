@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import { Engine } from '../../core/engine.ts';
+import { WorkflowRevisionUnavailableError } from '../../core/engine/revision-errors.ts';
 import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
@@ -265,6 +266,41 @@ describe('weft.schedules.update', () => {
     });
   });
 
+  it('returns InvalidParams over JSON-RPC for an unrecognized revisionPolicy (WFT-20)', async () => {
+    engine = createEngine();
+    await engine.schedule('echo', null, '0 * * * *', {
+      id: 'schedule-update-invalid-json-rpc-revision-policy',
+    });
+
+    const response = await handleJsonRpcHttpRequest(
+      new Request('http://localhost/jsonrpc', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'weft.schedules.update',
+          params: {
+            scheduleId: 'schedule-update-invalid-json-rpc-revision-policy',
+            cronExpression: '30 * * * *',
+            revisionPolicy: 'whenever',
+          },
+        }),
+      }),
+      { registry, engine, principal: anonymousPrincipal() },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      jsonrpc: '2.0',
+      id: 1,
+      error: expect.objectContaining({
+        code: -32602,
+        message: 'Field "revisionPolicy" must be one of active-at-fire, pinned',
+      }),
+    });
+  });
+
   it('uses the wire field name for zero jitter over JSON-RPC', async () => {
     engine = createEngine();
     await engine.schedule('echo', null, '0 * * * *', {
@@ -380,6 +416,33 @@ describe('weft.schedules.update', () => {
 
       expect(response.status).toBe(409);
       expect(await response.json()).toEqual({ error: 'Schedule already exists' });
+    } finally {
+      engine.updateSchedule = originalUpdateSchedule;
+    }
+  });
+
+  it('returns 409 with a structured reason when a pinned revision is unavailable (WFT-20)', async () => {
+    engine = createEngine();
+    const originalUpdateSchedule = engine.updateSchedule.bind(engine);
+
+    try {
+      engine.updateSchedule = async () => {
+        throw new WorkflowRevisionUnavailableError('echo', 'revision-gone', 'not-installed');
+      };
+
+      const response = await handleRequest(
+        jsonRequest('PATCH', '/v1/schedules/schedule-update', {
+          cronExpression: '30 * * * *',
+          revisionPolicy: 'pinned',
+        }),
+        engine,
+        { operationRegistry: registry, restBindings: bindings },
+      );
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: expect.stringContaining('revision-gone'),
+      });
     } finally {
       engine.updateSchedule = originalUpdateSchedule;
     }

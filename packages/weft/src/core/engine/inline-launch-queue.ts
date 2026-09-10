@@ -260,7 +260,9 @@ async function startQueuedInlineWorkflowExecution(
       start.workflowId,
       state.workflowExecutionToken,
       start.workflowType,
-      start.revision,
+      // Re-read off the RELOADED persisted state, exactly like
+      // `workflowExecutionToken` above — never from `start` itself (WFT-20).
+      state.revision,
       start.input,
       start.checkpoint,
       start.nestingDepth,

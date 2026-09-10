@@ -477,6 +477,117 @@ describe('handleTaskResultRequest', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// WFT-20: long-poll completion is STRICT on workflowRevision — a stored
+// ledger record carrying one requires the POST body to echo it back exactly.
+// ---------------------------------------------------------------------------
+describe('handleTaskResultRequest revision authorization (WFT-20)', () => {
+  it('rejects with 403 when the ledger record has a workflowRevision but the POST body omits it', async () => {
+    const context = createMinimalContext();
+    const storage = new MemoryStorage();
+    const options = createMinimalOptions(storage);
+    await writeLeasedRecord(storage, {
+      operationId: 'op-revision-missing',
+      workflowRevision: 'revision-expected',
+    });
+
+    const request = makePostRequest({
+      operationId: 'op-revision-missing',
+      workerId: 'longpoll-worker',
+      attemptToken: 'attempt-token',
+      status: 'completed',
+      value: 'done',
+    });
+    const response = await handleTaskResultRequest(
+      context,
+      options,
+      request,
+      makeUrl('/v1/tasks/op-revision-missing/result'),
+    );
+
+    expect(response?.status).toBe(403);
+    expect(await response?.json()).toEqual({ error: 'Forbidden' });
+  });
+
+  it('rejects with 403 when the POST body echoes the wrong workflowRevision', async () => {
+    const context = createMinimalContext();
+    const storage = new MemoryStorage();
+    const options = createMinimalOptions(storage);
+    await writeLeasedRecord(storage, {
+      operationId: 'op-revision-wrong',
+      workflowRevision: 'revision-expected',
+    });
+
+    const request = makePostRequest({
+      operationId: 'op-revision-wrong',
+      workerId: 'longpoll-worker',
+      attemptToken: 'attempt-token',
+      status: 'completed',
+      value: 'done',
+      workflowRevision: 'revision-wrong',
+    });
+    const response = await handleTaskResultRequest(
+      context,
+      options,
+      request,
+      makeUrl('/v1/tasks/op-revision-wrong/result'),
+    );
+
+    expect(response?.status).toBe(403);
+    expect(await response?.json()).toEqual({ error: 'Forbidden' });
+  });
+
+  it('accepts a 200 when the POST body echoes the matching workflowRevision', async () => {
+    const context = createMinimalContext();
+    const storage = new MemoryStorage();
+    const options = createMinimalOptions(storage);
+    await writeLeasedRecord(storage, {
+      operationId: 'op-revision-match',
+      workflowRevision: 'revision-expected',
+    });
+
+    const request = makePostRequest({
+      operationId: 'op-revision-match',
+      workerId: 'longpoll-worker',
+      attemptToken: 'attempt-token',
+      status: 'completed',
+      value: 'done',
+      workflowRevision: 'revision-expected',
+    });
+    const response = await handleTaskResultRequest(
+      context,
+      options,
+      request,
+      makeUrl('/v1/tasks/op-revision-match/result'),
+    );
+
+    expect(response?.status).toBe(200);
+  });
+
+  it('accepts a 200 with no workflowRevision echo when the ledger record has none', async () => {
+    const context = createMinimalContext();
+    const storage = new MemoryStorage();
+    const options = createMinimalOptions(storage);
+    await writeLeasedRecord(storage, { operationId: 'op-revision-none' });
+
+    const request = makePostRequest({
+      operationId: 'op-revision-none',
+      workerId: 'longpoll-worker',
+      attemptToken: 'attempt-token',
+      status: 'completed',
+      value: 'done',
+    });
+    const response = await handleTaskResultRequest(
+      context,
+      options,
+      request,
+      makeUrl('/v1/tasks/op-revision-none/result'),
+    );
+
+    expect(response?.status).toBe(200);
+  });
+});
+
 describe('handleTaskPollRequest', () => {
   it('requires the worker write scope when a principal is present', async () => {
     const context = minimalServerContext();

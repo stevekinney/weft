@@ -30,6 +30,7 @@ export function pickBase(record: RemoteTaskBase): RemoteTaskBase {
     ...(record.workflowExecutionToken !== undefined
       ? { workflowExecutionToken: record.workflowExecutionToken }
       : {}),
+    ...(record.workflowRevision !== undefined ? { workflowRevision: record.workflowRevision } : {}),
     activityName: record.activityName,
     queue: record.queue,
     input: record.input,

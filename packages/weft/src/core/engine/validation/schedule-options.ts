@@ -1,6 +1,11 @@
 import { parseDuration } from '../../scheduler.ts';
 import { coerceStartWorkflowId } from '../../start-workflow-validation.ts';
-import type { ScheduleOptions, ScheduleOverlapPolicy, ScheduleUpdateOptions } from '../../types.ts';
+import type {
+  ScheduleOptions,
+  ScheduleOverlapPolicy,
+  ScheduleRevisionPolicy,
+  ScheduleUpdateOptions,
+} from '../../types.ts';
 
 export const SCHEDULE_OVERLAP_POLICIES = new Set<ScheduleOverlapPolicy>([
   'skip',
@@ -9,10 +14,16 @@ export const SCHEDULE_OVERLAP_POLICIES = new Set<ScheduleOverlapPolicy>([
   'allow',
 ]);
 
+export const SCHEDULE_REVISION_POLICIES = new Set<ScheduleRevisionPolicy>([
+  'active-at-fire',
+  'pinned',
+]);
+
 type NormalizedScheduleOptions = Required<Pick<ScheduleOptions, 'overlap' | 'backfill'>> & {
   id?: string;
   description?: string;
   jitterMs?: number;
+  revisionPolicy?: ScheduleRevisionPolicy;
 };
 
 type NormalizedScheduleUpdateOptions = {
@@ -20,6 +31,7 @@ type NormalizedScheduleUpdateOptions = {
   overlap?: ScheduleOverlapPolicy;
   backfill?: boolean;
   jitterMs?: number;
+  revisionPolicy?: ScheduleRevisionPolicy;
 };
 
 export function normalizeScheduleOptions(
@@ -39,6 +51,12 @@ export function normalizeScheduleOptions(
     }),
     ...(options.jitter !== undefined && {
       jitterMs: normalizeScheduleJitter(options.jitter, 'options.jitter'),
+    }),
+    ...(options.revisionPolicy !== undefined && {
+      revisionPolicy: normalizeScheduleRevisionPolicy(
+        options.revisionPolicy,
+        'options.revisionPolicy',
+      ),
     }),
   };
 }
@@ -62,7 +80,23 @@ export function normalizeScheduleUpdateOptions(
     ...(options.jitter !== undefined && {
       jitterMs: normalizeScheduleJitter(options.jitter, 'options.jitter'),
     }),
+    ...(options.revisionPolicy !== undefined && {
+      revisionPolicy: normalizeScheduleRevisionPolicy(
+        options.revisionPolicy,
+        'options.revisionPolicy',
+      ),
+    }),
   };
+}
+
+function normalizeScheduleRevisionPolicy(
+  value: unknown,
+  fieldName: string,
+): ScheduleRevisionPolicy {
+  if (!SCHEDULE_REVISION_POLICIES.has(value as ScheduleRevisionPolicy)) {
+    throw new Error(`${fieldName} must be one of ${[...SCHEDULE_REVISION_POLICIES].join(', ')}`);
+  }
+  return value as ScheduleRevisionPolicy;
 }
 
 function normalizeScheduleDescription(description: unknown): string {

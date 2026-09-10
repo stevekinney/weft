@@ -121,6 +121,13 @@ export function createBoundedWorkerFailureMessage(parameters: {
   error: string;
   failureCategory: FailureCategory;
   turnId?: number;
+  /**
+   * Echo of the active turn's captured revision (WFT-20). Required whenever the
+   * caller has one, so a bounded fallback for an oversized checkpoint/terminal
+   * message still passes the host's strict revision check instead of being
+   * discarded as a protocol violation.
+   */
+  workflowRevision?: string;
 }): WorkerOutboundMessage {
   return {
     type: 'failed',
@@ -129,6 +136,9 @@ export function createBoundedWorkerFailureMessage(parameters: {
     workflowId: parameters.workflowId,
     error: truncateForProtocol(parameters.error),
     failureCategory: parameters.failureCategory,
+    ...(parameters.workflowRevision === undefined
+      ? {}
+      : { workflowRevision: parameters.workflowRevision }),
   };
 }
 

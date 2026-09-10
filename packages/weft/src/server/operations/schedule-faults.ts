@@ -1,5 +1,7 @@
+import { WorkflowRevisionUnavailableError } from '../../core/engine/revision-errors.ts';
 import {
   isValidScheduleOverlapPolicy,
+  isValidScheduleRevisionPolicy,
   normalizeScheduleUpdateOptions,
 } from '../../core/engine/validation/schedule.ts';
 import type { ScheduleSpec, ScheduleUpdateOptions } from '../../core/types.ts';
@@ -13,6 +15,7 @@ export type ScheduleMutableOptionsInput = {
   overlap?: unknown;
   backfill?: unknown;
   jitter?: unknown;
+  revisionPolicy?: unknown;
 };
 
 /** Validate the mutable schedule options shared by create and update. */
@@ -23,12 +26,14 @@ export function validateScheduleMutableOptions(
   const overlap = validateScheduleOverlap(input.overlap);
   const backfill = validateScheduleBackfill(input.backfill);
   const jitter = validateScheduleJitter(input.jitter);
+  const revisionPolicy = validateScheduleRevisionPolicy(input.revisionPolicy);
 
   return {
     ...(description !== undefined ? { description } : {}),
     ...(overlap !== undefined ? { overlap } : {}),
     ...(backfill !== undefined ? { backfill } : {}),
     ...(jitter !== undefined ? { jitter } : {}),
+    ...(revisionPolicy !== undefined ? { revisionPolicy } : {}),
   };
 }
 
@@ -44,6 +49,14 @@ function validateScheduleOverlap(value: unknown): ScheduleUpdateOptions['overlap
   if (value === undefined) return undefined;
   if (!isValidScheduleOverlapPolicy(value)) {
     throw invalidParamsFault('Field "overlap" must be one of skip, queue, cancel-running, allow');
+  }
+  return value;
+}
+
+function validateScheduleRevisionPolicy(value: unknown): ScheduleUpdateOptions['revisionPolicy'] {
+  if (value === undefined) return undefined;
+  if (!isValidScheduleRevisionPolicy(value)) {
+    throw invalidParamsFault('Field "revisionPolicy" must be one of active-at-fire, pinned');
   }
   return value;
 }
@@ -81,7 +94,52 @@ function formatJitterValidationMessage(message: string): string {
   return hasEnginePrefix ? `Field "jitter" is invalid: ${wireDetail}` : wireDetail;
 }
 
+/**
+ * A pinned schedule's create/update commit lost its revision-availability
+ * fence (WFT-20) — the pinned revision was concurrently removed, or (for an
+ * eager type) does not exactly match what this process has registered. A
+ * structured, typed check rather than substring matching, since the message
+ * text varies by `WorkflowRevisionUnavailableError.reason`. `undefined` when
+ * `error` is not this error class, so the caller falls through to the
+ * ordinary message-based classification.
+ */
+function mapRevisionUnavailableToFault(error: unknown): OperationFault | undefined {
+  if (!(error instanceof WorkflowRevisionUnavailableError)) {
+    return undefined;
+  }
+  return {
+    code: 'Conflict',
+    message: error.message,
+    // `error.reason`/`workflowType`/`revision` are already folded into
+    // `message` by the error's own constructor; `OperationFault`'s
+    // `Conflict.data.reason` is a caller-facing free-text summary, not a
+    // structured enum slot for this specific error class.
+    data: { reason: error.reason },
+  };
+}
+
+function isScheduleConflictMessage(normalizedMessage: string): boolean {
+  return (
+    normalizedMessage.includes('already exists') || normalizedMessage.includes('cannot be resumed')
+  );
+}
+
+function isScheduleInvalidParamsMessage(message: string, normalizedMessage: string): boolean {
+  return (
+    message.includes('Missing required field') ||
+    normalizedMessage.includes('must be') ||
+    normalizedMessage.includes('no workflow registered') ||
+    normalizedMessage.includes('cron') ||
+    normalizedMessage.includes('interval')
+  );
+}
+
 export function mapScheduleErrorToFault(scheduleId: string, error: unknown): OperationFault {
+  const revisionFault = mapRevisionUnavailableToFault(error);
+  if (revisionFault !== undefined) {
+    return revisionFault;
+  }
+
   const message = error instanceof Error ? error.message : String(error);
   const normalizedMessage = message.toLowerCase();
 
@@ -93,10 +151,7 @@ export function mapScheduleErrorToFault(scheduleId: string, error: unknown): Ope
     };
   }
 
-  if (
-    normalizedMessage.includes('already exists') ||
-    normalizedMessage.includes('cannot be resumed')
-  ) {
+  if (isScheduleConflictMessage(normalizedMessage)) {
     return {
       code: 'Conflict',
       message,
@@ -104,13 +159,7 @@ export function mapScheduleErrorToFault(scheduleId: string, error: unknown): Ope
     };
   }
 
-  if (
-    message.includes('Missing required field') ||
-    normalizedMessage.includes('must be') ||
-    normalizedMessage.includes('no workflow registered') ||
-    normalizedMessage.includes('cron') ||
-    normalizedMessage.includes('interval')
-  ) {
+  if (isScheduleInvalidParamsMessage(message, normalizedMessage)) {
     return {
       code: 'InvalidParams',
       message,

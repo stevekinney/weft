@@ -484,6 +484,7 @@ function scheduleDefinitionFromInternals(
     ...(definition.overlapPolicy !== undefined && { overlap: definition.overlapPolicy }),
     ...(definition.backfill !== undefined && { backfill: definition.backfill }),
     ...(definition.jitter !== undefined && { jitter: definition.jitter }),
+    ...(definition.revisionPolicy !== undefined && { revisionPolicy: definition.revisionPolicy }),
   });
 }
 

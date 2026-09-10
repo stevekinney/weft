@@ -266,19 +266,20 @@ Use `--jitter` to spread schedules that share the same cadence. Weft stores `nex
 
 **Options:**
 
-| Flag          | Short | Default     | Description                                                                                       |
-| ------------- | ----- | ----------- | ------------------------------------------------------------------------------------------------- |
-| `--database`  | `-d`  | `./weft.db` | SQLite database file path                                                                         |
-| `--storage`   | `-s`  | `sqlite`    | Storage backend: `sqlite` or `lmdb`                                                               |
-| `--workflows` | `-w`  |             | Workflow registration module, required for create                                                 |
-| `--every`     |       |             | Interval cadence for create (e.g. `30s`, `5m`, `1h`); mutually exclusive with the cron positional |
-| `--input`     |       | `null`      | JSON input payload for create                                                                     |
-| `--id`        |       |             | Custom schedule ID for create                                                                     |
-| `--overlap`   |       |             | Overlap policy: `skip`, `queue`, `cancel-running`, or `allow`                                     |
-| `--backfill`  |       | `false`     | Run missed ticks on recovery instead of skipping timers more than one second late                 |
-| `--jitter`    |       |             | Deterministic dispatch jitter for create (e.g. `30s`, `5m`)                                       |
-| `--json`      | `-j`  | `false`     | Output as JSON                                                                                    |
-| `--help`      | `-h`  |             | Show help message                                                                                 |
+| Flag                | Short | Default          | Description                                                                                                                                                          |
+| ------------------- | ----- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--database`        | `-d`  | `./weft.db`      | SQLite database file path                                                                                                                                            |
+| `--storage`         | `-s`  | `sqlite`         | Storage backend: `sqlite` or `lmdb`                                                                                                                                  |
+| `--workflows`       | `-w`  |                  | Workflow registration module, required for create                                                                                                                    |
+| `--every`           |       |                  | Interval cadence for create (e.g. `30s`, `5m`, `1h`); mutually exclusive with the cron positional                                                                    |
+| `--input`           |       | `null`           | JSON input payload for create                                                                                                                                        |
+| `--id`              |       |                  | Custom schedule ID for create                                                                                                                                        |
+| `--overlap`         |       |                  | Overlap policy: `skip`, `queue`, `cancel-running`, or `allow`                                                                                                        |
+| `--backfill`        |       | `false`          | Run missed ticks on recovery instead of skipping timers more than one second late                                                                                    |
+| `--jitter`          |       |                  | Deterministic dispatch jitter for create (e.g. `30s`, `5m`)                                                                                                          |
+| `--revision-policy` |       | `active-at-fire` | Revision policy for create (WFT-20): `active-at-fire` or `pinned` — see [Schedule revision policy](../guides/workflow-versioning.md#schedule-revision-policy-wft-20) |
+| `--json`            | `-j`  | `false`          | Output as JSON                                                                                                                                                       |
+| `--help`            | `-h`  |                  | Show help message                                                                                                                                                    |
 
 ### server
 

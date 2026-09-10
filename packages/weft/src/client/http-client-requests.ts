@@ -28,7 +28,7 @@ import type {
 import { HttpClientError, request } from './http-request.ts';
 import type { UpdateResult } from './interface.ts';
 import { buildReviewListSearchParams } from './search-params.ts';
-import { scheduleSpecToWireFields } from './start-body.ts';
+import { scheduleSpecToWireFields, setIfDefined } from './start-body.ts';
 
 export type HttpClientRequestContext = {
   readonly baseUrl: string;
@@ -497,10 +497,11 @@ export function updateScheduleRequest(
   options?: ScheduleUpdateOptions,
 ): Promise<void> {
   const body = scheduleSpecToWireFields(newSpec);
-  if (options?.description !== undefined) body['description'] = options.description;
-  if (options?.overlap !== undefined) body['overlap'] = options.overlap;
-  if (options?.backfill !== undefined) body['backfill'] = options.backfill;
-  if (options?.jitter !== undefined) body['jitter'] = options.jitter;
+  setIfDefined(body, 'description', options?.description);
+  setIfDefined(body, 'overlap', options?.overlap);
+  setIfDefined(body, 'backfill', options?.backfill);
+  setIfDefined(body, 'jitter', options?.jitter);
+  setIfDefined(body, 'revisionPolicy', options?.revisionPolicy);
 
   return request<void>(context.baseUrl, `/schedules/${encodeURIComponent(id)}`, context.headers, {
     method: 'PATCH',

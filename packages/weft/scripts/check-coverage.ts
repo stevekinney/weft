@@ -837,17 +837,17 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       // `pre-commit.ts` below.
       {
         reason:
-          'Process-entry and failure-exit behavior runs in child processes whose hits are not attributed to the parent Bun LCOV report.',
+          'Process-entry and failure-exit behavior runs in child processes whose hits are not attributed to the parent Bun LCOV report. Re-derived from a fresh coverage/lcov.info (WFT-19 review round 2) after the word-boundary-matching rewrite shifted every line below parseArguments().',
         functions: 7,
         lines: createMergedLineSet(
-          createLineSet(108, 121),
-          createLineSet(125, 141),
-          createLineSet(186, 190),
-          createLineSet(195, 199),
-          createLineSet(203, 225),
-          createLineSet(229, 250),
-          createLineSet(254, 255),
-          createLineSet(260, 261),
+          createLineSet(121, 134),
+          createLineSet(138, 154),
+          createLineSet(199, 203),
+          createLineSet(208, 212),
+          createLineSet(216, 238),
+          createLineSet(242, 263),
+          createLineSet(267, 268),
+          createLineSet(273, 274),
         ),
         requireUncoveredLines: true,
       },
@@ -1151,16 +1151,24 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
         reason:
           'Process-entry and failure-exit behavior runs in child processes whose hits are not attributed to the parent Bun LCOV report.',
         functions: 1,
-        lines: new Set([50, 101, 123, 136, 146, 147, 163, 164, 219, 292, 344]),
+        lines: new Set([50, 101, 123, 136, 146, 147, 163, 164, 221, 294, 362]),
         requireUncoveredLines: true,
       },
     ],
     [
       'src/cli/parse-schedule-arguments.ts',
       {
+        // WFT-20's own `--revision-policy` unit tests now exercise
+        // `parseScheduleArguments`'s 'create' branch in-process, so the
+        // OUTER `if (values.every !== undefined) {` check (line 217) itself
+        // is genuinely covered now, as is the cron-positional `else` branch
+        // (224-230) — only the `--every`-with-exactly-one-positional
+        // branch's own `assertExactSchedulePositionals(...)` call body
+        // (218-223) remains untested, since no test exercises `create`
+        // with `--every` and exactly one positional.
         reason:
           'Process-entry and failure-exit behavior runs in child processes whose hits are not attributed to the parent Bun LCOV report.',
-        lines: new Set([196, 197, 198, 199, 200, 201]),
+        lines: new Set([218, 219, 220, 221, 222, 223]),
         requireUncoveredLines: true,
       },
     ],
@@ -1274,11 +1282,14 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       // rework (`resolveCatalogTombstoneIfPresent` pre-check, and
       // `tombstoneBytes`-based restore/finalize) added above this
       // function — the switch and default guard themselves are otherwise
-      // unchanged.
+      // unchanged. Lines realigned to 290-293 by WFT-20's `pinnedSchedules`
+      // wiring (the new `countPinnedSchedulesForRevision` call and its
+      // doc-comment update) added above this function — the switch and
+      // default guard themselves are otherwise unchanged.
       {
         reason:
           'Compile-time exhaustiveness guard for a closed discriminated union has no reachable runtime path to test without an unsafe cast.',
-        lines: new Set([285, 286, 287, 288]),
+        lines: new Set([290, 291, 292, 293]),
       },
     ],
     [
@@ -1325,23 +1336,32 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       },
     ],
     [
-      'src/core/engine/lifecycle/start.ts',
+      // WFT-20: `resolveCachedStartRevision`/`resolveStartRevisionUncached`
+      // were extracted out of `lifecycle/start.ts` into their own module
+      // (`lifecycle/start-revision-resolution.ts`) so both `start.ts` and
+      // the new pinned-schedule-revision resolver can import the same
+      // logic instead of duplicating it — this allowance moved with them.
+      'src/core/engine/lifecycle/start-revision-resolution.ts',
       {
-        // `resolveStartRevisionUncached()`'s own doc marks this "Unreachable
-        // in practice": every call site resolved `type` to a real
-        // `registration` first, so `registeredCatalogRevisions` is always
-        // populated by the time `ensureWorkflowCatalogReady()` here
-        // settles — either because `type` is an eager registration (which
-        // that call always assigns a revision to) or a resolved dynamic
-        // source (handled entirely by the sync `resolveCachedStartRevision()`
-        // fast path and never reaching this fallback at all). Line 188 is
-        // the `if (afterReadiness !== undefined) { return … }` block's
-        // fallthrough when the readiness re-check still finds nothing —
-        // the same unreachable condition the throw two lines later guards;
-        // 196-197 are that throw statement's own first two lines.
+        // `resolveStartRevisionUncached()`'s own doc marks its FINAL throw
+        // "Unreachable in practice": every call site resolved `type` to a
+        // real `registration` first, so `registeredCatalogRevisions` is
+        // always populated once `ensureWorkflowCatalogReady()` here settles.
+        // The success path immediately above it (the
+        // `if (afterReadiness !== undefined) { return … }` block, WFT-20)
+        // IS genuinely reachable and covered now — `resolveScheduleRevisionForPin()`/
+        // `resolveScheduleCreationRevision()` call this uncached fallback
+        // from `schedule()`, a caller that (unlike `engine.start()`'s
+        // top-level entry gates) does not already await
+        // `ensureWorkflowCatalogReady()` beforehand, so the cache-miss
+        // fallback is a real, exercised path there. Only the throw
+        // statement's own two lines remain unreachable. (This allowance's
+        // key moved from `lifecycle/start.ts` to this extracted file in
+        // WFT-20; WFT-152's unrelated `lifecycle/start.ts` edit no longer
+        // applies here since the function itself moved out.)
         reason:
           'Defensive fail-loud guard for an invariant every call site of resolveStartRevisionUncached() already guarantees; has no reachable runtime path to test without corrupting registeredCatalogRevisions via an unsafe cast.',
-        lines: new Set([188, 196, 197]),
+        lines: new Set([53, 61, 62, 65]),
         requireUncoveredLines: true,
       },
     ],
@@ -1450,8 +1470,8 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/core/engine/workflow-retention-deadline.ts',
       {
         reason:
-          "New async resolve path (WFT-19 review round 1): Bun maps the closing brace after the DynamicWorkflowSourceUnavailableError/WorkflowRevisionUnavailableError catch branch's `return undefined` as uncovered, the same brace-attribution artifact already documented for `termination/finalizer-registration.ts`'s identical catch shape — although workflow-retention.test.ts directly exercises both that return (an unresolvable-pinned-revision fallback) and the success path (an async-resolved entry's own policy), and the suite's own `throw error;` rethrow line reads as hit from an unrelated disposal-race elsewhere in the full run.",
-        lines: new Set([59]),
+          "New async resolve path (WFT-19 review round 1, re-derived in round 2 after the fail-closed rewrite shifted this line from 59 to 72): Bun maps the closing brace after the DynamicWorkflowSourceUnavailableError/WorkflowRevisionUnavailableError catch branch's `return { kind: 'unresolvable' }` as uncovered, the same brace-attribution artifact already documented for `termination/finalizer-registration.ts`'s identical catch shape — although workflow-retention.test.ts directly exercises both that return (an unresolvable-pinned-revision, now asserted NOT-purged rather than default-purged) and the success path (an async-resolved entry's own policy), and the suite's own `throw error;` rethrow line reads as hit from an unrelated disposal-race elsewhere in the full run.",
+        lines: new Set([72]),
         requireUncoveredLines: true,
       },
     ],
@@ -1515,18 +1535,21 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       // (projectTaskDetail's switch) unreachable at runtime — a compile-time
       // exhaustiveness guard only. `requireUncoveredLines` is omitted
       // because, matching the sibling entry's documented experience, which
-      // of `default: {` (287), the dead `const`/`return` pair (290, 291),
-      // and the closing brace (292) reads 0 flips between runs/environments
-      // with byte-identical source — a coverage-attribution artifact, not a
-      // real reachability signal. All four are included so the allowance
-      // covers every combination CI has actually produced. Re-derive from
-      // fresh coverage/lcov.info (not by inspection) if this file's line
-      // count ever shifts again — it has drifted repeatedly from lint-staged
-      // formatting collapsing multi-line conditional spreads onto one line.
+      // of `default: {`, the dead `const`/`return` pair, and the closing
+      // brace reads 0 flips between runs/environments with byte-identical
+      // source — a coverage-attribution artifact, not a real reachability
+      // signal. All four are included so the allowance covers every
+      // combination CI has actually produced. Re-derived from fresh
+      // coverage/lcov.info (not by inspection) for WFT-20's `workflowRevision`
+      // field, which shifted this switch down by one line (287→288,
+      // 290→291, 291→292, 292→293) — this file's line count has drifted
+      // repeatedly from lint-staged formatting collapsing multi-line
+      // conditional spreads onto one line, so re-derive again if it shifts
+      // further.
       {
         reason:
           'Compile-time exhaustiveness guard for a closed discriminated union has no reachable runtime path to test without an unsafe cast.',
-        lines: new Set([287, 290, 291, 292]),
+        lines: new Set([288, 291, 292, 293]),
       },
     ],
     [
@@ -1565,14 +1588,16 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       // the identical pattern already allowed for
       // `websocket-worker.ts`'s WorkerToServerMessage switch. `requireUncoveredLines`
       // is intentionally omitted for the same reason it is omitted there:
-      // `default: {` (156) is a case-label/brace line that flips between hit
+      // `default: {` (157) is a case-label/brace line that flips between hit
       // and unhit run to run with byte-identical source — a coverage-attribution
       // artifact, not a real reachability signal — so only the two dead
-      // statements inside it (159, 160) are guaranteed to read 0 every run.
+      // statements inside it (160, 161) are guaranteed to read 0 every run.
+      // (Shifted down by one line from the original 156–160 range by WFT-20's
+      // `rehydrateWorkerOwnership` gaining a `record.workflowRevision` argument.)
       {
         reason:
           'Compile-time exhaustiveness guard for a closed discriminated union has no reachable runtime path to test without an unsafe cast.',
-        lines: new Set([156, 157, 158, 159, 160]),
+        lines: new Set([157, 158, 159, 160, 161]),
       },
     ],
     [
@@ -1608,11 +1633,13 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       // `requireUncoveredLines` is intentionally omitted here rather than
       // chasing whichever subset happens to be 0 in a given run. (Line
       // numbers shifted +9 from the WFT-23 baseline when WFT-24's dead-letter
-      // dispatch import and call sites were added above this switch.)
+      // dispatch import and call sites were added above this switch; shifted
+      // a further +17 by WFT-20's `taskResult` revision-authorization gate
+      // added above this switch.)
       {
         reason:
           'Transport disconnect and concurrency exits are behaviorally tested, but Bun does not deterministically attribute these residual paths.',
-        lines: new Set([349, 350, 353, 354, 357, 358]),
+        lines: new Set([366, 367, 370, 371, 374, 375]),
       },
     ],
     [
@@ -1628,10 +1655,13 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
     [
       'src/workers/workflow-runner.ts',
       {
+        // Line realigned from 524 to 523 by WFT-20's `workflowRevisions`
+        // capture logic added above this function — re-derived from fresh
+        // LCOV, not by inspection.
         reason:
           'Transport disconnect and concurrency exits are behaviorally tested, but Bun does not deterministically attribute these residual paths.',
         functions: 1,
-        lines: new Set([500]),
+        lines: new Set([523]),
         requireUncoveredLines: true,
       },
     ],

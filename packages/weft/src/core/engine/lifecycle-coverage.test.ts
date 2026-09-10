@@ -884,7 +884,7 @@ describe('engine lifecycle coverage helpers', () => {
       'workflow-begin-worker',
       undefined,
       'workflow',
-      undefined,
+      'revision-worker-begin',
       { value: 1 },
       checkpoint,
       25_000,
@@ -899,6 +899,7 @@ describe('engine lifecycle coverage helpers', () => {
         deadline: 25_000,
         headers: [['traceparent', '00-worker']],
         nestingDepth: 2,
+        revision: 'revision-worker-begin',
       }),
     );
     expect(internals.pendingNestingDepth).toBeUndefined();
@@ -1051,6 +1052,7 @@ describe('engine lifecycle coverage helpers', () => {
       registrations: new Map(),
       strategy: { startWorkflow: startWorkflowStrategy },
       workflowHeaders: new Map([['workflow-worker-launch', new Map([['x-test', '1']])]]),
+      workflowTypeByWorkflowId: new Map(),
       workflowVersionTuples: new Map(),
     };
     const checkpoint = createCheckpoint('workflow-worker-launch', {
@@ -1108,6 +1110,7 @@ describe('engine lifecycle coverage helpers', () => {
       options: { development: true, getNow: () => 1_000 },
       strategy: { startWorkflow: mock(() => {}) },
       workflowHeaders: new Map<string, Map<string, string>>(),
+      workflowTypeByWorkflowId: new Map(),
       workflowVersionTuples: new Map(),
     };
     const workflowId = 'workflow-inline-launch';
@@ -1153,6 +1156,7 @@ describe('engine lifecycle coverage helpers', () => {
       },
       options: { development: false, getNow: () => 1_000 },
       strategy: { startWorkflow: mock(() => {}) },
+      workflowTypeByWorkflowId: new Map(),
       workflowVersionTuples: new Map(),
     };
     const workflowId = 'workflow-inline-inconsistent';

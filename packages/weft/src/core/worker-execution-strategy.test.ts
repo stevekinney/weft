@@ -1422,6 +1422,107 @@ describe('WorkerExecutionStrategy', () => {
         failureCategory: 'resource',
       });
     });
+
+    // WFT-20: `#workflowRevisions` is populated once in `startWorkflow()` and
+    // read on EVERY `beginTurn` call, including resume — proving that wiring
+    // requires driving a real run -> checkpoint -> resume sequence through
+    // `WorkerExecutionStrategy` itself, not hand-seeding `WorkerTurnWatchdog`
+    // state directly (that's `worker-protocol-guard.test.ts`'s job).
+    it('carries a captured revision from startWorkflow through a checkpoint into the resume turn, and rejects a mismatched echo there', async () => {
+      setup(1, {
+        maxProtocolMessageBytes: 4_096,
+        requireProtocolVersion: true,
+      });
+
+      strategy.startWorkflow({
+        workflowId: 'wf-revision-resume',
+        workflowType: 'test',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+        revision: 'rev-1',
+      });
+      await sleepForTesting(10);
+
+      const worker = firstWorker();
+      const runMessage = worker.postMessage.mock.calls[0]?.[0] as { turnId: number };
+
+      // A non-parking checkpoint (an ordinary activity request, not
+      // wait-signal) that correctly echoes the captured revision — keeps the
+      // worker active and proves the FIRST turn's revision check passes.
+      dispatchToMockWorker(
+        worker,
+        'message',
+        new MessageEvent('message', {
+          data: {
+            type: 'checkpoint',
+            protocolVersion: WORKER_PROTOCOL_VERSION,
+            turnId: runMessage.turnId,
+            workflowId: 'wf-revision-resume',
+            checkpoint: new ArrayBuffer(0),
+            operationRequest: {
+              id: 'op-activity',
+              workflowId: 'wf-revision-resume',
+              kind: 'activity',
+              queue: 'default',
+              activityName: 'doSomething',
+              attempt: 1,
+              retryPolicy: {
+                maxAttempts: 1,
+                initialBackoff: 0,
+                backoffMultiplier: 1,
+                maxBackoff: 0,
+              },
+              scheduledAt: Date.now(),
+            },
+            workflowRevision: 'rev-1',
+          } satisfies WorkerOutboundMessage,
+        }),
+      );
+
+      // Accepted, not discarded: the checkpoint reached the engine handler.
+      expect(mockPool.discard).not.toHaveBeenCalled();
+      expect(messages.some((message) => message.type === 'checkpoint')).toBe(true);
+
+      strategy.resumeWorkflow({
+        workflowId: 'wf-revision-resume',
+        checkpoint: new ArrayBuffer(4),
+        operationResult: { status: 'completed', value: 'resume payload' },
+      });
+
+      const resumeMessage = worker.postMessage.mock.calls.at(-1)?.[0] as {
+        type: string;
+        turnId: number;
+      };
+      expect(resumeMessage.type).toBe('resume');
+
+      // The worker's reply to the RESUME turn omits the still-captured
+      // revision — this is the specific combination the coverage gap named:
+      // an in-flight/active turn with a revision, echoed absent on turn two.
+      dispatchToMockWorker(
+        worker,
+        'message',
+        new MessageEvent('message', {
+          data: {
+            type: 'completed',
+            protocolVersion: WORKER_PROTOCOL_VERSION,
+            turnId: resumeMessage.turnId,
+            workflowId: 'wf-revision-resume',
+            result: 'done',
+          } satisfies WorkerOutboundMessage,
+        }),
+      );
+
+      expect(mockPool.discard).toHaveBeenCalledWith(worker);
+      const failure = lastMessage();
+      expect(failure).toMatchObject({
+        type: 'failed',
+        workflowId: 'wf-revision-resume',
+        failureCategory: 'system',
+      });
+      if (failure.type === 'failed') {
+        expect(failure.error).toContain('revision');
+      }
+    });
   });
 
   // -------------------------------------------------------------------------

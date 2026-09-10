@@ -90,7 +90,34 @@ describe('check-revision-keyed-lookups', () => {
     expect(result.exitCode).toBe(0);
   });
 
-  it('passes when the bare field name appears without a leading dot (a type/property declaration, not an access)', async () => {
+  it('fails when a non-allowlisted file destructures the guarded field, evading a dot-only pattern (WFT-19 review round 2)', async () => {
+    await writeFixtureFile(
+      root,
+      'src/core/engine/destructure-only.ts',
+      `export function readIt(internals: { activityRegistriesByWorkflow: Map<string, unknown> }) {\n` +
+        `  const { activityRegistriesByWorkflow } = internals;\n` +
+        `  return activityRegistriesByWorkflow.get('type');\n` +
+        `}\n`,
+    );
+    const result = run(['--root', root]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('src/core/engine/destructure-only.ts:2');
+  });
+
+  it('fails when a non-allowlisted file uses bracket-string access on the guarded field, evading a dot-only pattern (WFT-19 review round 2)', async () => {
+    await writeFixtureFile(
+      root,
+      'src/core/engine/bracket-only.ts',
+      `export function writeIt(internals: { sources: { lastResolvedRevisionByName: Map<string, string> } }) {\n` +
+        `  internals.sources['lastResolvedRevisionByName'].set('type', 'rev');\n` +
+        `}\n`,
+    );
+    const result = run(['--root', root]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('src/core/engine/bracket-only.ts:2');
+  });
+
+  it("fails when the bare field name appears without a leading dot in a non-allowlisted file (a type/property declaration is itself flagged unless the file is allowlisted — the field's own declaring files are)", async () => {
     await writeFixtureFile(
       root,
       'src/core/engine/declaration-only.ts',
@@ -98,7 +125,7 @@ describe('check-revision-keyed-lookups', () => {
         `export function build(): Sources {\n  return { lastResolvedRevisionByName: new Map() };\n}\n`,
     );
     const result = run(['--root', root]);
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode).toBe(1);
   });
 
   it("passes when the reference is in one of the field's own allowed files", async () => {
@@ -138,22 +165,27 @@ describe('check-revision-keyed-lookups', () => {
     await writeFixtureFile(
       root,
       'src/core/engine/file-a.ts',
-      `export function a(internals: { activityRegistriesByWorkflow: Map<string, unknown> }) {\n` +
+      // A type-only import (never matching the guarded identifier itself)
+      // keeps this fixture at exactly one violation line — the access —
+      // rather than also matching an inline structural type annotation.
+      `import type { InternalsLike } from './fixture-types.ts';\n` +
+        `export function a(internals: InternalsLike) {\n` +
         `  return internals.activityRegistriesByWorkflow.get('x');\n` +
         `}\n`,
     );
     await writeFixtureFile(
       root,
       'src/core/engine/file-b.ts',
-      `export function b(internals: { sources: { lastResolvedRevisionByName: Map<string, string> } }) {\n` +
+      `import type { InternalsLike } from './fixture-types.ts';\n` +
+        `export function b(internals: InternalsLike) {\n` +
         `  return internals.sources.lastResolvedRevisionByName.get('x');\n` +
         `}\n`,
     );
     const result = run(['--root', root]);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('Found 2 reference(s)');
-    expect(result.stderr).toContain('src/core/engine/file-a.ts:2');
-    expect(result.stderr).toContain('src/core/engine/file-b.ts:2');
+    expect(result.stderr).toContain('src/core/engine/file-a.ts:3');
+    expect(result.stderr).toContain('src/core/engine/file-b.ts:3');
   });
 });
 

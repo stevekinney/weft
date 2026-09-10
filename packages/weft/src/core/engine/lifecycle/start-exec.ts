@@ -46,6 +46,12 @@ export function startWorkflowExecution(
   workflowId: string,
   workflowExecutionToken: string | undefined,
   workflowType: string,
+  /**
+   * The starting run's persisted `WorkflowState.revision` (WFT-19/WFT-20):
+   * populates the per-instance identity cache readers use for revision-scoped
+   * routing, and is echoed to the strategy's `startWorkflow` for worker-protocol
+   * revision validation.
+   */
   revision: string | undefined,
   input: unknown,
   checkpoint: Checkpoint,
@@ -66,6 +72,7 @@ export function startWorkflowExecution(
   internals.strategy.startWorkflow({
     workflowId,
     ...(workflowExecutionToken !== undefined && { workflowExecutionToken }),
+    ...(revision !== undefined && { revision }),
     workflowType,
     input,
     checkpoint: serializeCheckpoint(checkpoint),
@@ -85,6 +92,14 @@ export function beginWorkflowExecution(
   workflowId: string,
   workflowExecutionToken: string | undefined,
   workflowType: string,
+  /**
+   * The starting run's persisted `WorkflowState.revision` (WFT-19/WFT-20).
+   * Threaded into both the queued-inline path below (which also re-reads
+   * `revision` off the RELOADED `WorkflowState` at flush time —
+   * `inline-launch-queue.ts` — exactly like it already does for
+   * `workflowExecutionToken`) and the non-inline `startWorkflowExecution`
+   * branch, which populates the per-instance identity cache with it directly.
+   */
   revision: string | undefined,
   input: unknown,
   checkpoint: Checkpoint,
