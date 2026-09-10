@@ -412,7 +412,7 @@ describe('WorkflowRevisionsPanel', () => {
     });
   });
 
-  test('activating the already-active revision (labeled Refresh) opens the confirm dialog and applies', async () => {
+  test('activating the already-active revision (labeled Refresh) opens a re-stamp-worded confirm dialog and applies, reporting "Refreshed" not "Activated"', async () => {
     scripted = new ScriptedFetch();
     scripted.routeJsonRpcMethod('weft.workflows.revisions.list', [
       revisionRecord('order-processing-rev-1'),
@@ -432,8 +432,56 @@ describe('WorkflowRevisionsPanel', () => {
     const refreshButton = await waitFor(() => getByRole('button', { name: 'Refresh' }));
     await fireEvent.click(refreshButton);
     const dialog = await waitFor(() => getByRole('dialog'));
-    await fireEvent.click(within(dialog).getByRole('button', { name: 'Activate' }));
+    // The dialog itself must use re-stamp wording, not the generic
+    // Activate copy — an operator confirming a same-revision refresh
+    // should never read language implying a different revision is about
+    // to go live.
+    expect(within(dialog).getByText(/re-stamps it as the active revision/)).not.toBeNull();
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Refresh' }));
 
     expect(await findByText('Compatible')).not.toBeNull();
+    expect(await findByText(/^Refreshed revision/)).not.toBeNull();
+  });
+
+  test('activating a different, non-active candidate opens the generic Activate-worded confirm dialog', async () => {
+    scripted = new ScriptedFetch();
+    scripted.routeJsonRpcMethod('weft.workflows.revisions.list', [
+      revisionRecord('order-processing-rev-1'),
+      revisionRecord('order-processing-rev-2'),
+    ]);
+    scripted.routeJsonRpcMethod(
+      'weft.workflows.active.get',
+      activePointer('order-processing-rev-1'),
+    );
+
+    const { getByRole } = await renderPanel();
+    const activateButton = await waitFor(() => getByRole('button', { name: 'Activate' }));
+    await fireEvent.click(activateButton);
+    const dialog = await waitFor(() => getByRole('dialog'));
+    expect(within(dialog).getByText(/Weft evaluates compatibility/)).not.toBeNull();
+    expect(within(dialog).getByRole('button', { name: 'Activate' })).not.toBeNull();
+  });
+
+  test('a malformed (successful but structurally invalid) active.get response is rejected, not silently treated as never-activated', async () => {
+    scripted = new ScriptedFetch();
+    scripted.routeJsonRpcMethod('weft.workflows.revisions.list', [
+      revisionRecord('order-processing-rev-1'),
+    ]);
+    // Structurally invalid: missing `generation`/`activatedAt`, so
+    // `isWorkflowCatalogActivePointerLike` rejects it — a real, successful
+    // response the console cannot trust, distinct from a genuine
+    // never-activated `NotFound` fault.
+    scripted.routeJsonRpcMethod('weft.workflows.active.get', {
+      revision: 'order-processing-rev-1',
+    });
+
+    const { findByText, queryByText } = await renderPanel();
+    // 'Invalid input' — the panel throws this as an `Unprocessable`-coded
+    // `HttpClientError`, not a plain `Error`, specifically so it does NOT
+    // hit `query.ts`'s retryable-fault path (see the module's own comment).
+    expect(await findByText('Invalid input')).not.toBeNull();
+    // Never silently falls back to "no active revision" for a malformed
+    // (as opposed to genuinely absent) active pointer.
+    expect(queryByText('No active revision — never activated.')).toBeNull();
   });
 });

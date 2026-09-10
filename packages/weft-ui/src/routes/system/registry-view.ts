@@ -114,6 +114,8 @@ export interface RegistryWorkflowRow {
   readonly manifestVersion: number;
   /** Deterministic payload-only contract identity (`WorkflowRevisionManifest.contractHash`). */
   readonly contractHash: string;
+  /** `WorkflowRevisionManifest.workflowVersion` — the compatibility-relevant version string a `workflow-version-incompatible` verdict compares against, independent of `manifestVersion`. Surfaced here so it's visible without `workflows:read` (the Revisions panel's own gate). */
+  readonly workflowVersion: string;
   readonly description: string | undefined;
   readonly tags: readonly string[];
   readonly hasInputSchema: boolean;
@@ -299,12 +301,20 @@ function toContractMessageRows(
 }
 
 function toWorkflowRow(manifest: WorkflowRevisionManifestSource): RegistryWorkflowRow {
-  const { name: type, revision, manifestVersion, contractHash, contract } = manifest;
+  const {
+    name: type,
+    revision,
+    manifestVersion,
+    contractHash,
+    workflowVersion,
+    contract,
+  } = manifest;
   return {
     type,
     revision,
     manifestVersion,
     contractHash,
+    workflowVersion,
     description: contract.description,
     tags: contract.tags ?? [],
     hasInputSchema: contract.inputSchema !== undefined,

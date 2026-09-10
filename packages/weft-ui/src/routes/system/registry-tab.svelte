@@ -20,6 +20,7 @@
   import { toStore } from 'svelte/store';
 
   import { getClient } from '../../lib/client.ts';
+  import { formatDuration } from '../../lib/format/index.ts';
   import { queryKeys } from '../../lib/query.ts';
   import ManifestDiagnosticsView from '../workers/manifest-diagnostics-view.svelte';
   import {
@@ -66,6 +67,18 @@
   });
 
   let selectedType = $state<string | null>(null);
+
+  /**
+   * Weft's `Duration` (`@lostgradient/weft`) is `number | string` — a
+   * numeric activity timeout is milliseconds, a string one is already
+   * unit-qualified (e.g. `'30s'`). Rendering a bare number verbatim reads
+   * as an ambiguous, unitless value next to string durations; the numeric
+   * case goes through the same `formatDuration` helper `formatRelativeTime`
+   * already uses.
+   */
+  function formatActivityTimeout(timeout: number | string): string {
+    return typeof timeout === 'number' ? formatDuration(timeout) : timeout;
+  }
 </script>
 
 {#snippet registryBadge(label: string, variant: 'neutral' | 'success')}
@@ -175,7 +188,10 @@
                   {@render registryBadge(`retry: ${activity.retry.maxAttempts}x`, 'neutral')}
                 {/if}
                 {#if activity.timeout}
-                  {@render registryBadge(`timeout: ${activity.timeout}`, 'neutral')}
+                  {@render registryBadge(
+                    `timeout: ${formatActivityTimeout(activity.timeout)}`,
+                    'neutral',
+                  )}
                 {/if}
               </div>
             </div>

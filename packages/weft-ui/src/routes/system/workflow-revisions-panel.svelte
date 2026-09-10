@@ -96,7 +96,25 @@
       queryFn: async (): Promise<WorkflowCatalogActivePointerLike | null> => {
         try {
           const raw = await client.operations['weft.workflows.active.get']({ name: workflowName });
-          return isWorkflowCatalogActivePointerLike(raw) ? raw : null;
+          if (isWorkflowCatalogActivePointerLike(raw)) return raw;
+          // A successful-but-malformed response is NOT the same as "never
+          // activated": collapsing it to `null` would make every row read
+          // as Installed (no Active badge) and drop `expectedGeneration`
+          // from the next Activate call, which the server then refuses as
+          // a stale/expected-generation conflict for a workflow that DOES
+          // have a real active revision. Throw instead — this reaches the
+          // ordinary catch below, which only special-cases the genuine
+          // `NotFound` fault; anything else (this included) rethrows and
+          // renders through `{:else if $activeQuery.isError}`. Modeled as
+          // an `HttpClientError` with `Unprocessable` (-> the non-retrying
+          // 'invalid' treatment) rather than a plain `Error`: a plain
+          // `Error` fails `classifyFault`'s `instanceof` check, which
+          // `shouldRetryQuery` (`lib/query.ts`) treats as retryable —
+          // several seconds of real backoff to report data the console
+          // already has in hand and knows is unusable.
+          throw new HttpClientError(422, 'Malformed active-pointer response', {
+            faultCode: 'Unprocessable',
+          });
         } catch (error) {
           // A workflow that has never been activated is a legitimate state
           // (module doc), not a fault to surface — every other NotFound (or
@@ -171,11 +189,14 @@
   });
 
   let confirmRevision = $state<string | null>(null);
+  /** Whether the open confirm dialog is re-stamping the already-active revision (the row's own "Refresh" action) rather than activating a different candidate — see this file's module doc on why the two need distinct wording. */
+  let confirmIsRefresh = $state(false);
   let confirmOpen = $state(false);
   let triggerRef = $state<HTMLElement | null>(null);
 
-  function openConfirm(revision: string, trigger: HTMLElement): void {
-    confirmRevision = revision;
+  function openConfirm(row: WorkflowRevisionRow, trigger: HTMLElement): void {
+    confirmRevision = row.revision;
+    confirmIsRefresh = row.isActive;
     triggerRef = trigger;
     confirmOpen = true;
   }
@@ -212,11 +233,20 @@
     ];
   }
 
-  /** Outcome-banner copy, built as plain script-level string functions rather than inline multi-part template expressions — one interpolation per rendered line. */
+  /**
+   * Outcome-banner copy, built as plain script-level string functions
+   * rather than inline multi-part template expressions — one interpolation
+   * per rendered line. `appliedOutcomeMessage` reads `confirmIsRefresh` as
+   * it stood when the confirm dialog was opened (not reset on success), so
+   * a same-revision re-stamp reports "Refreshed", never "Activated" — an
+   * operator must never read a generation re-stamp as a new revision going
+   * live.
+   */
   function appliedOutcomeMessage(
     outcome: Extract<WorkflowActivationOutcome, { kind: 'applied' }>,
   ): string {
-    return `Activated revision "${outcome.pointer.revision}" (generation ${outcome.pointer.generation}).`;
+    const verb = confirmIsRefresh ? 'Refreshed' : 'Activated';
+    return `${verb} revision "${outcome.pointer.revision}" (generation ${outcome.pointer.generation}).`;
   }
 
   function staleOutcomeMessage(
@@ -297,7 +327,7 @@
             label={row.isActive ? 'Refresh' : 'Activate'}
             disabled={adminGate.disabled || $activateMutation.isPending}
             title={adminGate.title}
-            onclick={(event) => openConfirm(row.revision, event.currentTarget as HTMLElement)}
+            onclick={(event) => openConfirm(row, event.currentTarget as HTMLElement)}
           />
         </li>
       {/each}
@@ -348,11 +378,13 @@
 <ConfirmDialog
   bind:open={confirmOpen}
   {triggerRef}
-  title="Activate revision?"
+  title={confirmIsRefresh ? 'Refresh active revision?' : 'Activate revision?'}
   description={confirmRevision === null
     ? ''
-    : `Activate "${confirmRevision}" as the active revision for ${workflowName}? Weft evaluates compatibility against the currently active revision before applying — an incompatible candidate is refused with no durable change.`}
-  confirmLabel="Activate"
+    : confirmIsRefresh
+      ? `Refresh "${confirmRevision}" — Weft re-stamps it as the active revision under a new generation. Nothing about the running revision changes; this does not activate a different revision.`
+      : `Activate "${confirmRevision}" as the active revision for ${workflowName}? Weft evaluates compatibility against the currently active revision before applying — an incompatible candidate is refused with no durable change.`}
+  confirmLabel={confirmIsRefresh ? 'Refresh' : 'Activate'}
   onConfirm={() => {
     if (confirmRevision !== null) $activateMutation.mutate(confirmRevision);
   }}

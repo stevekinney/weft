@@ -83,19 +83,31 @@
     <ul class="weft-registry-detail__message-list">
       {#each entries as entry (entry.name)}
         <li class="weft-registry-detail__message">
-          <div class="weft-registry-detail__message-header">
-            <span class="weft-registry-detail__message-name">{entry.name}</span>
-            {@render schemaBadge(
-              entry.hasInputSchema ? `${entry.inputFields.length} in` : 'no input',
-              entry.hasInputSchema ? 'neutral' : 'warning',
-              true,
-            )}
-            {@render schemaBadge(
-              entry.hasOutputSchema ? `${entry.outputFields.length} out` : 'no output',
-              entry.hasOutputSchema ? 'neutral' : 'warning',
-              true,
-            )}
-          </div>
+          <details class="weft-registry-detail__message-details">
+            <summary class="weft-registry-detail__message-header">
+              <span class="weft-registry-detail__message-name">{entry.name}</span>
+              {@render schemaBadge(
+                entry.hasInputSchema ? `${entry.inputFields.length} in` : 'no input',
+                entry.hasInputSchema ? 'neutral' : 'warning',
+                true,
+              )}
+              {@render schemaBadge(
+                entry.hasOutputSchema ? `${entry.outputFields.length} out` : 'no output',
+                entry.hasOutputSchema ? 'neutral' : 'warning',
+                true,
+              )}
+            </summary>
+            <div class="weft-registry-detail__message-body">
+              <div>
+                <h4 class="weft-registry-detail__message-schema-title">Input</h4>
+                {@render schemaTree(entry.inputSchemaTree, 'No input schema declared.')}
+              </div>
+              <div>
+                <h4 class="weft-registry-detail__message-schema-title">Output</h4>
+                {@render schemaTree(entry.outputSchemaTree, 'No output schema declared.')}
+              </div>
+            </div>
+          </details>
         </li>
       {/each}
     </ul>
@@ -130,6 +142,7 @@
         label={`Copy contract hash ${row.contractHash}`}
       />
     </span>
+    <span class="weft-registry-detail__identity-item">workflow v{row.workflowVersion}</span>
     <span class="weft-registry-detail__identity-item">manifest v{row.manifestVersion}</span>
   </div>
 
@@ -277,17 +290,40 @@
     gap: 8px;
   }
 
+  .weft-registry-detail__message-details {
+    border: 1px solid var(--cinder-border);
+    border-radius: var(--cinder-radius-md);
+    padding: 8px 10px;
+  }
+
   .weft-registry-detail__message-header {
     display: flex;
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
+    cursor: pointer;
   }
 
   .weft-registry-detail__message-name {
     font-family: var(--cinder-font-mono);
     font-size: var(--cinder-text-sm);
     font-weight: 600;
+  }
+
+  .weft-registry-detail__message-body {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 10px 16px;
+    margin-top: 10px;
+  }
+
+  .weft-registry-detail__message-schema-title {
+    margin: 0 0 4px;
+    font-size: var(--cinder-text-2xs);
+    font-weight: 600;
+    color: var(--cinder-text-subtle);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
   }
 
   .weft-registry-detail__panel {

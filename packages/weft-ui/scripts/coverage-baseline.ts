@@ -234,11 +234,19 @@ const DARWIN_BASELINE: CoverageBaseline = {
     //     test already exercises that branch) — another compiled-output
     //     attribution artifact, not new dead code from this PR's 1-line
     //     query-key-unification edit to that file.
+    // Re-measured again within the same WFT-115 PR after addressing review
+    // feedback (workflowVersion added to RegistryWorkflowRow/the identity
+    // block, expandable per-message schema trees in the contract panels, a
+    // rejected-not-silently-null malformed active-pointer response, and
+    // re-stamp-worded confirm-dialog copy) — the new tests these fixes
+    // required raised the floor again, from 5850/5821/1224/1201 to this
+    // tuple. See the DARWIN_BASELINE entry above for the original
+    // investigation this floor builds on.
     'src/routes/system': {
-      linesFound: 5850,
-      linesHit: 5821,
-      functionsFound: 1224,
-      functionsHit: 1201,
+      linesFound: 5904,
+      linesHit: 5875,
+      functionsFound: 1236,
+      functionsHit: 1213,
     },
     'src/routes/workers': {
       linesFound: 5685,
