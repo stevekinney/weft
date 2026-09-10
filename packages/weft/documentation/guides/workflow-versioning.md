@@ -865,6 +865,20 @@ Five fields are wired to real signals now:
   API keeps serving "the latest dead letter for this workflow id" exactly
   as before.
 
+  The reference count ALSO scans the single-slot namespace as a fallback,
+  for a dead letter written by a process from before the history namespace
+  existed—such a record lives ONLY under the single-slot key, with no
+  history sibling at all, and once its `WorkflowState` is purged it is the
+  sole surviving evidence the revision was ever referenced. A single-slot
+  record whose computed history key (its own `workflowExecutionToken`, or
+  the fixed legacy fallback segment when it has none) already exists is
+  skipped as already counted by the history scan above; a record with no
+  `workflowExecutionToken` is pinned conservatively—counted toward every
+  queried revision of the matching type—since the legacy fallback
+  segment's own documented id-reuse collision means a single "does a
+  history sibling exist" check cannot be trusted for it the way it can for
+  a token-bearing record.
+
 The remaining two fields—`pendingDispatches` and `activeExecutionRealms`—
 stay structurally present but always `0`. Each awaits revision identity
 threaded through a different, later-owned subsystem—the dispatch ledger and
@@ -943,6 +957,19 @@ proceeding (for a long-lived engine that observes a peer crash mid-lifetime,
 after its own boot sweep already ran). See
 `core/catalog/removal.ts` and `core/engine/catalog-tombstone-recovery.ts`
 for the full mechanism.
+
+The boot-time sweep isolates each tombstone's own resolution: a
+tombstone whose manifest bytes fail to decode is left untouched (neither
+restored nor finalized, since neither can be trusted), and a tombstone
+whose fresh reference count cannot be computed—an unrelated undecodable
+record elsewhere in the store—is restored rather than finalized, the same
+conservative default used for a nonzero reference count. Either case
+reports a bounded diagnostic (`CleanupWarningEvent`) and the sweep
+continues to the next tombstone, rather than one bad record blocking
+`ensureWorkflowCatalogReady()`—and therefore every `start`/`resume`/
+`fork`/recovery call—until an operator repairs it. A malformed tombstone
+KEY (not a decode failure) still fails the whole sweep closed, since that
+can only mean storage corruption or a foreign write into the namespace.
 
 `getWorkflowRevisionDiagnostics(engine, name, revision)` projects the same
 accounting into a read-only shape—`installed`, `active`, `activeRevision`,

@@ -31,8 +31,10 @@
  */
 
 import { KEYS, type Storage } from '../../storage/interface.ts';
+import { decodeStorageKeyComponent } from '../../storage/key-encoding.ts';
 import { decode } from '../codec.ts';
 import { isRecord } from '../debug-output.ts';
+import { LEGACY_DEAD_LETTER_HISTORY_TOKEN } from './termination/finalizer-claim.ts';
 
 /**
  * Scan `storage` for `TeardownDeadLetterRecord`s whose `type` and
@@ -63,6 +65,29 @@ import { isRecord } from '../debug-output.ts';
  * unguarded (its `if (!state) continue` skip is a SEPARATE, narrower check —
  * successfully decoded bytes that fail schema validation, not an undecodable
  * blob).
+ *
+ * Also scans {@link KEYS.teardownDeadLetterPrefix}, the legacy single-slot
+ * namespace (Codex review, item 7): `deadLetterTeardown()` writes the
+ * single-slot key and its history sibling TOGETHER on every current write,
+ * but a record written by a pre-upgrade process (before the history sibling
+ * existed at all) survives ONLY under the single-slot key. Once that run's
+ * `WorkflowState` is purged, such a record is the sole remaining evidence
+ * the revision was ever referenced — without this second scan, reference
+ * accounting would silently read zero and let `removeWorkflowRevision()`
+ * remove a revision this exact dead letter still pins, defeating this
+ * module's own permanent-pin contract. A single-slot record whose computed
+ * history key already exists is skipped here — it is a current-format write
+ * already counted by the history scan above, so counting it again here
+ * would double-count it. A record with NO `workflowExecutionToken` is
+ * pinned conservatively: `deadLetterTeardown()`'s own fixed
+ * {@link LEGACY_DEAD_LETTER_HISTORY_TOKEN} fallback segment means a second
+ * token-less generation for the same workflow id can silently overwrite an
+ * earlier one at that same sentinel slot (see that constant's own doc), so
+ * the single "does a history sibling exist" check is not reliable evidence
+ * for a token-less record the way it is for a token-bearing one — such a
+ * record counts toward EVERY queried revision of the matching type, rather
+ * than risking an under-count from a revision comparison this scan cannot
+ * fully trust.
  */
 export async function countTeardownDeadLettersForRevision(
   storage: Storage,
@@ -76,5 +101,47 @@ export async function countTeardownDeadLettersForRevision(
     if (decoded['type'] !== type || decoded['revision'] !== revision) continue;
     count += 1;
   }
+
+  for await (const [key, bytes] of storage.scan(KEYS.teardownDeadLetterPrefix())) {
+    if (await countLegacySingleSlotDeadLetter(storage, key, bytes, type, revision)) {
+      count += 1;
+    }
+  }
+
   return count;
+}
+
+/**
+ * Decide whether one legacy single-slot `wf-teardown-deadletter:` record
+ * (see {@link countTeardownDeadLettersForRevision}'s own doc for the "why")
+ * counts toward `(type, revision)`. Extracted to keep the caller's
+ * complexity bounded.
+ */
+async function countLegacySingleSlotDeadLetter(
+  storage: Storage,
+  key: string,
+  bytes: Uint8Array,
+  type: string,
+  revision: string,
+): Promise<boolean> {
+  const decoded = decode(bytes);
+  if (!isRecord(decoded) || decoded['type'] !== type) return false;
+
+  const workflowId = decodeStorageKeyComponent(key.slice(KEYS.teardownDeadLetterPrefix().length));
+  const token =
+    typeof decoded['workflowExecutionToken'] === 'string'
+      ? decoded['workflowExecutionToken']
+      : undefined;
+  const historyKey = KEYS.teardownDeadLetterHistory(
+    workflowId,
+    token ?? LEGACY_DEAD_LETTER_HISTORY_TOKEN,
+  );
+  const alreadyCountedViaHistory = (await storage.get(historyKey)) !== null;
+  if (alreadyCountedViaHistory) return false;
+
+  // Conservative pin: cannot reliably correlate a token-less record to a
+  // specific revision (see the doc above), so it counts for every query.
+  if (token === undefined) return true;
+
+  return decoded['revision'] === revision;
 }

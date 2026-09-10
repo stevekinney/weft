@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { decode, encode } from '../codec.ts';
 import { Engine } from '../engine.ts';
 import { activity, workflow, type ActivityContext, type WorkflowContext } from '../types.ts';
@@ -581,6 +582,103 @@ describe('timeline and replay', () => {
     const replay = await engine.replayTo(handle.id, 1);
     expect(replay).not.toBeNull();
     expect(replay?.revision).toBeUndefined();
+  });
+
+  it('seeds `workflowExecutionToken` onto a recovered pre-upgrade checkpoint, so a post-recovery checkpoint converges and `replayTo().revision` attribution works again (WFT-21, Codex review, item 4)', async () => {
+    const storage = new MemoryStorage();
+    const recoveryWorkflow = workflow({ name: 'replay-recovery-token-seed' }).execute(
+      async function* (ctx: WorkflowContext) {
+        yield* ctx.run(async () => 'step-one');
+        yield* ctx.waitForSignal<string>('first');
+        yield* ctx.run(async () => 'step-after-recovery');
+        yield* ctx.waitForSignal<string>('second');
+        return 'done';
+      },
+    );
+
+    engine = new Engine({ storage, checkpointHistory: 10 });
+    engine.register(recoveryWorkflow);
+    const handle = await engine.start('replay-recovery-token-seed', null, {
+      id: 'wf-replay-recovery-token-seed',
+    });
+    // `ctx.run()` commits step 1, and parking on `waitForSignal` commits a
+    // further step (step 2) recording the pending wait — poll for that
+    // settled park point before mangling storage below.
+    const checkpointKey = KEYS.checkpoint(handle.id);
+    await waitForCondition(
+      async () => {
+        const bytes = await storage.get(checkpointKey);
+        if (bytes === null) return false;
+        return (decode(bytes) as Record<string, unknown>)['step'] === 2;
+      },
+      { label: 'the step-2 checkpoint (parked on the first waitForSignal)' },
+    );
+
+    const state = decode((await storage.get(KEYS.workflow(handle.id)))!) as Record<string, unknown>;
+    expect(state['workflowExecutionToken']).toBeDefined();
+
+    // Simulate a pre-upgrade run: `WorkflowState` already carries a token
+    // (added at `start()`), but its persisted checkpoint chain predates the
+    // field's introduction entirely — strip it from the live checkpoint and
+    // every history entry written so far, mirroring
+    // `deserializeCheckpoint()`'s own tolerance for its absence.
+    const liveCheckpoint = {
+      ...(decode((await storage.get(checkpointKey))!) as Record<string, unknown>),
+    };
+    delete liveCheckpoint['workflowExecutionToken'];
+    await storage.put(checkpointKey, encode(liveCheckpoint));
+
+    for (const step of [1, 2]) {
+      const historyKey = KEYS.checkpointHistory(handle.id, step);
+      const historyBytes = await storage.get(historyKey);
+      if (historyBytes === null) continue;
+      const historyEntry = { ...(decode(historyBytes) as Record<string, unknown>) };
+      delete historyEntry['workflowExecutionToken'];
+      await storage.put(historyKey, encode(historyEntry));
+    }
+
+    engine[Symbol.dispose]();
+
+    // Recover in a fresh engine instance sharing the same storage — the
+    // real-world "process restart after upgrade" scenario `prepareResumeState()`
+    // must handle.
+    engine = new Engine({ storage, checkpointHistory: 10 });
+    engine.register(recoveryWorkflow);
+    const recoveredHandle = await engine.resume(handle.id);
+    await recoveredHandle.signal('first', 'go');
+    await waitForCondition(
+      async () => {
+        const bytes = await storage.get(checkpointKey);
+        if (bytes === null) return false;
+        const replay = (decode(bytes) as Record<string, unknown>)['__weftCheckpointReplay'] as
+          { accumulatedResults?: Array<[number, unknown]> } | undefined;
+        return (replay?.accumulatedResults ?? []).some(
+          ([, value]) => value === 'step-after-recovery',
+        );
+      },
+      {
+        label:
+          'the checkpoint parked on the second waitForSignal, after the post-recovery ctx.run step',
+      },
+    );
+
+    // The checkpoint produced AFTER recovery must now carry the token,
+    // seeded from `WorkflowState` by `prepareResumeState()` — before this
+    // fix it stayed permanently missing for a run recovered this way, and
+    // `replayTo()` could never attribute a `revision` to any of its
+    // post-recovery history again.
+    const postRecoveryCheckpoint = decode((await storage.get(checkpointKey))!) as Record<
+      string,
+      unknown
+    >;
+    expect(postRecoveryCheckpoint['workflowExecutionToken']).toBe(state['workflowExecutionToken']);
+
+    const replay = await engine.replayTo(handle.id, postRecoveryCheckpoint['step'] as number);
+    expect(replay).not.toBeNull();
+    expect(replay?.revision).toBe(state['revision'] as string);
+
+    await recoveredHandle.signal('second', 'go');
+    await recoveredHandle.result();
   });
 
   it('ignores malformed stored timeline entries and returns results sorted by step', async () => {

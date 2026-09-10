@@ -144,8 +144,15 @@ export interface TeardownDeadLetterRecord {
  * losing the earlier legacy record's reference — a bounded edge case
  * affecting only runs that predate `WorkflowState.workflowExecutionToken`,
  * mirroring this file's own `revision === undefined` legacy fallback.
+ *
+ * Exported (not module-private) so
+ * {@link import('../retained-recovery-record-count.ts').countTeardownDeadLettersForRevision}
+ * can compute the exact history key a token-less single-slot
+ * `KEYS.teardownDeadLetter` record would have produced, to detect whether a
+ * legacy single-slot record already has a history sibling (WFT-21, Codex
+ * review, item 7).
  */
-const LEGACY_DEAD_LETTER_HISTORY_TOKEN = 'legacy';
+export const LEGACY_DEAD_LETTER_HISTORY_TOKEN = 'legacy';
 
 /** Build the operations that arm a fresh `wf-teardown:` timer at `fireAt` (same token). */
 export function teardownTimerOperations(

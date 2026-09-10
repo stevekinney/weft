@@ -74,27 +74,19 @@ function splitCatalogTombstoneKey(key: string): { name: string; revision: string
  * original caller finishing normally) is a harmless no-op — never an
  * error, never double-processed.
  *
- * **Known limitation, documented rather than fixed (self-audit following
- * Codex review round 10):** all three counts below propagate an
- * undecodable durable record as a thrown error rather than a value — none
- * of `decodeWorkflowState()`, `decodeScheduleState()`, or (since round 10)
- * `countTeardownDeadLettersForRevision()`'s own `decode()` call is guarded.
- * For {@link resolveCatalogTombstoneIfPresent}'s targeted, operator-invoked
- * call this is exactly the desired fail-closed behavior. For the BOOT-TIME
- * sweep (`resolveOrphanedCatalogTombstones()`, called from
- * `ensureWorkflowCatalogReady()` with no surrounding try/catch), the same
- * propagation means one undecodable record anywhere in the relevant scan —
- * not necessarily related to the orphan actually being resolved — blocks
- * `internals.catalogRestored` from ever becoming `true`, so every future
- * `start`/`resume`/`fork`/recovery call retries and re-hits the identical
- * failure. This is a pre-existing property of the boot sweep (present for
- * `WorkflowState`/schedule decode failures since WFT-12/17/20); round 10
- * only removed dead letters' status as the one scan that disagreed with it
- * by silently under-counting instead. Whether the boot sweep should isolate
- * a per-tombstone reference-count failure (skip, log, continue) rather than
- * block ALL catalog readiness is a genuine design question, left open — see
- * the CHANGELOG entry alongside the round-10 dead-letter fix for the full
- * writeup.
+ * All three counts below propagate an undecodable durable record as a
+ * thrown error rather than a value — none of `decodeWorkflowState()`,
+ * `decodeScheduleState()`, or `countTeardownDeadLettersForRevision()`'s own
+ * `decode()` call is guarded. For {@link resolveCatalogTombstoneIfPresent}'s
+ * targeted, operator-invoked call this is exactly the desired fail-closed
+ * behavior — it throws, the caller (`removeWorkflowRevision()`) surfaces
+ * the error, and the operator resolves the undecodable record before
+ * retrying. For the BOOT-TIME sweep, `resolveOrphanedCatalogTombstones()`
+ * itself catches a rejection from this function per-tombstone rather than
+ * letting one undecodable record anywhere in the relevant scan — not
+ * necessarily related to the orphan actually being resolved — block the
+ * WHOLE sweep; see that function's own doc for the isolation and its
+ * conservative-restore default.
  */
 async function resolveCatalogTombstone(
   storage: Storage,
@@ -126,8 +118,56 @@ async function resolveCatalogTombstone(
  * (`catalog-readiness.ts`), before recovery's own preflight or any fresh
  * start can observe a revision this sweep would otherwise still be
  * resolving.
+ *
+ * A malformed tombstone KEY (wrong shape) still fails the whole sweep
+ * closed outright — that can only mean actual storage corruption or a
+ * foreign write into this namespace, never an ordinary decode gap, so
+ * there is no safe per-record default to isolate it behind.
+ *
+ * Everything past the key-shape check IS isolated per tombstone (WFT-21,
+ * Codex review, item 8): before this fix, either `decodeCatalogEntryRecord`
+ * (the tombstone's own manifest bytes are corrupt) or
+ * `resolveCatalogTombstone` (a reference-count scan hit an unrelated
+ * undecodable record ELSEWHERE in the store) rejecting for ANY one
+ * tombstone propagated out of this whole function uncaught. Its only
+ * caller, `ensureWorkflowCatalogReady()`, has no surrounding try/catch, so
+ * that rejection meant `internals.catalogRestored` never became `true` —
+ * blocking `start`/`resume`/`fork`/recovery entirely, on every future call,
+ * from a single undecodable record anywhere in the store, until an
+ * operator repaired it. Each tombstone's resolution is now caught
+ * independently, mirroring this codebase's other "one bad record fails
+ * only its own unit, siblings continue" precedent
+ * (`DynamicWorkflowSourceUnavailableError`'s recovery classification —
+ * `documentation/reference/api-errors.md`):
+ *
+ * - A `decodeCatalogEntryRecord` failure means the tombstone's own bytes
+ *   cannot be trusted as a real entry at all, so this tombstone is left
+ *   completely untouched — neither restored (would risk reinstating
+ *   corrupt bytes as a live catalog entry) nor finalized (would durably
+ *   confirm a removal with no evidence the bytes were ever valid). The
+ *   revision stays deleted-but-unresolved until an operator repairs the
+ *   record.
+ * - A `resolveCatalogTombstone` failure means the tombstone's OWN bytes
+ *   are already known valid (the decode above already succeeded) but its
+ *   fresh reference count could not be computed. The conservative default
+ *   under that uncertainty is the same one `resolveCatalogTombstone`
+ *   itself uses for a nonzero count: restore the entry, keeping the
+ *   revision installed rather than risk finalizing a removal the evidence
+ *   could not actually prove safe.
+ *
+ * Either isolated failure invokes the optional `onIsolatedFailure` callback
+ * with the affected `(name, revision)` and the caught error — a bounded,
+ * low-cardinality diagnostic (at most one call per orphaned tombstone, not
+ * per scanned record) — before continuing to the next tombstone in the
+ * scan. `catalog-readiness.ts` wires this to
+ * `engine.dispatchEvent(new CleanupWarningEvent(...))`, the same
+ * background-failure event class `termination/cleanup.ts` already uses for
+ * this exact "caught, reported, moved on" shape.
  */
-export async function resolveOrphanedCatalogTombstones(storage: Storage): Promise<void> {
+export async function resolveOrphanedCatalogTombstones(
+  storage: Storage,
+  onIsolatedFailure?: (name: string, revision: string, error: unknown) => void,
+): Promise<void> {
   for await (const [key, bytes] of storage.scan(KEYS.catalogTombstonePrefix())) {
     const split = splitCatalogTombstoneKey(key);
     if (split === null) {
@@ -139,13 +179,55 @@ export async function resolveOrphanedCatalogTombstones(storage: Storage): Promis
           'in flight, delete the key.',
       );
     }
+    await resolveOneOrphanedCatalogTombstone(
+      storage,
+      key,
+      split.name,
+      split.revision,
+      bytes,
+      onIsolatedFailure,
+    );
+  }
+}
+
+/**
+ * Resolve a single orphaned tombstone, isolating a decode or reference-count
+ * failure per {@link resolveOrphanedCatalogTombstones}'s own doc. Extracted
+ * to keep that function's loop body simple and its complexity bounded.
+ */
+async function resolveOneOrphanedCatalogTombstone(
+  storage: Storage,
+  key: string,
+  name: string,
+  revision: string,
+  bytes: Uint8Array,
+  onIsolatedFailure: ((name: string, revision: string, error: unknown) => void) | undefined,
+): Promise<void> {
+  try {
     // Validates the tombstone's own bytes decode as a real catalog-entry
     // record — the same fail-closed precedent every other durable catalog
     // read in this codebase follows (`restoreWorkflowCatalog`,
     // `readCatalogEntry`); the decoded manifest itself is not needed here,
     // only the validation that `tombstoneBytes` is a real, restorable entry.
-    await decodeCatalogEntryRecord(key, bytes, split.name, split.revision);
-    await resolveCatalogTombstone(storage, split.name, split.revision, bytes);
+    await decodeCatalogEntryRecord(key, bytes, name, revision);
+  } catch (error) {
+    onIsolatedFailure?.(name, revision, error);
+    return;
+  }
+
+  try {
+    await resolveCatalogTombstone(storage, name, revision, bytes);
+  } catch (error) {
+    // `bytes` is already known-valid (decoded above); a reference-count
+    // scan failing here means an UNRELATED record elsewhere in the store
+    // could not be read. Restore conservatively rather than leave the
+    // tombstone in limbo — this trusted entry can always be re-swept and
+    // finalized later once the unrelated record is repaired.
+    await restoreCatalogEntryFromTombstone(storage, name, revision, bytes).catch(() => {
+      // Lost CAS: a concurrent resolver already handled this tombstone.
+      // Harmless — nothing left to restore.
+    });
+    onIsolatedFailure?.(name, revision, error);
   }
 }
 

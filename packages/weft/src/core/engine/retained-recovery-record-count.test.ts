@@ -146,4 +146,50 @@ describe('countTeardownDeadLettersForRevision', () => {
     expect(await countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')).toBe(0);
     expect(await countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-b')).toBe(1);
   });
+
+  it('counts a pre-upgrade dead letter that exists ONLY under the legacy single-slot namespace, with no history sibling, after its WorkflowState is purged (WFT-21, Codex review, item 7)', async () => {
+    const storage = new MemoryStorage();
+    // Pre-upgrade write: `deadLetterTeardown()` writes both keys together
+    // today, but this record predates that (round 3) change, so only the
+    // single-slot key exists. Its `WorkflowState` has since been purged, so
+    // this record is the ONLY surviving evidence the revision was ever
+    // referenced.
+    await storage.put(
+      KEYS.teardownDeadLetter('wf-preupgrade'),
+      encode(
+        makeDeadLetter({ type: 'checkout', revision: 'rev-a', workflowExecutionToken: 'tok-1' }),
+      ),
+    );
+
+    expect(await countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')).toBe(1);
+  });
+
+  it('does not double-count a current-format single-slot record already covered by the history scan', async () => {
+    const storage = new MemoryStorage();
+    const record = makeDeadLetter({
+      type: 'checkout',
+      revision: 'rev-a',
+      workflowExecutionToken: 'tok-1',
+    });
+    // `deadLetterTeardown()` writes both keys together for every current
+    // write, so a matching history record always accompanies the
+    // single-slot one.
+    await storage.put(KEYS.teardownDeadLetter('wf-current'), encode(record));
+    await storage.put(KEYS.teardownDeadLetterHistory('wf-current', 'tok-1'), encode(record));
+
+    expect(await countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')).toBe(1);
+  });
+
+  it('conservatively pins a legacy single-slot record with no workflowExecutionToken for every queried revision of the matching type, since it cannot be reliably correlated to a history sibling (WFT-21, Codex review, item 7)', async () => {
+    const storage = new MemoryStorage();
+    await storage.put(
+      KEYS.teardownDeadLetter('wf-preupgrade-no-token'),
+      encode(makeDeadLetter({ type: 'checkout', revision: 'rev-a' })),
+    );
+
+    expect(await countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')).toBe(1);
+    expect(await countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-b')).toBe(1);
+    // A different type must still be excluded.
+    expect(await countTeardownDeadLettersForRevision(storage, 'other', 'rev-a')).toBe(0);
+  });
 });
