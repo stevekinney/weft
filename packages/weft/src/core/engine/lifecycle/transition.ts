@@ -419,6 +419,7 @@ export async function fork(
     lineage,
     forkedAt,
     callbacks,
+    resolvedRevision,
   );
 
   let forkStarted = false;

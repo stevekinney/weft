@@ -646,6 +646,104 @@ describe('recoverAll() — per-(type, revision) preload barrier and exact revisi
     expect(await forked.result()).toBe('go:activity-sole');
   });
 
+  it("a fork of a legacy (revision-undefined) source run persists its OWN resolved revision durably, not the source's unpinned legacy revision — so a LATER-registered sibling candidate does not make it unresumable after a restart (WFT-19 review round 6)", async () => {
+    // Codex P1 (round 6), fresh evidence beyond the round-5 identity-cache
+    // finding above: `fork()` resolves the source's sole candidate and
+    // passes that resolved revision to the process-local identity cache
+    // (round 5's fix), but `createForkedWorkflowState()` still stamped the
+    // FORK's own persisted `revision` field with `sourceState.revision` —
+    // the source's raw, still-`undefined` legacy pin — not the resolver's
+    // answer. The fork runs correctly until the process restarts; but if a
+    // SECOND candidate is registered before that restart, `recoverAll()`
+    // on the fresh process reads the fork's durably-unpinned `revision`
+    // straight off storage, sees 2 registered candidates, and classifies
+    // it `legacy-ambiguous` — refusing to resume a fork whose own resolver
+    // knew exactly which revision it belonged to at creation time.
+    const storage = new MemoryStorage();
+    const definition = workflow({ name: 'legacy-sole-candidate-fork-persist' }).execute(
+      async function* (ctx: WorkflowContext) {
+        return yield* ctx.waitForSignal<string>('continue');
+      },
+    );
+    const sibling = workflow({
+      name: 'legacy-sole-candidate-fork-persist',
+      description: 'a later-registered sibling candidate',
+    }).execute(async function* () {
+      return 'unused';
+    });
+    const soleRevision = await revisionFor(definition);
+    const siblingRevision = await revisionFor(sibling);
+
+    await seedRunningWorkflowState(
+      storage,
+      'legacy-fork-persist-source',
+      'legacy-sole-candidate-fork-persist',
+    );
+
+    let forkedId: string;
+    {
+      await using engine = new Engine({ storage });
+      engine.registerSource(
+        workflowSource(
+          {
+            name: 'legacy-sole-candidate-fork-persist',
+            location: './only.ts',
+            exportName: 'only',
+            revision: soleRevision,
+          },
+          async () => ({ only: definition }),
+        ),
+      );
+
+      const forked = await engine.fork('legacy-fork-persist-source');
+      forkedId = forked.id;
+
+      // Direct assertion of the round-6 fix: the fork's own PERSISTED
+      // `revision` (not just its in-memory identity cache) must be the
+      // resolver's resolved value, never `undefined`.
+      const forkedState = await engine.get(forkedId);
+      expect(forkedState?.revision).toBe(soleRevision);
+    }
+
+    // A second candidate registers AFTER the fork was created — exactly
+    // the ordering that exposes the pre-fix bug: `type` now has 2
+    // registered candidates, so a `revision: undefined` record would
+    // recover `legacy-ambiguous`.
+    await using recovered = new Engine({ storage });
+    recovered.registerSource(
+      workflowSource(
+        {
+          name: 'legacy-sole-candidate-fork-persist',
+          location: './only.ts',
+          exportName: 'only',
+          revision: soleRevision,
+        },
+        async () => ({ only: definition }),
+      ),
+    );
+    recovered.registerSource(
+      workflowSource(
+        {
+          name: 'legacy-sole-candidate-fork-persist',
+          location: './sibling.ts',
+          exportName: 'sibling',
+          revision: siblingRevision,
+        },
+        async () => ({ sibling }),
+      ),
+    );
+
+    const handles = await recovered.recoverAll();
+    expect(handles.map((handle) => handle.id)).toEqual([forkedId]);
+
+    const recoveredState = await recovered.get(forkedId);
+    expect(recoveredState?.status).toBe('running');
+    expect(recoveredState?.revision).toBe(soleRevision);
+
+    await handles[0]!.signal('continue', 'go');
+    expect(await handles[0]!.result()).toBe('go');
+  });
+
   it("a run pinned to a revision this process never registered recovers unavailable — including when it is the type's sole registered candidate under a DIFFERENT revision (today's stale-sole-candidate bug) — without blocking a sibling pinned to a registered revision", async () => {
     const storage = new MemoryStorage();
     const definition = workflow({ name: 'partial-avail' }).execute(async function* (

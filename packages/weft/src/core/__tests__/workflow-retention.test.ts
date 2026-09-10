@@ -717,6 +717,112 @@ describe('workflow retention', () => {
     engine[Symbol.dispose]();
   });
 
+  it('a legacy (revision-undefined) terminal run on a type with 2+ registered candidates is NOT purged under whichever sibling this process last resolved (review round 6)', async () => {
+    // Codex P1 (round 6): `getResolvedDynamicRegistration()`'s sync-only
+    // fallback used `lastResolvedRevisionByName` unconditionally whenever
+    // `revision === undefined` — including for a per-INSTANCE caller like
+    // this deadline calculation, where `undefined` means "this specific
+    // run's own pin is unknown (legacy)," not "no instance to pin against
+    // at all" (that's `retention.ts`'s type-level overview, the one caller
+    // meant to get the permissive answer). With two or more candidates
+    // registered, silently substituting whichever one this process
+    // happened to resolve last is exactly as wrong as the round-1/round-2
+    // findings this same file already covers for an unresolved/unregistered
+    // pin — except here the sweep never even reaches the async resolver
+    // that would classify it `legacy-ambiguous`, because the buggy sync
+    // fallback already "succeeded." The fix gates the fallback on
+    // `canResolveRevisionLocally()`: with 2+ candidates it now returns
+    // `undefined`, forcing the async path, which correctly reports
+    // unresolvable — proven here by giving the LAST-RESOLVED sibling a
+    // short retention window and confirming the legacy record survives it.
+    let now = 5_000;
+    const storage = new MemoryStorage();
+    const type = 'legacy-ambiguous-retention';
+    const definitionA = workflow({
+      name: type,
+      description: "A - the type's sole candidate at seed time",
+    }).execute(async function* () {
+      return 'A-done';
+    });
+    const definitionB = workflow({
+      name: type,
+      description: 'B - registered and resolved AFTER the seed, short retention',
+      retention: { completed: '1s' },
+    }).execute(async function* () {
+      return 'B-done';
+    });
+    async function manifestRevisionFor(definition: WorkflowDefinition): Promise<string> {
+      const entry = buildRegistrationEntry(type, definition);
+      const registered = copyWorkflowDefinition(type, entry);
+      const manifest = await buildWorkflowManifestFromDefinition(
+        registered,
+        new ActivityRegistry().listDefinitions(),
+      );
+      return manifest.revision;
+    }
+    const revisionA = await manifestRevisionFor(definitionA);
+    const revisionB = await manifestRevisionFor(definitionB);
+    const workflowId = 'legacy-ambiguous-retention-run';
+
+    const engine = new Engine({
+      storage,
+      getNow: () => now,
+      retention: { completed: '100s' }, // engine default: also must NOT apply — this pin stays unresolvable
+      retentionSweepInterval: '10ms',
+    });
+    engine.registerSource(
+      workflowSource(
+        { name: type, location: './a.ts', exportName: 'a', revision: revisionA },
+        async () => ({ a: definitionA }),
+      ),
+    );
+
+    // Start and complete a REAL run under the sole candidate (A) — indexes
+    // the terminal record properly. Then overwrite the persisted `revision`
+    // to simulate a genuinely legacy (pre-revision-pinning) record: the
+    // field is absent entirely, not merely a stale value.
+    const handle = await engine.start(type, null, { id: workflowId });
+    await handle.result();
+    const persisted = decode((await storage.get(KEYS.workflow(workflowId)))!) as Record<
+      string,
+      unknown
+    >;
+    delete persisted['revision'];
+    await storage.put(KEYS.workflow(workflowId), encode(persisted));
+
+    // NOW register B and actually resolve it LOCALLY by starting and
+    // completing a real (unrelated) run under it — `type` has 2 registered
+    // candidates from this point on, and `internals.sources.resolved`/
+    // `lastResolvedRevisionByName` now genuinely hold B, the exact value
+    // the pre-fix sync fallback would have substituted for the legacy
+    // record's unknown pin. (Merely calling `resolveWorkflowSource()` +
+    // activating B, without starting a run under it, never populates
+    // `internals.sources.resolved` — only an actual local load does, so a
+    // real start is required to reproduce the bug this test guards.)
+    engine.registerSource(
+      workflowSource(
+        { name: type, location: './b.ts', exportName: 'b', revision: revisionB },
+        async () => ({ b: definitionB }),
+      ),
+    );
+    await engine.resolveWorkflowSource(type, revisionB);
+    await activateDynamicSourceRevision(engine, type, revisionB);
+    const handleB = await engine.start(type, null, { id: 'legacy-ambiguous-retention-b' });
+    await handleB.result();
+
+    now += 1_500; // past B's 1s window (the pre-fix bug's purge trigger) and the 100s engine default is irrelevant either way
+    // Proving the sweep does NOT purge this workflow across several real
+    // sweep intervals; there is no observable "purge did not happen" event
+    // to await, so a fixed real-time window is the only way to give the
+    // (would-be regression) short-sibling-policy purge a fair chance to
+    // have already run.
+    // fixed delay: negative assertion
+    await waitForRealTimersForTesting(80);
+    expect(await engine.get(workflowId)).not.toBeNull();
+
+    engine[Symbol.dispose]();
+  });
+
   it('Acceptance criteria: retention deletes workflow state, checkpoints, checkpoint history, events, search attribute indexes, offloaded data, archived data, and stream chunks in one batch() call per workflow', async () => {
     const storage = new RecordingMemoryStorage();
     const engine = new Engine({

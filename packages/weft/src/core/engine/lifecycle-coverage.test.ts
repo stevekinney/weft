@@ -971,6 +971,7 @@ describe('engine lifecycle coverage helpers', () => {
       lineage,
       70_000,
       createLifecycleCallbacks() as never,
+      undefined,
     );
     const forkCheckpoint = {
       ...sourceCheckpoint,
