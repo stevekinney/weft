@@ -170,16 +170,23 @@ export async function startDelayedWorkflow(
     return;
   }
 
-  const registration = await resolveDelayedStartRegistrationOrFail(
+  const resolvedRegistration = await resolveDelayedStartRegistrationOrFail(
     internals,
     entry,
     state.type,
     state.revision,
     callbacks,
   );
-  if (registration === null) {
+  if (resolvedRegistration === null) {
     return;
   }
+  // The resolver's OWN resolved revision, not `state.revision` re-read
+  // independently: for a legacy, pre-revision-pinning pending record with
+  // exactly one registered candidate, `state.revision` stays `undefined`
+  // even though the resolver unambiguously resolved that candidate. Using
+  // `state.revision` here would silently mis-stamp the identity cache
+  // (WFT-19 review round 7) — mirrors `resume.ts`'s `resolvedRevision`.
+  const { entry: registration, revision: resolvedRevision } = resolvedRegistration;
 
   const now = internals.options.getNow();
   const executionDeadline = await resolveDelayedExecutionDeadline(internals, entry, now, callbacks);
@@ -193,11 +200,30 @@ export async function startDelayedWorkflow(
         return null;
       }
 
+      // `latestState.revision ?? resolvedRevision` — NEVER the other order.
+      // `resolveExecutableRegistrationForRevision()` always returns
+      // `revision: undefined` for an eager registration (eager has no
+      // ambiguity to resolve against), even when `latestState.revision` is a
+      // real, independently-meaningful pin (stamped at ordinary start time
+      // for every registration kind). Blindly preferring `resolvedRevision`
+      // would silently WIPE that pin on every eager-type delayed-start fire.
+      // `resolvedRevision` only fills the gap for the one case it actually
+      // applies to: a legacy, pre-revision-pinning pending record on a
+      // `registerSource()`-registered type with exactly one registered
+      // candidate, where `latestState.revision` is itself `undefined` even
+      // though the resolver unambiguously resolved that sole candidate.
+      // Mirrors `createForkedWorkflowState()`'s identical fix (WFT-19 review
+      // round 6) for the same resolver contract, one launch path over.
+      const effectiveRevision = latestState.revision ?? resolvedRevision;
       const nextRunningState: WorkflowState = {
         ...latestState,
         status: 'running',
         startedAt: now,
         updatedAt: now,
+        // Conditional spread, not a plain property: `revision` is optional
+        // and `exactOptionalPropertyTypes` forbids assigning an explicit
+        // `undefined` to it.
+        ...(effectiveRevision !== undefined && { revision: effectiveRevision }),
         ...(executionDeadline !== undefined && { executionDeadline }),
       };
 
@@ -298,6 +324,12 @@ export async function startDelayedWorkflow(
     entry.workflowId,
     runningState.workflowExecutionToken,
     runningState.type,
+    // `runningState.revision` — the EFFECTIVE revision computed above
+    // (`latestState.revision ?? resolvedRevision`) and persisted onto this
+    // exact state, never the raw `resolvedRevision` alone: that would
+    // silently wipe an eager type's real pin (see the stamp's doc). The
+    // per-instance identity cache this populates (`start-exec.ts`) must
+    // agree with what storage now holds (WFT-19 review round 7).
     runningState.revision,
     runningState.input,
     checkpoint,

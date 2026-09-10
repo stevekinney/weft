@@ -1373,6 +1373,65 @@ describe('engine lifecycle coverage helpers', () => {
     ).rejects.toThrow(`Workflow "${workflowId}" not found in storage`);
   });
 
+  it('resumeWorkflowFromStorage rejects a start-new replacement landing mid-resume instead of replaying its stale checkpoint (WFT-19 review round 7)', async () => {
+    // Reproduces the exact race `chatgpt-codex-connector`/`stevekinney` flagged
+    // on `workflow-claim-reclaim-target.ts`: `onReclaimed` (bound to this same
+    // `resumeWorkflowFromStorage`) reads state/registration/checkpoint against
+    // one generation, then a `start-new` replacement lands at the SAME
+    // workflowId before the serialized section's fresh read — new
+    // `workflowExecutionToken`, here also a new `type`. Before the
+    // `expectedGeneration` check existed, `performSerializedResume` only
+    // re-validated `status`, so this replacement's fresh 'running' state would
+    // have silently passed and the stale handler/checkpoint would have been
+    // driven against it.
+    const storage = new MemoryStorage();
+    const workflowId = 'workflow-resume-replaced-mid-flight';
+    const startWorkflowStrategy = mock(() => {});
+
+    await storage.put(
+      KEYS.workflow(workflowId),
+      encode(createWorkflowState(workflowId, { workflowExecutionToken: 'token-original' })),
+    );
+    await storage.put(
+      KEYS.checkpoint(workflowId),
+      serializeCheckpoint(createCheckpoint(workflowId)),
+    );
+
+    await expect(
+      resumeWorkflowFromStorage(
+        createResumeWorkflowFromStorageInternals({
+          storage,
+          strategy: { startWorkflow: startWorkflowStrategy },
+        }),
+        workflowId,
+        true,
+        createLifecycleCallbacks(
+          {
+            getHandle: () => ({ id: workflowId }),
+            runSerializedWorkflowStateWrite: async <Result>(
+              _workflowId: string,
+              writeOperation: () => Promise<Result>,
+            ) => {
+              // The replacement: same id, fresh token — as every `start()`
+              // mints (`start-state.ts`'s `buildInitialIdentitySlice`).
+              await storage.put(
+                KEYS.workflow(workflowId),
+                encode(
+                  createWorkflowState(workflowId, { workflowExecutionToken: 'token-replacement' }),
+                ),
+              );
+              return writeOperation();
+            },
+          },
+          RESUME_TEST_REGISTRATIONS,
+        ) as never,
+      ),
+    ).rejects.toThrow('changed generation');
+
+    // The stale handler must never have been driven against the replacement.
+    expect(startWorkflowStrategy).not.toHaveBeenCalled();
+  });
+
   it('resumeWorkflowFromStorage replays worker-mode workflows through the execution strategy', async () => {
     const storage = new MemoryStorage();
     const workflowId = 'workflow-resume-worker-mode';

@@ -615,6 +615,71 @@ describe('activity dispatch does not clobber across revisions (WFT-19)', () => {
   });
 });
 
+describe('query routing does not clobber across revisions (WFT-19 review round 7)', () => {
+  it("a query against a run pinned to revision A returns A's ctx.onQuery answer even after sibling revision B resolves later in the same process", async () => {
+    // `queries.ts`'s dispatch reads `InlineExecutionStrategy`'s `#contexts`
+    // (a `Map<workflowId, Context>`), so a `Context`'s installed
+    // `queryHandlers` are only ever as correct as the handler this
+    // instance's launch-time `getRegistration` callback resolved — the exact
+    // callback the WFT-19 identity-cache fix (`index.ts`'s
+    // `workflowTypeByWorkflowId`) made revision-aware. Non-blocking finding
+    // from review round 7 (no bug found, but no direct regression test
+    // existed for this specific routing surface either): pin a run to
+    // revision A's `onQuery` answer, THEN resolve and start a sibling run on
+    // revision B, and confirm A's query still answers with A's handler.
+    const storage = new MemoryStorage();
+    const definitionA = workflow({ name: 'query-clobber', description: 'candidate A' }).execute(
+      async function* (ctx: WorkflowContext) {
+        ctx.onQuery('whoami', () => 'query-A');
+        yield* ctx.waitForSignal<string>('go');
+        return 'done-A';
+      },
+    );
+    const definitionB = workflow({ name: 'query-clobber', description: 'candidate B' }).execute(
+      async function* (ctx: WorkflowContext) {
+        ctx.onQuery('whoami', () => 'query-B');
+        return 'done-B';
+      },
+    );
+    const revisionA = await revisionFor(definitionA);
+    const revisionB = await revisionFor(definitionB);
+
+    await using engine = new Engine({ storage, backgroundTasks: 'manual' });
+    engine.registerSource(
+      workflowSource(
+        { name: 'query-clobber', location: './a.ts', exportName: 'a', revision: revisionA },
+        async () => ({ a: definitionA }),
+      ),
+    );
+    engine.registerSource(
+      workflowSource(
+        { name: 'query-clobber', location: './b.ts', exportName: 'b', revision: revisionB },
+        async () => ({ b: definitionB }),
+      ),
+    );
+
+    // Activate and start run A pinned to revision A; it parks on the signal
+    // wait, its `onQuery('whoami', ...)` handler already installed.
+    await engine.resolveWorkflowSource('query-clobber', revisionA);
+    await activateDynamicSourceRevision(engine, 'query-clobber', revisionA);
+    const runA = await engine.start('query-clobber', null, { id: 'query-clobber-a' });
+
+    // Resolve and run B on a sibling revision AFTER A is already parked —
+    // this is what a pre-fix shared type-keyed lookup would have clobbered.
+    await engine.resolveWorkflowSource('query-clobber', revisionB);
+    await activateDynamicSourceRevision(engine, 'query-clobber', revisionB);
+    const runB = await engine.start('query-clobber', null, { id: 'query-clobber-b' });
+    expect(await runB.result()).toBe('done-B');
+
+    // A's query still answers with A's own handler, not B's.
+    expect(await engine.query(runA.id, 'whoami')).toBe('query-A');
+    await runA.signal('go', 'x');
+    expect(await runA.result()).toBe('done-A');
+
+    engine[Symbol.dispose]();
+  });
+});
+
 describe("engine.fork() populates the forked run's own identity before its first dispatch (WFT-19 review round 2)", () => {
   it("a checkpoint-launched fork resolves its own pinned revision's per-workflow activity, not a sibling revision's, on its first live turn", async () => {
     // Regression for a gap the batch's own launch-path audit missed the first

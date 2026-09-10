@@ -23,6 +23,7 @@ import {
   reprovideRecoveredServices,
   workflowServicesResolverInfoFromState,
 } from './recovered-services.ts';
+import { assertSameGeneration, deriveResumeGeneration } from './resume-generation-guard.ts';
 import {
   enforceHistoryPolicyBeforeReplay,
   loadTerminalCleanupTrackedState,
@@ -44,14 +45,13 @@ type SerializedResumeArgs = {
   workflowStartHeaders: Map<string, string> | undefined;
   registration: RegistrationEntry;
   /**
-   * The EXACT revision `registration` resolved against (same resolver call
-   * that produced it), NOT `state.revision` re-read independently (WFT-19
-   * review round 5, Codex). A legacy record with exactly one registered
+   * The EXACT revision `registration` resolved against, NOT `state.revision`
+   * re-read independently (WFT-19 round 5): a legacy record with one registered
    * candidate has `state.revision === undefined` even though the resolver
-   * resolved that candidate — caching `state.revision` here would silently
-   * disable the exact-`(type, revision)`-keyed activity lookup for the run.
+   * resolved it — caching `state.revision` here would disable exact-revision lookup.
    */
   resolvedRevision: string | undefined;
+  expectedGeneration: ReturnType<typeof deriveResumeGeneration>;
   callbacks: LifecycleCallbacks;
 };
 
@@ -304,6 +304,7 @@ async function performSerializedResume(
     );
   }
 
+  assertSameGeneration(workflowId, latestState, args.expectedGeneration);
   // A suspended workflow must be flipped back to 'running' durably as part of
   // this serialized section, before the generator is relaunched. If we
   // relaunched but left the persisted status 'suspended', a crash right after
@@ -481,6 +482,7 @@ export async function resumeWorkflowFromStorage(
       workflowStartHeaders,
       registration,
       resolvedRevision,
+      expectedGeneration: deriveResumeGeneration(state),
       callbacks,
     }),
   );

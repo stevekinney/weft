@@ -381,6 +381,126 @@ describe('engine time operation helpers', () => {
     expect(resolveCalls).toEqual([{ type: state.type, revision: 'sha256:pinned-revision' }]);
   });
 
+  it("threads the resolver's own resolved revision into launch for a legacy pending record the resolver resolves unambiguously (WFT-19 review round 7)", async () => {
+    // `state.revision` is `undefined` — a legacy, pre-revision-pinning pending
+    // record on a `registerSource()`-registered type — but the resolver can
+    // still unambiguously resolve the sole registered candidate and reports
+    // that candidate's revision back. The fire path must carry THAT resolved
+    // revision into `beginWorkflowExecution` and the persisted running state,
+    // never the still-`undefined` `state.revision`/`runningState.revision`
+    // (the bug this test guards against: the per-instance identity cache
+    // silently stamped with a missing revision).
+    const storage = new MemoryStorage();
+    const workflowId = 'workflow-delayed-legacy-resolved';
+    const state = createWorkflowState(workflowId, { executionStateOwnerId: 'owner-workflow' });
+    const checkpoint = createCheckpoint(workflowId);
+    const registration = { handler: async function* () {}, version: '1' };
+    const beginWorkflowExecution = mock(() => {});
+    const resolvedRevision = 'sha256:sole-candidate-revision';
+
+    await storage.put(KEYS.workflow(workflowId), encode(state));
+    await storage.put(KEYS.checkpoint(workflowId), serializeCheckpoint(checkpoint));
+
+    await startDelayedWorkflow(
+      {
+        checkpoints: new Map<string, Checkpoint>(),
+        inlineStrategy: {},
+        workflowServices: new Map<string, unknown>(),
+        options: { getNow: () => 2_000 },
+        registrations: new Map(),
+        storage,
+        workflowVersionTuples: new Map(),
+      } as never,
+      createDelayedStartEntry(workflowId),
+      createCallbacks({
+        beginWorkflowExecution,
+        loadWorkflowState: async () => state,
+        resolveExecutableRegistrationForRevision: async (_type: string, revision) => {
+          // Input `revision` is `undefined` (legacy record); the resolver
+          // still unambiguously resolves the sole registered candidate and
+          // reports its revision — mirroring `resolveExecutableRegistrationForRevision`'s
+          // documented `legacy, unambiguous` fast path.
+          expect(revision).toBeUndefined();
+          return { entry: registration, revision: resolvedRevision };
+        },
+      }),
+    );
+
+    expect(beginWorkflowExecution).toHaveBeenCalledWith(
+      workflowId,
+      state.workflowExecutionToken,
+      state.type,
+      resolvedRevision,
+      state.input,
+      checkpoint,
+      undefined,
+      'owner-workflow',
+      registration,
+    );
+
+    const persisted = decode((await storage.get(KEYS.workflow(workflowId)))!) as WorkflowState;
+    expect(persisted.revision).toBe(resolvedRevision);
+  });
+
+  it("never overwrites an already-pinned revision with the resolver's `undefined` (an eager registration always resolves with `revision: undefined`)", async () => {
+    // `resolveExecutableRegistrationForRevision()` always returns
+    // `revision: undefined` for an eager registration, even when the
+    // pending state's own `revision` is a real, independently-meaningful
+    // pin. The fire path must keep that existing pin — never overwrite it
+    // with the resolver's `undefined` — mirroring `createForkedWorkflowState()`'s
+    // `sourceState.revision ?? resolvedRevision` fix (WFT-19 review round 6)
+    // for the same resolver contract.
+    const storage = new MemoryStorage();
+    const workflowId = 'workflow-delayed-eager-pin-preserved';
+    const state = createWorkflowState(workflowId, {
+      executionStateOwnerId: 'owner-workflow',
+      revision: 'sha256:already-pinned',
+    });
+    const checkpoint = createCheckpoint(workflowId);
+    const registration = { handler: async function* () {}, version: '1' };
+    const beginWorkflowExecution = mock(() => {});
+
+    await storage.put(KEYS.workflow(workflowId), encode(state));
+    await storage.put(KEYS.checkpoint(workflowId), serializeCheckpoint(checkpoint));
+
+    await startDelayedWorkflow(
+      {
+        checkpoints: new Map<string, Checkpoint>(),
+        inlineStrategy: {},
+        workflowServices: new Map<string, unknown>(),
+        options: { getNow: () => 2_000 },
+        registrations: new Map([[state.type, registration]]),
+        storage,
+        workflowVersionTuples: new Map(),
+      } as never,
+      createDelayedStartEntry(workflowId),
+      createCallbacks({
+        beginWorkflowExecution,
+        loadWorkflowState: async () => state,
+        // Eager-registration resolver behavior: always `revision: undefined`.
+        resolveExecutableRegistrationForRevision: async () => ({
+          entry: registration,
+          revision: undefined,
+        }),
+      }),
+    );
+
+    expect(beginWorkflowExecution).toHaveBeenCalledWith(
+      workflowId,
+      state.workflowExecutionToken,
+      state.type,
+      'sha256:already-pinned',
+      state.input,
+      checkpoint,
+      undefined,
+      'owner-workflow',
+      registration,
+    );
+
+    const persisted = decode((await storage.get(KEYS.workflow(workflowId)))!) as WorkflowState;
+    expect(persisted.revision).toBe('sha256:already-pinned');
+  });
+
   it('fails a recovered delayed-start run whose services the resolver reports unavailable', async () => {
     const fixture = await createDelayedStartServicesFixture('workflow-delayed-no-services');
     // This run WAS launched with services, so its durable "expects services"
