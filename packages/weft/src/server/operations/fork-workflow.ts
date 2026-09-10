@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import type { Engine } from '../../core/engine.ts';
 import type { ForkOptions } from '../../core/types.ts';
+import { VersionMismatchError } from '../../core/versioning.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
@@ -72,15 +73,39 @@ function validateForkInput(input: ForkWorkflowInput): ForkOptions | undefined {
  *      first so its message text never accidentally matches a substring
  *      branch below (e.g. its own "not registered" text could otherwise
  *      match the generic 'not found' branch).
- *   2. 'fromStep' / 'Checkpoint not found at step' → InvalidParams (400)
- *   3. 'Checkpoint not found'                       → NotFound, resource: 'checkpoint'
- *   4. 'not found'                                  → NotFound, resource: 'workflow'
- *   5. otherwise                                    → EngineFailure
+ *   2. `VersionMismatchError`                       → Conflict (409), typed check
+ *      (Codex review round 11, P2 — see below)
+ *   3. 'fromStep' / 'Checkpoint not found at step' → InvalidParams (400)
+ *   4. 'Checkpoint not found'                       → NotFound, resource: 'checkpoint'
+ *   5. 'not found'                                  → NotFound, resource: 'workflow'
+ *   6. otherwise                                    → EngineFailure
  */
 export function resolveForkAccess(error: unknown): never {
   const revisionFault = mapRevisionUnavailableToFault(error);
   if (revisionFault !== undefined) {
     throw revisionFault;
+  }
+
+  // WFT-21, Codex review round 11, P2: an explicit-revision fork onto a
+  // registered revision whose WORKFLOW VERSION is semver-incompatible with
+  // the source checkpoint is a deterministic, caller-selected outcome —
+  // `derivePreparedExecutionState()` throws `VersionMismatchError` for
+  // exactly this case (see `ForkOptions.revision`'s own doc: "a semver-
+  // incompatible target version still throws VersionMismatchError... an
+  // explicit revision never bypasses ordinary compatibility checking").
+  // Before this typed check, that error fell through every branch below —
+  // its message never mentions "not found" or "fromStep" — landing on the
+  // generic `EngineFailure`, masking a documented Conflict as a REST 500 /
+  // undeclared JSON-RPC engine failure. Checked before the substring
+  // branches for the same reason the revision check above is: its own
+  // message text must never accidentally match one of them.
+  if (error instanceof VersionMismatchError) {
+    const fault: OperationFault = {
+      code: 'Conflict',
+      message: error.message,
+      data: { reason: error.message, weftCode: error.code },
+    };
+    throw fault;
   }
 
   const message = error instanceof Error ? error.message : String(error);
