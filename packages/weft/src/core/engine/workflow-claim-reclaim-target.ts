@@ -257,14 +257,16 @@ export function createWorkflowClaimReclaimTarget(
    * A claim just landed (fresh takeover or acquire CAS) while this target was
    * already disposing. Never drive it — `onReclaimed` may resume against
    * torn-down host internals — and never leave it held past this call, since
-   * this engine's renewal is being stopped and the claim would otherwise sit
-   * stranded until TTL/grace expiry. Best-effort, matching
-   * `WorkflowClaimRegistry.releaseAll()`'s own posture: a process crash
-   * between the CAS landing and this release still leaves the claim for
-   * `expire`/`takeover` to reclaim later, same as any other ungraceful exit.
+   * this engine's renewal is stopping and the claim would otherwise sit
+   * stranded until TTL/grace expiry. Best-effort, matching `releaseAll()`'s
+   * own posture: a crash between the CAS landing and this release still
+   * leaves the claim for `expire`/`takeover` to reclaim later.
    */
-  async function releaseClaimAcquiredWhileDisposing(workflowId: string): Promise<void> {
-    await registry.release(workflowId);
+  async function releaseClaimAcquiredWhileDisposing(
+    workflowId: string,
+    acquiredEpoch: number,
+  ): Promise<void> {
+    await registry.release(workflowId, acquiredEpoch);
   }
 
   /**
@@ -301,7 +303,7 @@ export function createWorkflowClaimReclaimTarget(
       return true;
     }
     if (registry.currentEpoch(workflowId) === acquiredEpoch) {
-      await registry.release(workflowId);
+      await registry.release(workflowId, acquiredEpoch);
     }
     return false;
   }
@@ -326,7 +328,7 @@ export function createWorkflowClaimReclaimTarget(
       // now-moot claim instead of renewing it indefinitely.
       pendingRedriveWorkflowIds.delete(workflowId);
       if (registry.currentEpoch(workflowId) === expectedEpoch) {
-        await registry.release(workflowId);
+        await registry.release(workflowId, expectedEpoch);
       }
       // Else: a replacement run (`start-new`) was minted on this same
       // workflow id while the terminal-state read above was pending.
@@ -367,7 +369,7 @@ export function createWorkflowClaimReclaimTarget(
     }
     metrics.recordClaimAttempt('acquired');
     if (disposing) {
-      await releaseClaimAcquiredWhileDisposing(workflowId);
+      await releaseClaimAcquiredWhileDisposing(workflowId, acquireResult.epoch);
       return { status: 'not-eligible' };
     }
     if (!(await confirmStillRunningOrReleaseFreshClaim(workflowId, acquireResult.epoch))) {
@@ -387,7 +389,7 @@ export function createWorkflowClaimReclaimTarget(
   ): Promise<WorkflowClaimReclaimAttemptResult> {
     metrics.recordClaimAttempt('takeover');
     if (disposing) {
-      await releaseClaimAcquiredWhileDisposing(workflowId);
+      await releaseClaimAcquiredWhileDisposing(workflowId, acquiredEpoch);
       return { status: 'not-eligible' };
     }
     // An expired holder can remain beside an already-terminal workflow state

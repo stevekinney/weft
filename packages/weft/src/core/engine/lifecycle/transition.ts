@@ -1,19 +1,14 @@
 import { serializeCheckpoint } from '../../checkpoint.ts';
-import { RegExpExtensionDecodeError } from '../../codec/extension-codec.ts';
 import { EMPTY_EVENT_HEAD } from '../../event-log.ts';
 import { WorkflowRecoverySkippedEvent } from '../../events.ts';
 import type { ForkOptions, WorkflowState } from '../../types.ts';
-import { VersionMismatchError } from '../../versioning.ts';
 import { releaseInFlightStart, reserveInFlightStart } from '../catalog-removal.ts';
 import { forgetCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
-import { DynamicWorkflowSourceUnavailableError } from '../dynamic-source-errors.ts';
 import { resolveExecutableRegistrationOrRenamedNotFound } from '../dynamic-source-execution.ts';
 import { WorkflowTypeNotRegisteredForRecoveryError } from '../errors.ts';
 import { commitFencedEngineWrite } from '../fenced-write.ts';
 import type { WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
-import { WorkflowClaimUnavailableError } from '../lease-errors.ts';
-import { WorkflowRevisionUnavailableError } from '../revision-errors.ts';
 import { normalizeForkStep, selectPersistedWorkflowStartHeaders } from '../state-utilities.ts';
 import { loadWorkflowState } from '../storage-io.ts';
 import { decodeWorkflowState } from '../validation.ts';
@@ -35,12 +30,13 @@ import {
   assertForkSourceNotReplacedBeforeCommit,
 } from './fork-source-replacement-guards.ts';
 import { derivePreparedExecutionState } from './persist.ts';
+import { isolateRecoveryFailure } from './recovery-isolation.ts';
 import {
   buildRecoveryRevisionGroups,
   classifyRevisionGroups,
   createRecoveryScopedRevisionCallbacks,
 } from './recovery-revision-groups.ts';
-import { resumeWorkflowFromStorage } from './resume.ts';
+import { resumeWorkflowFromStorage, type FreshResumeClaimTracker } from './resume.ts';
 import {
   enforceHistoryPolicyBeforeReplayById,
   loadWorkflowStartHeaders,
@@ -48,6 +44,7 @@ import {
   type LifecycleCallbacks,
   type RecoverAllOptions,
 } from './shared.ts';
+import { releaseFreshlyAcquiredResumeClaim } from './standalone-claim-acquire.ts';
 
 type MissingRecoveryWorkflow = { type: string; workflowId: string };
 
@@ -151,13 +148,21 @@ async function preflightRecoverAll(
  *   workflow this engine can legitimately own, never abort the sweep or
  *   surface the error to the caller. This is the one caller-side difference
  *   from `engine.resume(id)`, which reaches the SAME `resume()` below
- *   un-isolated and lets the error propagate, per the ADR's explicit
- *   "explicit, single-workflow public API... throws" vs "background
- *   scanning... never thrown" asymmetry.
+ *   un-isolated and lets the error propagate, per the ADR's "explicit API...
+ *   throws" vs "background scanning... never thrown" asymmetry.
  *
  * Returns `null` when the failure was isolated (nothing to push onto the
  * caller's handle list); rethrows anything else, including an opted-in
  * `VersionMismatchError` throw.
+ *
+ * `resume()` below runs with `deferClaimReleaseOnRejection: true`: several
+ * branches (`failWorkflowForXxx`) commit a `'self'`-fenced write that needs a
+ * freshly-acquired claim still installed (WFT-134 review round 2, issue D —
+ * releasing before this function's own handling ran left no local epoch, so
+ * `commitFencedEngineWrite` threw `EngineDeposedError`, aborting recovery
+ * instead of terminalizing just this run). The `finally` below releases the
+ * tracked epoch AFTER every branch has had its chance, mirroring the release
+ * an explicit `engine.resume()` gets immediately.
  */
 async function recoverEntryOrIsolateFailure(
   internals: EngineInternals,
@@ -165,44 +170,20 @@ async function recoverEntryOrIsolateFailure(
   callbacks: LifecycleCallbacks,
   options: RecoverAllOptions | undefined,
 ): Promise<WorkflowHandle | null> {
+  const freshClaimTracker: FreshResumeClaimTracker = { epoch: null };
   try {
-    return await resume(internals, workflowId, callbacks, options?.onRecoveredWorkflow);
+    return await resume(internals, workflowId, callbacks, options?.onRecoveredWorkflow, {
+      deferClaimReleaseOnRejection: true,
+      freshClaimTracker,
+    });
   } catch (error) {
-    if (error instanceof RegExpExtensionDecodeError) {
-      await callbacks.failWorkflowForCheckpointDecodeError(workflowId, error);
-      return null;
+    try {
+      return await isolateRecoveryFailure(workflowId, callbacks, options, error);
+    } finally {
+      if (freshClaimTracker.epoch !== null) {
+        await releaseFreshlyAcquiredResumeClaim(internals, workflowId, freshClaimTracker.epoch);
+      }
     }
-    if (error instanceof VersionMismatchError && options?.versionMismatchPolicy !== 'throw') {
-      await callbacks.failWorkflowForVersionMismatch(workflowId, error);
-      return null;
-    }
-    if (error instanceof WorkflowClaimUnavailableError) {
-      return null;
-    }
-    if (error instanceof WorkflowRevisionUnavailableError) {
-      // `recoverAll()`'s preload barrier classified this entry's
-      // `(type, revision)` group `unavailable` before the loop started;
-      // `resume()` reached this exact cached error via the batch-local,
-      // closure-scoped `resolveExecutableRegistrationForRevision()` wrapper
-      // `createRecoveryScopedRevisionCallbacks()` builds below, AFTER
-      // acquiring this workflow's claim and loading its terminal-cleanup
-      // tracking — the same ordering `VersionMismatchError` gets — so
-      // `failWorkflowForRevisionUnavailable` below commits cleanly under
-      // `ownership: 'workflow-lease'` instead of racing an unfenced write.
-      await callbacks.failWorkflowForRevisionUnavailable(workflowId, error);
-      return null;
-    }
-    if (error instanceof DynamicWorkflowSourceUnavailableError) {
-      // A legacy (revision-undefined) run on a dynamic source with a single
-      // registered candidate falls through to the ordinary active-pointer
-      // resolve inside `resolveExecutableRegistrationForRevision()`, which
-      // can still fail with THIS error (a load failure, or an
-      // ambiguous-revision race against a concurrent removal) rather than
-      // `WorkflowRevisionUnavailableError` — isolate it the same way.
-      await callbacks.failWorkflowForUnavailableDynamicSource(workflowId, error);
-      return null;
-    }
-    throw error;
   }
 }
 
@@ -303,6 +284,14 @@ export type ResumeOptions = {
    * `engine.resume()` leaves it `false` — nothing was deposed there.
    */
   readonly forceReplayFromStorage?: boolean;
+  /**
+   * Forwarded to `resumeWorkflowFromStorage()`'s matching options — see
+   * `ResumeFromStorageOptions` (WFT-134 issue D). Set by
+   * `recoverEntryOrIsolateFailure` only; unset for the local-ownership fast
+   * path above, which never reaches that function.
+   */
+  readonly deferClaimReleaseOnRejection?: boolean;
+  readonly freshClaimTracker?: FreshResumeClaimTracker;
 };
 
 export async function resume(
@@ -331,7 +320,14 @@ export async function resume(
     }
   }
 
-  return resumeWorkflowFromStorage(internals, workflowId, true, callbacks, onRecoveredWorkflow);
+  return resumeWorkflowFromStorage(internals, workflowId, true, callbacks, onRecoveredWorkflow, {
+    ...(options?.deferClaimReleaseOnRejection !== undefined && {
+      deferClaimReleaseOnRejection: options.deferClaimReleaseOnRejection,
+    }),
+    ...(options?.freshClaimTracker !== undefined && {
+      freshClaimTracker: options.freshClaimTracker,
+    }),
+  });
 }
 
 export async function fork(
