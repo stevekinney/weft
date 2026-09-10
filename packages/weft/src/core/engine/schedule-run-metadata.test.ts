@@ -32,6 +32,19 @@ describe('schedule-run metadata', () => {
     });
   });
 
+  // Regression (WFT-95 review): a schedule-run link persisted before the
+  // "."/".." admission rejection landed must still decode on upgrade,
+  // whether recorded as the legacy bare-string form or the current object
+  // form — the admission-only check must not leak into decoding.
+  it('decodes schedule-run metadata whose persisted id is exactly "." or ".." (WFT-95 upgrade regression)', () => {
+    expect(decodeScheduleRunMetadata(encode('.'))).toEqual({ id: '.' });
+    expect(decodeScheduleRunMetadata(encode('..'))).toEqual({ id: '..' });
+    expect(decodeScheduleRunMetadata(encodeScheduleRunMetadata('.', 1_767_225_600_000))).toEqual({
+      id: '.',
+      occurrence: 1_767_225_600_000,
+    });
+  });
+
   it('rejects malformed persisted metadata', () => {
     for (const malformed of [
       42,

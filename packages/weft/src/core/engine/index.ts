@@ -1971,7 +1971,17 @@ export class Engine<
     filter: ListFilter,
     options?: BulkOperationDryRunOptions | BulkOperationCommitOptions,
   ): Promise<BulkRetryFailedResult | BulkOperationDryRunResult> {
-    return retryFailedAllWorkflows(getInternals(this), filter, options);
+    // `LifecycleCallbacks` threaded through so `retryFailedWorkflow()`'s
+    // checkpoint-absent fallback can replay a legacy `.`/`..` id via the
+    // internal `startWorkflow()` entry point (WFT-95 issue 2 follow-up) —
+    // see `runBulkFailedWorkflowRetry`'s doc comment (`bulk-operations-retry.ts`)
+    // for why this is constructed here rather than imported by that module.
+    return retryFailedAllWorkflows(
+      getInternals(this),
+      filter,
+      options,
+      this.#createLifecycleCallbacks(),
+    );
   }
   async signalAll(
     filter: ListFilter,

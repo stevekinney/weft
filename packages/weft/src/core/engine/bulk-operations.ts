@@ -38,6 +38,7 @@ import {
 import { BulkDeleteRequiresTerminalWorkflowsError } from './errors.ts';
 import { assertLeaseHeldForEngineWork } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
+import type { LifecycleCallbacks } from './lifecycle.ts';
 import { BULK_OPERATION_BATCH_SIZE } from './listing.ts';
 import { loadWorkflowState } from './storage-io.ts';
 import { isTerminalWorkflowStatus } from './validation.ts';
@@ -163,19 +164,23 @@ export async function retryFailedAll(
   internals: EngineInternals,
   filter: ListFilter,
   options?: BulkOperationCommitOptions,
+  callbacks?: LifecycleCallbacks,
 ): Promise<BulkRetryFailedResult>;
 export async function retryFailedAll(
   internals: EngineInternals,
   filter: ListFilter,
   options?: BulkOperationDryRunOptions | BulkOperationCommitOptions,
+  callbacks?: LifecycleCallbacks,
 ): Promise<BulkRetryFailedResult | BulkOperationDryRunResult>;
 export async function retryFailedAll(
   internals: EngineInternals,
   filter: ListFilter,
   options: BulkOperationOptions = {},
+  // See `runBulkFailedWorkflowRetry`'s doc comment (`bulk-operations-retry.ts`, WFT-95 issue 2) for why this is a parameter rather than constructed here.
+  callbacks?: LifecycleCallbacks,
 ): Promise<BulkRetryFailedResult | BulkOperationDryRunResult> {
   assertLeaseHeldForEngineWork(internals);
-  return runBulkFailedWorkflowRetry(internals, filter, options);
+  return runBulkFailedWorkflowRetry(internals, filter, options, callbacks);
 }
 
 export async function signalAll(

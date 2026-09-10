@@ -1863,6 +1863,62 @@ describe('recurring schedules', () => {
     engine[Symbol.dispose]();
   });
 
+  it('drains a queued run whose persisted workflowId is "." without rejecting or pausing the schedule (WFT-95 historical queued-run regression)', async () => {
+    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+    const storage = new MemoryStorage();
+    const engine = createEngine(clock, storage);
+    const warnings: CleanupWarningEvent[] = [];
+    engine.addEventListener(CleanupWarningEvent.type, (event) => warnings.push(event));
+
+    registerWorkflow(engine, 'historical-queued-dot-id', async function* (ctx: WorkflowContext) {
+      yield* ctx.waitForSignal('release');
+      return 'released';
+    });
+
+    const schedule = await engine.schedule('historical-queued-dot-id', null, '* * * * *', {
+      overlap: 'queue',
+    });
+    const firstDescription = await schedule.describe();
+    await tickEngine(engine, clock, requireNextFireAt(firstDescription));
+    const [firstWorkflowId] = await listRunningWorkflowIds(engine);
+    expect(firstWorkflowId).toBeDefined();
+
+    const secondDescription = await schedule.describe();
+    await tickEngine(engine, clock, requireNextFireAt(secondDescription));
+
+    const queuedDescription = await schedule.describe();
+    expect(queuedDescription.queuedRuns).toHaveLength(1);
+
+    // Simulate a queued run persisted before WFT-95, when "." was a legal
+    // workflow id: hand-rewrite the queued entry's workflowId in storage —
+    // bypassing normal admission, which would reject a fresh "." id — to
+    // stand in for a pre-upgrade record.
+    const storedBytes = await storage.get(KEYS.schedule(schedule.id));
+    const storedState = decode(storedBytes!) as ScheduleState;
+    expect(storedState.queuedRuns).toHaveLength(1);
+    const historicalQueuedState: ScheduleState = {
+      ...storedState,
+      queuedRuns: [{ ...storedState.queuedRuns[0]!, workflowId: '.' }],
+    };
+    await storage.put(KEYS.schedule(schedule.id), encode(historicalQueuedState));
+
+    await engine.signal(firstWorkflowId!, 'release');
+    await drainEngine();
+
+    // The drained queued run started successfully under its historical "." id
+    // instead of being rejected by strict fresh-admission — the schedule does
+    // not pause and no cleanup warning is raised.
+    expect(warnings).toHaveLength(0);
+    const drainedDescription = await schedule.describe();
+    expect(drainedDescription.currentWorkflowId).toBe('.');
+    expect(drainedDescription.queuedRuns).toEqual([]);
+    expect(await engine.get('.')).toMatchObject({ status: 'running' });
+
+    await engine.signal('.', 'release');
+    await drainEngine();
+    engine[Symbol.dispose]();
+  });
+
   it('retries a failed queue drain with the same reserved workflow id on the next occurrence', async () => {
     const { engine, firstWorkflowId, queuedWorkflowId, schedule, storage, clock } =
       await createQueuedScheduleStartFailureFixture();

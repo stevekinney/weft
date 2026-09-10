@@ -1385,6 +1385,64 @@ describe('handleRequest', () => {
     });
   });
 
+  it('POST /v1/workflows rejects a custom id of exactly "." at admission (WFT-95)', async () => {
+    engine = createEngine();
+
+    const response = await handleRequest(
+      request('POST', '/v1/workflows', {
+        type: 'echo',
+        input: 'data',
+        id: '.',
+      }),
+      engine,
+    );
+
+    // Rejected as a validation error at admission, not a silent 404 from the
+    // route matcher — WHATWG URL path normalization would otherwise collapse
+    // a literal "." id out of any later single-trailing-segment lookup route
+    // (e.g. GET /v1/workflows/:id), making the workflow permanently
+    // unaddressable once started.
+    expect(response.status).toBe(400);
+    expect(await json(response)).toMatchObject({
+      error: 'Field "id" must not be "." or ".."',
+    });
+  });
+
+  it('POST /v1/workflows rejects a custom id of exactly ".." at admission (WFT-95)', async () => {
+    engine = createEngine();
+
+    const response = await handleRequest(
+      request('POST', '/v1/workflows', {
+        type: 'echo',
+        input: 'data',
+        id: '..',
+      }),
+      engine,
+    );
+
+    expect(response.status).toBe(400);
+    expect(await json(response)).toMatchObject({
+      error: 'Field "id" must not be "." or ".."',
+    });
+  });
+
+  it('POST /v1/workflows accepts a custom id that merely contains a dot character (WFT-95)', async () => {
+    engine = createEngine();
+
+    const response = await handleRequest(
+      request('POST', '/v1/workflows', {
+        type: 'echo',
+        input: 'data',
+        id: 'my.workflow.v2',
+      }),
+      engine,
+    );
+
+    expect(response.status).toBe(201);
+    const body = (await json(response)) as { id: string };
+    expect(body.id).toBe('my.workflow.v2');
+  });
+
   it('POST /v1/workflows with startAt keeps the workflow pending until it is due', async () => {
     engine = createEngine();
     const startAt = Date.now() + 60_000;

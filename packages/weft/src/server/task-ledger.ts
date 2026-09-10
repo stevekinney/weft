@@ -24,6 +24,7 @@ export {
   isRemoteTaskTerminalCancelled,
   isRemoteTaskTerminalResolved,
   isRemoteTaskTerminalRetryExhausted,
+  isValidOperationId,
   isValidTaskHeaders,
   isValidWorkflowRevision,
 } from './task-ledger-codec.ts';

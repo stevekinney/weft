@@ -10,6 +10,7 @@ import {
   normalizeBulkFilterNumber,
 } from './validation.ts';
 import {
+  coerceScheduleId,
   decodeScheduleIdentityFields,
   decodeScheduleRuntimeFields,
   isValidScheduleIdentifier,
@@ -172,6 +173,52 @@ describe('engine validation helpers', () => {
     );
   });
 
+  // Regression (WFT-95 review): `isValidScheduleIdentifier` decodes
+  // already-persisted data, not fresh admission. A schedule created before
+  // the "." / ".." rejection landed may already carry one of those ids
+  // durably, and must remain decodable — and keep firing — after upgrade.
+  // Only fresh schedule *creation* admission (`normalizeScheduleOptions`'s
+  // direct `coerceStartWorkflowId(options.id, …)` call) rejects those ids;
+  // see `src/core/start-workflow-validation.test.ts` for that admission-side
+  // coverage. `coerceScheduleId` looks up/controls an *existing* schedule
+  // (get/pause/resume/cancel/update) and must accept these ids too — see
+  // `coerceScheduleId` regression coverage below.
+  it('accepts persisted schedule identifiers of exactly "." or ".." (WFT-95 decode exemption)', () => {
+    expect(isValidScheduleIdentifier('.')).toBe(true);
+    expect(isValidScheduleIdentifier('..')).toBe(true);
+  });
+
+  // Regression (WFT-95 review, second round): `coerceScheduleId` is the
+  // lookup/control coercion `getSchedule`/`pauseSchedule`/`resumeSchedule`/
+  // `cancelSchedule`/`updateSchedule` all call for a caller-supplied
+  // `scheduleId` naming an *existing* schedule — never schedule creation.
+  // It must accept "."/".." so a schedule persisted before that rejection
+  // landed stays manageable (inspectable, pausable, resumable, cancelable,
+  // updatable) after upgrade, instead of only being reachable by editing
+  // storage directly. Still rejects the ordinary malformed cases.
+  it('accepts "." and ".." for schedule lookup/control, but still rejects malformed ids (WFT-95 review regression)', () => {
+    expect(coerceScheduleId('.', 'scheduleId')).toBe('.');
+    expect(coerceScheduleId('..', 'scheduleId')).toBe('..');
+    expect(() => coerceScheduleId('', 'scheduleId')).toThrow('must not be an empty string');
+    expect(() => coerceScheduleId('x'.repeat(129), 'scheduleId')).toThrow(
+      'must be at most 128 characters',
+    );
+  });
+
+  // Regression (WFT-95 review, third round): a direct, untyped same-process
+  // caller (e.g. `engine.getSchedule(null)`) must get a clear validation
+  // error, not a raw TypeError from the decode-compatible predicate
+  // assuming a string, and an array-like object carrying a `length` must
+  // not silently pass.
+  it('rejects a non-string scheduleId with a clear error (WFT-95 review regression)', () => {
+    expect(() => coerceScheduleId(null, 'scheduleId')).toThrow('scheduleId must be a string');
+    expect(() => coerceScheduleId(undefined, 'scheduleId')).toThrow('scheduleId must be a string');
+    expect(() => coerceScheduleId(42, 'scheduleId')).toThrow('scheduleId must be a string');
+    expect(() => coerceScheduleId({ length: 3 }, 'scheduleId')).toThrow(
+      'scheduleId must be a string',
+    );
+  });
+
   it('normalizes schedule options', () => {
     expect(normalizeScheduleOptions(undefined)).toEqual({ overlap: 'skip', backfill: false });
     expect(() => normalizeScheduleOptions(null as never)).toThrow(
@@ -191,6 +238,12 @@ describe('engine validation helpers', () => {
     );
     expect(() => normalizeScheduleOptions({ jitter: 0 })).toThrow(
       'options.jitter must resolve to a positive number of milliseconds',
+    );
+    // Confirms the creation/admission boundary: unlike `coerceScheduleId`
+    // (lookup/control of an existing schedule, tested above), fresh schedule
+    // creation still rejects "." and ".." (WFT-95).
+    expect(() => normalizeScheduleOptions({ id: '.' })).toThrow(
+      'options.id must not be "." or ".."',
     );
     expect(
       normalizeScheduleOptions({
@@ -303,6 +356,40 @@ describe('engine validation helpers', () => {
       }),
     );
     expect(invalidRestartId.restartedFrom).toBeUndefined();
+  });
+
+  // Regression (WFT-95 review, second round): `executionStateOwnerId`,
+  // `parentWorkflowId`, and `restartedFrom.workflowId` are sanitized on
+  // decode by dropping the field if it fails validation. Before this fix
+  // they ran through the admission-only "."/".." rejection, so a workflow
+  // persisted before that rejection landed with one of these fields equal
+  // to "." or ".." would have it silently dropped on decode — for
+  // `parentWorkflowId` that also drops `parentWorkflowExecutionToken`,
+  // severing the parent link entirely. These decode-adjacent sanitizers
+  // must preserve "."/".." like every other decode path does.
+  it('preserves lineage and execution-owner fields of exactly "." or ".." (WFT-95 review regression)', () => {
+    const decoded = decodeWorkflowState(
+      encode(
+        createWorkflowState({
+          executionStateOwnerId: '.',
+          parentWorkflowId: '..',
+          parentWorkflowExecutionToken: 'parent-token',
+          restartedFrom: {
+            workflowId: '.',
+            workflowExecutionToken: 'previous-token',
+            replacedAt: 2,
+          },
+        }),
+      ),
+    );
+    expect(decoded.executionStateOwnerId).toBe('.');
+    expect(decoded.parentWorkflowId).toBe('..');
+    expect(decoded.parentWorkflowExecutionToken).toBe('parent-token');
+    expect(decoded.restartedFrom).toEqual({
+      workflowId: '.',
+      workflowExecutionToken: 'previous-token',
+      replacedAt: 2,
+    });
   });
 
   it('round-trips a persisted revision on decode', () => {
@@ -491,6 +578,26 @@ describe('engine validation helpers', () => {
     } finally {
       console.warn = originalWarn;
     }
+  });
+
+  // Regression (WFT-95 review): a schedule persisted before the "."/".."
+  // admission rejection landed must still decode on upgrade — and keep
+  // firing — rather than becoming permanently unreadable.
+  it('decodes a persisted schedule record whose id is exactly "." or ".." (WFT-95 upgrade regression)', () => {
+    expect(decodeScheduleIdentityFields(createScheduleRecord({ id: '.' }))).toEqual({
+      id: '.',
+      workflowType: 'demo-workflow',
+      cronExpression: '0 * * * *',
+      status: 'active',
+      overlap: 'skip',
+    });
+    expect(decodeScheduleIdentityFields(createScheduleRecord({ id: '..' }))).toEqual({
+      id: '..',
+      workflowType: 'demo-workflow',
+      cronExpression: '0 * * * *',
+      status: 'active',
+      overlap: 'skip',
+    });
   });
 
   it('decodes schedule runtime fields and rejects malformed records', () => {

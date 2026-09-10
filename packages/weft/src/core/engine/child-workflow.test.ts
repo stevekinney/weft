@@ -3,9 +3,12 @@ import { describe, expect, it, mock } from 'bun:test';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { encode } from '../codec.ts';
 import type { ChildWorkflowInterception } from '../interceptor/interception-contexts.ts';
+import { StartWorkflowValidationError } from '../start-workflow-validation.ts';
 import { workflow, type WorkflowContext, type WorkflowState } from '../types.ts';
 import type { ChildWorkflowOptions } from '../types/workflow-function.ts';
+import { createChildWorkflowOperationCallbacks } from './callback-creators-bundles.ts';
 import { executeChildWorkflow } from './child-workflow.ts';
 import { WorkflowAlreadyExistsError } from './errors.ts';
 import { Engine } from './index.ts';
@@ -280,6 +283,356 @@ describe('engine child workflow helpers', () => {
     expect(internals.pendingNestingDepth).toBeUndefined();
     expect(internals.pendingParentHeaders).toBeUndefined();
     expect(internals.pendingExecutionStateOwnerId).toBeUndefined();
+  });
+
+  it('reattaches to an already-persisted historical "." child on crash-reattach replay (WFT-95)', async () => {
+    const internals = createInternals();
+    seedChildResult(internals, '.', 'historical-child-result');
+    const childHandle = { id: '.', result: mock(async () => 'historical-child-result') };
+    // The exact failure `coerceStartWorkflowId` raises for a fresh `options.id`
+    // of "." or "..": strict admission (WFT-95), which a pre-WFT-95 persisted
+    // child may already carry.
+    const admissionError = new StartWorkflowValidationError('options.id must not be "." or ".."');
+    let startCallCount = 0;
+
+    await expect(
+      executeChildWorkflow(
+        internals as never,
+        'parent',
+        {
+          input: { value: 1 },
+          operationId: 'child:historical-dot',
+          options: { id: '.' },
+          type: 'child-workflow',
+          workflowType: 'child',
+        },
+        0,
+        {
+          getComposedWorkflowInterceptor: () => null,
+          getHandle: () => childHandle as never,
+          loadWorkflowState: async (workflowId) =>
+            workflowId === 'parent' ? createWorkflowState('parent') : createWorkflowState('.'),
+          start: async (_type, _input, _options, skipAdmissionIdCheck) => {
+            startCallCount += 1;
+            if (startCallCount === 1) {
+              // The first attempt is a genuinely strict admission check —
+              // the internal bypass must not be set preemptively.
+              expect(skipAdmissionIdCheck).toBeUndefined();
+              throw admissionError;
+            }
+            // Only the confirmed-reattach retry may bypass strict admission,
+            // and only via the reattach-fenced variant (WFT-95 TOCTOU fix).
+            expect(skipAdmissionIdCheck).toBe('reattach-only');
+            throw new WorkflowAlreadyExistsError('.');
+          },
+        },
+      ),
+    ).resolves.toBe('historical-child-result');
+
+    expect(startCallCount).toBe(2);
+    // Deliberately NOT `expect(childHandle.result).toHaveBeenCalled()` — see
+    // the "reuses an existing matching child workflow" test above for why.
+    expect(childHandle.result).not.toHaveBeenCalled();
+  });
+
+  it('rejects a genuinely fresh child start using the reserved "." id (WFT-95)', async () => {
+    const internals = createInternals();
+    const admissionError = new StartWorkflowValidationError('options.id must not be "." or ".."');
+    const start = mock(async () => {
+      throw admissionError;
+    });
+
+    await expect(
+      executeChildWorkflow(
+        internals as never,
+        'parent',
+        {
+          input: { value: 1 },
+          operationId: 'child:fresh-dot',
+          options: { id: '.' },
+          type: 'child-workflow',
+          workflowType: 'child',
+        },
+        0,
+        {
+          getComposedWorkflowInterceptor: () => null,
+          getHandle: () => ({ result: async () => 'never' }) as never,
+          // No persisted child under "." exists yet — this is a genuinely
+          // fresh admission, not a crash-reattach replay.
+          loadWorkflowState: async (workflowId) =>
+            workflowId === 'parent' ? createWorkflowState('parent') : null,
+          start,
+        },
+      ),
+    ).rejects.toBe(admissionError);
+
+    // Strict admission stands: no retry with the bypass was attempted.
+    expect(start).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects the reserved "." id when a persisted "." workflow exists but does not match this request (WFT-95)', async () => {
+    const internals = createInternals();
+    const admissionError = new StartWorkflowValidationError('options.id must not be "." or ".."');
+    const start = mock(async () => {
+      throw admissionError;
+    });
+
+    await expect(
+      executeChildWorkflow(
+        internals as never,
+        'parent',
+        {
+          input: { value: 1 },
+          operationId: 'child:mismatched-dot',
+          options: { id: '.' },
+          type: 'child-workflow',
+          workflowType: 'child',
+        },
+        0,
+        {
+          getComposedWorkflowInterceptor: () => null,
+          getHandle: () => ({ result: async () => 'never' }) as never,
+          // A "." workflow exists, but for a different type/input — it is not
+          // this parent's child, so it must not be hijacked as a reattach
+          // target. The original strict-admission rejection stands.
+          loadWorkflowState: async (workflowId) =>
+            workflowId === 'parent'
+              ? createWorkflowState('parent')
+              : createWorkflowState('.', { type: 'unrelated-workflow' }),
+          start,
+        },
+      ),
+    ).rejects.toBe(admissionError);
+
+    // No retry with the bypass was attempted — the mismatch was caught before
+    // ever calling `start()` again.
+    expect(start).toHaveBeenCalledTimes(1);
+  });
+
+  it('rethrows a non-collision failure from the confirmed-reattach retry (WFT-95)', async () => {
+    const internals = createInternals();
+    const admissionError = new StartWorkflowValidationError('options.id must not be "." or ".."');
+    const retryFailure = new Error('storage unavailable during reattach retry');
+    let startCallCount = 0;
+
+    await expect(
+      executeChildWorkflow(
+        internals as never,
+        'parent',
+        {
+          input: { value: 1 },
+          operationId: 'child:retry-failure',
+          options: { id: '.' },
+          type: 'child-workflow',
+          workflowType: 'child',
+        },
+        0,
+        {
+          getComposedWorkflowInterceptor: () => null,
+          getHandle: () => ({ result: async () => 'never' }) as never,
+          loadWorkflowState: async (workflowId) =>
+            workflowId === 'parent' ? createWorkflowState('parent') : createWorkflowState('.'),
+          start: async () => {
+            startCallCount += 1;
+            if (startCallCount === 1) {
+              throw admissionError;
+            }
+            // The confirmed-reattach retry hits something other than the
+            // expected duplicate-id conflict — that failure must propagate,
+            // not be swallowed as though it were a successful reattach.
+            throw retryFailure;
+          },
+        },
+      ),
+    ).rejects.toBe(retryFailure);
+
+    expect(startCallCount).toBe(2);
+  });
+});
+
+describe('WFT-95: real engine child-workflow crash-reattach replay', () => {
+  it('reattaches to an already-persisted historical "." child through the real startWorkflow/resolveTerminalConflictForRestart path', async () => {
+    const storage = new MemoryStorage();
+    const childWorkflow = workflow({ name: 'wft-95-historical-child' }).execute(async function* () {
+      return 'historical-child-result';
+    });
+    const parentWorkflow = workflow({ name: 'wft-95-historical-parent' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      yield* ctx.waitForSignal('release');
+      return 'parent-done';
+    });
+    const workflows = {
+      'wft-95-historical-parent': parentWorkflow,
+      'wft-95-historical-child': childWorkflow,
+    };
+
+    await using engine = await Engine.create({ storage, workflows });
+    const parentHandle = await engine.start('wft-95-historical-parent', null, {
+      id: 'wft-95-historical-parent-1',
+    });
+    await waitForCondition(
+      async () => {
+        const parentState = await engine.get(parentHandle.id);
+        return parentState?.status === 'running';
+      },
+      { label: 'parent running' },
+    );
+
+    // Seed a completed child persisted under "." — the one id strict
+    // admission (WFT-95) now rejects — standing in for a run created before
+    // that rejection existed. `parentWorkflowId`/`parentWorkflowExecutionToken`
+    // are left undefined to model the historical pre-lineage shape
+    // `existingChildMatchesRequest` still accepts (see its own doc comment).
+    // `executionStateOwnerId` matches the parent's own id: `executeChildWorkflow`
+    // falls back to `workflowId` when the parent's own state carries none.
+    const historicalChildState: WorkflowState = {
+      createdAt: 1,
+      executionStateOwnerId: parentHandle.id,
+      id: '.',
+      input: null,
+      result: 'historical-child-result',
+      startedAt: 1,
+      status: 'completed',
+      type: 'wft-95-historical-child',
+      updatedAt: 1,
+      versionTuple: { workflowVersion: '1' },
+    };
+    await storage.put(KEYS.workflow('.'), encode(historicalChildState));
+
+    // Drive `executeChildWorkflow` directly with the REAL callback bundle
+    // (`createChildWorkflowOperationCallbacks`, the same wiring
+    // `processChildWorkflowOperation` uses in production) instead of the
+    // hand-mocked callbacks the tests above use — this proves the actual
+    // `start.ts`/`start-workflow-validation.ts`/`resolveTerminalConflictForRestart`
+    // chain reattaches through a real `WorkflowAlreadyExistsError`, not just
+    // that the dispatch logic calls its callbacks in the right order.
+    const result = await executeChildWorkflow(
+      getInternals(engine),
+      parentHandle.id,
+      {
+        input: null,
+        operationId: 'child:historical-dot-real',
+        options: { id: '.' },
+        type: 'child-workflow',
+        workflowType: 'wft-95-historical-child',
+      },
+      0,
+      createChildWorkflowOperationCallbacks(engine),
+    );
+
+    // Reattached to the seeded completed child instead of failing recovery —
+    // this is the generator-owned result the parent's `yield* ctx.startChild()`
+    // would receive.
+    expect(result).toBe('historical-child-result');
+    // No duplicate/replacement run was created under "." — the seeded record
+    // is untouched.
+    await expect(engine.get('.')).resolves.toMatchObject({
+      status: 'completed',
+      result: 'historical-child-result',
+    });
+
+    await engine.signal(parentHandle.id, 'release');
+  });
+
+  it('does not create a fresh reserved-id child when the matched historical record is purged between the reattach confirmation and the retry (WFT-95 TOCTOU)', async () => {
+    const storage = new MemoryStorage();
+    const childWorkflow = workflow({ name: 'wft-95-race-child' }).execute(async function* () {
+      return 'historical-child-result';
+    });
+    const parentWorkflow = workflow({ name: 'wft-95-race-parent' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      yield* ctx.waitForSignal('release');
+      return 'parent-done';
+    });
+    const workflows = {
+      'wft-95-race-parent': parentWorkflow,
+      'wft-95-race-child': childWorkflow,
+    };
+
+    await using engine = await Engine.create({ storage, workflows });
+    const parentHandle = await engine.start('wft-95-race-parent', null, {
+      id: 'wft-95-race-parent-1',
+    });
+    await waitForCondition(
+      async () => {
+        const parentState = await engine.get(parentHandle.id);
+        return parentState?.status === 'running';
+      },
+      { label: 'parent running' },
+    );
+
+    // Same historical-record shape as the test above — a completed child persisted
+    // under the reserved id "." from before strict admission existed.
+    const historicalChildState: WorkflowState = {
+      createdAt: 1,
+      executionStateOwnerId: parentHandle.id,
+      id: '.',
+      input: null,
+      result: 'historical-child-result',
+      startedAt: 1,
+      status: 'completed',
+      type: 'wft-95-race-child',
+      updatedAt: 1,
+      versionTuple: { workflowVersion: '1' },
+    };
+    await storage.put(KEYS.workflow('.'), encode(historicalChildState));
+
+    // `reattachHistoricalReservedChildOrRethrow()` reads `KEYS.workflow('.')` once
+    // to confirm the match (read #1: `loadWorkflowState`), then its retry's
+    // own `resolveTerminalConflictForRestart()` reads the SAME key again,
+    // atomically with its duplicate-id decision (read #2). Gate that second
+    // read and, while it is paused, simulate another engine (under
+    // `ownership: 'workflow-lease'`) purging the matched record in the
+    // window between the two reads — the exact race the `'reattach-only'`
+    // fence exists to close.
+    const workflowKey = KEYS.workflow('.');
+    const originalGet = storage.get.bind(storage);
+    let readCount = 0;
+    const secondReadStarted = Promise.withResolvers<void>();
+    const releaseSecondRead = Promise.withResolvers<void>();
+    storage.get = async (key: string): Promise<Uint8Array | null> => {
+      if (key === workflowKey) {
+        readCount += 1;
+        if (readCount === 2) {
+          secondReadStarted.resolve();
+          await releaseSecondRead.promise;
+        }
+      }
+      return await originalGet(key);
+    };
+
+    const executePromise = executeChildWorkflow(
+      getInternals(engine),
+      parentHandle.id,
+      {
+        input: null,
+        operationId: 'child:historical-dot-race',
+        options: { id: '.' },
+        type: 'child-workflow',
+        workflowType: 'wft-95-race-child',
+      },
+      0,
+      createChildWorkflowOperationCallbacks(engine),
+    );
+
+    await secondReadStarted.promise;
+    await storage.delete(workflowKey);
+    releaseSecondRead.resolve();
+
+    // The fence rejects the retry with the same strict-admission error a
+    // genuinely fresh `ctx.startChild({ id: '.' })` would get — a clean
+    // rejection, not a silently created fresh run under the reserved id.
+    await expect(executePromise).rejects.toThrow('options.id must not be "." or ".."');
+
+    // No replacement run was created under "." — the race left it absent,
+    // and it must STAY absent rather than get backfilled by a bypassed create.
+    await expect(engine.get('.')).resolves.toBeNull();
+    // `pendingStarts`/`inFlightRevision` bookkeeping unwound via `finally`.
+    expect(getInternals(engine).pendingStarts.has('.')).toBe(false);
+
+    await engine.signal(parentHandle.id, 'release');
   });
 });
 

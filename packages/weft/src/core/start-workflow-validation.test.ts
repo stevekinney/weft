@@ -4,6 +4,7 @@ import {
   assertExclusiveStartWorkflowOptions,
   assertOnTerminalConflictUnsupported,
   assertValidOnTerminalConflict,
+  coerceReplayWorkflowId,
   coerceStartWorkflowDuration,
   coerceStartWorkflowId,
   coerceStartWorkflowIdempotencyKey,
@@ -54,6 +55,50 @@ describe('start workflow validation', () => {
     expect(error).toEqual(
       new StartWorkflowValidationError('options.id must not be an empty string'),
     );
+  });
+
+  it('rejects the exact strings "." and ".." as workflow ids (WFT-95)', () => {
+    const dotError = captureValidationError(() => coerceStartWorkflowId('.', 'options.id'));
+    expect(dotError).toEqual(
+      new StartWorkflowValidationError('options.id must not be "." or ".."'),
+    );
+
+    const dotDotError = captureValidationError(() => coerceStartWorkflowId('..', 'options.id'));
+    expect(dotDotError).toEqual(
+      new StartWorkflowValidationError('options.id must not be "." or ".."'),
+    );
+  });
+
+  it('allows a workflow id that merely contains a dot character (WFT-95)', () => {
+    expect(coerceStartWorkflowId('my.workflow.v2', 'options.id')).toBe('my.workflow.v2');
+    expect(coerceStartWorkflowId('...', 'options.id')).toBe('...');
+    expect(coerceStartWorkflowId('.hidden', 'options.id')).toBe('.hidden');
+  });
+
+  it('coerceReplayWorkflowId accepts "." and ".." (WFT-95 internal replay path)', () => {
+    // Unlike coerceStartWorkflowId, the replay variant is decode-compatible: it
+    // must keep accepting a legacy pre-WFT-95 id (a drained queued schedule run
+    // or a child-workflow crash-reattach) instead of re-rejecting it.
+    expect(coerceReplayWorkflowId('.', 'options.id')).toBe('.');
+    expect(coerceReplayWorkflowId('..', 'options.id')).toBe('..');
+    expect(coerceReplayWorkflowId('workflow-123', 'options.id')).toBe('workflow-123');
+  });
+
+  it('coerceReplayWorkflowId rejects non-string ids', () => {
+    const error = captureValidationError(() => coerceReplayWorkflowId(42, 'options.id'));
+    expect(error).toEqual(new StartWorkflowValidationError('options.id must be a string'));
+  });
+
+  it('coerceReplayWorkflowId still rejects other decode-invalid ids (empty, too long, control characters)', () => {
+    expect(captureValidationError(() => coerceReplayWorkflowId('', 'options.id'))).toEqual(
+      new StartWorkflowValidationError('options.id must not be an empty string'),
+    );
+    expect(
+      captureValidationError(() => coerceReplayWorkflowId('x'.repeat(129), 'options.id')),
+    ).toEqual(new StartWorkflowValidationError('options.id must be at most 128 characters'));
+    expect(
+      captureValidationError(() => coerceReplayWorkflowId('bad\u0000id', 'options.id')),
+    ).toEqual(new StartWorkflowValidationError('options.id must not contain control characters'));
   });
 
   it('validates idempotency keys as non-empty strings within the byte limit', () => {

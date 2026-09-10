@@ -1,7 +1,7 @@
 import { parseDuration } from './scheduler.ts';
 import type { Duration } from './types.ts';
 import { WeftError } from './weft-error.ts';
-import { assertValidWorkflowId } from './workflow-identifiers.ts';
+import { assertDecodableWorkflowId, assertValidWorkflowId } from './workflow-identifiers.ts';
 
 export const MAX_WORKFLOW_TAGS = 32;
 export const MAX_WORKFLOW_TAG_BYTES = 128;
@@ -38,6 +38,34 @@ export const coerceStartWorkflowId = (value: unknown, fieldName: string): string
 
   try {
     assertValidWorkflowId(value, fieldName);
+    return value;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new StartWorkflowValidationError(message);
+  }
+};
+
+/**
+ * Coerce a caller-supplied `options.id` for an internal REPLAY of a start
+ * that was already accepted once before (WFT-95). Deliberately uses the
+ * decode-compatible {@link assertDecodableWorkflowId}, not the strict
+ * `.`/`..`-rejecting {@link assertValidWorkflowId} that
+ * {@link coerceStartWorkflowId} enforces: this path exists only for the three
+ * internal callers that replay an id which was already durably admitted
+ * before strict admission existed (a drained schedule queued-run, a bulk
+ * failed-workflow retry rebuilding from persisted input, or a child-workflow
+ * crash-reattach) — see `startWorkflow`'s `skipAdmissionIdCheck` parameter.
+ * It must never be reachable from a public start surface (REST, JSON-RPC,
+ * `engine.start`, `ctx.startChild`), because that would let a genuinely
+ * fresh caller admit `.`/`..` again.
+ */
+export const coerceReplayWorkflowId = (value: unknown, fieldName: string): string => {
+  if (typeof value !== 'string') {
+    throw new StartWorkflowValidationError(`${fieldName} must be a string`);
+  }
+
+  try {
+    assertDecodableWorkflowId(value, fieldName);
     return value;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

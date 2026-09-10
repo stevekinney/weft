@@ -64,6 +64,28 @@ export function isValidWorkflowRevision(value: unknown): value is string {
   return isBoundedIdentifier(value);
 }
 
+/**
+ * Whether `value` is a valid caller-facing task `operationId` — a non-empty,
+ * bounded identifier per the ledger's own contract, and not the exact string
+ * `.` or `..` (WFT-95). WHATWG URL path normalization collapses `.`/`..`
+ * path segments (and their percent-encoded forms) before `handleRequest()`
+ * ever sees `url.pathname`, so a REST route with a single trailing
+ * `:operationId` segment (e.g. `weft.tasks.get`'s
+ * `/v1/tasks/detail/:operationId`) can never address a record whose
+ * operationId is literally `.` or `..`. Exported so fresh-dispatch admission
+ * (`task-dispatch.ts`'s `dispatchTaskImpl`) can reject an invalid
+ * caller-supplied `operationId` before it ever reaches a ledger write,
+ * closing that URL-normalization quirk as an enforced admission-time
+ * guarantee instead of an assumption. Deliberately NOT applied when
+ * redispatching an already-decoded, previously persisted ledger record —
+ * see `dispatchTaskImpl`'s `redispatch` option — since such an id was valid
+ * under the pre-WFT-95 decode contract and may already be durably
+ * persisted. Does not reject an id that merely contains a dot character.
+ */
+export function isValidOperationId(value: unknown): value is string {
+  return isBoundedIdentifier(value) && value !== '.' && value !== '..';
+}
+
 function isBoundedOptionalIdentifier(
   value: unknown,
   maxBytes = MAX_TASK_IDENTIFIER_BYTES,
