@@ -16,12 +16,14 @@ import { encodeStorageKeyComponent, formatSortableStorageTimestamp } from './key
 const formatSortableTimestamp = formatSortableStorageTimestamp;
 
 /**
- * Workflow state, checkpoint, timeline, schedule, queued-operation, event, and
- * async-activity/update keys.
+ * Workflow state, checkpoint, timeline, schedule, queued-operation, and event
+ * keys.
  *
- * Spread into `KEYS`; not intended to be imported directly by engine code.
+ * Spread into `KEYS` ahead of `SIGNAL_KEYS` and `WORKFLOW_LIFECYCLE_KEYS_CORE`
+ * to preserve the pre-split `Object.keys(KEYS)` insertion order; not intended
+ * to be imported directly by engine code.
  */
-export const WORKFLOW_RECORD_KEYS = {
+export const WORKFLOW_RECORD_KEYS_CORE = {
   workflow: (id: string) => `wf:${encodeStorageKeyComponent(id)}`,
   checkpoint: (id: string) => `wf:${encodeStorageKeyComponent(id)}:ckpt`,
   checkpointHistory: (id: string, step: number) =>
@@ -82,6 +84,21 @@ export const WORKFLOW_RECORD_KEYS = {
     `fleet-event-by-workflow:${encodeStorageKeyComponent(workflowId)}:`,
   fleetEventByWorkflow: (workflowId: string, sequence: number) =>
     `fleet-event-by-workflow:${encodeStorageKeyComponent(workflowId)}:${String(sequence).padStart(10, '0')}`,
+} as const;
+
+/**
+ * Workflow attribute/tag index and update keys.
+ *
+ * Spread into `KEYS` after `WORKFLOW_LIFECYCLE_KEYS_CORE` to preserve the
+ * pre-split `Object.keys(KEYS)` insertion order; not intended to be imported
+ * directly by engine code.
+ */
+export const WORKFLOW_RECORD_KEYS_EXTENDED = {
+  attribute: (workflowId: string) => `attr:${encodeStorageKeyComponent(workflowId)}`,
+  attributeIndex: (attributeName: string, encodedValue: string, workflowId: string) =>
+    `idx:${attributeName}:${encodedValue}:${encodeStorageKeyComponent(workflowId)}`,
+  tagIndex: (tag: string, workflowId: string) =>
+    `tag:${encodeStorageKeyComponent(tag)}:${encodeStorageKeyComponent(workflowId)}`,
   updatePrefix: (workflowId: string) => `upd:${encodeStorageKeyComponent(workflowId)}:`,
   update: (workflowId: string, updateId: string) =>
     `upd:${encodeStorageKeyComponent(workflowId)}:${updateId}`,
@@ -110,9 +127,4 @@ export const WORKFLOW_RECORD_KEYS = {
    * correct, so the raw-vs-encoded difference is harmless.
    */
   startIdempotencySignalId: (key: string) => `start-idem:${key}`,
-  attribute: (workflowId: string) => `attr:${encodeStorageKeyComponent(workflowId)}`,
-  attributeIndex: (attributeName: string, encodedValue: string, workflowId: string) =>
-    `idx:${attributeName}:${encodedValue}:${encodeStorageKeyComponent(workflowId)}`,
-  tagIndex: (tag: string, workflowId: string) =>
-    `tag:${encodeStorageKeyComponent(tag)}:${encodeStorageKeyComponent(workflowId)}`,
 } as const;

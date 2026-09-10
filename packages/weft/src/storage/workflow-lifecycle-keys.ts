@@ -18,13 +18,14 @@ import { encodeStorageKeyComponent, formatSortableStorageTimestamp } from './key
 const formatSortableTimestamp = formatSortableStorageTimestamp;
 
 /**
- * Deadline/terminal timers, finalizer/teardown tracking, concurrency limits,
- * child-workflow bookkeeping, durable state/stream storage, and workflow
- * visibility index keys.
+ * Deadline and terminal timer keys.
  *
- * Spread into `KEYS`; not intended to be imported directly by engine code.
+ * Spread into `KEYS` after `SIGNAL_KEYS` and ahead of
+ * `WORKFLOW_RECORD_KEYS_EXTENDED` to preserve the pre-split
+ * `Object.keys(KEYS)` insertion order; not intended to be imported directly
+ * by engine code.
  */
-export const WORKFLOW_LIFECYCLE_KEYS = {
+export const WORKFLOW_LIFECYCLE_KEYS_CORE = {
   deadline: (deadline: number, workflowId: string) =>
     `wf-deadline:${formatSortableTimestamp(deadline)}:${encodeStorageKeyComponent(workflowId)}`,
   terminalCleanup: (fireAt: number, timerId: string) =>
@@ -44,6 +45,19 @@ export const WORKFLOW_LIFECYCLE_KEYS = {
   terminalWorkflowPrefix: () => 'wf-terminal:',
   terminalWorkflow: (updatedAt: number, workflowId: string) =>
     `wf-terminal:${formatSortableTimestamp(updatedAt)}:${encodeStorageKeyComponent(workflowId)}`,
+} as const;
+
+/**
+ * Finalizer/teardown tracking, concurrency limits, child-workflow
+ * bookkeeping, durable state/stream storage, and workflow visibility index
+ * keys.
+ *
+ * Spread into `KEYS` after `MAILBOX_KEYS`, `OUTBOX_KEYS`,
+ * `OWNERSHIP_CLAIM_KEYS`, and `WORKFLOW_CATALOG_KEYS` to preserve the
+ * pre-split `Object.keys(KEYS)` insertion order; not intended to be imported
+ * directly by engine code.
+ */
+export const WORKFLOW_LIFECYCLE_KEYS_EXTENDED = {
   budget: (namespace: string, period: string, date: string) =>
     `budget:${namespace}:${period}:${date}`,
   review: (workflowId: string, reviewId: string) =>

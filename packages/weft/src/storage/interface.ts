@@ -12,8 +12,14 @@ import { MAILBOX_KEYS } from './mailbox-keys.ts';
 import { OUTBOX_KEYS } from './outbox-keys.ts';
 import { OWNERSHIP_CLAIM_KEYS } from './ownership-keys.ts';
 import { SIGNAL_KEYS } from './signal-keys.ts';
-import { WORKFLOW_LIFECYCLE_KEYS } from './workflow-lifecycle-keys.ts';
-import { WORKFLOW_RECORD_KEYS } from './workflow-record-keys.ts';
+import {
+  WORKFLOW_LIFECYCLE_KEYS_CORE,
+  WORKFLOW_LIFECYCLE_KEYS_EXTENDED,
+} from './workflow-lifecycle-keys.ts';
+import {
+  WORKFLOW_RECORD_KEYS_CORE,
+  WORKFLOW_RECORD_KEYS_EXTENDED,
+} from './workflow-record-keys.ts';
 
 export { assertDurableStorageForRecovery, requireStorageCapability } from './capabilities.ts';
 export type { GatedStorageCapabilityKey, StorageCapabilities } from './capabilities.ts';
@@ -457,13 +463,19 @@ export {
  * KEYS.workflow('workflow-id');
  * ```
  */
+// This interleaving preserves the byte-identical Object.keys(KEYS) insertion
+// order from before the module split (see interface.test.ts's characterization
+// test): each *_CORE / *_EXTENDED pair is split at the point where another
+// module's keys were interleaved in the original single-object literal.
 export const KEYS = {
-  ...WORKFLOW_RECORD_KEYS,
-  ...WORKFLOW_LIFECYCLE_KEYS,
+  ...WORKFLOW_RECORD_KEYS_CORE,
   ...SIGNAL_KEYS,
+  ...WORKFLOW_LIFECYCLE_KEYS_CORE,
+  ...WORKFLOW_RECORD_KEYS_EXTENDED,
   ...LEASE_KEYS,
   ...MAILBOX_KEYS,
   ...OUTBOX_KEYS,
   ...OWNERSHIP_CLAIM_KEYS,
   ...WORKFLOW_CATALOG_KEYS,
+  ...WORKFLOW_LIFECYCLE_KEYS_EXTENDED,
 } as const;
