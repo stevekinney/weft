@@ -122,15 +122,6 @@ export type WorkflowActivationOutcome =
   | { readonly kind: 'stale'; readonly currentGeneration: number };
 
 /**
- * Turns one {@link ActivationAttempt} into a {@link WorkflowActivationOutcome}.
- * A refusal this module recognizes (bounded compatibility reasons, or a
- * stale/expected-generation signal) is a legitimate, expected result — not
- * an error — and renders as text. Any other error (`NotFound`, a network
- * failure, a malformed response) is rethrown unchanged so the caller's
- * normal fault handling (the shared mutation `onError` toast) reports it,
- * rather than this module silently swallowing an unrecognized failure.
- */
-/**
  * The `expectedGeneration` the next `weft.workflows.revisions.activate`
  * attempt should send: the NEWER of two known generations, never simply
  * "prefer the pending one."
@@ -157,6 +148,15 @@ export function resolveExpectedGeneration(
   return Math.max(pending, active);
 }
 
+/**
+ * Turns one {@link ActivationAttempt} into a {@link WorkflowActivationOutcome}.
+ * A refusal this module recognizes (bounded compatibility reasons, or a
+ * stale/expected-generation signal) is a legitimate, expected result — not
+ * an error — and renders as text. Any other error (`NotFound`, a network
+ * failure, a malformed response) is rethrown unchanged so the caller's
+ * normal fault handling (the shared mutation `onError` toast) reports it,
+ * rather than this module silently swallowing an unrecognized failure.
+ */
 export function describeActivationOutcome(attempt: ActivationAttempt): WorkflowActivationOutcome {
   if (attempt.applied) return { kind: 'applied', pointer: attempt.pointer };
 
