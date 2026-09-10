@@ -578,6 +578,25 @@ tombstone-aware `catalog.install()`, not a bounded review-response fix—see
 `reserveLegacyForkTargetRevision()`'s own doc comment for the full
 explanation.
 
+**A second, narrower residual, also documented rather than fixed (Codex
+review round 8)—this one live even under the single-process `'none'` mode
+`buildForkCatalogEntryCondition()` deliberately leaves unfenced.**
+`removeWorkflowRevision()`'s post-delete half does re-count references once
+after the catalog delete commits, but that one snapshot can read zero and
+then a fork's reservation, resolution, and reinstall can all land in the
+window between that snapshot and the tombstone's own finalization—a window
+nothing re-checks. Neither commit in that window conditions on the other's
+key, so they race cleanly past each other, and `removeWorkflowRevision()`
+can report `{ removed: true }` while a live, referenced run now exists
+against that revision. Unlike round 6 above (a sibling process racing the
+fork's own intermediate load step under `workflow-lease`), this is
+`removeWorkflowRevision()`'s own finalization step racing a fork on the
+SAME process, reachable even under `'none'`. Closing it needs either
+serializing removal against reservations through finalization or fencing
+the fork's commit under `'none'` too—both real design decisions, not a
+bounded fix—see `buildForkCatalogEntryCondition()`'s own doc comment for
+the full explanation.
+
 The ADR 0002 workflow-lease reclaim-eligibility check
 (`isWorkflowTypeRegistered`) is source- and revision-aware for the same
 reason—see
