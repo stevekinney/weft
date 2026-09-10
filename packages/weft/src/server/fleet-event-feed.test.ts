@@ -40,6 +40,28 @@ class FailingFleetBatchStorage extends MemoryStorage {
   }
 }
 
+class FailingVirginSentinelStorage extends MemoryStorage {
+  failNextSentinelWrite = true;
+
+  override async conditionalBatch(
+    conditions: ConditionalBatchCondition[],
+    operations: BatchOperation[],
+  ): Promise<boolean> {
+    const tailCondition = conditions.find(
+      (condition) => condition.key === KEYS.fleetEventTail() && condition.expectedValue === null,
+    );
+    if (
+      tailCondition !== undefined &&
+      this.failNextSentinelWrite &&
+      operations.some((operation) => operation.key === KEYS.fleetEventTail())
+    ) {
+      this.failNextSentinelWrite = false;
+      throw new Error('sentinel persist failed');
+    }
+    return super.conditionalBatch(conditions, operations);
+  }
+}
+
 class RecordingScanStorage extends MemoryStorage {
   readonly scanCalls: Array<{ prefix: string; options: ScanOptions | undefined }> = [];
 
@@ -727,6 +749,20 @@ describe('createFleetEventFeed', () => {
 
     expect(await feed.snapshotTailSequence()).toBe(-1);
     expect(storage.scanCalls.length).toBe(scansAfterFirstCall);
+
+    feed.dispose();
+  });
+
+  it('resolves -1 for a virgin feed even when persisting the sentinel throws', async () => {
+    const storage = new FailingVirginSentinelStorage();
+    const feed = createFleetEventFeed(storage);
+
+    await expect(feed.snapshotTailSequence()).resolves.toBe(-1);
+    expect(storage.failNextSentinelWrite).toBe(false);
+    // The failed write never landed, so the tail key stays absent.
+    expect(await storage.get(KEYS.fleetEventTail())).toBeNull();
+    // A later call re-scans (nothing was persisted) but still resolves -1.
+    await expect(feed.snapshotTailSequence()).resolves.toBe(-1);
 
     feed.dispose();
   });
