@@ -3,6 +3,7 @@ import { deserializeCheckpoint, serializeCheckpoint } from '../core/checkpoint.t
 import { readCheckpointReplayPayload } from '../core/engine/checkpoint-replay.ts';
 import type { OperationRequest, WorkerOutboundMessage } from '../core/types.ts';
 import {
+  cleanupWorkflowRunnerState,
   createWorkflowRunnerContext,
   handleCancelMessage,
   handleResumeMessage,
@@ -367,6 +368,125 @@ describe('handleRunMessage', () => {
       key: 'counter',
       initial: 0,
     });
+  });
+});
+
+describe('workflowRevisions capture (WFT-20)', () => {
+  it('captures the run message workflowRevision, keyed by workflow id', async () => {
+    const context = createWorkflowRunnerContext();
+
+    async function* simpleWorkflow() {
+      return 'done';
+    }
+
+    await handleRunMessage(
+      context,
+      {
+        workflowId: 'wf-revision-1',
+        workflowType: 'simple',
+        input: null,
+        workflowRevision: 'revision-a',
+      },
+      () => simpleWorkflow,
+    );
+
+    expect(context.workflowRevisions.get('wf-revision-1')).toBe('revision-a');
+  });
+
+  it('clears any previously captured revision when a run message carries none', async () => {
+    const context = createWorkflowRunnerContext();
+    context.workflowRevisions.set('wf-revision-2', 'stale-revision');
+
+    async function* simpleWorkflow() {
+      return 'done';
+    }
+
+    await handleRunMessage(
+      context,
+      { workflowId: 'wf-revision-2', workflowType: 'simple', input: null },
+      () => simpleWorkflow,
+    );
+
+    expect(context.workflowRevisions.has('wf-revision-2')).toBe(false);
+  });
+
+  it('captures the revision even when the workflow type is unknown (failed outcome)', async () => {
+    const context = createWorkflowRunnerContext();
+
+    await handleRunMessage(
+      context,
+      {
+        workflowId: 'wf-revision-3',
+        workflowType: 'unknown',
+        input: null,
+        workflowRevision: 'revision-b',
+      },
+      () => undefined,
+    );
+
+    expect(context.workflowRevisions.get('wf-revision-3')).toBe('revision-b');
+  });
+
+  it('cleanupWorkflowRunnerState does not clear a captured revision', async () => {
+    const context = createWorkflowRunnerContext();
+
+    async function* simpleWorkflow() {
+      return 'done';
+    }
+
+    await handleRunMessage(
+      context,
+      {
+        workflowId: 'wf-revision-4',
+        workflowType: 'simple',
+        input: null,
+        workflowRevision: 'revision-c',
+      },
+      () => simpleWorkflow,
+    );
+    cleanupWorkflowRunnerState(context, 'wf-revision-4');
+
+    expect(context.workflowRevisions.get('wf-revision-4')).toBe('revision-c');
+  });
+
+  it('handleCancelMessage clears the captured revision for the cancelled generator', async () => {
+    const context = createWorkflowRunnerContext();
+
+    const operationRequest: OperationRequest = {
+      id: 'op-1',
+      workflowId: 'wf-revision-5',
+      kind: 'activity',
+      queue: 'default',
+      attempt: 1,
+      retryPolicy: {
+        maxAttempts: 3,
+        initialBackoff: 1000,
+        backoffMultiplier: 2,
+        maxBackoff: 30_000,
+      },
+      scheduledAt: Date.now(),
+    };
+
+    async function* pendingWorkflow() {
+      const result: unknown = yield operationRequest;
+      return result;
+    }
+
+    await handleRunMessage(
+      context,
+      {
+        workflowId: 'wf-revision-5',
+        workflowType: 'pending',
+        input: null,
+        workflowRevision: 'revision-d',
+      },
+      () => pendingWorkflow,
+    );
+    expect(context.workflowRevisions.get('wf-revision-5')).toBe('revision-d');
+
+    await handleCancelMessage(context, { workflowId: 'wf-revision-5' });
+
+    expect(context.workflowRevisions.has('wf-revision-5')).toBe(false);
   });
 });
 

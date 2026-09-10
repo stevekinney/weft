@@ -1128,12 +1128,15 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       {
         // WFT-20's own `--revision-policy` unit tests now exercise
         // `parseScheduleArguments`'s 'create' branch in-process, so the
-        // OUTER `if (values.every !== undefined) {` check itself is
-        // genuinely covered now — only the `--every`-with-exactly-one-
-        // positional branch's own body remains untested.
+        // OUTER `if (values.every !== undefined) {` check (line 217) itself
+        // is genuinely covered now, as is the cron-positional `else` branch
+        // (224-230) — only the `--every`-with-exactly-one-positional
+        // branch's own `assertExactSchedulePositionals(...)` call body
+        // (218-223) remains untested, since no test exercises `create`
+        // with `--every` and exactly one positional.
         reason:
           'Process-entry and failure-exit behavior runs in child processes whose hits are not attributed to the parent Bun LCOV report.',
-        lines: new Set([220, 221, 222, 223, 224, 225]),
+        lines: new Set([218, 219, 220, 221, 222, 223]),
         requireUncoveredLines: true,
       },
     ],
@@ -1490,18 +1493,21 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       // (projectTaskDetail's switch) unreachable at runtime — a compile-time
       // exhaustiveness guard only. `requireUncoveredLines` is omitted
       // because, matching the sibling entry's documented experience, which
-      // of `default: {` (287), the dead `const`/`return` pair (290, 291),
-      // and the closing brace (292) reads 0 flips between runs/environments
-      // with byte-identical source — a coverage-attribution artifact, not a
-      // real reachability signal. All four are included so the allowance
-      // covers every combination CI has actually produced. Re-derive from
-      // fresh coverage/lcov.info (not by inspection) if this file's line
-      // count ever shifts again — it has drifted repeatedly from lint-staged
-      // formatting collapsing multi-line conditional spreads onto one line.
+      // of `default: {`, the dead `const`/`return` pair, and the closing
+      // brace reads 0 flips between runs/environments with byte-identical
+      // source — a coverage-attribution artifact, not a real reachability
+      // signal. All four are included so the allowance covers every
+      // combination CI has actually produced. Re-derived from fresh
+      // coverage/lcov.info (not by inspection) for WFT-20's `workflowRevision`
+      // field, which shifted this switch down by one line (287→288,
+      // 290→291, 291→292, 292→293) — this file's line count has drifted
+      // repeatedly from lint-staged formatting collapsing multi-line
+      // conditional spreads onto one line, so re-derive again if it shifts
+      // further.
       {
         reason:
           'Compile-time exhaustiveness guard for a closed discriminated union has no reachable runtime path to test without an unsafe cast.',
-        lines: new Set([287, 290, 291, 292]),
+        lines: new Set([288, 291, 292, 293]),
       },
     ],
     [
@@ -1605,10 +1611,13 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
     [
       'src/workers/workflow-runner.ts',
       {
+        // Line realigned from 524 to 523 by WFT-20's `workflowRevisions`
+        // capture logic added above this function — re-derived from fresh
+        // LCOV, not by inspection.
         reason:
           'Transport disconnect and concurrency exits are behaviorally tested, but Bun does not deterministically attribute these residual paths.',
         functions: 1,
-        lines: new Set([524]),
+        lines: new Set([523]),
         requireUncoveredLines: true,
       },
     ],

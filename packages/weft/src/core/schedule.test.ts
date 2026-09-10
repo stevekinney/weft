@@ -342,6 +342,9 @@ describe('schedule validation helpers', () => {
     expect(() => normalizeScheduleUpdateOptions({ jitter: null as never })).toThrow(
       'options.jitter must be a duration string or a number of milliseconds',
     );
+    expect(() => normalizeScheduleUpdateOptions({ revisionPolicy: 'whenever' as never })).toThrow(
+      'options.revisionPolicy must be one of active-at-fire, pinned',
+    );
   });
 
   it('rejects an invalid schedule spec before ever resolving a registerSource()-registered type', async () => {
@@ -456,6 +459,52 @@ describe('schedule record decoding', () => {
     expect(decoded).toBeNull();
     expect(warnSpy).toHaveBeenCalledWith(
       '[weft] Ignoring malformed schedule "schedule-state" with invalid description.',
+    );
+  });
+
+  it('rejects schedule records with an unrecognized revisionPolicy (WFT-20)', () => {
+    using warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+
+    const state = createScheduleState();
+    const decoded = decodeScheduleState(
+      encode({
+        ...state,
+        revisionPolicy: 'whenever',
+      }),
+    );
+
+    expect(decoded).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[weft] Ignoring malformed schedule "schedule-state" with invalid revisionPolicy.',
+    );
+  });
+
+  it('rejects a "pinned" schedule record with a missing pinnedRevision (WFT-20)', () => {
+    using warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+
+    const state = createScheduleState({ revisionPolicy: 'pinned' });
+    const decoded = decodeScheduleState(encode(state));
+
+    expect(decoded).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[weft] Ignoring malformed schedule "schedule-state" with revisionPolicy "pinned" but a missing or invalid pinnedRevision.',
+    );
+  });
+
+  it('rejects a non-"pinned" schedule record that still carries a pinnedRevision (WFT-20)', () => {
+    using warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+
+    const state = createScheduleState({ revisionPolicy: 'active-at-fire' });
+    const decoded = decodeScheduleState(
+      encode({
+        ...state,
+        pinnedRevision: 'stray-revision',
+      }),
+    );
+
+    expect(decoded).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[weft] Ignoring malformed schedule "schedule-state" with a pinnedRevision but revisionPolicy is not "pinned".',
     );
   });
 });
