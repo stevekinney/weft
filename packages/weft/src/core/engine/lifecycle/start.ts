@@ -48,7 +48,7 @@ import {
   parseStartOptionDuration,
 } from './start-state.ts';
 import {
-  enforceReattachOnlyIdFence,
+  enforceReplayOnlyIdFence,
   GENERATED_ID_START_DECISION,
   prepareTerminalRunPurge,
   resolveTerminalConflictForRestart,
@@ -81,17 +81,18 @@ function prepareStartWorkflow(
   options: StartOptions | undefined,
   callbacks: LifecycleCallbacks,
   /**
-   * Internal-only (WFT-95): when truthy (`true` or `'reattach-only'`),
-   * `options.id` is validated with the decode-compatible
+   * Internal-only (WFT-95): when truthy (`true`, `'reattach-only'`, or
+   * `'bulk-retry-only'`), `options.id` is validated with the decode-compatible
    * {@link coerceReplayWorkflowId} instead of the strict
    * {@link coerceStartWorkflowId}. See `startWorkflow`'s `skipAdmissionIdCheck`
    * parameter for the full contract — this must stay unreachable from any
-   * public start surface. The `'reattach-only'` fence itself is applied later
-   * in `startWorkflow`, after `resolveTerminalConflictForRestart()` runs —
-   * this coercion only needs to know whether to relax the `.`/`..` rejection
-   * at all, not which variant is in effect.
+   * public start surface. The `'reattach-only'`/`'bulk-retry-only'` fence
+   * itself is applied later in `startWorkflow`, after
+   * `resolveTerminalConflictForRestart()` runs — this coercion only needs to
+   * know whether to relax the `.`/`..` rejection at all, not which variant is
+   * in effect.
    */
-  skipAdmissionIdCheck: boolean | 'reattach-only',
+  skipAdmissionIdCheck: boolean | 'reattach-only' | 'bulk-retry-only',
 ): StartWorkflowPreparation {
   const callerProvidedId = options?.id !== undefined;
   const workflowId =
@@ -254,17 +255,21 @@ export async function startWorkflow(
    *     persisted `queuedRuns[].workflowId` — safe unconditionally (`true`),
    *     since a queued run created after this fix was already validated as
    *     non-`.`/`..` at schedule-admission time, so relaxing the check here
-   *     is a no-op for it and only matters for a legacy pre-WFT-95 queued run.
+   *     is a no-op for it and only matters for a historical pre-WFT-95 queued run.
    *   - `retryFailedWorkflow()`'s checkpoint-absent fallback (`bulk-operations-retry.ts`),
    *     which rebuilds an already-persisted, already-validated-at-the-time
-   *     `workflowId` from its stored input via `onTerminalConflict: 'start-new'`
-   *     — safe unconditionally (`true`), since that purges-then-replaces a
-   *     KNOWN existing terminal record rather than speculatively matching one.
+   *     `workflowId` from its stored input via `onTerminalConflict: 'start-new'`.
+   *     Passes the literal `'bulk-retry-only'` rather than `true` — see
+   *     {@link enforceReplayOnlyIdFence}'s doc comment for the TOCTOU race that
+   *     value fences: the retry's own confirmation read and
+   *     `resolveTerminalConflictForRestart`'s atomic read are not the same
+   *     read, so a concurrent purge under `ownership: 'workflow-lease'` can
+   *     leave nothing to purge-and-replace by the time this runs.
    *   - `dispatchChildWorkflowStart()`'s crash-reattach retry, which passes
    *     the literal `'reattach-only'` rather than `true` — see
-   *     {@link enforceReattachOnlyIdFence}'s doc comment for the TOCTOU race
-   *     that value fences (this one only *speculatively* matched an existing
-   *     record before this call, unlike the two unconditional sites above).
+   *     {@link enforceReplayOnlyIdFence}'s doc comment for the same TOCTOU
+   *     race (this one only *speculatively* matched an existing record
+   *     before this call, unlike the schedule-drain site above).
    *
    * Every other caller (REST, JSON-RPC, direct `engine.start()`,
    * `engine.startOrSignal()`, a fresh `ctx.startChild()`) omits this
@@ -272,7 +277,7 @@ export async function startWorkflow(
    * `StartOptions`/`StartWorkflowOptions` and therefore cannot be set from
    * any public surface.
    */
-  skipAdmissionIdCheck?: boolean | 'reattach-only',
+  skipAdmissionIdCheck?: boolean | 'reattach-only' | 'bulk-retry-only',
 ): Promise<WorkflowHandle> {
   assertServicesSupportedForMode(internals, options);
   assertValidOnTerminalConflict(options);
@@ -328,7 +333,7 @@ export async function startWorkflow(
     const { terminalRunToPurge, duplicateIdCondition } = callerProvidedId
       ? await resolveTerminalConflictForRestart(internals, workflowId, options)
       : GENERATED_ID_START_DECISION;
-    enforceReattachOnlyIdFence(skipAdmissionIdCheck, workflowId, terminalRunToPurge);
+    enforceReplayOnlyIdFence(skipAdmissionIdCheck, workflowId, terminalRunToPurge);
 
     const versionTuple = createWorkflowVersionTuple(internals, registration, callbacks);
 

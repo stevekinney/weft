@@ -125,40 +125,40 @@ describe('bulk failed-workflow retry', () => {
     expect(retriedState.result).toBe('restarted:from-input');
   });
 
-  it('restarts a failed workflow from persisted input for a legacy "." id when no checkpoint exists (WFT-95)', async () => {
+  it('restarts a failed workflow from persisted input for a historical "." id when no checkpoint exists (WFT-95)', async () => {
     const storage = new MemoryStorage();
     await using engine = new Engine({ storage });
     let shouldFailBeforeCheckpoint = true;
-    const legacyDotRetryWorkflow = workflow({ name: 'legacy-dot-retry' }).execute(async function* (
-      _ctx: WorkflowContext,
-      input: { value: string },
-    ) {
-      if (shouldFailBeforeCheckpoint) {
-        throw new Error('first attempt failed before checkpoint');
-      }
-      return `restarted:${input.value}`;
-    });
-    engine.register(legacyDotRetryWorkflow);
+    const historicalDotRetryWorkflow = workflow({ name: 'historical-dot-retry' }).execute(
+      async function* (_ctx: WorkflowContext, input: { value: string }) {
+        if (shouldFailBeforeCheckpoint) {
+          throw new Error('first attempt failed before checkpoint');
+        }
+        return `restarted:${input.value}`;
+      },
+    );
+    engine.register(historicalDotRetryWorkflow);
 
     // Seed a failed run persisted under the reserved id "." directly (not
     // through `engine.start()`, which now rejects "." at strict admission) —
     // standing in for a pre-WFT-95 workflow that failed before its first
     // checkpoint. `retryFailedWorkflow()`'s checkpoint-absent fallback must
     // still be able to rebuild and restart it via the internal
-    // `skipAdmissionIdCheck: true` replay path (issue 2 of the WFT-95 TOCTOU
-    // follow-up), not just the checkpoint-backed reactivation path.
-    const failedLegacyState: WorkflowState = {
+    // `skipAdmissionIdCheck: 'bulk-retry-only'` replay path (issue 2 of the
+    // WFT-95 TOCTOU follow-up), not just the checkpoint-backed reactivation
+    // path.
+    const failedHistoricalState: WorkflowState = {
       createdAt: 1,
       error: 'first attempt failed before checkpoint',
       id: '.',
-      input: { value: 'from-legacy-dot' },
+      input: { value: 'from-historical-dot' },
       startedAt: 1,
       status: 'failed',
-      type: 'legacy-dot-retry',
+      type: 'historical-dot-retry',
       updatedAt: 1,
       versionTuple: { workflowVersion: '1' },
     };
-    await storage.put(KEYS.workflow('.'), encode(failedLegacyState));
+    await storage.put(KEYS.workflow('.'), encode(failedHistoricalState));
     expect(await storage.get(KEYS.checkpoint('.'))).toBeNull();
 
     shouldFailBeforeCheckpoint = false;
@@ -166,7 +166,78 @@ describe('bulk failed-workflow retry', () => {
 
     expect(result).toEqual({ retried: 1, failed: 0, errors: [] });
     const retriedState = await waitForWorkflowStatus(engine, '.', 'completed');
-    expect(retriedState.result).toBe('restarted:from-legacy-dot');
+    expect(retriedState.result).toBe('restarted:from-historical-dot');
+  });
+
+  it('does not create a fresh reserved-id workflow when the matched historical record is purged between the load and the retry (WFT-95 TOCTOU)', async () => {
+    const storage = new MemoryStorage();
+    await using engine = new Engine({ storage });
+    const raceRetryWorkflow = workflow({ name: 'historical-dot-retry-race' }).execute(
+      async function* () {
+        return 'restarted';
+      },
+    );
+    engine.register(raceRetryWorkflow);
+
+    // Same historical-record shape as the test above — a failed run persisted
+    // under the reserved id "." with no checkpoint, from before strict
+    // admission existed.
+    const failedHistoricalState: WorkflowState = {
+      createdAt: 1,
+      error: 'first attempt failed before checkpoint',
+      id: '.',
+      input: null,
+      startedAt: 1,
+      status: 'failed',
+      type: 'historical-dot-retry-race',
+      updatedAt: 1,
+      versionTuple: { workflowVersion: '1' },
+    };
+    await storage.put(KEYS.workflow('.'), encode(failedHistoricalState));
+    expect(await storage.get(KEYS.checkpoint('.'))).toBeNull();
+
+    // `retryFailedWorkflow()` reads `KEYS.workflow('.')` once to load the
+    // failed state (read #1: `loadWorkflowState`), then its restart's own
+    // `resolveTerminalConflictForRestart()` reads the SAME key again,
+    // atomically with its duplicate-id decision (read #2). Gate that second
+    // read and, while it is paused, simulate another engine (under
+    // `ownership: 'workflow-lease'`) purging the matched record in the
+    // window between the two reads — the exact race the `'bulk-retry-only'`
+    // fence exists to close.
+    const workflowKey = KEYS.workflow('.');
+    const originalGet = storage.get.bind(storage);
+    let readCount = 0;
+    const secondReadStarted = Promise.withResolvers<void>();
+    const releaseSecondRead = Promise.withResolvers<void>();
+    storage.get = async (key: string): Promise<Uint8Array | null> => {
+      if (key === workflowKey) {
+        readCount += 1;
+        if (readCount === 2) {
+          secondReadStarted.resolve();
+          await releaseSecondRead.promise;
+        }
+      }
+      return await originalGet(key);
+    };
+
+    const retryPromise = engine.retryFailedAll({ status: 'failed' });
+
+    await secondReadStarted.promise;
+    await storage.delete(workflowKey);
+    releaseSecondRead.resolve();
+
+    const result = await retryPromise;
+
+    // The fence rejects the retry with the same strict-admission error a
+    // genuinely fresh `engine.start({ id: '.' })` would get — a clean
+    // rejection, not a silently created fresh run under the reserved id.
+    expect(result.retried).toBe(0);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]?.error).toContain('options.id must not be "." or ".."');
+
+    // No replacement run was created under "." — the race left it absent,
+    // and it must STAY absent rather than get backfilled by a bypassed create.
+    await expect(engine.get('.')).resolves.toBeNull();
   });
 
   it('only retries failed workflows that match the supplied filter', async () => {

@@ -165,13 +165,25 @@ async function retryFailedWorkflow(
   // Internal replay call site #3 (WFT-95), alongside schedule drain and child
   // reattach: this rebuilds an already-persisted, already-validated-at-the-time
   // `workflowId` from its stored input via `onTerminalConflict: 'start-new'`,
-  // which purges-then-replaces a KNOWN existing terminal record rather than
-  // speculatively matching one — there is no "fresh create" ambiguity here the
-  // way there is for child-reattach, so the bypass applies unconditionally. A
-  // pre-WFT-95 failed workflow whose id is "." or ".." and whose checkpoint is
-  // absent must still be retryable through this fallback, so this calls the
-  // internal `startWorkflow` directly (with `skipAdmissionIdCheck: true`)
-  // instead of the public `engine.start()`, which enforces strict admission.
+  // which is INTENDED to purge-then-replace the KNOWN terminal record loaded
+  // above rather than speculatively match one. A pre-WFT-95 failed workflow
+  // whose id is "." or ".." and whose checkpoint is absent must still be
+  // retryable through this fallback, so this calls the internal
+  // `startWorkflow` directly instead of the public `engine.start()`, which
+  // enforces strict admission.
+  //
+  // The `loadWorkflowState()` read above and `startWorkflow`'s own atomic
+  // `resolveTerminalConflictForRestart()` read are NOT the same read (WFT-95
+  // TOCTOU follow-up, chatgpt-codex-connector review): under
+  // `ownership: 'workflow-lease'`, another engine can purge this exact record
+  // in the window between them, and an unconditional bypass would then let
+  // `startWorkflow`'s fresh-create branch silently admit a reserved `.`/`..`
+  // id. `'bulk-retry-only'` — not `true` — fences the bypass to
+  // `resolveTerminalConflictForRestart()` actually finding the SAME terminal
+  // record still there to purge-and-replace: if the race means it is gone,
+  // `enforceReplayOnlyIdFence()` re-runs strict admission instead (see its
+  // doc comment for the shared mechanism this shares with child-reattach's
+  // `'reattach-only'` fence).
   //
   // `engine.start()` and `engine.resume()` (used by the checkpoint-backed
   // branch above) both assert the lease is held and the workflow catalog is
@@ -190,7 +202,7 @@ async function retryFailedWorkflow(
     callbacks,
     undefined,
     undefined,
-    true,
+    'bulk-retry-only',
   );
 }
 

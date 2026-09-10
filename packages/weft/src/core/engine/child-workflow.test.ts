@@ -285,10 +285,10 @@ describe('engine child workflow helpers', () => {
     expect(internals.pendingExecutionStateOwnerId).toBeUndefined();
   });
 
-  it('reattaches to an already-persisted legacy "." child on crash-reattach replay (WFT-95)', async () => {
+  it('reattaches to an already-persisted historical "." child on crash-reattach replay (WFT-95)', async () => {
     const internals = createInternals();
-    seedChildResult(internals, '.', 'legacy-child-result');
-    const childHandle = { id: '.', result: mock(async () => 'legacy-child-result') };
+    seedChildResult(internals, '.', 'historical-child-result');
+    const childHandle = { id: '.', result: mock(async () => 'historical-child-result') };
     // The exact failure `coerceStartWorkflowId` raises for a fresh `options.id`
     // of "." or "..": strict admission (WFT-95), which a pre-WFT-95 persisted
     // child may already carry.
@@ -301,7 +301,7 @@ describe('engine child workflow helpers', () => {
         'parent',
         {
           input: { value: 1 },
-          operationId: 'child:legacy-dot',
+          operationId: 'child:historical-dot',
           options: { id: '.' },
           type: 'child-workflow',
           workflowType: 'child',
@@ -327,7 +327,7 @@ describe('engine child workflow helpers', () => {
           },
         },
       ),
-    ).resolves.toBe('legacy-child-result');
+    ).resolves.toBe('historical-child-result');
 
     expect(startCallCount).toBe(2);
     // Deliberately NOT `expect(childHandle.result).toHaveBeenCalled()` — see
@@ -451,25 +451,25 @@ describe('engine child workflow helpers', () => {
 });
 
 describe('WFT-95: real engine child-workflow crash-reattach replay', () => {
-  it('reattaches to an already-persisted legacy "." child through the real startWorkflow/resolveTerminalConflictForRestart path', async () => {
+  it('reattaches to an already-persisted historical "." child through the real startWorkflow/resolveTerminalConflictForRestart path', async () => {
     const storage = new MemoryStorage();
-    const childWorkflow = workflow({ name: 'wft-95-legacy-child' }).execute(async function* () {
-      return 'legacy-child-result';
+    const childWorkflow = workflow({ name: 'wft-95-historical-child' }).execute(async function* () {
+      return 'historical-child-result';
     });
-    const parentWorkflow = workflow({ name: 'wft-95-legacy-parent' }).execute(async function* (
+    const parentWorkflow = workflow({ name: 'wft-95-historical-parent' }).execute(async function* (
       ctx: WorkflowContext,
     ) {
       yield* ctx.waitForSignal('release');
       return 'parent-done';
     });
     const workflows = {
-      'wft-95-legacy-parent': parentWorkflow,
-      'wft-95-legacy-child': childWorkflow,
+      'wft-95-historical-parent': parentWorkflow,
+      'wft-95-historical-child': childWorkflow,
     };
 
     await using engine = await Engine.create({ storage, workflows });
-    const parentHandle = await engine.start('wft-95-legacy-parent', null, {
-      id: 'wft-95-legacy-parent-1',
+    const parentHandle = await engine.start('wft-95-historical-parent', null, {
+      id: 'wft-95-historical-parent-1',
     });
     await waitForCondition(
       async () => {
@@ -482,23 +482,23 @@ describe('WFT-95: real engine child-workflow crash-reattach replay', () => {
     // Seed a completed child persisted under "." — the one id strict
     // admission (WFT-95) now rejects — standing in for a run created before
     // that rejection existed. `parentWorkflowId`/`parentWorkflowExecutionToken`
-    // are left undefined to model the legacy pre-lineage shape
+    // are left undefined to model the historical pre-lineage shape
     // `existingChildMatchesRequest` still accepts (see its own doc comment).
     // `executionStateOwnerId` matches the parent's own id: `executeChildWorkflow`
     // falls back to `workflowId` when the parent's own state carries none.
-    const legacyChildState: WorkflowState = {
+    const historicalChildState: WorkflowState = {
       createdAt: 1,
       executionStateOwnerId: parentHandle.id,
       id: '.',
       input: null,
-      result: 'legacy-child-result',
+      result: 'historical-child-result',
       startedAt: 1,
       status: 'completed',
-      type: 'wft-95-legacy-child',
+      type: 'wft-95-historical-child',
       updatedAt: 1,
       versionTuple: { workflowVersion: '1' },
     };
-    await storage.put(KEYS.workflow('.'), encode(legacyChildState));
+    await storage.put(KEYS.workflow('.'), encode(historicalChildState));
 
     // Drive `executeChildWorkflow` directly with the REAL callback bundle
     // (`createChildWorkflowOperationCallbacks`, the same wiring
@@ -512,10 +512,10 @@ describe('WFT-95: real engine child-workflow crash-reattach replay', () => {
       parentHandle.id,
       {
         input: null,
-        operationId: 'child:legacy-dot-real',
+        operationId: 'child:historical-dot-real',
         options: { id: '.' },
         type: 'child-workflow',
-        workflowType: 'wft-95-legacy-child',
+        workflowType: 'wft-95-historical-child',
       },
       0,
       createChildWorkflowOperationCallbacks(engine),
@@ -524,21 +524,21 @@ describe('WFT-95: real engine child-workflow crash-reattach replay', () => {
     // Reattached to the seeded completed child instead of failing recovery —
     // this is the generator-owned result the parent's `yield* ctx.startChild()`
     // would receive.
-    expect(result).toBe('legacy-child-result');
+    expect(result).toBe('historical-child-result');
     // No duplicate/replacement run was created under "." — the seeded record
     // is untouched.
     await expect(engine.get('.')).resolves.toMatchObject({
       status: 'completed',
-      result: 'legacy-child-result',
+      result: 'historical-child-result',
     });
 
     await engine.signal(parentHandle.id, 'release');
   });
 
-  it('does not create a fresh reserved-id child when the matched legacy record is purged between the reattach confirmation and the retry (WFT-95 TOCTOU)', async () => {
+  it('does not create a fresh reserved-id child when the matched historical record is purged between the reattach confirmation and the retry (WFT-95 TOCTOU)', async () => {
     const storage = new MemoryStorage();
     const childWorkflow = workflow({ name: 'wft-95-race-child' }).execute(async function* () {
-      return 'legacy-child-result';
+      return 'historical-child-result';
     });
     const parentWorkflow = workflow({ name: 'wft-95-race-parent' }).execute(async function* (
       ctx: WorkflowContext,
@@ -563,23 +563,23 @@ describe('WFT-95: real engine child-workflow crash-reattach replay', () => {
       { label: 'parent running' },
     );
 
-    // Same legacy-record shape as the test above — a completed child persisted
+    // Same historical-record shape as the test above — a completed child persisted
     // under the reserved id "." from before strict admission existed.
-    const legacyChildState: WorkflowState = {
+    const historicalChildState: WorkflowState = {
       createdAt: 1,
       executionStateOwnerId: parentHandle.id,
       id: '.',
       input: null,
-      result: 'legacy-child-result',
+      result: 'historical-child-result',
       startedAt: 1,
       status: 'completed',
       type: 'wft-95-race-child',
       updatedAt: 1,
       versionTuple: { workflowVersion: '1' },
     };
-    await storage.put(KEYS.workflow('.'), encode(legacyChildState));
+    await storage.put(KEYS.workflow('.'), encode(historicalChildState));
 
-    // `reattachLegacyReservedChildOrRethrow()` reads `KEYS.workflow('.')` once
+    // `reattachHistoricalReservedChildOrRethrow()` reads `KEYS.workflow('.')` once
     // to confirm the match (read #1: `loadWorkflowState`), then its retry's
     // own `resolveTerminalConflictForRestart()` reads the SAME key again,
     // atomically with its duplicate-id decision (read #2). Gate that second
@@ -608,7 +608,7 @@ describe('WFT-95: real engine child-workflow crash-reattach replay', () => {
       parentHandle.id,
       {
         input: null,
-        operationId: 'child:legacy-dot-race',
+        operationId: 'child:historical-dot-race',
         options: { id: '.' },
         type: 'child-workflow',
         workflowType: 'wft-95-race-child',
