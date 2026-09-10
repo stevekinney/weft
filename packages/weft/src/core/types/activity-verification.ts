@@ -76,5 +76,4 @@ export type ActivityTier0Verifier<TInput = unknown, TOutput = unknown> = {
 }['bivarianceHack'];
 
 export type ActivityVerifier<TInput = unknown, TOutput = unknown> =
-  | ActivityPostExecutionVerifier<TOutput>
-  | ActivityTier0Verifier<TInput, TOutput>;
+  ActivityPostExecutionVerifier<TOutput> | ActivityTier0Verifier<TInput, TOutput>;

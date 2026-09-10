@@ -254,9 +254,7 @@ export type RemoteTaskTerminalRetryExhausted = RemoteTaskTerminalCommon &
   }>;
 
 export type RemoteTaskTerminal =
-  | RemoteTaskTerminalResolved
-  | RemoteTaskTerminalCancelled
-  | RemoteTaskTerminalRetryExhausted;
+  RemoteTaskTerminalResolved | RemoteTaskTerminalCancelled | RemoteTaskTerminalRetryExhausted;
 
 // ---------------------------------------------------------------------------
 // Dead-lettered

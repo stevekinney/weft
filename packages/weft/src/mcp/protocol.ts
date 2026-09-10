@@ -66,8 +66,7 @@ export type McpResponse = {
 
 /** Result of handling one MCP message. */
 export type McpDispatchResult =
-  | { readonly kind: 'response'; readonly response: McpResponse }
-  | { readonly kind: 'accepted' };
+  { readonly kind: 'response'; readonly response: McpResponse } | { readonly kind: 'accepted' };
 
 /** Build a JSON-RPC success response. */
 export function successResponse(id: JsonRpcId, result: unknown): McpResponse {

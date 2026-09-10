@@ -32,9 +32,7 @@ import type { ActivityDefinition, WorkflowDefinition } from '../core/types.ts';
 
 export type ValidationIssueSeverity = 'error' | 'warning';
 export type ValidationIssueCode =
-  | 'unbounded-retry'
-  | 'stateful-without-compensator'
-  | 'non-serializable-input';
+  'unbounded-retry' | 'stateful-without-compensator' | 'non-serializable-input';
 
 export interface ValidationIssue {
   severity: ValidationIssueSeverity;

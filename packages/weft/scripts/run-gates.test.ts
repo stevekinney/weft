@@ -103,8 +103,13 @@ describe('runPipeline', () => {
     try {
       const code = await runPipeline('validate', runGate);
       expect(code).toBe(2);
-      // 'lint' and 'typecheck' ran; nothing after 'typecheck' did.
-      expect(ran).toEqual(['lint', 'typecheck']);
+      // Every gate up to and including 'typecheck' ran; nothing after it did.
+      // Derived from PIPELINES rather than hardcoded, so adding or reordering a
+      // gate cannot silently retarget what this asserts.
+      const throughTypecheck = PIPELINES.validate
+        .map((gate) => gate.name)
+        .slice(0, PIPELINES.validate.findIndex((gate) => gate.name === 'typecheck') + 1);
+      expect(ran).toEqual(throughTypecheck);
       expect(capturedConsole.log.join('\n')).toContain('typecheck failed (exit 2');
       expect(capturedConsole.error.join('\n')).toContain('failed at gate "typecheck"');
     } finally {

@@ -76,8 +76,7 @@ export interface StandardSchemaV1Properties<
  * ```
  */
 export type StandardSchemaV1Result<Output> =
-  | StandardSchemaV1SuccessResult<Output>
-  | StandardSchemaV1FailureResult;
+  StandardSchemaV1SuccessResult<Output> | StandardSchemaV1FailureResult;
 
 /**
  * Successful Standard Schema v1 validation result.
@@ -214,10 +213,7 @@ export interface StandardJSONSchemaV1Converter {
  * ```
  */
 export type StandardJSONSchemaV1Target =
-  | 'draft-2020-12'
-  | 'draft-07'
-  | 'openapi-3.0'
-  | ({} & string);
+  'draft-2020-12' | 'draft-07' | 'openapi-3.0' | ({} & string);
 
 /**
  * Options passed to Standard JSON Schema converter functions.
@@ -331,8 +327,7 @@ export interface StandardJSONSchemaV1<Input = unknown, Output = Input> {
  * ```
  */
 export type DefinitionSchema<Input = unknown, Output = Input> =
-  | StandardSchemaV1<Input, Output>
-  | StandardJSONSchemaV1<Input, Output>;
+  StandardSchemaV1<Input, Output> | StandardJSONSchemaV1<Input, Output>;
 
 /**
  * Extract the schema's *input* type — what the validator accepts before any

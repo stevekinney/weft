@@ -385,8 +385,7 @@ describe('emitBindings — body-accepting methods', () => {
       emitBindings(paths, new Set(), [binding], registry);
 
       const entry = paths['/api/v1/test/bodysuffix']?.[method.toLowerCase()] as
-        | Record<string, unknown>
-        | undefined;
+        Record<string, unknown> | undefined;
       expect(entry).toBeDefined();
       expect(entry).toHaveProperty('requestBody');
     });
@@ -419,8 +418,7 @@ describe('emitBindings — body-accepting methods', () => {
     emitBindings(paths, new Set(), [binding], registry);
 
     const entry = paths['/api/v1/test/getread/{id}']?.['get'] as
-      | Record<string, unknown>
-      | undefined;
+      Record<string, unknown> | undefined;
     expect(entry).toBeDefined();
     expect(entry).not.toHaveProperty('requestBody');
   });
@@ -558,8 +556,7 @@ describe('emitBindings — body-accepting methods', () => {
     emitBindings(paths, new Set(), [binding], registry);
 
     const pathItem = paths['/api/v1/test/throwingoutput/{key}'] as
-      | Record<string, Record<string, unknown>>
-      | undefined;
+      Record<string, Record<string, unknown>> | undefined;
     const getOperation = pathItem?.['get'];
     const responses = getOperation?.['responses'] as Record<string, unknown>;
     expect(responses).toHaveProperty('200');

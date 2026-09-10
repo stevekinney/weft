@@ -135,23 +135,22 @@ export type AttributeRangeValue<TKey extends AttributeFilterKey> =
 
 export type AttributeFilter<TKey extends AttributeFilterKey = AttributeFilterKey> =
   TKey extends SearchAttributeHandle
-    ?
-        | {
-            key: TKey;
-            value?: AttributeFilterValue<TKey> | AttributeFilterAnyOfValue<TKey>;
-            gt?: never;
-            lt?: never;
-            gte?: never;
-            lte?: never;
-          }
-        | {
-            key: TKey;
-            value?: never;
-            gt?: AttributeRangeValue<TKey>;
-            lt?: AttributeRangeValue<TKey>;
-            gte?: AttributeRangeValue<TKey>;
-            lte?: AttributeRangeValue<TKey>;
-          }
+    ? | {
+          key: TKey;
+          value?: AttributeFilterValue<TKey> | AttributeFilterAnyOfValue<TKey>;
+          gt?: never;
+          lt?: never;
+          gte?: never;
+          lte?: never;
+        }
+      | {
+          key: TKey;
+          value?: never;
+          gt?: AttributeRangeValue<TKey>;
+          lt?: AttributeRangeValue<TKey>;
+          gte?: AttributeRangeValue<TKey>;
+          lte?: AttributeRangeValue<TKey>;
+        }
     : {
         key: TKey;
         /**

@@ -75,10 +75,7 @@ export function externalApiPath(canonicalPath: string): string {
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 export type DirectRouteResponseMediaType =
-  | 'application/json'
-  | 'application/msgpack'
-  | 'application/linkset+json'
-  | 'text/plain';
+  'application/json' | 'application/msgpack' | 'application/linkset+json' | 'text/plain';
 
 export type DirectRouteResponseSchema = 'object' | 'string';
 

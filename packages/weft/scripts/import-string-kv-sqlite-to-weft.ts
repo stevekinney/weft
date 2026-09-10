@@ -121,10 +121,9 @@ function assertTargetPrefix(prefix: string): void {
 
 function assertSourceTableExists(database: Database, tableName: string): void {
   const row = database
-    .prepare<
-      { name: string },
-      [string]
-    >("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .prepare<{ name: string }, [string]>(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+    )
     .get(tableName);
 
   if (!row) {
@@ -138,10 +137,9 @@ function quoteIdentifier(identifier: string): string {
 
 function readSourceRows(database: Database, tableName: string): TextKeyValueRow[] {
   const rows = database
-    .prepare<
-      Record<string, unknown>,
-      []
-    >(`SELECT key, value FROM ${quoteIdentifier(tableName)} ORDER BY key ASC`)
+    .prepare<Record<string, unknown>, []>(
+      `SELECT key, value FROM ${quoteIdentifier(tableName)} ORDER BY key ASC`,
+    )
     .all();
 
   return rows.map((row) => {

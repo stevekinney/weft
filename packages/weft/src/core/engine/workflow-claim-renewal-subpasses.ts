@@ -116,8 +116,7 @@ export type WorkflowClaimReclaimPassResult =
  * treatment as {@link WorkflowClaimReclaimPassResult}'s `'discovery-failed'`.
  */
 export type WorkflowClaimSignalPollOutcome =
-  | { status: 'completed'; result: OwnerSideSignalPollResult }
-  | { status: 'failed'; error: unknown };
+  { status: 'completed'; result: OwnerSideSignalPollResult } | { status: 'failed'; error: unknown };
 
 /**
  * The owner-side update-poll sub-pass's result (WFT-79). `'failed'` covers
@@ -126,8 +125,7 @@ export type WorkflowClaimSignalPollOutcome =
  * treatment as {@link WorkflowClaimSignalPollOutcome}'s `'failed'`.
  */
 export type WorkflowClaimUpdatePollOutcome =
-  | { status: 'completed'; result: OwnerSideUpdatePollResult }
-  | { status: 'failed'; error: unknown };
+  { status: 'completed'; result: OwnerSideUpdatePollResult } | { status: 'failed'; error: unknown };
 
 /**
  * The result of one full claim-renewal pass

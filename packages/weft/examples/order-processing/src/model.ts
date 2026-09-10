@@ -43,12 +43,7 @@ export interface OrderStatus {
 }
 
 export type OrderStatusName =
-  | 'received'
-  | 'reserving'
-  | 'awaiting-review'
-  | 'awaiting-shipment'
-  | 'cancelled'
-  | 'shipped';
+  'received' | 'reserving' | 'awaiting-review' | 'awaiting-shipment' | 'cancelled' | 'shipped';
 
 export interface CancelOrderInput {
   reason: string;

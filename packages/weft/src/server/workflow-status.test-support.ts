@@ -14,12 +14,7 @@ import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 
 /** Terminal and intermediate workflow statuses the tests wait on. */
 export type WaitableWorkflowStatus =
-  | 'pending'
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'cancelled'
-  | 'timed-out';
+  'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out';
 
 /**
  * Poll `engine.get(workflowId)` until the workflow reports `status`, or throw

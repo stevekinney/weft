@@ -51,6 +51,10 @@ type GateRunner = (gate: Gate) => Promise<number>;
  */
 export const PIPELINES: Record<string, readonly Gate[]> = {
   validate: [
+    // First because it is the cheapest and the most likely to drift: `lint-staged`
+    // only formats the files a commit touches, so package-wide drift accumulates
+    // silently otherwise (WFT-154).
+    { name: 'format check', script: 'format:check' },
     { name: 'lint', script: 'lint' },
     { name: 'typecheck', script: 'typecheck' },
     { name: 'typecheck tests', script: 'typecheck:tests' },

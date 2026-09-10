@@ -105,8 +105,7 @@ describe('AsyncAPI document', () => {
     }) as AsyncApiDocument;
     const request = document.components?.messages?.['weft_workflows_events_subscribeRequest'];
     const payload = request?.payload as
-      | { properties?: { method?: { const?: unknown } } }
-      | undefined;
+      { properties?: { method?: { const?: unknown } } } | undefined;
 
     expect(payload?.properties?.method?.const).toBe('weft.workflows.subscribe');
   });

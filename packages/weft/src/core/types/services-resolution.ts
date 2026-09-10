@@ -19,8 +19,7 @@
  * ```
  */
 export type WorkflowServicesResolution<TServices = unknown> =
-  | { status: 'available'; services: TServices }
-  | { status: 'unavailable'; reason: string };
+  { status: 'available'; services: TServices } | { status: 'unavailable'; reason: string };
 
 /**
  * Durable launch context passed to {@link EngineOptions.resolveWorkflowServices}

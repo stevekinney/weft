@@ -89,9 +89,7 @@ export interface QueryDefinition<TInput = void, TOutput = unknown> {
 }
 
 export type MessageDefinition =
-  | QueryDefinition<unknown>
-  | SignalDefinition<unknown>
-  | UpdateDefinition<unknown>;
+  QueryDefinition<unknown> | SignalDefinition<unknown> | UpdateDefinition<unknown>;
 
 export type MessageName = string | { readonly name: string };
 

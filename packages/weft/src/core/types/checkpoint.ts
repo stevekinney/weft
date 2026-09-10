@@ -206,8 +206,7 @@ export interface OperationRequest {
 }
 
 export type OperationOutcome =
-  | { status: 'completed'; value: unknown }
-  | WorkerReplayOperationFailure;
+  { status: 'completed'; value: unknown } | WorkerReplayOperationFailure;
 
 // ---------------------------------------------------------------------------
 // Timer entry for scheduler

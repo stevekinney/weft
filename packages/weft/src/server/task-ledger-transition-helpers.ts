@@ -12,12 +12,10 @@ import type { WorkerExecutionIdentity } from '../worker/manifest/types.ts';
 import type { RemoteTaskAttemptFields, RemoteTaskBase } from './task-ledger-types.ts';
 
 export type TaskLedgerTransitionResult<T> =
-  | Readonly<{ ok: true; nextRecord: T }>
-  | Readonly<{ ok: false; reason: string }>;
+  Readonly<{ ok: true; nextRecord: T }> | Readonly<{ ok: false; reason: string }>;
 
 export type TaskLedgerPreconditionResult =
-  | Readonly<{ ok: true }>
-  | Readonly<{ ok: false; reason: string }>;
+  Readonly<{ ok: true }> | Readonly<{ ok: false; reason: string }>;
 
 // Internal field pickers — explicit, not `...current`, so a next record never
 // silently inherits state-specific fields (e.g. `availableAt`) that do not

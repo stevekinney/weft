@@ -30,12 +30,10 @@ import {
 } from '../task-ledger.ts';
 
 export type TaskLedgerCommitResult<T extends RemoteTaskRecord> =
-  | Readonly<{ ok: true; record: T }>
-  | Readonly<{ ok: false; reason: string }>;
+  Readonly<{ ok: true; record: T }> | Readonly<{ ok: false; reason: string }>;
 
 export type TaskLedgerDeleteResult =
-  | Readonly<{ ok: true }>
-  | Readonly<{ ok: false; reason: string }>;
+  Readonly<{ ok: true }> | Readonly<{ ok: false; reason: string }>;
 
 /**
  * Read the current ledger record, apply `transitionFn`, and commit the

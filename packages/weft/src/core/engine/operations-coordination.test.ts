@@ -351,9 +351,7 @@ describe('partial-failure preservation worker-mode boundary', () => {
     const payload = { ok: true };
     const internals = createSignalInternals(
       createSequencedStorage([
-        [
-          /* first scan empty */
-        ],
+        [/* first scan empty */],
         [[KEYS.signal('workflow-id', 'release', 'signal-1'), encode(payload)]],
       ]) as never,
     );

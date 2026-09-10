@@ -54,8 +54,7 @@ export function coerceScheduleId(scheduleId: string, fieldName: string): string 
  * engine persists. Interval periods are resolved to whole milliseconds.
  */
 export type NormalizedScheduleSpec =
-  | { kind: 'cron'; cronExpression: string }
-  | { kind: 'interval'; intervalMs: number };
+  { kind: 'cron'; cronExpression: string } | { kind: 'interval'; intervalMs: number };
 
 function normalizeIntervalEvery(every: unknown): { kind: 'interval'; intervalMs: number } {
   if (typeof every !== 'string' && typeof every !== 'number') {
