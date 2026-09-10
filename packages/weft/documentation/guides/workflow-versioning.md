@@ -561,6 +561,23 @@ own resolver already used for the identical class of race, and `fork()`
 now reserves from inside it the instant the resolver picks the candidate's
 revision, closing the window entirely.
 
+**Known residual, documented rather than fixed (Codex review round 6).**
+That reservation is `inFlightStartsByRevision`—process-local, in-memory—so
+under a supported multi-engine `ownership: 'workflow-lease'` deployment it
+protects only a race against another caller on the SAME process. A sibling
+engine (a separate process sharing durable storage) can still remove the
+sole candidate after the hook fires but before the awaited source loader
+finishes reading it—that sibling's own `removeWorkflowRevision()` sees
+only durable references, never this process's local map, and the loader's
+own `catalog.install()` then reinstalls the revision regardless of that
+sibling's removal. The fork's own FINAL commit is still fenced durably
+under lease ownership (`buildForkCatalogEntryCondition()`, above)—this gap
+is narrower, in the intermediate load/install step before that commit.
+Closing it needs a durable, cross-process reservation or a
+tombstone-aware `catalog.install()`, not a bounded review-response fix—see
+`reserveLegacyForkTargetRevision()`'s own doc comment for the full
+explanation.
+
 The ADR 0002 workflow-lease reclaim-eligibility check
 (`isWorkflowTypeRegistered`) is source- and revision-aware for the same
 reason—see

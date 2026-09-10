@@ -208,6 +208,31 @@ export function buildForkCommitLostRaceError(
  * already `undefined`, so a defined `persistedRevision` can never equal it
  * — kept rather than removed so this function's own contract still holds
  * independently of that one call site; exercised directly by a unit test.
+ *
+ * **Known residual limitation, documented rather than fixed (Codex review
+ * round 6, P1):** this reservation is `inFlightStartsByRevision` —
+ * process-local, in-memory (see `catalog-removal.ts`'s own doc) — so under
+ * a supported multi-engine `ownership: 'workflow-lease'` deployment it
+ * protects only a race against ANOTHER caller on THIS SAME process. A
+ * SIBLING engine (a separate process sharing durable storage) can still
+ * remove the sole candidate after this hook fires but before the awaited
+ * source loader (`resolveWorkflowSourceForExecution()`) finishes reading
+ * it — that sibling's own `removeWorkflowRevision()` sees only DURABLE
+ * references, never this process's local map, so it can report success
+ * while this load is still in flight; the loader's own `catalog.install()`
+ * then reinstalls the revision regardless, papering over that removal.
+ * `buildForkCatalogEntryCondition()` still fences the fork's own FINAL
+ * commit durably under lease ownership (round 1) — this residual gap is
+ * narrower: the intermediate LOAD/INSTALL step the resolver performs
+ * before that commit is reached has no durable fence of its own. Closing
+ * it properly needs either a durable, cross-process reservation (a
+ * lease/claim analog to `inFlightStartsByRevision` itself) or a
+ * tombstone-aware `catalog.install()` that refuses to resurrect a revision
+ * concurrently removed — either is a genuine architectural addition, not a
+ * bounded review-response fix, and warrants a follow-up rather than a
+ * rushed change here. Scoped narrowly: only a legacy (pre-revision-pinning)
+ * dynamic-source fork, under `workflow-lease` specifically, racing a
+ * sibling engine's own concurrent removal of that exact sole candidate.
  */
 export function reserveLegacyForkTargetRevision(
   internals: EngineInternals,

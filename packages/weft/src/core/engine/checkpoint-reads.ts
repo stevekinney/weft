@@ -236,16 +236,19 @@ export async function replayTo(
  * a match here proves `state` and `rawCheckpoint` belong to the SAME run,
  * with no timing assumption at all.
  *
- * Falls back to the original `createdAt` comparison only when either side
- * predates this field (a checkpoint or a workflow record persisted before
- * this release) — `advanceCheckpoint()` re-stamps `createdAt` to "now" on
- * every step save, so for the run a checkpoint actually came from,
- * `checkpoint.createdAt` is always `>= state.createdAt` (that run's own
- * fixed start time); a `start-new` replacement stamps a brand new
- * `WorkflowState.createdAt` strictly later than anything the displaced run
- * ever saved, so the reverse inequality still reliably detects a mismatch
- * for that legacy case — same-millisecond collisions and non-monotonic
- * clocks aside, which the token check above exists specifically to close.
+ * Returns `undefined` — never falls back to a `createdAt` comparison —
+ * whenever either side predates this field (a checkpoint or a workflow
+ * record persisted before this release; WFT-21, Codex review round 5, P2,
+ * tightening round 3's own fix). Round 3 originally fell back to comparing
+ * `checkpoint.createdAt >= state.createdAt` for this case; that fallback
+ * was itself flagged as reachable for the identical same-millisecond (or
+ * backward clock-adjustment) collision round 3 fixed for the general case,
+ * specifically for the pre-upgrade checkpoints it exists to serve — the
+ * token-based fix above never covers a record with no token to compare. A
+ * pre-upgrade checkpoint now loses best-effort `revision` attribution
+ * during replay (reports `undefined` rather than guessing) in exchange for
+ * never misattributing it, the same bound already accepted for a legacy
+ * `WorkflowState.revision` itself (WFT-17).
  */
 function resolveReplayRevision(
   rawCheckpoint: Checkpoint,
