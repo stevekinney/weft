@@ -242,11 +242,15 @@ const DARWIN_BASELINE: CoverageBaseline = {
     // required raised the floor again, from 5850/5821/1224/1201 to this
     // tuple. See the DARWIN_BASELINE entry above for the original
     // investigation this floor builds on.
+    // Re-measured once more within WFT-115 after a second review pass
+    // (durable-generation reuse after a stale refusal, the full
+    // `RetryPolicy` badge, and the docs-only preload-operation fix) —
+    // 5904/5875/1236/1213 -> this tuple.
     'src/routes/system': {
-      linesFound: 5904,
-      linesHit: 5875,
-      functionsFound: 1236,
-      functionsHit: 1213,
+      linesFound: 5973,
+      linesHit: 5944,
+      functionsFound: 1248,
+      functionsHit: 1225,
     },
     'src/routes/workers': {
       linesFound: 5685,

@@ -196,6 +196,7 @@ describe('RegistryTab', () => {
               initialBackoff: '200ms',
               backoffMultiplier: 2,
               maxBackoff: '2s',
+              nonRetryableErrors: ['ValidationError'],
             },
             timeout: '30s',
           },
@@ -223,7 +224,11 @@ describe('RegistryTab', () => {
     expect(activityFieldCountBadge.getAttribute('data-cinder-variant')).toBe('success');
     expect(activityFieldCountBadge.getAttribute('data-cinder-size')).toBe('md');
 
-    expect(await findByText('retry: 3x')).not.toBeNull();
+    // Full retry policy, not just maxAttempts — backoff timing and
+    // non-retryable errors are operationally significant and were
+    // previously hidden entirely.
+    expect(await findByText('retry: 3x, 200ms→2s ×2')).not.toBeNull();
+    expect(await findByText('never retries: ValidationError')).not.toBeNull();
     expect(await findByText('timeout: 30s')).not.toBeNull();
 
     await fireEvent.click(getByRole('button', { name: /order-processing/ }));

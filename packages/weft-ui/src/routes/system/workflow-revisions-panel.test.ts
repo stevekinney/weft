@@ -1,18 +1,22 @@
 /**
  * Component tests for `<WorkflowRevisionsPanel>` (WFT-115): data mapping,
- * permission gating, successful mutation, rejected mutation (both
- * `compatibilityReasons` and `currentGeneration`-only shapes), query
- * invalidation, and the loading/denied/malformed-response/server-fault
- * states.
+ * permission gating, and the loading/denied/malformed-response/empty/
+ * server-fault query states. The Activate/Refresh mutation and its
+ * outcomes live in the sibling `workflow-revisions-panel-activation.test.ts`
+ * — this file crossed the repo's 500-line implementation-file cap combined.
+ * Shared fixtures (`revisionRecord`/`activePointer`/`renderPanel`) live in
+ * `workflow-revisions-panel-fixtures.test-support.ts`.
  */
-import { fireEvent, render, waitFor, within } from '@testing-library/svelte';
+import { fireEvent, waitFor } from '@testing-library/svelte';
 import { afterEach, describe, expect, test } from 'bun:test';
 
-import { createQueryClient } from '../../lib/query.ts';
 import { AUTHORIZATION_SCOPES } from '../../lib/scopes.svelte.ts';
-import SystemRouteTestHarness from './system-route-test-harness.test-harness.svelte';
-import { realClient, ScriptedFetch } from './system-test-support.test-support.ts';
-import WorkflowRevisionsPanelFixture from './workflow-revisions-panel-fixture.test-harness.svelte';
+import { ScriptedFetch } from './system-test-support.test-support.ts';
+import {
+  activePointer,
+  renderPanel,
+  revisionRecord,
+} from './workflow-revisions-panel-fixtures.test-support.ts';
 
 let scripted: ScriptedFetch | undefined;
 
@@ -20,36 +24,6 @@ afterEach(() => {
   scripted?.restore();
   scripted = undefined;
 });
-
-function revisionRecord(revision: string, overrides: Record<string, unknown> = {}) {
-  return {
-    manifest: {
-      manifestVersion: 1,
-      name: 'order-processing',
-      workflowVersion: '0.0.0',
-      revision,
-      contractHash: `sha256:${revision}-hash`,
-      contract: { name: 'order-processing', workflowVersion: '0.0.0' },
-    },
-    installedAt: 1_700_000_000_000,
-    ...overrides,
-  };
-}
-
-function activePointer(revision: string, generation = 1) {
-  return { revision, generation, activatedAt: 1_700_000_000_000 };
-}
-
-async function renderPanel(principalScopes?: readonly (typeof AUTHORIZATION_SCOPES)[number][]) {
-  return render(SystemRouteTestHarness, {
-    props: {
-      client: realClient(),
-      queryClient: createQueryClient(),
-      component: WorkflowRevisionsPanelFixture,
-      ...(principalScopes === undefined ? {} : { principalScopes }),
-    },
-  });
-}
 
 describe('WorkflowRevisionsPanel', () => {
   test('shows a loading state while queries are pending', async () => {
@@ -203,263 +177,6 @@ describe('WorkflowRevisionsPanel', () => {
     const activateButton = await waitFor(() => getByRole('button', { name: 'Activate' }));
     expect(activateButton.hasAttribute('disabled')).toBe(true);
     expect(activateButton.getAttribute('title')).toBe('Requires workflows:admin');
-  });
-
-  test('a successful activation shows the applied outcome and invalidates the revisions/active/registry queries', async () => {
-    scripted = new ScriptedFetch();
-    scripted.routeJsonRpcMethod('weft.workflows.revisions.list', [
-      revisionRecord('order-processing-rev-1'),
-      revisionRecord('order-processing-rev-2'),
-    ]);
-    scripted.routeJsonRpcMethod(
-      'weft.workflows.active.get',
-      activePointer('order-processing-rev-1'),
-    );
-    scripted.routeJsonRpcMethod('weft.workflows.revisions.activate', {
-      applied: true,
-      pointer: activePointer('order-processing-rev-2', 2),
-    });
-
-    const { getByRole, findByText } = await renderPanel();
-    const activateButton = await waitFor(() => getByRole('button', { name: 'Activate' }));
-    const callsBeforeActivation = scripted.calls.length;
-
-    await fireEvent.click(activateButton);
-    const dialog = await waitFor(() => getByRole('dialog'));
-    await fireEvent.click(within(dialog).getByRole('button', { name: 'Activate' }));
-
-    expect(await findByText('Compatible')).not.toBeNull();
-    expect(await findByText(/order-processing-rev-2/)).not.toBeNull();
-
-    // Invalidated queries refetch: at least one more call landed after the
-    // mutation itself (revisions.list and/or active.get and/or the
-    // registry snapshot re-fetching), proving invalidation actually fired
-    // rather than asserting on internal query-client spies.
-    await waitFor(() => {
-      expect(scripted?.calls.length).toBeGreaterThan(callsBeforeActivation + 1);
-    });
-  });
-
-  test('a refusal carrying compatibilityReasons renders every reason as explicit text, never color alone', async () => {
-    scripted = new ScriptedFetch();
-    scripted.routeJsonRpcMethod('weft.workflows.revisions.list', [
-      revisionRecord('order-processing-rev-1'),
-      revisionRecord('order-processing-rev-2'),
-    ]);
-    scripted.routeJsonRpcMethod(
-      'weft.workflows.active.get',
-      activePointer('order-processing-rev-1'),
-    );
-    scripted.routeJsonRpcError('weft.workflows.revisions.activate', {
-      code: -32021,
-      message: 'Candidate revision is incompatible with the currently active revision',
-      data: {
-        weftCode: 'Conflict',
-        httpStatus: 409,
-        reason: 'incompatible',
-        compatibilityReasons: [
-          'contract-hash-mismatch',
-          'workflow-version-incompatible',
-          'artifact-revision-mismatch',
-        ],
-      },
-    });
-
-    const { getByRole, findByText } = await renderPanel();
-    const activateButton = await waitFor(() => getByRole('button', { name: 'Activate' }));
-    await fireEvent.click(activateButton);
-    const dialog = await waitFor(() => getByRole('dialog'));
-    await fireEvent.click(within(dialog).getByRole('button', { name: 'Activate' }));
-
-    expect(await findByText('Incompatible')).not.toBeNull();
-    expect(await findByText(/contract-hash-mismatch/)).not.toBeNull();
-    expect(await findByText(/workflow-version-incompatible/)).not.toBeNull();
-    expect(await findByText(/artifact-revision-mismatch/)).not.toBeNull();
-  });
-
-  test('a refusal carrying only currentGeneration renders the stale message and a refresh action', async () => {
-    scripted = new ScriptedFetch();
-    scripted.routeJsonRpcMethod('weft.workflows.revisions.list', [
-      revisionRecord('order-processing-rev-1'),
-      revisionRecord('order-processing-rev-2'),
-    ]);
-    scripted.routeJsonRpcMethod(
-      'weft.workflows.active.get',
-      activePointer('order-processing-rev-1'),
-    );
-    scripted.routeJsonRpcError('weft.workflows.revisions.activate', {
-      code: -32021,
-      message: 'Stale expectedGeneration: the current durable generation is 4',
-      data: {
-        weftCode: 'Conflict',
-        httpStatus: 409,
-        reason: 'stale-generation',
-        currentGeneration: 4,
-      },
-    });
-
-    const { getByRole, findByText } = await renderPanel();
-    const activateButton = await waitFor(() => getByRole('button', { name: 'Activate' }));
-    await fireEvent.click(activateButton);
-    const dialog = await waitFor(() => getByRole('dialog'));
-    await fireEvent.click(within(dialog).getByRole('button', { name: 'Activate' }));
-
-    expect(await findByText(/current generation 4/)).not.toBeNull();
-    expect(await findByText('Conflict')).not.toBeNull();
-  });
-
-  test('a success-shaped but malformed activation response never renders an outcome banner', async () => {
-    scripted = new ScriptedFetch();
-    scripted.routeJsonRpcMethod('weft.workflows.revisions.list', [
-      revisionRecord('order-processing-rev-1'),
-      revisionRecord('order-processing-rev-2'),
-    ]);
-    scripted.routeJsonRpcMethod(
-      'weft.workflows.active.get',
-      activePointer('order-processing-rev-1'),
-    );
-    // `applied: true` but the `pointer` fails `isAppliedActivationResult`'s
-    // structural guard — the wire lied about its own shape (or a future
-    // server added a field this build doesn't understand in a way that
-    // broke the pointer). Never fabricated into a "Compatible" banner.
-    scripted.routeJsonRpcMethod('weft.workflows.revisions.activate', {
-      applied: true,
-      pointer: { revision: 'order-processing-rev-2' },
-    });
-
-    const { getByRole, queryByText, findByRole } = await renderPanel();
-    const activateButton = await waitFor(() => getByRole('button', { name: 'Activate' }));
-    await fireEvent.click(activateButton);
-    const dialog = await waitFor(() => getByRole('dialog'));
-    await fireEvent.click(within(dialog).getByRole('button', { name: 'Activate' }));
-
-    await findByRole('button', { name: 'Activate' });
-    expect(queryByText('Compatible')).toBeNull();
-    expect(queryByText('Incompatible')).toBeNull();
-  });
-
-  test('a NotFound/server fault on activation routes through the existing six-code fault mapping instead of rendering an outcome banner', async () => {
-    scripted = new ScriptedFetch();
-    scripted.routeJsonRpcMethod('weft.workflows.revisions.list', [
-      revisionRecord('order-processing-rev-1'),
-      revisionRecord('order-processing-rev-2'),
-    ]);
-    scripted.routeJsonRpcMethod(
-      'weft.workflows.active.get',
-      activePointer('order-processing-rev-1'),
-    );
-    scripted.routeJsonRpcError('weft.workflows.revisions.activate', {
-      code: -32020,
-      message: 'Workflow revision "order-processing:order-processing-rev-2" was never installed',
-      data: { weftCode: 'NotFound', httpStatus: 404, resource: 'workflow-revision' },
-    });
-
-    const { getByRole, queryByText, findByRole } = await renderPanel();
-    const activateButton = await waitFor(() => getByRole('button', { name: 'Activate' }));
-    await fireEvent.click(activateButton);
-    const dialog = await waitFor(() => getByRole('dialog'));
-    await fireEvent.click(within(dialog).getByRole('button', { name: 'Activate' }));
-
-    // The mutation settles (button returns to its normal, non-pending state)
-    // without ever rendering one of the recognized outcome banners — a
-    // NotFound refusal isn't a compatibility verdict this panel understands,
-    // so it is rethrown and handled by the default mutation-error toast
-    // (query.ts), not fabricated into a local outcome.
-    await findByRole('button', { name: 'Activate' });
-    expect(queryByText('Compatible')).toBeNull();
-    expect(queryByText('Incompatible')).toBeNull();
-  });
-
-  test('the stale-outcome Refresh button refetches revisions and the active pointer', async () => {
-    scripted = new ScriptedFetch();
-    scripted.routeJsonRpcMethod('weft.workflows.revisions.list', [
-      revisionRecord('order-processing-rev-1'),
-      revisionRecord('order-processing-rev-2'),
-    ]);
-    scripted.routeJsonRpcMethod(
-      'weft.workflows.active.get',
-      activePointer('order-processing-rev-1'),
-    );
-    scripted.routeJsonRpcError('weft.workflows.revisions.activate', {
-      code: -32021,
-      message: 'Stale expectedGeneration: the current durable generation is 4',
-      data: {
-        weftCode: 'Conflict',
-        httpStatus: 409,
-        reason: 'stale-generation',
-        currentGeneration: 4,
-      },
-    });
-
-    const { getByRole, findByText, getAllByRole } = await renderPanel();
-    const activateButton = await waitFor(() => getByRole('button', { name: 'Activate' }));
-    await fireEvent.click(activateButton);
-    const dialog = await waitFor(() => getByRole('dialog'));
-    await fireEvent.click(within(dialog).getByRole('button', { name: 'Activate' }));
-    await findByText(/current generation 4/);
-
-    const callsBeforeRefresh = scripted.calls.length;
-    // Two "Refresh" buttons now exist: the active row's own Refresh action
-    // and the stale-outcome banner's Refresh action — the LAST one rendered
-    // is the outcome banner's (it renders after the row list in document
-    // order).
-    const refreshButtons = getAllByRole('button', { name: 'Refresh' });
-    const outcomeRefresh = refreshButtons[refreshButtons.length - 1];
-    if (outcomeRefresh) await fireEvent.click(outcomeRefresh);
-
-    await waitFor(() => {
-      expect(scripted?.calls.length).toBeGreaterThan(callsBeforeRefresh);
-    });
-  });
-
-  test('activating the already-active revision (labeled Refresh) opens a re-stamp-worded confirm dialog and applies, reporting "Refreshed" not "Activated"', async () => {
-    scripted = new ScriptedFetch();
-    scripted.routeJsonRpcMethod('weft.workflows.revisions.list', [
-      revisionRecord('order-processing-rev-1'),
-      revisionRecord('order-processing-rev-2'),
-      revisionRecord('order-processing-rev-3'),
-    ]);
-    scripted.routeJsonRpcMethod(
-      'weft.workflows.active.get',
-      activePointer('order-processing-rev-1', 3),
-    );
-    scripted.routeJsonRpcMethod('weft.workflows.revisions.activate', {
-      applied: true,
-      pointer: activePointer('order-processing-rev-1', 4),
-    });
-
-    const { getByRole, findByText } = await renderPanel();
-    const refreshButton = await waitFor(() => getByRole('button', { name: 'Refresh' }));
-    await fireEvent.click(refreshButton);
-    const dialog = await waitFor(() => getByRole('dialog'));
-    // The dialog itself must use re-stamp wording, not the generic
-    // Activate copy — an operator confirming a same-revision refresh
-    // should never read language implying a different revision is about
-    // to go live.
-    expect(within(dialog).getByText(/re-stamps it as the active revision/)).not.toBeNull();
-    await fireEvent.click(within(dialog).getByRole('button', { name: 'Refresh' }));
-
-    expect(await findByText('Compatible')).not.toBeNull();
-    expect(await findByText(/^Refreshed revision/)).not.toBeNull();
-  });
-
-  test('activating a different, non-active candidate opens the generic Activate-worded confirm dialog', async () => {
-    scripted = new ScriptedFetch();
-    scripted.routeJsonRpcMethod('weft.workflows.revisions.list', [
-      revisionRecord('order-processing-rev-1'),
-      revisionRecord('order-processing-rev-2'),
-    ]);
-    scripted.routeJsonRpcMethod(
-      'weft.workflows.active.get',
-      activePointer('order-processing-rev-1'),
-    );
-
-    const { getByRole } = await renderPanel();
-    const activateButton = await waitFor(() => getByRole('button', { name: 'Activate' }));
-    await fireEvent.click(activateButton);
-    const dialog = await waitFor(() => getByRole('dialog'));
-    expect(within(dialog).getByText(/Weft evaluates compatibility/)).not.toBeNull();
-    expect(within(dialog).getByRole('button', { name: 'Activate' })).not.toBeNull();
   });
 
   test('a malformed (successful but structurally invalid) active.get response is rejected, not silently treated as never-activated', async () => {

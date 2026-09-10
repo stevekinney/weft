@@ -19,6 +19,8 @@
   import { createQuery } from '@tanstack/svelte-query';
   import { toStore } from 'svelte/store';
 
+  import type { RetryPolicy } from '@lostgradient/weft';
+
   import { getClient } from '../../lib/client.ts';
   import { formatDuration } from '../../lib/format/index.ts';
   import { queryKeys } from '../../lib/query.ts';
@@ -78,6 +80,21 @@
    */
   function formatActivityTimeout(timeout: number | string): string {
     return typeof timeout === 'number' ? formatDuration(timeout) : timeout;
+  }
+
+  /**
+   * A single `retry: 3x` badge understated `RetryPolicy` (`@lostgradient/weft`)
+   * down to only `maxAttempts` — hiding whether retries back off over
+   * seconds or hours (`initialBackoff`/`backoffMultiplier`/`maxBackoff`,
+   * each also `Duration`-typed) and which failures never retry at all
+   * (`nonRetryableErrors`). Renders the full policy in one badge string;
+   * `nonRetryableErrors` gets its own badge below since its length varies
+   * and it is operationally distinct information.
+   */
+  function formatRetryPolicy(retry: RetryPolicy): string {
+    const initial = formatActivityTimeout(retry.initialBackoff);
+    const max = formatActivityTimeout(retry.maxBackoff);
+    return `retry: ${retry.maxAttempts}x, ${initial}→${max} ×${retry.backoffMultiplier}`;
   }
 </script>
 
@@ -185,7 +202,13 @@
                   )}
                 {/if}
                 {#if activity.retry}
-                  {@render registryBadge(`retry: ${activity.retry.maxAttempts}x`, 'neutral')}
+                  {@render registryBadge(formatRetryPolicy(activity.retry), 'neutral')}
+                  {#if activity.retry.nonRetryableErrors?.length}
+                    {@render registryBadge(
+                      `never retries: ${activity.retry.nonRetryableErrors.join(', ')}`,
+                      'neutral',
+                    )}
+                  {/if}
                 {/if}
                 {#if activity.timeout}
                   {@render registryBadge(

@@ -167,15 +167,32 @@
     );
   }
 
+  /**
+   * The `currentGeneration` a `stale` refusal most recently reported, when
+   * one has. `weft.workflows.active.get`'s documented contract is
+   * in-memory-only (not read from the durable store this catalog write
+   * path itself uses) — refetching it after a stale-generation refusal can
+   * return the exact same lagging value, which would otherwise make the
+   * next Activate attempt reuse the same wrong `expectedGeneration` and
+   * refuse again forever. The refusal's own `currentGeneration` IS the
+   * durable truth at refusal time, so once we have one, prefer it over
+   * `activeQuery`'s cache for the next attempt. Reset to `null` on an
+   * applied outcome, whose `pointer.generation` is itself now the fresh
+   * durable truth and flows back through `activeQuery` via
+   * `invalidateAfterActivation`.
+   */
+  let pendingExpectedGeneration = $state<number | null>(null);
+
   const activateMutation = createMutation<WorkflowActivationOutcome, unknown, string>({
     mutationFn: async (candidateRevision: string) => {
       const activePointer = $activeQuery.data ?? null;
+      const expectedGeneration = pendingExpectedGeneration ?? activePointer?.generation;
       let attempt: ActivationAttempt;
       try {
         const raw = await client.operations['weft.workflows.revisions.activate']({
           name: workflowName,
           revision: candidateRevision,
-          ...(activePointer === null ? {} : { expectedGeneration: activePointer.generation }),
+          ...(expectedGeneration === undefined ? {} : { expectedGeneration }),
         });
         attempt = isAppliedActivationResult(raw)
           ? { applied: true, pointer: raw.pointer }
@@ -183,7 +200,9 @@
       } catch (error) {
         attempt = { applied: false, error };
       }
-      return describeActivationOutcome(attempt);
+      const outcome = describeActivationOutcome(attempt);
+      pendingExpectedGeneration = outcome.kind === 'stale' ? outcome.currentGeneration : null;
+      return outcome;
     },
     onSuccess: invalidateAfterActivation,
   });
