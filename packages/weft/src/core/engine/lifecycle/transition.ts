@@ -21,6 +21,7 @@ import { decodeWorkflowState } from '../validation.ts';
 import { launchWorkflowFromCheckpoint } from './checkpoint-launch.ts';
 import {
   buildForkBatchOperations,
+  buildForkCatalogEntryCondition,
   buildForkSearchAttributes,
   createForkLineage,
   createForkedWorkflowState,
@@ -436,6 +437,15 @@ export async function fork(
     persistedRevision,
   );
 
+  // Fence the commit below against a concurrent removeWorkflowRevision()
+  // targeting this fork's own persisted revision (WFT-21, Codex review
+  // round 1, P1) — see `buildForkCatalogEntryCondition()`'s own doc.
+  const forkCatalogEntryCondition = await buildForkCatalogEntryCondition(
+    internals,
+    sourceState.type,
+    persistedRevision,
+  );
+
   let forkStarted = false;
   try {
     const forkCheckpointBytes = serializeCheckpoint(forkCheckpoint);
@@ -454,7 +464,7 @@ export async function fork(
         persistedWorkflowStartHeaders,
         callbacks,
       ),
-      [],
+      forkCatalogEntryCondition,
       () => new Error(`Fork of workflow "${workflowId}" lost its CAS race.`),
     );
     internals.eventLogHeads.set(workflowId, EMPTY_EVENT_HEAD);

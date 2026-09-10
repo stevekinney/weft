@@ -508,6 +508,18 @@ surfaces as a `Conflict` (409) fault carrying `data.reason` over JSON-RPC
 (REST discloses the reason in the error message text rather than
 structured `data`, per the existing WFT-11 REST/JSON-RPC fidelity split).
 
+Under `ownership: 'lease'` or `'workflow-lease'`, the fork's own commit is
+fenced against a concurrent `removeWorkflowRevision()` targeting the fork's
+persisted revision—the same `buildCatalogEntryRevisionCondition` fence a
+fresh `start()` carries. Without it, an explicit-revision fork onto a
+revision other than the source run's own pin would perform only a
+process-local availability check with no durable reservation, so a
+concurrent removal could see zero references, delete the catalog entry, and
+still let the fork's own commit land right behind it—durably persisting a
+reference to a revision the catalog now claims is gone. The fenced fork
+loses its own CAS instead, the identical "whichever operation lands second
+loses" guarantee `start()` already provides.
+
 The ADR 0002 workflow-lease reclaim-eligibility check
 (`isWorkflowTypeRegistered`) is source- and revision-aware for the same
 reason—see

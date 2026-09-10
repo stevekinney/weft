@@ -1,4 +1,4 @@
-import type { BatchOperation } from '../../../storage/interface.ts';
+import type { BatchOperation, ConditionalBatchCondition } from '../../../storage/interface.ts';
 import { KEYS } from '../../../storage/interface.ts';
 import { encode } from '../../codec.ts';
 import { buildIndexOperations } from '../../search-attributes.ts';
@@ -11,6 +11,7 @@ import { WorkflowRevisionUnavailableError } from '../revision-errors.ts';
 import { encodeWorkflowStartHeaders } from '../state-utilities.ts';
 import { buildWorkflowVisibilityIndexOperations } from '../workflow-indexes.ts';
 import { EMPTY_STORAGE_VALUE, FORK_LINEAGE_ATTRIBUTE, type LifecycleCallbacks } from './shared.ts';
+import { buildCatalogEntryRevisionCondition } from './start-commit.ts';
 
 /**
  * Validate an explicit `ForkOptions.revision` request (WFT-21) against what
@@ -81,6 +82,42 @@ export function resolveForkPersistedRevision(
   resolvedRevision: string | undefined,
 ): string | undefined {
   return options?.revision ?? sourceState.revision ?? resolvedRevision;
+}
+
+/**
+ * Fence the fork's own commit against a concurrent `removeWorkflowRevision()`
+ * targeting the fork's persisted revision (WFT-21, Codex review round 1,
+ * P1): without this, under `ownership: 'lease'`/`'workflow-lease'`, a fork
+ * — ESPECIALLY an explicit-revision fork onto a revision other than the
+ * source run's own, which is far more likely to be an inactive removal
+ * target — performs only a process-local availability check
+ * ({@link assertForkRevisionResolvable}/`canResolveRevisionLocally`) and
+ * reserves no `inFlightStartsByRevision` entry, so `removeWorkflowRevision()`
+ * running concurrently can observe zero references, delete the catalog
+ * entry, and then this fork's own commit — racing right behind it — would
+ * still land a running `WorkflowState` durably pinned to a revision the
+ * catalog now claims is gone. Mirrors `start()`'s own
+ * `needsCatalogEntryStartPrecondition`/`buildCatalogEntryStartPrecondition`
+ * gate exactly (same ownership-mode check, same "only when a revision is
+ * actually persisted" gate) — `buildCatalogEntryRevisionCondition` itself is
+ * reused unchanged, since `commitFencedEngineWrite`'s `baseConditions` wants
+ * the same flat `ConditionalBatchCondition`, not `start()`'s own tagged
+ * multi-precondition wrapper. A `'none'` ownership mode returns no
+ * condition, byte-for-byte unfenced — identical to `start()`'s own no-op
+ * there. Throws `WorkflowRevisionUnavailableError('not-installed')` should
+ * the entry have vanished in the narrow window since this same revision was
+ * already confirmed resolvable earlier in `fork()` — a genuine loss, not a
+ * false positive, and still entirely before any commit (no partial write).
+ */
+export async function buildForkCatalogEntryCondition(
+  internals: EngineInternals,
+  type: string,
+  persistedRevision: string | undefined,
+): Promise<ConditionalBatchCondition[]> {
+  if (internals.options.ownershipMode === 'none' || persistedRevision === undefined) {
+    return [];
+  }
+  return [await buildCatalogEntryRevisionCondition(internals, type, persistedRevision)];
 }
 
 export function createForkLineage(

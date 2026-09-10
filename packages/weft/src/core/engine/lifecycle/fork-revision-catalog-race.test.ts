@@ -1,0 +1,163 @@
+/**
+ * WFT-21, Codex review round 1, P1: fork's own commit fenced against a
+ * concurrent `removeWorkflowRevision()` targeting the fork's persisted
+ * revision.
+ *
+ * An explicit-revision fork ({@link ForkOptions.revision}) onto a revision
+ * OTHER than the source run's own pin performs only a process-local
+ * availability check ({@link assertForkRevisionResolvable}) — unlike a
+ * fresh `engine.start()`, it reserves no `inFlightStartsByRevision` entry,
+ * so nothing durable protects the target revision between that check and
+ * the fork's own commit. Before this fix, `fork()`'s `commitFencedEngineWrite`
+ * call carried NO base conditions at all: a `removeWorkflowRevision()` racing
+ * concurrently against the SAME target revision could observe zero
+ * references (the fork hasn't committed yet, so nothing pins the revision),
+ * delete the catalog entry, and the fork's own commit — landing right
+ * behind it — would still durably persist a running `WorkflowState` pinned
+ * to a revision the catalog now claims is gone.
+ *
+ * `buildForkCatalogEntryCondition()` (`fork-helpers.ts`) closes this by
+ * reusing `start()`'s own `buildCatalogEntryRevisionCondition` fence: under
+ * any ownership mode besides `'none'`, the fork's commit now conditions on
+ * the target revision's catalog-entry bytes still matching what the fork
+ * itself observed — so whichever operation lands second loses its CAS. This
+ * test proves the fix end to end: park the fork's own commit exactly there,
+ * let `removeWorkflowRevision()` complete underneath it, then prove the
+ * fork's own commit fails closed (not a silent, durably orphaned write).
+ */
+import { describe, expect, it } from 'bun:test';
+
+import { KEYS } from '../../../storage/interface.ts';
+import { MemoryStorage } from '../../../storage/memory.ts';
+import { ActivityRegistry } from '../../activity-registry.ts';
+import { Engine } from '../../engine.ts';
+import { buildWorkflowManifestFromDefinition } from '../../registry-workflow-manifest.ts';
+import { workflowSource } from '../../source/index.ts';
+import { workflow, type WorkflowContext, type WorkflowDefinition } from '../../types.ts';
+import { copyWorkflowDefinition } from '../construction.ts';
+import { getWorkflowCatalog, removeWorkflowRevision } from '../index.ts';
+import { buildRegistrationEntry } from '../registration.ts';
+
+async function revisionFor(name: string, definition: WorkflowDefinition): Promise<string> {
+  const entry = buildRegistrationEntry(name, definition);
+  const registered = copyWorkflowDefinition(name, entry);
+  const manifest = await buildWorkflowManifestFromDefinition(
+    registered,
+    new ActivityRegistry().listDefinitions(),
+  );
+  return manifest.revision;
+}
+
+describe('fork() vs. a concurrent removeWorkflowRevision() — WFT-21 Codex review P1', () => {
+  it("fails the fork's own commit closed when its target revision is removed underneath it, rather than persisting an orphaned running state", async () => {
+    const storage = new MemoryStorage();
+    const type = 'fork-catalog-race';
+    const definitionV1 = workflow({ name: type, description: 'v1' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      return yield* ctx.waitForSignal<string>('go');
+    });
+    const definitionV2 = workflow({ name: type, description: 'v2' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      return yield* ctx.waitForSignal<string>('go');
+    });
+    const revisionV1 = await revisionFor(type, definitionV1);
+    const revisionV2 = await revisionFor(type, definitionV2);
+
+    // A real, lease-holding engine — `buildForkCatalogEntryCondition` is a
+    // no-op under the default `ownership: 'none'`, so this race needs a
+    // mode where `ownershipMode !== 'none'` to be reachable at all.
+    const engineA = await Engine.create({
+      storage,
+      ownership: 'lease',
+      leaseRenewInterval: '1s',
+      leaseTtl: '2s',
+    });
+    try {
+      engineA.registerSource(
+        workflowSource(
+          { name: type, location: './v1.ts', exportName: 'v1', revision: revisionV1 },
+          async () => ({ v1: definitionV1 }),
+        ),
+      );
+      // The source run pins to v1 and stays non-terminal (parked on
+      // `waitForSignal`) — a durable reference to v1, never to v2.
+      const sourceHandle = await engineA.start(type, null, { id: 'fork-catalog-race-source' });
+
+      // Register AND resolve v2 as a second candidate — resolving installs
+      // it into the durable catalog (a real `catalog-entry:` record) without
+      // activating it, so it stays unreferenced and removable.
+      engineA.registerSource(
+        workflowSource(
+          { name: type, location: './v2.ts', exportName: 'v2', revision: revisionV2 },
+          async () => ({ v2: definitionV2 }),
+        ),
+      );
+      await engineA.resolveWorkflowSource(type, revisionV2);
+      expect(await getWorkflowCatalog(engineA).hasInstalled(type, revisionV2)).toBe(true);
+
+      // `removeWorkflowRevision()` itself commits unfenced (no lease/claim
+      // needed for its own writes), so a plain, unleased engine sharing the
+      // SAME storage is a legitimate separate caller — mirrors
+      // `catalog-removal.test.ts`'s own separate-process pattern.
+      const engineB = new Engine({ storage });
+      try {
+        const gate = Promise.withResolvers<void>();
+        const entered = Promise.withResolvers<void>();
+        const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+        let paused = false;
+        storage.conditionalBatch = async (conditions, operations) => {
+          if (!paused) {
+            paused = true;
+            entered.resolve();
+            await gate.promise;
+          }
+          return originalConditionalBatch(conditions, operations);
+        };
+
+        // Park the fork's own commit exactly at its `conditionalBatch` call
+        // — its catalog-entry condition already captured v2's current bytes
+        // (read before this gated call) before pausing here.
+        const forkPromise = engineA.fork(sourceHandle.id, { revision: revisionV2 });
+        await entered.promise;
+
+        // Restore the real `conditionalBatch` for engine B's own removal so
+        // it is not itself gated by the same wrapper.
+        storage.conditionalBatch = originalConditionalBatch;
+        const removed = await removeWorkflowRevision(engineB, type, revisionV2);
+        expect(removed).toEqual({ removed: true });
+        expect(await getWorkflowCatalog(engineB).hasInstalled(type, revisionV2)).toBe(false);
+
+        // Release the fork's parked commit — its own catalog-entry
+        // condition now points at bytes the delete above already
+        // invalidated, so the whole batch loses its CAS.
+        gate.resolve();
+        let forkError: unknown;
+        try {
+          await forkPromise;
+        } catch (error) {
+          forkError = error;
+        }
+        expect(forkError).toBeInstanceOf(Error);
+        expect((forkError as Error).message).toContain('lost its CAS race');
+
+        // No orphaned reference: the source's own run is the only `wf:`
+        // record for this type, and none of them are pinned to the
+        // now-removed v2.
+        const runs = await engineA.list({ type });
+        expect(runs.items).toHaveLength(1);
+        expect(runs.items[0]?.id).toBe(sourceHandle.id);
+        expect(runs.items[0]?.revision).toBe(revisionV1);
+        expect(await storage.get(KEYS.catalogEntry(type, revisionV2))).toBeNull();
+
+        await engineA.signal(sourceHandle.id, 'go', 'done');
+        await expect(sourceHandle.result()).resolves.toBe('done');
+      } finally {
+        engineB[Symbol.dispose]();
+      }
+    } finally {
+      await engineA.shutdown();
+    }
+  });
+});
