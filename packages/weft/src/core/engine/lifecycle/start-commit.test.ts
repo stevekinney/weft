@@ -216,17 +216,20 @@ describe('start-commit lifecycle helpers', () => {
     ).rejects.toBeInstanceOf(WorkflowAlreadyExistsError);
   });
 
-  it('reports a duplicate id when a purged winner leaves both keys matching again', async () => {
-    // The escalated purge race Codex flagged on #959. The winning run completed,
-    // RELEASED its concurrency slot, and was purged before this attribution runs, so
-    // both the workflow key and the concurrency key match their original
-    // expectations again. Retrying on the absence of a duplicate-id conflict would
-    // let the retry's batch commit and execute a SECOND run under an id the caller
-    // asked to be unique - so the start must fail closed instead.
+  it('fails closed when a lost batch shows no retryable cause at all', async () => {
+    // Both base conditions still match on re-read, so nothing retryable explains the
+    // miss. Attribution must not invent a retry; it reports the duplicate id, which
+    // is public, non-destructive, and retryable by the caller.
+    //
+    // Note this deliberately does NOT model "a winner acquired and released the
+    // concurrency slot": that condition is a monotonic atomic-state VERSION key
+    // (`buildWorkflowConcurrencyStartOperations` conditions on `snapshot.version`
+    // and writes `version + 1`; release increments again), so it can never return to
+    // the loser's expected value. An earlier revision of this test asserted exactly
+    // that impossible state — see the sibling test below for the real shape.
     const storage = new MemoryStorage();
     const context = createBaseContext(storage);
     const workflowKey = KEYS.workflow('workflow-start-commit');
-    // Both keys absent: exactly the post-purge, slot-released state.
     storage.conditionalBatch = async () => false;
 
     await expect(
@@ -246,10 +249,13 @@ describe('start-commit lifecycle helpers', () => {
   });
 
   it('retries admission only on positive evidence that concurrency is what missed', async () => {
-    // The one case that is safe to retry: the concurrency key demonstrably no longer
-    // matches, so the miss belongs to admission rather than the duplicate id. The
-    // start falls through to the retry loop and ends in the public
-    // `AtomicStateConflictError`.
+    // The retryable shape, modelled the way production actually looks: the
+    // concurrency condition is a monotonic atomic-state version key, so once it has
+    // moved it stays mismatched. Retrying is safe here only because the caller's
+    // earlier positive duplicate-id check already ran and found the workflow record
+    // still matching — the id is free right now, so the retry re-conditions on that
+    // same value and ends in the public `AtomicStateConflictError` rather than
+    // committing a second run. The purged-winner residual is WFT-153.
     const storage = new MemoryStorage();
     const context = createBaseContext(storage);
     const workflowKey = KEYS.workflow('workflow-start-commit');

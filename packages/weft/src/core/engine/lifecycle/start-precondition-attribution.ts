@@ -26,14 +26,28 @@ import { StartIdempotencyRaceLostError } from './start-commit-errors.ts';
  *
  * When concurrency conditions ARE present, retry only on positive evidence that the
  * retryable one is what missed — hence `hasWorkflowConcurrencyConflict`, invoked
- * lazily so the extra storage read happens only on that path. Inferring the
- * opposite way (retrying unless the duplicate-id key still shows a conflict) is what
- * makes the purge race dangerous rather than merely wasteful: a winner that
- * completed, released its concurrency slot AND was purged leaves BOTH keys matching
- * again, so the retry's batch commits and the losing start executes a SECOND run
- * under an id the caller asked to be unique. Failing closed costs at worst a
- * spurious `WorkflowAlreadyExistsError` on a transient admission miss, which is
- * public, non-destructive, and retryable by the caller.
+ * lazily so the extra storage read happens only on that path.
+ *
+ * That evidence is NOT proof the duplicate id was fine, and deliberately is not
+ * treated as such. The concurrency precondition is a monotonic atomic-state VERSION
+ * key (`buildWorkflowConcurrencyStartOperations` conditions on `snapshot.version`
+ * and writes `version + 1`; releasing the slot increments again rather than
+ * restoring), so once a same-id winner acquires and releases, that condition stays
+ * mismatched forever and reports a conflict regardless of what else missed. What
+ * makes retrying safe here is the caller's own earlier check: it re-reads the
+ * duplicate-id key positively and raises `WorkflowAlreadyExistsError` before this
+ * runs, so reaching this point means the workflow record currently matches the
+ * expectation — the id is free right now, and a retry re-conditions on that same
+ * still-matching value.
+ *
+ * The residual is the pre-compare-and-swap purge ABA (WFT-153): a winner purged
+ * between the read and the commit makes an absent record look never-used, which no
+ * value-comparing condition can detect. That is tracked separately and is the reason
+ * this function does not claim exclusive attribution.
+ *
+ * With no concurrency evidence at all, fail closed: something missed, nothing
+ * retryable explains it, and a spurious `WorkflowAlreadyExistsError` is public,
+ * non-destructive, and retryable by the caller.
  */
 export async function attributeLostStartPreconditionOrRetry(
   workflowId: string,
