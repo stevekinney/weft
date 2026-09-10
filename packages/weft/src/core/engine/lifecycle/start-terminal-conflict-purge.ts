@@ -47,6 +47,16 @@ export type StartDuplicateIdDecision = {
    * `WorkflowCatalog#activateRegistered`, which already hard-requires that
    * capability at `Engine.create()`. A store that cannot honour this condition
    * cannot host an engine that could start a workflow in the first place.
+   *
+   * KNOWN LIMITATION (PR #959 review). The condition compares a VALUE, so it cannot
+   * distinguish "this id was never used" from "a run existed here and was purged".
+   * If a racing winner commits, completes, and is purged or swept by retention
+   * before this batch commits, `wf:<id>` is absent again, `expectedValue: null`
+   * matches, and both starts execute. Closing that needs durable per-id generation
+   * or tombstone state a purge cannot restore — a new persisted mechanism, out of
+   * scope here. The window is narrow (a winner's whole lifecycle plus a purge inside
+   * one loser's read-to-commit gap) and the outcome is a duplicate run rather than
+   * the indefinite hang this fence exists to remove.
    */
   duplicateIdCondition: ConditionalBatchCondition;
 };
