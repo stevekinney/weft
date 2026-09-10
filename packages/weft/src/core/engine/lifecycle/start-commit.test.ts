@@ -183,13 +183,17 @@ describe('start-commit lifecycle helpers', () => {
     ).rejects.toBeInstanceOf(WorkflowAlreadyExistsError);
   });
 
-  it('still reports a duplicate id when concurrency admission is also present', async () => {
-    // Both kinds of base condition present, so the outcome alone cannot say which
-    // missed and the duplicate-id key is re-read to disambiguate.
+  it('reports a duplicate id when a purged winner leaves both keys matching again', async () => {
+    // The escalated purge race Codex flagged on #959. The winning run completed,
+    // RELEASED its concurrency slot, and was purged before this attribution runs, so
+    // both the workflow key and the concurrency key match their original
+    // expectations again. Retrying on the absence of a duplicate-id conflict would
+    // let the retry's batch commit and execute a SECOND run under an id the caller
+    // asked to be unique - so the start must fail closed instead.
     const storage = new MemoryStorage();
     const context = createBaseContext(storage);
     const workflowKey = KEYS.workflow('workflow-start-commit');
-    await storage.put(workflowKey, new Uint8Array([9]));
+    // Both keys absent: exactly the post-purge, slot-released state.
     storage.conditionalBatch = async () => false;
 
     await expect(
@@ -208,14 +212,15 @@ describe('start-commit lifecycle helpers', () => {
     ).rejects.toBeInstanceOf(WorkflowAlreadyExistsError);
   });
 
-  it('retries admission when the duplicate id is intact and only concurrency missed', async () => {
-    // The complement of the case above: the duplicate-id key still matches, so the
-    // miss belongs to concurrency admission, which is retryable - the start must
-    // fall through to the retry loop and end in the public `AtomicStateConflictError`
-    // rather than being misreported as a duplicate id.
+  it('retries admission only on positive evidence that concurrency is what missed', async () => {
+    // The one case that is safe to retry: the concurrency key demonstrably no longer
+    // matches, so the miss belongs to admission rather than the duplicate id. The
+    // start falls through to the retry loop and ends in the public
+    // `AtomicStateConflictError`.
     const storage = new MemoryStorage();
     const context = createBaseContext(storage);
     const workflowKey = KEYS.workflow('workflow-start-commit');
+    await storage.put('workflow-concurrency', new Uint8Array([7]));
     storage.conditionalBatch = async () => false;
 
     await expect(

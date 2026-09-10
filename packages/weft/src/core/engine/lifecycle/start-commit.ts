@@ -306,26 +306,29 @@ export async function buildAndCommitStartBatch(
     // re-fail this same condition on every attempt and end in a misleading
     // `AtomicStateConflictError`.
     if (context.duplicateIdCondition !== undefined) {
-      // Attribute by ELIMINATION whenever nothing else could have missed, rather
-      // than by re-reading the key. A re-read is not reliable here: the winning run
-      // can complete and be purged (or swept by retention) between the failed
-      // compare-and-swap and this check, restoring `wf:<id>` to the very value the
-      // condition expected. The conflict then reads as "no conflict" and the start
-      // would fall through to the `StartIdempotencyRaceLostError` sentinel below —
-      // which is internal and documented as never reaching a caller. With no
-      // workflow-concurrency conditions in this batch, the duplicate-id condition is
-      // the only base condition there was, so a `'precondition-lost'` outcome is
-      // proof enough on its own.
+      // Attribute by ELIMINATION, never by re-reading the duplicate-id key. A
+      // re-read is unsound here: the winning run can complete and be purged (or
+      // swept by retention) between the failed compare-and-swap and the check,
+      // restoring `wf:<id>` to the very value the condition expected, so the
+      // conflict reads back as "no conflict".
+      //
+      // With no workflow-concurrency conditions in this batch, the duplicate-id
+      // condition is the only base condition there was, so a `'precondition-lost'`
+      // outcome is proof on its own.
       if (workflowConcurrency === undefined) {
         throw new WorkflowAlreadyExistsError(workflowId);
       }
-      // Both kinds of base condition are present, so the outcome alone cannot say
-      // which missed. Re-read only the duplicate-id key: a concurrency admission
-      // miss is retryable and must fall through to the loop, while a duplicate id is
-      // terminal. The purge race above still applies, but mis-reading it here costs
-      // a retry rather than a leaked sentinel — the admission loop ends in
-      // `AtomicStateConflictError`, which is a public error.
-      if (await hasStartConditionConflict(internals, conditions, 'duplicate-id')) {
+      // Both kinds of base condition are present, so retry ONLY on positive
+      // evidence that the retryable one is what missed. Inferring the opposite way
+      // — retrying unless the duplicate-id key still shows a conflict — is what
+      // makes the purge race dangerous rather than merely wasteful: a winner that
+      // completed, released its concurrency slot AND was purged leaves BOTH keys
+      // matching again, so the retry's batch commits and the losing start executes
+      // a SECOND run under an id the caller asked to be unique. Failing closed
+      // costs at worst a spurious `WorkflowAlreadyExistsError` on a transient
+      // admission miss, which is public, non-destructive, and retryable by the
+      // caller.
+      if (!(await hasStartConditionConflict(internals, conditions, 'workflow-concurrency'))) {
         throw new WorkflowAlreadyExistsError(workflowId);
       }
     } else if (workflowConcurrency === undefined) {
