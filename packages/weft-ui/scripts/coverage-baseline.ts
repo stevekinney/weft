@@ -189,11 +189,56 @@ const DARWIN_BASELINE: CoverageBaseline = {
       functionsFound: 532,
       functionsHit: 520,
     },
+    // Re-measured 2026-09-10 for WFT-115 (contract identity, full contract
+    // surface, and the new Revisions/Activate panel). Darwin local
+    // measurement: `bun run check:coverage` at HEAD, `coverage/lcov.info`
+    // parsed with this file's own `parseLcov`/`aggregateByArea` (see the
+    // repo-relative `scripts/agg_coverage.py`-style aggregation this number
+    // was cross-checked against). Investigated every regressed line/function
+    // individually before bumping rather than bumping blind:
+    //   - `workflow-revisions-panel.svelte` (new, 554 LF/114 FNF) is the
+    //     large majority of the delta. Its `.svelte` DA line numbers are
+    //     COMPILED-OUTPUT line numbers, not source lines (confirmed: this
+    //     file's LF/FNF both exceed its own 488-line raw source, so no
+    //     `sed`/`awk` reading of "the uncovered line" is trustworthy for a
+    //     `.svelte` file — a lesson worth recording for the next person who
+    //     tries). Of its original 24 uncovered lines / 4 uncovered
+    //     functions, one real production bug was found and fixed
+    //     (`$activeQuery.isError` had NO rendered branch at all — a
+    //     non-NotFound `weft.workflows.active.get` fault silently fell
+    //     through to "every row shows Installed, no Active badge, no
+    //     banner" instead of the fault UI every other query state gets;
+    //     `{:else if $activeQuery.isError}` + `QueryFaultBanner` added),
+    //     three more real test gaps were closed (a `revisions.list` fault,
+    //     the explicit empty-state text, and a success-shaped-but-malformed
+    //     `revisions.activate` response never fabricating an outcome
+    //     banner) — bringing it to 5 uncovered lines / 2 uncovered
+    //     functions. The residual 3-line gap (three consecutive lines
+    //     inside the `{#each rows}` row-identity block, sandwiched between
+    //     two lines that DO show non-zero hits) reproduces the exact
+    //     "covered code reports DA:0" pattern this file already documents
+    //     for `scopes.svelte.ts` above and for `src/routes/dashboard`'s
+    //     Linux floor below — confirmed not a real gap because 6+ of
+    //     `workflow-revisions-panel.test.ts`'s passing tests directly
+    //     assert the "Active"/"Installed" badge text that only renders if
+    //     that exact block executed.
+    //   - `registry-detail.svelte` (+4 uncovered lines, +3 functions) and
+    //     `registry-view.ts` (+1 uncovered line) are pre-existing,
+    //     untouched-by-this-PR code paths (`compareCodepoint`'s `a === b`
+    //     tie-return branch in the latter) whose relative weight in the
+    //     area average simply grew once `workflow-revisions-panel.svelte`
+    //     expanded the area's total denominator.
+    //   - `health-tab.svelte`'s pre-existing 2-line gap is unrelated static
+    //     hint-paragraph text inside an already-tested `{#if preview}`
+    //     branch (`health-tab.test.ts`'s "renders a codegen preview..."
+    //     test already exercises that branch) — another compiled-output
+    //     attribution artifact, not new dead code from this PR's 1-line
+    //     query-key-unification edit to that file.
     'src/routes/system': {
-      linesFound: 4901,
-      linesHit: 4881,
-      functionsFound: 1022,
-      functionsHit: 1005,
+      linesFound: 5850,
+      linesHit: 5821,
+      functionsFound: 1224,
+      functionsHit: 1201,
     },
     'src/routes/workers': {
       linesFound: 5685,

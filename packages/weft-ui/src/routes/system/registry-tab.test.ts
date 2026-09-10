@@ -273,6 +273,15 @@ describe('RegistryTab', () => {
     expect(
       await findByText('No input schema declared — this definition accepts an untyped payload.'),
     ).not.toBeNull();
+
+    // `heartbeat`'s fixture contract declares no signals/updates/queries/
+    // activities/finalizer at all (WFT-115) — every contract-section panel
+    // renders its honest empty note rather than nothing.
+    expect(await findByText('No signals declared.')).not.toBeNull();
+    expect(await findByText('No updates declared.')).not.toBeNull();
+    expect(await findByText('No queries declared.')).not.toBeNull();
+    expect(await findByText('No activities declared.')).not.toBeNull();
+    expect(await findByText('No finalizer declared.')).not.toBeNull();
   });
 
   test('shows the honest "no activities" note when the engine has none registered', async () => {

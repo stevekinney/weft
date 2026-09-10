@@ -251,6 +251,8 @@
     </div>
   {:else if $revisionsQuery.isError}
     <QueryFaultBanner error={$revisionsQuery.error} onRetry={() => $revisionsQuery.refetch()} />
+  {:else if $activeQuery.isError}
+    <QueryFaultBanner error={$activeQuery.error} onRetry={() => $activeQuery.refetch()} />
   {:else if isMalformed}
     <div class="weft-revisions-panel__malformed" role="alert">
       <AlertTriangle aria-hidden="true" size={16} />

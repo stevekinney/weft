@@ -21,8 +21,10 @@ test('operator inspects installed revisions and sees a refused activation report
 
   const revisionsPanel = page.getByRole('region', { name: 'Installed revisions' });
   await expect(revisionsPanel).toBeVisible();
-  await expect(revisionsPanel.getByText('Active')).toBeVisible();
-  await expect(revisionsPanel.getByText('Installed')).toBeVisible();
+  await expect(revisionsPanel.getByText('Active', { exact: true })).toBeVisible();
+  // `{ exact: true }` — a substring match would also hit the "Installed at"
+  // meta term sitting right next to the "Installed" badge in the same row.
+  await expect(revisionsPanel.getByText('Installed', { exact: true })).toBeVisible();
   await expect(revisionsPanel.getByRole('button', { name: 'Refresh' })).toBeVisible();
 
   const activateButton = revisionsPanel.getByRole('button', { name: 'Activate' });
@@ -34,10 +36,16 @@ test('operator inspects installed revisions and sees a refused activation report
   await expect(dialog.getByText('order-processing-candidate-2', { exact: false })).toBeVisible();
   await dialog.getByRole('button', { name: 'Activate' }).click();
 
-  await expect(page.getByText('Incompatible')).toBeVisible();
-  await expect(page.getByText(/contract-hash-mismatch/)).toBeVisible();
-  await expect(page.getByText(/workflow-version-incompatible/)).toBeVisible();
-  await expect(page.getByText(/artifact-revision-mismatch/)).toBeVisible();
+  // Scoped to the outcome banner's own `role="alert"` region rather than
+  // the whole page — the dialog's own description text also contains the
+  // word "incompatible" (lowercase, case-insensitive substring match) and
+  // could otherwise still be mid-unmount when this assertion runs.
+  const outcomeBanner = page.getByRole('alert').filter({ hasText: 'Incompatible' });
+  await expect(outcomeBanner).toBeVisible();
+  await expect(outcomeBanner.getByText('Incompatible', { exact: true })).toBeVisible();
+  await expect(outcomeBanner.getByText(/contract-hash-mismatch/)).toBeVisible();
+  await expect(outcomeBanner.getByText(/workflow-version-incompatible/)).toBeVisible();
+  await expect(outcomeBanner.getByText(/artifact-revision-mismatch/)).toBeVisible();
 
   await checkA11y('system — registry revisions panel, refused activation');
 });
@@ -61,7 +69,9 @@ test('the Revisions panel is usable across supported widths and themes', async (
 
       const revisionsPanel = page.getByRole('region', { name: 'Installed revisions' });
       await expect(revisionsPanel).toBeVisible();
-      await expect(revisionsPanel.getByText('Active')).toBeVisible();
+      // `{ exact: true }` — a substring match would also hit the "Activate"
+      // button's own text node.
+      await expect(revisionsPanel.getByText('Active', { exact: true })).toBeVisible();
       await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
         true,

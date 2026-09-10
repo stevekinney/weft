@@ -82,6 +82,78 @@ describe('WorkflowRevisionsPanel', () => {
     expect(await findByText(/revisions list this console doesn't recognize/)).not.toBeNull();
   });
 
+  test('shows the explicit empty state when no revisions are installed', async () => {
+    scripted = new ScriptedFetch();
+    scripted.routeJsonRpcMethod('weft.workflows.revisions.list', []);
+    scripted.routeJsonRpcError('weft.workflows.active.get', {
+      code: -32020,
+      message: 'never activated',
+      data: { weftCode: 'NotFound', httpStatus: 404 },
+    });
+    const { findByText } = await renderPanel();
+    expect(await findByText('No revisions installed for this workflow yet.')).not.toBeNull();
+  });
+
+  test('a revisions.list server fault renders the fault banner with a working retry', async () => {
+    scripted = new ScriptedFetch();
+    // `MethodNotFound` (-> the 'not-found' treatment) rather than
+    // `EngineFailure`: both queries use `query.ts`'s default retry policy
+    // (never overridden here, unlike e.g. `mcp-panel.svelte`'s `retry:
+    // false`), which retries an `internal`-treatment fault up to 3 times
+    // with backoff — genuine production behavior, but multiple seconds of
+    // real backoff in a unit test. A non-retrying treatment still exercises
+    // exactly the same `{:else if $revisionsQuery.isError}` branch this
+    // test targets, deterministically and fast.
+    scripted.routeJsonRpcError('weft.workflows.revisions.list', {
+      code: -32020,
+      message: 'weft.workflows.revisions.list is not available on this server',
+      data: { weftCode: 'MethodNotFound', httpStatus: 404 },
+    });
+    scripted.routeJsonRpcMethod(
+      'weft.workflows.active.get',
+      activePointer('order-processing-rev-1'),
+    );
+    const { findByText, findByRole } = await renderPanel();
+    expect(await findByText('Not found')).not.toBeNull();
+
+    const callsBeforeRetry = scripted.calls.length;
+    const retryButton = await findByRole('button', { name: /retry/i });
+    await fireEvent.click(retryButton);
+    await waitFor(() => {
+      expect(scripted?.calls.length).toBeGreaterThan(callsBeforeRetry);
+    });
+  });
+
+  test('an active.get server fault (not the never-activated NotFound case) renders the fault banner instead of silently hiding the active badge', async () => {
+    scripted = new ScriptedFetch();
+    scripted.routeJsonRpcMethod('weft.workflows.revisions.list', [
+      revisionRecord('order-processing-rev-1'),
+    ]);
+    // `Forbidden` (-> the 'unauthorized' treatment, non-retrying) rather
+    // than `EngineFailure` — see the sibling test above for why a
+    // retryable `internal` fault is the wrong choice for a fast, focused
+    // unit test of this branch. `activeQuery`'s own catch only special-
+    // cases `NotFound`; every other fault code (this one included) falls
+    // through to `throw error`, reaching `$activeQuery.isError` untouched.
+    scripted.routeJsonRpcError('weft.workflows.active.get', {
+      code: -32030,
+      message: 'Caller lacks workflows:read for this workflow catalog entry',
+      data: { weftCode: 'Forbidden', httpStatus: 403 },
+    });
+    const { findByText, findByRole, queryByText } = await renderPanel();
+    expect(await findByText('Not authorized')).not.toBeNull();
+    // Never silently falls back to "every row is just Installed" — the
+    // fault banner replaces the row list entirely.
+    expect(queryByText('Installed')).toBeNull();
+
+    const callsBeforeRetry = scripted.calls.length;
+    const retryButton = await findByRole('button', { name: /retry/i });
+    await fireEvent.click(retryButton);
+    await waitFor(() => {
+      expect(scripted?.calls.length).toBeGreaterThan(callsBeforeRetry);
+    });
+  });
+
   test('lists installed revisions, flagging exactly one as Active and offering Activate on the rest', async () => {
     scripted = new ScriptedFetch();
     scripted.routeJsonRpcMethod('weft.workflows.revisions.list', [
@@ -234,6 +306,36 @@ describe('WorkflowRevisionsPanel', () => {
 
     expect(await findByText(/current generation 4/)).not.toBeNull();
     expect(await findByText('Conflict')).not.toBeNull();
+  });
+
+  test('a success-shaped but malformed activation response never renders an outcome banner', async () => {
+    scripted = new ScriptedFetch();
+    scripted.routeJsonRpcMethod('weft.workflows.revisions.list', [
+      revisionRecord('order-processing-rev-1'),
+      revisionRecord('order-processing-rev-2'),
+    ]);
+    scripted.routeJsonRpcMethod(
+      'weft.workflows.active.get',
+      activePointer('order-processing-rev-1'),
+    );
+    // `applied: true` but the `pointer` fails `isAppliedActivationResult`'s
+    // structural guard — the wire lied about its own shape (or a future
+    // server added a field this build doesn't understand in a way that
+    // broke the pointer). Never fabricated into a "Compatible" banner.
+    scripted.routeJsonRpcMethod('weft.workflows.revisions.activate', {
+      applied: true,
+      pointer: { revision: 'order-processing-rev-2' },
+    });
+
+    const { getByRole, queryByText, findByRole } = await renderPanel();
+    const activateButton = await waitFor(() => getByRole('button', { name: 'Activate' }));
+    await fireEvent.click(activateButton);
+    const dialog = await waitFor(() => getByRole('dialog'));
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Activate' }));
+
+    await findByRole('button', { name: 'Activate' });
+    expect(queryByText('Compatible')).toBeNull();
+    expect(queryByText('Incompatible')).toBeNull();
   });
 
   test('a NotFound/server fault on activation routes through the existing six-code fault mapping instead of rendering an outcome banner', async () => {
