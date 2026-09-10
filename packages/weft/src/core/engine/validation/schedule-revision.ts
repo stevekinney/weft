@@ -31,6 +31,17 @@ export function decodeScheduleRevisionPolicyFields(
 ): ScheduleRevisionFields | null {
   const rawRevisionPolicy = decoded['revisionPolicy'];
   if (rawRevisionPolicy === undefined) {
+    // A legacy (pre-WFT-20) record has neither field — decode as
+    // 'active-at-fire'. But a record with a stray `pinnedRevision` and no
+    // `revisionPolicy` is not legacy; it is malformed (or externally
+    // tampered), since no writer this codebase produces would ever persist
+    // a pin without also persisting the policy that names it. Silently
+    // defaulting such a record to 'active-at-fire' would ignore the pin
+    // and execute whichever revision happens to be active at fire time —
+    // reject it instead.
+    if (decoded['pinnedRevision'] !== undefined) {
+      return rejectInvalidScheduleRecord(scheduleId, 'with a pinnedRevision but no revisionPolicy');
+    }
     return { revisionPolicy: 'active-at-fire' };
   }
   if (!SCHEDULE_REVISION_POLICIES.has(rawRevisionPolicy as ScheduleState['revisionPolicy'])) {

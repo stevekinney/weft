@@ -107,6 +107,9 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
       emit: (message) => {
         this.#emit(message);
       },
+      forgetWorkflowRevision: (workflowId) => {
+        this.#workflowRevisions.delete(workflowId);
+      },
     });
     this.#dispatcher = new WorkerExecutionDispatcher({
       pool: this.#pool,

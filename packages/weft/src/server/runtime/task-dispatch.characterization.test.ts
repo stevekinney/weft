@@ -305,6 +305,84 @@ describe('dispatchTaskImpl', () => {
     ).rejects.toThrow('non-JSON-serializable');
   });
 
+  it('throws when workflowRevision is an empty string (WFT-20)', async () => {
+    context = createMinimalContext();
+    options = createMinimalOptions();
+
+    await expect(
+      dispatchTaskImpl(context, options, {
+        operationId: 'op-empty-revision',
+        activityName: 'doWork',
+        workflowType: 'testWorkflow',
+        input: null,
+        workflowRevision: '',
+      }),
+    ).rejects.toThrow('invalid "workflowRevision"');
+  });
+
+  it('throws when workflowRevision exceeds the bounded identifier byte limit (WFT-20)', async () => {
+    context = createMinimalContext();
+    options = createMinimalOptions();
+
+    await expect(
+      dispatchTaskImpl(context, options, {
+        operationId: 'op-oversized-revision',
+        activityName: 'doWork',
+        workflowType: 'testWorkflow',
+        input: null,
+        workflowRevision: 'x'.repeat(10_000),
+      }),
+    ).rejects.toThrow('invalid "workflowRevision"');
+  });
+
+  it("reuses the durable ledger record's revision, not the caller's, for an already-queued long-poll hint (WFT-20)", async () => {
+    // A concurrent dispatch for the same operationId may have already
+    // written a `queued` ledger record carrying a DIFFERENT revision than
+    // this caller supplies. The long-poll match hint must reflect the
+    // durable record a worker will actually claim and be authorized to
+    // complete against — not whichever caller happened to reuse it.
+    const operationId = 'op-reuse-ledger-revision';
+    const storage = new MemoryStorage();
+    const existing: RemoteTaskQueued = {
+      recordVersion: 1,
+      operationId,
+      workflowType: 'testWorkflow',
+      activityName: 'doWork',
+      queue: 'default',
+      input: null,
+      headers: {},
+      visibilityTimeoutMilliseconds: 30_000,
+      createdAt: Date.now(),
+      generation: 0,
+      state: 'queued',
+      attempt: 1,
+      availableAt: Date.now(),
+      firstQueuedAt: Date.now(),
+      lastQueuedAt: Date.now(),
+      retryCount: 0,
+      requeueCount: 0,
+      workflowRevision: 'ledger-revision',
+    };
+    await storage.put(taskLedgerKey(operationId), encodeRemoteTaskRecord(existing));
+
+    context = createMinimalContext();
+    options = createMinimalOptions(storage);
+
+    const dispatched = await dispatchTaskImpl(context, options, {
+      operationId,
+      activityName: 'doWork',
+      workflowType: 'testWorkflow',
+      queue: 'default',
+      input: null,
+      workflowRevision: 'caller-revision',
+    });
+
+    expect(dispatched).toBe(true);
+    const [pending] = context.taskQueue.peekPending('default');
+    expect(pending?.operationId).toBe(operationId);
+    expect(pending?.workflowRevision).toBe('ledger-revision');
+  });
+
   it('falls back to the winning record when the durable create races a concurrent dispatch', async () => {
     /**
      * Simulates the TOCTOU gap `enqueueTaskForLongPoll` documents: its own

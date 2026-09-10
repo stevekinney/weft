@@ -28,6 +28,34 @@ describe('Worker protocol message accounting', () => {
     );
   });
 
+  it('stamps workflowRevision on the bounded failure envelope when supplied (WFT-20)', () => {
+    // Without this, `postOutboundMessage`'s bounded fallback for an oversized
+    // checkpoint/terminal message would fail the host's strict revision
+    // check and get the worker discarded for every other workflow it owns.
+    const failure = createBoundedWorkerFailureMessage({
+      workflowId: 'workflow-with-bounded-worker-failure',
+      error: 'x'.repeat(10_000),
+      failureCategory: 'resource',
+      turnId: 17,
+      workflowRevision: 'rev-1',
+    });
+
+    expect(failure).toMatchObject({ type: 'failed', workflowRevision: 'rev-1' });
+    expect(estimateWorkerProtocolMessageBytes(failure)).toBeLessThanOrEqual(
+      MIN_WORKER_PROTOCOL_MESSAGE_BYTES,
+    );
+  });
+
+  it('omits workflowRevision on the bounded failure envelope when not supplied', () => {
+    const failure = createBoundedWorkerFailureMessage({
+      workflowId: 'workflow-with-bounded-worker-failure',
+      error: 'boom',
+      failureCategory: 'resource',
+    });
+
+    expect('workflowRevision' in failure).toBe(false);
+  });
+
   it('counts binary payload bytes without requiring JSON-shaped messages', () => {
     const message = {
       type: 'checkpoint',

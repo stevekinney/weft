@@ -1531,6 +1531,64 @@ describe('handleWorkerWebSocketMessage', () => {
       expect(protocolErrors).toHaveLength(0);
     });
 
+    it('rejects a taskResult with a missing workflowRevision echo when the in-flight entry has one', async () => {
+      const context = minimalServerContext();
+      const storage = new MemoryStorage();
+      const options = minimalServeOptions(storage);
+      const ws = createFakeWs();
+
+      handleWorkerWebSocketMessage(
+        context,
+        options,
+        ws as never,
+        registerMessageJson('w-revision-omitted', ['doWork'], { concurrency: 5 }),
+        NOOP_CLEANUP,
+      );
+      await waitForRegistrationSideEffect(
+        () => context.registry.getWorker('w-revision-omitted') !== undefined,
+      );
+
+      context.registry.assignTask(
+        'w-revision-omitted',
+        'op-revision-omitted',
+        30_000,
+        undefined,
+        'attempt-token',
+        'revision-expected',
+      );
+      await writeLeasedLedgerRecord(storage, {
+        operationId: 'op-revision-omitted',
+        workerSessionId: 'w-revision-omitted',
+      });
+
+      handleWorkerWebSocketMessage(
+        context,
+        options,
+        ws as never,
+        JSON.stringify({
+          type: 'taskResult',
+          operationId: 'op-revision-omitted',
+          attemptToken: 'attempt-token',
+          status: 'completed',
+          value: 'done',
+          // No workflowRevision field at all — the in-flight entry has one
+          // ('revision-expected'), so an additive-policy reading that treats
+          // "both missing" as the only tolerated combination must reject
+          // this, not silently accept it (mirrors
+          // task-polling.characterization.test.ts's equivalent long-poll case).
+        }),
+        NOOP_CLEANUP,
+      );
+
+      // Still assigned — the completion was rejected, not applied.
+      expect(context.registry.isAssigned('op-revision-omitted')).toBe(true);
+      const protocolErrors = ws.sentMessages
+        .map((raw) => JSON.parse(raw))
+        .filter((msg) => msg.type === 'protocolError');
+      expect(protocolErrors).toHaveLength(1);
+      expect(protocolErrors[0].message).toContain('revision');
+    });
+
     it('accepts a taskResult with a missing workflowRevision echo when the in-flight entry has none', async () => {
       const context = minimalServerContext();
       const storage = new MemoryStorage();

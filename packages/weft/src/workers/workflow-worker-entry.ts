@@ -138,6 +138,10 @@ function postOutboundMessage(
   message: WorkerOutboundMessage,
   inboundMessage: Extract<WorkerInboundMessage, { type: 'run' | 'resume' }>,
 ): void {
+  // Read the captured revision (WFT-20) before any delete below, so the
+  // bounded fallback in the catch block can still stamp it even though the
+  // active turn's outbound message never made it past the size guard.
+  const activeTurnRevision = runnerContext.workflowRevisions.get(inboundMessage.workflowId);
   const outboundMessage = attachWorkerProtocol(runnerContext, message, inboundMessage);
   // The captured revision (WFT-20) is consumed here — `cleanupWorkflowRunnerState`
   // deliberately leaves `workflowRevisions` alone (see its own doc comment) so
@@ -160,6 +164,7 @@ function postOutboundMessage(
       error: error instanceof Error ? error.message : String(error),
       failureCategory: 'resource',
       ...(inboundMessage.turnId === undefined ? {} : { turnId: inboundMessage.turnId }),
+      ...(activeTurnRevision === undefined ? {} : { workflowRevision: activeTurnRevision }),
     });
     try {
       workerPostMessage(failedMessage);

@@ -52,6 +52,18 @@ function isBoundedIdentifier(
   return typeof value === 'string' && value.length > 0 && utf8ByteLength(value) <= maxBytes;
 }
 
+/**
+ * Whether `value` is a valid `workflowRevision` per the durable task
+ * ledger's non-empty, bounded identifier contract — the same contract
+ * `decodeRemoteTaskRecord` enforces on read. Exported so dispatch-time
+ * callers (`task-dispatch.ts`) can reject an invalid caller-supplied
+ * revision before it reaches a ledger write, instead of writing a record
+ * that later fails to decode.
+ */
+export function isValidWorkflowRevision(value: unknown): value is string {
+  return isBoundedIdentifier(value);
+}
+
 function isBoundedOptionalIdentifier(
   value: unknown,
   maxBytes = MAX_TASK_IDENTIFIER_BYTES,

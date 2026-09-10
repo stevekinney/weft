@@ -1546,14 +1546,16 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       // the identical pattern already allowed for
       // `websocket-worker.ts`'s WorkerToServerMessage switch. `requireUncoveredLines`
       // is intentionally omitted for the same reason it is omitted there:
-      // `default: {` (156) is a case-label/brace line that flips between hit
+      // `default: {` (157) is a case-label/brace line that flips between hit
       // and unhit run to run with byte-identical source — a coverage-attribution
       // artifact, not a real reachability signal — so only the two dead
-      // statements inside it (159, 160) are guaranteed to read 0 every run.
+      // statements inside it (160, 161) are guaranteed to read 0 every run.
+      // (Shifted down by one line from the original 156–160 range by WFT-20's
+      // `rehydrateWorkerOwnership` gaining a `record.workflowRevision` argument.)
       {
         reason:
           'Compile-time exhaustiveness guard for a closed discriminated union has no reachable runtime path to test without an unsafe cast.',
-        lines: new Set([156, 157, 158, 159, 160]),
+        lines: new Set([157, 158, 159, 160, 161]),
       },
     ],
     [

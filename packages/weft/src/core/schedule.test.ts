@@ -507,6 +507,42 @@ describe('schedule record decoding', () => {
       '[weft] Ignoring malformed schedule "schedule-state" with a pinnedRevision but revisionPolicy is not "pinned".',
     );
   });
+
+  it('accepts a legacy schedule record with no revisionPolicy field, defaulting to "active-at-fire" (WFT-20)', () => {
+    const state = createScheduleState();
+    const { revisionPolicy: _omitted, ...legacyState } = state;
+    void _omitted;
+
+    const decoded = decodeScheduleState(encode(legacyState));
+
+    expect(decoded).not.toBeNull();
+    expect(decoded?.revisionPolicy).toBe('active-at-fire');
+  });
+
+  it('rejects a schedule record with a stray pinnedRevision but no revisionPolicy field at all (WFT-20)', () => {
+    using warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+
+    const state = createScheduleState();
+    const { revisionPolicy: _omitted, ...legacyState } = state;
+    void _omitted;
+
+    // No writer in this codebase persists a `pinnedRevision` without also
+    // persisting `revisionPolicy: 'pinned'` — a record with the former but
+    // not even the latter field is malformed (or externally tampered), not
+    // a legacy pre-WFT-20 record. It must not silently decode as
+    // 'active-at-fire' and ignore the pin.
+    const decoded = decodeScheduleState(
+      encode({
+        ...legacyState,
+        pinnedRevision: 'stray-revision',
+      }),
+    );
+
+    expect(decoded).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[weft] Ignoring malformed schedule "schedule-state" with a pinnedRevision but no revisionPolicy.',
+    );
+  });
 });
 
 describe('recurring schedules', () => {
