@@ -153,21 +153,6 @@ export async function buildForkCatalogEntryCondition(
 }
 
 /**
- * A SECOND, conditional in-flight reservation for `fork()` (WFT-21, Codex
- * review round 3, P1) — closes the one gap `fork()`'s own early
- * `targetRevision` reservation cannot cover: a legacy (pre-revision-pinning)
- * source run on a dynamic-source type with exactly one registered candidate
- * has `sourceState.revision` genuinely `undefined`, so `targetRevision`
- * (`options.revision ?? sourceState.revision`) is `undefined` too and the
- * early reservation is a no-op — yet the resolver still resolves, and the
- * fork still persists against, that sole candidate's real revision
- * (`persistedRevision`). Reserves that real revision instead, but ONLY when
- * it differs from `targetRevision` (otherwise the early reservation already
- * covers it, and a second reservation would double-count the fork's own
- * in-flight reference). See `fork-revision-catalog-race.test.ts`'s round-3
- * `describe` block for the full end-to-end race this closes.
- */
-/**
  * Build the error a lost `fork()` commit-time CAS race throws (WFT-21,
  * Codex review round 4, P2). A lost race on that commit is ALWAYS the
  * catalog-entry precondition (`forkCatalogEntryCondition`) — the only other
@@ -194,6 +179,21 @@ export function buildForkCommitLostRaceError(
   return new Error(`Fork of workflow "${workflowId}" lost its CAS race.`);
 }
 
+/**
+ * A SECOND, conditional in-flight reservation for `fork()` (WFT-21, Codex
+ * review round 3, P1) — closes the one gap `fork()`'s own early
+ * `targetRevision` reservation cannot cover: a legacy (pre-revision-pinning)
+ * source run on a dynamic-source type with exactly one registered candidate
+ * has `sourceState.revision` genuinely `undefined`, so `targetRevision`
+ * (`options.revision ?? sourceState.revision`) is `undefined` too and the
+ * early reservation is a no-op — yet the resolver still resolves, and the
+ * fork still persists against, that sole candidate's real revision
+ * (`persistedRevision`). Reserves that real revision instead, but ONLY when
+ * it differs from `targetRevision` (otherwise the early reservation already
+ * covers it, and a second reservation would double-count the fork's own
+ * in-flight reference). See `fork-revision-catalog-race.test.ts`'s round-3
+ * `describe` block for the full end-to-end race this closes.
+ */
 export function reserveLegacyForkTargetRevision(
   internals: EngineInternals,
   type: string,
