@@ -82,7 +82,11 @@ const maximumUnpackedBytes = 12 * 1024 * 1024;
 // WFT-85's outbox then adds its modules, the shared payload validators, and
 // the shared timing helpers on top of that; `prepack` on the merged tree
 // reports 1665.
-const maximumEntryCount = 1665;
+// WFT-15 through WFT-20 subsequently split revision-pinning, dynamic-source,
+// and task-dispatch responsibilities into focused implementation modules.
+// Those merged changes add 60 shipped `.js`/`.d.ts` entries; `npm pack
+// --dry-run --json --ignore-scripts` reports 1725 on the resulting tree.
+const maximumEntryCount = 1725;
 
 type PackFile = {
   path: string;

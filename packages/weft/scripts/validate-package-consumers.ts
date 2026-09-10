@@ -111,8 +111,12 @@ async function createConsumerProject(
           [packageName]: `file:${tarballPath}`,
         },
         devDependencies: {
-          '@types/bun': '1.3.13',
-          typescript: '5.9.3',
+          // Pin the downstream toolchain that reported this regression.
+          // bun-types accepts any @types/node version, so leaving it floating
+          // makes this strict check depend on the registry's moving latest tag.
+          '@types/bun': '1.3.14',
+          '@types/node': '25.9.6',
+          typescript: '6.0.3',
         },
       },
       null,
@@ -640,6 +644,63 @@ async function runTypeScriptConsumerSmoke(consumerDirectory: string): Promise<vo
   );
 }
 
+async function runStrictStorageBarrelTypeScriptSmoke(consumerDirectory: string): Promise<void> {
+  if (existsSync(join(consumerDirectory, 'node_modules', 'lmdb'))) {
+    throw new Error('strict storage-barrel consumer unexpectedly installed the optional lmdb peer');
+  }
+
+  const lmdbDeclaration = await Bun.file(
+    join(
+      consumerDirectory,
+      'node_modules',
+      '@lostgradient',
+      'weft',
+      'dist',
+      'storage',
+      'lmdb.d.ts',
+    ),
+  ).text();
+  if (/\b(?:from|import\s*\()\s*['"]lmdb['"]/.test(lmdbDeclaration)) {
+    throw new Error('dist/storage/lmdb.d.ts references the optional lmdb peer');
+  }
+
+  await Bun.write(
+    join(consumerDirectory, 'strict-storage-consumer.ts'),
+    [`import { MemoryStorage } from '${packageName}/storage';`, 'void MemoryStorage;'].join('\n'),
+  );
+  await Bun.write(
+    join(consumerDirectory, 'strict-storage-tsconfig.json'),
+    `${JSON.stringify(
+      {
+        compilerOptions: {
+          target: 'ESNext',
+          module: 'Preserve',
+          moduleResolution: 'bundler',
+          strict: true,
+          exactOptionalPropertyTypes: true,
+          skipLibCheck: false,
+          types: ['bun'],
+          noEmit: true,
+        },
+        include: ['strict-storage-consumer.ts'],
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  runCommand(
+    'strict TypeScript consumer imports the zero-native-dependency storage barrel without lmdb',
+    [
+      join(consumerDirectory, 'node_modules/.bin/tsc'),
+      '--noEmit',
+      '-p',
+      'strict-storage-tsconfig.json',
+    ],
+    consumerDirectory,
+  );
+}
+
 async function main(): Promise<void> {
   const workingDirectory = mkdtempSync(join(tmpdir(), 'weft-package-consumers-'));
   try {
@@ -651,6 +712,7 @@ async function main(): Promise<void> {
     await runCliServeSharesRootSingletonsWithDynamicWorkflowModuleSmoke(consumerDirectory);
     await runNodeConsumerSmoke(consumerDirectory);
     await runBrowserBundleSmoke(consumerDirectory);
+    await runStrictStorageBarrelTypeScriptSmoke(consumerDirectory);
     await runTypeScriptConsumerSmoke(consumerDirectory);
     await runEventFeedIntegrationSmoke(consumerDirectory);
   } finally {
