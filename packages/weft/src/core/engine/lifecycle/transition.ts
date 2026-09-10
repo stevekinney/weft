@@ -21,6 +21,7 @@ import { launchWorkflowFromCheckpoint } from './checkpoint-launch.ts';
 import {
   buildForkBatchOperations,
   buildForkCatalogEntryCondition,
+  buildForkCommitLostRaceError,
   buildForkSearchAttributes,
   createForkLineage,
   createForkedWorkflowState,
@@ -344,11 +345,10 @@ export async function fork(
   // `WorkflowState.revision`), never the catalog's currently active pointer
   // (WFT-19 review round 2): the active pointer can move between the
   // source run's start and this fork call, and resolving via the
-  // active-pointer path would launch the FORKED run against the wrong
-  // code from the very first turn. `options.revision` (WFT-21) is an
-  // explicit, validated opt-in to fork against a DIFFERENT installed
-  // revision — validated before any checkpoint read. See
-  // `resolveForkTargetRevision()`'s own doc for the full precedence chain.
+  // active-pointer path would launch the FORKED run against the wrong code
+  // from the very first turn. `options.revision` (WFT-21) is an explicit,
+  // validated opt-in to fork against a DIFFERENT installed revision —
+  // validated before any checkpoint read. See `resolveForkTargetRevision()`'s doc.
   const targetRevision = resolveForkTargetRevision(internals, sourceState, options);
   // Reserve an in-flight-start slot against `targetRevision` BEFORE any
   // further async work (WFT-21, Codex review round 2, P1): closes the
@@ -362,8 +362,7 @@ export async function fork(
   // that function's own doc. Released, unconditionally, in this function's
   // own outer `finally` below.
   const inFlightRevision = reserveInFlightStart(internals, sourceState.type, targetRevision);
-  // Second, conditional reservation — see `reserveLegacyForkTargetRevision()`'s
-  // doc (WFT-21, Codex review round 3, P1); released below unconditionally.
+  // See `reserveLegacyForkTargetRevision()`'s doc (round 3, P1).
   let legacyResolvedInFlightRevision: string | undefined;
   try {
     // `revision` here is the resolver's OWN resolved revision — threaded
@@ -380,8 +379,7 @@ export async function fork(
             `No workflow registered with name "${sourceState.type}" (needed to fork "${sourceWorkflowId}")`,
           ),
       );
-    // The fork's own persisted `revision` (WFT-21) — see
-    // `resolveForkPersistedRevision()`'s own doc for the precedence chain.
+    // The fork's own persisted `revision` — see `resolveForkPersistedRevision()`'s doc.
     const persistedRevision = resolveForkPersistedRevision(options, sourceState, resolvedRevision);
     legacyResolvedInFlightRevision = reserveLegacyForkTargetRevision(
       internals,
@@ -426,7 +424,7 @@ export async function fork(
       ...sourceCheckpointForFork,
       createdAt: forkedAt,
       workflowId,
-      // The forked run's own fresh token, never the source's (WFT-21).
+      // The fork's own fresh token, never the source's.
       ...(forkState.workflowExecutionToken !== undefined && {
         workflowExecutionToken: forkState.workflowExecutionToken,
       }),
@@ -438,9 +436,8 @@ export async function fork(
       ),
     };
 
-    // Fence the commit below against a concurrent removeWorkflowRevision()
-    // targeting this fork's own persisted revision (WFT-21, Codex review
-    // round 1, P1) — see `buildForkCatalogEntryCondition()`'s own doc.
+    // Fences the commit below against a concurrent removeWorkflowRevision()
+    // (WFT-21 round 1, P1) — see `buildForkCatalogEntryCondition()`'s doc.
     const forkCatalogEntryCondition = await buildForkCatalogEntryCondition(
       internals,
       sourceState.type,
@@ -466,7 +463,13 @@ export async function fork(
           callbacks,
         ),
         forkCatalogEntryCondition,
-        () => new Error(`Fork of workflow "${workflowId}" lost its CAS race.`),
+        () =>
+          buildForkCommitLostRaceError(
+            workflowId,
+            sourceState.type,
+            persistedRevision,
+            forkCatalogEntryCondition,
+          ),
       );
       internals.eventLogHeads.set(workflowId, EMPTY_EVENT_HEAD);
       setWorkflowStartHeaders(internals, workflowId, persistedWorkflowStartHeaders, callbacks);

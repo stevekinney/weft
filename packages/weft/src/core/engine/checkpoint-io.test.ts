@@ -8,9 +8,10 @@ import {
 } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { createCheckpoint, serializeCheckpoint } from '../checkpoint.ts';
+import { encode } from '../codec.ts';
 import type { ContextOperationRequest } from '../context.ts';
 import { EMPTY_EVENT_HEAD } from '../event-log.ts';
-import type { Checkpoint } from '../types.ts';
+import type { Checkpoint, WorkflowState } from '../types.ts';
 import { rememberCommittedCheckpointBytes } from './checkpoint-commit-snapshots.ts';
 import { persistCheckpoint } from './checkpoint-io.ts';
 import type { EngineInternals } from './internals.ts';
@@ -307,5 +308,78 @@ describe('checkpoint commit compare-and-swap guard', () => {
       serializeCheckpoint(nextCheckpoint),
     );
     expect(storage.conditionalBatchCallCount).toBe(0);
+  });
+
+  it("reattaches the host's own workflowExecutionToken to a worker-returned checkpoint, never trusting whatever token the worker bytes claim (WFT-21, Codex review round 4, P2)", async () => {
+    const storage = new MemoryStorage();
+    const checkpoint = createCheckpoint('checkpoint-workflow', '1', 1_000);
+    const internals = createCheckpointInternals(storage, checkpoint);
+    await seedCheckpoint(storage, checkpoint);
+    const hostState: WorkflowState = {
+      id: 'checkpoint-workflow',
+      type: 'checkpoint-workflow-type',
+      status: 'running',
+      input: null,
+      versionTuple: { workflowVersion: '1' },
+      workflowExecutionToken: 'host-owned-token',
+      createdAt: 1_000,
+      startedAt: 1_000,
+      updatedAt: 1_000,
+    };
+    await storage.put(KEYS.workflow('checkpoint-workflow'), encode(hostState));
+
+    // A worker claiming a DIFFERENT token than the host's own — a
+    // hostile/buggy worker, or a stale pre-upgrade worker rebuilding the
+    // object without this field. Either way the persisted checkpoint must
+    // carry the HOST's token, never the worker's claim.
+    const workerClaimedCheckpoint: Checkpoint = {
+      ...checkpoint,
+      step: 1,
+      workflowExecutionToken: 'worker-forged-token',
+    };
+    await persistCheckpoint(
+      internals,
+      checkpoint.workflowId,
+      checkpointOperation,
+      serializeCheckpointBuffer(workerClaimedCheckpoint),
+      createPersistCallbacks(),
+    );
+
+    const persistedBytes = await storage.get(KEYS.checkpoint('checkpoint-workflow'));
+    const decodedRoundTrip = internals.checkpoints.get('checkpoint-workflow');
+    expect(decodedRoundTrip?.workflowExecutionToken).toBe('host-owned-token');
+    expect(persistedBytes).not.toBeNull();
+    expect(
+      serializeCheckpoint({
+        ...workerClaimedCheckpoint,
+        workflowExecutionToken: 'host-owned-token',
+      }),
+    ).toEqual(persistedBytes!);
+  });
+
+  it('drops workflowExecutionToken entirely when the host workflow record itself has none (legacy, or vanished mid-flight) — never falls back to the worker-claimed token', async () => {
+    const storage = new MemoryStorage();
+    const checkpoint = createCheckpoint('checkpoint-workflow-no-host-token', '1', 1_000);
+    const internals = createCheckpointInternals(storage, checkpoint);
+    await seedCheckpoint(storage, checkpoint);
+    // No `wf:` record seeded at all — simulates the workflow record having
+    // vanished mid-flight (or, identically for this purpose, a legacy host
+    // record with no `workflowExecutionToken`).
+
+    const workerClaimedCheckpoint: Checkpoint = {
+      ...checkpoint,
+      step: 1,
+      workflowExecutionToken: 'worker-forged-token',
+    };
+    await persistCheckpoint(
+      internals,
+      checkpoint.workflowId,
+      checkpointOperation,
+      serializeCheckpointBuffer(workerClaimedCheckpoint),
+      createPersistCallbacks(),
+    );
+
+    const decodedRoundTrip = internals.checkpoints.get('checkpoint-workflow-no-host-token');
+    expect(decodedRoundTrip?.workflowExecutionToken).toBeUndefined();
   });
 });

@@ -42,6 +42,7 @@ import {
 import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
 import { getTimelineInputSummary, getTimelineOperationLabel } from './state-utilities.ts';
+import { loadWorkflowState } from './storage-io.ts';
 import { buildPendingTimelineOperation } from './termination.ts';
 import { notifyWorkflowFeedCommit } from './workflow-feed.ts';
 
@@ -210,6 +211,20 @@ async function persistWorkerCheckpoint(
 ): Promise<void> {
   const serialized = new Uint8Array(workerCheckpointBytes);
   const checkpoint = deserializeCheckpoint(serialized);
+  // Reattach the HOST's own authoritative `workflowExecutionToken` — never
+  // trust whatever the worker-returned bytes claim (WFT-21, Codex review
+  // round 4, P2). A pre-upgrade worker naturally omits the field entirely
+  // (the existing legacy fallback, unchanged); a worker that DOES include
+  // one must never be trusted to supply the correct value, since this is
+  // exactly the token `replayTo()`'s exact-match correlation relies on —
+  // silently accepting a worker-supplied token would let a compromised or
+  // stale worker defeat that correlation.
+  const workerCheckpointState = await loadWorkflowState(internals, workflowId);
+  if (workerCheckpointState?.workflowExecutionToken !== undefined) {
+    checkpoint.workflowExecutionToken = workerCheckpointState.workflowExecutionToken;
+  } else {
+    delete checkpoint.workflowExecutionToken;
+  }
   const workerReplayPayload = readCheckpointReplayPayload(checkpoint);
   const pruned = pruneCheckpointReplayState(
     checkpoint,

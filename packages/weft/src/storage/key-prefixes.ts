@@ -84,6 +84,7 @@ export const WEFT_RESERVED_KEY_PREFIXES = [
   'wf-owner-holder:',
   'wf-teardown:',
   'wf-teardown-deadletter:',
+  'wf-teardown-deadletter-history:',
   'wf-teardown-needed:',
   'wf-teardown-succeeded:',
   'wf-terminal:',

@@ -530,6 +530,14 @@ catalog entry, and still let the fork's own commit land right behind
 it—durably persisting a reference to a revision the catalog now claims is
 gone.
 
+**A lost commit-time catalog fence now surfaces as `Conflict`, not a masked
+500** (Codex review round 4). When the fence above genuinely loses its
+race, `resolveForkAccess()` now recognizes the resulting error as the same
+typed `WorkflowRevisionUnavailableError` the pre-commit check already
+throws for the identical class of loss—previously it fell through to a
+generic `EngineFailure`, so `weft.workflows.fork` returned a 500 instead of
+the documented 409 a client should retry against.
+
 **A third, narrower reservation closes one remaining legacy-source gap**
 (Codex review round 3). The in-memory reservation above reserves against
 `targetRevision` (`options.revision ?? sourceState.revision`)—a no-op when

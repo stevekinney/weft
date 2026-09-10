@@ -167,6 +167,33 @@ export async function buildForkCatalogEntryCondition(
  * in-flight reference). See `fork-revision-catalog-race.test.ts`'s round-3
  * `describe` block for the full end-to-end race this closes.
  */
+/**
+ * Build the error a lost `fork()` commit-time CAS race throws (WFT-21,
+ * Codex review round 4, P2). A lost race on that commit is ALWAYS the
+ * catalog-entry precondition (`forkCatalogEntryCondition`) — the only other
+ * possible cause, a deposition, throws `EngineDeposedError` directly inside
+ * `commitFencedEngineWrite` before ever reaching this factory — so whenever
+ * `forkCatalogEntryCondition` was non-empty, this throws the SAME typed
+ * `WorkflowRevisionUnavailableError('not-installed')` the pre-commit check
+ * in `buildForkCatalogEntryCondition()` throws for the identical class of
+ * loss, so `resolveForkAccess()` maps it to a `Conflict` fault instead of a
+ * generic `EngineFailure`. Falls back to a generic error only in the
+ * (currently unreachable, since an empty condition array cannot lose a
+ * non-epoch CAS) case the condition was empty — never silently
+ * misclassifying a genuinely unexpected loss as a revision conflict.
+ */
+export function buildForkCommitLostRaceError(
+  workflowId: string,
+  sourceType: string,
+  persistedRevision: string | undefined,
+  forkCatalogEntryCondition: ConditionalBatchCondition[],
+): Error {
+  if (forkCatalogEntryCondition.length > 0) {
+    return new WorkflowRevisionUnavailableError(sourceType, persistedRevision, 'not-installed');
+  }
+  return new Error(`Fork of workflow "${workflowId}" lost its CAS race.`);
+}
+
 export function reserveLegacyForkTargetRevision(
   internals: EngineInternals,
   type: string,

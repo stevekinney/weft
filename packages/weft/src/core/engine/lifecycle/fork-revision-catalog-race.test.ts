@@ -24,6 +24,15 @@
  * test proves the fix end to end: park the fork's own commit exactly there,
  * let `removeWorkflowRevision()` complete underneath it, then prove the
  * fork's own commit fails closed (not a silent, durably orphaned write).
+ *
+ * The lost-race error itself was, until round 4, a generic `Error` — Codex
+ * review round 4, P2 flagged that `resolveForkAccess()` (`server/operations/
+ * fork-workflow.ts`) only maps a typed `WorkflowRevisionUnavailableError` to
+ * a `Conflict` fault, so this specific loss (unlike the identical class the
+ * PRE-commit check in `buildForkCatalogEntryCondition()` already throws
+ * typed) surfaced as a masked `EngineFailure`/500 instead of `Conflict`/409.
+ * `buildForkCommitLostRaceError()` now throws the same typed error for this
+ * commit-time loss too — this test's assertion below covers that fix.
  */
 import { describe, expect, it } from 'bun:test';
 
@@ -39,6 +48,8 @@ import { copyWorkflowDefinition } from '../construction.ts';
 import { getWorkflowCatalog, removeWorkflowRevision } from '../index.ts';
 import { getInternals } from '../internals.ts';
 import { buildRegistrationEntry } from '../registration.ts';
+import { WorkflowRevisionUnavailableError } from '../revision-errors.ts';
+import { buildForkCommitLostRaceError } from './fork-helpers.ts';
 
 async function revisionFor(name: string, definition: WorkflowDefinition): Promise<string> {
   const entry = buildRegistrationEntry(name, definition);
@@ -141,8 +152,13 @@ describe('fork() vs. a concurrent removeWorkflowRevision() — WFT-21 Codex revi
         } catch (error) {
           forkError = error;
         }
-        expect(forkError).toBeInstanceOf(Error);
-        expect((forkError as Error).message).toContain('lost its CAS race');
+        // Typed, not a generic `Error` (WFT-21, Codex review round 4, P2) —
+        // so `resolveForkAccess()` maps this to a `Conflict` fault instead
+        // of a masked `EngineFailure`.
+        expect(forkError).toBeInstanceOf(WorkflowRevisionUnavailableError);
+        expect((forkError as WorkflowRevisionUnavailableError).reason).toBe('not-installed');
+        expect((forkError as WorkflowRevisionUnavailableError).workflowType).toBe(type);
+        expect((forkError as WorkflowRevisionUnavailableError).revision).toBe(revisionV2);
 
         // No orphaned reference: the source's own run is the only `wf:`
         // record for this type, and none of them are pinned to the
@@ -269,5 +285,23 @@ describe('fork() legacy-dynamic-source default fork — WFT-21 Codex review roun
     } finally {
       engine[Symbol.dispose]();
     }
+  });
+});
+
+describe('buildForkCommitLostRaceError — WFT-21 Codex review round 4 P2', () => {
+  it('throws the typed WorkflowRevisionUnavailableError when the fork carried a non-empty catalog-entry condition', () => {
+    const error = buildForkCommitLostRaceError('wf-1', 'checkout', 'sha256:target', [
+      { key: 'catalog-entry:checkout:sha256:target', expectedValue: new Uint8Array([1]) },
+    ]);
+    expect(error).toBeInstanceOf(WorkflowRevisionUnavailableError);
+    expect((error as WorkflowRevisionUnavailableError).reason).toBe('not-installed');
+    expect((error as WorkflowRevisionUnavailableError).workflowType).toBe('checkout');
+    expect((error as WorkflowRevisionUnavailableError).revision).toBe('sha256:target');
+  });
+
+  it("falls back to a generic error when the fork carried no catalog-entry condition — a defensive branch that never fires in production (see this function's own doc), never silently misclassifying an unexpected loss as a revision conflict", () => {
+    const error = buildForkCommitLostRaceError('wf-1', 'checkout', undefined, []);
+    expect(error).not.toBeInstanceOf(WorkflowRevisionUnavailableError);
+    expect(error.message).toContain('lost its CAS race');
   });
 });

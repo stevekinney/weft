@@ -390,6 +390,24 @@ export type WorkflowReplay = {
    * since been purged (no `WorkflowState` left to read), or when it
    * predates revision pinning (a legacy record with no persisted
    * `revision`).
+   *
+   * **Known limitation for an EAGER-registered type (Codex review round 4,
+   * P2, documented rather than fixed):** recovery and a default fork
+   * intentionally run whatever THIS process currently has eagerly
+   * registered, even when it differs from `revision` —
+   * `resolveExecutableRegistrationForRevision()`'s documented "eager is
+   * always ready regardless of pin" design (see
+   * `documentation/guides/workflow-versioning.md#per-run-revision-pinning-wft-17`).
+   * `revision` itself is stamped once, only at that run's own genuine
+   * start/fork, and is never re-stamped by a LATER recovery — so a run
+   * recovered after this process redeployed to a new eager revision B
+   * (compatible `version`, different `revision` than the original A) keeps
+   * reporting `revision: A` for checkpoints B's own code goes on to
+   * produce. The `workflowExecutionToken` correlation above is still
+   * correct (it is genuinely the same execution), but `revision` itself
+   * can be stale for this specific eager-redeploy-during-recovery case —
+   * a pre-existing property of how eager `revision` has behaved since
+   * WFT-17/19, not something this field's own addition changes.
    */
   revision?: string;
 };
