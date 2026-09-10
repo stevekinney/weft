@@ -10,7 +10,7 @@
  *
  * Deliberately covers `running` and `suspended` the same way. The ADR
  * describes `suspended` as folding `acquire` into the status flip itself
- * (`reactivateSuspendedWorkflowState`'s commit in `resume.ts`), but the
+ * (`reactivateSuspendedWorkflowState`'s commit in `resume-body.ts`), but the
  * EARLIER fenced writes above need a held claim regardless of final status,
  * so one early standalone acquire is the pragmatic shape for both — a
  * documented deviation from that row, not an oversight.
@@ -121,7 +121,7 @@ export async function acquireStandaloneClaimBeforeResume(
  * Best-effort durable release of a claim {@link acquireStandaloneClaimBeforeResume}
  * freshly acquired for THIS resume attempt, called when a later, status-aware
  * check (`performSerializedResume`'s status/generation re-validation in
- * `resume.ts`) rejects the resume after all (WFT-134). Without this, a claim
+ * `resume-body.ts`) rejects the resume after all (WFT-134). Without this, a claim
  * acquired for a workflow that turned out to be non-resumable — already
  * terminal, or replaced by an `onTerminalConflict: 'start-new'` run — stays
  * installed: the renewal task keeps refreshing it indefinitely, and a
