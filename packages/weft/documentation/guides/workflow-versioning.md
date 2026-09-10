@@ -592,18 +592,32 @@ concurrent `engine.start()` on a DIFFERENT process could read the entry as
 still installed and commit a new run pinned to it in the narrow window
 between this function's own pre-check and its delete landing. Once the
 delete lands, `removeWorkflowRevision` re-counts references; if the count
-is now nonzero, it restores the entry (re-`install()`s the captured
-manifest, byte-identical) and returns `'referenced'` instead of leaving a
-real run pinned to a revision the catalog no longer carries. This is safe
-because it composes with the OTHER half of the fix below: any start whose
-own commit lands after the delete necessarily loses its own compare-and-swap,
-so a nonzero post-delete count can only be a run that committed before the
-delete. The one residual gap: a process crash between the delete committing
-and the restore committing leaves the revision durably uninstalled while a
-run still references it—that run becomes `unavailable` (via
-`WorkflowRevisionUnavailableError`, not silent wrong-code execution) at its
-next recovery, a bounded and diagnosable failure, not a correctness
-violation.
+is now nonzero, it restores the entry and returns `'referenced'` instead of
+leaving a real run pinned to a revision the catalog no longer carries. This
+is safe because it composes with the OTHER half of the fix below: any start
+whose own commit lands after the delete necessarily loses its own
+compare-and-swap, so a nonzero post-delete count can only be a run that
+committed before the delete.
+
+**The delete and its own restore-or-finalize resolution are each atomic**
+(WFT-17/18, second-round Codex review on PR #958): a bare delete followed
+by a SEPARATE restore/finalize commit left a crash window between the two
+where the revision was durably uninstalled with no durable record of what
+was deleted, recoverable by no one — not even the process that crashed.
+`removeCatalogEntry`'s delete now lands in the SAME `conditionalBatch` as a
+`catalog-tombstone:<name>:<revision>` record (the exact deleted bytes), and
+`removeWorkflowRevision`'s restore-or-finalize is itself a single atomic
+`conditionalBatch` against that tombstone. A process crash between the two
+commits now leaves a durable tombstone any process — not just the crashed
+one — can resolve from a fresh reference count:
+`ensureWorkflowCatalogReady()` sweeps every orphaned tombstone at
+catalog-boot time, before recovery's own preflight or any new start can
+observe stale catalog state, and `removeWorkflowRevision` itself resolves a
+stale tombstone for its own exact `(name, revision)` target before
+proceeding (for a long-lived engine that observes a peer crash mid-lifetime,
+after its own boot sweep already ran). See
+`core/catalog/removal.ts` and `core/engine/catalog-tombstone-recovery.ts`
+for the full mechanism.
 
 `getWorkflowRevisionDiagnostics(engine, name, revision)` projects the same
 accounting into a read-only shape—`installed`, `active`, `activeRevision`,
@@ -646,6 +660,32 @@ there, and the zero-precondition plain-`batch()` fast path is unchanged.
 Both `'lease'` and `'workflow-lease'` already require `conditionalBatch` for
 an ordinary start's own epoch or claim fencing, so this adds no new storage
 capability requirement for the common path.
+
+### Checkpoint-backed retry admission fences on the pinned revision (WFT-17/18)
+
+A checkpoint-backed `engine.retryFailedAll()` reactivation carries the same
+kind of precondition, for a related but distinct reason: a `failed`
+workflow is TERMINAL, so `countWorkflowRevisionReferences()`'s reference
+scan—what `removeWorkflowRevision()`'s pre- and post-checks both rely
+on—never counts it, even while a retry is actively reactivating it back to
+`running` against its own pinned revision. Without this fence, a
+`removeWorkflowRevision()` racing that reactivation's commit could report
+`removed: true` for a revision a run is about to be reactivated against, in
+every ownership mode—not just under a lease topology, since a retry's
+reactivation carries no `inFlightStartsByRevision` reservation of its own
+the way a fresh start's SAME-process protection does. `retryFailedAll()`'s
+reactivation batch therefore always carries the `catalog-entry:<name>:<revision>`
+precondition whenever the failed run has a pinned `revision`—unconditionally,
+not scoped to `ownershipMode !== 'none'`—reusing the exact same
+`conditionalBatch` mechanism as start admission above. A retry whose pinned
+revision is concurrently removed before its own commit lands throws
+`WorkflowRevisionUnavailableError` with `reason: 'not-installed'`, reported
+per-workflow in `retryFailedAll()`'s `errors` array; the run is left
+`failed`, exactly as it was before the retry attempt, never stranded
+`running` with a reactivation that committed against a revision the catalog
+no longer carries. A legacy (`revision === undefined`) failed run carries
+no exact pin to fence on and is retried unfenced, the same bounded legacy
+case documented throughout this guide.
 
 ### Catalog Events
 

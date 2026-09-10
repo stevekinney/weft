@@ -512,6 +512,77 @@ describe('recoverAll() — per-(type, revision) preload barrier and exact revisi
     expect(await handleB.result()).toBe('B:y');
   });
 
+  it('a fork of a dynamic-source run inherits the source run\'s pinned revision, and recovers under it — not "legacy-ambiguous" — even with a second registered candidate present', async () => {
+    // Regression test for the fork-revision gap: `createForkedWorkflowState`
+    // used to omit `revision` entirely, so a forked child of a
+    // dynamic-source type with 2+ registered candidates would recover
+    // `legacy-ambiguous` (this describe block's own earlier test) even
+    // though the fork continues execution against the exact code its
+    // source run resolved. `fork-helpers.ts` now inherits
+    // `sourceState.revision` — proven here end to end: start under
+    // revision A (with only A registered), fork while running, then boot a
+    // FRESH engine with BOTH A and B registered and confirm the forked
+    // child recovers under A rather than failing ambiguous.
+    const storage = new MemoryStorage();
+    const definitionA = workflow({ name: 'fork-multi-rev', description: 'candidate A' }).execute(
+      async function* (ctx: WorkflowContext) {
+        const value = yield* ctx.waitForSignal<string>('continue');
+        return `A:${value}`;
+      },
+    );
+    const definitionB = workflow({ name: 'fork-multi-rev', description: 'candidate B' }).execute(
+      async function* () {
+        return 'unused';
+      },
+    );
+    const revisionA = await revisionFor(definitionA);
+    const revisionB = await revisionFor(definitionB);
+
+    let forkedId: string;
+    {
+      await using started = new Engine({ storage });
+      started.registerSource(
+        workflowSource(
+          { name: 'fork-multi-rev', location: './a.ts', exportName: 'a', revision: revisionA },
+          async () => ({ a: definitionA }),
+        ),
+      );
+      const original = await started.start('fork-multi-rev', null, {
+        id: 'fork-multi-rev-source',
+      });
+      const forked = await started.fork(original.id);
+      forkedId = forked.id;
+
+      const sourceState = await started.get(original.id);
+      const forkedState = await started.get(forked.id);
+      expect(sourceState?.revision).toBe(revisionA);
+      expect(forkedState?.revision).toBe(revisionA);
+    }
+
+    await using recovered = new Engine({ storage });
+    recovered.registerSource(
+      workflowSource(
+        { name: 'fork-multi-rev', location: './a.ts', exportName: 'a', revision: revisionA },
+        async () => ({ a: definitionA }),
+      ),
+    );
+    recovered.registerSource(
+      workflowSource(
+        { name: 'fork-multi-rev', location: './b.ts', exportName: 'b', revision: revisionB },
+        async () => ({ b: definitionB }),
+      ),
+    );
+
+    const handles = await recovered.recoverAll();
+    expect(handles.map((handle) => handle.id).toSorted()).toEqual(
+      ['fork-multi-rev-source', forkedId].toSorted(),
+    );
+
+    const forkedHandle = handles.find((handle) => handle.id === forkedId)!;
+    await forkedHandle.signal('continue', 'z');
+    expect(await forkedHandle.result()).toBe('A:z');
+  });
+
   it("a run pinned to a revision this process never registered recovers unavailable — including when it is the type's sole registered candidate under a DIFFERENT revision (today's stale-sole-candidate bug) — without blocking a sibling pinned to a registered revision", async () => {
     const storage = new MemoryStorage();
     const definition = workflow({ name: 'partial-avail' }).execute(async function* (

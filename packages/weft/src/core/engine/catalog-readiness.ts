@@ -23,6 +23,7 @@
 import { restoreWorkflowCatalog, WorkflowCatalog } from '../catalog/index.ts';
 import { buildWorkflowManifestForType } from '../registry-workflow-manifest.ts';
 import { dispatchCatalogInstallAndActivatedEvents } from './catalog-events.ts';
+import { resolveOrphanedCatalogTombstones } from './catalog-tombstone-recovery.ts';
 import { EngineDisposedError } from './errors.ts';
 import type { Engine } from './index.ts';
 import { getInternals } from './internals.ts';
@@ -153,6 +154,13 @@ export async function ensureWorkflowCatalogReady(engine: Engine): Promise<void> 
       throw new EngineDisposedError();
     }
     if (!internals.catalogRestored) {
+      // Sweep orphaned removal tombstones (WFT-17/18) BEFORE the restore
+      // scan immediately below — a tombstone this sweep resolves by
+      // RESTORING must already be durably back in place before
+      // `restoreWorkflowCatalog` builds its in-memory snapshot, or that
+      // restored entry would be silently missing from `#entries` until a
+      // later durable read-through happened to notice it.
+      await resolveOrphanedCatalogTombstones(internals.storage);
       internals.workflowCatalog = new WorkflowCatalog(
         internals.storage,
         await restoreWorkflowCatalog(internals.storage),

@@ -1237,11 +1237,16 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       // extraction (Codex review on PR #958) — the switch itself, and this
       // default guard, are otherwise unchanged; the closing brace (270) now
       // also attributes as missed, the same brace-line artifact already
-      // documented above for this exact guard.
+      // documented above for this exact guard. Lines realigned to 285-288
+      // by the WFT-17/18 second-round Codex review's atomic-tombstone
+      // rework (`resolveCatalogTombstoneIfPresent` pre-check, and
+      // `tombstoneBytes`-based restore/finalize) added above this
+      // function — the switch and default guard themselves are otherwise
+      // unchanged.
       {
         reason:
           'Compile-time exhaustiveness guard for a closed discriminated union has no reachable runtime path to test without an unsafe cast.',
-        lines: new Set([267, 268, 269, 270]),
+        lines: new Set([285, 286, 287, 288]),
       },
     ],
     [

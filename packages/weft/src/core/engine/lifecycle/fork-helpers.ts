@@ -49,6 +49,7 @@ export function createForkedWorkflowState(
     input: sourceState.input,
     workflowExecutionToken: crypto.randomUUID(),
     versionTuple,
+    ...(sourceState.revision !== undefined && { revision: sourceState.revision }),
     executionStateOwnerId: workflowId,
     createdAt: forkedAt,
     startedAt: forkedAt,

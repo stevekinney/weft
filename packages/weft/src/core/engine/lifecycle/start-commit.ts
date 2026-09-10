@@ -92,6 +92,18 @@ type TaggedStartCondition = {
  * for a dynamic source, so ITS absence here can only mean a concurrent
  * removal already won; treating that as "still absent, so still fine to
  * commit against" would be the exact bug this function exists to close.
+ *
+ * Performance note: unlike `ownership: 'none'`, which this precondition
+ * never applies to (see above), an ordinary start under `'lease'` or
+ * `'workflow-lease'` now pays one ADDITIONAL `storage.get(catalog-entry:…)`
+ * round trip on every attempt of the commit loop — not just a delayed
+ * (`startAt`/`startAfter`) start, but every ordinary start's hot path under
+ * those two ownership modes. This is a new added-latency cost this PR
+ * introduces (it did not exist before WFT-17/18); it is the accepted price
+ * of closing the catalog-removal/start-admission race documented above,
+ * and both modes already require `conditionalBatch` for their own
+ * epoch/claim fencing, so no new storage-capability dependency is added —
+ * only this extra read per attempt.
  */
 function needsCatalogEntryStartPrecondition(
   internals: EngineInternals,
@@ -118,12 +130,36 @@ async function buildCatalogEntryStartPrecondition(
   internals: EngineInternals,
   state: WorkflowState & { revision: string },
 ): Promise<TaggedStartCondition> {
-  const key = KEYS.catalogEntry(state.type, state.revision);
+  return {
+    source: 'catalog-entry',
+    condition: await buildCatalogEntryRevisionCondition(internals, state.type, state.revision),
+  };
+}
+
+/**
+ * The `conditionalBatch` precondition half of {@link buildCatalogEntryStartPrecondition}
+ * — a bare `type`/`revision` pair rather than a full `WorkflowState`, so it
+ * is also reusable by a checkpoint-backed failed-run retry's reactivation
+ * commit (`bulk-operations-retry.ts`, WFT-17/18 Codex review on PR #958),
+ * which has no `WorkflowState & { revision: string }` narrowing of its own
+ * and — unlike a fresh start — carries no `inFlightStartsByRevision`
+ * reservation to close the SAME-process half of this race, so it needs this
+ * fence unconditionally rather than only under `ownershipMode !== 'none'`.
+ * Exported (rather than kept local to this module) specifically for that
+ * reuse; returns the bare {@link ConditionalBatchCondition} so callers never
+ * need this module's own non-exported {@link TaggedStartCondition} shape.
+ */
+export async function buildCatalogEntryRevisionCondition(
+  internals: EngineInternals,
+  type: string,
+  revision: string,
+): Promise<ConditionalBatchCondition> {
+  const key = KEYS.catalogEntry(type, revision);
   const entryBytes = await internals.storage.get(key);
   if (entryBytes === null) {
-    throw new WorkflowRevisionUnavailableError(state.type, state.revision, 'not-installed');
+    throw new WorkflowRevisionUnavailableError(type, revision, 'not-installed');
   }
-  return { source: 'catalog-entry', condition: { key, expectedValue: entryBytes } };
+  return { key, expectedValue: entryBytes };
 }
 
 /** Outcome of {@link persistStartBatch}, disambiguating WHICH kind of race was lost. */

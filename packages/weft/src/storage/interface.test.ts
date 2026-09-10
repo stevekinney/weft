@@ -241,6 +241,7 @@ describe('WEFT_RESERVED_KEY_PREFIXES', () => {
       KEYS.applicationDeliveryTerminal('namespace', 'owner', 1, 'delivery-id'),
       KEYS.catalogEntry('workflow-type', 'revision'),
       KEYS.catalogActive('workflow-type'),
+      KEYS.catalogTombstone('workflow-type', 'revision'),
     ];
 
     for (const key of representativeKeys) {

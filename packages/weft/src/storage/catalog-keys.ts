@@ -46,4 +46,24 @@ export const WORKFLOW_CATALOG_KEYS = {
    * `KEYS.ownershipModeMarker()` uses.
    */
   catalogActive: (name: string): string => `catalog-active:${encodeStorageKeyComponent(name)}`,
+  /**
+   * A durable, transient marker for a `(name, revision)` catalog entry
+   * mid-removal (WFT-17/18): `removeCatalogEntry` puts this key — value is
+   * the exact `catalog-entry:<name>:<revision>` bytes it just deleted — in
+   * the SAME `conditionalBatch` as the entry delete, so "the entry is gone"
+   * and "a durable record of what it was" land atomically together. A
+   * process that crashes between that commit and the removal's own
+   * post-delete reference re-check leaves this key behind as the ONLY
+   * durable evidence a removal was in flight; `catalog-readiness.ts`'s
+   * boot-time restore sweeps every `catalog-tombstone:` key and resolves
+   * each one (restore the entry, or finalize the removal) from a FRESH
+   * reference count, so no process — not just the one that crashed — is
+   * needed to complete it. Present only for the brief window between the
+   * delete committing and its own resolution (normally sub-millisecond,
+   * same call); never present after a clean `removed`/`referenced` outcome.
+   */
+  catalogTombstone: (name: string, revision: string): string =>
+    `catalog-tombstone:${encodeStorageKeyComponent(name)}:${encodeStorageKeyComponent(revision)}`,
+  /** Scan prefix for every in-flight removal tombstone (should normally be empty). */
+  catalogTombstonePrefix: (): string => `catalog-tombstone:`,
 } as const;

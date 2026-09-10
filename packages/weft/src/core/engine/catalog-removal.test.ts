@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { ActivityRegistry } from '../activity-registry.ts';
 import { buildWorkflowContract } from '../contract/build.ts';
 import { buildWorkflowRevisionManifest } from '../contract/manifest.ts';
@@ -9,7 +10,12 @@ import type { WorkflowRevisionManifest } from '../contract/types.ts';
 import { WorkflowRevisionRemovedEvent } from '../events/catalog-events.ts';
 import { buildWorkflowManifestFromDefinition } from '../registry-workflow-manifest.ts';
 import { workflowSource } from '../source/index.ts';
-import { workflow, type WorkflowContext, type WorkflowDefinition } from '../types.ts';
+import {
+  workflow,
+  type WorkflowContext,
+  type WorkflowDefinition,
+  type WorkflowState,
+} from '../types.ts';
 import { activateCatalogRevisionCandidate } from './catalog-activation.ts';
 import { ensureWorkflowCatalogReady } from './catalog-readiness.ts';
 import {
@@ -142,6 +148,9 @@ describe('removeWorkflowRevision', () => {
     expect(events).toHaveLength(1);
     expect(events[0]?.revision).toBe(revA);
     expect(getWorkflowCatalog(engine).getEntry('checkout', revA)).toBeUndefined();
+    // WFT-17/18: a clean `removed: true` leaves no tombstone behind — the
+    // finalize half of `finalizeRevisionRemoval` durably deletes it.
+    expect(await storage.get(KEYS.catalogTombstone('checkout', revA))).toBeNull();
   });
 
   it('the inFlightStarts counter itself is reserved/released around a real in-flight start()', async () => {
@@ -943,6 +952,10 @@ describe('removeWorkflowRevision vs. a concurrent start() — cross-process race
     // The entry was restored — still installed, from EITHER engine's view.
     expect(await getWorkflowCatalog(engineB).hasInstalled('race-restore', revisionR1)).toBe(true);
     expect(await getWorkflowCatalog(engineA).hasInstalled('race-restore', revisionR1)).toBe(true);
+    // WFT-17/18: the restore goes through the tombstone atomically (see
+    // `catalog/removal.ts`) — no tombstone remains once resolved, and the
+    // restored entry bytes are byte-identical to what was originally there.
+    expect(await storage.get(KEYS.catalogTombstone('race-restore', revisionR1))).toBeNull();
 
     // A's parked run is unaffected — never touched by the removal/restore
     // dance, still running against its own in-memory code.
@@ -1030,5 +1043,136 @@ describe('removeWorkflowRevision vs. a concurrent start() — cross-process race
 
     const state = await engineA.get('race-fail-closed-new');
     expect(state).toBeNull();
+  });
+});
+
+/**
+ * WFT-17/WFT-18: the catalog-removal/checkpoint-retry race (Codex review,
+ * PR #958). A checkpoint-backed `retryFailedAll()` reactivation commits a
+ * `failed` -> `running` transition; `countNonTerminalRunsForRevision()`'s
+ * reference scan — what `removeWorkflowRevision()`'s pre- and post-checks
+ * both rely on — never counts a `failed` run at all, so a revision removal
+ * concurrent with a retry cannot see this run coming even via the post-check
+ * that closes the equivalent fresh-`start()` race above. Deliberately run
+ * under `ownership: 'none'` (a single, plain `new Engine({ storage })`) —
+ * unlike a fresh start, a retry's reactivation carries no
+ * `inFlightStartsByRevision` reservation of its own to close the
+ * SAME-process half of this race, so the fix must fence retries in every
+ * ownership mode, not just under a lease topology with two real engines.
+ */
+async function waitForWorkflowStatus(
+  engine: Engine,
+  workflowId: string,
+  status: WorkflowState['status'],
+): Promise<WorkflowState> {
+  let matchingState: WorkflowState | null = null;
+  await waitForCondition(
+    async () => {
+      const state = await engine.get(workflowId);
+      if (state?.status === status) {
+        matchingState = state;
+        return true;
+      }
+      return false;
+    },
+    { label: `workflow "${workflowId}" to reach ${status}`, intervalMs: 5 },
+  );
+  if (matchingState === null) {
+    throw new Error(`Workflow "${workflowId}" did not reach ${status}`);
+  }
+  return matchingState;
+}
+
+describe('removeWorkflowRevision vs. a concurrent retryFailedAll() — checkpoint-backed reactivation race (WFT-17/18)', () => {
+  async function revisionFor(definition: WorkflowDefinition): Promise<string> {
+    const entry = buildRegistrationEntry(definition.name, definition);
+    const registered = copyWorkflowDefinition(definition.name, entry);
+    const manifest = await buildWorkflowManifestFromDefinition(
+      registered,
+      new ActivityRegistry().listDefinitions(),
+    );
+    return manifest.revision;
+  }
+
+  it("fails a checkpoint-backed retry closed with WorkflowRevisionUnavailableError('not-installed') — leaving the run FAILED, not stranded RUNNING — when its pinned revision is removed by a concurrent process before the retry's own reactivation commit lands, even under ownership: 'none'", async () => {
+    const storage = new MemoryStorage();
+
+    const retryRaceWorkflow = workflow({
+      name: 'retry-fence-race',
+      version: '1.0.0',
+    }).execute(async function* (ctx: WorkflowContext) {
+      yield* ctx.run(async () => 'checkpoint-marker');
+      throw new Error('always fails after the checkpoint');
+    });
+    const revisionR1 = await revisionFor(retryRaceWorkflow);
+
+    await using engineA = new Engine({ storage });
+    engineA.register(retryRaceWorkflow);
+    const handle = await engineA.start('retry-fence-race', null, { id: 'retry-fence-race-target' });
+    const failedState = await waitForWorkflowStatus(engineA, handle.id, 'failed');
+    expect(failedState.revision).toBe(revisionR1);
+    expect(await storage.get(KEYS.checkpoint(handle.id))).not.toBeNull();
+
+    // `removeWorkflowRevision()` refuses removal of the currently ACTIVE
+    // revision outright — move the active pointer to a DIFFERENT revision
+    // first, mirroring the fresh-start race test above, so R1 is
+    // installed-but-not-active when the removal actually runs.
+    const manifestR2 = await manifestFor('retry-fence-race', '1.0.0', {
+      description: 'a later revision never loaded',
+    });
+    const activation = await activateCatalogRevisionCandidate(
+      engineA,
+      'retry-fence-race',
+      manifestR2,
+      { expectedGeneration: 1, policy: { requireExactRevision: false } },
+    );
+    expect(activation.applied).toBe(true);
+
+    // A second process (engineB, same durable store) that never registers
+    // 'retry-fence-race' at all — `removeWorkflowRevision()`'s
+    // `registeredDefinitions` reference count is scoped to the CALLING
+    // engine's own in-process registration, so calling it from engineA
+    // itself (which still has the type eagerly registered) would report
+    // "referenced" unconditionally, never reaching the race this test
+    // targets. Mirrors the fresh-start race test's engineA/engineB split
+    // above.
+    await using engineB = new Engine({ storage });
+
+    const gate = Promise.withResolvers<void>();
+    const entered = Promise.withResolvers<void>();
+    const originalConditionalBatch = storage.conditionalBatch!.bind(storage);
+    let paused = false;
+    storage.conditionalBatch = async (conditions, operations) => {
+      if (!paused) {
+        paused = true;
+        entered.resolve();
+        await gate.promise;
+      }
+      return originalConditionalBatch(conditions, operations);
+    };
+
+    // Park the retry's reactivation exactly at its own commit CAS: its
+    // catalog-entry precondition already captured R1's bytes (read before
+    // this gated call) before pausing here.
+    const retryPromise = engineA.retryFailedAll({ type: 'retry-fence-race' });
+    await entered.promise;
+
+    // Restore the real conditionalBatch before the concurrent removal so it
+    // is not itself gated by the same wrapper.
+    storage.conditionalBatch = originalConditionalBatch;
+    const removed = await removeWorkflowRevision(engineB, 'retry-fence-race', revisionR1);
+    expect(removed).toEqual({ removed: true });
+
+    gate.resolve();
+    const result = await retryPromise;
+    expect(result.retried).toBe(0);
+    expect(result.failed).toBe(1);
+    expect(result.errors[0]?.id).toBe(handle.id);
+    expect(result.errors[0]?.error).toContain('is no longer installed');
+
+    // The critical regression assertion: the run must still be `failed`,
+    // never left `running` with a reactivation commit that landed anyway.
+    const stateAfterRace = await engineA.get(handle.id);
+    expect(stateAfterRace?.status).toBe('failed');
   });
 });

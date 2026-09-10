@@ -31,8 +31,17 @@ export {
   totalWorkflowRevisionReferences,
   type WorkflowRevisionReferenceCounts,
 } from './reference-counts.ts';
-export { removeCatalogEntry, type WorkflowCatalogRemovalOutcome } from './removal.ts';
-export { restoreWorkflowCatalog, type RestoredWorkflowCatalogState } from './storage-io.ts';
+export {
+  finalizeCatalogTombstone,
+  removeCatalogEntry,
+  restoreCatalogEntryFromTombstone,
+  type WorkflowCatalogRemovalOutcome,
+} from './removal.ts';
+export {
+  decodeCatalogEntryRecord,
+  restoreWorkflowCatalog,
+  type RestoredWorkflowCatalogState,
+} from './storage-io.ts';
 export type {
   WorkflowCatalogActivationResult,
   WorkflowCatalogActivePointer,

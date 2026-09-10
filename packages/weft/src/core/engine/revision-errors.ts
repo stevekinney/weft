@@ -29,13 +29,18 @@ import { WeftError } from '../weft-error.ts';
  *   `revision` was ever persisted for it) and its type is a dynamic source
  *   with two or more registered candidates, so there is no way to tell which
  *   one it actually started against.
- * - `reason: 'not-installed'` — thrown at FRESH START admission, not
- *   recovery: under a lease ownership mode, the resolved revision's durable
- *   catalog entry was concurrently removed (`removeWorkflowRevision()` on a
- *   different process) between this process resolving it and the start
- *   batch's own commit. Fails the one `start()` call outright — never
- *   retried inside the engine — so the caller re-issues `start()`, which
- *   re-resolves against whatever is actually still installed.
+ * - `reason: 'not-installed'` — thrown at commit-time ADMISSION, not
+ *   recovery, for either a fresh `start()` or a checkpoint-backed failed-run
+ *   `retryFailedAll()` reactivation (WFT-17/WFT-18 Codex review on PR #958):
+ *   the resolved (or pinned) revision's durable catalog entry was
+ *   concurrently removed — `removeWorkflowRevision()` racing a `start()` on
+ *   a DIFFERENT process under a lease ownership mode, or racing a
+ *   `retryFailedAll()` on ANY process/mode, since a failed run contributes no
+ *   `inFlightStartsByRevision` reservation of its own — between this
+ *   process resolving the revision and that commit batch actually landing.
+ *   Fails the one call outright — never retried inside the engine — so the
+ *   caller re-issues it, which re-resolves against whatever is actually
+ *   still installed.
  *
  * `engine.recoverAll()` classifies the affected `(type, revision)` group
  * `unavailable`: only the runs in that group fail (with this error as their
@@ -77,9 +82,9 @@ export class WorkflowRevisionUnavailableError extends WeftError<'WorkflowRevisio
             'pinning and the type is a dynamic source with multiple registered revisions, ' +
             'so which one it started against cannot be determined.'
         : reason === 'not-installed'
-          ? `Cannot start workflow type "${workflowType}": revision` +
+          ? `Cannot admit workflow type "${workflowType}": revision` +
             `${revision === undefined ? '' : ` "${revision}"`} is no longer installed in the ` +
-            'durable catalog (removed concurrently by another process). Retry the start.'
+            'durable catalog (removed concurrently). Retry the operation.'
           : `Cannot recover workflow type "${workflowType}": its pinned revision` +
             `${revision === undefined ? '' : ` "${revision}"`} is not registered in this ` +
             'process. Register the exact revision this run started against before retrying.',

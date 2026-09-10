@@ -35,6 +35,7 @@ import {
 import { resolveExecutableRegistrationForRetry } from './dynamic-source-execution.ts';
 import { commitFencedEngineWriteAllowingPreconditionFailure } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
+import { buildCatalogEntryRevisionCondition } from './lifecycle/start-commit.ts';
 import { createTerminalCleanupTimerId } from './state-utilities.ts';
 import { loadWorkflowState, runSerializedWorkflowStateWrite } from './storage-io.ts';
 import { decodeWorkflowState } from './validation.ts';
@@ -229,6 +230,26 @@ type ReactivationCommit = {
  * per-attempt work {@link reactivateFailedWorkflowFromCheckpointSerialized}'s
  * retry loop needs before it can try to commit. Split out to keep that
  * loop under the complexity ceiling.
+ *
+ * Also fences the reactivation commit on the pinned revision's durable
+ * catalog entry (WFT-17/18 Codex review on PR #958): `resolveExecutableRegistrationForRetry()`
+ * above can return successfully and then, in the gap before this commit
+ * lands, a concurrent `removeWorkflowRevision()` can remove that exact
+ * entry — `countNonTerminalRunsForRevision()`'s reference scan does not see
+ * this run, because a `failed` workflow is terminal, so removal proceeds
+ * believing nothing references the revision. Reusing
+ * {@link buildCatalogEntryRevisionCondition} (the same precondition a fresh
+ * `start()` carries) closes that gap: the reactivation CAS fails closed if
+ * the entry is gone by commit time, and this run is left `failed` rather
+ * than silently reactivated against a revision the catalog no longer
+ * carries. Unlike the start-side precondition, this applies in EVERY
+ * `ownershipMode` (not just `!== 'none'`) — a fresh start has same-process
+ * protection via `inFlightStartsByRevision`, which a retry's reactivation
+ * has no equivalent of, so even a single-process `ownership: 'none'` retry
+ * needs this fence. A `state.revision === undefined` run (pre-revision-pinning
+ * legacy record) carries no exact pin to fence on, so it is left unfenced —
+ * a bounded, already-documented legacy case, consistent with
+ * `decode-revision.ts`'s handling of the same gap elsewhere.
  */
 async function buildReactivationCommit(
   internals: EngineInternals,
@@ -242,6 +263,15 @@ async function buildReactivationCommit(
     currentState.revision,
     workflowId,
   );
+
+  const catalogEntryCondition =
+    currentState.revision === undefined
+      ? undefined
+      : await buildCatalogEntryRevisionCondition(
+          internals,
+          currentState.type,
+          currentState.revision,
+        );
 
   const concurrencyStartOperations =
     registration.concurrency === undefined
@@ -267,7 +297,10 @@ async function buildReactivationCommit(
 
   return {
     operations,
-    conditions: concurrencyStartOperations?.conditions ?? [],
+    conditions: [
+      ...(concurrencyStartOperations?.conditions ?? []),
+      ...(catalogEntryCondition === undefined ? [] : [catalogEntryCondition]),
+    ],
     concurrencyStateKey: concurrencyStartOperations?.stateKey,
   };
 }

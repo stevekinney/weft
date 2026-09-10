@@ -515,7 +515,11 @@ describe('WorkflowCatalog.remove', () => {
 
     const result = await catalog.remove('checkout', v1.revision);
 
-    expect(result).toEqual({ outcome: 'removed' });
+    expect(result.outcome).toBe('removed');
+    // WFT-17/18: a successful removal also durably tombstones the deleted
+    // bytes (see `core/catalog/removal.ts`) — `remove()` passes that
+    // outcome through unchanged.
+    expect(result).toHaveProperty('tombstoneBytes');
     expect(catalog.getEntry('checkout', v1.revision)).toBeUndefined();
     expect(catalog.listRevisions('checkout')).toHaveLength(1);
   });
