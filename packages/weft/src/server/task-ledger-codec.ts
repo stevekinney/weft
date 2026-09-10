@@ -72,12 +72,15 @@ export function isValidWorkflowRevision(value: unknown): value is string {
  * ever sees `url.pathname`, so a REST route with a single trailing
  * `:operationId` segment (e.g. `weft.tasks.get`'s
  * `/v1/tasks/detail/:operationId`) can never address a record whose
- * operationId is literally `.` or `..`. Exported so dispatch-time callers
- * (`task-dispatch-envelope.ts`'s `buildCreateQueuedInput`) can reject an
- * invalid caller-supplied `operationId` before it ever reaches a ledger
- * write, closing that URL-normalization quirk as an enforced admission-time
- * guarantee instead of an assumption. Does not reject an id that merely
- * contains a dot character.
+ * operationId is literally `.` or `..`. Exported so fresh-dispatch admission
+ * (`task-dispatch.ts`'s `dispatchTaskImpl`) can reject an invalid
+ * caller-supplied `operationId` before it ever reaches a ledger write,
+ * closing that URL-normalization quirk as an enforced admission-time
+ * guarantee instead of an assumption. Deliberately NOT applied when
+ * redispatching an already-decoded, previously persisted ledger record —
+ * see `dispatchTaskImpl`'s `redispatch` option — since such an id was valid
+ * under the pre-WFT-95 decode contract and may already be durably
+ * persisted. Does not reject an id that merely contains a dot character.
  */
 export function isValidOperationId(value: unknown): value is string {
   return isBoundedIdentifier(value) && value !== '.' && value !== '..';

@@ -11,6 +11,7 @@ import type {
   ScheduleState,
   ScheduleStatus,
 } from '../../types.ts';
+import { isDecodableWorkflowId } from '../../workflow-identifiers.ts';
 import { decodeScheduleCadence } from './schedule-cadence.ts';
 import { SCHEDULE_OVERLAP_POLICIES, SCHEDULE_REVISION_POLICIES } from './schedule-options.ts';
 import { decodeScheduleRevisionPolicyFields } from './schedule-revision.ts';
@@ -44,17 +45,19 @@ export function isValidScheduleRevisionPolicy(value: unknown): value is Schedule
   );
 }
 
+/**
+ * Whether `value` is a schedule-related workflow id that decoded persisted
+ * data may still carry. Deliberately reuses the pre-WFT-95 decode predicate
+ * (not {@link coerceStartWorkflowId}'s admission-time check), because every
+ * caller of this function — `decodeScheduleIdentityFields`,
+ * `decodeScheduleRunMetadata`, and the persisted `currentWorkflowId`/
+ * `queuedRuns[].workflowId` fields in this module — reads already-persisted
+ * data. A schedule created before WFT-95 with `id: '.'` or `'..'` must
+ * remain decodable and keep firing after upgrade; only fresh schedule
+ * creation/update admission (`coerceScheduleId`, below) rejects those ids.
+ */
 export function isValidScheduleIdentifier(value: unknown): value is string {
-  if (typeof value !== 'string') {
-    return false;
-  }
-
-  try {
-    coerceStartWorkflowId(value, 'schedule id');
-    return true;
-  } catch {
-    return false;
-  }
+  return typeof value === 'string' && isDecodableWorkflowId(value);
 }
 
 export function coerceScheduleId(scheduleId: string, fieldName: string): string {

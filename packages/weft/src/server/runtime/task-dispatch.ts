@@ -18,7 +18,11 @@ import {
   type RemoteTaskRecord,
 } from '../task-ledger.ts';
 import type { ServerContext } from './context.ts';
-import { buildCreateQueuedInput } from './task-dispatch-envelope.ts';
+import {
+  assertFreshDispatchOperationIdAdmissible,
+  awaitTaskLedgerRecoveryReady,
+  buildCreateQueuedInput,
+} from './task-dispatch-envelope.ts';
 import { assertDispatchTargetsFreshRevision } from './task-dispatch-revision.ts';
 import { commitTaskLedgerTransition } from './task-ledger-runtime.ts';
 import {
@@ -60,7 +64,13 @@ export function scheduleDelayedDispatch(
   if (context.stopping) return;
   const timer = setTimeout(() => {
     context.pendingTimers.delete(timer);
-    void dispatchTaskImpl(context, options, task).catch((err) =>
+    // Redispatch of an already-decoded, previously persisted task-ledger
+    // record — every caller of `scheduleDelayedDispatch` builds `task` from
+    // `taskDispatchFromLedgerRecord()`. Skip the fresh-dispatch operationId
+    // admission check (WFT-95): a record whose persisted operationId is "."
+    // or ".." was valid before that check existed and must keep redispatching
+    // on upgrade instead of being stranded in `queued`/`leased` state forever.
+    void dispatchTaskImpl(context, options, task, { redispatch: true }).catch((err) =>
       console.error(`[weft] Delayed redispatch failed for "${task.operationId}":`, err),
     );
   }, delay);
@@ -381,21 +391,10 @@ export async function dispatchTaskImpl(
   context: ServerContext,
   options: ServeOptions,
   task: TaskDispatch,
+  { redispatch = false }: { redispatch?: boolean } = {},
 ): Promise<boolean> {
-  // Gate on startup task-ledger recovery (WFT-23) — covers both the public
-  // `WeftServer.dispatchTask` entry point and `scheduleDelayedDispatch`'s
-  // timer callback, which also calls this function directly. A rejected
-  // gate means the recovery scan itself failed; propagate that failure
-  // loudly rather than silently returning false, which callers would read
-  // as an ordinary "no worker available" outcome.
-  try {
-    await context.taskLedgerRecovery.ready;
-  } catch (error) {
-    throw new Error(
-      `Cannot dispatch task "${task.operationId}" — startup task-ledger recovery failed: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
-    );
-  }
+  await awaitTaskLedgerRecoveryReady(context, task);
+  assertFreshDispatchOperationIdAdmissible(task, redispatch);
   if (!task.workflowType) {
     throw new Error(
       `TaskDispatch for operation "${task.operationId}" is missing required field "workflowType".`,

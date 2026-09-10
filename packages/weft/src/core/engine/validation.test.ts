@@ -172,6 +172,18 @@ describe('engine validation helpers', () => {
     );
   });
 
+  // Regression (WFT-95 review): `isValidScheduleIdentifier` decodes
+  // already-persisted data, not fresh admission. A schedule created before
+  // the "." / ".." rejection landed may already carry one of those ids
+  // durably, and must remain decodable — and keep firing — after upgrade.
+  // Only fresh schedule creation/update admission (`coerceScheduleId`)
+  // rejects those ids; see `src/core/start-workflow-validation.test.ts` for
+  // that admission-side coverage.
+  it('accepts persisted schedule identifiers of exactly "." or ".." (WFT-95 decode exemption)', () => {
+    expect(isValidScheduleIdentifier('.')).toBe(true);
+    expect(isValidScheduleIdentifier('..')).toBe(true);
+  });
+
   it('normalizes schedule options', () => {
     expect(normalizeScheduleOptions(undefined)).toEqual({ overlap: 'skip', backfill: false });
     expect(() => normalizeScheduleOptions(null as never)).toThrow(
@@ -491,6 +503,26 @@ describe('engine validation helpers', () => {
     } finally {
       console.warn = originalWarn;
     }
+  });
+
+  // Regression (WFT-95 review): a schedule persisted before the "."/".."
+  // admission rejection landed must still decode on upgrade — and keep
+  // firing — rather than becoming permanently unreadable.
+  it('decodes a persisted schedule record whose id is exactly "." or ".." (WFT-95 upgrade regression)', () => {
+    expect(decodeScheduleIdentityFields(createScheduleRecord({ id: '.' }))).toEqual({
+      id: '.',
+      workflowType: 'demo-workflow',
+      cronExpression: '0 * * * *',
+      status: 'active',
+      overlap: 'skip',
+    });
+    expect(decodeScheduleIdentityFields(createScheduleRecord({ id: '..' }))).toEqual({
+      id: '..',
+      workflowType: 'demo-workflow',
+      cronExpression: '0 * * * *',
+      status: 'active',
+      overlap: 'skip',
+    });
   });
 
   it('decodes schedule runtime fields and rejects malformed records', () => {

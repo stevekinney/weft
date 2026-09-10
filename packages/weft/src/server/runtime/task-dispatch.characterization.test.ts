@@ -6,7 +6,7 @@
  * refactor cannot silently change behavior.
  */
 
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, mock } from 'bun:test';
 
 import { encode } from '../../core/codec.ts';
 import { KEYS } from '../../storage/interface.ts';
@@ -333,6 +333,48 @@ describe('dispatchTaskImpl', () => {
     ).rejects.toThrow('invalid "operationId"');
   });
 
+  // Regression (WFT-95 review): the operationId "."/".." admission check is
+  // fresh-dispatch-only. `scheduleDelayedDispatch` always redispatches an
+  // already-decoded, previously persisted ledger record built by
+  // `taskDispatchFromLedgerRecord()` — such a record's operationId was valid
+  // under the pre-WFT-95 decode contract and may already be durably
+  // persisted as "." or "..". Redispatch must not re-apply the admission
+  // check to that data, or a pre-upgrade task is stranded in `queued`/
+  // `leased` state forever (startup recovery and expired-lease requeue both
+  // route through this `{ redispatch: true }` path).
+  it('does not throw for a redispatch whose operationId is exactly "." or ".." (WFT-95 review regression)', async () => {
+    context = createMinimalContext();
+    options = createMinimalOptions();
+
+    const dotResult = await dispatchTaskImpl(
+      context,
+      options,
+      {
+        operationId: '.',
+        activityName: 'doWork',
+        workflowType: 'testWorkflow',
+        input: null,
+      },
+      { redispatch: true },
+    );
+    expect(dotResult).toBe(true);
+    expect(context.taskQueue.isTracked('.')).toBe(true);
+
+    const dotDotResult = await dispatchTaskImpl(
+      context,
+      options,
+      {
+        operationId: '..',
+        activityName: 'doWork',
+        workflowType: 'testWorkflow',
+        input: null,
+      },
+      { redispatch: true },
+    );
+    expect(dotDotResult).toBe(true);
+    expect(context.taskQueue.isTracked('..')).toBe(true);
+  });
+
   it('allows an operationId that merely contains a dot character (WFT-95)', async () => {
     context = createMinimalContext();
     options = createMinimalOptions();
@@ -559,6 +601,46 @@ describe('scheduleDelayedDispatch', () => {
     );
 
     expect(context.pendingTimers.size).toBe(0);
+  });
+
+  // Regression (WFT-95 review): drives the actual redispatch entry point —
+  // not just `dispatchTaskImpl`'s `{ redispatch: true }` option directly —
+  // to prove startup recovery and expired-lease requeue (both of which call
+  // `scheduleDelayedDispatch` with a `taskDispatchFromLedgerRecord()` task)
+  // successfully redispatch a pre-upgrade record whose persisted
+  // operationId is "." or "..", instead of logging "Delayed redispatch
+  // failed" and leaving the task stranded.
+  it('successfully redispatches a task whose operationId is exactly "." or ".." (WFT-95 review regression)', async () => {
+    context = createMinimalContext();
+    options = createMinimalOptions();
+
+    const errors: unknown[] = [];
+    const originalError = console.error;
+    console.error = mock((...args: unknown[]) => {
+      errors.push(args);
+    });
+
+    try {
+      scheduleDelayedDispatch(
+        context,
+        options,
+        {
+          operationId: '.',
+          activityName: 'doWork',
+          workflowType: 'testWorkflow',
+          input: null,
+        },
+        0,
+      );
+
+      // Let the zero-delay timer's callback (an async IIFE) settle.
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(errors).toEqual([]);
+      expect(context.taskQueue.isTracked('.')).toBe(true);
+    } finally {
+      console.error = originalError;
+    }
   });
 });
 

@@ -343,8 +343,9 @@ export const getTaskDetailRestBinding: UnknownRestBinding = {
   method: 'GET',
   // Deliberately not `/v1/tasks/:operationId`: a caller-controlled
   // operationId is a nonempty, bounded identifier other than the exact
-  // string "." or ".." (WFT-95; enforced at dispatch admission in
-  // `buildCreateQueuedInput`, not here), so it can still legally equal an
+  // string "." or ".." (WFT-95; enforced at fresh-dispatch admission in
+  // `dispatchTaskImpl`, not here — a redispatched, already-decoded ledger
+  // record is exempt from that check), so it can still legally equal an
   // existing (or future) literal sibling segment under `/v1/tasks/` —
   // "diagnostics" today. A bare :operationId route would make that task
   // permanently unreachable over REST (the literal route always wins; see
