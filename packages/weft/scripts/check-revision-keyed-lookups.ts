@@ -36,9 +36,14 @@
  * or write a guarded field while evading a dot-only pattern (WFT-19 review
  * round 2, Codex: the original dot-only regex missed exactly these). The
  * tradeoff is a handful of expected non-access matches — each guarded
- * field's own type declaration and initial-value construction — which are
- * allowlisted explicitly per field rather than narrowing the pattern back
- * down and reopening the gap.
+ * field's own type declaration and initial-value construction — exempted
+ * by EXACT (file, line) in `declarationSites`, not by narrowing the
+ * pattern back down (which would reopen the destructure/bracket gap) and
+ * not by exempting the declaring file wholesale either (WFT-19 review
+ * round 2, Codex again: a whole-file exemption for `internals.ts` or
+ * `source-runtime-state.ts` would let a future unrelated reference added
+ * anywhere else in that same file pass the check silently — line-exact
+ * closes that).
  *
  * `--root <path>` sets the directory the scanner walks. Defaults to the
  * repository root. Used by the script's own tests to point at fixture trees
@@ -59,12 +64,28 @@ export const TEST_FILE_EXCLUSION_GLOBS = [
   '**/__tests__/**',
 ] as const;
 
+/** A single audited line — the field's own declaration or initial-value construction. */
+export type DeclarationSite = {
+  /** Repo-relative path (POSIX separators). */
+  file: string;
+  /** 1-indexed line number, exact — not a range, so a later edit to the same file that adds a NEW reference on a different line still fails the check (WFT-19 review round 2, Codex: a whole-file exemption would have let any other new reference in that file pass silently). */
+  line: number;
+};
+
 export type GuardedField = {
   /** The bare field name, matched as `.fieldName` (a property access, not a declaration). */
   name: string;
-  /** Repo-relative paths (POSIX separators) allowed to reference this field. */
+  /** Repo-relative paths (POSIX separators) allowed to reference this field ANYWHERE in the file — the field's own audited execution-path modules. */
   allowedFiles: readonly string[];
-  /** Why each file in `allowedFiles` is there — surfaced in `--help` and failure output. */
+  /**
+   * Exact (file, line) pairs exempted even in a file NOT listed in
+   * `allowedFiles` — the field's own type declaration and initial-value
+   * construction, which the word-boundary match (necessarily) also
+   * matches. Line-exact rather than whole-file so a future unrelated
+   * reference added anywhere else in the SAME file still fails the check.
+   */
+  declarationSites: readonly DeclarationSite[];
+  /** Why each entry in `allowedFiles`/`declarationSites` is there — surfaced in `--help` and failure output. */
   rationale: string;
 };
 
@@ -77,33 +98,37 @@ export const GUARDED_FIELDS: readonly GuardedField[] = [
   {
     name: 'activityRegistriesByWorkflow',
     allowedFiles: [
-      'src/core/engine/internals.ts',
       'src/core/engine/registration.ts',
       'src/core/engine/activity-resolution.ts',
       'src/core/engine/index.ts',
       'src/core/engine/disposal.ts',
     ],
+    declarationSites: [{ file: 'src/core/engine/internals.ts', line: 185 }],
     rationale:
-      "internals.ts declares the field itself (EngineInternals' own type), registration.ts writes it " +
-      '(engine.register()), activity-resolution.ts reads it as the eager-first branch of dispatch ' +
-      'resolution, index.ts reads it for the documented eager-only ' +
+      "internals.ts declares the field itself (EngineInternals' own type) at its one audited line, " +
+      'registration.ts writes it (engine.register()), activity-resolution.ts reads it as the ' +
+      'eager-first branch of dispatch resolution, index.ts reads it for the documented eager-only ' +
       'getWorkflowActivityDefinition()/listWorkflowActivityDefinitions() accessors (and initializes it ' +
       'at construction), and disposal.ts clears it.',
   },
   {
     name: 'lastResolvedRevisionByName',
     allowedFiles: [
-      'src/core/engine/source-runtime-state.ts',
       'src/core/engine/dynamic-source-execution.ts',
       'src/core/engine/index.ts',
       'src/core/engine/disposal.ts',
     ],
+    declarationSites: [
+      { file: 'src/core/engine/source-runtime-state.ts', line: 83 },
+      { file: 'src/core/engine/source-runtime-state.ts', line: 96 },
+    ],
     rationale:
-      "source-runtime-state.ts declares the field itself (WorkflowSourceRuntimeState's own type and " +
-      'its empty-state factory). Last-resolved-revision-wins fallback, valid ONLY when a caller has no ' +
-      'running instance to pin against: dynamic-source-execution.ts writes it on every dynamic-source ' +
-      "resolve and reads it as getResolvedDynamicRegistration()'s revision:undefined fallback, index.ts " +
-      'reads it for type enumeration (listRegisteredWorkflowTypes()), and disposal.ts clears it.',
+      "source-runtime-state.ts declares the field itself (WorkflowSourceRuntimeState's own type, " +
+      "line 83) and its empty-state factory's initial value (line 96) at its two audited lines. " +
+      'Last-resolved-revision-wins fallback, valid ONLY when a caller has no running instance to pin ' +
+      'against: dynamic-source-execution.ts writes it on every dynamic-source resolve and reads it as ' +
+      "getResolvedDynamicRegistration()'s revision:undefined fallback, index.ts reads it for type " +
+      'enumeration (listRegisteredWorkflowTypes()), and disposal.ts clears it.',
   },
 ];
 
@@ -149,7 +174,10 @@ function printUsage(): void {
     lines.push(`  ${guarded.name}`);
     lines.push(`    ${guarded.rationale}`);
     for (const path of guarded.allowedFiles) {
-      lines.push(`      - ${path}`);
+      lines.push(`      - ${path} (whole file)`);
+    }
+    for (const site of guarded.declarationSites) {
+      lines.push(`      - ${site.file}:${site.line} (declaration site only)`);
     }
   }
   console.log(lines.join('\n'));
@@ -225,14 +253,18 @@ async function scanViolations(root: string): Promise<Violation[]> {
       if (guarded.allowedFiles.includes(relativePath)) continue;
       const identifierTokenRegex = new RegExp(`\\b${guarded.name}\\b`);
       for (const [index, lineText] of lines.entries()) {
-        if (identifierTokenRegex.test(lineText)) {
-          violations.push({
-            field: guarded.name,
-            file: relativePath,
-            line: index + 1,
-            lineText: (rawLines[index] ?? '').trim(),
-          });
-        }
+        const lineNumber = index + 1;
+        if (!identifierTokenRegex.test(lineText)) continue;
+        const isDeclarationSite = guarded.declarationSites.some(
+          (site) => site.file === relativePath && site.line === lineNumber,
+        );
+        if (isDeclarationSite) continue;
+        violations.push({
+          field: guarded.name,
+          file: relativePath,
+          line: lineNumber,
+          lineText: (rawLines[index] ?? '').trim(),
+        });
       }
     }
   }
@@ -258,7 +290,8 @@ async function runEnforcement(args: CliArguments): Promise<number> {
   }
 
   const fieldSummary = GUARDED_FIELDS.map(
-    (guarded) => `${guarded.name} (${guarded.allowedFiles.length} file(s))`,
+    (guarded) =>
+      `${guarded.name} (${guarded.allowedFiles.length} file(s), ${guarded.declarationSites.length} declaration site(s))`,
   ).join(', ');
   console.log(`OK: no out-of-allowlist references to guarded fields: ${fieldSummary}.`);
   return 0;

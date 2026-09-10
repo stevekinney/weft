@@ -837,17 +837,17 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       // `pre-commit.ts` below.
       {
         reason:
-          'Process-entry and failure-exit behavior runs in child processes whose hits are not attributed to the parent Bun LCOV report. Re-derived from a fresh coverage/lcov.info (WFT-19 review round 2) after the word-boundary-matching rewrite shifted every line below parseArguments().',
+          'Process-entry and failure-exit behavior runs in child processes whose hits are not attributed to the parent Bun LCOV report. Re-derived from a fresh coverage/lcov.info (WFT-19 review round 3) after the declarationSites rewrite shifted every line below parseArguments() again.',
         functions: 7,
         lines: createMergedLineSet(
-          createLineSet(121, 134),
-          createLineSet(138, 154),
-          createLineSet(199, 203),
-          createLineSet(208, 212),
-          createLineSet(216, 238),
-          createLineSet(242, 263),
-          createLineSet(267, 268),
-          createLineSet(273, 274),
+          createLineSet(146, 159),
+          createLineSet(163, 182),
+          createLineSet(227, 231),
+          createLineSet(236, 240),
+          createLineSet(244, 270),
+          createLineSet(274, 296),
+          createLineSet(300, 301),
+          createLineSet(306, 307),
         ),
         requireUncoveredLines: true,
       },

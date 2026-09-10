@@ -142,6 +142,36 @@ describe('check-revision-keyed-lookups', () => {
     expect(result.exitCode).toBe(0);
   });
 
+  it('passes when a match is exactly on its audited declaration-site line, in a file with no whole-file allowance', async () => {
+    const guarded = GUARDED_FIELDS.find((field) => field.name === 'lastResolvedRevisionByName')!;
+    const site = guarded.declarationSites[0]!;
+    // Pad so the real reference lands EXACTLY on the audited declaration-site
+    // line number, not just somewhere in the file.
+    const padding = '\n'.repeat(site.line - 1);
+    const body = `${padding}  lastResolvedRevisionByName: Map<string, string>;\n`;
+    await writeFixtureFile(root, site.file, body);
+    // Sanity-check the fixture actually puts the reference on the audited
+    // line — otherwise this test would pass for the wrong reason.
+    expect(body.split('\n')[site.line - 1]).toContain('lastResolvedRevisionByName');
+    const result = run(['--root', root]);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('fails when a match is in a declaration-site FILE but on a DIFFERENT line — line-exactness, not whole-file exemption (WFT-19 review round 2, Codex)', async () => {
+    const guarded = GUARDED_FIELDS.find((field) => field.name === 'lastResolvedRevisionByName')!;
+    const site = guarded.declarationSites[0]!;
+    // Pad with blank lines so the real reference lands one line AFTER the
+    // audited declaration-site line number — a future unrelated addition to
+    // this same file must still be caught, not silently pass because the
+    // file also happens to hold the audited declaration.
+    const padding = '\n'.repeat(site.line);
+    const body = `${padding}export const rogue = { lastResolvedRevisionByName: new Map() };\n`;
+    await writeFixtureFile(root, site.file, body);
+    const result = run(['--root', root]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(`${site.file}:${site.line + 1}`);
+  });
+
   it('excludes .test.ts and __tests__ paths from enforcement', async () => {
     await writeFixtureFile(
       root,
@@ -227,6 +257,18 @@ describe('check-revision-keyed-lookups GUARDED_FIELDS', () => {
       for (const path of guarded.allowedFiles) {
         expect(path.startsWith('/')).toBe(false);
         expect(path.startsWith('src/')).toBe(true);
+      }
+    }
+  });
+
+  it('every declaration site names a repo-relative file and a positive line number, and is not also a whole-file-allowed path', () => {
+    for (const guarded of GUARDED_FIELDS) {
+      expect(guarded.declarationSites.length).toBeGreaterThan(0);
+      for (const site of guarded.declarationSites) {
+        expect(site.file.startsWith('/')).toBe(false);
+        expect(site.file.startsWith('src/')).toBe(true);
+        expect(site.line).toBeGreaterThan(0);
+        expect(guarded.allowedFiles.includes(site.file)).toBe(false);
       }
     }
   });
