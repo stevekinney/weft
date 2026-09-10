@@ -6976,14 +6976,18 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     }
     const futureDeadline = leasedRecord.leaseDeadline;
 
-    // WFT-91 review (Copilot): same prototype-vs-instance tradeoff as the
-    // sibling "restores heartbeat-extended deadline" test above — see that
-    // test's comment for why prototype-level is used here (no instance-level
-    // seam without adding a test-only accessor to `WeftServer`'s public
-    // interface) and how the blast radius is bounded (always restored in
-    // `finally`; the `.add()` override counts only this test's own
-    // `operationId` while delegating every call, matching or not, to the
-    // original implementation).
+    // WFT-91 review (Copilot): these overrides are installed on
+    // `DeadlineTracker.prototype`, not on the specific instance the running
+    // server uses — `WeftServer`'s public interface (see `src/server/index.ts`)
+    // deliberately does not expose the internal `ServerContext.deadlineTracker`
+    // instance, so there is no instance-level seam to target without adding a
+    // test-only accessor to a public, documented surface. The blast radius is
+    // bounded two ways: both overrides are restored in the `finally` block
+    // below regardless of outcome, and the `.add()` override only *counts*
+    // calls for this test's own `operationId` while still delegating every
+    // call — matching and non-matching alike — to the original
+    // implementation, so any other `DeadlineTracker` instance alive during
+    // this test observes unchanged behavior.
     const originalAdd = DeadlineTracker.prototype.add;
     const originalDrainExpired = DeadlineTracker.prototype.drainExpired;
     let addCountForOperation = 0;
