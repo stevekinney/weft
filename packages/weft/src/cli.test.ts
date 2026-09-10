@@ -667,6 +667,49 @@ describe('CLI argument parsing', () => {
       expect(result.jitter).toBe('45s');
     });
 
+    it('parses --revision-policy on schedule create (WFT-20)', () => {
+      const result = parseCliArguments([
+        'schedule',
+        'create',
+        'echo',
+        '0 * * * *',
+        '--workflows',
+        './workflows.ts',
+        '--revision-policy',
+        'pinned',
+      ]) as ScheduleCreateCommand;
+
+      expect(result.revisionPolicy).toBe('pinned');
+    });
+
+    it('omits revisionPolicy when --revision-policy is not supplied', () => {
+      const result = parseCliArguments([
+        'schedule',
+        'create',
+        'echo',
+        '0 * * * *',
+        '--workflows',
+        './workflows.ts',
+      ]) as ScheduleCreateCommand;
+
+      expect(result.revisionPolicy).toBeUndefined();
+    });
+
+    it('rejects an unknown --revision-policy value', () => {
+      expect(() =>
+        parseCliArguments([
+          'schedule',
+          'create',
+          'echo',
+          '0 * * * *',
+          '--workflows',
+          './workflows.ts',
+          '--revision-policy',
+          'sometimes',
+        ]),
+      ).toThrow("Invalid revision policy 'sometimes'. Must be one of: active-at-fire, pinned");
+    });
+
     it('rejects invalid schedule overlap policies', () => {
       expect(() =>
         parseCliArguments([
@@ -1428,6 +1471,7 @@ describe('executeConformance', () => {
       'heartbeat',
       'cancellation',
       'reconnect',
+      'revision echo',
       'graceful shutdown',
     ]);
   });

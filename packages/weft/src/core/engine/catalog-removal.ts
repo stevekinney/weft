@@ -29,6 +29,7 @@ import { resolveCatalogTombstoneIfPresent } from './catalog-tombstone-recovery.t
 import type { Engine } from './index.ts';
 import { getInternals, type EngineInternals } from './internals.ts';
 import { countNonTerminalRunsForRevision } from './nonterminal-revision-count.ts';
+import { countPinnedSchedulesForRevision } from './pinned-schedule-revision-count.ts';
 import { readSourceLoadDiagnostics, readSourceWaiterCount } from './source-diagnostics.ts';
 import type { SourceLoadDiagnostics } from './source-runtime-state.ts';
 
@@ -143,9 +144,12 @@ export function releaseInFlightStart(
  * {@link finalizeRevisionRemoval}'s post-check) — worth knowing before
  * wiring `removeWorkflowRevision()` into an automated cleanup path on a
  * large durable store, rather than the operator-triggered use this batch
- * assumes. The remaining three fields of {@link WorkflowRevisionReferenceCounts}
- * stay `0` — schedules (WFT-20), dispatches, and execution realms are out
- * of this batch's scope.
+ * assumes. `pinnedSchedules` is ALSO an unbounded, full `schedule:`-prefix
+ * durable scan (WFT-20 — see {@link countPinnedSchedulesForRevision}), so
+ * this function now pays for two bounded-but-unbounded-in-store-size scans
+ * per call. The remaining two fields of {@link WorkflowRevisionReferenceCounts}
+ * stay `0` — the dispatch ledger and execution realms are out of this
+ * batch's scope.
  */
 export async function countWorkflowRevisionReferences(
   engine: Engine,
@@ -154,11 +158,12 @@ export async function countWorkflowRevisionReferences(
 ): Promise<WorkflowRevisionReferenceCounts> {
   const internals = getInternals(engine);
   const nonTerminalRuns = await countNonTerminalRunsForRevision(internals.storage, name, revision);
+  const pinnedSchedules = await countPinnedSchedulesForRevision(internals.storage, name, revision);
   return {
     registeredDefinitions: internals.registeredCatalogRevisions.get(name) === revision ? 1 : 0,
     inFlightStarts: readNestedRevisionCount(internals.inFlightStartsByRevision, name, revision),
     nonTerminalRuns,
-    pinnedSchedules: 0,
+    pinnedSchedules,
     pendingDispatches: 0,
     activeExecutionRealms: 0,
     retainedRecoveryRecords: 0,

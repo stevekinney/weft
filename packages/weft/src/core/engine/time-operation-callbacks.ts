@@ -30,6 +30,7 @@ export type TimeOperationCallbacks = {
     checkpoint: Checkpoint,
     executionDeadline: number | undefined,
     executionStateOwnerId: string,
+    revision: string | undefined,
     registration: RegistrationEntry,
   ) => void;
   workflowVersionTupleFromState: (state: WorkflowState) => WorkflowVersionTuple;

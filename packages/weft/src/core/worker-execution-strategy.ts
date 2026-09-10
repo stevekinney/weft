@@ -52,6 +52,13 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
   #messageHandler: ((message: WorkerOutboundMessage) => void | Promise<void>) | null;
   #disposed: boolean;
   #nextTurnId: number;
+  /**
+   * Per-workflow captured revision (WFT-20), set once at `startWorkflow()`
+   * and read by every subsequent turn's `beginTurn` — including `resume`
+   * turns, whose inbound message never re-carries the revision. Cleared when
+   * the workflow reaches a terminal outbound message or is cancelled.
+   */
+  readonly #workflowRevisions: Map<string, string>;
 
   constructor(pool: WorkerPool, options?: WorkerExecutionStrategyOptions) {
     const {
@@ -66,6 +73,7 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
     } = options ?? {};
     this.#pool = pool;
     this.#ownership = new WorkerExecutionOwnership();
+    this.#workflowRevisions = new Map();
     this.#workerListeners = new WorkerListenerRegistry();
     this.#checkpointResumeState = new WorkerCheckpointResumeState();
     this.#workflowTurnTimeoutMs = workflowTurnTimeoutMs;
@@ -99,6 +107,9 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
       emit: (message) => {
         this.#emit(message);
       },
+      forgetWorkflowRevision: (workflowId) => {
+        this.#workflowRevisions.delete(workflowId);
+      },
     });
     this.#dispatcher = new WorkerExecutionDispatcher({
       pool: this.#pool,
@@ -115,7 +126,14 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
       },
       ensureRealmReady: (worker, workflowId) => this.#ensureRealmReady(worker, workflowId),
       beginTurn: (worker, workflowId, turnId, kind) => {
-        this.#turnWatchdog.begin(worker, workflowId, turnId, kind);
+        this.#turnWatchdog.begin(
+          worker,
+          workflowId,
+          turnId,
+          kind,
+          undefined,
+          this.#workflowRevisions.get(workflowId),
+        );
       },
       clearTurn: (worker) => {
         this.#turnWatchdog.clear(worker);
@@ -155,6 +173,7 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
   startWorkflow(parameters: {
     workflowId: string;
     workflowExecutionToken?: string;
+    revision?: string;
     workflowType: string;
     input: unknown;
     checkpoint: ArrayBuffer;
@@ -167,6 +186,11 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
   }): void {
     this.#ownership.resetWorkflow(parameters.workflowId);
     this.#checkpointResumeState.resetWorkflow(parameters.workflowId);
+    if (parameters.revision !== undefined) {
+      this.#workflowRevisions.set(parameters.workflowId, parameters.revision);
+    } else {
+      this.#workflowRevisions.delete(parameters.workflowId);
+    }
     const message = buildRunMessage(parameters, this.#inboundMessageContext());
     if (!this.#faultHandler.assertHostToWorkerMessageWithinLimit(parameters.workflowId, message)) {
       return;
@@ -233,6 +257,11 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
   }
 
   cancelWorkflow(workflowId: string): void {
+    // Cancellation is terminal for this strategy's own bookkeeping even
+    // though a stray outbound message can still arrive after — the turn
+    // watchdog is cleared below (via `#releaseActiveWorker`/discard), so any
+    // late message fails the guard's turn-match check regardless.
+    this.#workflowRevisions.delete(workflowId);
     const worker = this.#ownership.getActiveWorker(workflowId);
     if (worker) {
       this.#ownership.markCancelled(workflowId);
@@ -306,6 +335,7 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
     this.#workerListeners.detachAll();
     this.#ownership.clear();
     this.#checkpointResumeState.clear();
+    this.#workflowRevisions.clear();
     this.#messageHandler = null;
   }
 
@@ -367,6 +397,7 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
 
     this.#ownership.consumeCancelled(message.workflowId);
     this.#ownership.deleteParked(message.workflowId);
+    this.#workflowRevisions.delete(message.workflowId);
     this.#releaseActiveWorker(message.workflowId);
     this.#detachWorkerListenersIfIdle(worker);
     this.#checkpointResumeState.forgetWorkflowIfClosed(

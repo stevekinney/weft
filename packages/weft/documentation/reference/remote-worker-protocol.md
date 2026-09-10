@@ -225,19 +225,31 @@ Sent when an in-flight task completes, fails, or is cancelled.
 }
 ```
 
-| Field          | Type                                     | Required                    | Description                                                                           |
-| -------------- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------- |
-| `type`         | `"taskResult"`                           | Yes                         | Message discriminator.                                                                |
-| `operationId`  | string                                   | Yes                         | The opaque `operationId` from the corresponding `task` message.                       |
-| `status`       | `"completed" \| "failed" \| "cancelled"` | Yes                         | Terminal outcome.                                                                     |
-| `value`        | any JSON value                           | Yes if `completed`          | Activity result. Use `null` when the activity has no value.                           |
-| `error`        | string                                   | Yes if `failed`/`cancelled` | Human-readable error message.                                                         |
-| `cancelled`    | `true`                                   | No                          | Optional marker for cancelled results. If present, it must be `true`.                 |
-| `attemptToken` | non-empty string                         | Yes                         | Per-dispatch token from the matching `task` frame. The worker must echo it unchanged. |
+| Field              | Type                                     | Required                    | Description                                                                           |
+| ------------------ | ---------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------- |
+| `type`             | `"taskResult"`                           | Yes                         | Message discriminator.                                                                |
+| `operationId`      | string                                   | Yes                         | The opaque `operationId` from the corresponding `task` message.                       |
+| `status`           | `"completed" \| "failed" \| "cancelled"` | Yes                         | Terminal outcome.                                                                     |
+| `value`            | any JSON value                           | Yes if `completed`          | Activity result. Use `null` when the activity has no value.                           |
+| `error`            | string                                   | Yes if `failed`/`cancelled` | Human-readable error message.                                                         |
+| `cancelled`        | `true`                                   | No                          | Optional marker for cancelled results. If present, it must be `true`.                 |
+| `attemptToken`     | non-empty string                         | Yes                         | Per-dispatch token from the matching `task` frame. The worker must echo it unchanged. |
+| `workflowRevision` | non-empty string                         | No (WFT-20)                 | Echo of `task.workflowRevision`, when the dispatch carried one. See below.            |
 
 The server stores `completed` as a completed task and treats `failed` and `cancelled` as failed terminal resolutions. Missing `operationId`, missing `value` on completed results, unknown statuses, non-string errors on failed or cancelled results, and non-string or empty `attemptToken` values are malformed messages. The server sends `protocolError` and closes the socket with `1002`.
 
 For a well-formed result, the server verifies that the WebSocket connection still owns the `operationId`, and then requires the echoed `attemptToken` to match the current dispatch exactly. Missing or mismatched tokens are rejected with `protocolError` before task state changes.
+
+**Revision staleness (WFT-20).** When the dispatch carried a `workflowRevision`
+(see `task` below), the in-flight entry remembers it. The WebSocket
+transport's authorization is ADDITIVE: a `taskResult` with no
+`workflowRevision` echo is tolerated whenever the in-flight entry itself
+carries none (an older worker SDK that has never heard of the field, or a
+dispatch that never opted in); a `taskResult` that echoes a DIFFERENT
+revision than the in-flight entry's is always rejected with
+`protocolError`, regardless of SDK age. This is deliberately more lenient
+than the HTTP long-poll transport below, which has no live in-flight
+registry entry to fall back on and is therefore strict.
 
 Workers must echo the token from every `task` frame:
 
@@ -265,21 +277,23 @@ Dispatched when the server has work for this worker.
   "input": null,
   "attempt": 1,
   "workflowExecutionToken": "<string>",
+  "workflowRevision": "<string>",
   "attemptToken": "<string>",
   "headers": { "<key>": "<value>" }
 }
 ```
 
-| Field                    | Type                     | Required | Description                                                                          |
-| ------------------------ | ------------------------ | -------- | ------------------------------------------------------------------------------------ |
-| `type`                   | `"task"`                 | Yes      | Message discriminator.                                                               |
-| `operationId`            | string                   | Yes      | Unique task identifier the worker echoes back in `taskResult`.                       |
-| `activityName`           | string                   | Yes      | Name of the activity to execute. Must be in the worker's `activities` list.          |
-| `input`                  | any JSON value           | Yes      | Activity input. `null` is used when the dispatch input is undefined.                 |
-| `attempt`                | number                   | No       | Retry counter. Present on retries.                                                   |
-| `workflowExecutionToken` | non-empty string         | No       | Durable per-run token exposed to the activity context for external write fencing.    |
-| `attemptToken`           | non-empty string         | Yes      | Per-dispatch token the worker must echo on `taskResult` for stale-attempt rejection. |
-| `headers`                | `Record<string, string>` | No       | Interceptor-propagated headers from the dispatch path.                               |
+| Field                    | Type                     | Required    | Description                                                                                                                                                      |
+| ------------------------ | ------------------------ | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `type`                   | `"task"`                 | Yes         | Message discriminator.                                                                                                                                           |
+| `operationId`            | string                   | Yes         | Unique task identifier the worker echoes back in `taskResult`.                                                                                                   |
+| `activityName`           | string                   | Yes         | Name of the activity to execute. Must be in the worker's `activities` list.                                                                                      |
+| `input`                  | any JSON value           | Yes         | Activity input. `null` is used when the dispatch input is undefined.                                                                                             |
+| `attempt`                | number                   | No          | Retry counter. Present on retries.                                                                                                                               |
+| `workflowExecutionToken` | non-empty string         | No          | Durable per-run token exposed to the activity context for external write fencing.                                                                                |
+| `workflowRevision`       | non-empty string         | No (WFT-20) | The dispatching workflow run's persisted revision, populated by the `TaskDispatch` caller (via `server.dispatchTask()`). Echo it back unchanged on `taskResult`. |
+| `attemptToken`           | non-empty string         | Yes         | Per-dispatch token the worker must echo on `taskResult` for stale-attempt rejection.                                                                             |
+| `headers`                | `Record<string, string>` | No          | Interceptor-propagated headers from the dispatch path.                                                                                                           |
 
 If the worker does not recognize `activityName`, it should send `taskResult` with `status: "failed"` and an explanatory `error`.
 
@@ -439,20 +453,22 @@ Task response body:
   "headers": { "traceparent": "00-..." },
   "workerId": "longpoll-a1b2c3d4",
   "workflowExecutionToken": "workflow-run-token",
+  "workflowRevision": "sha256:9f2c…",
   "attemptToken": "per-claim-token"
 }
 ```
 
-| Field                    | Type                     | Description                                                                 |
-| ------------------------ | ------------------------ | --------------------------------------------------------------------------- |
-| `operationId`            | string                   | Opaque task identifier to echo in the result request.                       |
-| `activityName`           | string                   | Activity name selected from the advertised `activity` values.               |
-| `input`                  | JSON value               | Activity input.                                                             |
-| `attempt`                | number                   | Retry attempt number. Present on retried dispatches.                        |
-| `headers`                | `Record<string, string>` | Interceptor-propagated headers when present.                                |
-| `workerId`               | string                   | Synthetic worker id for this HTTP claim. Echo it in the result request.     |
-| `workflowExecutionToken` | string                   | Durable per-run token exposed to the activity context for external writes.  |
-| `attemptToken`           | string                   | Per-claim token for stale-attempt rejection. Echo it in the result request. |
+| Field                    | Type                     | Description                                                                                                                                          |
+| ------------------------ | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `operationId`            | string                   | Opaque task identifier to echo in the result request.                                                                                                |
+| `activityName`           | string                   | Activity name selected from the advertised `activity` values.                                                                                        |
+| `input`                  | JSON value               | Activity input.                                                                                                                                      |
+| `attempt`                | number                   | Retry attempt number. Present on retried dispatches.                                                                                                 |
+| `headers`                | `Record<string, string>` | Interceptor-propagated headers when present.                                                                                                         |
+| `workerId`               | string                   | Synthetic worker id for this HTTP claim. Echo it in the result request.                                                                              |
+| `workflowExecutionToken` | string                   | Durable per-run token exposed to the activity context for external writes.                                                                           |
+| `workflowRevision`       | string                   | The dispatching workflow run's persisted revision (WFT-20), when the dispatch carried one. Echo it back UNCHANGED in the result request — see below. |
+| `attemptToken`           | string                   | Per-claim token for stale-attempt rejection. Echo it in the result request.                                                                          |
 
 ### Result request
 
@@ -485,21 +501,31 @@ Failure body:
 }
 ```
 
-| Field          | Type                      | Required              | Description                                                 |
-| -------------- | ------------------------- | --------------------- | ----------------------------------------------------------- |
-| `operationId`  | string                    | Yes                   | Opaque task identifier from the poll response.              |
-| `workerId`     | string                    | Yes for claimed tasks | Synthetic worker id from the poll response.                 |
-| `attemptToken` | non-empty string          | Yes                   | Per-claim token from the poll response.                     |
-| `status`       | `"completed" \| "failed"` | Yes                   | Terminal activity result status.                            |
-| `value`        | JSON value                | Yes if `completed`    | Activity result. Use `null` when the activity has no value. |
-| `error`        | string                    | Yes if `failed`       | Human-readable failure message.                             |
+| Field              | Type                      | Required              | Description                                                                                                                   |
+| ------------------ | ------------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `operationId`      | string                    | Yes                   | Opaque task identifier from the poll response.                                                                                |
+| `workerId`         | string                    | Yes for claimed tasks | Synthetic worker id from the poll response.                                                                                   |
+| `attemptToken`     | non-empty string          | Yes                   | Per-claim token from the poll response.                                                                                       |
+| `workflowRevision` | non-empty string          | See below             | Echo of the poll response's `workflowRevision`, when present — required whenever the stored ledger record has one; see below. |
+| `status`           | `"completed" \| "failed"` | Yes                   | Terminal activity result status.                                                                                              |
+| `value`            | JSON value                | Yes if `completed`    | Activity result. Use `null` when the activity has no value.                                                                   |
+| `error`            | string                    | Yes if `failed`       | Human-readable failure message.                                                                                               |
 
-| Response | Meaning                                                                                                |
-| -------- | ------------------------------------------------------------------------------------------------------ |
-| `200`    | Result accepted. Body is `{ "ok": true }`.                                                             |
-| `400`    | Invalid JSON, missing required fields, unsupported status, or malformed `attemptToken`.                |
-| `403`    | The echoed `workerId` or `attemptToken` does not match the current in-flight record.                   |
-| `413`    | The result body or serialized activity result exceeds `maxRequestBodyBytes` or `payloadSize.maxBytes`. |
+| Response | Meaning                                                                                                   |
+| -------- | --------------------------------------------------------------------------------------------------------- |
+| `200`    | Result accepted. Body is `{ "ok": true }`.                                                                |
+| `400`    | Invalid JSON, missing required fields, unsupported status, or malformed `attemptToken`.                   |
+| `403`    | The echoed `workerId`, `attemptToken`, or `workflowRevision` does not match the current in-flight record. |
+| `413`    | The result body or serialized activity result exceeds `maxRequestBodyBytes` or `payloadSize.maxBytes`.    |
+
+**Revision staleness is STRICT for long-poll (WFT-20)**, unlike the
+WebSocket transport's additive policy above: when the stored ledger record
+for this task carries a `workflowRevision`, the result request must echo
+it back EXACTLY — a missing echo is rejected the same as a mismatched one.
+Long-poll has no live in-flight registry entry to fall back on the way the
+WebSocket transport does, so once ANY `TaskDispatch` caller starts
+supplying `workflowRevision` for a given operation, every worker
+completing it must echo the value back or receive `403`.
 
 Long-poll authorization is strict. A claimed task records the synthetic
 `workerId` and a fresh `attemptToken`; the completion must echo both while that

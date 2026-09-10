@@ -208,6 +208,14 @@ export interface WorkflowRunnerContext {
   generators: Map<string, AsyncGenerator>;
   abortControllers: Map<string, AbortController>;
   replayStates: Map<string, WorkerReplayState>;
+  /**
+   * The revision (WFT-20) captured from the `run` message that started this
+   * workflow, keyed by workflow id — a `resume` inbound message never
+   * re-sends it, so `workflow-worker-entry.ts`'s `attachWorkerProtocol` reads
+   * it from here to stamp every outbound message for the workflow's
+   * remaining turns.
+   */
+  workflowRevisions: Map<string, string>;
 }
 
 export function createWorkflowRunnerContext(): WorkflowRunnerContext {
@@ -215,6 +223,7 @@ export function createWorkflowRunnerContext(): WorkflowRunnerContext {
     generators: new Map(),
     abortControllers: new Map(),
     replayStates: new Map(),
+    workflowRevisions: new Map(),
   };
 }
 
@@ -233,6 +242,7 @@ export async function handleRunMessage(
     executionStateOwnerId?: string;
     deadline?: number;
     headers?: [string, string][];
+    workflowRevision?: string;
   },
   getWorkflowHandler: (
     type: string,
@@ -242,6 +252,15 @@ export async function handleRunMessage(
   // entry size-checks against `maxProtocolMessageBytes` and posts (or throws on oversize).
   postLog?: WorkerLogPoster,
 ): Promise<WorkerOutboundMessage> {
+  // Capture (or clear) the run's revision BEFORE the handler lookup, so even
+  // the "unknown workflow type" early-return failure below is stamped
+  // consistently by `attachWorkerProtocol` — and so a `start-new` restart
+  // reusing this exact workflow id never inherits a stale prior revision.
+  if (message.workflowRevision !== undefined) {
+    context.workflowRevisions.set(message.workflowId, message.workflowRevision);
+  } else {
+    context.workflowRevisions.delete(message.workflowId);
+  }
   const handler = getWorkflowHandler(message.workflowType);
 
   if (!handler) {
@@ -401,9 +420,13 @@ export async function handleCancelMessage(
   }
 
   // Identity-compare before deleting: if a new `run` message arrived
-  // during the await and replaced either entry, leave it alone.
+  // during the await and replaced either entry, leave it alone — including
+  // its freshly-captured `workflowRevisions` entry (WFT-20), which a
+  // replacing `run` message sets synchronously before this function ever
+  // reaches its own `await`.
   if (context.generators.get(message.workflowId) === capturedGenerator) {
     context.generators.delete(message.workflowId);
+    context.workflowRevisions.delete(message.workflowId);
   }
   if (context.abortControllers.get(message.workflowId) === capturedController) {
     context.abortControllers.delete(message.workflowId);
@@ -551,6 +574,13 @@ export function cleanupWorkflowRunnerState(
   context.generators.delete(workflowId);
   context.abortControllers.delete(workflowId);
   context.replayStates.delete(workflowId);
+  // `workflowRevisions` is deliberately NOT cleared here (WFT-20): a workflow
+  // that completes on its very first turn calls this function — via
+  // `processGeneratorStep`'s `currentStep.done` branch — BEFORE the entry
+  // module's `attachWorkerProtocol` ever gets a chance to read the captured
+  // revision for the outbound `completed` message it is about to stamp and
+  // send. The entry (`workflow-worker-entry.ts`) deletes the map entry
+  // itself, AFTER stamping the terminal outbound message.
 }
 
 function formatError(error: unknown): string {

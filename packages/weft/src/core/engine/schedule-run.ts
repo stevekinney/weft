@@ -6,6 +6,7 @@ import type { ScheduleState } from '../types.ts';
 import type { EngineInternals } from './internals.ts';
 import { unavailableServicesError } from './lifecycle/recovered-services.ts';
 import { EMPTY_STORAGE_VALUE } from './lifecycle/shared.ts';
+import { buildPinnedRevisionOverride } from './schedule-revision-fire.ts';
 import { encodeScheduleRunMetadata } from './schedule-run-metadata.ts';
 import type { ScheduleCallbacks } from './schedules.ts';
 
@@ -105,11 +106,15 @@ export async function startScheduledRun(
 
   // An empty array and `undefined` are equivalent at the receiving end
   // (buildStartBatchOperations spreads `?? []`), so pass the array directly.
+  // `buildPinnedRevisionOverride` is `undefined` for an `'active-at-fire'`
+  // schedule — every non-pinned occurrence launches byte-for-byte the
+  // pre-WFT-20 way.
   await callbacks.startWorkflow(
     state.workflowType,
     state.input,
     { id: workflowId },
     scheduleRunOperations,
+    buildPinnedRevisionOverride(state),
   );
 
   // The run launched, so the occurrence fired. Emit before the unavailable

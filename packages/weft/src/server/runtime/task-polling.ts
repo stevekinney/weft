@@ -55,6 +55,7 @@ type ValidatedTaskResult = {
   value: unknown;
   error: string | undefined;
   attemptToken: string;
+  workflowRevision: string | undefined;
 };
 
 function authorizeWorkerPrincipal(principal: Principal | undefined): Response | null {
@@ -113,6 +114,8 @@ function validateTaskResultBody(body: Record<string, unknown>): ValidatedTaskRes
     value: body['value'],
     error: typeof body['error'] === 'string' ? body['error'] : undefined,
     attemptToken: rawAttemptToken,
+    workflowRevision:
+      typeof body['workflowRevision'] === 'string' ? body['workflowRevision'] : undefined,
   };
 }
 
@@ -124,6 +127,15 @@ function validateTaskResultBody(body: Record<string, unknown>): ValidatedTaskRes
  * the ambiguity that made "absent" a plausible stand-in for "already
  * resolved elsewhere" (see the project brief's failure matrix: "Result
  * arrives for unknown operation → Rejected").
+ *
+ * Revision authorization (WFT-20) is STRICT for long-poll, unlike the
+ * WebSocket transport's additive policy: when the stored ledger record
+ * carries a `workflowRevision`, the POST body must echo it back exactly — a
+ * missing echo is rejected the same as a mismatched one. Long-poll has no
+ * live in-flight registry entry to fall back to ("was this SDK ever told
+ * about the field") the way the WebSocket path does, so once ANY caller
+ * starts supplying `workflowRevision` on `TaskDispatch` for a given
+ * operation, every worker completing it must echo the value back.
  */
 function isLongPollCompletionAuthorized(
   record: RemoteTaskRecord | null,
@@ -134,7 +146,14 @@ function isLongPollCompletionAuthorized(
   if (validated.workerId === undefined || record.workerSessionId !== validated.workerId) {
     return false;
   }
-  return validated.attemptToken === record.attemptToken;
+  if (validated.attemptToken !== record.attemptToken) return false;
+  if (
+    record.workflowRevision !== undefined &&
+    validated.workflowRevision !== record.workflowRevision
+  ) {
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -325,6 +344,7 @@ export async function handleTaskPollRequest(
       ...(task.workflowExecutionToken !== undefined && {
         workflowExecutionToken: task.workflowExecutionToken,
       }),
+      ...(task.workflowRevision !== undefined && { workflowRevision: task.workflowRevision }),
     });
   }
 

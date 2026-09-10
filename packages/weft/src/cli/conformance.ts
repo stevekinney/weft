@@ -206,6 +206,7 @@ async function dispatchAndWait(
   input: unknown,
   expectedStatus: 'completed' | 'failed',
   timeoutMs: number,
+  workflowRevision?: string,
 ): Promise<void> {
   const dispatched = await server.dispatchTask({
     operationId,
@@ -214,6 +215,7 @@ async function dispatchAndWait(
     input,
     queue: CONFORMANCE_QUEUE,
     visibilityTimeout: Math.max(500, timeoutMs),
+    ...(workflowRevision !== undefined && { workflowRevision }),
   });
   if (!dispatched) {
     throw new Error(`Could not dispatch ${operationId}`);
@@ -338,6 +340,22 @@ async function runConformanceChecks(
     await waitForWorkerIdle(server, replacementWorkerId, timeoutMs);
     await waitForResolvedStatus(storage, reconnectOperationId, 'completed', timeoutMs);
     checks.push(createCheck('reconnect', true, 'in-flight task completed after reconnect'));
+
+    // Dispatch with a workflowRevision (WFT-20) and confirm the reference
+    // worker echoes it back correctly on taskResult — a worker that echoes
+    // the wrong (or no) value would be rejected by the server's revision
+    // authorization gate, which would surface here as a failure to resolve.
+    await dispatchAndWait(
+      server,
+      storage,
+      'conformance-revision-echo',
+      'conformance.echo',
+      { ok: true },
+      'completed',
+      timeoutMs,
+      'conformance-revision-1',
+    );
+    checks.push(createCheck('revision echo', true, 'workflowRevision echoed and accepted'));
 
     const shutdownWorkerId = server.registry.getWorker(replacementWorkerId)?.id;
     if (shutdownWorkerId === undefined) {

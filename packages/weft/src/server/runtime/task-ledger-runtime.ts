@@ -17,7 +17,11 @@
  * @module server/runtime/task-ledger-runtime
  */
 
-import { storageConditionalBatch, type Storage } from '../../storage/interface.ts';
+import {
+  storageConditionalBatch,
+  type ConditionalBatchCondition,
+  type Storage,
+} from '../../storage/interface.ts';
 import type {
   TaskLedgerPreconditionResult,
   TaskLedgerTransitionResult,
@@ -54,6 +58,18 @@ export async function commitTaskLedgerTransition<T extends RemoteTaskRecord>(
   operationId: string,
   transitionFn: (current: RemoteTaskRecord | null, now: number) => TaskLedgerTransitionResult<T>,
   maxAttempts = 1,
+  /**
+   * Extra same-transaction preconditions to fence the commit on — for
+   * example, "the target workflow's persisted state is still exactly the
+   * bytes read at dispatch time" (WFT-20's revision-staleness gate). Checked
+   * in the SAME `conditionalBatch` call as the ledger key's own CAS, so a
+   * concurrent write to any of these keys between read and commit loses the
+   * whole batch atomically, closing the gap a standalone pre-check
+   * (read-then-later-write, with unrelated work in between) cannot close.
+   * Re-supplied by the caller on each retry attempt since the caller, not
+   * this loop, owns re-reading whatever these conditions guard.
+   */
+  additionalConditions: readonly ConditionalBatchCondition[] = [],
 ): Promise<TaskLedgerCommitResult<T>> {
   // storageConditionalBatch re-checks the capability on every call; serve()
   // already fails fast at attachment when it is absent (see src/server/index.ts).
@@ -67,11 +83,15 @@ export async function commitTaskLedgerTransition<T extends RemoteTaskRecord>(
 
     const committed = await storageConditionalBatch(
       storage,
-      [{ key, expectedValue: rawExisting }],
+      [{ key, expectedValue: rawExisting }, ...additionalConditions],
       [{ type: 'put', key, value: encodeRemoteTaskRecord(result.nextRecord) }],
     );
     if (committed) return { ok: true, record: result.nextRecord };
-    // Lost the CAS — another writer changed the record. Retry against fresh state.
+    // Lost the CAS — another writer changed the record (the ledger key
+    // itself, or one of `additionalConditions`, such as the fenced workflow
+    // revision moving). Retry against fresh state either way; a caller
+    // fencing on a moved workflow revision is expected to reject on the next
+    // attempt's own freshness check rather than loop forever.
   }
 
   return {

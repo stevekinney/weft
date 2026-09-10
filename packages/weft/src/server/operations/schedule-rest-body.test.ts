@@ -49,6 +49,7 @@ describe('schedule REST body extraction', () => {
       overlap: undefined,
       backfill: undefined,
       jitter: undefined,
+      revisionPolicy: undefined,
     });
   });
 
@@ -57,6 +58,7 @@ describe('schedule REST body extraction', () => {
       every: undefined,
       overlap: 'queue',
       jitter: '30s',
+      revisionPolicy: 'pinned',
     });
 
     expect(fields).toEqual({
@@ -66,6 +68,7 @@ describe('schedule REST body extraction', () => {
       overlap: 'queue',
       backfill: undefined,
       jitter: '30s',
+      revisionPolicy: 'pinned',
     });
   });
 });

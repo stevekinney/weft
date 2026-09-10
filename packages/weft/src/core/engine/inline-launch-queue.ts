@@ -265,6 +265,9 @@ async function startQueuedInlineWorkflowExecution(
       start.nestingDepth,
       start.executionDeadline,
       start.executionStateOwnerId,
+      // Re-read off the RELOADED persisted state, exactly like
+      // `workflowExecutionToken` above — never from `start` itself (WFT-20).
+      state.revision,
     );
 
     // Async disposal starts queued workflows so their first turns cannot fire

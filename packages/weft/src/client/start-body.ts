@@ -33,6 +33,7 @@ export function buildScheduleBody(
   setIfDefined(body, 'overlap', options?.overlap);
   setIfDefined(body, 'backfill', options?.backfill);
   setIfDefined(body, 'jitter', options?.jitter);
+  setIfDefined(body, 'revisionPolicy', options?.revisionPolicy);
   return body;
 }
 

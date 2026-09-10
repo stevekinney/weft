@@ -1,5 +1,6 @@
 import {
   KEYS,
+  storageValuesEqual,
   type BatchOperation,
   type ConditionalBatchCondition,
 } from '../../storage/interface.ts';
@@ -11,7 +12,10 @@ import {
   clearPendingAtomicWorkflowCommitSideEffects,
   takePendingAtomicWorkflowCommitSideEffects,
 } from './checkpoint-side-effects.ts';
-import { commitFencedEngineWrite } from './fenced-write.ts';
+import {
+  commitFencedEngineWrite,
+  commitFencedEngineWriteAllowingPreconditionFailure,
+} from './fenced-write.ts';
 import { getWorkflowExecutionStartedAt } from './handles.ts';
 import type { EngineInternals } from './internals.ts';
 import { resolveEffectiveScheduleFireAt } from './schedule-jitter.ts';
@@ -337,7 +341,22 @@ function buildScheduleTimerReplacementOperations(
   ];
 }
 
-/** Persist schedule state and optionally write the next schedule timer. */
+/**
+ * Persist schedule state and optionally write the next schedule timer.
+ *
+ * `extraConditions` (WFT-20) additionally fences the commit on caller-supplied
+ * preconditions — used by a `revisionPolicy: 'pinned'` create/update to fence
+ * the write on `buildCatalogEntryRevisionCondition(type, pinnedRevision)` so a
+ * concurrent `removeWorkflowRevision()` landing between pin capture and this
+ * commit cannot let a pin to an already-removed revision durably land. When
+ * the commit's `extraConditions` are the ones that lost the CAS,
+ * `onExtraConditionsLost` (required whenever `extraConditions` is non-empty)
+ * supplies the thrown error instead of this function's own generic
+ * lost-precondition error, so the caller sees an actionable, typed failure
+ * (e.g. `WorkflowRevisionUnavailableError`) rather than a bare "lost its
+ * precondition" message. Every existing caller passes neither option and gets
+ * byte-for-byte the pre-WFT-20 commit shape.
+ */
 export async function writeScheduleState(
   internals: EngineInternals,
   state: ScheduleState,
@@ -345,6 +364,8 @@ export async function writeScheduleState(
     includeTimer?: boolean;
     replaceTimerFrom?: ScheduleState;
     additionalOperations?: BatchOperation[];
+    extraConditions?: ConditionalBatchCondition[];
+    onExtraConditionsLost?: () => Error;
   },
 ): Promise<void> {
   const operations: BatchOperation[] = [
@@ -358,9 +379,22 @@ export async function writeScheduleState(
 
   operations.push(...(options?.additionalOperations ?? []));
 
+  const extraConditions = options?.extraConditions ?? [];
+
   // Engine-scoped: `state.id` here is a SCHEDULE id, not a workflow id, and
   // this writes the schedule record itself (create/pause/resume/cancel/update),
   // not any one workflow's execution. No `wf-owner-epoch` fence applies.
+  if (extraConditions.length > 0) {
+    await commitScheduleStateWithExtraConditions(
+      internals,
+      state,
+      operations,
+      extraConditions,
+      options?.onExtraConditionsLost,
+    );
+    return;
+  }
+
   await commitFencedEngineWrite(
     internals,
     null,
@@ -368,6 +402,42 @@ export async function writeScheduleState(
     [],
     () => new Error(`Schedule state commit for schedule "${state.id}" lost its precondition.`),
   );
+}
+
+/**
+ * The `extraConditions` half of {@link writeScheduleState} — split out to
+ * keep that function under the complexity ceiling. Commits, and on a lost
+ * CAS, disambiguates which extra condition actually changed (mirrors
+ * `start-commit.ts`'s `hasCatalogEntryConflict` re-check pattern) before
+ * trusting the caller-supplied typed error over the generic
+ * lost-precondition one.
+ */
+async function commitScheduleStateWithExtraConditions(
+  internals: EngineInternals,
+  state: ScheduleState,
+  operations: BatchOperation[],
+  extraConditions: ConditionalBatchCondition[],
+  onExtraConditionsLost: (() => Error) | undefined,
+): Promise<void> {
+  const committed = await commitFencedEngineWriteAllowingPreconditionFailure(
+    internals,
+    null,
+    operations,
+    extraConditions,
+  );
+  if (committed) {
+    return;
+  }
+  for (const condition of extraConditions) {
+    const currentValue = await internals.storage.get(condition.key);
+    if (!storageValuesEqual(currentValue, condition.expectedValue)) {
+      throw (
+        onExtraConditionsLost?.() ??
+        new Error(`Schedule state commit for schedule "${state.id}" lost its precondition.`)
+      );
+    }
+  }
+  throw new Error(`Schedule state commit for schedule "${state.id}" lost its precondition.`);
 }
 
 /** Load persisted workflow start headers by workflow ID. */

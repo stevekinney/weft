@@ -957,6 +957,9 @@
           "input": {},
           "jitter": {},
           "overlap": {},
+          "revisionPolicy": {
+            "description": "Revision policy (WFT-20). Runtime validation requires \"active-at-fire\" or \"pinned\"; defaults to \"active-at-fire\"."
+          },
           "type": {
             "description": "Workflow type name. Runtime validation requires a non-empty string."
           }
@@ -1126,6 +1129,9 @@
           },
           "jitter": {},
           "overlap": {},
+          "revisionPolicy": {
+            "description": "Revision policy (WFT-20). Runtime validation requires \"active-at-fire\" or \"pinned\". Omitted preserves the current policy (and pin); \"pinned\" always re-resolves and re-captures the pin against the revision active right now."
+          },
           "scheduleId": {
             "minLength": 1,
             "type": "string"
@@ -2382,6 +2388,9 @@
               "workflowId": {
                 "type": "string"
               },
+              "workflowRevision": {
+                "type": "string"
+              },
               "workflowType": {
                 "type": "string"
               }
@@ -2541,6 +2550,9 @@
                 "type": "string"
               },
               "workflowId": {
+                "type": "string"
+              },
+              "workflowRevision": {
                 "type": "string"
               },
               "workflowType": {
@@ -2711,6 +2723,9 @@
                 "type": "string"
               },
               "workflowId": {
+                "type": "string"
+              },
+              "workflowRevision": {
                 "type": "string"
               },
               "workflowType": {
@@ -2884,6 +2899,9 @@
               "workflowId": {
                 "type": "string"
               },
+              "workflowRevision": {
+                "type": "string"
+              },
               "workflowType": {
                 "type": "string"
               }
@@ -3051,6 +3069,9 @@
                   "workflowId": {
                     "type": "string"
                   },
+                  "workflowRevision": {
+                    "type": "string"
+                  },
                   "workflowType": {
                     "type": "string"
                   }
@@ -3205,6 +3226,9 @@
                   "workflowId": {
                     "type": "string"
                   },
+                  "workflowRevision": {
+                    "type": "string"
+                  },
                   "workflowType": {
                     "type": "string"
                   }
@@ -3356,6 +3380,9 @@
                     "type": "string"
                   },
                   "workflowId": {
+                    "type": "string"
+                  },
+                  "workflowRevision": {
                     "type": "string"
                   },
                   "workflowType": {
@@ -3519,6 +3546,9 @@
                 "type": "string"
               },
               "workflowId": {
+                "type": "string"
+              },
+              "workflowRevision": {
                 "type": "string"
               },
               "workflowType": {

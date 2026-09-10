@@ -25,6 +25,7 @@ export {
   isRemoteTaskTerminalResolved,
   isRemoteTaskTerminalRetryExhausted,
   isValidTaskHeaders,
+  isValidWorkflowRevision,
 } from './task-ledger-codec.ts';
 export { taskLedgerKey } from './task-ledger-keys.ts';
 export {

@@ -45,6 +45,7 @@
   import { cadenceToScheduleValue, describeCadence } from './cadence.ts';
   import FaultBanner from './fault-banner.svelte';
   import { overlapConsequence, overlapLabel } from './overlap-policy.ts';
+  import { revisionPolicyLabel } from './revision-policy.ts';
   import {
     cancelSchedule,
     fetchScheduleDetail,
@@ -225,6 +226,13 @@
                 schedule.nextFireAt !== null ? formatRelativeTime(schedule.nextFireAt) : '—',
             },
             { term: 'Missed fires', definition: String(schedule.missedFireCount) },
+            {
+              term: 'Revision policy',
+              definition:
+                schedule.revisionPolicy === 'pinned' && schedule.pinnedRevision !== undefined
+                  ? `${revisionPolicyLabel(schedule.revisionPolicy)} (${schedule.pinnedRevision})`
+                  : revisionPolicyLabel(schedule.revisionPolicy),
+            },
           ]}
         />
         <div class="weft-schedule-detail__next-fires">

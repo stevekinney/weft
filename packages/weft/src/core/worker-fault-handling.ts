@@ -18,6 +18,16 @@ export interface WorkerFaultHandlerDependencies {
   protocolGuard: WorkerProtocolGuard;
   pool: WorkerPool;
   emit: (message: WorkerOutboundMessage) => void;
+  /**
+   * Forget a workflow's captured revision (WFT-20), mirroring
+   * `#settleTerminalWorkerMessage`'s real-terminal-message cleanup. Every
+   * fault path here (protocol violation, turn timeout, worker crash, log
+   * abuse, realm-ready failure) synthesizes a `failed` message directly
+   * rather than routing through that settle path, so without this callback
+   * `WorkerExecutionStrategy#workflowRevisions` would keep an entry per
+   * faulted workflow ID for the life of the strategy.
+   */
+  forgetWorkflowRevision: (workflowId: string) => void;
 }
 
 export interface WorkerDiscardOptions {
@@ -128,6 +138,7 @@ export class WorkerFaultHandler {
     const { ownership, checkpointResumeState } = this.#dependencies;
     ownership.forgetWorkflow(workflowId);
     checkpointResumeState.forgetWorkflowIfClosed(workflowId, true);
+    this.#dependencies.forgetWorkflowRevision(workflowId);
     if (isTarget && options.skipTarget) {
       return;
     }

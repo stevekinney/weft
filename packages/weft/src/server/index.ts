@@ -411,6 +411,17 @@ export interface TaskDispatch {
   workflowId?: string | undefined;
   /** Durable token for the workflow run that launched this task, when known. */
   workflowExecutionToken?: string | undefined;
+  /**
+   * The dispatching workflow run's persisted `WorkflowState.revision`
+   * (WFT-20), when known. When BOTH `workflowId` and `workflowRevision` are
+   * supplied, `dispatchTask` rejects the dispatch before reserving any
+   * worker capacity if the persisted run's revision disagrees — the run was
+   * displaced (e.g. by a `start-new` restart) since this revision was
+   * captured. The worker echoes this value back on `taskResult`; a
+   * completion whose echoed revision disagrees with the in-flight dispatch's
+   * is rejected as stale.
+   */
+  workflowRevision?: string | undefined;
   /** When true, prefer the worker that last handled a task for this workflow. Requires `workflowId`. */
   sticky?: boolean;
   /** Visibility timeout in milliseconds. Defaults to `DEFAULT_VISIBILITY_TIMEOUT` (30 000). */

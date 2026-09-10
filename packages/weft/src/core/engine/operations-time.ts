@@ -302,6 +302,7 @@ export async function startDelayedWorkflow(
     checkpoint,
     executionDeadline,
     runningState.executionStateOwnerId ?? entry.workflowId,
+    runningState.revision,
     registration,
   );
 }

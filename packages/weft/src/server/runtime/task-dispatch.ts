@@ -1,4 +1,4 @@
-import { isJSONValue } from '../../core/json.ts';
+import type { ConditionalBatchCondition } from '../../storage/interface.ts';
 import { buildWorkerExecutionIdentity } from '../../worker/manifest/execution-identity.ts';
 import type { RoutingOptions } from '../../worker/registry.ts';
 import type { ServeOptions, TaskDispatch } from '../index.ts';
@@ -12,13 +12,14 @@ import {
 } from '../task-ledger-transitions.ts';
 import {
   decodeRemoteTaskRecord,
-  REMOTE_TASK_RECORD_VERSION,
   taskLedgerKey,
   type RemoteTaskLeased,
   type RemoteTaskQueued,
   type RemoteTaskRecord,
 } from '../task-ledger.ts';
 import type { ServerContext } from './context.ts';
+import { buildCreateQueuedInput } from './task-dispatch-envelope.ts';
+import { assertDispatchTargetsFreshRevision } from './task-dispatch-revision.ts';
 import { commitTaskLedgerTransition } from './task-ledger-runtime.ts';
 import {
   recordTaskBacklogMetric,
@@ -133,46 +134,6 @@ function recordDispatchOutcome(context: ServerContext, task: TaskDispatch, worke
   context.operationToWorkflow.set(task.operationId, task.workflowId);
 }
 
-/** The optional `CreateQueuedInput` fields a `TaskDispatch` may or may not carry. */
-function buildOptionalCreateQueuedFields(task: TaskDispatch): Partial<CreateQueuedInput> {
-  return {
-    ...(task.workflowId !== undefined ? { workflowId: task.workflowId } : {}),
-    ...(task.workflowExecutionToken !== undefined
-      ? { workflowExecutionToken: task.workflowExecutionToken }
-      : {}),
-    ...(task.priority !== undefined ? { priority: task.priority } : {}),
-    ...(task.fairShareKey !== undefined ? { fairShareKey: task.fairShareKey } : {}),
-    ...(task.sticky && task.workflowId !== undefined ? { stickyWorkflowId: task.workflowId } : {}),
-    ...(task.retryPolicy !== undefined ? { retryPolicy: task.retryPolicy } : {}),
-  };
-}
-
-/** The durable envelope every fresh dispatch would create if no ledger record exists yet. */
-function buildCreateQueuedInput(
-  task: TaskDispatch,
-  queue: string,
-  visibilityTimeout: number,
-): CreateQueuedInput {
-  const input = task.input === undefined ? null : task.input;
-  if (!isJSONValue(input)) {
-    throw new Error(
-      `TaskDispatch for operation "${task.operationId}" has a non-JSON-serializable "input" — the durable task ledger requires JSON-safe input.`,
-    );
-  }
-  return {
-    recordVersion: REMOTE_TASK_RECORD_VERSION,
-    operationId: task.operationId,
-    workflowType: task.workflowType,
-    activityName: task.activityName,
-    queue,
-    input,
-    headers: task.headers ?? {},
-    visibilityTimeoutMilliseconds: visibilityTimeout,
-    createdAt: Date.now(),
-    ...buildOptionalCreateQueuedFields(task),
-  };
-}
-
 /**
  * Compose "create if absent, then claim" into one transition attempt. A
  * fresh dispatch and a redispatch of an already-`queued` ledger record (from
@@ -235,6 +196,7 @@ async function selectAndReserveWorker(
   task: TaskDispatch,
   queue: string,
   visibilityTimeout: number,
+  revisionFenceConditions: readonly ConditionalBatchCondition[],
 ): Promise<boolean> {
   const routingOptions = buildRoutingOptions(context, task, queue);
   const worker = context.registry.findWorker(task.activityName, routingOptions);
@@ -274,6 +236,7 @@ async function selectAndReserveWorker(
     visibilityTimeout,
     task.fairShareKey,
     attemptToken,
+    task.workflowRevision,
   );
 
   let result;
@@ -288,6 +251,7 @@ async function selectAndReserveWorker(
         leaseDurationMilliseconds: visibilityTimeout,
       }),
       1,
+      revisionFenceConditions,
     );
   } catch (error) {
     // Durable claim failed after the local reservation — release it and let
@@ -317,6 +281,7 @@ async function selectAndReserveWorker(
       ...(task.workflowExecutionToken !== undefined && {
         workflowExecutionToken: task.workflowExecutionToken,
       }),
+      ...(task.workflowRevision !== undefined && { workflowRevision: task.workflowRevision }),
       ...(task.headers ? { headers: task.headers } : {}),
     }),
   );
@@ -348,6 +313,7 @@ async function enqueueTaskForLongPoll(
   queue: string,
   visibilityTimeout: number,
   resolvedPriority: number | undefined,
+  revisionFenceConditions: readonly ConditionalBatchCondition[],
 ): Promise<boolean> {
   const storage = options.engine.storage;
   const createInput = buildCreateQueuedInput(task, queue, visibilityTimeout);
@@ -361,6 +327,7 @@ async function enqueueTaskForLongPoll(
       task.operationId,
       (freshCurrent, now) => createQueued(freshCurrent, createInput, now),
       1,
+      revisionFenceConditions,
     );
     if (!result.ok) {
       // Lost the create race to a concurrent dispatch for the same
@@ -386,6 +353,13 @@ async function enqueueTaskForLongPoll(
     visibilityTimeout,
     workflowId: task.workflowId,
     workflowExecutionToken: task.workflowExecutionToken,
+    // Reuse the durable ledger record's revision, not the caller's — when
+    // `queuedRecord` came from an existing or raced-to record (rather than
+    // one this call just created), a concurrent dispatch for the same
+    // `operationId` may have carried a different revision. The long-poll
+    // hint must match the record a worker will actually claim and be
+    // authorized to complete against (WFT-20).
+    workflowRevision: queuedRecord.workflowRevision,
     firstQueuedAt: queuedRecord.firstQueuedAt,
     lastQueuedAt: queuedRecord.lastQueuedAt,
     lastDispatchedAt: queuedRecord.lastDispatchedAt,
@@ -427,6 +401,18 @@ export async function dispatchTaskImpl(
       `TaskDispatch for operation "${task.operationId}" is missing required field "workflowType".`,
     );
   }
+  // Dispatch-time staleness gate (WFT-20): when the caller supplies BOTH
+  // `workflowId` and `workflowRevision`, reject up front — before any worker
+  // capacity is reserved or ledger record written — if the persisted run has
+  // since moved to a different revision (e.g. displaced by a `start-new`
+  // restart since this revision was captured). A pure additional gate: it
+  // never replaces `buildCreateThenClaimTransition`'s own CAS-based
+  // concurrency control below, and reads storage before any reservation so a
+  // rejected dispatch never leaks one. The returned conditions fence the
+  // ledger commits below on the exact workflow-state bytes just read here,
+  // so a `start-new` landing in the gap between this check and the later
+  // commit loses that commit's CAS atomically instead of racing past it.
+  const revisionFenceConditions = await assertDispatchTargetsFreshRevision(options, task);
   // A qualified activityName's prefix must agree with workflowType — a
   // mismatch would still resolve a manifest lookup (against the WRONG
   // workflow) and persist incorrect provenance rather than failing loudly.
@@ -446,11 +432,26 @@ export async function dispatchTaskImpl(
   }
 
   // Try WebSocket workers first (lowest latency).
-  const dispatched = await selectAndReserveWorker(context, options, task, queue, visibilityTimeout);
+  const dispatched = await selectAndReserveWorker(
+    context,
+    options,
+    task,
+    queue,
+    visibilityTimeout,
+    revisionFenceConditions,
+  );
   if (dispatched) return true;
 
   // Fall back to long-poll task queue.
-  return enqueueTaskForLongPoll(context, options, task, queue, visibilityTimeout, resolvedPriority);
+  return enqueueTaskForLongPoll(
+    context,
+    options,
+    task,
+    queue,
+    visibilityTimeout,
+    resolvedPriority,
+    revisionFenceConditions,
+  );
 }
 
 /** Send a cancel message to the worker handling a specific operation. */

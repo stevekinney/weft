@@ -38,6 +38,12 @@ const updateScheduleInput = z.object({
   overlap: z.unknown().optional(),
   backfill: z.unknown().optional(),
   jitter: z.unknown().optional(),
+  revisionPolicy: z
+    .unknown()
+    .optional()
+    .describe(
+      'Revision policy (WFT-20). Runtime validation requires "active-at-fire" or "pinned". Omitted preserves the current policy (and pin); "pinned" always re-resolves and re-captures the pin against the revision active right now.',
+    ),
 });
 
 export type UpdateScheduleInput = z.infer<typeof updateScheduleInput>;
@@ -89,6 +95,7 @@ export const updateScheduleRestBinding: UnknownRestBinding = {
     overlap: { kind: 'body-field', bodyField: 'overlap' },
     backfill: { kind: 'body-field', bodyField: 'backfill' },
     jitter: { kind: 'body-field', bodyField: 'jitter' },
+    revisionPolicy: { kind: 'body-field', bodyField: 'revisionPolicy' },
   },
   extractInput: async (request, pathParams, context) => {
     const record = await parseScheduleRestBodyRequestRecord(request, context);

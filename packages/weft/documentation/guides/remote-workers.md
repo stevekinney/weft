@@ -88,6 +88,8 @@ The worker looks up the activity function, executes it, and sends back a result:
 
 If the activity function throws, the result message carries `"status": "failed"` with an error string. If the activity name isn't registered on this worker, an error result is sent immediately.
 
+`task` optionally carries `workflowRevision` (WFT-20) — the dispatching workflow run's persisted revision, when the `TaskDispatch` caller supplied one. Echo it back on `taskResult` unchanged; the server rejects a completion whose echoed revision disagrees with the dispatch's as stale. See [the protocol reference](../reference/remote-worker-protocol.md#taskresult) for the exact WebSocket-additive-versus-long-poll-strict authorization rule.
+
 ## Activity interceptors
 
 You want to trace every remote activity with OpenTelemetry, log timing for the on-call dashboard, or validate that the headers coming across the wire carry the metadata you expect before anything touches your business logic. Sprinkling that code into every activity function is exactly the kind of duplication interceptors exist to solve.

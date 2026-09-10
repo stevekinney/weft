@@ -130,6 +130,7 @@ async function executeScheduleCreate(
     ...(options.overlap !== undefined ? { overlap: options.overlap } : {}),
     ...(options.backfill ? { backfill: true } : {}),
     ...(options.jitter !== undefined ? { jitter: options.jitter } : {}),
+    ...(options.revisionPolicy !== undefined ? { revisionPolicy: options.revisionPolicy } : {}),
   });
 
   const schedule = await handle.describe();

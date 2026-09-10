@@ -9,7 +9,6 @@ import {
   coerceStartWorkflowTimestamp,
 } from '../../start-workflow-validation.ts';
 import type { StartOptions, StartWorkflowOptions, TimerEntry } from '../../types.ts';
-import { ensureWorkflowCatalogReady } from '../catalog-readiness.ts';
 import {
   releaseInFlightStart,
   resolveAndReserveExecutableRegistration,
@@ -20,6 +19,7 @@ import { type WorkflowHandle } from '../handles.ts';
 import type { Engine } from '../index.ts';
 import type { EngineInternals } from '../internals.ts';
 import { createDelayedStartTimerEntry } from '../operations-time.ts';
+import { resolveAndReservePinnedExecutableRegistration } from '../pinned-schedule-revision.ts';
 import { selectPersistedWorkflowStartHeaders } from '../state-utilities.ts';
 import { buildWorkflowConcurrencyStartOperations } from '../workflow-concurrency.ts';
 import { createWorkflowVersionTuple } from './persist.ts';
@@ -28,6 +28,7 @@ import {
   normalizeStartWorkflowTags,
   setWorkflowStartHeaders,
   type LifecycleCallbacks,
+  type RegistrationEntry,
 } from './shared.ts';
 import { buildAndCommitStartBatch, type BuildIdempotentStartOperations } from './start-commit.ts';
 import {
@@ -35,6 +36,10 @@ import {
   beginExecutionAwaitingLiveness,
   runWorkflowStartInterceptor,
 } from './start-exec.ts';
+import {
+  resolveCachedStartRevision,
+  resolveStartRevisionUncached,
+} from './start-revision-resolution.ts';
 import {
   applyRestartLineage,
   createInitialCheckpoint,
@@ -145,59 +150,55 @@ function assertServicesSupportedForMode(
 }
 
 /**
- * The exact executable artifact this run is about to run: the resolved
- * dynamic-source candidate revision, or — for an eager registration, which
- * never populates `resolvedRevision` — this process's own
- * `registeredCatalogRevisions` entry for `type` (the revision of the code
- * actually loaded here, NOT `inFlightRevision`, which for an eager type
- * falls back to the catalog's cached ACTIVE pointer and can name a revision
- * this process never loaded under a multi-engine deployment). Synchronous,
- * on purpose: every top-level engine.* method already awaits
- * `ensureWorkflowCatalogReady()` before reaching `startWorkflow`, so this
- * map is populated by the time the overwhelmingly common case gets here.
- * `await`ing an async function always costs a microtask tick even when its
- * own body takes a fast path (the same reason `isWorkflowCatalogReady()` is
- * its own sync check in `catalog-readiness.ts`) — a plain sync lookup here
- * keeps `startWorkflow`'s interleaving with concurrent callers unchanged
- * from before this field existed. `undefined` means "genuinely not cached
- * yet"; the caller falls back to {@link resolveStartRevisionUncached}.
+ * `startWorkflow`'s resolve-and-reserve dispatch — split out to keep that
+ * function under the complexity ceiling. Deliberately NOT an `async`
+ * function: it returns the callee's own pending `Promise` directly (or,
+ * for the pinned branch, chains exactly one `.then()` onto it) rather than
+ * `await`-ing internally and returning a freshly-wrapped one. An `await` on
+ * an `async` function's return value costs an EXTRA microtask tick beyond
+ * awaiting the inner promise directly — the exact class of hot-path timing
+ * regression WFT-17/18 hit and fixed for this same function (see
+ * `resolveCachedStartRevision`'s own doc comment) — so preserving the
+ * ordinary (non-pinned) branch's tick-for-tick timing here is required, not
+ * cosmetic; changing it can silently alter `startWorkflow`'s interleaving
+ * against concurrent callers.
+ *
+ * For the pinned branch (`revisionOverride` defined, WFT-20), remaps the
+ * pinned resolver's result so `resolvedRevision` is always `revisionOverride`
+ * — even for an eager type, whose resolver returns `revision: undefined` by
+ * its own eager convention — so the ordinary
+ * `resolveCachedStartRevision(...) ?? (await resolveStartRevisionUncached(...))`
+ * line below (byte-for-byte unchanged from before this field existed) keeps
+ * working uniformly for both cases without `startWorkflow` needing any new
+ * branch of its own.
  */
-function resolveCachedStartRevision(
+function resolveAndReserveStartRegistration(
   internals: EngineInternals,
   type: string,
-  resolvedRevision: string | undefined,
-): string | undefined {
-  return resolvedRevision ?? internals.registeredCatalogRevisions.get(type);
-}
-
-/**
- * The rare fallback {@link resolveCachedStartRevision} defers to: a fired
- * schedule occurrence or a delayed-start timer calls `startWorkflow`
- * directly from background scheduler code, with no top-level
- * `ensureWorkflowCatalogReady()` gate already awaited. Re-checks catalog
- * readiness once, then re-reads the cache.
- */
-async function resolveStartRevisionUncached(
-  internals: EngineInternals,
-  type: string,
-): Promise<string> {
-  await ensureWorkflowCatalogReady(internals.engine as unknown as Engine);
-  const afterReadiness = internals.registeredCatalogRevisions.get(type);
-  if (afterReadiness !== undefined) {
-    return afterReadiness;
+  revisionOverride: string | undefined,
+  callbacks: LifecycleCallbacks,
+): Promise<{
+  registration: RegistrationEntry;
+  inFlightRevision: string | undefined;
+  resolvedRevision: string | undefined;
+}> {
+  if (revisionOverride === undefined) {
+    return resolveAndReserveExecutableRegistration(
+      internals,
+      type,
+      callbacks.resolveExecutableRegistration,
+    );
   }
-  // Unreachable in practice: `type` resolved to a real `registration` at
-  // this call's only call site, so it is either an eager registration
-  // (which `ensureWorkflowCatalogReady()` always assigns a revision to) or
-  // a resolved dynamic source (which always populates `resolvedRevision`,
-  // handled entirely by {@link resolveCachedStartRevision} and never
-  // reaching here). Fail loud rather than silently persisting a workflow
-  // record with no revision identity.
-  throw new Error(
-    `Cannot start workflow "${type}": no catalog revision is registered for this ` +
-      'eagerly-registered type, even after re-checking catalog readiness. This should be ' +
-      'unreachable.',
-  );
+  return resolveAndReservePinnedExecutableRegistration(
+    internals.engine as unknown as Engine,
+    internals,
+    type,
+    revisionOverride,
+  ).then(({ registration, inFlightRevision }) => ({
+    registration,
+    inFlightRevision,
+    resolvedRevision: revisionOverride,
+  }));
 }
 
 export async function startWorkflow(
@@ -208,6 +209,20 @@ export async function startWorkflow(
   additionalStartOperations: BatchOperation[] | undefined,
   callbacks: LifecycleCallbacks,
   buildIdempotentStartOperations?: BuildIdempotentStartOperations,
+  /**
+   * A pinned schedule's forward-looking revision commitment (WFT-20),
+   * threaded from `ScheduleCallbacks.startWorkflow`'s own `revisionOverride`
+   * parameter. When supplied, this call resolves and reserves EXACTLY this
+   * revision (via {@link resolveAndReservePinnedExecutableRegistration},
+   * which enforces an exact-match check for an eager type rather than
+   * silently falling back to whatever is active) instead of the ordinary
+   * "whatever `resolveExecutableRegistration` currently resolves"
+   * admission path, and the persisted `WorkflowState.revision` is this
+   * value verbatim — never re-derived from `registeredCatalogRevisions`.
+   * `undefined` (the default, every non-schedule start) is byte-for-byte
+   * the pre-WFT-20 admission path.
+   */
+  revisionOverride?: string,
 ): Promise<WorkflowHandle> {
   assertServicesSupportedForMode(internals, options);
   assertValidOnTerminalConflict(options);
@@ -243,11 +258,7 @@ export async function startWorkflow(
       registration,
       inFlightRevision: reservedRevision,
       resolvedRevision,
-    } = await resolveAndReserveExecutableRegistration(
-      internals,
-      type,
-      callbacks.resolveExecutableRegistration,
-    );
+    } = await resolveAndReserveStartRegistration(internals, type, revisionOverride, callbacks);
     inFlightRevision = reservedRevision;
     const workflowConcurrency = registration.concurrency;
     const revision =

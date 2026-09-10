@@ -76,6 +76,23 @@ function onTaskResultMessage(
     });
     return;
   }
+  // Revision authorization (WFT-20) is ADDITIVE for WebSocket, unlike
+  // long-poll's strict policy: a missing echo is tolerated whenever the
+  // in-flight entry itself carries no `workflowRevision` (the dispatch never
+  // opted in, or a pre-WFT-20 worker SDK never echoes the field back) — a
+  // present-and-wrong echo always rejects.
+  const inFlightTask = context.registry.getTask(operationId);
+  if (
+    inFlightTask?.workflowRevision !== undefined &&
+    message.workflowRevision !== inFlightTask.workflowRevision
+  ) {
+    sendWorkerProtocolMessage(ws, {
+      type: 'protocolError',
+      code: 'invalid_message',
+      message: `taskResult for operation "${operationId}" rejected — revision mismatch`,
+    });
+    return;
+  }
 
   const resolvedStatus = resolveTaskResultStatus(message);
   const payloadError = taskResultPayloadSizeError(
