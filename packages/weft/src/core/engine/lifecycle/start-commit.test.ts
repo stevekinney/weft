@@ -55,6 +55,7 @@ function createBaseContext(storage: MemoryStorage) {
     // isolation; the duplicate-id condition has its own coverage in
     // `start-duplicate-id-race.test.ts`.
     duplicateIdCondition: undefined,
+    duplicateIdGenerationCondition: undefined,
     callbacks: {} as never,
     internals: {
       deposed: false,
@@ -242,7 +243,7 @@ describe('start-commit lifecycle helpers', () => {
             operations: [],
             stateKey: 'workflow-concurrency',
           }),
-        } as never,
+        },
         undefined,
       ),
     ).rejects.toBeInstanceOf(WorkflowAlreadyExistsError);
@@ -255,7 +256,9 @@ describe('start-commit lifecycle helpers', () => {
     // earlier positive duplicate-id check already ran and found the workflow record
     // still matching — the id is free right now, so the retry re-conditions on that
     // same value and ends in the public `AtomicStateConflictError` rather than
-    // committing a second run. The purged-winner residual is WFT-153.
+    // committing a second run. The purged-winner ABA this used to leave open
+    // is now closed positively by the `'duplicate-id-generation'` condition
+    // (WFT-153) — see the dedicated test above for that case.
     const storage = new MemoryStorage();
     const context = createBaseContext(storage);
     const workflowKey = KEYS.workflow('workflow-start-commit');
@@ -272,10 +275,62 @@ describe('start-commit lifecycle helpers', () => {
             operations: [],
             stateKey: 'workflow-concurrency',
           }),
-        } as never,
+        },
         undefined,
       ),
     ).rejects.toBeInstanceOf(AtomicStateConflictError);
+  });
+
+  it('WFT-153: attributes a lost CAS to the generation condition, instead of retrying on stale concurrency evidence', async () => {
+    // Reproduces the exact case the pre-WFT-153 elimination-only attribution
+    // could not positively distinguish: the duplicate-id VALUE condition still
+    // matches on re-read (the id looks free, same as a legitimate fresh id),
+    // but the durable generation counter has moved because the id was
+    // purged-and-reused underneath this attempt.
+    //
+    // A workflow-concurrency condition is ALSO present and ALSO mismatches on
+    // re-read (a plausible, unrelated coincidence) — before this fix, that
+    // combination would make `attributeLostStartPreconditionOrRetry` retry
+    // (treating the concurrency mismatch as positive evidence to retry on)
+    // instead of reporting the real duplicate-id-class conflict. The
+    // `'duplicate-id-generation'` check now runs first and throws
+    // `WorkflowAlreadyExistsError` immediately, so `conditionalBatch` is
+    // called exactly once — no wasted retry loop.
+    const storage = new MemoryStorage();
+    const context = createBaseContext(storage);
+    const workflowKey = KEYS.workflow('workflow-start-commit');
+    const generationKey = KEYS.workflowGeneration('workflow-start-commit');
+
+    // `wf:<id>` is absent, matching `duplicateIdCondition`'s expectation.
+    // `wf-gen:<id>` was bumped by a purge that happened after this attempt's
+    // own read, so it no longer matches `duplicateIdGenerationCondition`.
+    await storage.put(generationKey, new Uint8Array(8).fill(1));
+    // The workflow-concurrency condition also mismatches on re-read.
+    await storage.put('workflow-concurrency', new Uint8Array([9]));
+
+    let conditionalBatchCalls = 0;
+    const realConditionalBatch = storage.conditionalBatch.bind(storage);
+    storage.conditionalBatch = async (conditions, operations) => {
+      conditionalBatchCalls += 1;
+      return realConditionalBatch(conditions, operations);
+    };
+
+    await expect(
+      buildAndCommitStartBatch(
+        {
+          ...context,
+          duplicateIdCondition: { key: workflowKey, expectedValue: null },
+          duplicateIdGenerationCondition: { key: generationKey, expectedValue: null },
+          buildWorkflowConcurrencyStartOperations: async () => ({
+            conditions: [{ key: 'workflow-concurrency', expectedValue: null }],
+            operations: [],
+            stateKey: 'workflow-concurrency',
+          }),
+        },
+        undefined,
+      ),
+    ).rejects.toBeInstanceOf(WorkflowAlreadyExistsError);
+    expect(conditionalBatchCalls).toBe(1);
   });
 
   it('ADR 0002: folds acquire() into an idempotent start batch under ownership: "workflow-lease"', async () => {

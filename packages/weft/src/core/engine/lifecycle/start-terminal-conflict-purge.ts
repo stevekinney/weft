@@ -11,6 +11,7 @@ import { WorkflowAlreadyExistsError, WorkflowTeardownPendingError } from '../err
 import type { EngineInternals } from '../internals.ts';
 import { cleanupWaiters } from '../termination/cleanup.ts';
 import { decodeWorkflowState, isTerminalWorkflowStatus } from '../validation.ts';
+import { buildWorkflowGenerationBumpOperation } from '../workflow-generation-fence.ts';
 import { type LifecycleCallbacks } from './shared.ts';
 
 /**
@@ -49,17 +50,41 @@ export type StartDuplicateIdDecision = {
    * capability at `Engine.create()`. A store that cannot honour this condition
    * cannot host an engine that could start a workflow in the first place.
    *
-   * KNOWN LIMITATION (PR #959 review). The condition compares a VALUE, so it cannot
-   * distinguish "this id was never used" from "a run existed here and was purged".
-   * If a racing winner commits, completes, and is purged or swept by retention
-   * before this batch commits, `wf:<id>` is absent again, `expectedValue: null`
-   * matches, and both starts execute. Closing that needs durable per-id generation
-   * or tombstone state a purge cannot restore — a new persisted mechanism, out of
-   * scope here. The window is narrow (a winner's whole lifecycle plus a purge inside
-   * one loser's read-to-commit gap) and the outcome is a duplicate run rather than
-   * the indefinite hang this fence exists to remove.
+   * RESOLVED (PR #959 review; closed by WFT-153). This condition alone compares
+   * only a VALUE, so on its own it cannot distinguish "this id was never used"
+   * from "a run existed here and was purged" — a racing winner that commits,
+   * completes, and is purged (or swept by retention) before this batch commits
+   * would make `wf:<id>` absent again, matching `expectedValue: null`. That gap
+   * is now closed by {@link duplicateIdGenerationCondition} below, an ADDITIONAL
+   * condition on a durable per-id generation counter a purge bumps but never
+   * resets — see its own doc for the mechanism.
    */
   duplicateIdCondition: ConditionalBatchCondition;
+  /**
+   * ADDITIONAL compare-and-swap precondition on the observed `wf-gen:<id>`
+   * bytes, closing the residual ABA hole {@link duplicateIdCondition} cannot
+   * detect (WFT-153, following WFT-152). `duplicateIdCondition` compares a
+   * VALUE, so it cannot tell "this id was never used" from "a run existed
+   * here and was purged" — if a racing winner completes and is purged before
+   * this batch commits, `wf:<id>` looks absent again and `duplicateIdCondition`
+   * alone would match. `wf-gen:<id>` is bumped in the SAME atomic batch that
+   * deletes `wf:<id>` on purge (`workflow-generation-fence.ts`) and is never
+   * otherwise touched, so a purge landing in the read-to-commit gap changes
+   * this key even though `wf:<id>` reads the same — the stale loser's
+   * condition on the pre-purge generation bytes fails where the value-only
+   * comparison could not detect it. See `storage/generation-keys.ts`.
+   */
+  duplicateIdGenerationCondition: ConditionalBatchCondition;
+  /**
+   * The exact `wf-gen:<id>` bytes {@link duplicateIdGenerationCondition} was
+   * built from, threaded through to {@link prepareTerminalRunPurge} so a
+   * `'start-new'` restart's own displacing purge bumps the generation from
+   * this SAME observed value rather than a second, independent read. This is
+   * what makes the restart's own CAS trivially self-consistent — it can never
+   * fence itself out on its own legitimate restart, because the value it
+   * bumps from is exactly the value its own precondition checks.
+   */
+  observedGenerationBytes: Uint8Array | null;
 };
 
 /**
@@ -71,9 +96,17 @@ export type StartDuplicateIdDecision = {
 export const GENERATED_ID_START_DECISION = {
   terminalRunToPurge: null,
   duplicateIdCondition: undefined,
+  duplicateIdGenerationCondition: undefined,
+  // `null`, not `undefined`: always fed straight into `prepareTerminalRunPurge`'s
+  // `Uint8Array | null` parameter (unreachable for a generated id, since
+  // `terminalRunToPurge` is always `null` here — but typed to match without a
+  // caller-side `?? null`).
+  observedGenerationBytes: null,
 } as const satisfies {
   terminalRunToPurge: WorkflowState | null;
   duplicateIdCondition: ConditionalBatchCondition | undefined;
+  duplicateIdGenerationCondition: ConditionalBatchCondition | undefined;
+  observedGenerationBytes: Uint8Array | null;
 };
 
 /**
@@ -102,7 +135,10 @@ export const GENERATED_ID_START_DECISION = {
  * batch. The returned {@link StartDuplicateIdDecision} therefore carries a
  * `duplicateIdCondition` holding the exact bytes seen here, so that batch can be
  * conditioned on them — turning that window into a lost compare-and-swap rather
- * than a blind overwrite (WFT-152).
+ * than a blind overwrite (WFT-152). It also reads `wf-gen:<id>` in the SAME pass
+ * and carries `duplicateIdGenerationCondition`/`observedGenerationBytes` (WFT-153),
+ * closing the residual ABA window a value-only condition cannot detect — see that
+ * field's own doc.
  */
 export async function resolveTerminalConflictForRestart(
   internals: EngineInternals,
@@ -110,11 +146,21 @@ export async function resolveTerminalConflictForRestart(
   options: StartWorkflowOptions | undefined,
 ): Promise<StartDuplicateIdDecision> {
   const key = KEYS.workflow(workflowId);
-  const existingBytes = await internals.storage.get(key);
+  const generationKey = KEYS.workflowGeneration(workflowId);
+  const [existingBytes, observedGenerationBytes] = await Promise.all([
+    internals.storage.get(key),
+    internals.storage.get(generationKey),
+  ]);
+  const duplicateIdGenerationCondition: ConditionalBatchCondition = {
+    key: generationKey,
+    expectedValue: observedGenerationBytes,
+  };
   if (existingBytes === null) {
     return {
       terminalRunToPurge: null,
       duplicateIdCondition: { key, expectedValue: null },
+      duplicateIdGenerationCondition,
+      observedGenerationBytes,
     };
   }
   if (options?.onTerminalConflict !== 'start-new') {
@@ -130,6 +176,8 @@ export async function resolveTerminalConflictForRestart(
   return {
     terminalRunToPurge: existingState,
     duplicateIdCondition: { key, expectedValue: existingBytes },
+    duplicateIdGenerationCondition,
+    observedGenerationBytes,
   };
 }
 
@@ -195,17 +243,28 @@ export function enforceReplayOnlyIdFence(
  * entries. `clearPurgedWorkflowInMemoryState` runs `cleanupWaiters` to settle the
  * old run's pending signal/update/sleep waiters; it only needs
  * `swallowPromiseRejection`, which `LifecycleCallbacks` already exposes.
+ *
+ * Also appends the `wf-gen:<id>` bump PUT operation (WFT-153), built from
+ * `observedGenerationBytes` — the SAME bytes `resolveTerminalConflictForRestart`
+ * already read for `duplicateIdGenerationCondition` — rather than a second,
+ * independent read. Reusing that one observed value for both the outer CAS
+ * condition and the bump amount is what makes this restart's own commit
+ * trivially self-consistent: it can never fence itself out on its own
+ * legitimate restart, because the value it bumps from is exactly the value its
+ * own precondition checks (see `duplicateIdGenerationCondition`'s doc).
  */
 export async function prepareTerminalRunPurge(
   internals: EngineInternals,
   state: WorkflowState,
   callbacks: LifecycleCallbacks,
+  observedGenerationBytes: Uint8Array | null,
 ): Promise<BatchOperation[]> {
   const cleanupWaitersForStart: CleanupWaiters = (id) =>
     cleanupWaiters(internals, id, {
       swallowPromiseRejection: callbacks.swallowPromiseRejection,
     });
   const deleteOperations = await collectWorkflowPurgeDeleteOperations(internals, state);
+  deleteOperations.push(buildWorkflowGenerationBumpOperation(state.id, observedGenerationBytes));
   clearPurgedWorkflowInMemoryState(internals, state.id, cleanupWaitersForStart);
   return deleteOperations;
 }

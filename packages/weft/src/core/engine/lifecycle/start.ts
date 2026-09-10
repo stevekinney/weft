@@ -330,7 +330,12 @@ export async function startWorkflow(
     // but DEFER any destructive purge until just before the create commit below, so a
     // `'start-new'` restart rejected by later validation leaves the prior terminal run intact.
     // `pendingStarts` covers that window in-engine, `duplicateIdCondition` across engines.
-    const { terminalRunToPurge, duplicateIdCondition } = callerProvidedId
+    const {
+      terminalRunToPurge,
+      duplicateIdCondition,
+      duplicateIdGenerationCondition,
+      observedGenerationBytes,
+    } = callerProvidedId
       ? await resolveTerminalConflictForRestart(internals, workflowId, options)
       : GENERATED_ID_START_DECISION;
     enforceReplayOnlyIdFence(skipAdmissionIdCheck, workflowId, terminalRunToPurge);
@@ -377,7 +382,12 @@ export async function startWorkflow(
     // the atomic create batch as `purgeDeleteOperations` below.
     const purgeDeleteOperations =
       terminalRunToPurge !== null
-        ? await prepareTerminalRunPurge(internals, terminalRunToPurge, callbacks)
+        ? await prepareTerminalRunPurge(
+            internals,
+            terminalRunToPurge,
+            callbacks,
+            observedGenerationBytes,
+          )
         : undefined;
 
     internals.checkpoints.set(workflowId, checkpoint);
@@ -416,6 +426,7 @@ export async function startWorkflow(
         callbacks,
         purgeDeleteOperations,
         duplicateIdCondition,
+        duplicateIdGenerationCondition,
       },
       buildIdempotentStartOperations,
     );
