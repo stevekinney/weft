@@ -48,6 +48,7 @@ import type { ServeOptions, WeftServer } from './index.ts';
 import { DASHBOARD_PAGE_ROUTES, serve, wireEventBroadcasting } from './index.ts';
 import { anonymousPrincipal } from './principal.ts';
 import { API_PREFIX, DIRECT_HTTP_ROUTES } from './route-model.ts';
+import { useManualTaskReconciliationForTesting } from './runtime/task-reconciliation.ts';
 import { buildFetchHandler, buildServerContext, resolveNetworkConfig } from './serve-internals.ts';
 import {
   decodeRemoteTaskRecord,
@@ -6803,7 +6804,41 @@ describe('visibility timeout expiry triggers task reassignment', () => {
 
   it('does not reassign a task when a heartbeat extended its deadline past a stale heap entry', async () => {
     ({ engine, storage } = createEngineWithStorage());
-    server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 50 });
+
+    // WFT-89 review round 4 (Codex): three prior rounds tried to prove a
+    // negative ("no reassignment happened") by observing some side effect of
+    // `DeadlineTracker` — a call count, then a value match. Both are
+    // structurally unable to close the hole: a regressed "skip re-add, then
+    // fall through to reassign anyway" build can produce the exact same
+    // observed side effect at a different point in its own async sequence
+    // (e.g., re-reserving the operation before its awaited ledger write and
+    // `ws.send()`), so polling for that side effect can catch the test in a
+    // window where the regression hasn't yet revealed itself.
+    //
+    // Skip the side-effect guessing games entirely. `useManualTaskReconciliationForTesting`
+    // (see `src/server/runtime/task-reconciliation.ts`, and the reference
+    // usage in `src/core/parity/remote-task-heartbeat-reclaim.parity.test.ts`)
+    // disables the periodic visibility-timeout scanner and exposes `scanAt`,
+    // which injects a synthetic tracked deadline directly and AWAITS
+    // `scanExpiredTasks` to full completion — no polling, no race window.
+    // Once that await resolves, the scan's skip-or-reassign decision for this
+    // operationId is unambiguously settled, and we assert on DURABLE STATE
+    // (the ledger record's `attempt` and `leaseDeadline`) rather than a
+    // tracker call. A reassignment increments `attempt` inside the awaited
+    // scan; if `attempt` is unchanged once `scanAt` returns, no reassignment
+    // happened — full stop.
+    //
+    // The manual-reconciliation WeakMap keys off the exact `options` object
+    // reference, so this must call `serve()` directly with that same object
+    // — not through `serveTestServer`, which spreads its argument into a new
+    // object and would break the lookup.
+    const options = {
+      engine,
+      port: 0,
+      workerShutdownTimeoutMs: TEST_WORKER_SHUTDOWN_TIMEOUT_MS,
+    } satisfies ServeOptions;
+    const manualReconciliation = useManualTaskReconciliationForTesting(options);
+    server = serve(options);
 
     const ws = await connectWorker(server);
     const received: Array<{ type: string; operationId?: string; attemptToken?: string }> = [];
@@ -6817,7 +6852,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
       activityName: 'test.charge',
       workflowType: 'test',
       input: null,
-      visibilityTimeout: 2000,
+      visibilityTimeout: 60_000,
     });
 
     const initialRecordRaw = await readLedgerRecord(storage, 'heartbeat-stale-heap-op');
@@ -6826,6 +6861,18 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     }
     const initialRecord = initialRecordRaw;
 
+    // `renewAttemptLease` computes the extended deadline as `Date.now() +
+    // task.visibilityTimeout` at commit time, and `restoreExtendedDeadlineIfStillActive`
+    // later compares that persisted value against `initialRecord.leaseDeadline`
+    // (also `dispatchTime + visibilityTimeout`). Millisecond-resolution
+    // `Date.now()` means those two can land in the exact same millisecond
+    // tick under a fast/warmed-up event loop — the whole dispatch, storage
+    // read, heartbeat send, and server-side commit round trip is well
+    // under 1ms of real work — making the "heartbeat extended it" wait
+    // below spin forever waiting for a strictly-greater value that will
+    // never arrive. Force real wall-clock time to advance a comfortable
+    // margin before sending the heartbeat so the two `Date.now()` reads
+    // can never collide.
     await waitForRealTimersForTesting(1000);
     ws.send(JSON.stringify({ type: 'heartbeat', workerId: 'w-heartbeat-stale-heap' }));
 
@@ -6843,12 +6890,40 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     expect(extendedDeadline).toBeGreaterThan(initialRecord.leaseDeadline);
 
     const beforeScanTaskCount = received.filter((message) => message.type === 'task').length;
-    const staleDeadlineDelay = Math.max(0, initialRecord.leaseDeadline - Date.now()) + 100;
-    expect(Date.now() + staleDeadlineDelay).toBeLessThan(extendedDeadline);
-    await waitForRealTimersForTesting(staleDeadlineDelay);
-    expect(Date.now()).toBeGreaterThanOrEqual(initialRecord.leaseDeadline);
-    const afterScanTaskCount = received.filter((message) => message.type === 'task').length;
+    const beforeScanRecord = await readLedgerRecord(storage, 'heartbeat-stale-heap-op');
+    if (beforeScanRecord === null || beforeScanRecord.state !== 'leased') {
+      throw new Error(
+        'Expected "heartbeat-stale-heap-op" to still have a leased ledger record before the scan',
+      );
+    }
 
+    // Drive the reconciliation scan with the pre-heartbeat deadline as the
+    // synthetic tracked value, simulating `now` at exactly that same
+    // pre-heartbeat instant — exactly the scenario a stale deadline-heap
+    // entry produces once a heartbeat has since extended the persisted
+    // lease. `scanAt` awaits `scanExpiredTasks` to full completion before
+    // returning.
+    //
+    // Deliberately `now = initialRecord.leaseDeadline`, NOT `+ 1`:
+    // `restoreExtendedDeadlineIfStillActive`'s check is `deadline <= now`, so
+    // a `+ 1` here would only be safely non-expired if the real heartbeat
+    // extension were guaranteed to add more than 1ms over
+    // `initialRecord.leaseDeadline` — not true under a fast/warmed-up event
+    // loop, where the real wall-clock gap between dispatch and heartbeat
+    // processing can be as little as 1ms, making `extendedDeadline` collide
+    // exactly with `initialRecord.leaseDeadline + 1` and get treated as
+    // already-expired. Using the un-incremented `initialRecord.leaseDeadline`
+    // is unconditionally safe: the `waitFor` above already proved
+    // `extendedDeadline > initialRecord.leaseDeadline` strictly, so
+    // `extendedDeadline <= now` can never hold, regardless of how small the
+    // real extension margin turns out to be.
+    await manualReconciliation.scanAt(
+      'heartbeat-stale-heap-op',
+      initialRecord.leaseDeadline,
+      initialRecord.leaseDeadline,
+    );
+
+    const afterScanTaskCount = received.filter((message) => message.type === 'task').length;
     expect(afterScanTaskCount).toBe(beforeScanTaskCount);
     expect(server.registry.isAssigned('heartbeat-stale-heap-op')).toBe(true);
 
@@ -6856,10 +6931,15 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     if (persisted === null || persisted.state !== 'leased') {
       throw new Error('Expected "heartbeat-stale-heap-op" to still have a leased ledger record');
     }
-    // The deadline may advance further if another heartbeat fires during the
-    // sleep above — the only invariant is that it never regresses to the
-    // stale initialRecord.leaseDeadline value that the expiry scan would pick up.
-    expect(persisted.leaseDeadline).toBeGreaterThanOrEqual(extendedDeadline);
+    // A reassignment increments `attempt` inside the scan we just awaited to
+    // completion — this is the durable-state proof that no reassignment
+    // occurred, immune to any async ordering games a regression could play.
+    expect(persisted.attempt).toBe(beforeScanRecord.attempt);
+    // No further heartbeat fires after the one sent above, so a correct skip
+    // leaves the persisted deadline exactly at `extendedDeadline`; a
+    // reassignment would instead persist a freshly computed (and necessarily
+    // different) deadline.
+    expect(persisted.leaseDeadline).toBe(extendedDeadline);
 
     ws.close();
     await waitForRealTimersForTesting(50);
@@ -6896,10 +6976,31 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     }
     const futureDeadline = leasedRecord.leaseDeadline;
 
+    // WFT-91 review (Copilot): these overrides are installed on
+    // `DeadlineTracker.prototype`, not on the specific instance the running
+    // server uses — `WeftServer`'s public interface (see `src/server/index.ts`)
+    // deliberately does not expose the internal `ServerContext.deadlineTracker`
+    // instance, so there is no instance-level seam to target without adding a
+    // test-only accessor to a public, documented surface. The blast radius is
+    // bounded two ways: both overrides are restored in the `finally` block
+    // below regardless of outcome, and the `.add()` override only *counts*
+    // calls for this test's own `operationId` while still delegating every
+    // call — matching and non-matching alike — to the original
+    // implementation, so any other `DeadlineTracker` instance alive during
+    // this test observes unchanged behavior.
     const originalAdd = DeadlineTracker.prototype.add;
     const originalDrainExpired = DeadlineTracker.prototype.drainExpired;
     let addCountForOperation = 0;
     let injectedStaleEntry = false;
+    // WFT-91 review: the real dispatch above already calls `.add()` once for
+    // this operation before this override is even installed, and the
+    // override could observe further calls before `injectedStaleEntry`
+    // becomes true. An absolute `addCountForOperation >= 2` threshold can be
+    // satisfied by calls unrelated to the injected stale entry. Capture the
+    // count as of the exact moment `injectedStaleEntry` becomes true (inside
+    // the `drainExpired` override, the same tick the synthetic entry is
+    // produced) and require a call *after* that baseline instead.
+    let addCountAtInjection: number | null = null;
 
     const restoreAdd = overrideProperty(
       DeadlineTracker.prototype,
@@ -6925,6 +7026,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
         const expired = originalDrainExpired.call(this, now);
         if (!injectedStaleEntry) {
           injectedStaleEntry = true;
+          addCountAtInjection = addCountForOperation;
           return [...expired, { operationId, deadline: now - 1 }];
         }
         return expired;
@@ -6932,17 +7034,22 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     );
 
     try {
-      // The real dispatch above already counts as the first `.add()` call.
+      // Wait for a new `.add()` call for this operation strictly after the
+      // baseline captured at injection time — proof the reconciliation
+      // decision completed and chose to ignore the stale heap entry rather
+      // than proof of an arbitrary absolute call count.
       await waitFor(
         () =>
           injectedStaleEntry &&
-          addCountForOperation >= 2 &&
+          addCountAtInjection !== null &&
+          addCountForOperation > addCountAtInjection &&
           server.registry.isAssigned(operationId),
         { label: 'stale heap entry ignored while task remains assigned' },
       );
 
       expect(injectedStaleEntry).toBe(true);
-      expect(addCountForOperation).toBeGreaterThanOrEqual(2);
+      expect(addCountAtInjection).not.toBeNull();
+      expect(addCountForOperation).toBeGreaterThan(addCountAtInjection!);
       expect(server.registry.isAssigned(operationId)).toBe(true);
 
       const persisted = await readLedgerRecord(storage, operationId);
@@ -7646,6 +7753,21 @@ describe('retry policy respected on reassignment', () => {
     maxBackoff: 5000,
   };
 
+  // WFT-91: several `waitFor` calls in this describe block raise their
+  // budget to 8000ms (see the comments at each call site for the CI
+  // contention evidence behind that figure). A bare `waitFor` timeout alone
+  // is not enough — `bun test <path>` (the documented focused-run command in
+  // development-setup.md) falls back to Bun's own 5000ms-per-test default
+  // when no `--timeout` flag is supplied, which is below 8000ms and would
+  // kill the enclosing test before the wait's own headroom could be used.
+  // Only `bun run test`/`bun test --timeout 15000` (this repo's package.json
+  // script) raises Bun's per-test timeout above 8000ms. Giving each affected
+  // `it` an explicit per-test timeout (Bun's `it(name, fn, timeoutMs)` third
+  // argument), strictly above `CI_WAIT_TIMEOUT_MS`, makes those tests
+  // self-contained regardless of which supported invocation runs them.
+  const CI_WAIT_TIMEOUT_MS = 8000;
+  const CI_WAIT_TEST_TIMEOUT_MS = CI_WAIT_TIMEOUT_MS + 5000;
+
   it('does not re-dispatch when maxAttempts exceeded on visibility timeout expiry', async () => {
     ({ engine, storage } = createReconnectTestEngineWithStorage());
     server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 50 });
@@ -7764,237 +7886,299 @@ describe('retry policy respected on reassignment', () => {
     await waitForRealTimersForTesting(50);
   });
 
-  it('re-dispatches when within maxAttempts on visibility timeout expiry', async () => {
-    ({ engine, storage } = createReconnectTestEngineWithStorage());
-    server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 50 });
+  it(
+    're-dispatches when within maxAttempts on visibility timeout expiry',
+    async () => {
+      ({ engine, storage } = createReconnectTestEngineWithStorage());
+      server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 50 });
 
-    const ws = await connectWorker(server);
-    const received = collectAndCompleteTaskMessages(ws, {
-      completeWhen: (message) => message.type === 'task' && (message.attempt ?? 1) >= 2,
-    });
-    await registerWorker(ws, { workerId: 'w1', activities: ['test.charge'], concurrency: 5 });
+      const ws = await connectWorker(server);
+      const received = collectAndCompleteTaskMessages(ws, {
+        completeWhen: (message) => message.type === 'task' && (message.attempt ?? 1) >= 2,
+      });
+      await registerWorker(ws, { workerId: 'w1', activities: ['test.charge'], concurrency: 5 });
 
-    // maxAttempts = 3, starting at attempt 1 — should allow reassignment
-    await server.dispatchTask({
-      operationId: 'within-limit-expiry-op',
-      activityName: 'test.charge',
-      workflowType: 'test',
-      input: null,
-      visibilityTimeout: 100,
-      retryPolicy: { ...testRetryPolicy, maxAttempts: 3 },
-    });
-    await waitFor(
-      () =>
-        received.filter((m) => m.type === 'task' && m.operationId === 'within-limit-expiry-op')
-          .length >= 1,
-      { label: 'within-limit task initially dispatched' },
-    );
-
-    // Wait for the visibility timeout to expire and the scanner to re-dispatch
-    await waitFor(
-      () =>
-        received.filter((m) => m.type === 'task' && m.operationId === 'within-limit-expiry-op')
-          .length >= 2,
-      { label: 'within-limit task re-dispatched after visibility expiry' },
-    );
-
-    const taskMessages = received.filter(
-      (m) => m.type === 'task' && m.operationId === 'within-limit-expiry-op',
-    );
-    expect(taskMessages.length).toBeGreaterThanOrEqual(2);
-    expect(taskMessages[0]?.attempt).toBe(1);
-    expect(taskMessages[1]?.attempt).toBe(2);
-
-    ws.close();
-    await waitForRealTimersForTesting(50);
-  });
-
-  it('applies backoff delay before re-dispatch on visibility timeout expiry', async () => {
-    ({ engine, storage } = createReconnectTestEngineWithStorage());
-    server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 50 });
-
-    const ws = await connectWorker(server);
-    const timestamps: number[] = [];
-    ws.addEventListener('message', (event) => {
-      const msg = JSON.parse(String(event.data)) as {
-        type: string;
-        operationId?: string;
-        attempt?: number;
-        attemptToken?: string;
-      };
-      if (msg.type === 'task' && msg.operationId === 'backoff-expiry-op') {
-        timestamps.push(Date.now());
-        // Complete on attempt 2 to stop the cycle
-        if ((msg.attempt ?? 1) >= 2) {
-          ws.send(
-            JSON.stringify({
-              type: 'taskResult',
-              operationId: msg.operationId,
-              attemptToken: msg.attemptToken,
-              status: 'completed',
-              value: null,
-            }),
-          );
-        }
-      }
-    });
-    await registerWorker(ws, { workerId: 'w1', activities: ['test.charge'], concurrency: 5 });
-
-    // initialBackoff = 100ms
-    await server.dispatchTask({
-      operationId: 'backoff-expiry-op',
-      activityName: 'test.charge',
-      workflowType: 'test',
-      input: null,
-      visibilityTimeout: 80,
-      retryPolicy: { ...testRetryPolicy, maxAttempts: 3, initialBackoff: 100 },
-    });
-
-    // Wait long enough for: visibility timeout (80ms) + backoff (100ms) + scanner intervals
-    await waitFor(() => timestamps.length >= 2, {
-      label: 'backoff expiry redispatch received',
-    });
-
-    // Should have received both dispatches
-    expect(timestamps.length).toBeGreaterThanOrEqual(2);
-
-    // The gap between dispatch 1 and dispatch 2 should be at least ~80ms (visibility) + ~100ms (backoff)
-    // We use a conservative lower bound to account for timing variability
-    const gap = timestamps[1]! - timestamps[0]!;
-    expect(gap).toBeGreaterThanOrEqual(150);
-
-    ws.close();
-    await waitForRealTimersForTesting(50);
-  });
-
-  it('applies backoff delay before re-dispatch on worker disconnect', async () => {
-    ({ engine, storage } = createReconnectTestEngineWithStorage());
-    server = serveFastReconnectTestServer(engine);
-
-    const ws1 = await connectWorker(server);
-    const ws2 = await connectWorker(server);
-
-    const timestamps: number[] = [];
-    ws2.addEventListener('message', (event) => {
-      const msg = JSON.parse(String(event.data)) as {
-        type: string;
-        operationId?: string;
-        attempt?: number;
-      };
-      if (msg.type === 'task' && msg.operationId === 'backoff-disconnect-op') {
-        timestamps.push(Date.now());
-      }
-    });
-
-    await registerWorker(ws1, { workerId: 'w1', activities: ['test.charge'], concurrency: 5 });
-    await registerWorker(ws2, { workerId: 'w2', activities: ['test.charge'], concurrency: 5 });
-
-    const dispatchTime = Date.now();
-    // initialBackoff = 150ms, attempt 1 → backoff for attempt 2 = 150ms
-    await server.dispatchTask({
-      operationId: 'backoff-disconnect-op',
-      activityName: 'test.charge',
-      workflowType: 'test',
-      input: null,
-      retryPolicy: { ...testRetryPolicy, maxAttempts: 3, initialBackoff: 150 },
-    });
-    await waitForRealTimersForTesting(50);
-
-    // Disconnect w1 — should apply backoff before re-dispatching to w2
-    ws1.close();
-
-    // Wait for the backoff delay to complete
-    await waitFor(() => timestamps.length === 1, {
-      label: 'backoff disconnect redispatch received',
-    });
-
-    expect(timestamps.length).toBe(1);
-    // The re-dispatch should have been delayed by at least the backoff (150ms)
-    const gap = timestamps[0]! - dispatchTime;
-    expect(gap).toBeGreaterThanOrEqual(150);
-
-    ws2.close();
-    await waitForRealTimersForTesting(50);
-  });
-
-  it('logs delayed redispatch failures when backoff requeue dispatch throws', async () => {
-    ({ engine, storage } = createReconnectTestEngineWithStorage());
-    const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
-    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
-    server = serveFastReconnectTestServer(engine);
-
-    const operationId = 'delayed-redispatch-fail-op';
-    // Post-cutover (WFT-22), the delayed redispatch's own storage write is
-    // what must fail — and only that write. With a retry policy and a
-    // positive backoff, disconnect's own immediate `leased -> queued`
-    // requeue write succeeds normally; only after the backoff delay does
-    // `scheduleDelayedDispatch` re-invoke `dispatchTaskImpl`, which (with a
-    // second worker available) performs a real `queued -> leased` claim
-    // write on the same ledger key. Counting matching writes distinguishes
-    // that third write (1: initial dispatch's create+claim, 2: disconnect's
-    // requeue, 3: the delayed redispatch's claim) from the earlier ones that
-    // must succeed for the scenario to reach the delayed path at all.
-    let writeCount = 0;
-    const restoreConditionalBatch = overrideProperty(
-      storage,
-      'conditionalBatch',
-      async (
-        conditions: Parameters<MemoryStorage['conditionalBatch']>[0],
-        operations: Parameters<MemoryStorage['conditionalBatch']>[1],
-      ) => {
-        if (operations.some((operation) => operation.key === taskLedgerKey(operationId))) {
-          writeCount++;
-          if (writeCount >= 3) {
-            throw new Error('delayed redispatch failed');
-          }
-        }
-        return originalConditionalBatch(conditions, operations);
-      },
-    );
-
-    try {
-      const { primaryWorker: ws1, secondaryWorker: ws2 } =
-        await connectRegisteredWorkerPair(server);
-
+      // maxAttempts = 3, starting at attempt 1 — should allow reassignment
       await server.dispatchTask({
-        operationId,
+        operationId: 'within-limit-expiry-op',
         activityName: 'test.charge',
         workflowType: 'test',
         input: null,
-        retryPolicy: { ...testRetryPolicy, maxAttempts: 3, initialBackoff: 50, maxBackoff: 50 },
+        visibilityTimeout: 100,
+        retryPolicy: { ...testRetryPolicy, maxAttempts: 3 },
       });
-      await waitFor(() => server.registry.isAssignedToWorker(operationId, 'w1'), {
-        label: `${operationId} assigned to w1 before disconnect`,
-      });
-
-      ws1.close();
-
-      // Poll for the delayed-redispatch error log rather than waiting a fixed
-      // 250ms and asserting immediately: under parallel load the backoff requeue
-      // can land later than any fixed window, which made this test flaky in the
-      // pre-commit full-suite run. The poll adapts to the real timing, and the
-      // full `toHaveBeenCalledWith` contract (including the Error argument) is
-      // still asserted afterward so polling can't mask a wrong-shaped call.
       await waitFor(
         () =>
-          errorSpy.mock.calls.some(
-            (call) => call[0] === `[weft] Delayed redispatch failed for "${operationId}":`,
-          ),
-        { label: 'delayed redispatch error log' },
+          received.filter((m) => m.type === 'task' && m.operationId === 'within-limit-expiry-op')
+            .length >= 1,
+        { label: 'within-limit task initially dispatched' },
       );
 
-      expect(errorSpy).toHaveBeenCalledWith(
-        `[weft] Delayed redispatch failed for "${operationId}":`,
-        expect.any(Error),
+      // Wait for the visibility timeout to expire and the scanner to
+      // re-dispatch. WFT-91: this test was one of four in "retry policy
+      // respected on reassignment" observed timing out at
+      // `waitForParityCondition`'s default 2000ms budget in CI across
+      // otherwise-unrelated pull requests (see the WFT-91 Linear issue) — same
+      // describe-block-wide tight-margin exposure (100ms visibility timeout +
+      // 100ms initial backoff) as the "applies backoff delay" tests, whose
+      // comment records the local baseline measurement and the reasoning for
+      // the 8000ms figure used here too.
+      await waitFor(
+        () =>
+          received.filter((m) => m.type === 'task' && m.operationId === 'within-limit-expiry-op')
+            .length >= 2,
+        {
+          label: 'within-limit task re-dispatched after visibility expiry',
+          timeoutMs: CI_WAIT_TIMEOUT_MS,
+        },
       );
+
+      const taskMessages = received.filter(
+        (m) => m.type === 'task' && m.operationId === 'within-limit-expiry-op',
+      );
+      expect(taskMessages.length).toBeGreaterThanOrEqual(2);
+      expect(taskMessages[0]?.attempt).toBe(1);
+      expect(taskMessages[1]?.attempt).toBe(2);
+
+      ws.close();
+      await waitForRealTimersForTesting(50);
+    },
+    CI_WAIT_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'applies backoff delay before re-dispatch on visibility timeout expiry',
+    async () => {
+      ({ engine, storage } = createReconnectTestEngineWithStorage());
+      server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 50 });
+
+      const ws = await connectWorker(server);
+      const timestamps: number[] = [];
+      ws.addEventListener('message', (event) => {
+        const msg = JSON.parse(String(event.data)) as {
+          type: string;
+          operationId?: string;
+          attempt?: number;
+          attemptToken?: string;
+        };
+        if (msg.type === 'task' && msg.operationId === 'backoff-expiry-op') {
+          timestamps.push(Date.now());
+          // Complete on attempt 2 to stop the cycle
+          if ((msg.attempt ?? 1) >= 2) {
+            ws.send(
+              JSON.stringify({
+                type: 'taskResult',
+                operationId: msg.operationId,
+                attemptToken: msg.attemptToken,
+                status: 'completed',
+                value: null,
+              }),
+            );
+          }
+        }
+      });
+      await registerWorker(ws, { workerId: 'w1', activities: ['test.charge'], concurrency: 5 });
+
+      // initialBackoff = 100ms
+      await server.dispatchTask({
+        operationId: 'backoff-expiry-op',
+        activityName: 'test.charge',
+        workflowType: 'test',
+        input: null,
+        visibilityTimeout: 80,
+        retryPolicy: { ...testRetryPolicy, maxAttempts: 3, initialBackoff: 100 },
+      });
+
+      // Wait long enough for: visibility timeout (80ms) + backoff (100ms) + scanner intervals.
+      // WFT-91: this describe block observed real CI failures at
+      // `waitForParityCondition`'s default 2000ms budget across multiple
+      // otherwise-unrelated pull requests (see the WFT-91 Linear issue).
+      // Locally this test's actual work completes in ~270-320ms even under
+      // background load (measured via 15 repeated junit-timed runs), so the
+      // 2000ms default already has a wide nominal margin — the CI failures are
+      // evidence of GitHub Actions runner-side scheduling stalls, not a tight
+      // configured delay. `scheduleDelayedDispatch` has no test-injectable
+      // clock seam (see `src/server/runtime/task-dispatch.ts`), and adding one
+      // is out of scope for this test-only pull request, so raise the budget
+      // for this test only rather than the shared default: 8000ms is 4x the
+      // previous 2000ms budget, giving substantial headroom over the measured
+      // ~300ms baseline without matching the repo's known worst-case outlier
+      // (WFT-89 observed a 26.7s stall on an unrelated test under severe CI
+      // contention) — if 8000ms still proves insufficient that is itself
+      // evidence for the broader over-subscribed-runner investigation WFT-89
+      // and WFT-96 both flag, not a reason to keep inflating this number.
+      await waitFor(() => timestamps.length >= 2, {
+        label: 'backoff expiry redispatch received',
+        timeoutMs: CI_WAIT_TIMEOUT_MS,
+      });
+
+      // Should have received both dispatches
+      expect(timestamps.length).toBeGreaterThanOrEqual(2);
+
+      // The gap between dispatch 1 and dispatch 2 should be at least ~80ms (visibility) + ~100ms (backoff)
+      // We use a conservative lower bound to account for timing variability
+      const gap = timestamps[1]! - timestamps[0]!;
+      expect(gap).toBeGreaterThanOrEqual(150);
+
+      ws.close();
+      await waitForRealTimersForTesting(50);
+    },
+    CI_WAIT_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'applies backoff delay before re-dispatch on worker disconnect',
+    async () => {
+      ({ engine, storage } = createReconnectTestEngineWithStorage());
+      server = serveFastReconnectTestServer(engine);
+
+      const ws1 = await connectWorker(server);
+      const ws2 = await connectWorker(server);
+
+      const timestamps: number[] = [];
+      ws2.addEventListener('message', (event) => {
+        const msg = JSON.parse(String(event.data)) as {
+          type: string;
+          operationId?: string;
+          attempt?: number;
+        };
+        if (msg.type === 'task' && msg.operationId === 'backoff-disconnect-op') {
+          timestamps.push(Date.now());
+        }
+      });
+
+      await registerWorker(ws1, { workerId: 'w1', activities: ['test.charge'], concurrency: 5 });
+      await registerWorker(ws2, { workerId: 'w2', activities: ['test.charge'], concurrency: 5 });
+
+      const dispatchTime = Date.now();
+      // initialBackoff = 150ms, attempt 1 → backoff for attempt 2 = 150ms
+      await server.dispatchTask({
+        operationId: 'backoff-disconnect-op',
+        activityName: 'test.charge',
+        workflowType: 'test',
+        input: null,
+        retryPolicy: { ...testRetryPolicy, maxAttempts: 3, initialBackoff: 150 },
+      });
+      await waitForRealTimersForTesting(50);
+
+      // Disconnect w1 — should apply backoff before re-dispatching to w2
+      ws1.close();
+
+      // Wait for the backoff delay to complete. WFT-91: this is the tightest
+      // test in the describe block (150ms configured backoff, zero configured
+      // slack), and was one of four distinct tests in this block observed
+      // timing out at the 2000ms default in CI across separate pull requests
+      // (see the WFT-91 Linear issue). Locally this test's actual work
+      // completes in ~435-450ms even under background load (measured via 15
+      // repeated junit-timed runs), so raise the budget for this test only —
+      // same reasoning and the same 8000ms figure as the sibling
+      // "applies backoff delay before re-dispatch on visibility timeout
+      // expiry" test above.
+      await waitFor(() => timestamps.length === 1, {
+        label: 'backoff disconnect redispatch received',
+        timeoutMs: CI_WAIT_TIMEOUT_MS,
+      });
+
+      expect(timestamps.length).toBe(1);
+      // The re-dispatch should have been delayed by at least the backoff (150ms)
+      const gap = timestamps[0]! - dispatchTime;
+      expect(gap).toBeGreaterThanOrEqual(150);
 
       ws2.close();
       await waitForRealTimersForTesting(50);
-    } finally {
-      restoreConditionalBatch();
-      errorSpy.mockRestore();
-    }
-  });
+    },
+    CI_WAIT_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'logs delayed redispatch failures when backoff requeue dispatch throws',
+    async () => {
+      ({ engine, storage } = createReconnectTestEngineWithStorage());
+      const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
+      const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+      server = serveFastReconnectTestServer(engine);
+
+      const operationId = 'delayed-redispatch-fail-op';
+      // Post-cutover (WFT-22), the delayed redispatch's own storage write is
+      // what must fail — and only that write. With a retry policy and a
+      // positive backoff, disconnect's own immediate `leased -> queued`
+      // requeue write succeeds normally; only after the backoff delay does
+      // `scheduleDelayedDispatch` re-invoke `dispatchTaskImpl`, which (with a
+      // second worker available) performs a real `queued -> leased` claim
+      // write on the same ledger key. Counting matching writes distinguishes
+      // that third write (1: initial dispatch's create+claim, 2: disconnect's
+      // requeue, 3: the delayed redispatch's claim) from the earlier ones that
+      // must succeed for the scenario to reach the delayed path at all.
+      let writeCount = 0;
+      const restoreConditionalBatch = overrideProperty(
+        storage,
+        'conditionalBatch',
+        async (
+          conditions: Parameters<MemoryStorage['conditionalBatch']>[0],
+          operations: Parameters<MemoryStorage['conditionalBatch']>[1],
+        ) => {
+          if (operations.some((operation) => operation.key === taskLedgerKey(operationId))) {
+            writeCount++;
+            if (writeCount >= 3) {
+              throw new Error('delayed redispatch failed');
+            }
+          }
+          return originalConditionalBatch(conditions, operations);
+        },
+      );
+
+      try {
+        const { primaryWorker: ws1, secondaryWorker: ws2 } =
+          await connectRegisteredWorkerPair(server);
+
+        await server.dispatchTask({
+          operationId,
+          activityName: 'test.charge',
+          workflowType: 'test',
+          input: null,
+          retryPolicy: { ...testRetryPolicy, maxAttempts: 3, initialBackoff: 50, maxBackoff: 50 },
+        });
+        await waitFor(() => server.registry.isAssignedToWorker(operationId, 'w1'), {
+          label: `${operationId} assigned to w1 before disconnect`,
+        });
+
+        ws1.close();
+
+        // Poll for the delayed-redispatch error log rather than waiting a fixed
+        // 250ms and asserting immediately: under parallel load the backoff requeue
+        // can land later than any fixed window, which made this test flaky in the
+        // pre-commit full-suite run. The poll adapts to the real timing, and the
+        // full `toHaveBeenCalledWith` contract (including the Error argument) is
+        // still asserted afterward so polling can't mask a wrong-shaped call.
+        // WFT-91: this test was one of four in "retry policy respected on
+        // reassignment" observed timing out at `waitForParityCondition`'s
+        // default 2000ms budget in CI across otherwise-unrelated pull
+        // requests (see the WFT-91 Linear issue) — same describe-block-wide
+        // tight-margin exposure as the "applies backoff delay" tests above,
+        // whose comment records the local baseline measurement and the
+        // reasoning for the 8000ms figure used here too.
+        await waitFor(
+          () =>
+            errorSpy.mock.calls.some(
+              (call) => call[0] === `[weft] Delayed redispatch failed for "${operationId}":`,
+            ),
+          { label: 'delayed redispatch error log', timeoutMs: CI_WAIT_TIMEOUT_MS },
+        );
+
+        expect(errorSpy).toHaveBeenCalledWith(
+          `[weft] Delayed redispatch failed for "${operationId}":`,
+          expect.any(Error),
+        );
+
+        ws2.close();
+        await waitForRealTimersForTesting(50);
+      } finally {
+        restoreConditionalBatch();
+        errorSpy.mockRestore();
+      }
+    },
+    CI_WAIT_TEST_TIMEOUT_MS,
+  );
 
   it('stores retryPolicy in the inflight record for use during reassignment', async () => {
     ({ engine, storage } = createReconnectTestEngineWithStorage());
