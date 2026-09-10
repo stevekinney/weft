@@ -208,6 +208,29 @@ export function forEachResolvedDynamicRetentionPolicy(
   }
 }
 
+/**
+ * True when at least one `registerSource()`-registered type has a
+ * registered candidate revision this process has NOT yet resolved — its
+ * retention policy (and everything else `buildRegistrationEntry` would
+ * derive) is genuinely unknown, so `getMinimumRetentionMs()`'s scan-bound
+ * optimization in `bulk-operations-purge.ts` cannot be trusted (WFT-19
+ * review round 1): it silently excluded exactly this class of workflow
+ * from the periodic retention sweep's scan bound, since an unresolved
+ * candidate's possibly-shorter-than-default retention window was invisible
+ * to the minimum computation. Used to fall back to an unbounded terminal
+ * scan while any such candidate remains unresolved — self-healing once
+ * `shouldPurgeWorkflowState`'s own per-run resolve installs it.
+ */
+export function hasUnresolvedDynamicSourceCandidate(internals: EngineInternals): boolean {
+  for (const [type, byRevision] of internals.sources.byName) {
+    const resolvedForType = internals.sources.resolved.get(type);
+    for (const revision of byRevision.keys()) {
+      if (resolvedForType?.has(revision) !== true) return true;
+    }
+  }
+  return false;
+}
+
 type RuntimeNamedMessageDefinition = {
   readonly name: string;
 };

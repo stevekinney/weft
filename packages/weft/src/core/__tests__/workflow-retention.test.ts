@@ -9,7 +9,7 @@ import type { BatchOperation, ScanOptions } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { ActivityRegistry } from '../activity-registry.ts';
-import { encode } from '../codec.ts';
+import { decode, encode } from '../codec.ts';
 import { Engine } from '../engine.ts';
 import { copyWorkflowDefinition } from '../engine/construction.ts';
 import { buildRegistrationEntry } from '../engine/registration.ts';
@@ -541,6 +541,161 @@ describe('workflow retention', () => {
 
     now += 1_500; // past B's own 1s deadline, well under the 10s engine default
     await waitForWorkflowPresence(engine, handleB.id, false);
+
+    engine[Symbol.dispose]();
+  });
+
+  it('a terminal run pinned to a registered-but-unresolved revision resolves ITS OWN retention policy rather than falling back to the engine default (review round 1)', async () => {
+    // Regression flagged in first-round review of the WFT-19 fix above:
+    // the sync-only `getResolvedDynamicRegistration()` lookup returns
+    // `undefined` for a pin this process has never locally resolved — even
+    // when it IS a registered candidate — so the deadline calculation fell
+    // back to the engine-wide default instead of resolving the run's own
+    // declared (here, much shorter) window. `getWorkflowRetentionDeadline`
+    // must instead await a full resolve (mirroring
+    // `resolveFinalizerRegistration()`) before falling back to the default.
+    //
+    // Uses TWO engines sharing one store — a real "fresh process never
+    // resolved this revision" scenario, not a hand-seeded index bypass: A's
+    // completion in the first engine populates the visibility index the
+    // retention sweep depends on to discover it at all; the second, fresh
+    // engine's in-memory `internals.sources.resolved` starts empty
+    // regardless of what the first engine resolved, matching a real
+    // process restart.
+    let now = 5_000;
+    const storage = new MemoryStorage();
+    const type = 'unresolved-pin-retention';
+    const definitionA = workflow({
+      name: type,
+      description: 'A - short retention, never resolved by the sweeping engine',
+      retention: { completed: '1s' },
+    }).execute(async function* () {
+      return 'A-done';
+    });
+    const definitionB = workflow({
+      name: type,
+      description: 'B - resolved sibling in the sweeping engine',
+    }).execute(async function* () {
+      return 'B-done';
+    });
+    async function manifestRevisionFor(definition: WorkflowDefinition): Promise<string> {
+      const entry = buildRegistrationEntry(type, definition);
+      const registered = copyWorkflowDefinition(type, entry);
+      const manifest = await buildWorkflowManifestFromDefinition(
+        registered,
+        new ActivityRegistry().listDefinitions(),
+      );
+      return manifest.revision;
+    }
+    const revisionA = await manifestRevisionFor(definitionA);
+    const revisionB = await manifestRevisionFor(definitionB);
+    const workflowIdA = 'unresolved-pin-retention-a';
+
+    {
+      // First engine: only A registered (single-candidate fast path — no
+      // activation needed), starts and completes the run for real, giving
+      // it a properly-indexed terminal record.
+      await using seedingEngine = new Engine({ storage, getNow: () => now });
+      seedingEngine.registerSource(
+        workflowSource(
+          { name: type, location: './a.ts', exportName: 'a', revision: revisionA },
+          async () => ({ a: definitionA }),
+        ),
+      );
+      const handleA = await seedingEngine.start(type, null, { id: workflowIdA });
+      await handleA.result();
+    }
+
+    // Second, fresh engine: both A and B registered, but only B resolved —
+    // this process never calls `resolveWorkflowSource`/`start` for A.
+    const engine = new Engine({
+      storage,
+      getNow: () => now,
+      retention: { completed: '100s' }, // engine default: deliberately much longer than A's own window
+      retentionSweepInterval: '10ms',
+    });
+    engine.registerSource(
+      workflowSource(
+        { name: type, location: './a.ts', exportName: 'a', revision: revisionA },
+        async () => ({ a: definitionA }),
+      ),
+    );
+    engine.registerSource(
+      workflowSource(
+        { name: type, location: './b.ts', exportName: 'b', revision: revisionB },
+        async () => ({ b: definitionB }),
+      ),
+    );
+    await engine.resolveWorkflowSource(type, revisionB);
+    await activateDynamicSourceRevision(engine, type, revisionB);
+    const handleB = await engine.start(type, null, { id: 'unresolved-pin-retention-b' });
+    await handleB.result();
+
+    now += 1_500; // past A's own 1s deadline, well under the 100s engine default
+    await waitForWorkflowPresence(engine, workflowIdA, false);
+
+    engine[Symbol.dispose]();
+  });
+
+  it('a terminal run pinned to a revision this process has never registered as a candidate falls back to the engine default retention, rather than hanging (review round 1)', async () => {
+    // Exercises `getWorkflowRetentionDeadline()`'s `WorkflowRevisionUnavailableError`
+    // catch branch directly: `type` IS a registered dynamic source (so
+    // `resolveExecutableRegistrationForRevision()` is actually invoked, not
+    // short-circuited by the earlier `!internals.sources.byName.has(...)`
+    // guard), but the run's own pinned revision is not among the
+    // registered candidates — the resolve throws, the deadline calculation
+    // must fall back to the engine default rather than propagating the
+    // error and leaving the run stuck un-purgeable forever.
+    let now = 5_000;
+    const storage = new MemoryStorage();
+    const type = 'never-registered-pin-retention';
+    const definition = workflow({
+      name: type,
+      description: 'the only registered candidate',
+    }).execute(async function* () {
+      return 'done';
+    });
+    const registeredRevision = await (async () => {
+      const entry = buildRegistrationEntry(type, definition);
+      const registered = copyWorkflowDefinition(type, entry);
+      const manifest = await buildWorkflowManifestFromDefinition(
+        registered,
+        new ActivityRegistry().listDefinitions(),
+      );
+      return manifest.revision;
+    })();
+
+    const engine = new Engine({
+      storage,
+      getNow: () => now,
+      retention: { completed: '1s' }, // short engine default — proves the fallback actually applies
+      retentionSweepInterval: '10ms',
+    });
+    engine.registerSource(
+      workflowSource(
+        { name: type, location: './only.ts', exportName: 'only', revision: registeredRevision },
+        async () => ({ only: definition }),
+      ),
+    );
+
+    // Start and complete a REAL run first — this indexes the terminal
+    // record properly (the visibility index the sweep depends on to
+    // discover a workflow at all is not populated by a raw `storage.put`
+    // alone). Then overwrite the persisted `revision` to a value this
+    // process never registered as a candidate, leaving the index (keyed
+    // on status/updatedAt, unaffected by this field) intact.
+    const workflowId = 'never-registered-pin-retention-run';
+    const handle = await engine.start(type, null, { id: workflowId });
+    await handle.result();
+    const persisted = decode((await storage.get(KEYS.workflow(workflowId)))!) as Record<
+      string,
+      unknown
+    >;
+    persisted['revision'] = 'a-revision-never-registered';
+    await storage.put(KEYS.workflow(workflowId), encode(persisted));
+
+    now += 1_500; // past the 1s engine default
+    await waitForWorkflowPresence(engine, workflowId, false);
 
     engine[Symbol.dispose]();
   });

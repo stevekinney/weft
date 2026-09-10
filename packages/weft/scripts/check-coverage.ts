@@ -1380,22 +1380,23 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       },
     ],
     [
-      'src/core/engine/listing.ts',
-      {
-        reason:
-          'The remaining line is the equality tiebreaker after both strict id-order branches have been exercised; distinct workflow ids cannot reach it. ' +
-          'Realigned to 238 after the WFT-15/16 review round 2 fix routed setAttributes() through the sync-only dynamic-registration fallback. ' +
-          'Realigned to 239 after WFT-17/WFT-18 added the `revision` field to summaryFromState() above it.',
-        lines: new Set([239]),
-        requireUncoveredLines: true,
-      },
-    ],
-    [
       'src/core/engine/pending-updates.ts',
       {
         reason:
           'Bun reports pending-update callbacks as missed although enqueue, replace, apply, and teardown behavior is covered.',
         functions: 2,
+      },
+    ],
+    [
+      'src/core/engine/listing.ts',
+      {
+        reason:
+          'The remaining line is the equality tiebreaker after both strict id-order branches have been exercised; distinct workflow ids in existing tests never happen to need it. ' +
+          'Realigned to 238 after the WFT-15/16 review round 2 fix routed setAttributes() through the sync-only dynamic-registration fallback. ' +
+          'Realigned to 239 after WFT-17/WFT-18 added the `revision` field to summaryFromState() above it. ' +
+          'Realigned to 243 after WFT-19 review round 1 widened the import block (resolveExecutableRegistrationForRevision, Engine type) above it.',
+        lines: new Set([243]),
+        requireUncoveredLines: true,
       },
     ],
     [
@@ -1443,6 +1444,15 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
           57, 58, 59, 60, 61, 62, 63, 64, 65, 67, 68, 69, 70, 110, 111, 112, 131, 138, 139, 206,
           207,
         ]),
+        requireUncoveredLines: true,
+      },
+    ],
+    [
+      'src/core/engine/workflow-retention-deadline.ts',
+      {
+        reason:
+          "New async resolve path (WFT-19 review round 1): Bun maps the closing brace after the DynamicWorkflowSourceUnavailableError/WorkflowRevisionUnavailableError catch branch's `return undefined` as uncovered, the same brace-attribution artifact already documented for `termination/finalizer-registration.ts`'s identical catch shape — although workflow-retention.test.ts directly exercises both that return (an unresolvable-pinned-revision fallback) and the success path (an async-resolved entry's own policy), and the suite's own `throw error;` rethrow line reads as hit from an unrelated disposal-race elsewhere in the full run.",
+        lines: new Set([59]),
         requireUncoveredLines: true,
       },
     ],

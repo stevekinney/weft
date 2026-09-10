@@ -470,6 +470,51 @@ describe('getWorkflowActivityDefinition() / listWorkflowActivityDefinitions() �
     engine[Symbol.dispose]();
   });
 
+  it('getWorkflowActivityDefinition still returns a same-named GLOBAL activity for a registerSource()-registered type (review round 1)', async () => {
+    // The eager-only scope above covers the PER-WORKFLOW registry lookup
+    // only — getWorkflowActivityDefinition()'s own doc (and
+    // documentation/reference/api-engine.md) both say it falls back to the
+    // global registry when the per-workflow lookup misses, same as
+    // activity-resolution.ts's dispatch-time order. A registerSource()-
+    // registered type never has a per-workflow entry, but that must not
+    // make a same-named GLOBAL activity unreachable through this accessor.
+    const type = 'dynamic-with-global-activity-fallback';
+    const globalActivity = activity({
+      name: 'shared-ping',
+      execute: async () => 'pong-from-global',
+    });
+    const definition = workflow({ name: type }).execute(async function* (ctx: WorkflowContext) {
+      yield* ctx.waitForSignal('never');
+    });
+    const entry = buildRegistrationEntry(type, definition);
+    const registered = copyWorkflowDefinition(type, entry);
+    const manifest = await buildWorkflowManifestFromDefinition(registered, []);
+
+    const engine = await Engine.create({
+      activities: { 'shared-ping': globalActivity },
+      recover: false,
+    });
+    engine.registerSource(
+      workflowSource(
+        {
+          name: type,
+          location: './dynamic-with-global-activity-fallback.ts',
+          exportName: 'dyn',
+          revision: manifest.revision,
+        },
+        async () => ({ dyn: definition }),
+      ),
+    );
+
+    expect(engine.getWorkflowActivityDefinition(type, 'shared-ping')?.name).toBe('shared-ping');
+    // listWorkflowActivityDefinitions() has NO global fallback (unlike
+    // getWorkflowActivityDefinition()) — it only enumerates the per-workflow
+    // registry, which a registerSource() type never has an entry in.
+    expect(engine.listWorkflowActivityDefinitions(type)).toEqual([]);
+
+    engine[Symbol.dispose]();
+  });
+
   it('returns the eager registration for a same-named eager type unaffected by a resolved dynamic-source sibling', async () => {
     const eagerDefinition = workflow({ name: 'eager-activity-scope' })
       .activities({ pong: async () => 'ping' })

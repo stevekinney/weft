@@ -21,7 +21,10 @@ import { forgetCommittedCheckpointBytes } from './checkpoint-commit-snapshots.ts
 import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
 import { streamWorkflowStates } from './listing.ts';
-import { forEachResolvedDynamicRetentionPolicy } from './registration.ts';
+import {
+  forEachResolvedDynamicRetentionPolicy,
+  hasUnresolvedDynamicSourceCandidate,
+} from './registration.ts';
 import { decodeScheduleRunMetadata } from './schedule-run-metadata.ts';
 import { createTerminalCleanupTimerId } from './state-utilities.ts';
 import { buildExternalTerminalRotationFragment } from './storage-io.ts';
@@ -108,16 +111,25 @@ async function* streamExpiredRetentionWorkflowStates(
   internals: EngineInternals,
   now: number,
 ): AsyncGenerator<WorkflowState> {
-  const minimumRetentionMs = getMinimumRetentionMs(internals);
-  if (minimumRetentionMs === null) return;
+  // A registered-but-unresolved dynamic-source candidate's retention policy
+  // is unknown, so the minimum-retention scan bound below cannot be
+  // trusted while one exists (WFT-19 review round 1) — fall back to an
+  // unbounded terminal scan, letting `shouldPurgeWorkflowState`'s own
+  // per-run async resolve decide each state; self-heals once the sweep's
+  // own resolve installs the candidate and the fast bound re-engages.
+  const untrustworthyBound = hasUnresolvedDynamicSourceCandidate(internals);
+  const minimumRetentionMs = untrustworthyBound ? null : getMinimumRetentionMs(internals);
+  if (!untrustworthyBound && minimumRetentionMs === null) return;
 
   const terminalWorkflowPrefix = KEYS.terminalWorkflowPrefix();
-  const newestPossibleExpiredUpdatedAt = now - minimumRetentionMs;
-  const upperBound = `${terminalWorkflowPrefix}${String(newestPossibleExpiredUpdatedAt).padStart(16, '0')}:\xff`;
+  const scanOptions =
+    minimumRetentionMs === null
+      ? {}
+      : {
+          lte: `${terminalWorkflowPrefix}${String(now - minimumRetentionMs).padStart(16, '0')}:\xff`,
+        };
 
-  for await (const [key] of internals.storage.scan(terminalWorkflowPrefix, {
-    lte: upperBound,
-  })) {
+  for await (const [key] of internals.storage.scan(terminalWorkflowPrefix, scanOptions)) {
     const encodedWorkflowId = key.slice(key.lastIndexOf(':') + 1);
     const workflowId = tryDecodeStorageKeyComponent(encodedWorkflowId);
     if (workflowId === null) continue;
@@ -188,7 +200,7 @@ async function shouldPurgeWorkflowState(
 
   if (!expiredOnly) return true;
 
-  const deadline = getWorkflowRetentionDeadline(internals, state);
+  const deadline = await getWorkflowRetentionDeadline(internals, state);
   return deadline !== null && deadline <= now;
 }
 

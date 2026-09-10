@@ -17,6 +17,19 @@ export type ConstraintCallbacks = {
 };
 
 /**
+ * The running instance's own pinned revision (WFT-19), or `undefined` for
+ * an eager registration / legacy record. Split out purely to keep
+ * `evaluateConstraints`'s own cyclomatic complexity under the repository's
+ * ceiling.
+ */
+function resolveRunningInstanceRevision(
+  internals: EngineInternals,
+  workflowId: string,
+): string | undefined {
+  return internals.workflowTypeByWorkflowId.get(workflowId)?.revision;
+}
+
+/**
  * Evaluate all registered constraints for a workflow at the current checkpoint.
  *
  * Returns `true` if any constraint was violated and a 'fail' or 'compensate'
@@ -30,19 +43,6 @@ export type ConstraintCallbacks = {
  * `!context` guard here only fires for benign cases (e.g. the workflow has
  * already terminated or the context was cleared mid-evaluation).
  */
-/**
- * The running instance's own pinned revision (WFT-19), or `undefined` for
- * an eager registration / legacy record. Split out purely to keep
- * `evaluateConstraints`'s own cyclomatic complexity under the repository's
- * ceiling.
- */
-function resolveRunningInstanceRevision(
-  internals: EngineInternals,
-  workflowId: string,
-): string | undefined {
-  return internals.workflowTypeByWorkflowId.get(workflowId)?.revision;
-}
-
 export async function evaluateConstraints(
   internals: EngineInternals,
   workflowId: string,
