@@ -345,14 +345,20 @@ export async function fork(
   // revision's handler entirely — not just a routing mismatch downstream of
   // execution, but the wrong code running from the very first turn. Mirrors
   // `resolveExecutableRegistrationForRetry()`'s identical fix for bulk retry.
-  const { entry: registration } = await resolveExecutableRegistrationOrRenamedNotFound(
-    (type) => callbacks.resolveExecutableRegistrationForRevision(type, sourceState.revision),
-    sourceState.type,
-    () =>
-      new Error(
-        `No workflow registered with name "${sourceState.type}" (needed to fork "${sourceWorkflowId}")`,
-      ),
-  );
+  // `revision` here is the resolver's OWN resolved revision — threaded
+  // through to `launchWorkflowFromCheckpoint()`'s identity-cache population
+  // below, NOT re-derived from `forkState.revision` (which is `undefined`
+  // for a legacy record even when this resolve found a real sole
+  // candidate — see that call site's doc, WFT-19 review round 5).
+  const { entry: registration, revision: resolvedRevision } =
+    await resolveExecutableRegistrationOrRenamedNotFound(
+      (type) => callbacks.resolveExecutableRegistrationForRevision(type, sourceState.revision),
+      sourceState.type,
+      () =>
+        new Error(
+          `No workflow registered with name "${sourceState.type}" (needed to fork "${sourceWorkflowId}")`,
+        ),
+    );
 
   const fromStep =
     options?.fromStep !== undefined ? normalizeForkStep(options.fromStep) : undefined;
@@ -444,6 +450,7 @@ export async function fork(
       forkState,
       forkCheckpoint,
       registration,
+      resolvedRevision,
       callbacks,
     );
     forkStarted = true;

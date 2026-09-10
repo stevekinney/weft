@@ -1376,9 +1376,9 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
         // already documented for `catalog-removal.ts`'s exhaustiveness
         // guard above: a coverage-instrumentation quirk, not a real gap.
         reason:
-          "Bun reports the catch clause's own line as missed although the surrounding failWorkflowForRecoveryHook call and this catch's own handleCleanupError body both show real hit counts — the same brace-line attribution artifact documented for catalog-removal.ts's exhaustiveness guard. Also reports one enclosing closure as missed for the same reason.",
+          "Bun reports the catch clause's own line as missed although the surrounding failWorkflowForRecoveryHook call and this catch's own handleCleanupError body both show real hit counts — the same brace-line attribution artifact documented for catalog-removal.ts's exhaustiveness guard. Also reports one enclosing closure as missed for the same reason. (Line moved from 93 to 102 when the WFT-19 review round 5 fix's doc comments were added.)",
         functions: 1,
-        lines: new Set([93]),
+        lines: new Set([102]),
         requireUncoveredLines: true,
       },
     ],

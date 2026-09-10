@@ -1076,6 +1076,7 @@ describe('engine lifecycle coverage helpers', () => {
         },
         version: '1',
       },
+      state.revision,
       createLifecycleCallbacks({
         createWorkflowHandleWithResultPromise: () => handle,
         dispatchEvent,
@@ -1129,6 +1130,7 @@ describe('engine lifecycle coverage helpers', () => {
         searchAttributes: { env: 'string' },
         version: '1',
       } as never,
+      undefined,
       createLifecycleCallbacks({
         createWorkflowHandleWithResultPromise: () => ({ id: workflowId }),
       }) as never,
@@ -1173,6 +1175,7 @@ describe('engine lifecycle coverage helpers', () => {
           },
           version: '1',
         },
+        undefined,
         createLifecycleCallbacks() as never,
       ),
     ).toThrow('Inline workflow launch requested without an inline strategy.');

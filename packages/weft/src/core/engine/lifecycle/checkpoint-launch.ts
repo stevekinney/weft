@@ -107,6 +107,21 @@ export function launchWorkflowFromCheckpoint(
   state: WorkflowState,
   checkpoint: Checkpoint,
   registration: RegistrationEntry,
+  /**
+   * The EXACT revision `registration` was resolved against — from the same
+   * `resolveExecutableRegistrationForRevision()` call that produced
+   * `registration`, NOT `state.revision` (WFT-19 review round 5, Codex,
+   * mirroring the identical fix in `lifecycle/resume.ts`). A forked
+   * checkpoint's `state.revision` is inherited verbatim from the SOURCE
+   * run's own persisted pin (`createForkedWorkflowState`), which is
+   * `undefined` for a legacy (pre-revision-pinning) record even when the
+   * resolver resolved — and `registration` was built from — a real sole
+   * registered candidate on a dynamic-source type. Populating the identity
+   * cache with `state.revision` in that case would silently disable the
+   * exact-`(type, revision)`-keyed activity lookup for the forked run's
+   * entire lifetime.
+   */
+  resolvedRevision: string | undefined,
   callbacks: LifecycleCallbacks,
 ): WorkflowHandle {
   // Cache the launched run's own exact (type, revision) pin for synchronous
@@ -118,7 +133,7 @@ export function launchWorkflowFromCheckpoint(
   // Cleared on terminal cleanup (see termination/cleanup.ts).
   internals.workflowTypeByWorkflowId.set(workflowId, {
     type: state.type,
-    revision: state.revision,
+    revision: resolvedRevision,
   });
   // Store checkpoint for future persistence
   internals.checkpoints.set(workflowId, checkpoint);

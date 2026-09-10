@@ -599,6 +599,53 @@ describe('recoverAll() — per-(type, revision) preload barrier and exact revisi
     expect(await forkedHandle.result()).toBe('A:z');
   });
 
+  it("a direct engine.fork() of a legacy (revision-undefined) source run on a single-candidate dynamic-source type resolves the candidate's own per-workflow activity on its first live turn (WFT-19 review round 5)", async () => {
+    // Companion to the resume-path regression above: `fork()` never started
+    // the source run in this process either (it was seeded straight into
+    // storage), so `launchWorkflowFromCheckpoint()`'s identity-cache write
+    // is the ONLY place the forked child's `(type, revision)` pin gets
+    // populated. Before the fix it recorded `forkState.revision`
+    // (inherited verbatim from the source's own `undefined` legacy pin)
+    // instead of the resolver's actual resolved revision, so the forked
+    // child's `ctx.run('whoami')` on its first live turn could not resolve
+    // through the per-workflow registry.
+    const storage = new MemoryStorage();
+    const definition = workflow({ name: 'legacy-sole-candidate-fork' })
+      .activities({ whoami: async () => 'activity-sole' })
+      .execute(async function* (ctx: WorkflowContext) {
+        const value = yield* ctx.waitForSignal<string>('continue');
+        const who = yield* ctx.run('whoami');
+        return `${value}:${String(who)}`;
+      });
+    const soleRevision = await revisionFor(definition);
+
+    // Seeded WITHOUT a `revision` — simulating a pre-revision-pinning
+    // (WFT-17) legacy record that was never started in this process, so
+    // `workflowTypeByWorkflowId` has no pre-existing entry for it.
+    await seedRunningWorkflowState(
+      storage,
+      'legacy-sole-fork-source',
+      'legacy-sole-candidate-fork',
+    );
+
+    await using engine = new Engine({ storage });
+    engine.registerSource(
+      workflowSource(
+        {
+          name: 'legacy-sole-candidate-fork',
+          location: './only.ts',
+          exportName: 'only',
+          revision: soleRevision,
+        },
+        async () => ({ only: definition }),
+      ),
+    );
+
+    const forked = await engine.fork('legacy-sole-fork-source');
+    await forked.signal('continue', 'go');
+    expect(await forked.result()).toBe('go:activity-sole');
+  });
+
   it("a run pinned to a revision this process never registered recovers unavailable — including when it is the type's sole registered candidate under a DIFFERENT revision (today's stale-sole-candidate bug) — without blocking a sibling pinned to a registered revision", async () => {
     const storage = new MemoryStorage();
     const definition = workflow({ name: 'partial-avail' }).execute(async function* (
@@ -689,6 +736,52 @@ describe('recoverAll() — per-(type, revision) preload barrier and exact revisi
     const pinnedHandle = handles[0]!;
     await pinnedHandle.signal('continue', 'go');
     expect(await pinnedHandle.result()).toBe('go');
+  });
+
+  it("a legacy (revision-undefined) run on a dynamic-source type with exactly one registered candidate resolves that candidate's own per-workflow activity on resume, not the eager/global registry (WFT-19 review round 5)", async () => {
+    // Codex P1 (round 5): `resolveExecutableRegistrationForRevision()`
+    // resolves the sole candidate for a legacy record even though
+    // `state.revision` is `undefined` (the "legacy, unambiguous" fast
+    // path) — but the resume-time identity-cache write must record THAT
+    // resolved revision, not the raw `undefined` pin. Before the fix,
+    // `relaunchInlineWorkflowAfterResume()` cached `revision: undefined`
+    // here, so `resolveActivityViaRegistries()`'s `identity.revision !==
+    // undefined` branch never fired and the per-workflow `whoami` activity
+    // fell through to the eager/global-only registry — empty for a
+    // dynamic-source type since WFT-19 removed the clobbering mirror-write
+    // — and threw `ActivityResolutionError` instead of resolving.
+    const storage = new MemoryStorage();
+    const definition = workflow({ name: 'legacy-sole-candidate' })
+      .activities({ whoami: async () => 'activity-sole' })
+      .execute(async function* (ctx: WorkflowContext) {
+        const value = yield* ctx.waitForSignal<string>('continue');
+        const who = yield* ctx.run('whoami');
+        return `${value}:${String(who)}`;
+      });
+    const soleRevision = await revisionFor(definition);
+
+    // Seeded WITHOUT a `revision` — simulating a pre-revision-pinning
+    // (WFT-17) legacy record.
+    await seedRunningWorkflowState(storage, 'legacy-sole-1', 'legacy-sole-candidate');
+
+    await using engine = new Engine({ storage });
+    engine.registerSource(
+      workflowSource(
+        {
+          name: 'legacy-sole-candidate',
+          location: './only.ts',
+          exportName: 'only',
+          revision: soleRevision,
+        },
+        async () => ({ only: definition }),
+      ),
+    );
+
+    const handles = await engine.recoverAll();
+    expect(handles.map((handle) => handle.id)).toEqual(['legacy-sole-1']);
+
+    await handles[0]!.signal('continue', 'go');
+    expect(await handles[0]!.result()).toBe('go:activity-sole');
   });
 
   it("a standalone engine.resume(id) on a run pinned to an unregistered revision throws WorkflowRevisionUnavailableError directly to its caller, unlike recoverAll()'s per-group isolation", async () => {
