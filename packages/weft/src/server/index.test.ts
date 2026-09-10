@@ -6871,18 +6871,36 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     const originalAdd = DeadlineTracker.prototype.add;
     const originalDrainExpired = DeadlineTracker.prototype.drainExpired;
     let injectedStaleEntry = false;
-    let addCountForOperation = 0;
-    // WFT-91 review: the `.add()` override below is installed after the
-    // initial dispatch and the heartbeat extension above, either (or both)
-    // of which may already have called `.add()` for this operation before
-    // this point. An absolute `addCountForOperation >= 2` threshold can
-    // therefore be satisfied by calls that happened before the stale entry
-    // was even injected, proving nothing about the skip-path re-add this
-    // test exists to observe. Capture the count as of the exact moment
-    // `injectedStaleEntry` becomes true (inside the `drainExpired` override,
-    // the same tick the synthetic entry is produced) and require a call
-    // *after* that baseline instead.
-    let addCountAtInjection: number | null = null;
+    // WFT-89/91/96 review (Codex, three rounds): a call-COUNT-based signal —
+    // whether an absolute threshold or a count-relative-to-injection
+    // baseline — is fundamentally ambiguous. A REGRESSED build that always
+    // reassigns instead of skipping would ALSO call `.add()` for this
+    // operationId exactly once after injection: `task-dispatch.ts` calls
+    // `deadlineTracker.add()` for the *new* dispatch's own visibility
+    // deadline before `ws.send()`, so a broken build satisfies "one more
+    // `.add()` call after the baseline" just as readily as the correct skip
+    // path does — and it would do so while the async WebSocket message
+    // handler hasn't yet incremented `received`, letting the immediate
+    // task-count assertion below miss the duplicate delivery this test
+    // exists to catch. A call count alone cannot distinguish "the skip path
+    // re-added the stale entry with the already-known extended deadline"
+    // from "the broken path dispatched a new task and added a freshly
+    // computed deadline for its own new lease."
+    //
+    // The values are NOT ambiguous, though. `restoreExtendedDeadlineIfStillActive`
+    // (see `src/server/runtime-helpers.ts`) re-adds with the exact
+    // *persisted* `leaseDeadline` it just read back from storage — which is
+    // the same `extendedDeadline` value already captured above from the
+    // heartbeat extension, because no further heartbeat fires during this
+    // test. A reassignment/redispatch would instead add a newly computed
+    // deadline (`now + visibilityTimeout` at dispatch time), which cannot
+    // coincidentally equal the specific `extendedDeadline` value captured
+    // earlier. So wait for an `.add()` call for this operationId whose
+    // `deadline` argument strictly equals `extendedDeadline` — this mirrors
+    // the sibling "keeps an in-flight task when the expiry scan encounters a
+    // stale heap entry" test's `persisted.leaseDeadline === futureDeadline`
+    // value assertion instead of a call count.
+    let matchedExtendedDeadlineAdd = false;
 
     const restoreAdd = overrideProperty(
       DeadlineTracker.prototype,
@@ -6891,8 +6909,12 @@ describe('visibility timeout expiry triggers task reassignment', () => {
         this: DeadlineTracker,
         entry: Parameters<DeadlineTracker['add']>[0],
       ): ReturnType<DeadlineTracker['add']> {
-        if (entry.operationId === 'heartbeat-stale-heap-op') {
-          addCountForOperation++;
+        if (
+          injectedStaleEntry &&
+          entry.operationId === 'heartbeat-stale-heap-op' &&
+          entry.deadline === extendedDeadline
+        ) {
+          matchedExtendedDeadlineAdd = true;
         }
         return originalAdd.call(this, entry);
       },
@@ -6908,7 +6930,6 @@ describe('visibility timeout expiry triggers task reassignment', () => {
         const expired = originalDrainExpired.call(this, now);
         if (!injectedStaleEntry) {
           injectedStaleEntry = true;
-          addCountAtInjection = addCountForOperation;
           return [...expired, { operationId: 'heartbeat-stale-heap-op', deadline: now - 1 }];
         }
         return expired;
@@ -6922,24 +6943,23 @@ describe('visibility timeout expiry triggers task reassignment', () => {
       // `restoreExtendedDeadlineIfStillActive` skip/reassign decision. And
       // because the task is already assigned before injection,
       // `isAssigned()` is satisfied immediately regardless of whether the
-      // decision has run yet, so on its own it proves nothing either. The
-      // skip path re-adds the operation's entry back onto the deadline heap
-      // (see `restoreExtendedDeadlineIfStillActive`), so waiting for a
-      // *new* `.add()` call for this operation strictly after the baseline
-      // captured at injection time is what actually proves the
-      // reconciliation decision completed and chose to skip reassignment
-      // rather than dispatch a new task.
+      // decision has run yet, so on its own it proves nothing either.
+      // Waiting for the VALUE-matched `.add()` call captured above —
+      // strictly `deadline === extendedDeadline` — is what actually proves
+      // the reconciliation decision completed and chose to skip
+      // reassignment: only `restoreExtendedDeadlineIfStillActive`'s skip
+      // path re-adds with that exact already-known value; a reassignment
+      // redispatch would add its own freshly computed deadline instead,
+      // which can never coincidentally equal `extendedDeadline`.
       await waitFor(
-        () =>
-          injectedStaleEntry &&
-          addCountAtInjection !== null &&
-          addCountForOperation > addCountAtInjection &&
-          server.registry.isAssigned('heartbeat-stale-heap-op'),
-        { label: 'stale heap entry re-added after skip decision while task remains assigned' },
+        () => matchedExtendedDeadlineAdd && server.registry.isAssigned('heartbeat-stale-heap-op'),
+        {
+          label:
+            'stale heap entry re-added with the matched extended deadline while task remains assigned',
+        },
       );
 
-      expect(addCountAtInjection).not.toBeNull();
-      expect(addCountForOperation).toBeGreaterThan(addCountAtInjection!);
+      expect(matchedExtendedDeadlineAdd).toBe(true);
 
       const afterScanTaskCount = received.filter((message) => message.type === 'task').length;
       expect(afterScanTaskCount).toBe(beforeScanTaskCount);
