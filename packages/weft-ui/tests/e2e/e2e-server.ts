@@ -36,6 +36,7 @@
 import { Engine, RemoteWorker } from '@lostgradient/weft';
 import { AUTHORIZATION_SCOPES, serve } from '@lostgradient/weft/server';
 
+import { seedWorkflowRevisions } from '../../fixtures/workflow-revisions.ts';
 import { seed, workflows } from '../../fixtures/workflows.ts';
 import {
   E2E_API_KEY,
@@ -65,6 +66,14 @@ const server = serve({
 });
 
 await seed(engine);
+
+// Second, deliberately incompatible installed-but-inactive revision of
+// `order-processing` (WFT-115) — `07-activate-workflow-revision.spec.ts`
+// exercises the Registry → Revisions panel's refused-activation path
+// against it. See `fixtures/workflow-revisions.ts`'s module doc; a refusal
+// never mutates the active pointer, so this is safe to install once and
+// leave here for every spec in this suite.
+await seedWorkflowRevisions(engine);
 
 const fleetWorker = new RemoteWorker({
   serverUrl: `ws://localhost:${E2E_SERVER_PORT}/v1/tasks/default/stream`,
