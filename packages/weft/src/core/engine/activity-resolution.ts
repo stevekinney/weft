@@ -7,6 +7,37 @@ import type { ActivityFunctionWithMetadata } from './operations-activity.ts';
 type ActivityOperation = Extract<ContextOperationRequest, { type: 'activity' }>;
 
 /**
+ * The three-tier resolve order for a workflow this process has a cached
+ * identity for: eager per-workflow registry, then the exact
+ * `(type, revision)`-keyed per-workflow registry, then the global registry.
+ * Split out of {@link resolveActivityViaRegistries} purely to keep that
+ * function's own cyclomatic complexity under the repository's ceiling.
+ */
+function resolveViaKnownIdentity(
+  internals: EngineInternals,
+  identity: WorkflowExecutionIdentity,
+  activityName: string,
+): { fn: (...arguments_: unknown[]) => unknown; workflowType: string } | undefined {
+  const eagerFn = internals.activityRegistriesByWorkflow.get(identity.type)?.resolve(activityName);
+  if (eagerFn) {
+    return { fn: eagerFn, workflowType: identity.type };
+  }
+
+  if (identity.revision !== undefined) {
+    const revisionFn = internals.sources.resolved
+      .get(identity.type)
+      ?.get(identity.revision)
+      ?.activityRegistry.resolve(activityName);
+    if (revisionFn) {
+      return { fn: revisionFn, workflowType: identity.type };
+    }
+  }
+
+  const globalFn = internals.activityRegistry.resolve(activityName);
+  return globalFn ? { fn: globalFn, workflowType: identity.type } : undefined;
+}
+
+/**
  * Look up `activityName` for the workflow identified by `workflowId`.
  *
  * Resolution rules, tried in order:
@@ -40,37 +71,6 @@ type ActivityOperation = Extract<ContextOperationRequest, { type: 'activity' }>;
  * whether to throw `ActivityResolutionError` (the dispatch path) or treat the
  * miss as advisory (the metadata path).
  */
-/**
- * The three-tier resolve order for a workflow this process has a cached
- * identity for: eager per-workflow registry, then the exact
- * `(type, revision)`-keyed per-workflow registry, then the global registry.
- * Split out of {@link resolveActivityViaRegistries} purely to keep that
- * function's own cyclomatic complexity under the repository's ceiling.
- */
-function resolveViaKnownIdentity(
-  internals: EngineInternals,
-  identity: WorkflowExecutionIdentity,
-  activityName: string,
-): { fn: (...arguments_: unknown[]) => unknown; workflowType: string } | undefined {
-  const eagerFn = internals.activityRegistriesByWorkflow.get(identity.type)?.resolve(activityName);
-  if (eagerFn) {
-    return { fn: eagerFn, workflowType: identity.type };
-  }
-
-  if (identity.revision !== undefined) {
-    const revisionFn = internals.sources.resolved
-      .get(identity.type)
-      ?.get(identity.revision)
-      ?.activityRegistry.resolve(activityName);
-    if (revisionFn) {
-      return { fn: revisionFn, workflowType: identity.type };
-    }
-  }
-
-  const globalFn = internals.activityRegistry.resolve(activityName);
-  return globalFn ? { fn: globalFn, workflowType: identity.type } : undefined;
-}
-
 function resolveActivityViaRegistries(
   internals: EngineInternals,
   workflowId: string,
