@@ -211,9 +211,11 @@ export type StartBatchContext = {
   purgeDeleteOperations: BatchOperation[] | undefined;
   /**
    * Compare-and-swap precondition making the caller-supplied-id duplicate check
-   * atomic with this commit (WFT-152). Built by `buildDuplicateIdCondition` from
-   * the exact bytes the duplicate-id read observed. Undefined for a generated id,
-   * which cannot collide and so keeps the unconditioned hot path.
+   * atomic with this commit (WFT-152). Built by `resolveTerminalConflictForRestart`
+   * from the exact bytes its duplicate-id read observed, and carried here as the
+   * `duplicateIdCondition` of the `StartDuplicateIdDecision` it returns. Undefined
+   * for a generated id, which cannot collide and so keeps the unconditioned hot
+   * path.
    */
   duplicateIdCondition: ConditionalBatchCondition | undefined;
 };

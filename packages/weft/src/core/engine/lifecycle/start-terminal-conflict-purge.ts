@@ -88,8 +88,9 @@ export const GENERATED_ID_START_DECISION = {
  *
  * This read is only a point-in-time observation: another engine sharing the store
  * can commit a create for the same id in the window between it and the create
- * batch. `observedWorkflowBytes` is returned so that batch can be conditioned on
- * the value seen here, turning that window into a lost compare-and-swap rather
+ * batch. The returned {@link StartDuplicateIdDecision} therefore carries a
+ * `duplicateIdCondition` holding the exact bytes seen here, so that batch can be
+ * conditioned on them — turning that window into a lost compare-and-swap rather
  * than a blind overwrite (WFT-152).
  */
 export async function resolveTerminalConflictForRestart(
