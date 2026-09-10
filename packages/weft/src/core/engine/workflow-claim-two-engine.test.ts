@@ -21,6 +21,7 @@
  * build fragment, THEN commit), which naturally interleave at each `await`
  * boundary and is exactly what a real cross-process race looks like.
  */
+import { ExtData, encode as msgpackEncode } from '@msgpack/msgpack';
 import { describe, expect, it } from 'bun:test';
 
 import {
@@ -31,6 +32,7 @@ import {
 import { MemoryStorage } from '../../storage/memory.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { workflow, type WorkflowContext } from '../types.ts';
+import { CURRENT_CHECKPOINT_SCHEMA_VERSION } from '../types/checkpoint.ts';
 import {
   ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING,
   Engine,
@@ -38,7 +40,7 @@ import {
 } from './index.ts';
 import { getInternals } from './internals.ts';
 import { encodeEpoch } from './lease-codec.ts';
-import { encodeWorkflowClaimHolder } from './workflow-claim-codec.ts';
+import { decodeWorkflowClaimHolder, encodeWorkflowClaimHolder } from './workflow-claim-codec.ts';
 import { WorkflowClaimRegistry } from './workflow-claim-registry.ts';
 
 /** Per-workflow-id activity execution counts. Ids are unique per test, so one shared map is safe. */
@@ -587,5 +589,318 @@ describe('WFT-134: engine.suspend() does not strand a same-engine resume() under
     await engineA.signal(workflowId, 'go');
     expect(await restarted.result()).toBe('ran');
     expect(activityRunCounts.get(workflowId)).toBe(1);
+  });
+});
+
+describe('WFT-134 review round 2: claim-generation release correctness', () => {
+  it('resume(): holder-absent fallthrough for a STALE CACHED claim, raced against a genuine foreign cancel, releases the fresh claim without leaking it (standalone-claim-acquire.ts, issue A)', async () => {
+    // Part 1 (above) proves the `cachedEpoch !== null` -> `holder-absent`
+    // fallthrough resumes successfully when nothing else races it. The
+    // "terminal-mid-flight" test (above) proves a FRESH (never-cached)
+    // acquire gets released when the workflow turns out to be terminal. This
+    // test is the interleaving the round-2 finding is actually about: a
+    // STALE CACHED epoch (not a fresh acquire) whose `holder-absent` signal
+    // comes from a GENUINE foreign termination racing in between
+    // `resumeWorkflowFromStorage()`'s own state read and the ownership
+    // check — never exercised by either test above in isolation.
+    const storage = new MemoryStorage();
+    const workflows: ClaimWorkflows = { 'claim-race-recovery': claimRaceRecoveryWorkflow };
+    const workflowId = 'holder-absent-stale-cache-foreign-race';
+
+    await seedParkedWorkflow(storage, workflowId);
+
+    await using engineA = await createClaimEngine(storage, 'engine-a', workflows);
+    await using engineB = await createClaimEngine(storage, 'engine-b', workflows);
+    const registryA = getInternals(engineA).workflowClaimRegistry;
+    expect(registryA).not.toBeNull();
+
+    // Populate engineA's LOCAL cache as though it already held the claim
+    // from an earlier pass (mirrors Part 1's setup) — the precondition for
+    // entering `acquireStandaloneClaimBeforeResume`'s `cachedEpoch !== null`
+    // branch at all. Without this, a fresh engine's resume() takes the "no
+    // claim cached yet" path and never reaches the `holder-absent`
+    // fallthrough this finding is about.
+    const staleAcquire = await registryA?.acquire(workflowId);
+    expect(staleAcquire?.status).toBe('acquired');
+    expect(registryA?.currentEpoch(workflowId)).not.toBeNull();
+
+    // Gate engineA's OWN top-of-function state read inside
+    // `resumeWorkflowFromStorage` (the SECOND `get(workflowKey)` — the first
+    // is `resume()`'s own local-ownership check, a fast in-memory no-op
+    // here since engineA never locally started this workflow). Let the real
+    // (still-'running') value resolve internally, but withhold it from the
+    // caller until engineB's concurrent cancel has committed.
+    const reached = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let matchCount = 0;
+    const workflowKey = KEYS.workflow(workflowId);
+    const internalsA = getInternals(engineA);
+    const realStorageA = internalsA.storage;
+    internalsA.storage = new Proxy(realStorageA, {
+      get(target, property, receiver) {
+        if (property === 'get') {
+          return async (key: string) => {
+            const value = await target.get(key);
+            if (key === workflowKey) {
+              matchCount += 1;
+              if (matchCount === 2) {
+                reached.resolve();
+                await release.promise;
+              }
+            }
+            return value;
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    const resumePromise = engineA.resume(workflowId);
+    await reached.promise;
+
+    // engineB genuinely terminalizes the workflow WHILE engineA's resume is
+    // still holding the stale 'running' state it already read — this durably
+    // deletes `wf-owner-holder:<id>` and rotates the epoch, the SAME
+    // `'holder-absent'` signature `suspendWorkflow`'s own rotation leaves,
+    // but this time from a GENUINE foreign termination, not engineA's own
+    // prior suspend.
+    await engineB.cancel(workflowId);
+
+    release.resolve();
+
+    await expect(resumePromise).rejects.toThrow(/status is "cancelled"/);
+
+    // The regression this finding describes: `acquireStandaloneClaimBeforeResume`
+    // saw `cachedEpoch !== null` (the stale entry `staleAcquire` installed),
+    // `wakeOwnershipCheck` reported `'holder-absent'` (engineB's rotation,
+    // not engineA's own suspend), and fell through to a fresh
+    // `registry.acquire()` for what turned out to be a now-terminal
+    // workflow. It must be released, not leaked.
+    expect(registryA?.currentEpoch(workflowId)).toBeNull();
+
+    // Proves the release was DURABLE: a legitimate `start-new` must not lose
+    // its own claim CAS to a stranded holder record.
+    const restarted = await engineA.start('claim-race-recovery', null, {
+      id: workflowId,
+      onTerminalConflict: 'start-new',
+    });
+    await engineA.signal(workflowId, 'go');
+    expect(await restarted.result()).toBe('ran');
+  });
+
+  it('resume(): a cleanup release must not drop a REPLACEMENT claim installed while the failed resume was still in flight (standalone-claim-acquire.ts, issue B)', async () => {
+    const storage = new MemoryStorage();
+    const workflows: ClaimWorkflows = { 'claim-race-recovery': claimRaceRecoveryWorkflow };
+    const workflowId = 'release-wrong-generation';
+
+    await seedParkedWorkflow(storage, workflowId);
+
+    await using engineA = await createClaimEngine(storage, 'engine-a', workflows);
+    await using engineB = await createClaimEngine(storage, 'engine-b', workflows);
+    const registryA = getInternals(engineA).workflowClaimRegistry;
+    expect(registryA).not.toBeNull();
+
+    // Gate engineA's checkpoint read inside `performResumeAfterClaimAcquired`
+    // — AFTER the fresh claim acquire commits, but BEFORE the serialized
+    // status/generation re-check that will eventually reject this resume.
+    const reached = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const checkpointKey = KEYS.checkpoint(workflowId);
+    const internalsA = getInternals(engineA);
+    const realStorageA = internalsA.storage;
+    internalsA.storage = new Proxy(realStorageA, {
+      get(target, property, receiver) {
+        if (property === 'get') {
+          return async (key: string) => {
+            const value = await target.get(key);
+            if (key === checkpointKey) {
+              reached.resolve();
+              await release.promise;
+            }
+            return value;
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    const resumePromise = engineA.resume(workflowId);
+    await reached.promise;
+    const staleEpoch = registryA?.currentEpoch(workflowId) ?? null;
+    expect(staleEpoch).not.toBeNull();
+
+    // While the stale resume is paused: engineB terminalizes the workflow,
+    // then a DIFFERENT path on engineA (a concurrent resume, or the
+    // replacement run's own fold-acquire — simulated directly against the
+    // registry here, mirroring how `recordFoldedAcquire` installs a fresh
+    // entry, without dragging in `start-commit.ts`'s own separate fencing
+    // behavior around an already-tracked-but-stale registry entry, which is
+    // out of this finding's scope) legitimately re-acquires the claim,
+    // REPLACING engineA's registry entry for `workflowId` with a new epoch —
+    // superseding the stale resume's entry the paused call captured above.
+    await engineB.cancel(workflowId);
+    const replacementAcquire = await registryA?.acquire(workflowId);
+    expect(replacementAcquire?.status).toBe('acquired');
+    const replacementEpoch = registryA?.currentEpoch(workflowId) ?? null;
+    expect(replacementEpoch).not.toBeNull();
+    expect(replacementEpoch).not.toBe(staleEpoch);
+
+    release.resolve();
+
+    // The stale resume rejects — its own state, read before the cancel,
+    // no longer matches what the serialized section observes.
+    await expect(resumePromise).rejects.toThrow(/status is "cancelled"/);
+
+    // The regression: cleaning up the STALE resume's claim must not release
+    // whatever is CURRENTLY tracked (the replacement's live claim) — it must
+    // be conditioned on the exact generation the stale resume itself
+    // acquired. The replacement's claim must survive untouched.
+    expect(registryA?.currentEpoch(workflowId)).toBe(replacementEpoch);
+    const holderBytes = await storage.get(KEYS.workflowOwnerHolder(workflowId));
+    expect(holderBytes).not.toBeNull();
+    expect(decodeWorkflowClaimHolder(holderBytes!)?.engineId).toBe('engine-a');
+
+    // Proves the replacement's fenced writes still work: its exact epoch
+    // bytes are still intact and renewable, not dropped by the stale
+    // resume's cleanup.
+    const renewResult = await registryA?.renew(workflowId);
+    expect(renewResult?.status).toBe('renewed');
+  });
+
+  it('resume(): a thrown durable release still forgets the LOCAL entry so the renewal task does not renew a claim forever (workflow-claim-registry.ts, issue C)', async () => {
+    const realStorage = new MemoryStorage();
+    const workflows: ClaimWorkflows = { 'claim-race-recovery': claimRaceRecoveryWorkflow };
+    const workflowId = 'release-throws-forgets-local';
+
+    await seedParkedWorkflow(realStorage, workflowId);
+    // Corrupt the checkpoint so `performResumeAfterClaimAcquired` rejects
+    // deterministically, AFTER the fresh claim acquire above it commits —
+    // no interleaving needed, unlike issues A/B/D.
+    await realStorage.delete(KEYS.checkpoint(workflowId));
+
+    // Arm a transient storage failure on EXACTLY the release's own durable
+    // delete of the holder key — the acquire above it is a PUT, so this
+    // cannot fire early and mask the intended acquisition. Wrapped BEFORE
+    // constructing the engine/registry (not swapped in after, like the
+    // other tests in this file do): `WorkflowClaimRegistry` captures its own
+    // `storage` reference at construction time, separate from
+    // `EngineInternals.storage` — a proxy installed only on
+    // `getInternals(engine).storage` afterward would never be seen by the
+    // registry's own `storageConditionalBatch` calls.
+    const holderKey = KEYS.workflowOwnerHolder(workflowId);
+    const storage = new Proxy(realStorage, {
+      get(target, property, receiver) {
+        if (property === 'conditionalBatch') {
+          return async (conditions: ConditionalBatchCondition[], operations: BatchOperation[]) => {
+            if (operations.some((op) => op.type === 'delete' && op.key === holderKey)) {
+              throw new Error('simulated transient storage failure during release');
+            }
+            return target.conditionalBatch(conditions, operations);
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    await using engineA = await createClaimEngine(storage, 'engine-a', workflows);
+    const registryA = getInternals(engineA).workflowClaimRegistry;
+    expect(registryA).not.toBeNull();
+
+    await expect(engineA.resume(workflowId)).rejects.toThrow(/Checkpoint not found/);
+
+    // The regression: `release()`'s durable CAS threw (simulated transient
+    // failure, not a lost CAS), so the durable holder record is still
+    // there — but the LOCAL entry must be forgotten anyway, or the renewal
+    // task keeps renewing a claim nothing is driving, forever.
+    expect(registryA?.currentEpoch(workflowId)).toBeNull();
+    expect(registryA?.listHeldWorkflowIds()).not.toContain(workflowId);
+    const holderBytes = await storage.get(holderKey);
+    expect(holderBytes).not.toBeNull();
+    expect(decodeWorkflowClaimHolder(holderBytes!)?.engineId).toBe('engine-a');
+  });
+
+  it("recoverAll(): the isolated checkpoint-decode failure's fenced failWorkflow commit still sees the freshly-acquired claim, and the claim is released only afterward (resume.ts, issue D)", async () => {
+    const workflowId = 'recover-all-defers-claim-release';
+    const workflows = {
+      'checkpoint-decode-waiter': workflow({ name: 'checkpoint-decode-waiter' }).execute(
+        async function* (ctx: WorkflowContext) {
+          yield* ctx.waitForSignal('continue');
+          return 'resumed';
+        },
+      ),
+    };
+    const storage = new MemoryStorage();
+
+    {
+      await using seedEngine = await Engine.create({ storage, workflows, recover: false });
+      await seedEngine.start('checkpoint-decode-waiter', null, { id: workflowId });
+      await waitForCondition(
+        async () => (await storage.get(KEYS.checkpoint(workflowId))) !== null,
+        { label: `checkpoint for seeded workflow "${workflowId}"` },
+      );
+    }
+
+    // Corrupt the checkpoint with an undecodable RegExp extension — the same
+    // fixture `checkpoint-decode-recovery.test.ts` uses — so
+    // `performResumeAfterClaimAcquired` throws `RegExpExtensionDecodeError`
+    // AFTER `recoverAll()`'s per-entry resume freshly acquires this
+    // workflow's claim.
+    await storage.put(
+      KEYS.checkpoint(workflowId),
+      msgpackEncode({
+        workflowId,
+        step: 1,
+        locals: {
+          pattern: new ExtData(2, msgpackEncode({ source: 'hello', flags: 'z' })),
+        },
+        accumulatedResults: [],
+        searchAttributes: {},
+        version: '1.0.0',
+        schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
+        createdAt: 1_778_716_800_000,
+      }),
+    );
+
+    // `createClaimEngine`'s `ClaimWorkflows` param type is scoped to this
+    // file's two shared fixtures, so this one-off workflow is wired up the
+    // same way `createClaimEngine` does internally instead of reusing it.
+    await using engine = await Engine.create({
+      storage,
+      workflows,
+      ownership: 'workflow-lease',
+      workflowClaimTtl: '1m',
+      workflowClaimRenewInterval: '5s',
+      recover: false,
+    });
+    installClaimRegistry(engine, 'engine-a', storage);
+    const registry = getInternals(engine).workflowClaimRegistry;
+    expect(registry).not.toBeNull();
+
+    // Pre-fix regression: releasing the freshly-acquired claim BEFORE
+    // `failWorkflowForCheckpointDecodeError`'s own fenced `failWorkflow()`
+    // commit left `commitFencedEngineWrite` with no local epoch, so it threw
+    // `EngineDeposedError` instead of committing the isolated failure —
+    // aborting `recoverAll()` entirely rather than isolating just this run.
+    const handles = await engine.recoverAll();
+
+    // The isolation worked: no handle for the failed workflow, and
+    // `recoverAll()` itself did not throw.
+    expect(handles.map((handle) => handle.id)).toEqual([]);
+
+    // The fenced `failWorkflowForCheckpointDecodeError` commit actually
+    // landed — proving the claim was still installed when it ran.
+    const summary = await engine.get(workflowId);
+    expect(summary?.status).toBe('failed');
+    expect(summary?.error).toContain('RegExp extension type 2');
+
+    // The claim was released once the isolated-failure handling was done —
+    // either by `failWorkflow()`'s own terminal-settlement release, or by
+    // `recoverEntryOrIsolateFailure`'s deferred `finally` release as a
+    // backstop; either way nothing is left stranded.
+    expect(registry?.currentEpoch(workflowId)).toBeNull();
+    expect(registry?.listHeldWorkflowIds()).not.toContain(workflowId);
   });
 });
