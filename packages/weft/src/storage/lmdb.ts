@@ -39,6 +39,34 @@ export type LMDBStorageOptions = {
   durability?: 'full' | 'relaxed';
 };
 
+type LMDBRangeOptions = {
+  start: string;
+  end: string;
+  reverse?: boolean;
+};
+
+type LMDBDatabase = {
+  get(key: string): Uint8Array | undefined;
+  put(key: string, value: Uint8Array): Promise<boolean>;
+  remove(key: string): Promise<boolean>;
+  doesExist(key: string): boolean;
+  batch(action: () => unknown): Promise<boolean>;
+  getRange(options: LMDBRangeOptions): Iterable<{ key: string; value: Uint8Array }>;
+  getKeys(options: LMDBRangeOptions): Iterable<string>;
+  getKeysCount(options: LMDBRangeOptions): number;
+  transactionSync<T>(action: () => T): T;
+  putSync(key: string, value: Uint8Array): void;
+  removeSync(key: string): boolean;
+  close(): Promise<void>;
+};
+
+type OpenLMDBEnvironment = (options: {
+  path: string;
+  encoding: 'binary';
+  noSync?: boolean;
+  noMetaSync?: boolean;
+}) => LMDBDatabase;
+
 /**
  * LMDB-backed storage adapter. Reads hit lmdb-js's synchronous memory-mapped
  * path internally, but the Storage interface presents them as Promises and
@@ -60,7 +88,7 @@ export type LMDBStorageOptions = {
  * ```
  */
 export class LMDBStorage implements Storage {
-  #database: lmdb.RootDatabase<Buffer, string>;
+  #database: LMDBDatabase;
   #durability: 'full' | 'relaxed';
   #isClosed = false;
   #closePromise: Promise<void> | null = null;
@@ -72,7 +100,7 @@ export class LMDBStorage implements Storage {
     // without mocking the `lmdb` module (Bun's `mock.module` is process-wide
     // and irreversible) or reaching into private fields. Not part of the
     // public API—mirrors the `databaseConstructor` seam on NodeSQLiteStorage.
-    openEnvironment: typeof lmdb.open = lmdb.open,
+    openEnvironment: OpenLMDBEnvironment = lmdb.open,
   ) {
     const durability = options?.durability ?? 'full';
     if (durability !== 'full' && durability !== 'relaxed') {
@@ -82,7 +110,7 @@ export class LMDBStorage implements Storage {
     }
 
     this.#durability = durability;
-    this.#database = openEnvironment<Buffer, string>({
+    this.#database = openEnvironment({
       path,
       encoding: 'binary',
       ...(durability === 'relaxed' ? { noSync: true, noMetaSync: true } : {}),
