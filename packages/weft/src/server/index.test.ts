@@ -48,6 +48,7 @@ import type { ServeOptions, WeftServer } from './index.ts';
 import { DASHBOARD_PAGE_ROUTES, serve, wireEventBroadcasting } from './index.ts';
 import { anonymousPrincipal } from './principal.ts';
 import { API_PREFIX, DIRECT_HTTP_ROUTES } from './route-model.ts';
+import { useManualTaskReconciliationForTesting } from './runtime/task-reconciliation.ts';
 import { buildFetchHandler, buildServerContext, resolveNetworkConfig } from './serve-internals.ts';
 import {
   decodeRemoteTaskRecord,
@@ -6803,7 +6804,41 @@ describe('visibility timeout expiry triggers task reassignment', () => {
 
   it('does not reassign a task when a heartbeat extended its deadline past a stale heap entry', async () => {
     ({ engine, storage } = createEngineWithStorage());
-    server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 50 });
+
+    // WFT-89 review round 4 (Codex): three prior rounds tried to prove a
+    // negative ("no reassignment happened") by observing some side effect of
+    // `DeadlineTracker` — a call count, then a value match. Both are
+    // structurally unable to close the hole: a regressed "skip re-add, then
+    // fall through to reassign anyway" build can produce the exact same
+    // observed side effect at a different point in its own async sequence
+    // (e.g., re-reserving the operation before its awaited ledger write and
+    // `ws.send()`), so polling for that side effect can catch the test in a
+    // window where the regression hasn't yet revealed itself.
+    //
+    // Skip the side-effect guessing games entirely. `useManualTaskReconciliationForTesting`
+    // (see `src/server/runtime/task-reconciliation.ts`, and the reference
+    // usage in `src/core/parity/remote-task-heartbeat-reclaim.parity.test.ts`)
+    // disables the periodic visibility-timeout scanner and exposes `scanAt`,
+    // which injects a synthetic tracked deadline directly and AWAITS
+    // `scanExpiredTasks` to full completion — no polling, no race window.
+    // Once that await resolves, the scan's skip-or-reassign decision for this
+    // operationId is unambiguously settled, and we assert on DURABLE STATE
+    // (the ledger record's `attempt` and `leaseDeadline`) rather than a
+    // tracker call. A reassignment increments `attempt` inside the awaited
+    // scan; if `attempt` is unchanged once `scanAt` returns, no reassignment
+    // happened — full stop.
+    //
+    // The manual-reconciliation WeakMap keys off the exact `options` object
+    // reference, so this must call `serve()` directly with that same object
+    // — not through `serveTestServer`, which spreads its argument into a new
+    // object and would break the lookup.
+    const options = {
+      engine,
+      port: 0,
+      workerShutdownTimeoutMs: TEST_WORKER_SHUTDOWN_TIMEOUT_MS,
+    } satisfies ServeOptions;
+    const manualReconciliation = useManualTaskReconciliationForTesting(options);
+    server = serve(options);
 
     const ws = await connectWorker(server);
     const received: Array<{ type: string; operationId?: string; attemptToken?: string }> = [];
@@ -6817,7 +6852,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
       activityName: 'test.charge',
       workflowType: 'test',
       input: null,
-      visibilityTimeout: 2000,
+      visibilityTimeout: 60_000,
     });
 
     const initialRecordRaw = await readLedgerRecord(storage, 'heartbeat-stale-heap-op');
@@ -6826,6 +6861,18 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     }
     const initialRecord = initialRecordRaw;
 
+    // `renewAttemptLease` computes the extended deadline as `Date.now() +
+    // task.visibilityTimeout` at commit time, and `restoreExtendedDeadlineIfStillActive`
+    // later compares that persisted value against `initialRecord.leaseDeadline`
+    // (also `dispatchTime + visibilityTimeout`). Millisecond-resolution
+    // `Date.now()` means those two can land in the exact same millisecond
+    // tick under a fast/warmed-up event loop — the whole dispatch, storage
+    // read, heartbeat send, and server-side commit round trip is well
+    // under 1ms of real work — making the "heartbeat extended it" wait
+    // below spin forever waiting for a strictly-greater value that will
+    // never arrive. Force real wall-clock time to advance a comfortable
+    // margin before sending the heartbeat so the two `Date.now()` reads
+    // can never collide.
     await waitForRealTimersForTesting(1000);
     ws.send(JSON.stringify({ type: 'heartbeat', workerId: 'w-heartbeat-stale-heap' }));
 
@@ -6843,143 +6890,59 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     expect(extendedDeadline).toBeGreaterThan(initialRecord.leaseDeadline);
 
     const beforeScanTaskCount = received.filter((message) => message.type === 'task').length;
-
-    // Instead of racing real wall-clock time until the heap's real deadline
-    // entry goes stale (the previous approach — flaky under CPU contention,
-    // see WFT-89), inject a synthetic stale heap entry for this operation
-    // directly, the same technique the
-    // "keeps an in-flight task when the expiry scan encounters a stale heap
-    // entry" sibling test uses. `restoreExtendedDeadlineIfStillActive` reads
-    // the *persisted* ledger record's current `leaseDeadline` — not the heap
-    // entry's deadline value — so injecting an already-expired heap entry
-    // deterministically drives the exact decision under test: does the scan
-    // see the heartbeat-extended persisted deadline and skip reassignment?
-    //
-    // WFT-91 review (Copilot): these overrides are installed on
-    // `DeadlineTracker.prototype`, not on the specific instance the running
-    // server uses — `WeftServer`'s public interface (see `src/server/index.ts`)
-    // deliberately does not expose the internal `ServerContext.deadlineTracker`
-    // instance, so there is no instance-level seam to target without adding a
-    // test-only accessor to a public, documented surface. The blast radius is
-    // mitigated two ways: both overrides are restored in the `finally` block
-    // below regardless of outcome, and the `.add()` override only *counts*
-    // calls for this test's own `operationId` (`entry.operationId ===
-    // 'heartbeat-stale-heap-op'`) while still delegating every call —
-    // matching and non-matching alike — to the original implementation, so
-    // any other `DeadlineTracker` instance alive during this test observes
-    // unchanged behavior.
-    const originalAdd = DeadlineTracker.prototype.add;
-    const originalDrainExpired = DeadlineTracker.prototype.drainExpired;
-    let injectedStaleEntry = false;
-    // WFT-89/91/96 review (Codex, three rounds): a call-COUNT-based signal —
-    // whether an absolute threshold or a count-relative-to-injection
-    // baseline — is fundamentally ambiguous. A REGRESSED build that always
-    // reassigns instead of skipping would ALSO call `.add()` for this
-    // operationId exactly once after injection: `task-dispatch.ts` calls
-    // `deadlineTracker.add()` for the *new* dispatch's own visibility
-    // deadline before `ws.send()`, so a broken build satisfies "one more
-    // `.add()` call after the baseline" just as readily as the correct skip
-    // path does — and it would do so while the async WebSocket message
-    // handler hasn't yet incremented `received`, letting the immediate
-    // task-count assertion below miss the duplicate delivery this test
-    // exists to catch. A call count alone cannot distinguish "the skip path
-    // re-added the stale entry with the already-known extended deadline"
-    // from "the broken path dispatched a new task and added a freshly
-    // computed deadline for its own new lease."
-    //
-    // The values are NOT ambiguous, though. `restoreExtendedDeadlineIfStillActive`
-    // (see `src/server/runtime-helpers.ts`) re-adds with the exact
-    // *persisted* `leaseDeadline` it just read back from storage — which is
-    // the same `extendedDeadline` value already captured above from the
-    // heartbeat extension, because no further heartbeat fires during this
-    // test. A reassignment/redispatch would instead add a newly computed
-    // deadline (`now + visibilityTimeout` at dispatch time), which cannot
-    // coincidentally equal the specific `extendedDeadline` value captured
-    // earlier. So wait for an `.add()` call for this operationId whose
-    // `deadline` argument strictly equals `extendedDeadline` — this mirrors
-    // the sibling "keeps an in-flight task when the expiry scan encounters a
-    // stale heap entry" test's `persisted.leaseDeadline === futureDeadline`
-    // value assertion instead of a call count.
-    let matchedExtendedDeadlineAdd = false;
-
-    const restoreAdd = overrideProperty(
-      DeadlineTracker.prototype,
-      'add',
-      function (
-        this: DeadlineTracker,
-        entry: Parameters<DeadlineTracker['add']>[0],
-      ): ReturnType<DeadlineTracker['add']> {
-        if (
-          injectedStaleEntry &&
-          entry.operationId === 'heartbeat-stale-heap-op' &&
-          entry.deadline === extendedDeadline
-        ) {
-          matchedExtendedDeadlineAdd = true;
-        }
-        return originalAdd.call(this, entry);
-      },
-    );
-
-    const restoreDrainExpired = overrideProperty(
-      DeadlineTracker.prototype,
-      'drainExpired',
-      function (
-        this: DeadlineTracker,
-        now: Parameters<DeadlineTracker['drainExpired']>[0],
-      ): ReturnType<DeadlineTracker['drainExpired']> {
-        const expired = originalDrainExpired.call(this, now);
-        if (!injectedStaleEntry) {
-          injectedStaleEntry = true;
-          return [...expired, { operationId: 'heartbeat-stale-heap-op', deadline: now - 1 }];
-        }
-        return expired;
-      },
-    );
-
-    try {
-      // Observing `injectedStaleEntry === true` only proves the scan tick
-      // started — `drainExpired` is invoked synchronously at the very start
-      // of `scanExpiredTasks`, before the `await storage.get(...)` and the
-      // `restoreExtendedDeadlineIfStillActive` skip/reassign decision. And
-      // because the task is already assigned before injection,
-      // `isAssigned()` is satisfied immediately regardless of whether the
-      // decision has run yet, so on its own it proves nothing either.
-      // Waiting for the VALUE-matched `.add()` call captured above —
-      // strictly `deadline === extendedDeadline` — is what actually proves
-      // the reconciliation decision completed and chose to skip
-      // reassignment: only `restoreExtendedDeadlineIfStillActive`'s skip
-      // path re-adds with that exact already-known value; a reassignment
-      // redispatch would add its own freshly computed deadline instead,
-      // which can never coincidentally equal `extendedDeadline`.
-      await waitFor(
-        () => matchedExtendedDeadlineAdd && server.registry.isAssigned('heartbeat-stale-heap-op'),
-        {
-          label:
-            'stale heap entry re-added with the matched extended deadline while task remains assigned',
-        },
+    const beforeScanRecord = await readLedgerRecord(storage, 'heartbeat-stale-heap-op');
+    if (beforeScanRecord === null || beforeScanRecord.state !== 'leased') {
+      throw new Error(
+        'Expected "heartbeat-stale-heap-op" to still have a leased ledger record before the scan',
       );
-
-      expect(matchedExtendedDeadlineAdd).toBe(true);
-
-      const afterScanTaskCount = received.filter((message) => message.type === 'task').length;
-      expect(afterScanTaskCount).toBe(beforeScanTaskCount);
-      expect(server.registry.isAssigned('heartbeat-stale-heap-op')).toBe(true);
-
-      const persisted = await readLedgerRecord(storage, 'heartbeat-stale-heap-op');
-      if (persisted === null || persisted.state !== 'leased') {
-        throw new Error('Expected "heartbeat-stale-heap-op" to still have a leased ledger record');
-      }
-      // The deadline may advance further if another heartbeat fires during
-      // the wait above — the only invariant is that it never regresses to
-      // the stale initialRecord.leaseDeadline value the expiry scan would
-      // pick up.
-      expect(persisted.leaseDeadline).toBeGreaterThanOrEqual(extendedDeadline);
-    } finally {
-      restoreDrainExpired();
-      restoreAdd();
-      ws.close();
-      await waitForRealTimersForTesting(50);
     }
+
+    // Drive the reconciliation scan with the pre-heartbeat deadline as the
+    // synthetic tracked value, simulating `now` at exactly that same
+    // pre-heartbeat instant — exactly the scenario a stale deadline-heap
+    // entry produces once a heartbeat has since extended the persisted
+    // lease. `scanAt` awaits `scanExpiredTasks` to full completion before
+    // returning.
+    //
+    // Deliberately `now = initialRecord.leaseDeadline`, NOT `+ 1`:
+    // `restoreExtendedDeadlineIfStillActive`'s check is `deadline <= now`, so
+    // a `+ 1` here would only be safely non-expired if the real heartbeat
+    // extension were guaranteed to add more than 1ms over
+    // `initialRecord.leaseDeadline` — not true under a fast/warmed-up event
+    // loop, where the real wall-clock gap between dispatch and heartbeat
+    // processing can be as little as 1ms, making `extendedDeadline` collide
+    // exactly with `initialRecord.leaseDeadline + 1` and get treated as
+    // already-expired. Using the un-incremented `initialRecord.leaseDeadline`
+    // is unconditionally safe: the `waitFor` above already proved
+    // `extendedDeadline > initialRecord.leaseDeadline` strictly, so
+    // `extendedDeadline <= now` can never hold, regardless of how small the
+    // real extension margin turns out to be.
+    await manualReconciliation.scanAt(
+      'heartbeat-stale-heap-op',
+      initialRecord.leaseDeadline,
+      initialRecord.leaseDeadline,
+    );
+
+    const afterScanTaskCount = received.filter((message) => message.type === 'task').length;
+    expect(afterScanTaskCount).toBe(beforeScanTaskCount);
+    expect(server.registry.isAssigned('heartbeat-stale-heap-op')).toBe(true);
+
+    const persisted = await readLedgerRecord(storage, 'heartbeat-stale-heap-op');
+    if (persisted === null || persisted.state !== 'leased') {
+      throw new Error('Expected "heartbeat-stale-heap-op" to still have a leased ledger record');
+    }
+    // A reassignment increments `attempt` inside the scan we just awaited to
+    // completion — this is the durable-state proof that no reassignment
+    // occurred, immune to any async ordering games a regression could play.
+    expect(persisted.attempt).toBe(beforeScanRecord.attempt);
+    // No further heartbeat fires after the one sent above, so a correct skip
+    // leaves the persisted deadline exactly at `extendedDeadline`; a
+    // reassignment would instead persist a freshly computed (and necessarily
+    // different) deadline.
+    expect(persisted.leaseDeadline).toBe(extendedDeadline);
+
+    ws.close();
+    await waitForRealTimersForTesting(50);
   });
 
   it('keeps an in-flight task when the expiry scan encounters a stale heap entry', async () => {
