@@ -66,19 +66,30 @@
    * chain" note above), and `ForkLineage` carries no execution token or
    * revision snapshot (`@lostgradient/weft`'s `ForkLineage` type — just
    * `{ workflowId, step }`) to pin down which one was actually forked. So
-   * if the source id was later reused via `onTerminalConflict: 'start-new'`
-   * — displacing the run this panel actually forked from with an unrelated
-   * replacement — showing that replacement's `revision` here would
-   * misattribute it to the historical fork (Codex review, PR #978).
-   * `sourceRevisionAttributable` guards against exactly that: the fetched
-   * generation is trustworthy only when it has never been restarted, or its
-   * most recent restart happened BEFORE this run (the fork) was created —
-   * in both cases the generation this panel just fetched is provably the
-   * same one that existed at fork time, since `client.get` always surfaces
-   * the CURRENT latest and a later restart would have moved
-   * `restartedFrom.replacedAt` forward past this run's own `createdAt`.
-   * When it isn't attributable, the chip is omitted with an explicit note
-   * rather than silently showing a possibly-wrong revision.
+   * if the source id was later reused for an UNRELATED generation — either
+   * tracked (`onTerminalConflict: 'start-new'` restarting it) or entirely
+   * untracked (the original was purged, then a plain new `engine.start()`
+   * happened to reuse the same explicit id, leaving no `restartedFrom` at
+   * all) — showing that unrelated generation's `revision` here would
+   * misattribute it to the historical fork (Codex review, PR #978, two
+   * rounds: the first covered only the tracked restart case; this doc and
+   * `sourceRevisionAttributable` cover both).
+   *
+   * `sourceRevisionAttributable` compares `source.createdAt` (the fetched
+   * generation's OWN origin time) against `workflow.createdAt` (THIS run's
+   * — the fork's — own creation time), independent of `restartedFrom`
+   * entirely: `client.get` always returns the CURRENT latest generation for
+   * an id, so if the generation just fetched originated strictly BEFORE
+   * this fork was created, it has necessarily been the current, unreplaced
+   * generation continuously from its own `createdAt` through right now —
+   * which means it was also the current generation back when the fork
+   * happened, however it came to hold that id (restart or fresh start).
+   * Conversely, if it originated AT OR AFTER the fork, it cannot be the
+   * historical source regardless of `restartedFrom`. This single
+   * comparison subsumes the restart-only check the first round shipped and
+   * closes the untracked-reuse gap the second round found. When it isn't
+   * attributable, the chip is omitted with an explicit note rather than
+   * silently showing a possibly-wrong revision.
    */
   import Badge from '@lostgradient/cinder/badge';
   import CopyButton from '@lostgradient/cinder/copy-button';
@@ -122,8 +133,7 @@
   const sourceRevisionAttributable = $derived.by(() => {
     const source = $forkSourceQuery.data;
     if (source === null || source === undefined) return false;
-    const replacedAt = source.restartedFrom?.replacedAt;
-    return replacedAt === undefined || replacedAt < workflow.createdAt;
+    return source.createdAt < workflow.createdAt;
   });
 
   const scheduleProvenanceQuery = createQuery(
@@ -296,7 +306,12 @@
               <span>{child.type}</span>
               <span class="weft-lineage-panel__id" title={child.id}>{truncateId(child.id)}</span>
               {#if child.revision !== undefined}
-                <span class="weft-lineage-panel__id">rev {truncateId(child.revision)}</span>
+                <span
+                  class="weft-lineage-panel__id"
+                  title={`Revision (exact executable artifact): ${child.revision}`}
+                >
+                  rev {truncateId(child.revision)}
+                </span>
               {:else}
                 <span class="weft-lineage-panel__id">Unpinned</span>
               {/if}

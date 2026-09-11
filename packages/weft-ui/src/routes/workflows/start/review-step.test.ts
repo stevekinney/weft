@@ -86,13 +86,24 @@ describe('ReviewStep', () => {
       expect(getByText('order-processing-rev-active')).not.toBeNull();
     });
 
-    test('shows an explicit "active revision unavailable" explanation, never blank, when undefined', async () => {
+    test('shows an explicit "active revision unknown" explanation, never blank, when undefined', async () => {
       const { getByText, queryByText } = render(ReviewStep, {
         props: { ...BASE_PROPS, activeRevision: undefined, submitState: { status: 'idle' } },
       });
 
       expect(queryByText(/^Starts against active revision/)).toBeNull();
-      expect(getByText(/^Active revision unavailable/)).not.toBeNull();
+      expect(getByText(/^Active revision unknown/)).not.toBeNull();
+    });
+
+    test('does not promise the run will use the catalog active revision when it is unknown (Codex review, PR #978, round 2) — eager registration and sole dynamic-source candidates can both bypass the active pointer', async () => {
+      const { getByText, queryByText } = render(ReviewStep, {
+        props: { ...BASE_PROPS, activeRevision: undefined, submitState: { status: 'idle' } },
+      });
+
+      expect(
+        getByText(/eager-registered type instead runs whatever this process currently has/),
+      ).not.toBeNull();
+      expect(queryByText(/will still start against whichever revision is active/)).toBeNull();
     });
   });
 });

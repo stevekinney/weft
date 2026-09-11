@@ -229,6 +229,31 @@ describe('ScheduleFormFields — edit mode', () => {
     expect(form.toUpdateRevisionPolicy()).toBeUndefined();
     expect(queryByText(/captures whichever revision is active right now/)).toBeNull();
   });
+
+  test("a fresh mount always captures its OWN form instance's revisionPolicy — the one-shot draft is safe precisely because the parent guarantees a fresh mount per form instance (Codex review, PR #978, round 2; see schedule-form-drawer.svelte's `{#key form}` and drawer test for the swap-while-mounted case this documents)", async () => {
+    const firstForm = new ScheduleFormState({
+      id: 'nightly-rollup',
+      workflowType: 'report-gen',
+      revisionPolicy: 'active-at-fire',
+    });
+    const { getByRole: getByRoleFirst, unmount } = render(ScheduleFormFields, {
+      props: { form: firstForm, mode: 'edit', workflowTypeOptions: undefined },
+    });
+    expect((getByRoleFirst('radio', { name: 'Active at fire' }) as HTMLInputElement).checked).toBe(
+      true,
+    );
+    unmount();
+
+    const secondForm = new ScheduleFormState({
+      id: 'nightly-rollup',
+      workflowType: 'report-gen',
+      revisionPolicy: 'pinned',
+    });
+    const { getByRole: getByRoleSecond } = render(ScheduleFormFields, {
+      props: { form: secondForm, mode: 'edit', workflowTypeOptions: undefined },
+    });
+    expect((getByRoleSecond('radio', { name: 'Pinned' }) as HTMLInputElement).checked).toBe(true);
+  });
 });
 
 describe('ScheduleFormFields — revision policy (create mode)', () => {

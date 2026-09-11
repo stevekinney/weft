@@ -27,9 +27,11 @@ import { fireEvent, render, waitFor } from '@testing-library/svelte';
 import { describe, expect, test } from 'bun:test';
 
 import { HttpClient } from '@lostgradient/weft/client';
+import type { QueryClient } from '@tanstack/svelte-query';
 
 import { startLiveSourceTestServer } from '../../lib/live-source/live-source-test-server.test-support.ts';
 import ScheduleFormDrawerHarness from './schedule-form-drawer-test-harness.test-harness.svelte';
+import { scheduleDetailQueryKey } from './schedule-queries.ts';
 
 describe('ScheduleFormDrawer — create', () => {
   test('creates a schedule with the selected workflow type and default cadence', async () => {
@@ -243,6 +245,68 @@ describe('ScheduleFormDrawer — edit', () => {
       await waitFor(() => expect(closed).toBe(true));
 
       const after = await server.engine.getSchedule('to-be-pinned');
+      expect(after?.revisionPolicy).toBe('pinned');
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('a background refetch that swaps `form` mid-edit does not leak the stale revisionPolicy draft onto the new form (Codex review, PR #978, round 2)', async () => {
+    // Reproduces the exact race the finding described: an external actor
+    // (e.g. the System route's Activate flow) changes the schedule's
+    // `revisionPolicy` on the server WHILE this drawer is open; a refetch
+    // of `editDetailQuery` then reconstructs `form` as a brand-new
+    // `ScheduleFormState` carrying the externally-updated value. Before the
+    // `{#key form}` fix, `schedule-form-fields.svelte`'s one-shot draft
+    // would have kept the OLD 'active-at-fire' value and silently written
+    // it back into the new form, so a subsequent unrelated save would have
+    // reverted the external pin. This proves it doesn't.
+    const server = await startLiveSourceTestServer();
+    await server.engine.schedule({
+      workflow: 'inventory-sync-sweep',
+      id: 'externally-pinned',
+      cron: '0 2 * * *',
+      input: { warehouseId: 'wh-main' },
+    });
+    const client = new HttpClient({ baseUrl: server.baseUrl, token: server.token });
+
+    let closed = false;
+    let queryClient: QueryClient | undefined;
+    try {
+      const { getByRole } = render(ScheduleFormDrawerHarness, {
+        props: {
+          client,
+          mode: 'edit',
+          scheduleId: 'externally-pinned',
+          onClose: () => (closed = true),
+          onQueryClient: (qc) => (queryClient = qc),
+        },
+      });
+
+      await waitFor(() => {
+        const radio = getByRole('radio', { name: 'Active at fire' }) as HTMLInputElement;
+        expect(radio.checked).toBe(true);
+      });
+
+      // Out-of-band change: NOT through this drawer's own form submission.
+      await server.engine.updateSchedule('externally-pinned', '0 2 * * *', {
+        revisionPolicy: 'pinned',
+      });
+      if (queryClient === undefined) throw new Error('queryClient was never captured');
+      await queryClient.invalidateQueries({
+        queryKey: scheduleDetailQueryKey('externally-pinned'),
+      });
+
+      await waitFor(() => {
+        const radio = getByRole('radio', { name: 'Pinned' }) as HTMLInputElement;
+        expect(radio.checked).toBe(true);
+      });
+
+      // An unrelated save after the refetch — must not resend the OLD draft.
+      await fireEvent.click(getByRole('button', { name: 'Save changes' }));
+      await waitFor(() => expect(closed).toBe(true));
+
+      const after = await server.engine.getSchedule('externally-pinned');
       expect(after?.revisionPolicy).toBe('pinned');
     } finally {
       await server.stop();

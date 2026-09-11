@@ -25,13 +25,18 @@
     children: Snippet;
     /** Defaults to every scope granted (the optimistic-grant default — `src/lib/scopes.svelte.ts` module doc). Pass a narrower list to test a denied/disabled state. */
     scopes?: readonly AuthorizationScope[] | undefined;
+    /** Test-only escape hatch: hands the test the same `QueryClient` this tree uses, so it can force a real `invalidateQueries()`/refetch — e.g. to simulate a background refetch racing an open form (schedule-form-drawer.test.ts's WFT-117 round-2 regression). */
+    onQueryClient?: ((queryClient: QueryClient) => void) | undefined;
   }
 
-  let { client, children, scopes }: Props = $props();
+  let { client, children, scopes, onQueryClient }: Props = $props();
 
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
+  // One-shot, like `provideClient(untrack(() => client))` just below — this
+  // harness never swaps `onQueryClient` after mount.
+  untrack(() => onQueryClient)?.(queryClient);
 
   provideClient(untrack(() => client));
   const principalStore = providePrincipalStore();

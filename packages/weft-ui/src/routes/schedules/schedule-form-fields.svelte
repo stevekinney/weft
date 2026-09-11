@@ -78,7 +78,32 @@
     return REVISION_POLICY_VALUES.has(value);
   }
 
-  /** Same `RadioGroup.value`-is-a-plain-string proxy pattern as `overlapDraft` above — see that declaration's doc. */
+  /**
+   * Same `RadioGroup.value`-is-a-plain-string proxy pattern as `overlapDraft`
+   * above, plus one thing `overlapDraft` doesn't need: `overlapDraft` is
+   * inert in edit mode (the disabled overlap `RadioGroup` is never
+   * submitted there — see the module doc), so a stale one-shot capture is
+   * harmless. `revisionPolicyDraft` IS submitted in edit mode
+   * (`toUpdateRevisionPolicy()`), so a stale draft is a real correctness
+   * bug: `schedule-form-drawer.svelte`'s edit-mode `$effect` can reconstruct
+   * `form` as a brand-new `ScheduleFormState` — e.g. on a background
+   * `editDetailQuery` refetch (window focus, an unrelated invalidation)
+   * while this component stays mounted — and Svelte does not remount a
+   * child just because a prop's VALUE changes identity, so a plain
+   * one-shot initializer would keep the OLD draft and the write-back
+   * effect below would push it onto the NEW form, silently reverting an
+   * externally-applied `revisionPolicy` change (Codex review, PR #978,
+   * round 2). Rather than diff `$state`-proxied prop identity here (Svelte
+   * warns `state_proxy_equality_mismatch` on raw `!==` comparisons across a
+   * reactive-class prop boundary — proxy identity is not the same object
+   * the parent's `$state` wraps), the fix lives in the parent:
+   * `schedule-form-drawer.svelte` wraps this component in `{#key form}`,
+   * which destroys and recreates it whenever `form` is swapped — the same
+   * "let a fresh mount see the current value at construction" idiom
+   * `fork-dialog.svelte` already uses for `initialStep`. A one-shot
+   * initializer is therefore correct again, this time genuinely one-shot
+   * per logical form instance.
+   */
   let revisionPolicyDraft = $state(untrack(() => form.revisionPolicy));
 
   $effect(() => {

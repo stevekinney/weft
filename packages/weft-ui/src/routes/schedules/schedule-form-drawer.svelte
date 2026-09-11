@@ -162,7 +162,18 @@
       }}
     />
   {:else if form}
-    <ScheduleFormFields {form} {mode} {workflowTypeOptions} />
+    <!--
+      Keyed on `form` itself (WFT-117, Codex review round 2): the `$effect`
+      above can reconstruct `form` as a brand-new `ScheduleFormState` while
+      this drawer stays open (e.g. a background `editDetailQuery` refetch).
+      `ScheduleFormFields` captures `form.revisionPolicy` into a one-shot
+      local draft at mount, which is correct only if a NEW `form` instance
+      always gets a FRESH mount — `{#key}` guarantees that instead of
+      leaving a stale draft to silently overwrite the new form's value.
+    -->
+    {#key form}
+      <ScheduleFormFields {form} {mode} {workflowTypeOptions} />
+    {/key}
     {#if submitError}
       <FaultBanner treatment={faultTreatment(submitError)} />
     {/if}

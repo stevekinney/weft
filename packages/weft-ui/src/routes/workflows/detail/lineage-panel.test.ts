@@ -80,111 +80,10 @@ describe('LineagePanel', () => {
     expect(getByText('at step 12')).not.toBeNull();
   });
 
-  test('shows the forked-from source run’s own revision once forkSourceQuery resolves', async () => {
-    const client = baseClient({
-      get: async (id) =>
-        id === 'wf_source'
-          ? workflow({ id: 'wf_source', type: 'reconcile-ledger', revision: 'reconcile-rev-abc' })
-          : null,
-    });
-
-    const { getByText } = render(LineagePanelHarness, {
-      props: {
-        client,
-        workflow: workflow({ forkedFrom: { workflowId: 'wf_source', step: 12 } }),
-      },
-    });
-
-    await waitFor(() => {
-      expect(getByText('reconcile-ledger')).not.toBeNull();
-    });
-    expect(getByText(/^rev reconcil/)).not.toBeNull();
-  });
-
-  test('shows no source-revision chip when the forked-from source has no persisted revision', async () => {
-    const client = baseClient({
-      get: async (id) =>
-        id === 'wf_source' ? workflow({ id: 'wf_source', type: 'reconcile-ledger' }) : null,
-    });
-
-    const { getByText, queryByText } = render(LineagePanelHarness, {
-      props: {
-        client,
-        workflow: workflow({ forkedFrom: { workflowId: 'wf_source', step: 12 } }),
-      },
-    });
-
-    await waitFor(() => {
-      expect(getByText('reconcile-ledger')).not.toBeNull();
-    });
-    expect(queryByText(/^rev /)).toBeNull();
-  });
-
-  test('omits the source-revision chip and shows "Revision not attributable" when the source id was reused by a start-new restart AFTER this fork was created (Codex review, PR #978)', async () => {
-    // `client.get` always returns the source id's LATEST generation. Here
-    // that generation's own `restartedFrom.replacedAt` (2_000) is AFTER the
-    // forking run's own `createdAt` (1_000, the `workflow()` default) — this
-    // fetched record post-dates the fork, so its `revision` cannot honestly
-    // be attributed to the run that was actually forked from.
-    const client = baseClient({
-      get: async (id) =>
-        id === 'wf_source'
-          ? workflow({
-              id: 'wf_source',
-              type: 'reconcile-ledger',
-              revision: 'reconcile-rev-replacement',
-              restartedFrom: { workflowId: 'wf_source', replacedAt: 2_000 },
-            })
-          : null,
-    });
-
-    const { getByText, queryByText } = render(LineagePanelHarness, {
-      props: {
-        client,
-        workflow: workflow({ forkedFrom: { workflowId: 'wf_source', step: 12 } }),
-      },
-    });
-
-    await waitFor(() => {
-      expect(getByText('reconcile-ledger')).not.toBeNull();
-    });
-    expect(getByText('Revision not attributable')).not.toBeNull();
-    expect(queryByText(/^rev reconcil/)).toBeNull();
-  });
-
-  test('still shows the source-revision chip when the source generation was restarted BEFORE this fork was created', async () => {
-    // The restart (replacedAt: 1_000) happened BEFORE this fork's own
-    // `createdAt` (5_000) — the fetched generation was already current at
-    // fork time and (per `client.get`'s "always latest" contract) has not
-    // been replaced again since, so its revision is the real source.
-    const client = baseClient({
-      get: async (id) =>
-        id === 'wf_source'
-          ? workflow({
-              id: 'wf_source',
-              type: 'reconcile-ledger',
-              revision: 'reconcile-rev-abc',
-              restartedFrom: { workflowId: 'wf_source', replacedAt: 1_000 },
-            })
-          : null,
-    });
-
-    const { getByText, queryByText } = render(LineagePanelHarness, {
-      props: {
-        client,
-        workflow: workflow({
-          createdAt: 5_000,
-          forkedFrom: { workflowId: 'wf_source', step: 12 },
-        }),
-      },
-    });
-
-    await waitFor(() => {
-      expect(getByText('reconcile-ledger')).not.toBeNull();
-    });
-    expect(getByText(/^rev reconcil/)).not.toBeNull();
-    expect(queryByText('Revision not attributable')).toBeNull();
-  });
+  // Forked-from SOURCE REVISION attribution (`sourceRevisionAttributable`)
+  // has its own file, `lineage-panel-source-revision.test.ts`, split out
+  // purely to stay under the implementation-file line cap — see that
+  // file's module doc.
 
   test('falls back to a truncated-id label when the forked-from source is no longer visible', async () => {
     const client = baseClient();
@@ -233,6 +132,38 @@ describe('LineagePanel', () => {
     const link = getByRole('link', { name: /validate-shipment/ });
     expect(link.getAttribute('href')).toContain('wf_child_1');
     expect(link.textContent).toContain('rev validate…ev-1');
+  });
+
+  test('a child preview row carries the full revision id in a title, not only the truncated text (Codex review, PR #978)', async () => {
+    // Two installed revisions can share a truncated prefix+suffix; without
+    // the full id recoverable somewhere, an operator cannot tell them apart
+    // from this preview alone — matching the workflow table and Children
+    // tab's existing convention of exposing the full id on hover/focus.
+    const client = baseClient({
+      list: async () => ({
+        items: [
+          {
+            id: 'wf_child_1',
+            type: 'validate-shipment',
+            status: 'completed',
+            version: '1',
+            revision: 'validate-shipment-rev-1',
+            createdAt: 1_000,
+            updatedAt: 1_000,
+          },
+        ],
+        total: 1,
+        offset: 0,
+        limit: 5,
+      }),
+    });
+
+    const { findByTitle } = render(LineagePanelHarness, {
+      props: { client, workflow: workflow() },
+    });
+
+    const revisionElement = await findByTitle(/validate-shipment-rev-1/);
+    expect(revisionElement.textContent).toContain('rev validate…ev-1');
   });
 
   test('a child preview row shows an explicit "Unpinned" label when its revision is undefined', async () => {

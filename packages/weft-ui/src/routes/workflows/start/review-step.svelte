@@ -68,9 +68,11 @@
       Starts against active revision <code>{activeRevision}</code> — active-at-fire; this run will resolve
       whichever revision is active when it actually starts (normally the same one shown here).
     {:else}
-      Active revision unavailable — the registry lookup for this type didn't resolve (denied,
-      unavailable, or still loading). The run will still start against whichever revision is active
-      for <code>{type}</code> at that moment.
+      Active revision unknown — the registry lookup for this type didn't resolve (denied,
+      unavailable, or still loading). Most starts resolve whichever revision is active for
+      <code>{type}</code> when they run, but an eager-registered type instead runs whatever this process
+      currently has loaded, and a sole dynamic-source candidate can be selected without consulting the
+      active pointer at all — so the exact revision this run targets cannot be stated here.
     {/if}
   </p>
 
