@@ -45,17 +45,6 @@ export const CLASSIFIED_OVERSIZED_IMPLEMENTATION_FILES = [
       'The Engine declaration surface is tracked by local task 3765ffa6-1430-4be5-970c-c0f984ff34df; this issue excludes that refactor.',
   },
   {
-    path: 'src/core/engine/lifecycle/start.ts',
-    classification: 'justified-exception',
-    rationale:
-      "Fresh-workflow admission, terminal-conflict handling, and this generation's checkpoint " +
-      'commit priming stay in one lifecycle entry point. Two independent, concurrently-landing ' +
-      "PRs each added a bounded slice of documented behavior here (WFT-95's replay-only id-" +
-      "admission fence, WFT-21's checkpoint-bytes CAS-baseline priming) and merged additively, " +
-      'pushing the file narrowly over the ceiling; splitting either slice out on its own would ' +
-      'scatter one admission flow across files for a 12-line overage.',
-  },
-  {
     path: 'src/core/types/options.ts',
     classification: 'justified-exception',
     rationale:

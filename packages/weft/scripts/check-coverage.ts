@@ -226,7 +226,7 @@ const BASE_COVERAGE_ALLOWANCES = buildAllowanceLayer('BASE_COVERAGE_ALLOWANCES',
       reason:
         'Process-entry and failure-exit behavior runs in child processes whose hits are not attributed to the parent Bun LCOV report.',
       functions: 1,
-      lines: new Set([392, 393]),
+      lines: new Set([381, 382]),
       requireUncoveredLines: true,
     },
   ],
