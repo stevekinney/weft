@@ -476,8 +476,15 @@ turn. See the `Fixed` entries in the changelog.
 
 By default, `engine.fork()` takes no `revision` opinion at all: it resolves
 and persists the SOURCE run's own pinned revision, exactly as described
-above, so a fork's differences from its source come only from `fromStep`,
-input, or history choices—never a silently different revision of the code.
+above, so for a **dynamic-source** workflow, a fork's differences from its
+source come only from `fromStep`, input, or history choices—never a
+silently different revision of the code. This does NOT extend to an
+**eager-registered** workflow type: `resolveExecutableRegistrationForRevision()`
+deliberately executes whatever this process currently has eagerly
+registered rather than honoring the source run's pin, the same "eager is
+always ready" exception recovery already makes (WFT-159)—so a default fork
+of an eager type can run different code than its source pinned, even
+though the persisted `revision` field itself is unaffected.
 
 `ForkOptions.revision?: string` is an explicit, validated opt-in to fork
 against a DIFFERENT installed revision instead—a genuine diagnostic need
@@ -510,15 +517,20 @@ structured `data`, per the existing WFT-11 REST/JSON-RPC fidelity split).
 
 The fork's own commit is fenced against a concurrent
 `removeWorkflowRevision()` targeting the fork's persisted revision through
-two layers, mirroring `start()`'s own defense exactly. The commit fences on
-the target revision's durable catalog entry—the same
-`buildCatalogEntryRevisionCondition` fence a fresh `start()` carries—under
-EVERY ownership mode, including the default `ownership: 'none'`: this
-durable fence is unconditional, since `catalog.install()`'s own durable
-write already requires the `conditionalBatch` storage capability regardless
-of ownership mode, so fencing the fork commit on the entry's bytes adds no
-new capability requirement under `'none'`. A concurrent removal that lands
-first makes the fork's own commit lose its CAS. In addition, `fork()`
+two layers, and on this durable layer the fork is actually STRONGER than a
+fresh `start()`. The commit fences on the target revision's durable catalog
+entry—the same `buildCatalogEntryRevisionCondition` fence `start()` builds
+via `buildCatalogEntryStartPrecondition`—under EVERY ownership mode,
+including the default `ownership: 'none'`: this durable fence is
+unconditional, since `catalog.install()`'s own durable write already
+requires the `conditionalBatch` storage capability regardless of ownership
+mode, so fencing the fork commit on the entry's bytes adds no new
+capability requirement under `'none'`. `start()` does NOT carry this same
+fence unconditionally: `needsCatalogEntryStartPrecondition()`
+(`lifecycle/start-commit.ts`) skips it entirely when
+`ownershipMode === 'none'`, so a fresh start's own COMMIT carries no
+durable catalog-entry fence in that mode. A concurrent removal that lands first makes the fork's own commit lose
+its CAS. In addition, `fork()`
 reserves an in-memory `inFlightStartsByRevision` slot for its target
 revision as soon as validation resolves it, released unconditionally once
 the commit settles (mirroring `start()`'s own `reserveInFlightStart`/
@@ -627,9 +639,17 @@ fence on) durable storage rather than trusting a stale in-process cache—so
 `getWorkflowRevisionDiagnostics()`, and `register()`'s activation paths can
 no longer report or activate a revision a peer has already durably removed.
 `activateRegistered()` reinstalls (unfenced) and retries on a missing
-candidate entry rather than throwing, since this call already owns
-`manifest`/`definition` and must never hard-fail registration; a still-null
-reread after reinstalling is treated as another lost race and retried.
+candidate entry rather than throwing immediately, since this call already
+owns `manifest`/`definition`; a still-null reread after reinstalling is
+treated as another lost race and retried. This retry is bounded, not
+unconditional: `activateRegistered()` caps at
+`MAX_ACTIVATE_REGISTERED_ATTEMPTS` (5, the repo-wide "cap at five" rule)
+attempts and then throws `WorkflowCatalogActivationConflictError` on
+exhaustion. Under sustained concurrent activation/removal contention that
+error propagates out of `drainPendingCatalogInstalls()` and
+`ensureWorkflowCatalogReady()`, and can fail `Engine.create()` itself—so
+registration is resilient to transient contention, but not guaranteed to
+never hard-fail.
 
 The ADR 0002 workflow-lease reclaim-eligibility check
 (`isWorkflowTypeRegistered`) is source- and revision-aware for the same
