@@ -49,6 +49,23 @@ describe('narrowRegistryWorkflows', () => {
     expect(result).toEqual({});
   });
 
+  test("regression (WFT-115): unaffected by the sibling registry-view.ts contract extension — a manifest carrying the full signals/updates/queries/activities/finalizer surface still projects to only RegistryWorkflowEntry's fields", () => {
+    const result = narrowRegistryWorkflows(
+      [
+        manifest('order-processing', 'rev-a', {
+          inputSchema: { type: 'object' },
+          signals: { cancel: { inputSchema: { type: 'object' } } },
+          updates: { expedite: { inputSchema: { type: 'object' } } },
+          queries: { status: { outputSchema: { type: 'object' } } },
+          activities: { chargeCard: { inputSchema: { type: 'object' } } },
+          finalizer: { inputSchema: { type: 'object' } },
+        }),
+      ],
+      { 'order-processing': 'rev-a' },
+    );
+    expect(result).toEqual({ 'order-processing': { inputSchema: { type: 'object' } } });
+  });
+
   test('drops array entries that are not manifest-shaped', () => {
     const result = narrowRegistryWorkflows(
       [

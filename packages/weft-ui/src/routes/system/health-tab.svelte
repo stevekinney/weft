@@ -48,6 +48,7 @@
 
   import { codeHighlighter } from '../../lib/code-highlighter.ts';
   import { getClient } from '../../lib/client.ts';
+  import { queryKeys } from '../../lib/query.ts';
   import { showToast } from '../../app/toast-host.svelte';
   import { codegenPreviewSource, type RegistryLike } from './codegen-preview-source.ts';
   import QueryFaultBanner from './query-fault-banner.svelte';
@@ -64,7 +65,7 @@
   });
 
   const registryQuery = createQuery({
-    queryKey: ['system', 'registry'],
+    queryKey: queryKeys.registry(),
     queryFn: (): Promise<RegistryLike> =>
       client.operations['weft.system.registry']({}) as Promise<RegistryLike>,
   });

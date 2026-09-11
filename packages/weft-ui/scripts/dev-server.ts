@@ -92,6 +92,7 @@ import { AUTHORIZATION_SCOPES, serve } from '@lostgradient/weft/server';
 
 import { DEV_API_KEY } from './dev-credentials.ts';
 
+import { seedWorkflowRevisions } from '../fixtures/workflow-revisions.ts';
 import { seed, workflows } from '../fixtures/workflows.ts';
 
 const PORT = 7233;
@@ -106,6 +107,14 @@ const server = serve({
 
 await seed(engine);
 
+// After `seed()` starts `order-processing` at least once, its eager
+// registration has already installed + activated the original revision
+// (`ensureWorkflowCatalogReady`) — installing the deliberately
+// incompatible candidate now leaves it installed-but-not-active, exactly
+// the "second installed revision" WFT-115's Revisions panel e2e test
+// needs (`fixtures/workflow-revisions.ts`'s own module doc).
+await seedWorkflowRevisions(engine);
+
 console.log(`weft dev server listening on ${server.url}`);
 console.log(
   'Seeded fixture workflows: order-processing, payment-failing, long-sleeper, review-gate, ' +
@@ -117,6 +126,10 @@ console.log(
 );
 console.log(
   'Seeded schedules: inventory-sync-every-5-minutes (active), nightly-inventory-audit (paused)',
+);
+console.log(
+  'Seeded workflow catalog: order-processing has a second, installed-but-inactive, ' +
+    'deliberately incompatible revision "order-processing-candidate-2" — Registry > Revisions.',
 );
 console.log(
   'Fleet SSE (/api/v1/events/sse), per-workflow SSE/WebSocket tails ' +

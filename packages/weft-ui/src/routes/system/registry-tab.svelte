@@ -19,7 +19,10 @@
   import { createQuery } from '@tanstack/svelte-query';
   import { toStore } from 'svelte/store';
 
+  import type { RetryPolicy } from '@lostgradient/weft';
+
   import { getClient } from '../../lib/client.ts';
+  import { formatDuration } from '../../lib/format/index.ts';
   import { queryKeys } from '../../lib/query.ts';
   import ManifestDiagnosticsView from '../workers/manifest-diagnostics-view.svelte';
   import {
@@ -66,6 +69,33 @@
   });
 
   let selectedType = $state<string | null>(null);
+
+  /**
+   * Weft's `Duration` (`@lostgradient/weft`) is `number | string` — a
+   * numeric activity timeout is milliseconds, a string one is already
+   * unit-qualified (e.g. `'30s'`). Rendering a bare number verbatim reads
+   * as an ambiguous, unitless value next to string durations; the numeric
+   * case goes through the same `formatDuration` helper `formatRelativeTime`
+   * already uses.
+   */
+  function formatActivityTimeout(timeout: number | string): string {
+    return typeof timeout === 'number' ? formatDuration(timeout) : timeout;
+  }
+
+  /**
+   * A single `retry: 3x` badge understated `RetryPolicy` (`@lostgradient/weft`)
+   * down to only `maxAttempts` — hiding whether retries back off over
+   * seconds or hours (`initialBackoff`/`backoffMultiplier`/`maxBackoff`,
+   * each also `Duration`-typed) and which failures never retry at all
+   * (`nonRetryableErrors`). Renders the full policy in one badge string;
+   * `nonRetryableErrors` gets its own badge below since its length varies
+   * and it is operationally distinct information.
+   */
+  function formatRetryPolicy(retry: RetryPolicy): string {
+    const initial = formatActivityTimeout(retry.initialBackoff);
+    const max = formatActivityTimeout(retry.maxBackoff);
+    return `retry: ${retry.maxAttempts}x, ${initial}→${max} ×${retry.backoffMultiplier}`;
+  }
 </script>
 
 {#snippet registryBadge(label: string, variant: 'neutral' | 'success')}
@@ -169,6 +199,21 @@
                   {@render registryBadge(
                     `${activity.inputFields.length} field${activity.inputFields.length === 1 ? '' : 's'}`,
                     'success',
+                  )}
+                {/if}
+                {#if activity.retry}
+                  {@render registryBadge(formatRetryPolicy(activity.retry), 'neutral')}
+                  {#if activity.retry.nonRetryableErrors?.length}
+                    {@render registryBadge(
+                      `never retries: ${activity.retry.nonRetryableErrors.join(', ')}`,
+                      'neutral',
+                    )}
+                  {/if}
+                {/if}
+                {#if activity.timeout !== undefined}
+                  {@render registryBadge(
+                    `timeout: ${formatActivityTimeout(activity.timeout)}`,
+                    'neutral',
                   )}
                 {/if}
               </div>

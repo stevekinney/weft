@@ -69,6 +69,11 @@ export const queryKeys = {
   retention: () => ['retention'] as const,
   metrics: () => ['metrics'] as const,
   principal: () => ['principal'] as const,
+  /** The five `weft.workflows.revisions.*`/`weft.workflows.active.get` catalog operations (WFT-11/WFT-115) — per-workflow-name keys, additive (WFT-115). */
+  catalog: {
+    revisions: (name: string) => ['catalog', 'revisions', name] as const,
+    active: (name: string) => ['catalog', 'active', name] as const,
+  },
 } as const;
 
 /**
