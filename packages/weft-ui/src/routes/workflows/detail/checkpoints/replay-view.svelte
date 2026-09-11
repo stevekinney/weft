@@ -17,6 +17,7 @@
 
   import { getPrincipalStore, scopeGate } from '../../../../lib/scopes.svelte.ts';
   import { formatBytes } from '../../../../lib/format/index.ts';
+  import { EAGER_REVISION_HEDGE } from '../../../../lib/workflow-revision.ts';
   import { replayQueryKey, replayWorkflow } from './checkpoints-data.ts';
 
   interface ReplayViewProps {
@@ -67,8 +68,9 @@
             {
               term: 'Revision',
               definition:
-                replay.revision ??
-                'Not attributable — the source record was purged, or predates revision pinning.',
+                replay.revision !== undefined
+                  ? `${replay.revision}. ${EAGER_REVISION_HEDGE}`
+                  : 'Not attributable — the source record was purged, or predates revision pinning.',
             },
             { term: 'Recorded', definition: new Date(replay.checkpoint.createdAt).toISOString() },
             { term: 'Events at this step', definition: String(replay.events.length) },

@@ -197,7 +197,13 @@ describe('CheckpointsTab', () => {
     await fireEvent.click(getByText('step 3'));
 
     await waitFor(() => {
-      expect(getByText('order-processing-rev-a')).not.toBeNull();
+      // The definition text now also carries the WFT-159 eager-registration
+      // hedge (Codex review, PR #978, round 3) — same caveat as the header,
+      // Overview row, and fork surfaces, so replay output can't be
+      // attributed to the wrong executable artifact after a redeploy.
+      expect(
+        getByText(/^order-processing-rev-a\. For an eager-registered workflow type/),
+      ).not.toBeNull();
     });
   });
 

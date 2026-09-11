@@ -44,6 +44,7 @@
   import { toStore } from 'svelte/store';
   import { ChevronDown, ChevronRight, GitFork } from 'lucide-svelte';
 
+  import { faultTreatment } from '../../../../lib/faults.ts';
   import { formatRelativeTime, truncateId } from '../../../../lib/format/index.ts';
   import { queryKeys } from '../../../../lib/query.ts';
   import { getPrincipalStore, scopeGate } from '../../../../lib/scopes.svelte.ts';
@@ -111,10 +112,27 @@
   );
 
   /**
+   * `readGate.disabled` reflects the principal store's scopes as of
+   * bootstrap — if `workflows:read` is revoked server-side afterward
+   * without the client's cached principal being updated, `readGate.disabled`
+   * stays `false` and the listing request itself comes back 403. Without
+   * this check that 403 fell through to the generic "could not load"
+   * error, a dead end even though `weft.workflows.fork` remains public and
+   * an operator who already knows a revision id could still fork against it
+   * (Codex review, PR #978, round 3). Treated the same as a known-denied
+   * read: degrade to the free-text fallback.
+   */
+  const revisionsForbidden = $derived.by(() => {
+    if (!$revisionsQuery.isError) return false;
+    const treatment = faultTreatment($revisionsQuery.error);
+    return treatment.kind === 'unauthorized' && treatment.mode === 'forbidden';
+  });
+
+  /**
    * Only one of the two picker inputs is ever mounted at a time
-   * (`readGate.disabled` decides which), so reading whichever one is
-   * non-empty is unambiguous — no risk of a stale value from the OTHER,
-   * unmounted input winning.
+   * (`readGate.disabled || revisionsForbidden` decides which), so reading
+   * whichever one is non-empty is unambiguous — no risk of a stale value
+   * from the OTHER, unmounted input winning.
    */
   const selection = $derived<ForkRevisionSelection>(
     selectedRevisionValue !== ''
@@ -131,15 +149,29 @@
     return Number.isSafeInteger(value) && value >= 0 ? value : null;
   });
 
+  /**
+   * The mutation's input carries `selection` alongside `fromStep` (Codex
+   * review, PR #978, round 3) — NOT just `fromStep` with `selection` closed
+   * over live. `$forkMutation.variables` freezes whatever was passed to the
+   * most recent `mutate()` call, so `$forkMutation.variables?.selection`
+   * below reflects the selection that actually FAILED, even if the operator
+   * keeps editing the picker afterward (e.g. switching from the default
+   * source-mode fork to an explicit revision) before dismissing or retrying
+   * the error. Reading the live `selection` derived value there instead
+   * would silently swap the conflict guidance out from under a
+   * still-displayed error — recreating the exact "tells the operator to
+   * retry the thing that just failed" bug `forkConflictGuidance` exists to
+   * prevent.
+   */
   const forkMutation = createMutation({
-    mutationFn: async (fromStep: number) =>
-      client.fork(workflowId, resolveForkOptions(selection, fromStep)),
+    mutationFn: async (input: { fromStep: number; selection: ForkRevisionSelection }) =>
+      client.fork(workflowId, resolveForkOptions(input.selection, input.fromStep)),
     onSuccess: (handle) => onForked?.(handle.id),
   });
 
   function submit(): void {
     if (parsedStep === null) return;
-    $forkMutation.mutate(parsedStep);
+    $forkMutation.mutate({ fromStep: parsedStep, selection });
   }
 
   function viewForkedRun(): void {
@@ -150,6 +182,8 @@
   const revisionConflict = $derived(
     $forkMutation.isError ? isForkRevisionConflict($forkMutation.error) : false,
   );
+  /** The selection that actually produced the current error — see `forkMutation`'s doc. Falls back to the live `selection` only when `variables` is somehow absent (defensive; TanStack always sets it after a `mutate()` call that reached `mutationFn`). */
+  const failedSelection = $derived($forkMutation.variables?.selection ?? selection);
 </script>
 
 <div class="weft-fork-dialog">
@@ -178,8 +212,10 @@
       </Tooltip>
     {:else}
       <span>
-        Unpinned source — this run predates revision pinning, so the fork resolves normally against
-        whichever revision is currently active for this type.
+        Unpinned source — this run predates revision pinning, so which revision the fork targets
+        can't be stated here. Most types resolve whichever revision is currently active, but an
+        eager-registered type instead runs whatever this process currently has loaded, and a sole
+        dynamic-source candidate can be selected without consulting the active pointer at all.
       </span>
     {/if}
   </div>
@@ -202,7 +238,7 @@
 
   {#if pickerOpen}
     <div class="weft-fork-dialog__picker">
-      {#if readGate.disabled}
+      {#if readGate.disabled || revisionsForbidden}
         <Input
           id={`fork-explicit-revision-${workflowId}`}
           label="Revision id"
@@ -244,7 +280,7 @@
           {$forkMutation.error instanceof Error
             ? $forkMutation.error.message
             : 'The requested revision could not be resolved.'}
-          {forkConflictGuidance(selection)}
+          {forkConflictGuidance(failedSelection)}
         </p>
       </div>
     {:else}

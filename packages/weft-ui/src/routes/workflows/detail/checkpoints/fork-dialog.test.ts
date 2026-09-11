@@ -27,15 +27,20 @@ function installedRevisionRecord(revision: string, installedAt: number) {
 }
 
 function baseClient(
-  overrides: { fork?: (id: string, options?: unknown) => Promise<{ readonly id: string }> } = {},
+  overrides: {
+    fork?: (id: string, options?: unknown) => Promise<{ readonly id: string }>;
+    revisionsList?: () => Promise<unknown>;
+  } = {},
 ) {
   return {
     fork: overrides.fork ?? (async () => ({ id: 'wf-forked-1' })),
     operations: {
-      'weft.workflows.revisions.list': async () => [
-        installedRevisionRecord('order-processing-rev-a', 1_000),
-        installedRevisionRecord('order-processing-rev-b', 2_000),
-      ],
+      'weft.workflows.revisions.list':
+        overrides.revisionsList ??
+        (async () => [
+          installedRevisionRecord('order-processing-rev-a', 1_000),
+          installedRevisionRecord('order-processing-rev-b', 2_000),
+        ]),
     },
   };
 }
@@ -71,6 +76,27 @@ describe('ForkDialog', () => {
     });
 
     expect(getByText(/^Unpinned source/)).not.toBeNull();
+  });
+
+  test('the unpinned-legacy variant does NOT promise the catalog-active revision (Codex review, PR #978, round 3) — eager registration and sole dynamic-source candidates can both bypass the active pointer', async () => {
+    const { getByText, queryByText } = render(ForkDialogHarness, {
+      props: {
+        client: baseClient(),
+        workflowId: 'wf-1',
+        initialStep: 3,
+        workflowType: 'order-processing',
+        sourceRevision: undefined,
+        principal: allScopesPrincipal(),
+        queryClient: newQueryClient(),
+      },
+    });
+
+    expect(
+      getByText(/eager-registered type instead runs whatever this process currently has/),
+    ).not.toBeNull();
+    expect(
+      queryByText(/resolves normally against\s*whichever revision is currently active/),
+    ).toBeNull();
   });
 
   test('the picker disclosure lists installed revisions when workflows:read is granted', async () => {
@@ -113,6 +139,65 @@ describe('ForkDialog', () => {
       expect(getByRole('textbox', { name: 'Revision id' })).not.toBeNull();
       expect(getByText(/don't have permission to list installed revisions/)).not.toBeNull();
     });
+  });
+
+  test('the picker also degrades to the free-text fallback when the listing itself comes back 403, even though the principal store still says workflows:read is granted (Codex review, PR #978, round 3)', async () => {
+    // Simulates a scope revoked server-side after principal bootstrap:
+    // client-side `readGate.disabled` stays false, but the actual request
+    // is rejected. `weft.workflows.fork` itself is public, so this must not
+    // be a dead end — the same free-text degrade as an already-known denial.
+    const client = baseClient({
+      revisionsList: async () => {
+        throw new HttpClientError(403, 'workflows:read required', { faultCode: 'Forbidden' });
+      },
+    });
+
+    const { getByRole, getByText, queryByText } = render(ForkDialogHarness, {
+      props: {
+        client,
+        workflowId: 'wf-1',
+        initialStep: 3,
+        workflowType: 'order-processing',
+        sourceRevision: 'order-processing-rev-current',
+        principal: allScopesPrincipal(),
+        queryClient: newQueryClient(),
+      },
+    });
+
+    await fireEvent.click(getByRole('button', { name: 'Fork a different revision' }));
+
+    await waitFor(() => {
+      expect(getByRole('textbox', { name: 'Revision id' })).not.toBeNull();
+      expect(getByText(/don't have permission to list installed revisions/)).not.toBeNull();
+    });
+    expect(queryByText('Could not load the list of installed revisions.')).toBeNull();
+  });
+
+  test('a non-Forbidden query failure still shows the generic "could not load" error, not the free-text fallback', async () => {
+    const client = baseClient({
+      revisionsList: async () => {
+        throw new HttpClientError(500, 'internal engine failure', { faultCode: 'EngineFailure' });
+      },
+    });
+
+    const { getByRole, getByText, queryByRole } = render(ForkDialogHarness, {
+      props: {
+        client,
+        workflowId: 'wf-1',
+        initialStep: 3,
+        workflowType: 'order-processing',
+        sourceRevision: 'order-processing-rev-current',
+        principal: allScopesPrincipal(),
+        queryClient: newQueryClient(),
+      },
+    });
+
+    await fireEvent.click(getByRole('button', { name: 'Fork a different revision' }));
+
+    await waitFor(() => {
+      expect(getByText('Could not load the list of installed revisions.')).not.toBeNull();
+    });
+    expect(queryByRole('textbox', { name: 'Revision id' })).toBeNull();
   });
 
   test('submitting with an explicit revision passes {fromStep, revision} to client.fork', async () => {
@@ -181,6 +266,49 @@ describe('ForkDialog', () => {
       // throw on finding both.
       expect(getByText(/pick one that is currently installed/)).not.toBeNull();
     });
+    expect(queryByText(/use the source revision instead/)).toBeNull();
+  });
+
+  test('conflict guidance stays bound to the SUBMITTED selection, not a live edit made after the failure (Codex review, PR #978, round 3)', async () => {
+    // A source-mode fork fails first (guidance: route to the picker). The
+    // operator then opens the picker and types an explicit revision WITHOUT
+    // resubmitting — the still-displayed error's guidance must not silently
+    // flip to "use the source revision instead" just because the live
+    // `selection` changed; it reflects `$forkMutation.variables`, frozen at
+    // the failed `mutate()` call, not the current picker contents.
+    const client = baseClient({
+      fork: async () => {
+        throw new HttpClientError(409, 'revision not registered', {
+          faultCode: 'Conflict',
+          weftCode: 'WorkflowRevisionUnavailableError',
+        });
+      },
+    });
+
+    const { getByRole, getByText, queryByText } = render(ForkDialogHarness, {
+      props: {
+        client,
+        workflowId: 'wf-1',
+        initialStep: 3,
+        workflowType: 'order-processing',
+        sourceRevision: 'order-processing-rev-current',
+        principal: deniedPrincipal(),
+        queryClient: newQueryClient(),
+      },
+    });
+
+    await fireEvent.click(getByRole('button', { name: 'Create fork' }));
+    await waitFor(() => {
+      expect(getByText(/pick one that is currently installed/)).not.toBeNull();
+    });
+
+    await fireEvent.click(getByRole('button', { name: 'Fork a different revision' }));
+    const input = getByRole('textbox', { name: 'Revision id' });
+    await fireEvent.input(input, { target: { value: 'order-processing-rev-explicit' } });
+
+    // Still showing the FIRST (source-mode) failure's guidance — the
+    // in-progress picker edit hasn't been submitted.
+    expect(getByText(/pick one that is currently installed/)).not.toBeNull();
     expect(queryByText(/use the source revision instead/)).toBeNull();
   });
 
