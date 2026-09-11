@@ -4,6 +4,7 @@ import { describe, expect, test } from 'bun:test';
 import { HttpClientError } from '@lostgradient/weft/client';
 import { QueryClient } from '@tanstack/svelte-query';
 
+import { queryKeys } from '../../../../lib/query.ts';
 import { AUTHORIZATION_SCOPES, type Principal } from '../../../../lib/scopes.svelte.ts';
 import ForkDialogHarness from './fork-dialog.test-harness.svelte';
 
@@ -114,9 +115,12 @@ describe('ForkDialog', () => {
 
     await fireEvent.click(getByRole('button', { name: 'Fork a different revision' }));
 
+    // Full revision ids, not a truncated form — two installed revisions
+    // could otherwise share the same displayed prefix/suffix and be
+    // indistinguishable before selection (Codex review, PR #978).
     await waitFor(() => {
-      expect(getByText(/rev order-pr…ev-a/)).not.toBeNull();
-      expect(getByText(/rev order-pr…ev-b/)).not.toBeNull();
+      expect(getByText(/order-processing-rev-a/)).not.toBeNull();
+      expect(getByText(/order-processing-rev-b/)).not.toBeNull();
     });
   });
 
@@ -372,5 +376,59 @@ describe('ForkDialog', () => {
       expect(getByText('internal engine failure')).not.toBeNull();
     });
     expect(queryByText('Revision unavailable')).toBeNull();
+  });
+
+  test("a mid-session degrade clears the now-hidden Select's stale value — typing a new revision into the Input that replaces it submits the NEW value, not the old Select choice (Codex review, PR #978)", async () => {
+    // First call succeeds (Select renders, operator picks revision A);
+    // every call after that is a 403 (simulates `workflows:read` revoked
+    // server-side mid-session, `revisionsForbidden` flips true, and the
+    // dialog swaps the Select for the free-text Input without the operator
+    // closing/reopening the disclosure).
+    let calls = 0;
+    const forkCalls: unknown[] = [];
+    const client = baseClient({
+      fork: async (_id, options) => {
+        forkCalls.push(options);
+        return { id: 'wf-forked-1' };
+      },
+      revisionsList: async () => {
+        calls += 1;
+        if (calls === 1) {
+          return [
+            installedRevisionRecord('order-processing-rev-a', 1_000),
+            installedRevisionRecord('order-processing-rev-b', 2_000),
+          ];
+        }
+        throw new HttpClientError(403, 'workflows:read required', { faultCode: 'Forbidden' });
+      },
+    });
+    const queryClient = newQueryClient();
+
+    const { getByRole, findByRole } = render(ForkDialogHarness, {
+      props: {
+        client,
+        workflowId: 'wf-1',
+        initialStep: 3,
+        workflowType: 'order-processing',
+        sourceRevision: 'order-processing-rev-current',
+        principal: allScopesPrincipal(),
+        queryClient,
+      },
+    });
+
+    await fireEvent.click(getByRole('button', { name: 'Fork a different revision' }));
+    const select = await findByRole('combobox', { name: 'Revision' });
+    await fireEvent.change(select, { target: { value: 'order-processing-rev-a' } });
+
+    // Force the listing query to refetch and this time come back 403 —
+    // the dialog degrades to the free-text Input mid-session.
+    await queryClient.refetchQueries({ queryKey: queryKeys.catalog.revisions('order-processing') });
+    const input = await findByRole('textbox', { name: 'Revision id' });
+    await fireEvent.input(input, { target: { value: 'order-processing-rev-b' } });
+    await fireEvent.click(getByRole('button', { name: 'Create fork' }));
+
+    await waitFor(() => {
+      expect(forkCalls).toEqual([{ fromStep: 3, revision: 'order-processing-rev-b' }]);
+    });
   });
 });

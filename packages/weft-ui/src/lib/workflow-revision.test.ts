@@ -6,6 +6,7 @@ import {
   classifyRevisionAgainstActive,
   EAGER_REVISION_HEDGE,
   fetchActiveWorkflowRevision,
+  FRESH_START_REVISION_HEDGE,
   isWorkflowCatalogActivePointerLike,
   type WorkflowActiveRevisionClient,
   type WorkflowCatalogActivePointerLike,
@@ -110,5 +111,17 @@ describe('EAGER_REVISION_HEDGE', () => {
   test('is a non-empty, apostrophe-straight sentence', () => {
     expect(EAGER_REVISION_HEDGE.length).toBeGreaterThan(0);
     expect(EAGER_REVISION_HEDGE).not.toContain('’');
+  });
+});
+
+describe('FRESH_START_REVISION_HEDGE', () => {
+  test('is a non-empty, apostrophe-straight sentence, distinct from EAGER_REVISION_HEDGE', () => {
+    expect(FRESH_START_REVISION_HEDGE.length).toBeGreaterThan(0);
+    expect(FRESH_START_REVISION_HEDGE).not.toContain('’');
+    // Hedges a different claim (a fresh start's "whichever is currently
+    // active" vs. a default fork/recovery's "retains the source
+    // revision") — must not collapse into one shared string that blurs
+    // the two mechanisms.
+    expect(FRESH_START_REVISION_HEDGE).not.toBe(EAGER_REVISION_HEDGE);
   });
 });

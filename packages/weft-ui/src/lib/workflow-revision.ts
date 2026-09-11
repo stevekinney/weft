@@ -130,3 +130,19 @@ export function classifyRevisionAgainstActive(
  */
 export const EAGER_REVISION_HEDGE: string =
   "For an eager-registered workflow type, recovery and a default fork always run this process's currently loaded code, even if it differs from the revision shown here.";
+
+/**
+ * Single-source-of-truth hedge for every "fresh start" surface — the
+ * start wizard's review step, a checkpoint-less retry, and an
+ * `onTerminalConflict: 'start-new'` replacement — reused verbatim so the
+ * caveat wording cannot drift between call sites (Codex review, PR #978).
+ * Unlike {@link EAGER_REVISION_HEDGE} (which hedges "will retain the
+ * SOURCE run's own revision"), this hedges the *different* claim that a
+ * fresh start resolves "whichever revision is currently active": for an
+ * eager-registered type, or when only one revision is a viable
+ * dynamic-source candidate, a fresh start can run without consulting the
+ * active pointer at all, so it can differ from whatever was shown as
+ * "active" at the moment the operator confirmed.
+ */
+export const FRESH_START_REVISION_HEDGE: string =
+  'For an eager-registered workflow type, or when only one revision is a viable dynamic-source candidate, a fresh start can run without consulting the active pointer at all, so it may not match the revision shown here.';

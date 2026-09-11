@@ -13,6 +13,7 @@
 
   import { truncateId } from '../../../lib/format/index.ts';
   import { router, workflowDetailPath } from '../../../lib/router.svelte.ts';
+  import { FRESH_START_REVISION_HEDGE } from '../../../lib/workflow-revision.ts';
   import QueryFaultBanner from '../list/query-fault-banner.svelte';
   import type { AdvancedStartOptionsInput } from './start-wizard-state.ts';
 
@@ -65,14 +66,12 @@
 
   <p class="weft-start-review__revision-note">
     {#if activeRevision !== undefined}
-      Starts against active revision <code>{activeRevision}</code> — active-at-fire; this run will resolve
-      whichever revision is active when it actually starts (normally the same one shown here).
+      Starts against active revision <code>{activeRevision}</code> — active-at-fire; this run
+      resolves whichever revision is active when it actually starts (normally the one shown here). {FRESH_START_REVISION_HEDGE}
     {:else}
       Active revision unknown — the registry lookup for this type didn't resolve (denied,
       unavailable, or still loading). Most starts resolve whichever revision is active for
-      <code>{type}</code> when they run, but an eager-registered type instead runs whatever this process
-      currently has loaded, and a sole dynamic-source candidate can be selected without consulting the
-      active pointer at all — so the exact revision this run targets cannot be stated here.
+      <code>{type}</code> when they run. {FRESH_START_REVISION_HEDGE}
     {/if}
   </p>
 

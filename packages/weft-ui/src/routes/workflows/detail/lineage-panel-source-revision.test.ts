@@ -85,10 +85,18 @@ describe('LineagePanel — forked-from source revision attribution', () => {
     expect(getByText(/^rev reconcil/)).not.toBeNull();
   });
 
-  test('shows no source-revision chip when the forked-from source has no persisted revision', async () => {
+  test('shows an explicit "Unpinned" badge — not a silent blank — when the forked-from source is attributable but has no persisted revision (Codex review, PR #978)', async () => {
+    // `sourceRevisionAttributable` is true (the fetched generation
+    // predates this fork), but `data.revision` is `undefined` — a legacy
+    // source that predates revision pinning entirely. Before this fix,
+    // neither the attributable-with-revision branch nor the
+    // not-attributable branch matched this combination, so the row
+    // rendered nothing at all.
     const client = baseClient({
       get: async (id) =>
-        id === 'wf_source' ? workflow({ id: 'wf_source', type: 'reconcile-ledger' }) : null,
+        id === 'wf_source'
+          ? workflow({ id: 'wf_source', type: 'reconcile-ledger', createdAt: 500 })
+          : null,
     });
 
     const { getByText, queryByText } = render(LineagePanelHarness, {
@@ -101,7 +109,9 @@ describe('LineagePanel — forked-from source revision attribution', () => {
     await waitFor(() => {
       expect(getByText('reconcile-ledger')).not.toBeNull();
     });
+    expect(getByText('Unpinned')).not.toBeNull();
     expect(queryByText(/^rev /)).toBeNull();
+    expect(queryByText('Revision not attributable')).toBeNull();
   });
 
   test('omits the source-revision chip and shows "Revision not attributable" when the source id was reused by a TRACKED start-new restart AFTER this fork was created (Codex review, PR #978, round 1)', async () => {

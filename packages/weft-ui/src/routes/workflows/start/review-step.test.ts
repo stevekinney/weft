@@ -101,9 +101,20 @@ describe('ReviewStep', () => {
       });
 
       expect(
-        getByText(/eager-registered type instead runs whatever this process currently has/),
+        getByText(/a fresh start can run without consulting the active pointer at all/),
       ).not.toBeNull();
       expect(queryByText(/will still start against whichever revision is active/)).toBeNull();
+    });
+
+    test('carries the SAME eager-registration/dynamic-source caveat when activeRevision IS defined (Codex review, PR #978) — a fresh start can still bypass the catalog pointer even though a specific revision was shown', async () => {
+      const { getByText } = render(ReviewStep, {
+        props: { ...BASE_PROPS, submitState: { status: 'idle' } },
+      });
+
+      expect(getByText(/^Starts against active revision/)).not.toBeNull();
+      expect(
+        getByText(/a fresh start can run without consulting the active pointer at all/),
+      ).not.toBeNull();
     });
   });
 });

@@ -51,14 +51,20 @@
    * SOURCE revision is a property of the source run, not of the link
    * pointing to it). The "This run" chip in the continuation chain shows
    * THIS run's own `workflow.revision`, plus an explicit explanation that
-   * `onTerminalConflict: 'start-new'` always selects whichever revision is
-   * active at the moment it replaces the prior run — no pin carries over
-   * from the displaced run, matching `documentation/guides/
+   * `onTerminalConflict: 'start-new'` selects whichever revision is active
+   * at the moment it replaces the prior run — no pin carries over from the
+   * displaced run, matching `documentation/guides/
    * workflow-versioning.md`'s per-run pinning contract (`@lostgradient/weft`).
-   * Every revision display degrades to an explicit "Unpinned" label for a
-   * pre-revision-pinning (legacy) record rather than a blank space — see
-   * `EAGER_REVISION_HEDGE`'s own doc for the WFT-159 hedge these tooltips
-   * also carry.
+   * That explanation carries `FRESH_START_REVISION_HEDGE`, not
+   * `EAGER_REVISION_HEDGE` (Codex review, PR #978): a start-new replacement
+   * is a FRESH start, not a fork or recovery of the displaced run, so it's
+   * the "can bypass the active pointer entirely" caveat that applies here,
+   * not the "retains the source run's own revision" one. Every revision
+   * display degrades to an explicit "Unpinned" label for a
+   * pre-revision-pinning (legacy) record rather than a blank space —
+   * including the "Forked from" row's own attributable-but-unpinned case
+   * (Codex review, PR #978), which a prior version of this file silently
+   * rendered nothing for.
    *
    * `forkSourceQuery` fetches `forkedFrom.workflowId` — a stable id, not the
    * concrete generation actually forked from. `GET /api/v1/workflows/:id`
@@ -104,7 +110,10 @@
   import { formatRelativeTime, truncateId } from '../../../lib/format/index.ts';
   import { queryKeys } from '../../../lib/query.ts';
   import { router, workflowDetailPath } from '../../../lib/router.svelte.ts';
-  import { EAGER_REVISION_HEDGE } from '../../../lib/workflow-revision.ts';
+  import {
+    EAGER_REVISION_HEDGE,
+    FRESH_START_REVISION_HEDGE,
+  } from '../../../lib/workflow-revision.ts';
   import { workflowStatusBadge } from '../list/workflow-status-badge.ts';
   import WorkflowStatusIcon from '../list/workflow-status-icon.svelte';
   import { getScheduleProvenance, scheduleProvenanceQueryKey } from './workflow-observability.ts';
@@ -238,8 +247,8 @@
           </span>
         </div>
         <p class="weft-lineage-panel__note">
-          A start-new replacement always resolves against whichever revision is active at the moment
-          it replaces the prior run — no pin carries over from the run it replaced.
+          A start-new replacement resolves against whichever revision is active at the moment it
+          replaces the prior run — no pin carries over from the run it replaced. {FRESH_START_REVISION_HEDGE}
         </p>
       </div>
     {/if}
@@ -268,6 +277,12 @@
             {@const sourceRevision = $forkSourceQuery.data.revision}
             <Tooltip text={`Source revision (exact executable artifact): ${sourceRevision}`}>
               <span class="weft-lineage-panel__id">rev {truncateId(sourceRevision)}</span>
+            </Tooltip>
+          {:else if sourceRevisionAttributable && $forkSourceQuery.data}
+            <Tooltip
+              text="This source run predates revision pinning, so which revision was actually forked can't be stated."
+            >
+              <Badge variant="neutral" size="sm">Unpinned</Badge>
             </Tooltip>
           {:else if $forkSourceQuery.data && !sourceRevisionAttributable}
             <Tooltip

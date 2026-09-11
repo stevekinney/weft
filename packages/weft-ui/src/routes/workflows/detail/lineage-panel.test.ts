@@ -278,7 +278,13 @@ describe('LineagePanel', () => {
     expect(getByText('No successor')).not.toBeNull();
     expect(getByText(/^rev order-fu/)).not.toBeNull();
     expect(
-      getByText(/A start-new replacement always resolves against whichever revision is active/),
+      getByText(/A start-new replacement resolves against whichever revision is active/),
+    ).not.toBeNull();
+    // The eager-registered/sole-dynamic-source-candidate caveat (Codex
+    // review, PR #978) — a start-new replacement can bypass the active
+    // pointer entirely, same as any other fresh start.
+    expect(
+      getByText(/a fresh start can run without consulting the active pointer at all/),
     ).not.toBeNull();
   });
 

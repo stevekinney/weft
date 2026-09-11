@@ -128,17 +128,46 @@
     return treatment.kind === 'unauthorized' && treatment.mode === 'forbidden';
   });
 
+  /** Which picker input is actually rendered right now — drives both `selection` below and the markup's `{#if}`. */
+  const isDegraded = $derived(readGate.disabled || revisionsForbidden);
+
   /**
-   * Only one of the two picker inputs is ever mounted at a time
-   * (`readGate.disabled || revisionsForbidden` decides which), so reading
-   * whichever one is non-empty is unambiguous — no risk of a stale value
-   * from the OTHER, unmounted input winning.
+   * Clears whichever input just stopped being the rendered one. Without
+   * this, a mid-session degrade — `workflows:read` revoked server-side
+   * after the operator already selected a revision in the `Select`, so
+   * `revisionsForbidden` flips true and the UI swaps to the free-text
+   * `Input` — left `selectedRevisionValue` holding the operator's OLD
+   * selection while the now-hidden `Select` component itself unmounts
+   * (Codex review, PR #978): entering a different revision in the newly
+   * shown `Input` looked like it should replace the choice, but
+   * `selection` below reads by rendered-input identity, not "whichever
+   * field is non-empty," so a stale value under a switched-away input can
+   * no longer silently win either way — this effect is defense in depth
+   * against exactly that leftover value resurfacing if the mode flips
+   * back a second time.
+   */
+  $effect(() => {
+    if (isDegraded) {
+      selectedRevisionValue = '';
+    } else {
+      explicitRevisionText = '';
+    }
+  });
+
+  /**
+   * Reads by WHICH INPUT `isDegraded` currently renders, not by "whichever
+   * field happens to be non-empty" — the latter is exactly the bug class
+   * flagged in review: a stale value left in a field that stopped being
+   * rendered could otherwise still win over a fresh entry in the field
+   * that replaced it.
    */
   const selection = $derived<ForkRevisionSelection>(
-    selectedRevisionValue !== ''
-      ? { mode: 'explicit', revision: selectedRevisionValue }
-      : explicitRevisionText.trim() !== ''
+    isDegraded
+      ? explicitRevisionText.trim() !== ''
         ? { mode: 'explicit', revision: explicitRevisionText.trim() }
+        : { mode: 'source' }
+      : selectedRevisionValue !== ''
+        ? { mode: 'explicit', revision: selectedRevisionValue }
         : { mode: 'source' },
   );
 
@@ -238,7 +267,7 @@
 
   {#if pickerOpen}
     <div class="weft-fork-dialog__picker">
-      {#if readGate.disabled || revisionsForbidden}
+      {#if isDegraded}
         <Input
           id={`fork-explicit-revision-${workflowId}`}
           label="Revision id"
@@ -259,8 +288,15 @@
           options={[
             { value: '', label: 'Use source revision' },
             ...installedRevisions.map((option) => ({
+              // Cinder's `Select` renders each option from `{value, label}`
+              // alone — no per-option `title`/description slot — so a
+              // truncated label risked two installed revisions sharing the
+              // same first-eight/last-four display and the same relative
+              // install time, making them indistinguishable before
+              // selection (Codex review, PR #978). The FULL revision id is
+              // the visible label; there is no truncated form here.
               value: option.revision,
-              label: `rev ${truncateId(option.revision)} · installed ${formatRelativeTime(option.installedAt)}`,
+              label: `${option.revision} · installed ${formatRelativeTime(option.installedAt)}`,
             })),
           ]}
         />

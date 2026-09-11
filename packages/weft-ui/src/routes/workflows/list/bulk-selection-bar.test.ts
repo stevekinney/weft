@@ -318,6 +318,13 @@ describe('BulkSelectionBar', () => {
       // an unconditional "always retains" promise.
       expect(getByText(/resumes in place on its own persisted revision/)).not.toBeNull();
       expect(getByText(/restarts fresh and resolves whichever revision is active/)).not.toBeNull();
+      // Same eager-registration/dynamic-source caveat as every other
+      // fresh-start surface (Codex review, PR #978) — a checkpoint-less
+      // retry enters the identical start path as a wizard start or a
+      // start-new replacement.
+      expect(
+        getByText(/a fresh start can run without consulting the active pointer at all/),
+      ).not.toBeNull();
     } finally {
       fetch.restore();
     }

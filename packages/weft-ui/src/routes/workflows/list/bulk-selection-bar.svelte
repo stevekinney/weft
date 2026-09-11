@@ -47,6 +47,7 @@
 
   import type { WorkflowListQuery } from '../../../lib/filters.ts';
   import type { ScopeGate } from '../../../lib/scopes.svelte.ts';
+  import { FRESH_START_REVISION_HEDGE } from '../../../lib/workflow-revision.ts';
   import BulkActionDialog from './bulk-action-dialog.svelte';
   import { BULK_FILTER_UNSCOPED_REASON, isBulkOperationScoped } from './bulk-filter-scope.ts';
   import { toBulkListFilterInput } from './bulk-list-filter.ts';
@@ -292,7 +293,7 @@
       retryFailedResultSummary(await commitBulkRetryFailed(client, bulkFilter, token), matched)}
     onClose={closeDialog}
     onSuccess={onActionComplete}
-    previewNote="A retry with a saved checkpoint resumes in place on its own persisted revision. A retry with no checkpoint restarts fresh and resolves whichever revision is active right now — the same as any other start-new replacement."
+    previewNote={`A retry with a saved checkpoint resumes in place on its own persisted revision. A retry with no checkpoint restarts fresh and resolves whichever revision is active right now — the same as any other start-new replacement. ${FRESH_START_REVISION_HEDGE}`}
   />
 {:else if activeAction === 'delete'}
   <BulkActionDialog
