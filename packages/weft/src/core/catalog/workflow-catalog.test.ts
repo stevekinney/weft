@@ -10,6 +10,7 @@ import {
   WorkflowCatalogActivationConflictError,
   WorkflowCatalogActiveEntryMissingError,
   WorkflowCatalogConflictError,
+  WorkflowRevisionNotInstalledError,
   WorkflowRevisionTombstonedError,
 } from './errors.ts';
 import { WorkflowCatalog } from './workflow-catalog.ts';
@@ -150,6 +151,29 @@ describe('WorkflowCatalog.install', () => {
     expect(installed.manifest.revision).toBe('pinned-1');
   });
 
+  it('throws WorkflowCatalogConflictError (not a tombstoned refusal) when a fenced install loses its CAS to a genuine concurrent writer with no removal in play (WFT-21, Codex review round 14, P1 item Q7jH)', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const manifest = await manifestFor('checkout', '1.0.0', { revision: 'pinned-1' });
+
+    // Force this install's own write CAS to report a lost race, simulating
+    // a genuine concurrent writer — no removal is involved at all, so the
+    // durable removal-generation counter stays absent (`null`) throughout.
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+    let intercepted = false;
+    storage.conditionalBatch = async (conditions, operations) => {
+      if (!intercepted) {
+        intercepted = true;
+        return false;
+      }
+      return originalConditionalBatch(conditions, operations);
+    };
+
+    await expect(
+      catalog.install(manifest, fakeDefinition('checkout'), { removalGeneration: null }),
+    ).rejects.toThrow(WorkflowCatalogConflictError);
+  });
+
   it('defensively rejects an invalid workflow name even for a hand-built manifest', async () => {
     const storage = new MemoryStorage();
     const catalog = new WorkflowCatalog(storage);
@@ -157,6 +181,35 @@ describe('WorkflowCatalog.install', () => {
     const invalid = { ...manifest, name: '1invalid' } as WorkflowRevisionManifest;
 
     await expect(catalog.install(invalid, fakeDefinition('1invalid'))).rejects.toThrow();
+  });
+
+  it('revalidates a cache hit against durable storage rather than trusting it outright — a peer that durably removed and tombstoned this exact entry is not masked by a stale cache hit (WFT-21, Codex review round 14, P1 item TYR4)', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const manifest = await manifestFor('checkout', '1.0.0', { revision: 'pinned-1' });
+
+    await catalog.install(manifest, fakeDefinition('checkout'));
+    expect(catalog.getEntry('checkout', 'pinned-1')).toBeDefined();
+
+    // Simulate a peer's `remove()` + tombstone write landing durably WITHOUT
+    // ever touching this process's own in-memory `#entries` cache — the
+    // exact durable state a peer removal leaves behind while a stale cache
+    // hit here still believes the revision installed.
+    await storage.delete(KEYS.catalogEntry('checkout', 'pinned-1'));
+    await storage.put(
+      KEYS.catalogTombstone('checkout', 'pinned-1'),
+      new TextEncoder().encode(JSON.stringify({ manifest, installedAt: Date.now() })),
+    );
+
+    // Before this fix, the cache hit above short-circuited, returning the
+    // stale entry without ever reading durable storage. Now it revalidates,
+    // finds the entry durably absent, evicts the stale cache entry, and
+    // falls through to the ordinary not-cached path — which fails closed on
+    // the tombstone exactly like a genuinely fresh install would.
+    await expect(catalog.install(manifest, fakeDefinition('checkout'))).rejects.toThrow(
+      WorkflowRevisionTombstonedError,
+    );
+    expect(catalog.getEntry('checkout', 'pinned-1')).toBeUndefined();
   });
 });
 
@@ -420,6 +473,36 @@ describe('WorkflowCatalog.activateCandidate', () => {
       throw new Error('expected a stale-generation refusal');
     }
     expect(catalog.resolveActive('checkout')).toBeUndefined();
+  });
+
+  it("fences the active-pointer CAS on the candidate entry's own bytes: a peer's removal landing exactly between the read and the commit loses the pointer write, not just the earlier install() call", async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const manifest = await manifestFor('checkout', '1.0.0', { revision: 'pinned-1' });
+
+    // Intercept `conditionalBatch` to delete the candidate entry the moment
+    // `activateCandidate`'s OWN pointer-write CAS is attempted — after its
+    // internal `install()` call (and the entry-bytes read that follows it)
+    // has already completed, simulating a peer removal landing in the exact
+    // gap the fence exists to close.
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+    let interceptedOnce = false;
+    storage.conditionalBatch = async (conditions, operations) => {
+      const isActivePointerWrite = operations.some(
+        (op) => op.type === 'put' && op.key === KEYS.catalogActive('checkout'),
+      );
+      if (isActivePointerWrite && !interceptedOnce) {
+        interceptedOnce = true;
+        await storage.delete(KEYS.catalogEntry('checkout', 'pinned-1'));
+      }
+      return originalConditionalBatch(conditions, operations);
+    };
+
+    await expect(catalog.activateCandidate('checkout', manifest)).rejects.toThrow(
+      WorkflowRevisionNotInstalledError,
+    );
+    expect(catalog.resolveActive('checkout')).toBeUndefined();
+    expect(await storage.get(KEYS.catalogActive('checkout'))).toBeNull();
   });
 });
 

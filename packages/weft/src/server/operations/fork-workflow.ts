@@ -76,10 +76,14 @@ function validateForkInput(input: ForkWorkflowInput): ForkOptions | undefined {
  *      match the generic 'not found' branch).
  *   2. `VersionMismatchError`                       → Conflict (409), typed check
  *      (Codex review round 11, P2 — see below)
- *   3. 'fromStep' / 'Checkpoint not found at step' → InvalidParams (400)
- *   4. 'Checkpoint not found'                       → NotFound, resource: 'checkpoint'
- *   5. 'not found'                                  → NotFound, resource: 'workflow'
- *   6. otherwise                                    → EngineFailure
+ *   3. `ForkSourceReplacedError`                    → Conflict (409), typed check
+ *      (Codex review, item 6 — the source run was replaced by a concurrent
+ *      `start-new` while this fork was still resolving or committing, a
+ *      legitimate retryable race, not an engine failure)
+ *   4. 'fromStep' / 'Checkpoint not found at step' → InvalidParams (400)
+ *   5. 'Checkpoint not found'                       → NotFound, resource: 'checkpoint'
+ *   6. 'not found'                                  → NotFound, resource: 'workflow'
+ *   7. otherwise                                    → EngineFailure
  */
 export function resolveForkAccess(error: unknown): never {
   const revisionFault = mapRevisionUnavailableToFault(error);

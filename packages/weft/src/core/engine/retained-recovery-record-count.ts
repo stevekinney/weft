@@ -141,7 +141,21 @@ export async function countTeardownDeadLettersForRevision(
           'letter as already counted, permitting removal of a revision it still durably pins.',
       );
     }
-    if (decoded['type'] !== type || decoded['revision'] !== revision) continue;
+    if (decoded['type'] !== type) continue;
+    // A history record whose `revision` is legitimately absent (WFT-21,
+    // Codex review round 14, P2 item TH4X) — a pre-revision-pinning
+    // workflow recovered and later dead-lettered under this version, so
+    // `deadLetterTeardown()` wrote this record with no `revision` field at
+    // all — is pinned CONSERVATIVELY toward every queried revision of the
+    // matching type, exactly like the single-slot fallback below
+    // (`countLegacySingleSlotDeadLetter()`'s own `decoded['revision'] ===
+    // undefined` branch) already does. Without this, `decoded['revision']
+    // !== revision` is `true` for every defined `revision` argument when
+    // the record's own revision is `undefined` — silently excluding it from
+    // EVERY query, and once the workflow's `WorkflowState` is purged, this
+    // history record is the sole remaining evidence the revision was ever
+    // referenced.
+    if (decoded['revision'] !== undefined && decoded['revision'] !== revision) continue;
     count += 1;
   }
 
@@ -172,7 +186,25 @@ async function countLegacySingleSlotDeadLetter(
   revision: string,
 ): Promise<boolean> {
   const decoded = decode(bytes);
-  if (!isRecord(decoded) || decoded['type'] !== type) return false;
+  // Fails the WHOLE scan closed, not a bare `return false` (WFT-21, Codex
+  // review round 14, P2 item TYSB) — mirroring the history scan's own
+  // fail-closed precedent above. A pre-history `wf-teardown-deadletter:`
+  // record that decodes successfully but is not a well-formed record at
+  // all (`null`, an array, or any other non-object value) or is an object
+  // missing a string `type` field is NOT provably unrelated to `type` — it
+  // is a record whose relevance cannot be determined, silently treating it
+  // as "unrelated" lets `removeWorkflowRevision()` remove a revision this
+  // exact dead letter could still durably pin once the workflow's
+  // `WorkflowState` is purged (its only remaining evidence).
+  if (!isRecord(decoded) || typeof decoded['type'] !== 'string') {
+    throw new Error(
+      `Dead-letter single-slot record "${key}" decoded successfully but is not a well-formed ` +
+        'record (expected an object with a string `type` field). Refusing to silently treat it ' +
+        'as unrelated: this record could durably pin a revision that removeWorkflowRevision() ' +
+        'would otherwise be permitted to remove.',
+    );
+  }
+  if (decoded['type'] !== type) return false;
 
   const workflowId = decodeStorageKeyComponent(key.slice(KEYS.teardownDeadLetterPrefix().length));
   const token =

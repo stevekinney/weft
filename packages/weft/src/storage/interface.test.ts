@@ -165,6 +165,7 @@ describe('KEYS insertion order', () => {
       'catalogActive',
       'catalogTombstone',
       'catalogTombstonePrefix',
+      'catalogRemovalGeneration',
       'workflowGeneration',
       'budget',
       'review',
@@ -385,6 +386,7 @@ describe('WEFT_RESERVED_KEY_PREFIXES', () => {
       KEYS.catalogEntry('workflow-type', 'revision'),
       KEYS.catalogActive('workflow-type'),
       KEYS.catalogTombstone('workflow-type', 'revision'),
+      KEYS.catalogRemovalGeneration('workflow-type', 'revision'),
     ];
 
     for (const key of representativeKeys) {

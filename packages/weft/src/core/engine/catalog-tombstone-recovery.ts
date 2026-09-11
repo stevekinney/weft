@@ -223,16 +223,19 @@ async function resolveOneOrphanedCatalogTombstone(
     // could not be read. Restore conservatively rather than leave the
     // tombstone in limbo — this trusted entry can always be re-swept and
     // finalized later once the unrelated record is repaired. A `false`
-    // return (lost CAS — a concurrent resolver already handled this exact
-    // tombstone) is intentionally ignored, not an error condition. The
-    // `.catch()` below guards only a genuine THROW from the restore
-    // attempt itself (e.g. a storage error) — best-effort, since this
+    // return (lost CAS — a concurrent resolver, e.g. a LIVE
+    // `removeWorkflowRevision()`'s own `finalizeRevisionRemoval()`, already
+    // resolved this exact tombstone) is a harmless, already-consistent
+    // no-op for THIS sweep's own restore intent — that concurrent resolver
+    // re-reads post-resolution state itself (WFT-21, item S-QH) rather than
+    // trusting this sweep's outcome, so no coordination is owed back the
+    // other way. Still routed into `onIsolatedFailure` (WFT-21, Codex
+    // review round 14, P2 item S-QH) rather than silently discarded, for
+    // operator visibility into how often this race actually fires; a
+    // genuine THROW from the restore attempt itself (e.g. a storage error)
+    // is routed the same way — best-effort either way, since this
     // tombstone can always be re-swept later.
-    await restoreCatalogEntryFromTombstone(storage, name, revision, bytes).catch(() => {
-      // Best-effort: nothing further to do if the restore attempt itself
-      // failed to even run its CAS. Re-swept on the next boot or targeted
-      // check either way.
-    });
+    await restoreCatalogEntryFromTombstone(storage, name, revision, bytes).catch(() => false);
     onIsolatedFailure?.(name, revision, error);
   }
 }

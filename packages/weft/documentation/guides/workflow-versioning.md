@@ -655,6 +655,28 @@ mode—fencing under `'none'` adds no new capability requirement. Together
 these close "removal is rejected while any durable or live reference
 exists" for every ownership mode and load path named above.
 
+**A narrower residual left by the tombstone-presence fence above is also
+now closed (Codex review round 14, item Q7jH).** The tombstone-presence CAS
+above protects a load racing a removal only up to that removal's own
+tombstone finalizing—a load that begins before its target revision has
+ever been installed anywhere, or after a full removal has already
+completed, has no local cache to adopt, so `catalog.install()` genuinely
+reaches its write path, and if a full remove-and-finalize cycle for the
+same `(name, revision)` lands while that load is still in flight, the
+entry and tombstone keys both read absent again by the time the write
+runs—indistinguishable from "never installed." A new, permanently-retained
+`catalog-removal-generation:<name>:<revision>` counter closes this:
+`removeCatalogEntry()` bumps it atomically alongside the delete and
+tombstone write, and `runSharedSourceLoad()` captures its bytes before
+invoking the host loader, threading them through to `catalog.install()` as
+an additional CAS condition. A removal that lands during the load—even one
+whose own tombstone has already resolved—now fails the fenced install
+closed instead of resurrecting the just-removed revision. `install()`'s
+cache-hit path and `activateCandidate()`'s active-pointer CAS were fixed
+the same round to close a related gap: a stale in-process cache hit could
+return—or activate—a revision a peer had already durably removed; both now
+revalidate against (or fence on) durable storage before proceeding.
+
 The ADR 0002 workflow-lease reclaim-eligibility check
 (`isWorkflowTypeRegistered`) is source- and revision-aware for the same
 reason—see

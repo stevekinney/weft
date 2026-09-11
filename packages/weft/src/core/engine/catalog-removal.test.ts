@@ -160,6 +160,185 @@ describe('removeWorkflowRevision', () => {
     expect(await storage.get(KEYS.catalogTombstone('checkout', revA))).toBeNull();
   });
 
+  describe('finalizeRevisionRemoval vs. a concurrent tombstone resolver — WFT-21, Codex review round 14, P2 item S-QH', () => {
+    async function installRemovableRevision(engine: Engine): Promise<string> {
+      engine.register(noopWorkflow('checkout'));
+      const startedHandle = await engine.start('checkout', null);
+      await startedHandle.result();
+      await engine.purge({ idPrefix: startedHandle.id });
+      const revA = getWorkflowCatalog(engine).resolveActive('checkout')!.revision;
+      getInternals(engine).registeredCatalogRevisions.delete('checkout');
+      const manifestB = await manifestFor('checkout', '1.0.0', { description: 'a later revision' });
+      await activateCatalogRevisionCandidate(engine, 'checkout', manifestB, {
+        expectedGeneration: 1,
+        policy: { requireExactRevision: false },
+      });
+      return revA;
+    }
+
+    it('reports "referenced" (not a lying "removed: true") and dispatches no event when a concurrent resolver RESTORED the entry before this call\'s own finalize CAS landed', async () => {
+      await using storage = new MemoryStorage();
+      await using engine = new Engine({ storage, backgroundTasks: 'manual' });
+      const revA = await installRemovableRevision(engine);
+      const tombstoneKey = KEYS.catalogTombstone('checkout', revA);
+
+      const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+      let intercepted = false;
+      storage.conditionalBatch = async (conditions, operations) => {
+        const isFinalizeTombstoneDelete =
+          !intercepted &&
+          operations.length === 1 &&
+          operations[0]?.type === 'delete' &&
+          operations[0]?.key === tombstoneKey;
+        if (isFinalizeTombstoneDelete) {
+          intercepted = true;
+          // Simulate a concurrent boot-time sweep RESTORING this exact
+          // tombstone (its own reference-count scan found something) a
+          // moment before this call's own `finalizeCatalogTombstone` CAS
+          // lands — the tombstone bytes are the exact deleted entry bytes,
+          // recoverable from the precondition this call itself supplied.
+          const tombstoneBytesCondition = conditions.find((c) => c.key === tombstoneKey);
+          const tombstoneBytes = tombstoneBytesCondition?.expectedValue;
+          if (tombstoneBytes !== null && tombstoneBytes !== undefined) {
+            await originalConditionalBatch(
+              [{ key: tombstoneKey, expectedValue: tombstoneBytes }],
+              [
+                { type: 'put', key: KEYS.catalogEntry('checkout', revA), value: tombstoneBytes },
+                { type: 'delete', key: tombstoneKey },
+              ],
+            );
+          }
+        }
+        return originalConditionalBatch(conditions, operations);
+      };
+
+      const events: WorkflowRevisionRemovedEvent[] = [];
+      engine.addEventListener(WorkflowRevisionRemovedEvent.type, (e) => events.push(e));
+
+      const result = await removeWorkflowRevision(engine, 'checkout', revA);
+
+      // The concurrent resolver restored the entry — the removal did NOT
+      // complete. Before this fix, `finalizeRevisionRemoval` ignored its
+      // own lost CAS and reported `{ removed: true }` + dispatched the
+      // event regardless.
+      expect(result.removed).toBe(false);
+      if (!result.removed && result.reason === 'referenced') {
+        // The reason code is truthful; the exact counts are this call's own
+        // (possibly stale) snapshot, not re-derived from the concurrent
+        // resolver's decision — documented in `finalizeRevisionRemoval`'s doc.
+        expect(result.references).toBeDefined();
+      } else {
+        throw new Error(`expected a "referenced" refusal, got ${JSON.stringify(result)}`);
+      }
+      expect(events).toHaveLength(0);
+      expect(getWorkflowCatalog(engine).getEntry('checkout', revA)).toBeUndefined();
+      expect(await storage.get(KEYS.catalogEntry('checkout', revA))).not.toBeNull();
+    });
+
+    it('still reports a truthful "removed: true" and dispatches the event when a concurrent resolver FINALIZED the exact same tombstone first', async () => {
+      await using storage = new MemoryStorage();
+      await using engine = new Engine({ storage, backgroundTasks: 'manual' });
+      const revA = await installRemovableRevision(engine);
+      const tombstoneKey = KEYS.catalogTombstone('checkout', revA);
+
+      const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+      let intercepted = false;
+      storage.conditionalBatch = async (conditions, operations) => {
+        const isFinalizeTombstoneDelete =
+          !intercepted &&
+          operations.length === 1 &&
+          operations[0]?.type === 'delete' &&
+          operations[0]?.key === tombstoneKey;
+        if (isFinalizeTombstoneDelete) {
+          intercepted = true;
+          // Simulate a concurrent boot-time sweep FINALIZING this exact
+          // tombstone (zero references, same as this call's own decision)
+          // a moment before this call's own CAS lands — applying the IDENTICAL
+          // conditions/operations this call is about to attempt.
+          await originalConditionalBatch(conditions, operations);
+        }
+        return originalConditionalBatch(conditions, operations);
+      };
+
+      const events: WorkflowRevisionRemovedEvent[] = [];
+      engine.addEventListener(WorkflowRevisionRemovedEvent.type, (e) => events.push(e));
+
+      const result = await removeWorkflowRevision(engine, 'checkout', revA);
+
+      // The concurrent resolver finalized it — the removal DID complete,
+      // just not through this call's own commit. `{ removed: true }` is
+      // truthful, and this call dispatches the event on the concurrent
+      // resolver's behalf (the boot-time sweep never dispatches engine
+      // events itself).
+      expect(result).toEqual({ removed: true });
+      expect(events).toHaveLength(1);
+      expect(events[0]?.revision).toBe(revA);
+      expect(await storage.get(KEYS.catalogEntry('checkout', revA))).toBeNull();
+      expect(await storage.get(tombstoneKey)).toBeNull();
+    });
+
+    it('reports "referenced" (not a lost restore treated as success) when a genuine reference appears between the pre- and post-checks AND the restore itself loses its CAS to a concurrent resolver', async () => {
+      await using storage = new MemoryStorage();
+      await using engine = new Engine({ storage, backgroundTasks: 'manual' });
+      const revA = await installRemovableRevision(engine);
+      const tombstoneKey = KEYS.catalogTombstone('checkout', revA);
+      const entryKey = KEYS.catalogEntry('checkout', revA);
+
+      const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+      let deleteIntercepted = false;
+      let restoreIntercepted = false;
+      storage.conditionalBatch = async (conditions, operations) => {
+        const isDeleteAndTombstoneWrite =
+          !deleteIntercepted &&
+          operations.some((op) => op.type === 'delete' && op.key === entryKey) &&
+          operations.some((op) => op.type === 'put' && op.key === tombstoneKey);
+        if (isDeleteAndTombstoneWrite) {
+          deleteIntercepted = true;
+          const result = await originalConditionalBatch(conditions, operations);
+          if (result) {
+            // A genuine reference appears in the gap between
+            // `catalog.remove()`'s own commit and `finalizeRevisionRemoval()`'s
+            // post-check — the exact TOCTOU window that check exists to close.
+            getInternals(engine).registeredCatalogRevisions.set('checkout', revA);
+          }
+          return result;
+        }
+
+        const isRestoreWrite =
+          !restoreIntercepted &&
+          operations.some((op) => op.type === 'put' && op.key === entryKey) &&
+          operations.some((op) => op.type === 'delete' && op.key === tombstoneKey);
+        if (isRestoreWrite) {
+          restoreIntercepted = true;
+          // Simulate a concurrent resolver (e.g. the boot-time sweep)
+          // restoring this exact tombstone a moment before this call's own
+          // restore CAS lands — applying the IDENTICAL conditions/operations
+          // this call is about to attempt.
+          await originalConditionalBatch(conditions, operations);
+        }
+        return originalConditionalBatch(conditions, operations);
+      };
+
+      const events: WorkflowRevisionRemovedEvent[] = [];
+      engine.addEventListener(WorkflowRevisionRemovedEvent.type, (e) => events.push(e));
+
+      const result = await removeWorkflowRevision(engine, 'checkout', revA);
+
+      expect(result.removed).toBe(false);
+      if (!result.removed && result.reason === 'referenced') {
+        expect(result.references.registeredDefinitions).toBe(1);
+      } else {
+        throw new Error(`expected a "referenced" refusal, got ${JSON.stringify(result)}`);
+      }
+      expect(events).toHaveLength(0);
+      // The concurrent resolver's own restore landed durably.
+      expect(await storage.get(entryKey)).not.toBeNull();
+      expect(await storage.get(tombstoneKey)).toBeNull();
+
+      getInternals(engine).registeredCatalogRevisions.delete('checkout');
+    });
+  });
+
   it('the inFlightStarts counter itself is reserved/released around a real in-flight start()', async () => {
     await using storage = new MemoryStorage();
     await using engine = new Engine({ storage, backgroundTasks: 'manual' });

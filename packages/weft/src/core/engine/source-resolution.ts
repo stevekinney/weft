@@ -15,7 +15,7 @@
  * @module core/engine/source-resolution
  */
 
-import { WorkflowRevisionTombstonedError, type WorkflowRevisionRecord } from '../catalog/index.ts';
+import { readCatalogRemovalGeneration, type WorkflowRevisionRecord } from '../catalog/index.ts';
 import {
   checkWorkflowCompatibility,
   DEFAULT_WORKFLOW_COMPATIBILITY_POLICY,
@@ -32,7 +32,6 @@ import { WorkflowSourceNotRegisteredError } from './dynamic-source-errors.ts';
 import { EngineDisposedError } from './errors.ts';
 import type { Engine } from './index.ts';
 import { getInternals, getWorkflowCatalog, type EngineInternals } from './internals.ts';
-import { WorkflowRevisionUnavailableError } from './revision-errors.ts';
 import {
   beginSourceWaiter,
   endSourceWaiterAndDispatchCancellation,
@@ -42,6 +41,7 @@ import {
   reviveOrphanedSourceLoadDiagnostics,
   type SourceEventContext,
 } from './source-diagnostics.ts';
+import { installFencedSourceRevision } from './source-install-fence.ts';
 
 /**
  * Options accepted by {@link resolveWorkflowSource}.
@@ -121,6 +121,12 @@ async function runSharedSourceLoad(
   revision: string,
   handle: WorkflowSourceHandle,
 ): Promise<WorkflowRevisionRecord> {
+  // See `installFencedSourceRevision`'s own doc (WFT-21, item Q7jH).
+  const removalGenerationAtLoadStart = await readCatalogRemovalGeneration(
+    internals.storage,
+    name,
+    revision,
+  );
   const resolved = await resolveSourceModule(handle.descriptor, handle);
   if (!resolved.ok) {
     throw new WorkflowSourceValidationError(name, revision, [resolved.reason]);
@@ -135,14 +141,14 @@ async function runSharedSourceLoad(
     throw new EngineDisposedError();
   }
 
-  const catalog = getWorkflowCatalog(engine);
-  // WFT-21, items 1-3: translate a tombstoned-revision refusal — see `WorkflowRevisionTombstonedError`'s JSDoc.
-  const installed = await catalog
-    .install(outcome.manifest, outcome.definition)
-    .catch((error: unknown) => {
-      if (!(error instanceof WorkflowRevisionTombstonedError)) throw error;
-      throw new WorkflowRevisionUnavailableError(name, revision, 'not-installed');
-    });
+  const installed = await installFencedSourceRevision(
+    getWorkflowCatalog(engine),
+    name,
+    revision,
+    outcome.manifest,
+    outcome.definition,
+    removalGenerationAtLoadStart,
+  );
 
   // Re-checked here, not just before `catalog.install()`: disposal can land
   // while that `await` is in flight, and `disposeSourceResolutionState()`

@@ -9,6 +9,7 @@ import { buildWorkflowRevisionManifest } from '../../core/contract/manifest.ts';
 import { Engine } from '../../core/engine.ts';
 import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
+import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
@@ -112,6 +113,40 @@ describe('weft.workflows.revisions.install', () => {
     expect(response.status).toBe(409);
     const body = (await response.json()) as { weftCode?: string };
     expect(body.weftCode).toBe('WorkflowCatalogConflictError');
+  });
+
+  it('faults with Conflict (409), not a masked EngineFailure, when the revision has a durable removal tombstone present (WFT-21, Codex review round 14, P2 item S-QK)', async () => {
+    const storage = new MemoryStorage();
+    engine = new Engine({ storage });
+    engine.register(checkout);
+    const manifest = await buildWorkflowRevisionManifest(
+      buildWorkflowContract({ name: 'checkout', version: '1.0.0' }),
+      { revision: 'pinned-1' },
+    );
+
+    // Warm the catalog first — `ensureWorkflowCatalogReady()`'s boot-time
+    // sweep resolves any orphaned tombstone it finds (it would otherwise
+    // finalize this test's own injected tombstone below before the install
+    // request ever observes it, since it carries zero references).
+    await engine.workflows.listRevisions('checkout');
+
+    // Simulate `removeCatalogEntry()` having already deleted the entry and
+    // written its tombstone — the exact durable state a concurrent removal
+    // leaves behind mid-resolution, before the tombstone is restored or
+    // finalized. Before this fix, `WorkflowRevisionTombstonedError` had no
+    // matching branch in `throwWorkflowCatalogOperationFault()`, so this
+    // install request surfaced as a masked `EngineFailure`/500 instead of
+    // the operation's declared retryable Conflict.
+    await storage.put(
+      KEYS.catalogTombstone('checkout', 'pinned-1'),
+      new TextEncoder().encode(JSON.stringify({ manifest, installedAt: Date.now() })),
+    );
+
+    const response = await installRequest({ manifest }, engine);
+
+    expect(response.status).toBe(409);
+    const body = (await response.json()) as { weftCode?: string; data?: { reason?: string } };
+    expect(body.weftCode).toBe('WorkflowRevisionUnavailableError');
   });
 
   it('faults with InvalidParams (400) when the workflow has no in-process definition', async () => {

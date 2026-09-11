@@ -66,4 +66,40 @@ export const WORKFLOW_CATALOG_KEYS = {
     `catalog-tombstone:${encodeStorageKeyComponent(name)}:${encodeStorageKeyComponent(revision)}`,
   /** Scan prefix for every in-flight removal tombstone (should normally be empty). */
   catalogTombstonePrefix: (): string => `catalog-tombstone:`,
+  /**
+   * A durable, PERMANENT (never deleted) monotonic removal-generation
+   * counter for one `(name, revision)` catalog entry (WFT-21, Codex review
+   * round 14, P1 item Q7jH). Absent means "never removed" (generation 0);
+   * `removeCatalogEntry` bumps it by exactly 1 in the SAME `conditionalBatch`
+   * as the entry delete and tombstone put — so it survives past
+   * `finalizeCatalogTombstone`'s own delete of the (transient) tombstone key,
+   * unlike `catalogTombstone` itself.
+   *
+   * This is a NEW, additive reserved key family — no schema-version bump,
+   * matching the WFT-9/WFT-10 precedent for `catalog-entry:`/`catalog-active:`
+   * and the WFT-17/WFT-18 precedent for `catalog-tombstone:` itself: every
+   * durable record this codebase persists is either a wholly new key family
+   * (safe for an older reader, which simply never scans it) or an in-place
+   * field addition to an existing record (guarded by the reader's own
+   * structural validator). A durable generation counter that outlives the
+   * tombstone closes the residual window the tombstone alone left open: a
+   * dynamic-source load that began BEFORE a removal, and only calls
+   * `catalog.install()` AFTER that removal's `finalizeCatalogTombstone()`
+   * has already deleted the tombstone, would otherwise see both the entry
+   * key and the tombstone key as `null` — indistinguishable from "never
+   * installed" — and resurrect the just-removed revision. `WorkflowCatalog.install()`'s
+   * loader callers (`runSharedSourceLoad`, `source-resolution.ts`) capture
+   * this counter's bytes before invoking the loader and pass them through as
+   * an install fence; the durable write additionally CAS-guards on the
+   * counter still reading those exact bytes, so any removal that landed
+   * during the load — even one whose tombstone has already resolved —
+   * fails the fenced install closed instead of resurrecting stale content.
+   * `engine.register()`'s drain path and a deliberate direct
+   * `engine.workflows.install()` reinstall both omit the fence (no prior
+   * observation to be stale against), so a genuine, caller-intended reinstall
+   * after removal still succeeds and implicitly advances past whatever the
+   * counter currently reads.
+   */
+  catalogRemovalGeneration: (name: string, revision: string): string =>
+    `catalog-removal-generation:${encodeStorageKeyComponent(name)}:${encodeStorageKeyComponent(revision)}`,
 } as const;

@@ -222,6 +222,17 @@ export const CLASSIFIED_OVERSIZED_IMPLEMENTATION_FILES = [
     rationale:
       'The operation-client generator keeps schema normalization, alias selection, rendering, formatting, and drift output together.',
   },
+  {
+    path: 'src/core/engine/source-resolution.ts',
+    classification: 'justified-exception',
+    rationale:
+      'The single-flight load -> validate -> install pipeline, its cancellation/disposal races, ' +
+      'and the per-caller waiter bookkeeping around it are one cohesive state machine that ' +
+      'resists further splitting without scattering that machine across files. WFT-21 (Codex ' +
+      'review round 14, P1 item Q7jH) pushed it over the ceiling by adding a durable ' +
+      'removal-generation fence read before the host loader runs; the file was already at ' +
+      'exactly 500/500 lines before that addition.',
+  },
 ] as const satisfies readonly OversizedImplementationFile[];
 
 type CliArguments = {

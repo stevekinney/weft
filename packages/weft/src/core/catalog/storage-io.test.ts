@@ -6,6 +6,7 @@ import { buildWorkflowContract } from '../contract/build.ts';
 import { buildWorkflowRevisionManifest } from '../contract/manifest.ts';
 import { encodeActivePointer } from './codec.ts';
 import {
+  catalogRemovalGenerationMatches,
   readActivePointer,
   readCatalogEntry,
   restoreWorkflowCatalog,
@@ -259,5 +260,61 @@ describe('scanCatalogEntriesForName', () => {
     await expect(scanCatalogEntriesForName(storage, 'checkout')).rejects.toThrow(
       /disagrees with its storage key/,
     );
+  });
+});
+
+describe('catalogRemovalGenerationMatches', () => {
+  it('treats absence on both sides as a match', async () => {
+    const storage = new MemoryStorage();
+    expect(await catalogRemovalGenerationMatches(storage, 'checkout', 'r1', null)).toBe(true);
+  });
+
+  it('treats a present counter against an expected null as a mismatch', async () => {
+    const storage = new MemoryStorage();
+    await storage.put(
+      KEYS.catalogRemovalGeneration('checkout', 'r1'),
+      new TextEncoder().encode('1'),
+    );
+    expect(await catalogRemovalGenerationMatches(storage, 'checkout', 'r1', null)).toBe(false);
+  });
+
+  it('compares two present, byte-identical counters as a match', async () => {
+    const storage = new MemoryStorage();
+    await storage.put(
+      KEYS.catalogRemovalGeneration('checkout', 'r1'),
+      new TextEncoder().encode('2'),
+    );
+    expect(
+      await catalogRemovalGenerationMatches(
+        storage,
+        'checkout',
+        'r1',
+        new TextEncoder().encode('2'),
+      ),
+    ).toBe(true);
+  });
+
+  it('compares two present, differing counters as a mismatch, including a differing byte length', async () => {
+    const storage = new MemoryStorage();
+    await storage.put(
+      KEYS.catalogRemovalGeneration('checkout', 'r1'),
+      new TextEncoder().encode('2'),
+    );
+    expect(
+      await catalogRemovalGenerationMatches(
+        storage,
+        'checkout',
+        'r1',
+        new TextEncoder().encode('3'),
+      ),
+    ).toBe(false);
+    expect(
+      await catalogRemovalGenerationMatches(
+        storage,
+        'checkout',
+        'r1',
+        new TextEncoder().encode('10'),
+      ),
+    ).toBe(false);
   });
 });

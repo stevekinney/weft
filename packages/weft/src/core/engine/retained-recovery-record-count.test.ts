@@ -49,11 +49,22 @@ describe('countTeardownDeadLettersForRevision', () => {
     expect(await countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')).toBe(1);
   });
 
-  it('a legacy dead letter with revision undefined never counts against any specific revision', async () => {
+  it('a history dead letter with a legitimately absent revision is pinned conservatively toward every queried revision of the matching type, exactly like the single-slot fallback (WFT-21, Codex review round 14, P2 item TH4X)', async () => {
     const storage = new MemoryStorage();
+    // A pre-revision-pinning workflow recovered and later dead-lettered
+    // under this version: `deadLetterTeardown()` wrote this history record
+    // with no `revision` field at all. Before this fix,
+    // `decoded['revision'] !== revision` was `true` for every queried
+    // revision when the record's own revision was `undefined`, silently
+    // excluding it from every query — once the workflow's `WorkflowState`
+    // is purged, this history record is the sole remaining evidence the
+    // revision was ever referenced.
     await seedDeadLetter(storage, 'wf-legacy', makeDeadLetter({ type: 'checkout' }));
 
-    expect(await countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')).toBe(0);
+    expect(await countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')).toBe(1);
+    expect(await countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-b')).toBe(1);
+    // A different type must still be excluded.
+    expect(await countTeardownDeadLettersForRevision(storage, 'other', 'rev-a')).toBe(0);
   });
 
   it('sums multiple dead letters for the same (type, revision)', async () => {
@@ -243,5 +254,31 @@ describe('countTeardownDeadLettersForRevision', () => {
     expect(await countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-b')).toBe(1);
     // A different type must still be excluded.
     expect(await countTeardownDeadLettersForRevision(storage, 'other', 'rev-a')).toBe(0);
+  });
+
+  it('fails the whole scan closed on a single-slot record that decodes successfully but is not a well-formed record at all (WFT-21, Codex review round 14, P2 item TYSB)', async () => {
+    const storage = new MemoryStorage();
+    // Decodes fine (msgpack `null` is perfectly valid), but is not an
+    // object at all — `countLegacySingleSlotDeadLetter()`'s pre-fix
+    // `!isRecord(decoded) || decoded['type'] !== type` returned `false`
+    // here (silently "unrelated"), even though this record's true `type`
+    // cannot be determined at all and could be exactly the queried type.
+    await storage.put(KEYS.teardownDeadLetter('wf-malformed-single-slot'), encode(null));
+
+    await expect(
+      countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a'),
+    ).rejects.toThrow();
+  });
+
+  it('fails the whole scan closed on a single-slot record that decodes successfully as an object but is missing a string `type` field (WFT-21, Codex review round 14, P2 item TYSB)', async () => {
+    const storage = new MemoryStorage();
+    await storage.put(
+      KEYS.teardownDeadLetter('wf-missing-type'),
+      encode({ lastError: 'boom', attempts: 1, deadLetteredAt: 1 }),
+    );
+
+    await expect(
+      countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a'),
+    ).rejects.toThrow();
   });
 });

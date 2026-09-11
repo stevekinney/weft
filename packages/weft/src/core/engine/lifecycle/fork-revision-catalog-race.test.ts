@@ -1061,3 +1061,115 @@ describe('reserveLegacyForkTargetRevision — WFT-21 Codex review round 3 P1', (
     ).toBe(0);
   });
 });
+
+describe('catalog.install() vs. a removal that fully completes WHILE a stale loader is mid-flight — WFT-21, Codex review round 14, P1 item Q7jH (durable removal-generation fence)', () => {
+  it("fails closed instead of resurrecting the revision, even though both the entry and tombstone keys read null again by the time the stale loader's install() call runs", async () => {
+    const storage = new MemoryStorage();
+    const type = 'removal-generation-fence';
+    const definitionV1 = workflow({ name: type, description: 'v1' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      return yield* ctx.waitForSignal<string>('go');
+    });
+    const definitionV2 = workflow({ name: type, description: 'v2' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      return yield* ctx.waitForSignal<string>('go');
+    });
+    const revisionV1 = await revisionFor(type, definitionV1);
+    const revisionV2 = await revisionFor(type, definitionV2);
+    const entryKeyV2 = KEYS.catalogEntry(type, revisionV2);
+    const tombstoneKeyV2 = KEYS.catalogTombstone(type, revisionV2);
+
+    // Engine A starts the source run on v1. Deliberately does NOT install v2
+    // at all yet — the durable read at the top of engine B's own resolution
+    // below (`resolveCachedOrHandle`) genuinely MISSES v2, reaching
+    // `runSharedSourceLoad` directly (interleaving 2 of the P1 residual: a
+    // load whose durable `resolveEntry()` read misses the target revision
+    // entirely, rather than adopting a durable hit into a process-local
+    // cache).
+    const engineA = new Engine({ storage });
+    engineA.registerSource(
+      workflowSource(
+        { name: type, location: './v1.ts', exportName: 'v1', revision: revisionV1 },
+        async () => ({ v1: definitionV1 }),
+      ),
+    );
+    const sourceHandle = await engineA.start(type, null, {
+      id: 'removal-generation-fence-source',
+    });
+    expect(await storage.get(entryKeyV2)).toBeNull();
+
+    // Engine B forks onto v2 with a pausable loader — its own durable read
+    // misses v2 (never installed anywhere yet), so this reaches
+    // `runSharedSourceLoad`, which captures the removal-generation counter
+    // (absent — `null`, "never removed") BEFORE the loader below ever runs.
+    const engineB = new Engine({ storage });
+    const loadGate = Promise.withResolvers<void>();
+    const loadEntered = Promise.withResolvers<void>();
+    engineB.registerSource(
+      workflowSource(
+        { name: type, location: './v2.ts', exportName: 'v2', revision: revisionV2 },
+        async () => {
+          loadEntered.resolve();
+          await loadGate.promise;
+          return { v2: definitionV2 };
+        },
+      ),
+    );
+    const forkPromise = engineB.fork(sourceHandle.id, { revision: revisionV2 });
+    await loadEntered.promise;
+
+    // WHILE engine B's loader is parked, engine A performs a FULL,
+    // independent install-then-remove-then-finalize cycle of the EXACT same
+    // revision — e.g. an operator deploying and then retiring v2 entirely
+    // while B's stale load is still in flight. This bumps the durable
+    // removal-generation counter past what B's loader captured above, and
+    // leaves both the entry and tombstone keys reading `null` again — the
+    // exact "indistinguishable from never installed" state the P1 review
+    // flagged as unprotected before this fix.
+    engineA.registerSource(
+      workflowSource(
+        { name: type, location: './v2.ts', exportName: 'v2', revision: revisionV2 },
+        async () => ({ v2: definitionV2 }),
+      ),
+    );
+    await engineA.resolveWorkflowSource(type, revisionV2);
+    expect(await getWorkflowCatalog(engineA).hasInstalled(type, revisionV2)).toBe(true);
+    const removed = await removeWorkflowRevision(engineA, type, revisionV2);
+    expect(removed).toEqual({ removed: true });
+    expect(await storage.get(entryKeyV2)).toBeNull();
+    expect(await storage.get(tombstoneKeyV2)).toBeNull();
+    expect(await storage.get(KEYS.catalogRemovalGeneration(type, revisionV2))).not.toBeNull();
+
+    // Resume engine B's stale loader. Before this fix, `catalog.install()`
+    // saw both the entry AND tombstone keys as `null` and reinstalled v2
+    // unconditionally — the fenced write now additionally CAS-guards on the
+    // removal-generation counter it captured before the loader ran, which
+    // has since advanced, so the write loses its CAS and fails closed.
+    loadGate.resolve();
+    let forkError: unknown;
+    try {
+      await forkPromise;
+    } catch (error) {
+      forkError = error;
+    }
+    expect(forkError).toBeInstanceOf(WorkflowRevisionUnavailableError);
+    expect((forkError as WorkflowRevisionUnavailableError).reason).toBe('not-installed');
+    expect((forkError as WorkflowRevisionUnavailableError).workflowType).toBe(type);
+    expect((forkError as WorkflowRevisionUnavailableError).revision).toBe(revisionV2);
+
+    // No resurrection: the entry stayed durably absent, and
+    // `removeWorkflowRevision()`'s earlier `{ removed: true }` result above
+    // stays truthful — no entry was recreated behind its back.
+    expect(await storage.get(entryKeyV2)).toBeNull();
+    expect(await getWorkflowCatalog(engineB).hasInstalled(type, revisionV2)).toBe(false);
+    const runs = await engineA.list({ type });
+    expect(runs.items).toHaveLength(1);
+    expect(runs.items[0]?.id).toBe(sourceHandle.id);
+    expect(runs.items[0]?.revision).toBe(revisionV1);
+
+    engineA[Symbol.dispose]();
+    engineB[Symbol.dispose]();
+  });
+});

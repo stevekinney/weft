@@ -13,6 +13,7 @@
  * @module core/engine/catalog-removal
  */
 
+import { KEYS } from '../../storage/interface.ts';
 import {
   decrementNestedRevisionCount,
   finalizeCatalogTombstone,
@@ -315,10 +316,14 @@ export async function removeWorkflowRevision(
  * (`restoreCatalogEntryFromTombstone`) rather than leaving a real run
  * pinned to a revision the catalog no longer carries. Otherwise atomically
  * finalizes the tombstone (`finalizeCatalogTombstone`), completing the
- * removal. Either resolution losing its own CAS (a concurrent boot-time
- * sweep or another `removeWorkflowRevision` call already resolved this
- * exact tombstone first) is a harmless, already-consistent no-op — nothing
- * further to do either way.
+ * removal.
+ *
+ * Either resolution can lose its own CAS to a concurrent resolver — most
+ * commonly `catalog-tombstone-recovery.ts`'s boot-time orphan sweep (WFT-21,
+ * item S-QH). A lost restore-CAS is harmless (already resolved either way);
+ * a lost finalize-CAS is NOT automatically safe (the resolver may have
+ * restored instead), so both cases re-read post-resolution durable state
+ * via {@link reportPostConcurrentTombstoneResolution}.
  */
 async function finalizeRevisionRemoval(
   engine: Engine,
@@ -329,10 +334,44 @@ async function finalizeRevisionRemoval(
   const internals = getInternals(engine);
   const postReferences = await countWorkflowRevisionReferences(engine, name, revision);
   if (totalWorkflowRevisionReferences(postReferences) > 0) {
-    await restoreCatalogEntryFromTombstone(internals.storage, name, revision, tombstoneBytes);
+    const restored = await restoreCatalogEntryFromTombstone(
+      internals.storage,
+      name,
+      revision,
+      tombstoneBytes,
+    );
+    if (!restored) {
+      return reportPostConcurrentTombstoneResolution(engine, name, revision, postReferences);
+    }
     return { removed: false, reason: 'referenced', references: postReferences };
   }
-  await finalizeCatalogTombstone(internals.storage, name, revision, tombstoneBytes);
+  const finalized = await finalizeCatalogTombstone(
+    internals.storage,
+    name,
+    revision,
+    tombstoneBytes,
+  );
+  if (!finalized) {
+    return reportPostConcurrentTombstoneResolution(engine, name, revision, postReferences);
+  }
+  engine.dispatchEvent(new WorkflowRevisionRemovedEvent(name, revision));
+  return { removed: true };
+}
+
+/**
+ * Resolve the truthful outcome after a lost CAS to a concurrent resolver
+ * (WFT-21, item S-QH): entry present means it was restored (`'referenced'`,
+ * no event); absent means it was finalized (`{ removed: true }`, event
+ * dispatched here since the boot-time sweep never dispatches its own).
+ */
+async function reportPostConcurrentTombstoneResolution(
+  engine: Engine,
+  name: string,
+  revision: string,
+  references: WorkflowRevisionReferenceCounts,
+): Promise<WorkflowCatalogRemovalResult> {
+  const stillInstalled = await getInternals(engine).storage.get(KEYS.catalogEntry(name, revision));
+  if (stillInstalled !== null) return { removed: false, reason: 'referenced', references };
   engine.dispatchEvent(new WorkflowRevisionRemovedEvent(name, revision));
   return { removed: true };
 }

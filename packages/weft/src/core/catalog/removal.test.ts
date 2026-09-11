@@ -125,6 +125,51 @@ describe('removeCatalogEntry', () => {
     const result = await removeCatalogEntry(storage, 'checkout', v1.revision);
     expect(result).toEqual({ outcome: 'conflict' });
   });
+
+  it('bumps the durable removal-generation counter by exactly 1 on each removal, decoding an existing nonzero counter rather than only ever reading it absent (WFT-21, Codex review round 14, P1 item Q7jH)', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const manifest = await manifestFor('checkout', '1.0.0', { revision: 'pinned-1' });
+    const generationKey = KEYS.catalogRemovalGeneration('checkout', 'pinned-1');
+
+    expect(await storage.get(generationKey)).toBeNull();
+
+    await catalog.install(manifest, fakeDefinition('checkout'));
+    const firstRemoval = await removeCatalogEntry(storage, 'checkout', 'pinned-1');
+    if (firstRemoval.outcome !== 'removed') {
+      throw new Error(`expected a "removed" outcome, got ${JSON.stringify(firstRemoval)}`);
+    }
+    expect(new TextDecoder().decode((await storage.get(generationKey))!)).toBe('1');
+    // Resolve (finalize) the first removal's tombstone before reinstalling —
+    // otherwise the reinstall below fails closed on the still-present
+    // tombstone, which is not what this test targets.
+    await finalizeCatalogTombstone(storage, 'checkout', 'pinned-1', firstRemoval.tombstoneBytes);
+
+    // A deliberate reinstall after removal (unfenced — see
+    // `WorkflowCatalog.install()`'s own doc) followed by a SECOND removal:
+    // `decodeRemovalGeneration()` must decode the EXISTING nonzero counter
+    // bytes, not just ever observe them absent.
+    await catalog.install(manifest, fakeDefinition('checkout'));
+    const secondRemoval = await removeCatalogEntry(storage, 'checkout', 'pinned-1');
+    expect(secondRemoval.outcome).toBe('removed');
+    expect(new TextDecoder().decode((await storage.get(generationKey))!)).toBe('2');
+  });
+
+  it('fails closed with a corrupt-counter error when the durable removal-generation counter bytes do not decode as a non-negative integer', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const manifest = await manifestFor('checkout', '1.0.0', { revision: 'pinned-1' });
+    const generationKey = KEYS.catalogRemovalGeneration('checkout', 'pinned-1');
+
+    // Simulate storage corruption of Weft's own bookkeeping key — never
+    // written by any producer other than `removeCatalogEntry` itself.
+    await storage.put(generationKey, new TextEncoder().encode('not-a-number'));
+    await catalog.install(manifest, fakeDefinition('checkout'));
+
+    await expect(removeCatalogEntry(storage, 'checkout', 'pinned-1')).rejects.toThrow(
+      /do not decode as a non-negative integer/,
+    );
+  });
 });
 
 describe('finalizeCatalogTombstone / restoreCatalogEntryFromTombstone (WFT-17/18)', () => {

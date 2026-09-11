@@ -13,6 +13,7 @@ import { buildWorkflowManifestFromDefinition } from '../../core/registry-workflo
 import { workflowSource } from '../../core/source/index.ts';
 import type { WorkflowDefinition } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
+import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
@@ -206,6 +207,67 @@ describe('weft.workflows.revisions.preload', () => {
     };
     expect(body.weftCode).toBe('WorkflowSourceValidationError');
     expect(body.data?.sourceValidationReasons).toBeDefined();
+  });
+
+  it('faults with Conflict (409), not a masked EngineFailure, when a concurrent removal tombstones the revision (WFT-21, Codex review round 14, P2 item S-QK)', async () => {
+    const storage = new MemoryStorage();
+    const revision = await lazyCheckoutRevision();
+    const sourceDescriptor = {
+      name: 'lazy-checkout',
+      location: './lazy-checkout.ts',
+      exportName: 'lazyCheckout',
+      revision,
+    } as const;
+
+    // Engine A installs the revision durably, then simulates a peer's
+    // `remove()` having already deleted the entry and written its
+    // tombstone (the exact durable state a concurrent removal leaves
+    // behind mid-resolution).
+    const engineA = new Engine({ storage });
+    try {
+      engineA.registerSource(workflowSource(sourceDescriptor, async () => ({ lazyCheckout })));
+      const firstResponse = await preloadRequest('lazy-checkout', { revision }, engineA);
+      expect(firstResponse.status).toBe(200);
+      await storage.delete(KEYS.catalogEntry('lazy-checkout', revision));
+      const manifestBytes = new TextEncoder().encode(
+        JSON.stringify({
+          manifest: {
+            manifestVersion: 1,
+            name: 'lazy-checkout',
+            workflowVersion: '0.0.0-unversioned',
+            revision,
+            contractHash: revision,
+            contract: { name: 'lazy-checkout', workflowVersion: '0.0.0-unversioned' },
+          },
+          installedAt: Date.now(),
+        }),
+      );
+      await storage.put(KEYS.catalogTombstone('lazy-checkout', revision), manifestBytes);
+    } finally {
+      engineA[Symbol.dispose]();
+    }
+
+    // Engine B — a FRESH instance sharing storage, whose own in-memory
+    // catalog cache has never seen this revision — is the actual assertion:
+    // its durable `resolveEntry()` read genuinely misses (deleted above),
+    // so this reaches `runSharedSourceLoad()`'s real loader-then-install
+    // path, which hits the tombstone and translates it to
+    // `WorkflowRevisionUnavailableError`. Before this fix, that translated
+    // error had no matching branch in `throwWorkflowCatalogOperationFault()`,
+    // so this request surfaced as a masked `EngineFailure`/500 instead of
+    // the operation's declared retryable Conflict.
+    engine = new Engine({ storage });
+    engine.registerSource(workflowSource(sourceDescriptor, async () => ({ lazyCheckout })));
+
+    const response = await preloadRequest('lazy-checkout', { revision }, engine);
+
+    expect(response.status).toBe(409);
+    // REST deliberately does not disclose `Conflict.data.reason` (see
+    // `REST_FAULT_DATA_EXTRACTORS`'s own "deny-by-default" doc) — `weftCode`
+    // alone is the observable proof this is the typed, mapped fault and not
+    // a masked `EngineFailure`.
+    const body = (await response.json()) as { weftCode?: string };
+    expect(body.weftCode).toBe('WorkflowRevisionUnavailableError');
   });
 
   it('faults with InvalidParams (400) for a missing revision field', async () => {
