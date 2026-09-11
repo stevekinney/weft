@@ -243,6 +243,20 @@ describe('fork() legacy-dynamic-source default fork — WFT-21 Codex review roun
       const gate = Promise.withResolvers<void>();
       const entered = Promise.withResolvers<void>();
       let paused = false;
+      // Any write touching ONLY the source workflow's own keys is not the
+      // fork's own commit — the engine's own inline-parking dispatcher can
+      // independently (and non-deterministically) commit the parked
+      // source's checkpoint concurrently with this test's fork() call
+      // (found while adding `WorkflowCatalog.resolveEntry()`'s own durable
+      // revalidation, WFT-21, item UXP-, which shifted this race's timing
+      // enough to expose it reliably). Pausing on THAT write instead of the
+      // fork's own commit would let the fork's real commit slip through
+      // unpaused entirely, settling before this test ever reaches its own
+      // `removeWorkflowRevision()` call. Skip pausing on any write whose
+      // every key belongs to the source, and wait for the first write that
+      // touches something else instead.
+      const isSourceOwnWrite = (operations: readonly { key: string }[]): boolean =>
+        operations.every((op) => op.key.includes(sourceHandle.id));
       // The fork's own commit now routes through `conditionalBatch` rather
       // than a plain `batch` under `ownership: 'none'` too (WFT-21, Codex
       // review items 1-3 — `buildForkCatalogEntryCondition` fences even
@@ -250,7 +264,7 @@ describe('fork() legacy-dynamic-source default fork — WFT-21 Codex review roun
       // persisted), so both write paths must be intercepted to still park
       // this test exactly at the fork's own commit.
       storage.batch = async (operations) => {
-        if (!paused) {
+        if (!paused && !isSourceOwnWrite(operations)) {
           paused = true;
           entered.resolve();
           await gate.promise;
@@ -258,7 +272,7 @@ describe('fork() legacy-dynamic-source default fork — WFT-21 Codex review roun
         return originalBatch(operations);
       };
       storage.conditionalBatch = async (conditions, operations) => {
-        if (!paused) {
+        if (!paused && !isSourceOwnWrite(operations)) {
           paused = true;
           entered.resolve();
           await gate.promise;

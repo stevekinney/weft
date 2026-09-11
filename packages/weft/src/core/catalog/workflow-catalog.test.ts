@@ -301,6 +301,42 @@ describe('WorkflowCatalog.activateRegistered', () => {
       catalog.activateRegistered('checkout', manifest, fakeDefinition('checkout')),
     ).rejects.toThrow(WorkflowCatalogActivationConflictError);
   });
+
+  it("fences the active-pointer CAS on the candidate entry's own bytes and reinstalls (rather than fails) when a peer removes it mid-activation (WFT-21, Codex review round 14, P1 item UXP7)", async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const manifest = await manifestFor('checkout', '1.0.0', { revision: 'pinned-1' });
+
+    // Intercept `conditionalBatch` to delete the candidate entry the moment
+    // `activateRegistered`'s OWN pointer-write CAS is attempted — after its
+    // internal `install()` call has already completed, simulating a peer
+    // removal landing in the exact gap the fence exists to close.
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+    let interceptedOnce = false;
+    storage.conditionalBatch = async (conditions, operations) => {
+      const isActivePointerWrite = operations.some(
+        (op) => op.type === 'put' && op.key === KEYS.catalogActive('checkout'),
+      );
+      if (isActivePointerWrite && !interceptedOnce) {
+        interceptedOnce = true;
+        await storage.delete(KEYS.catalogEntry('checkout', 'pinned-1'));
+      }
+      return originalConditionalBatch(conditions, operations);
+    };
+
+    const pointer = await catalog.activateRegistered(
+      'checkout',
+      manifest,
+      fakeDefinition('checkout'),
+    );
+
+    // Unlike `activateCandidate`, this call owns the manifest/definition
+    // content directly, so it reinstalls and succeeds rather than throwing
+    // — the "unconditional, never hard-fails construction" contract.
+    expect(pointer.revision).toBe('pinned-1');
+    expect(catalog.resolveActive('checkout')?.revision).toBe('pinned-1');
+    expect(await storage.get(KEYS.catalogEntry('checkout', 'pinned-1'))).not.toBeNull();
+  });
 });
 
 describe('WorkflowCatalog.activateCandidate', () => {
@@ -507,7 +543,7 @@ describe('WorkflowCatalog.activateCandidate', () => {
 });
 
 describe('WorkflowCatalog.resolveEntry', () => {
-  it('resolves a cache-hit entry without touching storage', async () => {
+  it('resolves a previously-cached entry (revalidated durably) to the correct record', async () => {
     const storage = new MemoryStorage();
     const catalog = new WorkflowCatalog(storage);
     const manifest = await manifestFor('checkout', '1.0.0');
@@ -516,6 +552,23 @@ describe('WorkflowCatalog.resolveEntry', () => {
     const resolved = await catalog.resolveEntry('checkout', manifest.revision);
 
     expect(resolved?.manifest.revision).toBe(manifest.revision);
+  });
+
+  it('resolves to undefined once a peer durably removes the entry, even though this instance still has it cached (WFT-21, Codex review round 14, P2 item UXP-)', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const manifest = await manifestFor('checkout', '1.0.0', { revision: 'pinned-1' });
+    await catalog.install(manifest, fakeDefinition('checkout'));
+    expect(catalog.getEntry('checkout', 'pinned-1')).toBeDefined();
+
+    // Simulate a peer's `remove()` durably deleting the entry WITHOUT
+    // touching this process's own in-memory cache.
+    await storage.delete(KEYS.catalogEntry('checkout', 'pinned-1'));
+
+    const resolved = await catalog.resolveEntry('checkout', 'pinned-1');
+
+    expect(resolved).toBeUndefined();
+    expect(catalog.getEntry('checkout', 'pinned-1')).toBeUndefined();
   });
 
   it('reads through to durable storage for an entry installed by a different instance', async () => {
@@ -620,6 +673,21 @@ describe('WorkflowCatalog.hasInstalled', () => {
     await writer.install(manifest, fakeDefinition('checkout'));
 
     expect(await reader.hasInstalled('checkout', manifest.revision)).toBe(true);
+  });
+
+  it('is false once a peer durably removes the entry, even though this instance still has it cached (WFT-21, Codex review round 14, P2 item UXP-)', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const manifest = await manifestFor('checkout', '1.0.0', { revision: 'pinned-1' });
+    await catalog.install(manifest, fakeDefinition('checkout'));
+    expect(catalog.getEntry('checkout', 'pinned-1')).toBeDefined();
+
+    // Simulate a peer's `remove()` durably deleting the entry WITHOUT
+    // touching this process's own in-memory cache, which still believes it
+    // installed.
+    await storage.delete(KEYS.catalogEntry('checkout', 'pinned-1'));
+
+    expect(await catalog.hasInstalled('checkout', 'pinned-1')).toBe(false);
   });
 });
 

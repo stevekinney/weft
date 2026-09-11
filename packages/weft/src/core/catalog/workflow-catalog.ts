@@ -106,23 +106,24 @@ export class WorkflowCatalog {
 
   /**
    * Resolve one installed `(name, revision)` entry as a public
-   * {@link WorkflowRevisionRecord} — cache hit first, else a durable
-   * read-through via {@link readCatalogEntry} (adopted into the local cache
-   * on hit, exactly like `install()`'s own read-through), else `undefined`
-   * when truly absent. No TOCTOU gap against a concurrent `install()` on
-   * this same instance: JS is single-threaded and neither this method nor
-   * `install()`'s fast (already-cached) path yields between the cache read
-   * and its use.
+   * {@link WorkflowRevisionRecord} — always durable-read-through via
+   * {@link readCatalogEntry}, never a bare in-memory cache-hit return (WFT-21,
+   * Codex review round 14, P2 item UXP-): a peer's `remove()` can durably
+   * delete this exact entry while it stays cached here, and every current
+   * public surface built on this method — `engine.resolveWorkflowSource()`/`preload()`
+   * (via `resolveCachedOrHandle()`), `activateCandidate()`'s compatibility
+   * check, `getWorkflowRevisionDiagnostics()` (via {@link hasInstalled}) —
+   * must never report a durably-removed revision as installed. A durable hit
+   * still (re-)populates the local cache, exactly like `install()`'s own
+   * read-through; a durable miss evicts any stale cache entry. Returns
+   * `undefined` when truly absent.
    */
   async resolveEntry(name: string, revision: string): Promise<WorkflowRevisionRecord | undefined> {
-    const cached = this.getEntry(name, revision);
-    if (cached !== undefined) {
-      return { manifest: cached.manifest, installedAt: cached.installedAt };
-    }
-
     const durable = await readCatalogEntry(this.#storage, name, revision);
-    if (durable === null) return undefined;
-
+    if (durable === null) {
+      this.#entries.get(name)?.delete(revision);
+      return undefined;
+    }
     this.#cacheEntry(name, revision, durable);
     return durable;
   }
@@ -141,33 +142,27 @@ export class WorkflowCatalog {
   }
 
   /**
-   * Whether `(name, revision)` is already durably installed — checked
-   * against this process's in-memory cache first, then, on a cache miss,
-   * durable storage itself (a different process may have installed it).
-   * Used by `catalog-events.ts`'s installed/activated/draining dispatch
-   * helper to decide whether an activation call is installing genuinely
-   * new content, since `install()`'s own cache-hit branch does not
-   * distinguish "already known to this process" from "just installed a
-   * moment ago by this same call."
+   * Whether `(name, revision)` is already durably installed — delegates to
+   * {@link resolveEntry}, so it shares that method's durable-safe guarantee
+   * (WFT-21, item UXP-): a peer's `remove()` is never misreported as still
+   * installed just because this process's cache has not caught up. Used by
+   * `catalog-events.ts`'s installed/activated/draining dispatch helper to
+   * decide whether an activation call is installing genuinely new content,
+   * and by `getWorkflowRevisionDiagnostics()`.
    */
   async hasInstalled(name: string, revision: string): Promise<boolean> {
-    if (this.getEntry(name, revision) !== undefined) return true;
-    return (await readCatalogEntry(this.#storage, name, revision)) !== null;
+    return (await this.resolveEntry(name, revision)) !== undefined;
   }
 
   /**
    * Durably resolve `name`'s active pointer — always reads through to
-   * durable storage rather than trusting the in-memory `#active` cache.
-   * Deliberately NOT cache-first like {@link hasInstalled}: `hasInstalled`'s
-   * cache-hit short-circuit can only go stale in the SAFE direction (a
-   * different process's `remove()` durably deleting an entry this
-   * process's `#entries` still holds still lets `catalog.remove()`'s own
-   * durable re-read refuse with `'not-found'` rather than double-deleting),
-   * whereas a name's active pointer has no such one-directional guarantee —
-   * a second engine/process can durably move it (e.g. via `activateCandidate`,
-   * or a second engine holding the ADR&nbsp;0002 workflow-lease) to a
-   * revision this process never installed, so a stale cache HIT here can
-   * misreport a durably-active revision as inactive. Used by removal and diagnostics
+   * durable storage rather than trusting the in-memory `#active` cache,
+   * the same durable-safe posture {@link hasInstalled}/{@link resolveEntry}
+   * now share (WFT-21, item UXP-). A second engine/process can durably move
+   * the active pointer (e.g. via `activateCandidate`, or a second engine
+   * holding the ADR&nbsp;0002 workflow-lease) to a revision this process
+   * never installed, so a stale cache HIT here could otherwise misreport a
+   * durably-active revision as inactive. Used by removal and diagnostics
    * (`core/engine/catalog-removal.ts`) so a durably-active revision is
    * never misreported as inactive/removable; `resolveActive` stays the
    * cheap, synchronous, best-effort accessor for in-process callers (e.g.
@@ -324,6 +319,17 @@ export class WorkflowCatalog {
    * revision bumps the generation by exactly 1. Retries the CAS write up to
    * {@link MAX_ACTIVATE_REGISTERED_ATTEMPTS} times under contention, throwing
    * {@link WorkflowCatalogActivationConflictError} on exhaustion.
+   *
+   * Each attempt's pointer-write CAS also fences on the candidate entry's
+   * own bytes, read fresh every iteration (WFT-21, Codex review round 14,
+   * P1 item UXP7) — the same fence {@link activateCandidate} applies, closing
+   * the identical gap here: a peer's `remove()` landing between this call's
+   * own `install()` and the pointer commit (or between retries) could
+   * otherwise leave the active pointer naming a missing entry. Unlike
+   * `activateCandidate`, a missing candidate entry does not fail this call
+   * outright — this method already owns `manifest`/`definition`, so it
+   * reinstalls (unfenced) and retries, preserving the "unconditional,
+   * never hard-fails construction" contract.
    */
   async activateRegistered(
     name: string,
@@ -333,12 +339,24 @@ export class WorkflowCatalog {
     requireStorageCapability(this.#storage, 'conditionalBatch', 'workflow catalog activation');
     await this.install(manifest, definition);
 
+    const candidateEntryKey = KEYS.catalogEntry(name, manifest.revision);
+
     for (let attempt = 1; attempt <= MAX_ACTIVATE_REGISTERED_ATTEMPTS; attempt++) {
       const current = await readActivePointer(this.#storage, name);
       if (current !== null && current.revision === manifest.revision) {
         // Already active at this exact revision: no-op, generation unchanged.
         this.#active.set(name, current);
         return current;
+      }
+
+      let candidateEntryBytes = await this.#storage.get(candidateEntryKey);
+      if (candidateEntryBytes === null) {
+        // A peer's removal raced this call's own earlier install() (or a
+        // prior iteration's reinstall below). Reinstall rather than fail —
+        // see this method's own doc for why that differs from
+        // `activateCandidate`'s throw.
+        await this.install(manifest, definition);
+        candidateEntryBytes = await this.#storage.get(candidateEntryKey);
       }
 
       const nextGeneration = current === null ? 1 : current.generation + 1;
@@ -355,6 +373,7 @@ export class WorkflowCatalog {
             key: KEYS.catalogActive(name),
             expectedValue: current === null ? null : encodeActivePointer(current),
           },
+          { key: candidateEntryKey, expectedValue: candidateEntryBytes },
         ],
         [{ type: 'put', key: KEYS.catalogActive(name), value: encodeActivePointer(nextPointer) }],
       );
@@ -363,7 +382,8 @@ export class WorkflowCatalog {
         this.#active.set(name, nextPointer);
         return nextPointer;
       }
-      // Lost the CAS race: another writer activated concurrently. Re-read and retry.
+      // Lost the CAS race: another writer activated concurrently, or a peer
+      // removed the candidate entry again. Re-read and retry.
     }
 
     throw new WorkflowCatalogActivationConflictError(name, MAX_ACTIVATE_REGISTERED_ATTEMPTS);

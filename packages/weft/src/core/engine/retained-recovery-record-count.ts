@@ -37,6 +37,25 @@ import { isRecord } from '../debug-output.ts';
 import { LEGACY_DEAD_LETTER_HISTORY_TOKEN } from './termination/finalizer-claim.ts';
 
 /**
+ * Whether a decoded dead-letter record's discriminant fields can safely be
+ * compared against a queried `(type, revision)` at all (WFT-21, Codex
+ * review round 14, P2 item UXQC): a string `type`, and a `revision` that is
+ * either a string or entirely absent. A record failing this — e.g. `{
+ * revision: 'r' }` (no `type` at all) or a non-string `revision` — is NOT
+ * provably unrelated to any particular query; the pre-fix mismatch filters
+ * silently treated a failure here as "doesn't match, skip," which could
+ * suppress the corresponding legacy single-slot sibling as "already
+ * counted by the history scan" (that check tests only key presence, never
+ * content validity) and under-count both to zero.
+ */
+function hasValidDeadLetterDiscriminant(
+  decoded: Record<string, unknown>,
+): decoded is Record<string, unknown> & { type: string; revision?: string } {
+  if (typeof decoded['type'] !== 'string') return false;
+  return decoded['revision'] === undefined || typeof decoded['revision'] === 'string';
+}
+
+/**
  * Scan `storage` for `TeardownDeadLetterRecord`s whose `type` and
  * `revision` match exactly, returning the count. A record with
  * `revision === undefined` (written before this field existed, or for a
@@ -133,12 +152,13 @@ export async function countTeardownDeadLettersForRevision(
     // sibling as "already counted by the history scan" — under-counting
     // both records to zero and letting `removeWorkflowRevision()` remove a
     // revision this exact dead letter still durably pins.
-    if (!isRecord(decoded)) {
+    if (!isRecord(decoded) || !hasValidDeadLetterDiscriminant(decoded)) {
       throw new Error(
         `Dead-letter history record "${key}" decoded successfully but is not a well-formed ` +
-          'record (expected an object with `type` and `revision` fields). Refusing to silently ' +
-          'skip it: this key existing could otherwise mask a legitimate legacy single-slot dead ' +
-          'letter as already counted, permitting removal of a revision it still durably pins.',
+          'record (expected an object with a string `type` field and a `revision` field that is ' +
+          'either a string or absent). Refusing to silently skip it: this key existing could ' +
+          'otherwise mask a legitimate legacy single-slot dead letter as already counted, ' +
+          'permitting removal of a revision it still durably pins.',
       );
     }
     if (decoded['type'] !== type) continue;
@@ -196,12 +216,13 @@ async function countLegacySingleSlotDeadLetter(
   // as "unrelated" lets `removeWorkflowRevision()` remove a revision this
   // exact dead letter could still durably pin once the workflow's
   // `WorkflowState` is purged (its only remaining evidence).
-  if (!isRecord(decoded) || typeof decoded['type'] !== 'string') {
+  if (!isRecord(decoded) || !hasValidDeadLetterDiscriminant(decoded)) {
     throw new Error(
       `Dead-letter single-slot record "${key}" decoded successfully but is not a well-formed ` +
-        'record (expected an object with a string `type` field). Refusing to silently treat it ' +
-        'as unrelated: this record could durably pin a revision that removeWorkflowRevision() ' +
-        'would otherwise be permitted to remove.',
+        'record (expected an object with a string `type` field and a `revision` field that is ' +
+        'either a string or absent). Refusing to silently treat it as unrelated: this record ' +
+        'could durably pin a revision that removeWorkflowRevision() would otherwise be permitted ' +
+        'to remove.',
     );
   }
   if (decoded['type'] !== type) return false;

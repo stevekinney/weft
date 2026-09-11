@@ -282,3 +282,53 @@ describe('countTeardownDeadLettersForRevision', () => {
     ).rejects.toThrow();
   });
 });
+
+describe('hasValidDeadLetterDiscriminant fail-closed coverage (WFT-21, Codex review round 14, P2 item UXQC)', () => {
+  it('fails the whole scan closed on a history record with a string revision but no type field at all', async () => {
+    const storage = new MemoryStorage();
+    await storage.put(
+      KEYS.teardownDeadLetterHistory('wf-no-type', 'tok'),
+      encode({ revision: 'rev-a' }),
+    );
+
+    await expect(
+      countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a'),
+    ).rejects.toThrow();
+  });
+
+  it('fails the whole scan closed on a history record whose type field is present but not a string', async () => {
+    const storage = new MemoryStorage();
+    await storage.put(
+      KEYS.teardownDeadLetterHistory('wf-numeric-type', 'tok'),
+      encode({ type: 123, revision: 'rev-a' }),
+    );
+
+    await expect(
+      countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a'),
+    ).rejects.toThrow();
+  });
+
+  it('fails the whole scan closed on a history record with a valid type but a non-string revision', async () => {
+    const storage = new MemoryStorage();
+    await storage.put(
+      KEYS.teardownDeadLetterHistory('wf-numeric-revision', 'tok'),
+      encode({ type: 'checkout', revision: 42 }),
+    );
+
+    await expect(
+      countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a'),
+    ).rejects.toThrow();
+  });
+
+  it('fails the whole scan closed on a single-slot record with a valid type but a non-string revision', async () => {
+    const storage = new MemoryStorage();
+    await storage.put(
+      KEYS.teardownDeadLetter('wf-single-slot-numeric-revision'),
+      encode({ type: 'checkout', revision: 42 }),
+    );
+
+    await expect(
+      countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a'),
+    ).rejects.toThrow();
+  });
+});

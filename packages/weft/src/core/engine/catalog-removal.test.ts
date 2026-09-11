@@ -739,6 +739,32 @@ describe('getWorkflowRevisionDiagnostics', () => {
     expect(diagnostics.references.registeredDefinitions).toBe(1);
     expect(diagnostics.removable).toBe(false);
   });
+
+  it('reports installed:false (not a stale cached installed:true) once a peer durably removes the revision (WFT-21, Codex review round 14, P2 item UXP-)', async () => {
+    await using storage = new MemoryStorage();
+    await using engine = new Engine({ storage, backgroundTasks: 'manual' });
+    engine.register(noopWorkflow('checkout'));
+    await ensureWorkflowCatalogReady(engine);
+    const revA = getWorkflowCatalog(engine).resolveActive('checkout')!.revision;
+    const manifestB = await manifestFor('checkout', '1.0.0', { description: 'later' });
+    await activateCatalogRevisionCandidate(engine, 'checkout', manifestB, {
+      expectedGeneration: 1,
+      policy: { requireExactRevision: false },
+    });
+
+    // Populate this process's own in-memory `#entries` cache for revA
+    // BEFORE the durable delete below.
+    const before = await getWorkflowRevisionDiagnostics(engine, 'checkout', revA);
+    expect(before.installed).toBe(true);
+
+    // Simulate a peer's `remove()` durably deleting the entry WITHOUT
+    // touching this process's own cache.
+    await storage.delete(KEYS.catalogEntry('checkout', revA));
+
+    const after = await getWorkflowRevisionDiagnostics(engine, 'checkout', revA);
+    expect(after.installed).toBe(false);
+    expect(after.removable).toBe(false);
+  });
 });
 
 describe('countWorkflowRevisionReferences', () => {
