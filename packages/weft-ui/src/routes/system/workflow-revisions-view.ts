@@ -16,6 +16,7 @@
  * function's own doc for why a partial, silently-filtered list is unsafe
  * here specifically.
  */
+import { formatRelativeTime, truncateId } from '../../lib/format/index.ts';
 
 /** Mirrors `WorkflowRevisionManifest` (`@lostgradient/weft`) structurally — only the identity fields this panel renders. */
 interface WorkflowRevisionManifestLike {
@@ -132,4 +133,63 @@ export function workflowRevisionRows(
       isActive: active !== null && active.revision === record.manifest.revision,
     }))
     .toSorted((a, b) => compareCodepoint(a.revision, b.revision));
+}
+
+/** The subset of a TanStack `createQuery` result `isBackgroundRefreshing` reads — structurally compatible with `$revisionsQuery`/`$activeQuery` in `workflow-revisions-panel.svelte` without importing `@tanstack/svelte-query`'s types into this framework-free module. */
+export interface FetchStateLike {
+  readonly isFetching: boolean;
+  readonly data: unknown;
+}
+
+/**
+ * Whether the panel's "Refreshing…" background-fetch indicator should show:
+ * either query is actively fetching AND already resolved once before (`data
+ * !== undefined` — `activeQuery`'s own resolved value CAN legitimately be
+ * `null` for "never activated", which must still count as "already
+ * resolved", not "still loading"). Extracted as a pure function rather than
+ * asserted via a real component's fetch-timing in a test, which — given
+ * `ScriptedFetch`'s responses resolve as fast as the microtask queue allows
+ * — has no reliable window in which "fetching" is observably true.
+ */
+export function isBackgroundRefreshing(
+  revisionsQuery: FetchStateLike,
+  activeQuery: FetchStateLike,
+): boolean {
+  return (
+    (revisionsQuery.isFetching && revisionsQuery.data !== undefined) ||
+    (activeQuery.isFetching && activeQuery.data !== undefined)
+  );
+}
+
+/** One `<dt>`/`<dd>` pair for a revision row's `DescriptionList`-style meta grid in `<WorkflowRevisionsPanel>` — a single templated `{#each}` in that markup instead of four hand-repeated blocks. */
+export interface RowMetaItem {
+  readonly term: string;
+  readonly value: string;
+  readonly title: string | undefined;
+  readonly mono: boolean;
+}
+
+/** Render-ready meta items for one {@link WorkflowRevisionRow}, in display order. Pure (no Svelte dependency) so it lives alongside the rest of this file's framework-free view-model mapping rather than in the component itself. */
+export function rowMeta(row: WorkflowRevisionRow): readonly RowMetaItem[] {
+  return [
+    { term: 'Workflow version', value: row.workflowVersion, title: undefined, mono: false },
+    {
+      term: 'Contract hash',
+      value: truncateId(row.contractHash),
+      title: row.contractHash,
+      mono: true,
+    },
+    {
+      term: 'Manifest version',
+      value: String(row.manifestVersion),
+      title: undefined,
+      mono: false,
+    },
+    {
+      term: 'Installed at',
+      value: formatRelativeTime(row.installedAt),
+      title: undefined,
+      mono: false,
+    },
+  ];
 }

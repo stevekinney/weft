@@ -5,8 +5,11 @@
  * non-compatibility-fault paths, query invalidation, the durable-generation
  * reuse after a stale refusal, and the Activate-vs-Refresh confirm-dialog
  * wording split. The loading/denied/malformed-revisions-list/empty/query-
- * fault states live in the sibling `workflow-revisions-panel.test.ts` — this
- * file crossed the repo's 500-line implementation-file cap combined.
+ * fault states live in the sibling `workflow-revisions-panel.test.ts`; the
+ * incompatible-outcome generation-preservation and completed-mutation-verb
+ * regression tests live in
+ * `workflow-revisions-panel-activation-generation.test.ts` — this file
+ * crossed the repo's 500-line implementation-file cap combined with those.
  * Shared fixtures live in `workflow-revisions-panel-fixtures.test-support.ts`.
  */
 import { fireEvent, waitFor, within } from '@testing-library/svelte';

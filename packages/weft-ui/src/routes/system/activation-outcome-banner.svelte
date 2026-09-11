@@ -57,7 +57,7 @@
     <div>
       <Badge variant="danger">Incompatible</Badge>
       <ul>
-        {#each outcome.reasons as reason (reason)}
+        {#each outcome.reasons as reason, index (index)}
           <li>{reasonListItem(reason)}</li>
         {/each}
       </ul>

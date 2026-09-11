@@ -5,7 +5,9 @@
 import { describe, expect, test } from 'bun:test';
 
 import {
+  isBackgroundRefreshing,
   isWorkflowRevisionRecordLike,
+  rowMeta,
   workflowRevisionRows,
   type WorkflowRevisionRecordSource,
 } from './workflow-revisions-view.ts';
@@ -107,6 +109,24 @@ describe('workflowRevisionRows', () => {
     expect(rows?.every((row) => !row.isActive)).toBe(true);
   });
 
+  test('no row is active when a non-null active pointer names a revision absent from the records — accepted cross-query-race behavior, not malformed data', () => {
+    // `revisionsQuery` and `activeQuery` are independent fetches
+    // (`workflow-revisions-panel.svelte`) — a real race, or a revision
+    // uninstalled between the two responses, can leave a valid non-null
+    // pointer naming a revision this particular records array doesn't
+    // include. This is a legitimate (if momentary) state, not a structural
+    // guard failure: every row simply resolves `isActive: false`, and the
+    // panel renders an explicit note for exactly this case rather than
+    // silently reading as "never activated".
+    const rows = workflowRevisionRows([record({ manifest: manifest({ revision: 'rev-a' }) })], {
+      revision: 'rev-missing',
+      generation: 1,
+      activatedAt: 1,
+    });
+    expect(rows).toBeDefined();
+    expect(rows?.every((row) => !row.isActive)).toBe(true);
+  });
+
   test('an empty array is a valid (not malformed) empty response', () => {
     expect(workflowRevisionRows([], null)).toEqual([]);
   });
@@ -141,5 +161,77 @@ describe('workflowRevisionRows', () => {
       installedAt: 42,
       isActive: false,
     });
+  });
+});
+
+describe('rowMeta', () => {
+  test('projects workflow version, a truncated-but-full-title contract hash, manifest version, and installed-at in display order', () => {
+    const rows = workflowRevisionRows(
+      [
+        record({
+          manifest: manifest({
+            workflowVersion: '3.1.4',
+            contractHash: 'sha256:a-very-long-contract-hash-value',
+          }),
+          installedAt: 1_700_000_000_000,
+        }),
+      ],
+      null,
+    );
+    const row = rows?.[0];
+    if (!row) throw new Error('fixture invariant: row must exist');
+
+    const items = rowMeta(row);
+    expect(items.map((item) => item.term)).toEqual([
+      'Workflow version',
+      'Contract hash',
+      'Manifest version',
+      'Installed at',
+    ]);
+    expect(items[0]).toEqual({
+      term: 'Workflow version',
+      value: '3.1.4',
+      title: undefined,
+      mono: false,
+    });
+    const contractHashItem = items[1];
+    expect(contractHashItem?.mono).toBe(true);
+    expect(contractHashItem?.title).toBe('sha256:a-very-long-contract-hash-value');
+    expect(contractHashItem?.value).not.toBe(contractHashItem?.title);
+    expect(items[2]).toEqual({
+      term: 'Manifest version',
+      value: '1',
+      title: undefined,
+      mono: false,
+    });
+  });
+});
+
+describe('isBackgroundRefreshing', () => {
+  test('false while neither query is fetching', () => {
+    expect(
+      isBackgroundRefreshing({ isFetching: false, data: ['a'] }, { isFetching: false, data: null }),
+    ).toBe(false);
+  });
+
+  test('false for the INITIAL load — fetching with no resolved data yet, even though isFetching is true', () => {
+    expect(
+      isBackgroundRefreshing(
+        { isFetching: true, data: undefined },
+        { isFetching: true, data: undefined },
+      ),
+    ).toBe(false);
+  });
+
+  test('true when revisionsQuery is fetching a value it has already resolved once before', () => {
+    expect(
+      isBackgroundRefreshing({ isFetching: true, data: ['a'] }, { isFetching: false, data: null }),
+    ).toBe(true);
+  });
+
+  test('true when activeQuery is fetching, even though its own resolved value is null ("never activated" is a legitimate resolved state, not "still loading")', () => {
+    expect(
+      isBackgroundRefreshing({ isFetching: false, data: ['a'] }, { isFetching: true, data: null }),
+    ).toBe(true);
   });
 });

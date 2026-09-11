@@ -241,6 +241,7 @@ describe('RegistryTab', () => {
     expect(await findByTitle('order-processing-rev')).not.toBeNull();
     expect(await findByTitle('order-processing-hash')).not.toBeNull();
     expect(await findByText('manifest v1')).not.toBeNull();
+    expect(await findByText('workflow v1.0.0')).not.toBeNull();
 
     // The full contract surface (WFT-115) — no longer the #736 gap note.
     expect(await findAllByText('cancel')).not.toHaveLength(0);

@@ -51,7 +51,7 @@
   import { HttpClientError } from '@lostgradient/weft/client';
 
   import { getClient } from '../../lib/client.ts';
-  import { formatRelativeTime, truncateId } from '../../lib/format/index.ts';
+  import { truncateId } from '../../lib/format/index.ts';
   import { queryKeys } from '../../lib/query.ts';
   import { getPrincipalStore, scopeGate } from '../../lib/scopes.svelte.ts';
   import ActivationOutcomeBanner from './activation-outcome-banner.svelte';
@@ -63,7 +63,9 @@
   } from './compatibility-verdict.ts';
   import QueryFaultBanner from './query-fault-banner.svelte';
   import {
+    isBackgroundRefreshing,
     isWorkflowCatalogActivePointerLike,
+    rowMeta,
     workflowRevisionRows,
     type WorkflowCatalogActivePointerLike,
     type WorkflowRevisionRow,
@@ -148,11 +150,26 @@
       : workflowRevisionRows(revisionsArray, $activeQuery.data ?? null),
   );
 
-  const isLoading = $derived(canRead && ($revisionsQuery.isPending || $activeQuery.isPending));
-  const isRefreshing = $derived(
-    ($revisionsQuery.isFetching && $revisionsQuery.data !== undefined) ||
-      ($activeQuery.isFetching && $activeQuery.data !== undefined),
+  /**
+   * `revisionsQuery` and `activeQuery` are independent, unordered fetches —
+   * a narrow but real race (or a revision uninstalled between the two
+   * responses) can leave a non-null active pointer naming a revision that
+   * isn't in the resolved `rows` at all. Every row would then render
+   * "Installed" with no "Active" badge, and — because `$activeQuery.data`
+   * is non-null — the "No active revision — never activated" note stays
+   * suppressed too, silently understating that this workflow DOES have an
+   * active revision this console just can't currently show. Accepted
+   * behavior (this is a display staleness window, not malformed data — the
+   * next `revisionsQuery` refetch resolves it), but called out explicitly
+   * rather than silently dropped, mirroring the malformed-record note
+   * above.
+   */
+  const activePointerRevisionMissing = $derived(
+    rows !== undefined && $activeQuery.data !== null && !rows.some((row) => row.isActive),
   );
+
+  const isLoading = $derived(canRead && ($revisionsQuery.isPending || $activeQuery.isPending));
+  const isRefreshing = $derived(isBackgroundRefreshing($revisionsQuery, $activeQuery));
   function invalidateAfterActivation(): void {
     void queryClient.invalidateQueries({ queryKey: queryKeys.catalog.revisions(workflowName) });
     void queryClient.invalidateQueries({ queryKey: queryKeys.catalog.active(workflowName) });
@@ -189,6 +206,16 @@
    * applied outcome, whose `pointer.generation` is itself now the fresh
    * durable truth and flows back through `activeQuery` via
    * `invalidateAfterActivation`.
+   *
+   * An `incompatible` outcome ALSO confirms a durable generation: the
+   * server only evaluates compatibility after the generation fence passes
+   * (`activationRefusalToFault`'s reasons are mutually exclusive with a
+   * stale refusal), so the `expectedGeneration` this attempt submitted is,
+   * by construction, the current durable generation at refusal time — even
+   * though nothing durable changed. Discarding it (the prior behavior)
+   * threw away a confirmed value and could resubmit `activeQuery`'s stale
+   * in-memory cache on the very next attempt, earning a guaranteed stale
+   * refusal for an unrelated candidate.
    */
   let pendingExpectedGeneration = $state<number | null>(null);
 
@@ -213,7 +240,12 @@
         attempt = { applied: false, error };
       }
       const outcome = describeActivationOutcome(attempt);
-      pendingExpectedGeneration = outcome.kind === 'stale' ? outcome.currentGeneration : null;
+      pendingExpectedGeneration =
+        outcome.kind === 'stale'
+          ? outcome.currentGeneration
+          : outcome.kind === 'incompatible'
+            ? (expectedGeneration ?? null)
+            : null;
       return outcome;
     },
     onSuccess: invalidateAfterActivation,
@@ -222,6 +254,17 @@
   let confirmRevision = $state<string | null>(null);
   /** Whether the open confirm dialog is re-stamping the already-active revision (the row's own "Refresh" action) rather than activating a different candidate — see this file's module doc on why the two need distinct wording. */
   let confirmIsRefresh = $state(false);
+  /**
+   * Whether the LAST COMPLETED mutation (not the currently open dialog) was
+   * a refresh — captured at the moment `mutate` fires, so opening a
+   * different row's dialog afterward (while the success banner from a
+   * previous attempt is still visible) can't retroactively relabel it.
+   * `confirmIsRefresh` is live-bound to whichever dialog is open right now,
+   * which is the wrong source for the banner: it would rewrite an already-
+   * displayed "Activated"/"Refreshed" banner the instant a new confirm
+   * dialog opens, before the operator even confirms it.
+   */
+  let completedMutationWasRefresh = $state(false);
   let confirmOpen = $state(false);
   let triggerRef = $state<HTMLElement | null>(null);
 
@@ -230,38 +273,6 @@
     confirmIsRefresh = row.isActive;
     triggerRef = trigger;
     confirmOpen = true;
-  }
-
-  /** One `<dt>`/`<dd>` pair for a revision row's `DescriptionList`-style meta grid — a single templated `{#each}` in the markup instead of four hand-repeated blocks. */
-  interface RowMetaItem {
-    readonly term: string;
-    readonly value: string;
-    readonly title: string | undefined;
-    readonly mono: boolean;
-  }
-
-  function rowMeta(row: WorkflowRevisionRow): readonly RowMetaItem[] {
-    return [
-      { term: 'Workflow version', value: row.workflowVersion, title: undefined, mono: false },
-      {
-        term: 'Contract hash',
-        value: truncateId(row.contractHash),
-        title: row.contractHash,
-        mono: true,
-      },
-      {
-        term: 'Manifest version',
-        value: String(row.manifestVersion),
-        title: undefined,
-        mono: false,
-      },
-      {
-        term: 'Installed at',
-        value: formatRelativeTime(row.installedAt),
-        title: undefined,
-        mono: false,
-      },
-    ];
   }
 
   function refetchAll(): void {
@@ -301,6 +312,10 @@
   {:else}
     {#if $activeQuery.data === null}
       <p class="weft-revisions-panel__note">No active revision — never activated.</p>
+    {:else if activePointerRevisionMissing}
+      <p class="weft-revisions-panel__note">
+        This workflow has an active revision the current list doesn't include yet — refreshing.
+      </p>
     {/if}
     <ul class="weft-revisions-panel__list">
       {#each rows as row (row.revision)}
@@ -342,7 +357,7 @@
   {#if $activateMutation.isSuccess}
     <ActivationOutcomeBanner
       outcome={$activateMutation.data}
-      verb={confirmIsRefresh ? 'Refreshed' : 'Activated'}
+      verb={completedMutationWasRefresh ? 'Refreshed' : 'Activated'}
       onRefresh={refetchAll}
     />
   {/if}
@@ -359,7 +374,10 @@
       : `Activate "${confirmRevision}" as the active revision for ${workflowName}? Weft evaluates compatibility against the currently active revision before applying — an incompatible candidate is refused with no durable change.`}
   confirmLabel={confirmIsRefresh ? 'Refresh' : 'Activate'}
   onConfirm={() => {
-    if (confirmRevision !== null) $activateMutation.mutate(confirmRevision);
+    if (confirmRevision !== null) {
+      completedMutationWasRefresh = confirmIsRefresh;
+      $activateMutation.mutate(confirmRevision);
+    }
   }}
 />
 

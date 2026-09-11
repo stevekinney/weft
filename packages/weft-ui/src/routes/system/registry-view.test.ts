@@ -151,10 +151,11 @@ describe('registryWorkflowRows', () => {
     expect(auditSweep?.tags).toEqual([]);
   });
 
-  test('surfaces revision identity fields (revision, manifestVersion, contractHash)', () => {
+  test('surfaces revision identity fields (revision, workflowVersion, manifestVersion, contractHash)', () => {
     const rows = registryWorkflowRows(SNAPSHOT);
     const orderProcessing = rows.find((row) => row.type === 'order-processing');
     expect(orderProcessing?.revision).toBe('sha256:order-processing-revision');
+    expect(orderProcessing?.workflowVersion).toBe('1.0.0');
     expect(orderProcessing?.manifestVersion).toBe(1);
     expect(orderProcessing?.contractHash).toBe('sha256:order-processing-hash');
   });

@@ -223,4 +223,35 @@ describe('WorkflowRevisionsPanel', () => {
     // (as opposed to genuinely absent) active pointer.
     expect(queryByText('No active revision — never activated.')).toBeNull();
   });
+
+  // The "Refreshing…" indicator's own condition is covered directly (not
+  // through component fetch-timing, which has no reliable observable
+  // window against `ScriptedFetch`'s effectively-synchronous responses) by
+  // `isBackgroundRefreshing`'s unit tests in `workflow-revisions-view.test.ts`.
+
+  test('when the active pointer names a revision not present in the resolved rows (a cross-query race), an explicit note appears instead of silently understating the active revision', async () => {
+    scripted = new ScriptedFetch();
+    // `revisionsQuery` and `activeQuery` are independent, unordered
+    // fetches — this models the narrow race where the active pointer names
+    // a revision this particular `revisions.list` response doesn't
+    // include, rather than a malformed record (already covered above).
+    scripted.routeJsonRpcMethod('weft.workflows.revisions.list', [
+      revisionRecord('order-processing-rev-1'),
+    ]);
+    scripted.routeJsonRpcMethod(
+      'weft.workflows.active.get',
+      activePointer('order-processing-rev-missing'),
+    );
+
+    const { findByText, queryByText } = await renderPanel();
+    expect(
+      await findByText(
+        "This workflow has an active revision the current list doesn't include yet — refreshing.",
+      ),
+    ).not.toBeNull();
+    // Never silently reads as "never activated" — the pointer IS non-null.
+    expect(queryByText('No active revision — never activated.')).toBeNull();
+    // No row can honestly claim to be the active one either.
+    expect(queryByText('Active')).toBeNull();
+  });
 });
