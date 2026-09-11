@@ -237,46 +237,24 @@ export function buildForkCommitLostRaceError(
  * correctly no-ops whenever the early reservation already covers the
  * resolved revision.
  *
- * **Known residual limitation, documented rather than fixed (Codex review
- * round 6, P1):** this reservation is `inFlightStartsByRevision` —
- * process-local, in-memory (see `catalog-removal.ts`'s own doc) — so under
- * a supported multi-engine `ownership: 'workflow-lease'` deployment it
- * protects only a race against ANOTHER caller on THIS SAME process. A
- * SIBLING engine (a separate process sharing durable storage) can still
- * remove the sole candidate after this hook fires but before the awaited
- * source loader (`resolveWorkflowSourceForExecution()`) finishes reading
- * it — that sibling's own `removeWorkflowRevision()` sees only DURABLE
- * references, never this process's local map, so it can report success
- * while this load is still in flight; the loader's own `catalog.install()`
- * then reinstalls the revision regardless, papering over that removal.
- * `buildForkCatalogEntryCondition()` still fences the fork's own FINAL
- * commit durably under lease ownership (round 1) — this residual gap is
- * narrower: the intermediate LOAD/INSTALL step the resolver performs
- * before that commit is reached has no durable fence of its own. Closing
- * it properly needs either a durable, cross-process reservation (a
- * lease/claim analog to `inFlightStartsByRevision` itself) or a
- * tombstone-aware `catalog.install()` that refuses to resurrect a revision
- * concurrently removed — either is a genuine architectural addition, not a
- * bounded review-response fix, and warrants a follow-up rather than a
- * rushed change here.
- *
- * **Scope corrected (Codex review round 9, P1): the limitation above is NOT
- * confined to the legacy path this function itself covers.** `fork()`'s own
- * EARLY reservation of `targetRevision` (`reserveInFlightStart`, called
- * synchronously in `fork()` before this function or any resolve is ever
- * reached — see `transition.ts`) is exactly as process-local as the
- * reservation this function takes; an explicit-revision fork
- * (`ForkOptions.revision`, this PR's own new API) reserves just as early
- * and just as locally, then awaits the same
- * `resolveExecutableRegistrationForRevision()` load/install pipeline for
- * its OWN `revision`-defined branch. A sibling engine's
- * `removeWorkflowRevision()` — seeing only durable references, never
- * either process-local map — can win the identical race against an
- * explicit-revision target exactly as it can against a legacy one. The
- * root cause, the affected step, and the two candidate fixes are all
- * unchanged from round 6 above; only the earlier "scoped narrowly to
- * legacy forks" claim was wrong; every dynamic-source fork under
- * `workflow-lease` whose target requires a resolver load is exposed.
+ * This reservation is `inFlightStartsByRevision` — process-local, in-memory
+ * (see `catalog-removal.ts`'s own doc) — so under a supported multi-engine
+ * `ownership: 'workflow-lease'` deployment it protects only a race against
+ * ANOTHER caller on THIS SAME process; the same is true of `fork()`'s own
+ * EARLY reservation of `targetRevision` for an explicit-revision fork
+ * (`ForkOptions.revision`). A SIBLING engine (a separate process sharing
+ * durable storage) removing the target revision after either reservation
+ * fires but before the awaited source loader
+ * (`resolveWorkflowSourceForExecution()`) finishes reading it is closed by
+ * a separate, durable mechanism: `catalog.install()` refuses to resurrect a
+ * revision a sibling has durably removed, whether that removal's own
+ * tombstone has already resolved (a `catalog-removal-generation` CAS
+ * condition, see `WorkflowRevisionTombstonedError`'s JSDoc) or is still
+ * in flight (the tombstone-presence CAS on the same write) — so a load
+ * racing either window fails closed instead of reinstalling a revision the
+ * catalog no longer carries. `buildForkCatalogEntryCondition()` separately
+ * fences the fork's own FINAL commit durably, under every ownership mode
+ * including `'none'`.
  */
 export function reserveLegacyForkTargetRevision(
   internals: EngineInternals,
