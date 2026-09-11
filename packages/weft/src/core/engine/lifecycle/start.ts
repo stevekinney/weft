@@ -1,14 +1,10 @@
 import type { BatchOperation } from '../../../storage/interface.ts';
 import { serializeCheckpoint } from '../../checkpoint.ts';
 import { assertPayloadWithinLimit } from '../../payload-size.ts';
-import { normalizeStorageTimestamp } from '../../scheduler.ts';
 import {
-  assertExclusiveStartWorkflowOptions,
   assertValidOnTerminalConflict,
   coerceReplayWorkflowId,
   coerceStartWorkflowId,
-  coerceStartWorkflowTimestamp,
-  StartWorkflowValidationError,
 } from '../../start-workflow-validation.ts';
 import type { StartOptions, StartWorkflowOptions, TimerEntry } from '../../types.ts';
 import {
@@ -45,6 +41,7 @@ import {
   resolveCachedStartRevision,
   resolveStartRevisionUncached,
 } from './start-revision-resolution.ts';
+import { resolveScheduledStartAt } from './start-schedule-timing.ts';
 import {
   applyRestartLineage,
   createInitialCheckpoint,
@@ -334,7 +331,12 @@ export async function startWorkflow(
     // but DEFER any destructive purge until just before the create commit below, so a
     // `'start-new'` restart rejected by later validation leaves the prior terminal run intact.
     // `pendingStarts` covers that window in-engine, `duplicateIdCondition` across engines.
-    const { terminalRunToPurge, duplicateIdCondition } = callerProvidedId
+    const {
+      terminalRunToPurge,
+      duplicateIdCondition,
+      duplicateIdGenerationCondition,
+      observedGenerationBytes,
+    } = callerProvidedId
       ? await resolveTerminalConflictForRestart(internals, workflowId, options)
       : GENERATED_ID_START_DECISION;
     enforceReplayOnlyIdFence(skipAdmissionIdCheck, workflowId, terminalRunToPurge);
@@ -382,7 +384,12 @@ export async function startWorkflow(
     // the atomic create batch as `purgeDeleteOperations` below.
     const purgeDeleteOperations =
       terminalRunToPurge !== null
-        ? await prepareTerminalRunPurge(internals, terminalRunToPurge, callbacks)
+        ? await prepareTerminalRunPurge(
+            internals,
+            terminalRunToPurge,
+            callbacks,
+            observedGenerationBytes,
+          )
         : undefined;
 
     internals.checkpoints.set(workflowId, checkpoint);
@@ -428,6 +435,7 @@ export async function startWorkflow(
         callbacks,
         purgeDeleteOperations,
         duplicateIdCondition,
+        duplicateIdGenerationCondition,
       },
       buildIdempotentStartOperations,
     );
@@ -475,38 +483,4 @@ export async function startWorkflow(
       rollbackTransientStartState(internals, workflowId);
     }
   }
-}
-
-export function resolveScheduledStartAt(
-  internals: EngineInternals,
-  options: StartOptions | undefined,
-  submissionTime: number,
-  callbacks: LifecycleCallbacks,
-): number | undefined {
-  assertExclusiveStartWorkflowOptions(options?.startAt, options?.startAfter);
-
-  if (options?.startAt !== undefined) {
-    return coerceStartWorkflowTimestamp(options.startAt, 'options.startAt');
-  }
-
-  if (options?.startAfter !== undefined) {
-    const startAfterMilliseconds = parseStartOptionDuration(
-      internals,
-      options.startAfter,
-      'options.startAfter',
-      callbacks,
-    );
-    try {
-      return normalizeStorageTimestamp(
-        submissionTime + startAfterMilliseconds,
-        'options.startAfter',
-      );
-    } catch {
-      throw new StartWorkflowValidationError(
-        'options.startAfter must resolve to a finite, non-negative start time',
-      );
-    }
-  }
-
-  return undefined;
 }

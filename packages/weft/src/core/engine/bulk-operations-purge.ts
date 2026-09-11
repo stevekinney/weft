@@ -29,6 +29,7 @@ import { decodeScheduleRunMetadata } from './schedule-run-metadata.ts';
 import { createTerminalCleanupTimerId } from './state-utilities.ts';
 import { buildExternalTerminalRotationFragment } from './storage-io.ts';
 import { decodeWorkflowState, isTerminalWorkflowStatus } from './validation.ts';
+import { foldWorkflowGenerationBumpForPurge } from './workflow-generation-fence.ts';
 import { buildWorkflowVisibilityIndexTransition } from './workflow-indexes.ts';
 import { getWorkflowRetentionDeadline } from './workflow-retention-deadline.ts';
 
@@ -210,10 +211,11 @@ export async function purgeWorkflow(
   cleanupWaiters: CleanupWaiters,
 ): Promise<void> {
   const deleteOperations = await collectWorkflowPurgeDeleteOperations(internals, state);
-  // Rotates wf-owner-epoch under `workflow-lease` (ADR 0002); no-op elsewhere.
+  // Rotates wf-owner-epoch (workflow-lease); folds in the wf-gen:<id> bump (WFT-153) too.
   const rotation = await buildExternalTerminalRotationFragment(internals, state.id);
-  const operations = [...deleteOperations, ...rotation.operations];
-  await commitFencedEngineWrite(internals, null, operations, rotation.conditions, () => {
+  const fenced = await foldWorkflowGenerationBumpForPurge(internals, state.id, rotation);
+  const operations = [...deleteOperations, ...fenced.operations];
+  await commitFencedEngineWrite(internals, null, operations, fenced.conditions, () => {
     return new Error(`Purge commit for workflow "${state.id}" lost its precondition.`);
   });
   clearPurgedWorkflowInMemoryState(internals, state.id, cleanupWaiters);
@@ -230,7 +232,7 @@ export async function purgeWorkflow(
  * `onTerminalConflict: 'start-new'` restart path prepends them to the create batch
  * so purge-and-recreate land as one atomic unit (no window where the prior run is
  * gone but the new one has not committed). Keep this the single source of truth
- * for "what a purge deletes" — do not fork the delete-set.
+ * for "what a purge deletes" — do not fork the delete-set. (`wf-gen:<id>` is deliberately excluded; WFT-153, see {@link buildBaseWorkflowDeleteKeys}.)
  */
 export async function collectWorkflowPurgeDeleteOperations(
   internals: EngineInternals,
@@ -370,7 +372,7 @@ function buildBaseWorkflowDeleteKeys(state: WorkflowState): Set<string> {
     // intentionally remain as leak evidence and are run-token qualified on read.
     KEYS.teardownSucceeded(state.id),
     KEYS.attribute(state.id),
-    KEYS.terminalWorkflow(state.updatedAt, state.id),
+    KEYS.terminalWorkflow(state.updatedAt, state.id), // `wf-gen:{id}` (WFT-153) is deliberately NOT here — bumped, not deleted.
   ]);
   if (state.parentWorkflowId !== undefined) {
     keys.add(

@@ -14,27 +14,36 @@
  * itself (`activeManifests`) the same way the engine-side
  * `registry-contract-builder.ts` and `weft codegen`'s `codegen-validate.ts`
  * do — one consistent resolution rule, not three independent inventions —
- * then reads each active manifest's `.contract` for the fields below.
+ * then reads each active manifest's identity (`revision`, `manifestVersion`,
+ * `contractHash`) and its `.contract` for the fields below.
  *
- * ## A known gap this module works around honestly
+ * ## The contract and activity gaps this module used to work around are closed (WFT-115)
  *
- * The plan (§9.7) and design reference call for "signal/update/query handler
- * names" and "activity definitions + retry policy" on this tab. Verified
- * against `weft` v0.11.0 (`src/core/registry-snapshot.ts`,
- * `src/core/activity-registry.ts`, `src/core/types/workflow-builder-runtime.ts`):
- * a workflow manifest's `.contract` never carries `.signals`/`.updates`/
- * `.queries` even though `workflow({name}).signals({...})` etc. register them
- * statically at build time (the data exists, `buildRegistrySnapshot` just
- * never copies it), and `RegistrySnapshot.activities[name]` drops
- * `ActivityMetadata.retry`/`.timeout` even though `buildActivityEntry` has
- * the full `ActivityMetadata` in hand and only copies `queue`/`inputSchema`/
- * `outputSchema`/`description`. Filed upstream:
- * https://github.com/stevekinney/weft/issues/736 — this module exposes
- * exactly the fields the wire snapshot actually carries and never fabricates
- * the missing ones; `RegistryWorkflowRow.handlers`/
- * `RegistryActivityRow.retry`/`.timeout` are typed `undefined` today by
- * construction, not guessed at.
+ * Earlier revisions of this module (through weft v0.11.0) noted that a
+ * workflow manifest's `.contract` never carried `.signals`/`.updates`/
+ * `.queries`/`.finalizer`, and that `RegistrySnapshot.activities[name]`
+ * dropped `ActivityMetadata.retry`/`.timeout` — filed upstream as
+ * https://github.com/stevekinney/weft/issues/736. That gap closed
+ * engine-side in WFT-5..8 (`WorkflowContract` now carries all four message
+ * kinds plus `finalizer`; `RegistryActivityEntry` now carries `retry`/
+ * `timeout`) — this module now sources every one of those fields for real
+ * rather than typing them permanently `undefined`. A signal/update/query/
+ * activity/finalizer this module can't structurally validate (a malformed
+ * schema fragment, an unsupported shape) still renders as "unknown" via the
+ * existing `schemaTypeLabel` fallback rather than a fabricated narrow type
+ * — the same honesty convention this module has always used for schema
+ * fragments themselves.
  */
+import type { Duration, RetryPolicy } from '@lostgradient/weft';
+
+/** One signal, update, or query contract's schema pair. Mirrors `WorkflowMessageContract` (`@lostgradient/weft`) structurally. */
+export interface WorkflowMessageContractSource {
+  readonly inputSchema?: Record<string, unknown>;
+  readonly outputSchema?: Record<string, unknown>;
+}
+
+/** One activity or finalizer contract's schema pair. Mirrors `WorkflowActivityContract` (`@lostgradient/weft`) structurally — currently identical to {@link WorkflowMessageContractSource}, kept as a distinct alias since the two vocabularies (message vs. activity) are independent on the wire and may diverge. */
+export type WorkflowActivityContractSource = WorkflowMessageContractSource;
 
 /** The subset of a `WorkflowRevisionManifest.contract` this module reads. Mirrors `WorkflowContract` (`@lostgradient/weft`) structurally rather than importing it, so this module has no runtime dependency on the package. */
 export interface WorkflowContractSource {
@@ -44,6 +53,11 @@ export interface WorkflowContractSource {
   readonly tags?: readonly string[];
   readonly inputSchema?: Record<string, unknown>;
   readonly outputSchema?: Record<string, unknown>;
+  readonly signals?: Readonly<Record<string, WorkflowMessageContractSource>>;
+  readonly updates?: Readonly<Record<string, WorkflowMessageContractSource>>;
+  readonly queries?: Readonly<Record<string, WorkflowMessageContractSource>>;
+  readonly activities?: Readonly<Record<string, WorkflowActivityContractSource>>;
+  readonly finalizer?: WorkflowActivityContractSource;
 }
 
 /** Mirrors `WorkflowRevisionManifest` (`@lostgradient/weft`) structurally. */
@@ -56,12 +70,14 @@ export interface WorkflowRevisionManifestSource {
   readonly contract: WorkflowContractSource;
 }
 
-/** Mirrors `RegistryActivityEntry` (`@lostgradient/weft`) structurally. */
+/** Mirrors `RegistryActivityEntry` (`@lostgradient/weft`) structurally. `retry`/`timeout` types are imported `import type` only — erased at build time, zero bundle cost (see this module's own doc and `../../lib/faults.ts`'s identical constraint on runtime-safe imports). */
 export interface RegistryActivityEntrySource {
   readonly inputSchema?: Record<string, unknown>;
   readonly outputSchema?: Record<string, unknown>;
   readonly queue: string;
   readonly description?: string;
+  readonly retry?: RetryPolicy;
+  readonly timeout?: Duration;
 }
 
 /** Mirrors `RegistrySnapshot` (`@lostgradient/weft`, v2) structurally. */
@@ -92,17 +108,52 @@ export interface RegistrySchemaField {
 
 export interface RegistryWorkflowRow {
   readonly type: string;
+  /** Content-derived or explicitly supplied opaque revision identity (`WorkflowRevisionManifest.revision`). */
+  readonly revision: string;
+  /** Manifest schema version this revision was built against. Never narrowed to the single literal this build understands — an unsupported value is exactly the `manifest-version-unsupported` compatibility reason surfacing honestly, not a type error. */
+  readonly manifestVersion: number;
+  /** Deterministic payload-only contract identity (`WorkflowRevisionManifest.contractHash`). */
+  readonly contractHash: string;
+  /** `WorkflowRevisionManifest.workflowVersion` — the compatibility-relevant version string a `workflow-version-incompatible` verdict compares against, independent of `manifestVersion`. Surfaced here so it's visible without `workflows:read` (the Revisions panel's own gate). */
+  readonly workflowVersion: string;
   readonly description: string | undefined;
   readonly tags: readonly string[];
   readonly hasInputSchema: boolean;
   readonly inputFields: readonly RegistrySchemaField[];
   /** Recursive tree for the `Tree`-based detail view (§ REGISTRY DEFINITION DETAIL). */
   readonly inputSchemaTree: readonly SchemaTreeNode[];
+  /** `schemaTypeLabel` of the declared root input schema — `undefined` when none is declared. Lets the detail view distinguish "declared as a non-object type, so the tree is legitimately empty" from "nothing declared" when `inputSchemaTree` is `[]`. */
+  readonly inputSchemaRootType: string | undefined;
   readonly hasOutputSchema: boolean;
   readonly outputFields: readonly RegistrySchemaField[];
   readonly outputSchemaTree: readonly SchemaTreeNode[];
-  /** Always `undefined` — see module doc's registry-snapshot gap. */
-  readonly handlers: undefined;
+  /** `schemaTypeLabel` of the declared root output schema — `undefined` when none is declared. Same purpose as {@link RegistryWorkflowRow.inputSchemaRootType}. */
+  readonly outputSchemaRootType: string | undefined;
+  /** Signal contracts, sorted by name. */
+  readonly signals: readonly RegistryContractMessageRow[];
+  /** Update contracts, sorted by name. */
+  readonly updates: readonly RegistryContractMessageRow[];
+  /** Query contracts, sorted by name. */
+  readonly queries: readonly RegistryContractMessageRow[];
+  /** Activity contracts, sorted by name. */
+  readonly activities: readonly RegistryContractMessageRow[];
+  /** The definition-level finalizer contract, when declared. */
+  readonly finalizer: RegistryContractMessageRow | undefined;
+}
+
+/** One signal/update/query/activity/finalizer contract, render-ready — the same schema-presence shape `RegistryWorkflowRow`'s own top-level input/output fields use. */
+export interface RegistryContractMessageRow {
+  readonly name: string;
+  readonly hasInputSchema: boolean;
+  readonly inputFields: readonly RegistrySchemaField[];
+  readonly inputSchemaTree: readonly SchemaTreeNode[];
+  /** See {@link RegistryWorkflowRow.inputSchemaRootType}. */
+  readonly inputSchemaRootType: string | undefined;
+  readonly hasOutputSchema: boolean;
+  readonly outputFields: readonly RegistrySchemaField[];
+  readonly outputSchemaTree: readonly SchemaTreeNode[];
+  /** See {@link RegistryWorkflowRow.outputSchemaRootType}. */
+  readonly outputSchemaRootType: string | undefined;
 }
 
 export interface RegistryActivityRow {
@@ -111,10 +162,10 @@ export interface RegistryActivityRow {
   readonly description: string | undefined;
   readonly hasInputSchema: boolean;
   readonly inputFields: readonly RegistrySchemaField[];
-  /** Always `undefined` — see module doc's registry-snapshot gap. */
-  readonly retry: undefined;
-  /** Always `undefined` — see module doc's registry-snapshot gap. */
-  readonly timeout: undefined;
+  /** `undefined` when the activity was registered with no retry policy — never fabricated. */
+  readonly retry: RetryPolicy | undefined;
+  /** `undefined` when the activity was registered with no timeout — never fabricated. */
+  readonly timeout: Duration | undefined;
 }
 
 function compareCodepoint(a: string, b: string): number {
@@ -127,8 +178,18 @@ function isJsonSchemaTypeString(value: unknown): value is string {
   return typeof value === 'string';
 }
 
-/** Best-effort "type" label for one JSON Schema property fragment — a compact summary, not a full schema renderer. */
-function schemaTypeLabel(fragment: unknown): string {
+/**
+ * Best-effort "type" label for one JSON Schema property fragment — a
+ * compact summary, not a full schema renderer. Also used at the schema
+ * ROOT (not just for a `properties` entry): a declared root schema that
+ * isn't `type: 'object'` — a bare `{ type: 'string' }` input/output/
+ * message schema, which Weft permits — has no `properties` to walk, so
+ * {@link buildSchemaTree} legitimately returns `[]` for it. That empty
+ * tree must never be read as "no schema declared" when a schema WAS
+ * declared; callers pair an empty tree with this root-type label so the
+ * detail view can say what the schema actually is.
+ */
+export function schemaTypeLabel(fragment: unknown): string {
   if (typeof fragment !== 'object' || fragment === null) return 'unknown';
   const record = fragment as Record<string, unknown>;
 
@@ -229,19 +290,73 @@ export function buildSchemaTree(
     .toSorted((a, b) => compareCodepoint(a.name, b.name));
 }
 
+/** Builds one render-ready contract-message row (a signal, update, query, activity, or finalizer) from its `{inputSchema?, outputSchema?}` pair. */
+function toContractMessageRow(
+  name: string,
+  entry: WorkflowMessageContractSource,
+  idPrefix: string,
+): RegistryContractMessageRow {
+  return {
+    name,
+    hasInputSchema: entry.inputSchema !== undefined,
+    inputFields: extractSchemaFields(entry.inputSchema),
+    inputSchemaTree: buildSchemaTree(entry.inputSchema, `${idPrefix}.input`),
+    inputSchemaRootType:
+      entry.inputSchema === undefined ? undefined : schemaTypeLabel(entry.inputSchema),
+    hasOutputSchema: entry.outputSchema !== undefined,
+    outputFields: extractSchemaFields(entry.outputSchema),
+    outputSchemaTree: buildSchemaTree(entry.outputSchema, `${idPrefix}.output`),
+    outputSchemaRootType:
+      entry.outputSchema === undefined ? undefined : schemaTypeLabel(entry.outputSchema),
+  };
+}
+
+/** Sorted (codepoint order, by name) contract-message rows for one signal/update/query/activity record — `[]` when the contract declares none. */
+function toContractMessageRows(
+  record: Readonly<Record<string, WorkflowMessageContractSource>> | undefined,
+  idPrefix: string,
+): readonly RegistryContractMessageRow[] {
+  if (!record) return [];
+  return Object.entries(record)
+    .map(([name, entry]) => toContractMessageRow(name, entry, `${idPrefix}.${name}`))
+    .toSorted((a, b) => compareCodepoint(a.name, b.name));
+}
+
 function toWorkflowRow(manifest: WorkflowRevisionManifestSource): RegistryWorkflowRow {
-  const { name: type, contract } = manifest;
+  const {
+    name: type,
+    revision,
+    manifestVersion,
+    contractHash,
+    workflowVersion,
+    contract,
+  } = manifest;
   return {
     type,
+    revision,
+    manifestVersion,
+    contractHash,
+    workflowVersion,
     description: contract.description,
     tags: contract.tags ?? [],
     hasInputSchema: contract.inputSchema !== undefined,
     inputFields: extractSchemaFields(contract.inputSchema),
     inputSchemaTree: buildSchemaTree(contract.inputSchema, `${type}.input`),
+    inputSchemaRootType:
+      contract.inputSchema === undefined ? undefined : schemaTypeLabel(contract.inputSchema),
     hasOutputSchema: contract.outputSchema !== undefined,
     outputFields: extractSchemaFields(contract.outputSchema),
     outputSchemaTree: buildSchemaTree(contract.outputSchema, `${type}.output`),
-    handlers: undefined,
+    outputSchemaRootType:
+      contract.outputSchema === undefined ? undefined : schemaTypeLabel(contract.outputSchema),
+    signals: toContractMessageRows(contract.signals, `${type}.signals`),
+    updates: toContractMessageRows(contract.updates, `${type}.updates`),
+    queries: toContractMessageRows(contract.queries, `${type}.queries`),
+    activities: toContractMessageRows(contract.activities, `${type}.activities`),
+    finalizer:
+      contract.finalizer === undefined
+        ? undefined
+        : toContractMessageRow('finalizer', contract.finalizer, `${type}.finalizer`),
   };
 }
 
@@ -252,8 +367,8 @@ function toActivityRow(name: string, entry: RegistryActivityEntrySource): Regist
     description: entry.description,
     hasInputSchema: entry.inputSchema !== undefined,
     inputFields: extractSchemaFields(entry.inputSchema),
-    retry: undefined,
-    timeout: undefined,
+    retry: entry.retry,
+    timeout: entry.timeout,
   };
 }
 

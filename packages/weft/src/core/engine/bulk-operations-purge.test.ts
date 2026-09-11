@@ -10,6 +10,7 @@ import {
   purgeInternal,
   purgeWorkflow,
 } from './bulk-operations-purge.ts';
+import { decodeGeneration, encodeGeneration } from './generation-codec.ts';
 import { encodeEpoch } from './lease-codec.ts';
 import { createTerminalCleanupTimerId } from './state-utilities.ts';
 import { decodeEpoch, encodeWorkflowClaimHolder } from './workflow-claim-codec.ts';
@@ -252,5 +253,40 @@ describe('bulk purge helpers', () => {
     await purgeWorkflow(internals, state, () => {});
 
     expect(await storage.get(KEYS.workflowOwnerEpoch(state.id))).toBeNull();
+  });
+
+  it('purgeWorkflow under "none" rejects a stale generation bump when a concurrent purge of the same id already committed (WFT-153 review)', async () => {
+    // Reproduces the overlapping-purge ABA the P2 review flagged directly through
+    // `purgeWorkflow`'s own commit path, not just the fold helper in isolation:
+    // this purge reads `wf-gen:<id>` as generation 1, but by the time its
+    // `conditionalBatch` actually lands, a DIFFERENT concurrent purge of the same
+    // id has already bumped it to generation 2. The CAS condition folded into
+    // this commit must make it lose the race rather than overwrite generation 2
+    // with a stale generation 2 minted from the pre-race read of 1.
+    const storage = new MemoryStorage();
+    const internals = createInternals(storage);
+    const state = createWorkflowState('purge-overlap', 3_000);
+    const generationKey = KEYS.workflowGeneration(state.id);
+    await storage.put(KEYS.workflow(state.id), encode(state));
+    await storage.put(generationKey, encodeGeneration(1));
+
+    const realConditionalBatch = storage.conditionalBatch.bind(storage);
+    let intercepted = false;
+    storage.conditionalBatch = async (conditions, operations) => {
+      if (!intercepted) {
+        // Simulate a concurrent purge of the SAME id committing in the window
+        // between this call's read (above) and its commit (here): it bumps
+        // `wf-gen:<id>` from 1 to 2 before this commit's own CAS runs.
+        intercepted = true;
+        await storage.put(generationKey, encodeGeneration(2));
+      }
+      return realConditionalBatch(conditions, operations);
+    };
+
+    await expect(purgeWorkflow(internals, state, () => {})).rejects.toThrow(
+      `Purge commit for workflow "${state.id}" lost its precondition.`,
+    );
+    // The concurrent purge's generation 2 must survive untouched.
+    expect(decodeGeneration((await storage.get(generationKey))!)).toBe(2);
   });
 });

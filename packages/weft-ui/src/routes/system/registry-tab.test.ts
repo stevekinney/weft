@@ -67,6 +67,17 @@ async function renderRegistryTab(
   if (manifestFixtures.diagnostics !== undefined) {
     scripted?.routeJsonRpcMethod('weft.workers.diagnostics', manifestFixtures.diagnostics);
   }
+  // Drilling into a definition's detail panel now also mounts
+  // `<WorkflowRevisionsPanel>` (WFT-115), which queries these two catalog
+  // operations regardless of which workflow type was clicked — a standing
+  // empty-by-default route here keeps every pre-existing drill-in test
+  // working without each one having to know about the Revisions panel.
+  scripted?.routeJsonRpcMethod('weft.workflows.revisions.list', []);
+  scripted?.routeJsonRpcError('weft.workflows.active.get', {
+    code: -32020,
+    message: 'never activated',
+    data: { weftCode: 'NotFound', httpStatus: 404 },
+  });
   return render(SystemRouteTestHarness, {
     props: { client: realClient(), queryClient: createQueryClient(), component: RegistryTab },
   });
@@ -159,6 +170,16 @@ describe('RegistryTab', () => {
                 note: { type: 'string' },
               },
             },
+            signals: { cancel: { inputSchema: { type: 'object', properties: {} } } },
+            updates: {
+              expedite: {
+                inputSchema: { type: 'object', properties: {} },
+                outputSchema: { type: 'object', properties: {} },
+              },
+            },
+            queries: { status: { outputSchema: { type: 'object', properties: {} } } },
+            activities: { chargeCard: { inputSchema: { type: 'object', properties: {} } } },
+            finalizer: { inputSchema: { type: 'object', properties: {} } },
           }),
           manifestFixture('heartbeat'),
         ],
@@ -170,12 +191,20 @@ describe('RegistryTab', () => {
               required: ['amount'],
               properties: { amount: { type: 'number' } },
             },
+            retry: {
+              maxAttempts: 3,
+              initialBackoff: '200ms',
+              backoffMultiplier: 2,
+              maxBackoff: '2s',
+              nonRetryableErrors: ['ValidationError'],
+            },
+            timeout: '30s',
           },
         },
       ),
     );
 
-    const { findByText, findAllByText, getByRole } = await renderRegistryTab();
+    const { findByText, findAllByText, findByTitle, getByRole } = await renderRegistryTab();
 
     expect(await findByText('order-processing')).not.toBeNull();
     expect(await findByText('chargeCard')).not.toBeNull();
@@ -195,9 +224,30 @@ describe('RegistryTab', () => {
     expect(activityFieldCountBadge.getAttribute('data-cinder-variant')).toBe('success');
     expect(activityFieldCountBadge.getAttribute('data-cinder-size')).toBe('md');
 
+    // Full retry policy, not just maxAttempts — backoff timing and
+    // non-retryable errors are operationally significant and were
+    // previously hidden entirely.
+    expect(await findByText('retry: 3x, 200ms→2s ×2')).not.toBeNull();
+    expect(await findByText('never retries: ValidationError')).not.toBeNull();
+    expect(await findByText('timeout: 30s')).not.toBeNull();
+
     await fireEvent.click(getByRole('button', { name: /order-processing/ }));
 
     expect(await findByText('Processes an order end to end.')).not.toBeNull();
+
+    // Revision identity (WFT-115): the exact revision/contractHash are on
+    // the element's `title` (hover-full convention, plan §10.8) even
+    // though the visible text is truncated; manifest version verbatim.
+    expect(await findByTitle('order-processing-rev')).not.toBeNull();
+    expect(await findByTitle('order-processing-hash')).not.toBeNull();
+    expect(await findByText('manifest v1')).not.toBeNull();
+    expect(await findByText('workflow v1.0.0')).not.toBeNull();
+
+    // The full contract surface (WFT-115) — no longer the #736 gap note.
+    expect(await findAllByText('cancel')).not.toHaveLength(0);
+    expect(await findAllByText('expedite')).not.toHaveLength(0);
+    expect(await findAllByText('status')).not.toHaveLength(0);
+    expect(await findAllByText('finalizer')).not.toHaveLength(0);
     const paymentElements = await findAllByText('payments');
     const tagBadge = paymentElements.find(
       (element) => element.getAttribute('data-cinder-variant') !== null,
@@ -229,6 +279,28 @@ describe('RegistryTab', () => {
     expect(
       await findByText('No input schema declared — this definition accepts an untyped payload.'),
     ).not.toBeNull();
+
+    // `heartbeat`'s fixture contract declares no signals/updates/queries/
+    // activities/finalizer at all (WFT-115) — every contract-section panel
+    // renders its honest empty note rather than nothing.
+    expect(await findByText('No signals declared.')).not.toBeNull();
+    expect(await findByText('No updates declared.')).not.toBeNull();
+    expect(await findByText('No queries declared.')).not.toBeNull();
+    expect(await findByText('No activities declared.')).not.toBeNull();
+    expect(await findByText('No finalizer declared.')).not.toBeNull();
+  });
+
+  test('renders an activity timeout of exactly 0 — a valid Duration, not the same as "no timeout"', async () => {
+    scripted = new ScriptedFetch();
+    scripted.enqueueJsonRpcResult(
+      registrySnapshot([manifestFixture('order-processing')], {
+        chargeCard: { queue: 'default', timeout: 0 },
+      }),
+    );
+    const { findByText } = await renderRegistryTab();
+    // A truthy-only guard on `activity.timeout` would suppress this badge
+    // for a genuinely configured (if unusual) zero-millisecond timeout.
+    expect(await findByText('timeout: 0ms')).not.toBeNull();
   });
 
   test('shows the honest "no activities" note when the engine has none registered', async () => {
@@ -236,6 +308,43 @@ describe('RegistryTab', () => {
     scripted.enqueueJsonRpcResult(registrySnapshot([manifestFixture('heartbeat')]));
     const { findByText } = await renderRegistryTab();
     expect(await findByText('No activities registered for this engine.')).not.toBeNull();
+  });
+
+  test('a declared root schema that is not `type: object` renders its root type, not "no schema declared"', async () => {
+    scripted = new ScriptedFetch();
+    scripted.enqueueJsonRpcResult(
+      registrySnapshot([
+        manifestFixture('order-processing', {
+          inputSchema: { type: 'string' },
+        }),
+      ]),
+    );
+    const { container, findByRole, queryByText } = await renderRegistryTab();
+    await fireEvent.click(await findByRole('button', { name: /order-processing/ }));
+
+    expect(container.textContent).toContain('Declared as string — no object fields to list.');
+    expect(
+      queryByText('No input schema declared — this definition accepts an untyped payload.'),
+    ).toBeNull();
+  });
+
+  test('renders a schema field description, when the fragment declares one', async () => {
+    scripted = new ScriptedFetch();
+    scripted.enqueueJsonRpcResult(
+      registrySnapshot([
+        manifestFixture('order-processing', {
+          inputSchema: {
+            type: 'object',
+            properties: {
+              orderId: { type: 'string', description: 'The order identifier to process.' },
+            },
+          },
+        }),
+      ]),
+    );
+    const { findByRole, findByText } = await renderRegistryTab();
+    await fireEvent.click(await findByRole('button', { name: /order-processing/ }));
+    expect(await findByText('The order identifier to process.')).not.toBeNull();
   });
 
   test('renders a nested object field as an expandable schema tree branch', async () => {

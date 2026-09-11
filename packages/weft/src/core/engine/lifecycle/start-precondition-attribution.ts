@@ -40,10 +40,16 @@ import { StartIdempotencyRaceLostError } from './start-commit-errors.ts';
  * expectation — the id is free right now, and a retry re-conditions on that same
  * still-matching value.
  *
- * The residual is the pre-compare-and-swap purge ABA (WFT-153): a winner purged
- * between the read and the commit makes an absent record look never-used, which no
- * value-comparing condition can detect. That is tracked separately and is the reason
- * this function does not claim exclusive attribution.
+ * The pre-compare-and-swap purge ABA — a winner purged between the read and the
+ * commit, making an absent record look never-used to a value-comparing condition
+ * alone — no longer reaches this function's elimination logic (WFT-153, closing
+ * the residual this comment used to describe as untracked). The caller now checks
+ * a SECOND, positive-evidence condition first (`'duplicate-id-generation'` in
+ * `buildAndCommitStartBatch`) on a durable per-id generation counter that a purge
+ * bumps but never resets, so that case throws `WorkflowAlreadyExistsError` before
+ * reaching here. This function still does not claim exclusive attribution for
+ * every conceivable cause — only that the two positively-detectable duplicate-id
+ * causes are ruled out ahead of it.
  *
  * With no concurrency evidence at all, fail closed: something missed, nothing
  * retryable explains it, and a spurious `WorkflowAlreadyExistsError` is public,

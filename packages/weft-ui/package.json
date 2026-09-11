@@ -54,7 +54,7 @@
     "test:e2e": "playwright test"
   },
   "peerDependencies": {
-    "@lostgradient/weft": "^0.22.0"
+    "@lostgradient/weft": "^0.24.1"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.12.1",

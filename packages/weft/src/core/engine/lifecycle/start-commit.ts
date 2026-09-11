@@ -43,7 +43,12 @@ export type BuildIdempotentStartOperations = (workflowId: string) => {
 const WORKFLOW_CONCURRENCY_ADMISSION_MAX_ATTEMPTS = 5;
 
 type TaggedStartCondition = {
-  source: 'workflow-concurrency' | 'start-precondition' | 'duplicate-id' | 'catalog-entry';
+  source:
+    | 'workflow-concurrency'
+    | 'start-precondition'
+    | 'duplicate-id'
+    | 'duplicate-id-generation'
+    | 'catalog-entry';
   condition: ConditionalBatchCondition;
 };
 
@@ -233,20 +238,21 @@ async function persistStartBatch(
 }
 
 /**
- * Re-read the conditions tagged `source` and report whether any no longer matches.
- * A `conditionalBatch` returning `false` says only that SOME condition missed, so
- * this is how the caller attributes the miss to one specific cause — an idempotency
- * race, a duplicate id, or a workflow-concurrency admission slip — each of which
- * the caller answers with a different, caller-visible outcome. Returns `false`
- * immediately when no condition carries `source`.
+ * Re-read the conditions tagged any of `sources` and report whether any no longer
+ * matches. A `conditionalBatch` returning `false` says only that SOME condition
+ * missed, so this is how the caller attributes the miss to one or more specific
+ * causes — an idempotency race, a duplicate id (value and/or WFT-153 generation),
+ * or a workflow-concurrency admission slip — each of which the caller answers
+ * with a different, caller-visible outcome. Returns `false` immediately when no
+ * condition carries one of `sources`.
  */
 async function hasStartConditionConflict(
   internals: EngineInternals,
   conditions: TaggedStartCondition[],
-  source: TaggedStartCondition['source'],
+  sources: readonly TaggedStartCondition['source'][],
 ): Promise<boolean> {
   for (const entry of conditions) {
-    if (entry.source !== source) continue;
+    if (!sources.includes(entry.source)) continue;
     const currentValue = await internals.storage.get(entry.condition.key);
     if (!storageValuesEqual(currentValue, entry.condition.expectedValue)) {
       return true;
@@ -288,10 +294,17 @@ function tagStartPreconditions(
   }));
 }
 
-function tagDuplicateIdCondition(
+/** Separate `source` tags (not merged) so a WFT-153 generation-only conflict is distinguishable from an ordinary value conflict. Both undefined together (generated id), or both defined. */
+function tagDuplicateIdConditions(
   condition: ConditionalBatchCondition | undefined,
+  generationCondition: ConditionalBatchCondition | undefined,
 ): TaggedStartCondition[] {
-  return condition === undefined ? [] : [{ source: 'duplicate-id' as const, condition }];
+  const tagged: TaggedStartCondition[] = [];
+  if (condition !== undefined) tagged.push({ source: 'duplicate-id', condition });
+  if (generationCondition !== undefined) {
+    tagged.push({ source: 'duplicate-id-generation', condition: generationCondition });
+  }
+  return tagged;
 }
 
 function tagWorkflowConcurrencyConditions(
@@ -344,6 +357,8 @@ export type StartBatchContext = {
    * path.
    */
   duplicateIdCondition: ConditionalBatchCondition | undefined;
+  /** ADDITIONAL WFT-153 precondition on observed `wf-gen:<id>` bytes; see `StartDuplicateIdDecision.duplicateIdGenerationCondition` in `start-terminal-conflict-purge.ts`. Undefined exactly when `duplicateIdCondition` is. */
+  duplicateIdGenerationCondition: ConditionalBatchCondition | undefined;
 };
 
 /**
@@ -402,7 +417,10 @@ export async function buildAndCommitStartBatch(
     );
     const conditions = [
       ...tagStartPreconditions(idempotent?.conditions),
-      ...tagDuplicateIdCondition(context.duplicateIdCondition),
+      ...tagDuplicateIdConditions(
+        context.duplicateIdCondition,
+        context.duplicateIdGenerationCondition,
+      ),
       ...tagWorkflowConcurrencyConditions(workflowConcurrency?.conditions ?? []),
       ...(catalogEntryPrecondition === undefined ? [] : [catalogEntryPrecondition]),
     ];
@@ -439,20 +457,24 @@ export async function buildAndCommitStartBatch(
     // makes `resolveCreateRaceOutcome` take its `lost-caller-id` branch and converge
     // onto the winner, which is what this race should do.
     //
-    // Positive evidence only. The purge ABA can make this read a false negative,
-    // which simply falls through to the elimination-based attribution below — it
-    // never turns a non-conflict into a spurious duplicate.
-    // Skipped for a `'claim-lost'` outcome: a `workflow-lease` loser fails its claim
-    // fold AND this condition, and must keep reporting `WorkflowClaimUnavailableError`
-    // (WFT-78). Gating on the outcome rather than reordering the checks leaves the
-    // existing idempotency-before-claim precedence untouched.
+    // Positive evidence only, checking BOTH duplicate-id sources together: a purge
+    // ABA (WFT-153) can make the `duplicate-id` value re-read a false negative
+    // (id looks free again), but `duplicate-id-generation` catches it — the
+    // durable counter a purge bumps (never resets) will have moved. Checking both
+    // here (rather than leaving generation to the elimination fallback below) is
+    // what attributes a purge-ABA loser correctly. Skipped for `'claim-lost'`: a
+    // `workflow-lease` loser fails its claim fold AND these, and must keep
+    // reporting `WorkflowClaimUnavailableError` (WFT-78).
     if (
       outcome !== 'claim-lost' &&
-      (await hasStartConditionConflict(internals, conditions, 'duplicate-id'))
+      (await hasStartConditionConflict(internals, conditions, [
+        'duplicate-id',
+        'duplicate-id-generation',
+      ]))
     ) {
       throw new WorkflowAlreadyExistsError(workflowId);
     }
-    if (await hasStartConditionConflict(internals, conditions, 'start-precondition')) {
+    if (await hasStartConditionConflict(internals, conditions, ['start-precondition'])) {
       throw new StartIdempotencyRaceLostError();
     }
     if (await hasCatalogEntryConflict(internals, conditions)) {
@@ -465,7 +487,7 @@ export async function buildAndCommitStartBatch(
       workflowId,
       context.duplicateIdCondition !== undefined,
       workflowConcurrency !== undefined,
-      () => hasStartConditionConflict(internals, conditions, 'workflow-concurrency'),
+      () => hasStartConditionConflict(internals, conditions, ['workflow-concurrency']),
     );
   }
 
