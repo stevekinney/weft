@@ -77,25 +77,37 @@
    * untracked (the original was purged, then a plain new `engine.start()`
    * happened to reuse the same explicit id, leaving no `restartedFrom` at
    * all) — showing that unrelated generation's `revision` here would
-   * misattribute it to the historical fork (Codex review, PR #978, two
-   * rounds: the first covered only the tracked restart case; this doc and
-   * `sourceRevisionAttributable` cover both).
+   * misattribute it to the historical fork.
    *
-   * `sourceRevisionAttributable` compares `source.createdAt` (the fetched
-   * generation's OWN origin time) against `workflow.createdAt` (THIS run's
-   * — the fork's — own creation time), independent of `restartedFrom`
-   * entirely: `client.get` always returns the CURRENT latest generation for
-   * an id, so if the generation just fetched originated strictly BEFORE
-   * this fork was created, it has necessarily been the current, unreplaced
-   * generation continuously from its own `createdAt` through right now —
-   * which means it was also the current generation back when the fork
-   * happened, however it came to hold that id (restart or fresh start).
-   * Conversely, if it originated AT OR AFTER the fork, it cannot be the
-   * historical source regardless of `restartedFrom`. This single
-   * comparison subsumes the restart-only check the first round shipped and
-   * closes the untracked-reuse gap the second round found. When it isn't
-   * attributable, the chip is omitted with an explicit note rather than
-   * silently showing a possibly-wrong revision.
+   * `sourceRevisionAttributable` requires BOTH, neither alone sufficing
+   * (Codex review, PR #978, three rounds — see below):
+   *
+   * - `source.restartedFrom === undefined` — timestamp-free: proves this
+   *   generation has never been displaced by ANY start-new replacement,
+   *   tracked or not, so it has held this id continuously since its own
+   *   origin regardless of clock behavior anywhere in the deployment.
+   * - `source.createdAt < workflow.createdAt` — best-effort and
+   *   wall-clock-based: the only signal available for the UNTRACKED reuse
+   *   case the `restartedFrom` check can't see (a purged id reused by a
+   *   plain fresh `engine.start()`, which sets no `restartedFrom` at all).
+   *
+   * History: round 1 shipped `restartedFrom`-only. Round 2 replaced it
+   * with `createdAt`-only, reasoning `client.get` always returns the
+   * current, unreplaced generation, so an origin strictly before the fork
+   * proves continuous identity through fork time regardless of how the id
+   * came to be held — believing this "subsumed" the `restartedFrom` check.
+   * Round 5 disproved that: `createdAt` is stamped from each engine's own
+   * wall-clock `getNow()` (`ownership: 'workflow-lease'` explicitly
+   * permits multiple engines, and Weft's ownership documentation accounts
+   * for clock skew between them), so a TRACKED replacement created causally
+   * AFTER the fork on a clock-skewed engine can still stamp a `createdAt`
+   * that appears to precede it — `createdAt`-only would misattribute it.
+   * `ForkLineage` carries no durable generation token to check instead
+   * (just `{ workflowId, step }`), so both signals are required together:
+   * `restartedFrom` closes every TRACKED case without touching a clock at
+   * all; `createdAt` remains the only (imperfect) signal for the untracked
+   * case. When either check fails, the chip is omitted with an explicit
+   * note rather than silently showing a possibly-wrong revision.
    */
   import Badge from '@lostgradient/cinder/badge';
   import CopyButton from '@lostgradient/cinder/copy-button';
@@ -138,11 +150,11 @@
     })),
   );
 
-  /** See the module doc's "Revision display" section for why this guard is required, not optional. */
+  /** See the module doc's "Revision display" section for why BOTH checks are required, not either alone. */
   const sourceRevisionAttributable = $derived.by(() => {
     const source = $forkSourceQuery.data;
     if (source === null || source === undefined) return false;
-    return source.createdAt < workflow.createdAt;
+    return source.restartedFrom === undefined && source.createdAt < workflow.createdAt;
   });
 
   const scheduleProvenanceQuery = createQuery(

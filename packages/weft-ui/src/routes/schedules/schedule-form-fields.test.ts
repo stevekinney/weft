@@ -199,6 +199,14 @@ describe('ScheduleFormFields — edit mode', () => {
     await fireEvent.click(getByRole('radio', { name: 'Pinned' }));
 
     expect(getByText(/captures whichever revision is active right now/)).not.toBeNull();
+    // `resolveScheduleRevisionForPin()` deliberately uses the same
+    // executable-resolution path as a fresh start (Codex review, PR #978,
+    // round 5) — for an eager-registered type, or when only one revision
+    // is a viable dynamic-source candidate, the captured pin can differ
+    // from whatever the catalog's active pointer shows.
+    expect(
+      getByText(/a fresh start can run without consulting the active pointer at all/),
+    ).not.toBeNull();
   });
 
   test('does NOT show the pinned warning when active-at-fire is selected in edit mode', async () => {

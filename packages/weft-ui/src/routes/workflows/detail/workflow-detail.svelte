@@ -132,6 +132,25 @@
     })),
   );
 
+  /**
+   * NOT `$activeRevisionQuery.data` read directly at the call sites below
+   * (Codex review, PR #978, round 5). TanStack Query keeps the PREVIOUS
+   * successful `data` around across a failed refetch alongside `isError`
+   * true — reading `.data` alone after, say, `workflows:read` is revoked
+   * server-side mid-session (the listing's own 403, same class of gap the
+   * fork picker's `revisionsForbidden` check already closes) would keep
+   * showing the LAST-known active pointer as current fact, potentially
+   * labeling a since-superseded run "Active" on stale data presented as
+   * fresh. Both `Header` and `OverviewTab` already treat `undefined` as
+   * "unresolved/denied/loading" (their own prop docs), so collapsing an
+   * error to `undefined` here — mirroring the System Revisions panel's own
+   * `$activeQuery.isError` branch — reuses that existing semantic instead
+   * of inventing a new one.
+   */
+  const resolvedActiveRevision = $derived(
+    $activeRevisionQuery.isError ? undefined : $activeRevisionQuery.data,
+  );
+
   // Fleet liveness: any event naming this workflow invalidates the detail
   // query, giving header/Overview a fresh status without the per-workflow
   // tail (see module doc). Subscribed once for the component's lifetime —
@@ -274,7 +293,7 @@
       onNavigateToTab={navigateToTab}
       finalizerStatus={$finalizerQuery.data}
       onRunQuery={runQuery}
-      activeRevision={$activeRevisionQuery.data}
+      activeRevision={resolvedActiveRevision}
     />
 
     <div class="weft-workflow-detail__tab-scroll">
@@ -292,11 +311,7 @@
 
         <div class="weft-workflow-detail__content">
           <Tabs.Panel value="overview"
-            ><OverviewTab
-              {client}
-              {workflow}
-              activeRevision={$activeRevisionQuery.data}
-            /></Tabs.Panel
+            ><OverviewTab {client} {workflow} activeRevision={resolvedActiveRevision} /></Tabs.Panel
           >
           <Tabs.Panel value="timeline"
             ><TimelineTab

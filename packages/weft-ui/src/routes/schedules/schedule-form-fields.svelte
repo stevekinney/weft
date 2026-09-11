@@ -29,6 +29,7 @@
   import type { ScheduleOverlapPolicy, ScheduleRevisionPolicy } from '@lostgradient/weft';
 
   import { computeNextFires } from '../../lib/format/cron-preview.ts';
+  import { FRESH_START_REVISION_HEDGE } from '../../lib/workflow-revision.ts';
   import JsonEditor from '@lostgradient/cinder/json-editor';
   import { OVERLAP_POLICIES } from './overlap-policy.ts';
   import { REVISION_POLICIES } from './revision-policy.ts';
@@ -264,6 +265,7 @@
         <TriangleAlert aria-hidden="true" size={14} />
         <span>
           Saving captures whichever revision is active right now and pins future occurrences to it.
+          {FRESH_START_REVISION_HEDGE}
         </span>
       </div>
     {/if}

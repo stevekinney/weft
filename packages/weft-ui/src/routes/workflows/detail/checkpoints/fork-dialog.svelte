@@ -33,6 +33,26 @@
    * failed — that case routes to the explicit picker instead. An
    * `'explicit'` fork that failed keeps "use the source revision instead"
    * as real, available advice.
+   *
+   * ## The default "Retains rev X" promise describes a SNAPSHOT, not a guarantee (Codex review, PR #978, round 5)
+   *
+   * `sourceRevision` is a prop threaded down from the detail page's own
+   * `WorkflowState` fetch — as of whenever that page last loaded or
+   * refetched, not as of the moment `Create fork` is actually clicked.
+   * `client.fork(workflowId)` (the default, no explicit `revision`) asks
+   * the server to resolve and persist whichever generation CURRENTLY
+   * occupies `workflowId` at submission time. If the displayed terminal run
+   * was replaced by a `start-new` restart after the page loaded — most
+   * likely while the fleet live-update feed is unavailable, so the stale
+   * page never refreshes — the two can diverge: the dialog still shows the
+   * OLD generation's revision while the actual fork call resolves the
+   * REPLACEMENT's. There is no client-side fix available within this
+   * batch's scope (revalidating would mean re-fetching the source and
+   * accepting a race against a start-new landing between that fetch and
+   * submission; pinning it durably would need `ForkOptions` to accept a
+   * source execution token, a `packages/weft` change, out of scope here) —
+   * the retention line's copy is qualified below to say so honestly rather
+   * than promise more than this snapshot can guarantee.
    */
   import Badge from '@lostgradient/cinder/badge';
   import Button from '@lostgradient/cinder/button';
@@ -233,10 +253,11 @@
       </Tooltip>
     {:else if sourceRevision !== undefined}
       <Tooltip
-        text={`Revision (exact executable artifact): ${sourceRevision}. ${EAGER_REVISION_HEDGE}`}
+        text={`Revision (exact executable artifact) as last loaded: ${sourceRevision}. ${EAGER_REVISION_HEDGE} If this run has been replaced by a start-new restart since this page loaded, the fork instead targets the replacement's own revision.`}
       >
         <span
-          >Retains <code>rev {truncateId(sourceRevision)}</code> — the source run's own revision.</span
+          >Retains <code>rev {truncateId(sourceRevision)}</code> — the source run's own revision, as last
+          loaded here.</span
         >
       </Tooltip>
     {:else}

@@ -63,6 +63,22 @@ describe('ForkDialog', () => {
     expect(getByText(/^Retains/)).not.toBeNull();
   });
 
+  test("qualifies the default retention promise as a snapshot, not a guarantee (Codex review, PR #978, round 5) — sourceRevision is threaded from the detail page's own fetch, which can be stale by the time the operator submits", async () => {
+    const { getByText } = render(ForkDialogHarness, {
+      props: {
+        client: baseClient(),
+        workflowId: 'wf-1',
+        initialStep: 3,
+        workflowType: 'order-processing',
+        sourceRevision: 'order-processing-rev-current',
+        principal: allScopesPrincipal(),
+        queryClient: newQueryClient(),
+      },
+    });
+
+    expect(getByText(/as last loaded here/)).not.toBeNull();
+  });
+
   test('default state shows the unpinned-legacy variant when sourceRevision is undefined', async () => {
     const { getByText } = render(ForkDialogHarness, {
       props: {

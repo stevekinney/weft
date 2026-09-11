@@ -4,6 +4,7 @@ import type { DetachedWindowAPI } from 'happy-dom';
 import { QueryClient } from '@tanstack/svelte-query';
 import { fireEvent, render, waitFor } from '@testing-library/svelte';
 
+import { queryKeys } from '../../../lib/query.ts';
 import { router } from '../../../lib/router.svelte.ts';
 import type { Principal } from '../../../lib/scopes.svelte.ts';
 import { realClient, ScriptedFetch } from '../list/workflow-test-support.test-support.ts';
@@ -220,5 +221,44 @@ describe('WorkflowDetail — active-revision comparison (WFT-117)', () => {
         }
       }),
     ).toBe(false);
+  });
+
+  test('a failed REFETCH does not keep showing the previous successful pointer as current fact (Codex review, PR #978, round 5)', async () => {
+    // TanStack Query keeps the PREVIOUS successful `data` around across a
+    // failed refetch, alongside `isError: true` — passing `.data` alone at
+    // the call sites (fixed to read a derived `resolvedActiveRevision`
+    // instead) would keep rendering the stale "Active" pointer as current
+    // even after the underlying request starts failing (e.g. `workflows:
+    // read` revoked server-side mid-session, mirroring the fork picker's
+    // own `revisionsForbidden` gap from an earlier round).
+    const id = 'wf-detail-active-rev-stale-1';
+    fetchScript.routeUrl(`/workflows/${id}`, baseWorkflow({ id, revision: 'order-rev-a' }));
+    // No standing route for `weft.workflows.active.get` here — both calls
+    // fall through to the FIFO queue below, in order: first the initial
+    // successful fetch, then the failed refetch.
+    fetchScript.enqueueJson({
+      jsonrpc: '2.0',
+      id: 1,
+      result: { revision: 'order-rev-a', generation: 2, activatedAt: 500 },
+    });
+    fetchScript.enqueueJson({
+      jsonrpc: '2.0',
+      id: 2,
+      error: { code: -32000, message: 'workflows:read required', data: { httpStatus: 403 } },
+    });
+    resetLocation(`/workflows/${id}`);
+
+    const queryClient = newQueryClient();
+    const { findByText, getByText } = render(WorkflowDetailHarness, {
+      props: { client: realClient(), principal: GRANTED_PRINCIPAL, queryClient },
+    });
+
+    expect(await findByText('Active')).not.toBeNull();
+
+    await queryClient.refetchQueries({ queryKey: queryKeys.catalog.active('order-fulfillment') });
+
+    await waitFor(() => {
+      expect(getByText('Active revision unknown')).not.toBeNull();
+    });
   });
 });

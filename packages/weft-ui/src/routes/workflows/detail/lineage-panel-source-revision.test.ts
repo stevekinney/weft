@@ -186,12 +186,13 @@ describe('LineagePanel — forked-from source revision attribution', () => {
     expect(queryByText(/^rev reconcil/)).toBeNull();
   });
 
-  test('still shows the source-revision chip when the fetched generation originated BEFORE this fork was created', async () => {
+  test('shows the source-revision chip when the fetched generation originated BEFORE this fork was created AND was never restarted', async () => {
     // The source's own `createdAt` (1_000) is BEFORE this fork's own
-    // `createdAt` (5_000) — since `client.get` always returns the current,
-    // unreplaced generation, this generation has existed continuously since
-    // 1_000 through now, so it was necessarily current at fork time (5_000)
-    // too. Its revision is the real source, regardless of `restartedFrom`.
+    // `createdAt` (5_000), AND `restartedFrom` is absent — since `client.
+    // get` always returns the current, unreplaced generation, an
+    // origin-before-fork generation that has ALSO never been displaced has
+    // existed continuously since 1_000 through now, so it was necessarily
+    // current at fork time (5_000) too. Its revision is the real source.
     const client = baseClient({
       get: async (id) =>
         id === 'wf_source'
@@ -200,7 +201,9 @@ describe('LineagePanel — forked-from source revision attribution', () => {
               type: 'reconcile-ledger',
               revision: 'reconcile-rev-abc',
               createdAt: 1_000,
-              restartedFrom: { workflowId: 'wf_source', replacedAt: 1_000 },
+              // Deliberately no `restartedFrom` — see the round-5 test
+              // below for why a PRESENT `restartedFrom` disqualifies this
+              // case even with the same `createdAt` ordering.
             })
           : null,
     });
@@ -220,5 +223,47 @@ describe('LineagePanel — forked-from source revision attribution', () => {
     });
     expect(getByText(/^rev reconcil/)).not.toBeNull();
     expect(queryByText('Revision not attributable')).toBeNull();
+  });
+
+  test('omits the source-revision chip for a TRACKED restart whose createdAt merely APPEARS to precede the fork — a clock-skewed engine, not a real predecessor (Codex review, PR #978, round 5)', async () => {
+    // `restartedFrom` IS present — this generation is provably a start-new
+    // REPLACEMENT, not the original. `createdAt`-only comparison (round
+    // 2's fix) would still treat this as attributable because 1_000 <
+    // 5_000, exactly the false positive round 5 flagged: `createdAt` is
+    // stamped from each engine's own wall-clock `getNow()`
+    // (`ownership: 'workflow-lease'` permits multiple engines), so a
+    // replacement created causally AFTER the fork on a clock-skewed engine
+    // can still stamp an EARLIER `createdAt` than the fork's own. The
+    // `restartedFrom === undefined` guard closes this without touching a
+    // clock at all — presence alone disqualifies attribution, regardless
+    // of `createdAt` ordering.
+    const client = baseClient({
+      get: async (id) =>
+        id === 'wf_source'
+          ? workflow({
+              id: 'wf_source',
+              type: 'reconcile-ledger',
+              revision: 'reconcile-rev-replacement',
+              createdAt: 1_000,
+              restartedFrom: { workflowId: 'wf_source', replacedAt: 1_000 },
+            })
+          : null,
+    });
+
+    const { getByText, queryByText } = render(LineagePanelHarness, {
+      props: {
+        client,
+        workflow: workflow({
+          createdAt: 5_000,
+          forkedFrom: { workflowId: 'wf_source', step: 12 },
+        }),
+      },
+    });
+
+    await waitFor(() => {
+      expect(getByText('reconcile-ledger')).not.toBeNull();
+    });
+    expect(getByText('Revision not attributable')).not.toBeNull();
+    expect(queryByText(/^rev reconcil/)).toBeNull();
   });
 });
