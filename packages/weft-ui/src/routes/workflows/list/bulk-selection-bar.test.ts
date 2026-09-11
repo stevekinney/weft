@@ -325,6 +325,11 @@ describe('BulkSelectionBar', () => {
       expect(
         getByText(/a fresh start can run without consulting the active pointer at all/),
       ).not.toBeNull();
+      // A checkpoint-backed retry of a pre-revision-pinning run has no
+      // persisted revision to resume against either (Codex review, PR
+      // #978, round 6) — the first sentence is qualified, not unconditional.
+      expect(getByText(/when one exists/)).not.toBeNull();
+      expect(getByText(/falls back to the same active-revision resolution/)).not.toBeNull();
     } finally {
       fetch.restore();
     }

@@ -63,8 +63,13 @@
    * display degrades to an explicit "Unpinned" label for a
    * pre-revision-pinning (legacy) record rather than a blank space —
    * including the "Forked from" row's own attributable-but-unpinned case
-   * (Codex review, PR #978), which a prior version of this file silently
-   * rendered nothing for.
+   * (Codex review, PR #978), and its purged (`$forkSourceQuery.data ===
+   * null`, `client.get()`'s documented 404 contract) and query-error
+   * (`$forkSourceQuery.isError`) cases (Codex review, PR #978, round 6),
+   * both of which a prior version of this file silently rendered nothing
+   * for — every one of the three `sourceRevisionAttributable`-gated
+   * branches requires truthy `data`, so neither a purged source nor a
+   * failed lookup ever matched any of them.
    *
    * `forkSourceQuery` fetches `forkedFrom.workflowId` — a stable id, not the
    * concrete generation actually forked from. `GET /api/v1/workflows/:id`
@@ -301,6 +306,16 @@
               text={`This id was reused by a start-new replacement after this fork was created, so the current record's revision may not match what was actually forked. Not shown to avoid a wrong attribution.`}
             >
               <Badge variant="neutral" size="sm">Revision not attributable</Badge>
+            </Tooltip>
+          {:else if $forkSourceQuery.data === null}
+            <Tooltip text="The source run has been purged, so its revision can no longer be shown.">
+              <Badge variant="neutral" size="sm">Revision unavailable</Badge>
+            </Tooltip>
+          {:else if $forkSourceQuery.isError}
+            <Tooltip
+              text="The source run's record could not be loaded, so its revision can't be shown."
+            >
+              <Badge variant="neutral" size="sm">Revision unavailable</Badge>
             </Tooltip>
           {/if}
         {/if}

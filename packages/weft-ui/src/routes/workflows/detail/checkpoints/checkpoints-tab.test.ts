@@ -231,6 +231,12 @@ describe('CheckpointsTab', () => {
 
     await waitFor(() => {
       expect(getByText(/Not attributable/)).not.toBeNull();
+      // The explanation covers every reason `resolveReplayRevision()`
+      // omits a revision, not only the purged/legacy cases (Codex review,
+      // PR #978, round 6) — a pre-token-correlation record and an
+      // id-reuse mismatch are real, distinct causes too.
+      expect(getByText(/execution-token correlation/)).not.toBeNull();
+      expect(getByText(/reused by a different run/)).not.toBeNull();
     });
   });
 

@@ -1,7 +1,8 @@
 import { QueryClient } from '@tanstack/svelte-query';
-import { fireEvent, render } from '@testing-library/svelte';
+import { fireEvent, render, waitFor } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 
+import { queryKeys } from '../../../lib/query.ts';
 import type { Principal } from '../../../lib/scopes.svelte.ts';
 import { realClient, ScriptedFetch } from '../list/workflow-test-support.test-support.ts';
 import StartWizardHarness from './start-wizard.test-harness.svelte';
@@ -108,5 +109,62 @@ describe('StartWizard', () => {
 
     const link = await findByRole('link', { name: 'View →' });
     expect(link.getAttribute('href')).toBe('/workflows/wf_started_1234567890');
+  });
+
+  test('a failed registry REFETCH falls back to "Active revision unknown" instead of keeping the stale cached revision (Codex review, PR #978, round 6)', async () => {
+    // No standing route for `weft.system.registry` — both calls fall
+    // through to the FIFO queue below, in order: the initial successful
+    // fetch, then the failed refetch. TanStack Query keeps the PREVIOUS
+    // successful `data` around across a failed refetch alongside
+    // `isError: true`; reading `registryWorkflows[type]?.revision` directly
+    // would keep promising the stale revision as current fact.
+    fetchScript.enqueueJson({
+      jsonrpc: '2.0',
+      id: 1,
+      result: {
+        registryVersion: 2,
+        generatedAt: '2026-01-01T00:00:00.000Z',
+        workflows: [
+          {
+            manifestVersion: 1,
+            name: 'order-processing',
+            workflowVersion: '1.0.0',
+            revision: 'order-processing-rev',
+            contractHash: 'order-processing-hash',
+            contract: { name: 'order-processing', workflowVersion: '1.0.0' },
+          },
+        ],
+        activeRevisions: { 'order-processing': 'order-processing-rev' },
+        activities: {},
+      },
+    });
+    fetchScript.enqueueJson({
+      jsonrpc: '2.0',
+      id: 2,
+      error: { code: -32000, message: 'internal engine failure', data: { httpStatus: 500 } },
+    });
+
+    const queryClient = newQueryClient();
+    const { findByLabelText, findByRole, getByRole, findByText, getByText, queryByText } = render(
+      StartWizardHarness,
+      { props: { client: realClient(), principal: GRANTED_PRINCIPAL, queryClient } },
+    );
+
+    const typeInput = await findByLabelText('Workflow type');
+    await fireEvent.input(typeInput, { target: { value: 'order-processing' } });
+    await fireEvent.click(await findByRole('button', { name: 'Next: configure' }));
+
+    const jsonField = await findByLabelText('Payload (JSON)');
+    await fireEvent.input(jsonField, { target: { value: '{"orderId":"ord-1"}' } });
+    await fireEvent.click(getByRole('button', { name: 'Continue to review' }));
+
+    expect(await findByText('order-processing-rev')).not.toBeNull();
+
+    await queryClient.refetchQueries({ queryKey: queryKeys.registry() });
+
+    await waitFor(() => {
+      expect(getByText(/^Active revision unknown/)).not.toBeNull();
+    });
+    expect(queryByText('order-processing-rev')).toBeNull();
   });
 });

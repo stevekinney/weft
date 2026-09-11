@@ -64,6 +64,22 @@
 
   const selectedSchema = $derived(registryWorkflows[workflowType]?.inputSchema);
 
+  /**
+   * NOT read directly as `registryWorkflows[workflowType]?.revision` at the
+   * Review step call site below (Codex review, PR #978, round 6). TanStack
+   * Query keeps the PREVIOUS successful `data` around across a failed
+   * refetch alongside `isError: true` — the same class of gap the
+   * workflow-detail active-revision comparison closed in an earlier round.
+   * Without this guard, a registry refresh that fails after an earlier
+   * success would keep showing the STALE active revision as current fact
+   * (e.g. revision B activated externally, then the refresh itself fails)
+   * instead of falling back to the Review step's own "Active revision
+   * unknown" branch, which already treats `undefined` correctly.
+   */
+  const reviewActiveRevision = $derived(
+    $registryQuery.isError ? undefined : registryWorkflows[workflowType]?.revision,
+  );
+
   $effect(() => {
     // A schema-less type has nothing to switch "form" mode INTO — pin JSON
     // mode automatically so the segmented control (only rendered when a
@@ -152,7 +168,7 @@
         {submitState}
         onBack={onReviewBack}
         {onSubmit}
-        activeRevision={registryWorkflows[workflowType]?.revision}
+        activeRevision={reviewActiveRevision}
       />
     {/if}
   {/if}

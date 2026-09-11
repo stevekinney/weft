@@ -447,4 +447,46 @@ describe('ForkDialog', () => {
       expect(forkCalls).toEqual([{ fromStep: 3, revision: 'order-processing-rev-b' }]);
     });
   });
+
+  test('a non-403 refetch failure replaces the cached Select with the "Could not load" error, not stale entries (Codex review, PR #978, round 6)', async () => {
+    // First call succeeds (the picker renders installed revisions);
+    // every call after that fails with a non-Forbidden error (network
+    // blip, EngineFailure, or a revision genuinely uninstalled between
+    // fetches). TanStack Query keeps the previous successful `data`
+    // alongside `isError: true` across the failed refetch — without
+    // ignoring cached data on error, the Select would keep presenting
+    // those (possibly stale) revisions as selectable.
+    let calls = 0;
+    const client = baseClient({
+      revisionsList: async () => {
+        calls += 1;
+        if (calls === 1) {
+          return [installedRevisionRecord('order-processing-rev-a', 1_000)];
+        }
+        throw new HttpClientError(500, 'internal engine failure', { faultCode: 'EngineFailure' });
+      },
+    });
+    const queryClient = newQueryClient();
+
+    const { getByRole, getByText, findByRole } = render(ForkDialogHarness, {
+      props: {
+        client,
+        workflowId: 'wf-1',
+        initialStep: 3,
+        workflowType: 'order-processing',
+        sourceRevision: 'order-processing-rev-current',
+        principal: allScopesPrincipal(),
+        queryClient,
+      },
+    });
+
+    await fireEvent.click(getByRole('button', { name: 'Fork a different revision' }));
+    await findByRole('combobox', { name: 'Revision' });
+
+    await queryClient.refetchQueries({ queryKey: queryKeys.catalog.revisions('order-processing') });
+
+    await waitFor(() => {
+      expect(getByText('Could not load the list of installed revisions.')).not.toBeNull();
+    });
+  });
 });

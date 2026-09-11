@@ -293,7 +293,7 @@
       retryFailedResultSummary(await commitBulkRetryFailed(client, bulkFilter, token), matched)}
     onClose={closeDialog}
     onSuccess={onActionComplete}
-    previewNote={`A retry with a saved checkpoint resumes in place on its own persisted revision. A retry with no checkpoint restarts fresh and resolves whichever revision is active right now — the same as any other start-new replacement. ${FRESH_START_REVISION_HEDGE}`}
+    previewNote={`A retry with a saved checkpoint resumes in place on its own persisted revision when one exists — a checkpoint from before revision pinning has none, so that retry falls back to the same active-revision resolution as a fresh start (and can fail as ambiguous if more than one candidate is installed). A retry with no checkpoint restarts fresh and resolves whichever revision is active right now — the same as any other start-new replacement. ${FRESH_START_REVISION_HEDGE}`}
   />
 {:else if activeAction === 'delete'}
   <BulkActionDialog

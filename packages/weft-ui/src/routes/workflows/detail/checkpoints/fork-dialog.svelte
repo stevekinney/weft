@@ -127,8 +127,26 @@
     })),
   );
 
+  /**
+   * NOT `$revisionsQuery.data !== undefined ? parseInstalledRevisions(...)
+   * : undefined` (Codex review, PR #978, round 6). TanStack Query keeps
+   * the PREVIOUS successful `data` around across a failed refetch
+   * alongside `isError: true` — without also checking `isError` here, a
+   * non-403 refetch failure (network blip, `EngineFailure`, a revision
+   * genuinely uninstalled server-side between fetches) would keep this
+   * derived value populated from the stale success, so the markup's
+   * `{:else if installedRevisions === undefined}` "Could not load" branch
+   * never triggers and the `Select` keeps presenting cached, possibly
+   * removed revisions as selectable — the operator submits one and gets a
+   * conflict instead of an honest "could not load" state. The 403 case
+   * (`revisionsForbidden`, `isDegraded`) is unaffected — it takes priority
+   * in the markup's own branch order and degrades to the free-text
+   * fallback instead, independent of this derivation.
+   */
   const installedRevisions = $derived(
-    $revisionsQuery.data !== undefined ? parseInstalledRevisions($revisionsQuery.data) : undefined,
+    $revisionsQuery.isError || $revisionsQuery.data === undefined
+      ? undefined
+      : parseInstalledRevisions($revisionsQuery.data),
   );
 
   /**

@@ -100,6 +100,32 @@ describe('LineagePanel', () => {
     await waitFor(() => {
       expect(getByText(/run$/)).not.toBeNull();
     });
+    // Purged (`client.get()`'s documented `null` 404 contract) still gets
+    // an explicit revision-status badge, not silence (Codex review, PR
+    // #978, round 6) — none of the three sourceRevisionAttributable-gated
+    // branches ever matched a null `data`.
+    expect(getByText('Revision unavailable')).not.toBeNull();
+  });
+
+  test('shows an explicit "Revision unavailable" badge — not silence — when the forked-from source lookup itself errors (Codex review, PR #978, round 6)', async () => {
+    const client = baseClient({
+      get: async () => {
+        throw new Error('network failure');
+      },
+    });
+
+    const { getByText } = render(LineagePanelHarness, {
+      props: {
+        client,
+        workflow: workflow({
+          forkedFrom: { workflowId: 'wf_source', step: 3 },
+        }),
+      },
+    });
+
+    await waitFor(() => {
+      expect(getByText('Revision unavailable')).not.toBeNull();
+    });
   });
 
   test('renders real, clickable child workflow rows from client.list({ parentWorkflowId }) (weft#732 item 1)', async () => {
