@@ -67,6 +67,8 @@
   import { faultTreatment } from '../../../lib/faults.ts';
   import { queryKeys } from '../../../lib/query.ts';
   import { router, workflowDetailPath } from '../../../lib/router.svelte.ts';
+  import { getPrincipalStore } from '../../../lib/scopes.svelte.ts';
+  import { fetchActiveWorkflowRevision } from '../../../lib/workflow-revision.ts';
   import { getFleetEventSource } from '../../../app/engine-status.svelte.ts';
   import CheckpointsTab from './checkpoints/checkpoints-tab.svelte';
   import ChildrenTab from './children-tab.svelte';
@@ -85,6 +87,7 @@
 
   const client: HttpClient = getClient();
   const queryClient = useQueryClient();
+  const principalStore = getPrincipalStore();
   const clock = new TickingClock();
   onDestroy(() => clock.dispose());
 
@@ -107,6 +110,25 @@
       queryKey: finalizerQueryKey(id),
       queryFn: () => getFinalizerStatus(client, id),
       enabled: statusMayHaveFinalizer($detailQuery.data?.status ?? 'pending'),
+    })),
+  );
+
+  // Active-revision comparison (WFT-117): mirrors `finalizerQuery`'s
+  // enabled-gating precedent (only once `detailQuery` has resolved a real
+  // workflow, so `weft.workflows.active.get` never fires for an empty
+  // `type`), reads the just-fetched workflow's `type` reactively (like
+  // `finalizerQuery` reads `status`), and is additionally gated on
+  // `workflows:read` — the underlying operation's own required scope.
+  // Reuses `queryKeys.catalog.active` verbatim (WFT-115, `src/lib/query.ts`)
+  // rather than a locally-scoped key, so an operator activating a different
+  // revision from the System route invalidates this badge too on next
+  // focus/refetch — ordinary TanStack Query staleness, no bespoke cross-tab
+  // notification.
+  const activeRevisionQuery = createQuery(
+    toStore(() => ({
+      queryKey: queryKeys.catalog.active($detailQuery.data?.type ?? ''),
+      queryFn: () => fetchActiveWorkflowRevision(client, $detailQuery.data?.type ?? ''),
+      enabled: $detailQuery.data != null && principalStore.hasScope('workflows:read'),
     })),
   );
 
@@ -252,6 +274,7 @@
       onNavigateToTab={navigateToTab}
       finalizerStatus={$finalizerQuery.data}
       onRunQuery={runQuery}
+      activeRevision={$activeRevisionQuery.data}
     />
 
     <div class="weft-workflow-detail__tab-scroll">
@@ -268,7 +291,13 @@
         </Tabs.List>
 
         <div class="weft-workflow-detail__content">
-          <Tabs.Panel value="overview"><OverviewTab {client} {workflow} /></Tabs.Panel>
+          <Tabs.Panel value="overview"
+            ><OverviewTab
+              {client}
+              {workflow}
+              activeRevision={$activeRevisionQuery.data}
+            /></Tabs.Panel
+          >
           <Tabs.Panel value="timeline"
             ><TimelineTab
               {client}
@@ -280,7 +309,12 @@
           <Tabs.Panel value="events"><EventsTab {client} {workflow} /></Tabs.Panel>
           <Tabs.Panel value="logs"><LogsTab /></Tabs.Panel>
           <Tabs.Panel value="checkpoints"
-            ><CheckpointsTab {client} workflowId={workflow.id} /></Tabs.Panel
+            ><CheckpointsTab
+              {client}
+              workflowId={workflow.id}
+              workflowType={workflow.type}
+              sourceRevision={workflow.revision}
+            /></Tabs.Panel
           >
           <Tabs.Panel value="signals"><SignalsTab {client} {workflow} /></Tabs.Panel>
           <Tabs.Panel value="updates"><UpdatesTab {client} {workflow} /></Tabs.Panel>

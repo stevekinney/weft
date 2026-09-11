@@ -168,6 +168,12 @@
   font-family: var(--cinder-font-mono);
 }
 
+.weft-workflows-table__revision {
+  font-family: var(--cinder-font-mono);
+  font-size: var(--cinder-text-xs);
+  color: var(--cinder-text-subtle);
+}
+
 .weft-workflows-table__row--recent {
   animation: weft-row-highlight 2s ease-out;
 }
@@ -458,6 +464,19 @@
 .weft-start-advanced__add {
   border: 1px dashed var(--cinder-border);
   padding: 6px 10px;
+}
+
+.weft-start-review__revision-note {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--cinder-surface-inset);
+  border-radius: var(--cinder-radius-sm);
+  font-size: var(--cinder-text-xs);
+  color: var(--cinder-text-subtle);
+}
+
+.weft-start-review__revision-note code {
+  font-family: var(--cinder-font-mono);
 }
 
 .weft-start-review__payload-label {

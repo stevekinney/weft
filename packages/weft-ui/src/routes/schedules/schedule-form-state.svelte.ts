@@ -9,7 +9,7 @@
  */
 import type { ScheduleValue } from '@lostgradient/cinder';
 
-import type { ScheduleOverlapPolicy } from '@lostgradient/weft';
+import type { ScheduleOverlapPolicy, ScheduleRevisionPolicy } from '@lostgradient/weft';
 
 import { scheduleValueToWireSpec } from './cadence.ts';
 import type { CreateScheduleArgs } from './schedule-queries.ts';
@@ -74,9 +74,23 @@ export interface ScheduleFormInit {
   readonly jitterText?: string;
   readonly backfill?: boolean;
   readonly startPaused?: boolean;
+  /** Prefills the edit drawer from the fetched `ScheduleSummary.revisionPolicy` (WFT-117). Defaults to `'active-at-fire'` for a fresh create draft. */
+  readonly revisionPolicy?: ScheduleRevisionPolicy;
 }
 
 const DEFAULT_CADENCE: ScheduleValue = { mode: 'interval', every: 15, unit: 'minutes' };
+
+/**
+ * `value ?? fallback`, extracted to a named helper rather than inlined nine
+ * times in the constructor below — each inline `??` counts as its own
+ * branch toward that function's cyclomatic complexity (eslint's
+ * `complexity` rule), and nine of them plus the constructor's own default
+ * parameter pushed it over this repo's ceiling. A sequence of plain
+ * function calls carries none of that cost.
+ */
+function withDefault<T>(value: T | undefined, fallback: T): T {
+  return value ?? fallback;
+}
 
 /**
  * Draft state for the create/edit schedule drawer. `id` is editable only in
@@ -96,16 +110,30 @@ export class ScheduleFormState {
   jitterText = $state('');
   backfill = $state(false);
   startPaused = $state(false);
+  revisionPolicy = $state<ScheduleRevisionPolicy>('active-at-fire');
+
+  /**
+   * The policy this draft started from — captured once at construction, not
+   * reactive. `toUpdateRevisionPolicy()` diffs the live `revisionPolicy`
+   * against this to decide whether an edit submission needs to send
+   * `revisionPolicy` at all. See that method's doc for why sending it
+   * unconditionally on every edit would be a correctness bug, not just an
+   * inefficiency: `'pinned'` is never a no-op server-side — it always
+   * RE-captures the revision active at that moment.
+   */
+  readonly initialRevisionPolicy: ScheduleRevisionPolicy;
 
   constructor(init: ScheduleFormInit = {}) {
-    this.id = init.id ?? this.id;
-    this.workflowType = init.workflowType ?? this.workflowType;
-    this.inputText = init.inputText ?? this.inputText;
-    this.cadence = init.cadence ?? this.cadence;
-    this.overlap = init.overlap ?? this.overlap;
-    this.jitterText = init.jitterText ?? this.jitterText;
-    this.backfill = init.backfill ?? this.backfill;
-    this.startPaused = init.startPaused ?? this.startPaused;
+    this.id = withDefault(init.id, this.id);
+    this.workflowType = withDefault(init.workflowType, this.workflowType);
+    this.inputText = withDefault(init.inputText, this.inputText);
+    this.cadence = withDefault(init.cadence, this.cadence);
+    this.overlap = withDefault(init.overlap, this.overlap);
+    this.jitterText = withDefault(init.jitterText, this.jitterText);
+    this.backfill = withDefault(init.backfill, this.backfill);
+    this.startPaused = withDefault(init.startPaused, this.startPaused);
+    this.revisionPolicy = withDefault(init.revisionPolicy, this.revisionPolicy);
+    this.initialRevisionPolicy = this.revisionPolicy;
   }
 
   get errors(): ScheduleFormFieldErrors {
@@ -143,8 +171,25 @@ export class ScheduleFormState {
       spec: scheduleValueToWireSpec(this.cadence),
       overlap: this.overlap,
       backfill: this.backfill,
+      revisionPolicy: this.revisionPolicy,
       ...(trimmedId.length > 0 ? { id: trimmedId } : {}),
       ...(trimmedJitter.length > 0 ? { jitter: trimmedJitter } : {}),
     };
+  }
+
+  /**
+   * The `revisionPolicy` an edit submission should send, or `undefined` to
+   * omit it entirely (preserving the schedule's current policy AND its
+   * captured pin unchanged — `ScheduleUpdateOptions`'s own doc,
+   * `@lostgradient/weft`). Only returns a value when the draft's live
+   * `revisionPolicy` differs from {@link initialRevisionPolicy}: sending
+   * `revisionPolicy: 'pinned'` unconditionally on every unrelated cadence
+   * edit would silently RE-capture the pin against whatever happens to be
+   * active at that moment — the engine documents `'pinned'` as never a
+   * no-op, so an unchanged-but-resent pin is a real correctness bug, not a
+   * redundant no-op call.
+   */
+  toUpdateRevisionPolicy(): ScheduleRevisionPolicy | undefined {
+    return this.revisionPolicy === this.initialRevisionPolicy ? undefined : this.revisionPolicy;
   }
 }

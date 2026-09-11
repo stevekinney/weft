@@ -175,6 +175,80 @@ describe('ScheduleFormDrawer — edit', () => {
     }
   });
 
+  test('prefills revisionPolicy from the fetched ScheduleSummary and leaves it unchanged on an unrelated save (WFT-117)', async () => {
+    const server = await startLiveSourceTestServer();
+    await server.engine.schedule({
+      workflow: 'inventory-sync-sweep',
+      id: 'pinned-rollup',
+      cron: '0 2 * * *',
+      input: { warehouseId: 'wh-main' },
+      revisionPolicy: 'pinned',
+    });
+    const client = new HttpClient({ baseUrl: server.baseUrl, token: server.token });
+
+    let closed = false;
+    try {
+      const { getByRole } = render(ScheduleFormDrawerHarness, {
+        props: {
+          client,
+          mode: 'edit',
+          scheduleId: 'pinned-rollup',
+          onClose: () => (closed = true),
+        },
+      });
+
+      const pinnedRadio = await waitFor(() => getByRole('radio', { name: 'Pinned' }));
+      expect((pinnedRadio as HTMLInputElement).checked).toBe(true);
+
+      const before = await server.engine.getSchedule('pinned-rollup');
+      const pinnedRevisionBefore = before?.pinnedRevision;
+
+      await fireEvent.click(getByRole('button', { name: 'Save changes' }));
+      await waitFor(() => expect(closed).toBe(true));
+
+      // Unchanged revisionPolicy must not resend it — the pin is never
+      // silently re-captured by an unrelated cadence-only save.
+      const after = await server.engine.getSchedule('pinned-rollup');
+      expect(after?.revisionPolicy).toBe('pinned');
+      expect(after?.pinnedRevision).toBe(pinnedRevisionBefore);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('changing revisionPolicy from active-at-fire to pinned and saving sends the new value (WFT-117)', async () => {
+    const server = await startLiveSourceTestServer();
+    await server.engine.schedule({
+      workflow: 'inventory-sync-sweep',
+      id: 'to-be-pinned',
+      cron: '0 2 * * *',
+      input: { warehouseId: 'wh-main' },
+    });
+    const client = new HttpClient({ baseUrl: server.baseUrl, token: server.token });
+
+    let closed = false;
+    try {
+      const { getByRole } = render(ScheduleFormDrawerHarness, {
+        props: {
+          client,
+          mode: 'edit',
+          scheduleId: 'to-be-pinned',
+          onClose: () => (closed = true),
+        },
+      });
+
+      await waitFor(() => getByRole('radio', { name: 'Active at fire' }));
+      await fireEvent.click(getByRole('radio', { name: 'Pinned' }));
+      await fireEvent.click(getByRole('button', { name: 'Save changes' }));
+      await waitFor(() => expect(closed).toBe(true));
+
+      const after = await server.engine.getSchedule('to-be-pinned');
+      expect(after?.revisionPolicy).toBe('pinned');
+    } finally {
+      await server.stop();
+    }
+  });
+
   test('renders the not-found fault when the schedule no longer exists', async () => {
     const server = await startLiveSourceTestServer();
     const client = new HttpClient({ baseUrl: server.baseUrl, token: server.token });

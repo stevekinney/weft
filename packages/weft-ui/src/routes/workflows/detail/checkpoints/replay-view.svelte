@@ -64,6 +64,12 @@
         <DescriptionList
           items={[
             { term: 'Version', definition: replay.checkpoint.version },
+            {
+              term: 'Revision',
+              definition:
+                replay.revision ??
+                'Not attributable — the source record was purged, or predates revision pinning.',
+            },
             { term: 'Recorded', definition: new Date(replay.checkpoint.createdAt).toISOString() },
             { term: 'Events at this step', definition: String(replay.events.length) },
             ...(replay.compactedBefore !== undefined

@@ -12,6 +12,7 @@ const BASE_PROPS = {
   advanced: EMPTY_ADVANCED_START_OPTIONS,
   onBack: () => {},
   onSubmit: () => {},
+  activeRevision: 'order-processing-rev-active',
 };
 
 describe('ReviewStep', () => {
@@ -73,5 +74,25 @@ describe('ReviewStep', () => {
     });
 
     expect(getByText('Something went wrong')).not.toBeNull();
+  });
+
+  describe('active-revision note (WFT-117)', () => {
+    test('shows "starts against active revision X" when activeRevision is defined', async () => {
+      const { getByText } = render(ReviewStep, {
+        props: { ...BASE_PROPS, submitState: { status: 'idle' } },
+      });
+
+      expect(getByText(/^Starts against active revision/)).not.toBeNull();
+      expect(getByText('order-processing-rev-active')).not.toBeNull();
+    });
+
+    test('shows an explicit "active revision unavailable" explanation, never blank, when undefined', async () => {
+      const { getByText, queryByText } = render(ReviewStep, {
+        props: { ...BASE_PROPS, activeRevision: undefined, submitState: { status: 'idle' } },
+      });
+
+      expect(queryByText(/^Starts against active revision/)).toBeNull();
+      expect(getByText(/^Active revision unavailable/)).not.toBeNull();
+    });
   });
 });

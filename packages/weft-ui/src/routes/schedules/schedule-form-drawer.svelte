@@ -77,6 +77,7 @@
       overlap: schedule.overlap,
       jitterText: schedule.jitterMs !== undefined ? `${schedule.jitterMs}ms` : '',
       backfill: schedule.backfill,
+      revisionPolicy: schedule.revisionPolicy,
     });
   });
 
@@ -101,7 +102,12 @@
   const updateScheduleMutation = createMutation({
     mutationFn: async () => {
       if (!form || scheduleId === undefined) throw new Error('Form not ready.');
-      await updateScheduleSpec(client, scheduleId, scheduleValueToWireSpec(form.cadence));
+      await updateScheduleSpec(
+        client,
+        scheduleId,
+        scheduleValueToWireSpec(form.cadence),
+        form.toUpdateRevisionPolicy(),
+      );
     },
     onSuccess: () => {
       invalidateSchedules();

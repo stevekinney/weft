@@ -8,10 +8,14 @@
    * visible to the parent drawer without prop-drilling every field.
    *
    * `mode: 'edit'` disables the workflow type, input payload, overlap
-   * policy, jitter, and backfill fields — `weft.schedules.update` only
-   * accepts a new cadence (`schedule-queries.ts`'s `updateScheduleSpec` doc);
-   * this is honesty, not decoration, so it stays in the same layout the
-   * create form uses rather than hiding the now-uneditable fields.
+   * policy, jitter, and backfill fields — those genuinely still can't be
+   * changed after creation. `revisionPolicy` is the one exception (WFT-117):
+   * `weft.schedules.update`/`ScheduleUpdateOptions` (`@lostgradient/weft`)
+   * DOES accept `revisionPolicy` alongside `description`/`overlap`/
+   * `backfill`/`jitter` — this console just hadn't adopted it until now
+   * (`schedule-queries.ts`'s `updateScheduleSpec` doc has the full
+   * correction). The revision-policy `RadioGroup` below is therefore NOT
+   * disabled in edit mode, unlike its four siblings.
    */
   import Input from '@lostgradient/cinder/input';
   import { RadioGroup } from '@lostgradient/cinder/radio-group';
@@ -22,11 +26,12 @@
   import { TriangleAlert } from 'lucide-svelte';
   import { untrack } from 'svelte';
 
-  import type { ScheduleOverlapPolicy } from '@lostgradient/weft';
+  import type { ScheduleOverlapPolicy, ScheduleRevisionPolicy } from '@lostgradient/weft';
 
   import { computeNextFires } from '../../lib/format/cron-preview.ts';
   import JsonEditor from '@lostgradient/cinder/json-editor';
   import { OVERLAP_POLICIES } from './overlap-policy.ts';
+  import { REVISION_POLICIES } from './revision-policy.ts';
   import type { ScheduleFormState } from './schedule-form-state.svelte.ts';
 
   interface Props {
@@ -63,6 +68,21 @@
 
   $effect(() => {
     if (isOverlapPolicy(overlapDraft)) form.overlap = overlapDraft;
+  });
+
+  const REVISION_POLICY_VALUES: ReadonlySet<string> = new Set(
+    REVISION_POLICIES.map((policy) => policy.value),
+  );
+
+  function isRevisionPolicy(value: string): value is ScheduleRevisionPolicy {
+    return REVISION_POLICY_VALUES.has(value);
+  }
+
+  /** Same `RadioGroup.value`-is-a-plain-string proxy pattern as `overlapDraft` above — see that declaration's doc. */
+  let revisionPolicyDraft = $state(untrack(() => form.revisionPolicy));
+
+  $effect(() => {
+    if (isRevisionPolicy(revisionPolicyDraft)) form.revisionPolicy = revisionPolicyDraft;
   });
 </script>
 
@@ -191,9 +211,37 @@
     {/if}
     {#if mode === 'edit'}
       <p class="weft-schedule-form__edit-note">
-        Overlap policy, jitter, backfill, and workflow input can only be set at creation today —
-        editing updates the cadence only.
+        Overlap policy, jitter, backfill, and workflow input can only be set at creation — editing
+        updates the cadence and revision policy.
       </p>
+    {/if}
+  </section>
+
+  <section class="weft-schedule-form__section">
+    <h3 class="weft-schedule-form__section-title">Revision policy</h3>
+    <RadioGroup
+      name="weft-schedule-revision-policy"
+      label="Which revision future occurrences resolve against"
+      variant="card"
+      bind:value={revisionPolicyDraft}
+    >
+      {#each REVISION_POLICIES as policy (policy.value)}
+        <RadioGroup.Option
+          id={`weft-schedule-revision-policy-${policy.value}`}
+          value={policy.value}
+          label={policy.label}
+          description={policy.consequence}
+        />
+      {/each}
+    </RadioGroup>
+    {#if mode === 'edit' && revisionPolicyDraft === 'pinned'}
+      <div class="weft-schedule-form__backfill-warning">
+        <TriangleAlert aria-hidden="true" size={14} />
+        <span>
+          Saving re-captures the pin against whichever revision is active right now — this is never
+          a no-op, even if the schedule is already pinned.
+        </span>
+      </div>
     {/if}
   </section>
 </div>

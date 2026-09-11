@@ -311,6 +311,8 @@ describe('BulkSelectionBar', () => {
       await waitFor(() => {
         expect(getByText('4 matching workflows')).not.toBeNull();
       });
+      // The retry-failed dialog passes the revision-retention previewNote (WFT-117).
+      expect(getByText(/keeps its own persisted revision/)).not.toBeNull();
     } finally {
       fetch.restore();
     }

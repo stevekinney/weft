@@ -80,6 +80,46 @@ describe('LineagePanel', () => {
     expect(getByText('at step 12')).not.toBeNull();
   });
 
+  test('shows the forked-from source run’s own revision once forkSourceQuery resolves', async () => {
+    const client = baseClient({
+      get: async (id) =>
+        id === 'wf_source'
+          ? workflow({ id: 'wf_source', type: 'reconcile-ledger', revision: 'reconcile-rev-abc' })
+          : null,
+    });
+
+    const { getByText } = render(LineagePanelHarness, {
+      props: {
+        client,
+        workflow: workflow({ forkedFrom: { workflowId: 'wf_source', step: 12 } }),
+      },
+    });
+
+    await waitFor(() => {
+      expect(getByText('reconcile-ledger')).not.toBeNull();
+    });
+    expect(getByText(/^rev reconcil/)).not.toBeNull();
+  });
+
+  test('shows no source-revision chip when the forked-from source has no persisted revision', async () => {
+    const client = baseClient({
+      get: async (id) =>
+        id === 'wf_source' ? workflow({ id: 'wf_source', type: 'reconcile-ledger' }) : null,
+    });
+
+    const { getByText, queryByText } = render(LineagePanelHarness, {
+      props: {
+        client,
+        workflow: workflow({ forkedFrom: { workflowId: 'wf_source', step: 12 } }),
+      },
+    });
+
+    await waitFor(() => {
+      expect(getByText('reconcile-ledger')).not.toBeNull();
+    });
+    expect(queryByText(/^rev /)).toBeNull();
+  });
+
   test('falls back to a truncated-id label when the forked-from source is no longer visible', async () => {
     const client = baseClient();
 
@@ -106,6 +146,7 @@ describe('LineagePanel', () => {
             type: 'validate-shipment',
             status: 'completed',
             version: '1',
+            revision: 'validate-shipment-rev-1',
             createdAt: 1_000,
             updatedAt: 1_000,
           },
@@ -125,6 +166,36 @@ describe('LineagePanel', () => {
     });
     const link = getByRole('link', { name: /validate-shipment/ });
     expect(link.getAttribute('href')).toContain('wf_child_1');
+    expect(link.textContent).toContain('rev validate…ev-1');
+  });
+
+  test('a child preview row shows an explicit "Unpinned" label when its revision is undefined', async () => {
+    const client = baseClient({
+      list: async () => ({
+        items: [
+          {
+            id: 'wf_child_1',
+            type: 'validate-shipment',
+            status: 'completed',
+            version: '1',
+            createdAt: 1_000,
+            updatedAt: 1_000,
+          },
+        ],
+        total: 1,
+        offset: 0,
+        limit: 5,
+      }),
+    });
+
+    const { getByRole } = render(LineagePanelHarness, {
+      props: { client, workflow: workflow() },
+    });
+
+    await waitFor(() => {
+      const link = getByRole('link', { name: /validate-shipment/ });
+      expect(link.textContent).toContain('Unpinned');
+    });
   });
 
   test('shows a "+N more" note when the parent has more children than the preview limit', async () => {
@@ -185,7 +256,36 @@ describe('LineagePanel', () => {
     expect(queryByText('Launched by schedule')).toBeNull();
   });
 
-  test('renders the continuation chain — previous run (no fabricated status), this run, no successor — for a start-new replacement (weft#732 item 2)', async () => {
+  test('renders the continuation chain — previous run (no fabricated status), this run (with revision), no successor — for a start-new replacement (weft#732 item 2, WFT-117)', async () => {
+    const client = baseClient();
+
+    const { getByText } = render(LineagePanelHarness, {
+      props: {
+        client,
+        workflow: workflow({
+          status: 'running',
+          revision: 'order-fulfillment-rev-current',
+          restartedFrom: {
+            workflowId: 'wf_current',
+            workflowExecutionToken: 'prior-run-token',
+            replacedAt: 500,
+          },
+        }),
+      },
+    });
+
+    await waitFor(() => {
+      expect(getByText('This run')).not.toBeNull();
+    });
+    expect(getByText('Previous run')).not.toBeNull();
+    expect(getByText('No successor')).not.toBeNull();
+    expect(getByText(/^rev order-fu/)).not.toBeNull();
+    expect(
+      getByText(/A start-new replacement always resolves against whichever revision is active/),
+    ).not.toBeNull();
+  });
+
+  test('the "This run" chip shows an explicit "Unpinned" badge when this run has no persisted revision', async () => {
     const client = baseClient();
 
     const { getByText } = render(LineagePanelHarness, {
@@ -205,8 +305,7 @@ describe('LineagePanel', () => {
     await waitFor(() => {
       expect(getByText('This run')).not.toBeNull();
     });
-    expect(getByText('Previous run')).not.toBeNull();
-    expect(getByText('No successor')).not.toBeNull();
+    expect(getByText('Unpinned')).not.toBeNull();
   });
 
   test('renders the schedule-provenance row without an occurrence suffix when none was recorded', async () => {

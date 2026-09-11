@@ -160,8 +160,80 @@ describe('ScheduleFormFields — edit mode', () => {
     ).toBe(true);
     expect(
       getByText(
-        'Overlap policy, jitter, backfill, and workflow input can only be set at creation today — editing updates the cadence only.',
+        'Overlap policy, jitter, backfill, and workflow input can only be set at creation — editing updates the cadence and revision policy.',
       ),
     ).not.toBeNull();
+  });
+
+  test('does NOT disable the revision-policy radio group in edit mode', async () => {
+    const form = new ScheduleFormState({
+      id: 'nightly-rollup',
+      workflowType: 'report-gen',
+      revisionPolicy: 'active-at-fire',
+    });
+
+    const { getByRole } = render(ScheduleFormFields, {
+      props: { form, mode: 'edit', workflowTypeOptions: undefined },
+    });
+
+    expect((getByRole('radio', { name: 'Active at fire' }) as HTMLInputElement).disabled).toBe(
+      false,
+    );
+    expect((getByRole('radio', { name: 'Pinned' }) as HTMLInputElement).disabled).toBe(false);
+  });
+
+  test('shows the "pinned always re-captures right now" warning when pinned is selected in edit mode', async () => {
+    const form = new ScheduleFormState({
+      id: 'nightly-rollup',
+      workflowType: 'report-gen',
+      revisionPolicy: 'pinned',
+    });
+
+    const { getByText } = render(ScheduleFormFields, {
+      props: { form, mode: 'edit', workflowTypeOptions: undefined },
+    });
+
+    expect(getByText(/never a no-op, even if the schedule is already pinned/)).not.toBeNull();
+  });
+
+  test('does NOT show the pinned warning when active-at-fire is selected in edit mode', async () => {
+    const form = new ScheduleFormState({
+      id: 'nightly-rollup',
+      workflowType: 'report-gen',
+      revisionPolicy: 'active-at-fire',
+    });
+
+    const { queryByText } = render(ScheduleFormFields, {
+      props: { form, mode: 'edit', workflowTypeOptions: undefined },
+    });
+
+    expect(queryByText(/never a no-op/)).toBeNull();
+  });
+});
+
+describe('ScheduleFormFields — revision policy (create mode)', () => {
+  test('renders both REVISION_POLICIES options with their labels and consequences', async () => {
+    const form = new ScheduleFormState();
+
+    const { getByText } = render(ScheduleFormFields, {
+      props: { form, mode: 'create', workflowTypeOptions: undefined },
+    });
+
+    expect(getByText('Active at fire')).not.toBeNull();
+    expect(getByText('Pinned')).not.toBeNull();
+    expect(getByText(/Each occurrence resolves whichever revision is active/)).not.toBeNull();
+    expect(getByText(/Every occurrence resolves the exact revision captured/)).not.toBeNull();
+  });
+
+  test('selecting Pinned updates form.revisionPolicy', async () => {
+    const form = new ScheduleFormState();
+
+    const { getByRole } = render(ScheduleFormFields, {
+      props: { form, mode: 'create', workflowTypeOptions: undefined },
+    });
+
+    await fireEvent.click(getByRole('radio', { name: 'Pinned' }));
+
+    expect(form.revisionPolicy).toBe('pinned');
   });
 });

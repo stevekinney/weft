@@ -169,3 +169,56 @@ describe('WorkflowDetail — loaded workflow', () => {
     expect(await findByText('Finalizing')).not.toBeNull();
   });
 });
+
+describe('WorkflowDetail — active-revision comparison (WFT-117)', () => {
+  test('resolves the active pointer and forwards it to both the Header badge and the Overview Revision row', async () => {
+    const id = 'wf-detail-active-rev-1';
+    fetchScript.routeUrl(`/workflows/${id}`, baseWorkflow({ id, revision: 'order-rev-a' }));
+    fetchScript.routeJsonRpcMethod('weft.workflows.active.get', {
+      revision: 'order-rev-a',
+      generation: 2,
+      activatedAt: 500,
+    });
+    resetLocation(`/workflows/${id}`);
+
+    const { findByText } = render(WorkflowDetailHarness, {
+      props: { client: realClient(), principal: GRANTED_PRINCIPAL, queryClient: newQueryClient() },
+    });
+
+    // Header badge.
+    expect(await findByText('Active')).not.toBeNull();
+    // Overview tab's Revision DescriptionList row (same page, both tabs
+    // render simultaneously — only the active Tabs.Panel is visible, but
+    // Svelte still mounts every panel here per this route's own Tabs usage).
+    expect(await findByText('order-rev-a — active')).not.toBeNull();
+  });
+
+  test('denied workflows:read leaves activeRevision undefined and the page still renders', async () => {
+    const id = 'wf-detail-active-rev-denied-1';
+    fetchScript.routeUrl(`/workflows/${id}`, baseWorkflow({ id, revision: 'order-rev-a' }));
+    resetLocation(`/workflows/${id}`);
+
+    const deniedPrincipal: Principal = { scopes: [], unauthenticatedAccess: null };
+    const { findByRole, getByText } = render(WorkflowDetailHarness, {
+      props: { client: realClient(), principal: deniedPrincipal, queryClient: newQueryClient() },
+    });
+
+    expect(await findByRole('heading', { name: 'order-fulfillment' })).not.toBeNull();
+    // No weft.workflows.active.get call fired at all — the query never
+    // enabled without the scope — so the comparison reads "unknown".
+    expect(getByText('Active revision unknown')).not.toBeNull();
+    expect(
+      fetchScript.calls.some((call) => {
+        if (typeof call.init?.body !== 'string') return false;
+        try {
+          return (
+            (JSON.parse(call.init.body) as { method?: string }).method ===
+            'weft.workflows.active.get'
+          );
+        } catch {
+          return false;
+        }
+      }),
+    ).toBe(false);
+  });
+});

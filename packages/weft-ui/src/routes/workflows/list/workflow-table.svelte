@@ -23,6 +23,21 @@
    * (`createdAt desc, id asc` — plan Ground Truth), so there is no sort
    * call to wire a clickable header to; making a header LOOK sortable with
    * nothing behind it would be worse than no affordance.
+   *
+   * ## Revision column (WFT-117)
+   *
+   * Shows each row's own persisted `WorkflowSummary.revision` — never
+   * `undefined` collapsed to a blank cell, always an explicit "Unpinned"
+   * text badge for a pre-revision-pinning (legacy) record, so a missing
+   * value never reads as a loading glitch. Deliberately does NOT compare
+   * against the catalog's currently active revision here: that comparison
+   * needs one `weft.workflows.active.get` fetch per distinct workflow TYPE
+   * on the page, which this table's own rows don't carry and this
+   * component has no query client to perform — the active-vs-persisted
+   * comparison is a detail-page-only feature (`header.svelte`/
+   * `overview-tab.svelte`), where there is exactly one record and one
+   * cheap fetch. See the batch's PR body for why a per-row list
+   * comparison was scoped out rather than folded in silently.
    */
   import { Copy } from 'lucide-svelte';
   import Badge from '@lostgradient/cinder/badge';
@@ -100,6 +115,7 @@
     <col style="width: 116px" />
     <col style="width: 220px" />
     <col style="width: 150px" />
+    <col style="width: 120px" />
     <col />
     <col style="width: 92px" />
     <col style="width: 92px" />
@@ -109,6 +125,7 @@
       <Table.HeaderCell>Status</Table.HeaderCell>
       <Table.HeaderCell>Workflow ID</Table.HeaderCell>
       <Table.HeaderCell>Type</Table.HeaderCell>
+      <Table.HeaderCell>Revision</Table.HeaderCell>
       <Table.HeaderCell>Tags</Table.HeaderCell>
       <Table.HeaderCell align="right">Created</Table.HeaderCell>
       <Table.HeaderCell align="right">Updated</Table.HeaderCell>
@@ -151,6 +168,15 @@
           </span>
         </Table.Cell>
         <Table.Cell>{row.type}</Table.Cell>
+        <Table.Cell>
+          {#if row.revision !== undefined}
+            <Tooltip text={`Revision (exact executable artifact): ${row.revision}`}>
+              <code class="weft-workflows-table__revision">{truncateId(row.revision)}</code>
+            </Tooltip>
+          {:else}
+            <Badge variant="neutral" size="xs">Unpinned</Badge>
+          {/if}
+        </Table.Cell>
         <Table.Cell>
           {#if row.tags && row.tags.length > 0}
             <span class="weft-workflows-table__tags">

@@ -100,6 +100,9 @@ describe('StartWizard', () => {
     await fireEvent.click(continueButton);
 
     expect(await findByText('order-processing')).not.toBeNull();
+    // The Review step's active-revision note (WFT-117) is threaded from
+    // `registryWorkflows[workflowType]?.revision`.
+    expect(await findByText('order-processing-rev')).not.toBeNull();
     const startButton = await findByRole('button', { name: 'Start workflow' });
     await fireEvent.click(startButton);
 

@@ -124,6 +124,37 @@ describe('ChildrenTab', () => {
     });
   });
 
+  test('a child row shows its truncated revision when defined', async () => {
+    const client = {
+      list: async () =>
+        page([summary({ id: 'wf_child_1', revision: 'validate-shipment-rev-abcdefgh' })]),
+    };
+
+    const { getByRole } = render(ChildrenTabHarness, {
+      props: { client, workflow: workflowState() },
+    });
+
+    await waitFor(() => {
+      const link = getByRole('link', { name: /validate-shipment/ });
+      expect(link.textContent).toContain('validate…efgh');
+    });
+  });
+
+  test('a child row shows an explicit "Unpinned" label when revision is undefined', async () => {
+    const client = {
+      list: async () => page([summary({ id: 'wf_child_1' })]),
+    };
+
+    const { getByRole } = render(ChildrenTabHarness, {
+      props: { client, workflow: workflowState() },
+    });
+
+    await waitFor(() => {
+      const link = getByRole('link', { name: /validate-shipment/ });
+      expect(link.textContent).toContain('Unpinned');
+    });
+  });
+
   test('a child row displays its truncated id and relative creation time', async () => {
     const client = {
       list: async () => page([summary({ id: 'wf_child_abcdef0123456789', createdAt: 1_000 })]),

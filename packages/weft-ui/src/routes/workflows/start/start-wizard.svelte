@@ -152,6 +152,7 @@
         {submitState}
         onBack={onReviewBack}
         {onSubmit}
+        activeRevision={registryWorkflows[workflowType]?.revision}
       />
     {/if}
   {/if}

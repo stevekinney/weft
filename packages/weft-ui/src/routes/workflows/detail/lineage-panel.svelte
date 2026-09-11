@@ -41,9 +41,29 @@
    *   returns the LATEST generation for that id, so whatever run this panel
    *   is currently showing can never itself have a successor — if one
    *   existed, this panel would already be showing it instead.
+   *
+   * ## Revision display (WFT-117)
+   *
+   * "Forked from" shows the SOURCE run's own persisted `revision` (from
+   * `forkSourceQuery`, the same fetch that already resolves the source's
+   * type for the link label) once it resolves — never fabricated from this
+   * run's own `forkedFrom.revision` (there is no such field; a fork's
+   * SOURCE revision is a property of the source run, not of the link
+   * pointing to it). The "This run" chip in the continuation chain shows
+   * THIS run's own `workflow.revision`, plus an explicit explanation that
+   * `onTerminalConflict: 'start-new'` always selects whichever revision is
+   * active at the moment it replaces the prior run — no pin carries over
+   * from the displaced run, matching `documentation/guides/
+   * workflow-versioning.md`'s per-run pinning contract (`@lostgradient/weft`).
+   * Every revision display degrades to an explicit "Unpinned" label for a
+   * pre-revision-pinning (legacy) record rather than a blank space — see
+   * `EAGER_REVISION_HEDGE`'s own doc for the WFT-159 hedge these tooltips
+   * also carry.
    */
+  import Badge from '@lostgradient/cinder/badge';
   import CopyButton from '@lostgradient/cinder/copy-button';
   import Skeleton from '@lostgradient/cinder/skeleton';
+  import Tooltip from '@lostgradient/cinder/tooltip';
   import { createQuery } from '@tanstack/svelte-query';
   import type { HttpClient } from '@lostgradient/weft/client';
   import type { WorkflowState } from '@lostgradient/weft';
@@ -53,6 +73,7 @@
   import { formatRelativeTime, truncateId } from '../../../lib/format/index.ts';
   import { queryKeys } from '../../../lib/query.ts';
   import { router, workflowDetailPath } from '../../../lib/router.svelte.ts';
+  import { EAGER_REVISION_HEDGE } from '../../../lib/workflow-revision.ts';
   import { workflowStatusBadge } from '../list/workflow-status-badge.ts';
   import WorkflowStatusIcon from '../list/workflow-status-icon.svelte';
   import { getScheduleProvenance, scheduleProvenanceQueryKey } from './workflow-observability.ts';
@@ -161,12 +182,27 @@
           <span class="weft-lineage-continuation__chip weft-lineage-continuation__chip--current">
             <WorkflowStatusIcon icon={thisRunBadge.icon} />
             <span class="weft-lineage-continuation__label">This run</span>
+            {#if workflow.revision !== undefined}
+              <Tooltip
+                text={`Revision (exact executable artifact): ${workflow.revision}. ${EAGER_REVISION_HEDGE}`}
+              >
+                <span class="weft-lineage-continuation__revision">
+                  rev {truncateId(workflow.revision)}
+                </span>
+              </Tooltip>
+            {:else}
+              <Badge variant="neutral" size="sm">Unpinned</Badge>
+            {/if}
           </span>
           <ArrowRight aria-hidden="true" size={14} />
           <span class="weft-lineage-continuation__chip weft-lineage-continuation__chip--none">
             No successor
           </span>
         </div>
+        <p class="weft-lineage-panel__note">
+          A start-new replacement always resolves against whichever revision is active at the moment
+          it replaces the prior run — no pin carries over from the run it replaced.
+        </p>
       </div>
     {/if}
 
@@ -190,6 +226,12 @@
             {truncateId(forkedFrom.workflowId)}
           </span>
           <CopyButton value={forkedFrom.workflowId} iconOnly label="Copy workflow id" />
+          {#if $forkSourceQuery.data?.revision !== undefined}
+            {@const sourceRevision = $forkSourceQuery.data.revision}
+            <Tooltip text={`Source revision (exact executable artifact): ${sourceRevision}`}>
+              <span class="weft-lineage-panel__id">rev {truncateId(sourceRevision)}</span>
+            </Tooltip>
+          {/if}
         {/if}
         <span class="weft-lineage-panel__meta">at step {forkedFrom.step}</span>
       </div>
@@ -219,6 +261,11 @@
               <CornerDownRight aria-hidden="true" size={12} />
               <span>{child.type}</span>
               <span class="weft-lineage-panel__id" title={child.id}>{truncateId(child.id)}</span>
+              {#if child.revision !== undefined}
+                <span class="weft-lineage-panel__id">rev {truncateId(child.revision)}</span>
+              {:else}
+                <span class="weft-lineage-panel__id">Unpinned</span>
+              {/if}
               <span class="weft-lineage-panel__meta">
                 <WorkflowStatusIcon icon={badge.icon} />
                 {badge.label}
@@ -305,6 +352,12 @@
   }
 
   .weft-lineage-continuation__meta {
+    font-family: var(--cinder-font-mono);
+    font-size: var(--cinder-text-2xs);
+    color: var(--cinder-text-subtle);
+  }
+
+  .weft-lineage-continuation__revision {
     font-family: var(--cinder-font-mono);
     font-size: var(--cinder-text-2xs);
     color: var(--cinder-text-subtle);

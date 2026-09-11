@@ -33,9 +33,18 @@
     submitState: StartSubmitState;
     onBack: () => void;
     onSubmit: () => void;
+    /**
+     * The active manifest's `revision` for `type` (WFT-117) — resolved from
+     * the registry snapshot the wizard already fetched
+     * (`registryWorkflows[type]?.revision`). `undefined` when the registry
+     * lookup itself is unavailable/denied/still loading, or `type` isn't a
+     * currently-active registered workflow — never silently blank.
+     */
+    activeRevision: string | undefined;
   }
 
-  let { type, payload, advanced, submitState, onBack, onSubmit }: ReviewStepProps = $props();
+  let { type, payload, advanced, submitState, onBack, onSubmit, activeRevision }: ReviewStepProps =
+    $props();
 
   const advancedItems = $derived(
     [
@@ -53,6 +62,17 @@
 
 <div class="weft-start-review">
   <DescriptionList items={[{ term: 'Workflow type', definition: type }, ...advancedItems]} />
+
+  <p class="weft-start-review__revision-note">
+    {#if activeRevision !== undefined}
+      Starts against active revision <code>{activeRevision}</code> — active-at-fire; this run will resolve
+      whichever revision is active when it actually starts (normally the same one shown here).
+    {:else}
+      Active revision unavailable — the registry lookup for this type didn't resolve (denied,
+      unavailable, or still loading). The run will still start against whichever revision is active
+      for <code>{type}</code> at that moment.
+    {/if}
+  </p>
 
   <div class="weft-start-review__payload">
     <span class="weft-start-review__payload-label">Payload</span>

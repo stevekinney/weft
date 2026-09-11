@@ -292,6 +292,7 @@
       retryFailedResultSummary(await commitBulkRetryFailed(client, bulkFilter, token), matched)}
     onClose={closeDialog}
     onSuccess={onActionComplete}
+    previewNote="Each retried run keeps its own persisted revision — a retry never re-pins to whichever revision happens to be active now."
   />
 {:else if activeAction === 'delete'}
   <BulkActionDialog

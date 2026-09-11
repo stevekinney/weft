@@ -21,8 +21,19 @@
    * module doc above already describes — `workflow-detail.svelte` owns the
    * `weft.workflows.finalizer.get` query and passes the result down, the same
    * way it owns `client.get(id)`.
+   *
+   * ## `activeRevision` (WFT-117)
+   *
+   * Same dumb-component split as `finalizerStatus`: `workflow-detail.svelte`
+   * owns the `weft.workflows.active.get` fetch (`fetchActiveWorkflowRevision`,
+   * `../../../lib/workflow-revision.ts`) and passes the result down.
+   * `classifyRevisionAgainstActive` turns `workflow.revision` + this prop
+   * into one of four states, each with an icon+text treatment — never color
+   * alone, per the acceptance criteria — and every non-`'unpinned'` tooltip
+   * carries `EAGER_REVISION_HEDGE` so the WFT-159 eager-registration caveat
+   * is visible wherever a revision comparison is shown as authoritative.
    */
-  import Badge from '@lostgradient/cinder/badge';
+  import Badge, { type BadgeVariant } from '@lostgradient/cinder/badge';
   import Button from '@lostgradient/cinder/button';
   import ConfirmDialog from '@lostgradient/cinder/confirm-dialog';
   import CopyButton from '@lostgradient/cinder/copy-button';
@@ -45,6 +56,11 @@
   } from 'lucide-svelte';
 
   import { formatDuration, formatRelativeTime, truncateId } from '../../../lib/format/index.ts';
+  import {
+    classifyRevisionAgainstActive,
+    EAGER_REVISION_HEDGE,
+    type WorkflowCatalogActivePointerLike,
+  } from '../../../lib/workflow-revision.ts';
   import { failureCategoryLabel } from './failure-category.ts';
   import {
     actionConfirmTier,
@@ -65,6 +81,12 @@
     readonly finalizerStatus: WorkflowFinalizerStatus | null | undefined;
     /** Runs a read-only query and resolves with its result, or throws. */
     readonly onRunQuery: (name: string, input: string) => Promise<unknown>;
+    /**
+     * `weft.workflows.active.get` result for `workflow.type` — `undefined`
+     * while unresolved (still loading, or `workflows:read` denied), `null`
+     * for "never activated." See module doc "`activeRevision` (WFT-117)".
+     */
+    readonly activeRevision: WorkflowCatalogActivePointerLike | null | undefined;
   }
 
   let {
@@ -76,10 +98,38 @@
     onNavigateToTab,
     finalizerStatus,
     onRunQuery,
+    activeRevision,
   }: WorkflowDetailHeaderProps = $props();
 
   const presentation = $derived(finalizerStatusPresentation(workflow.status, finalizerStatus));
   const actions = $derived(availableActions(workflow.status));
+
+  const revisionComparison = $derived(
+    classifyRevisionAgainstActive(workflow.revision, activeRevision),
+  );
+
+  interface RevisionBadgeTreatment {
+    readonly icon: typeof CircleCheck;
+    readonly variant: BadgeVariant;
+    readonly label: string;
+  }
+
+  const REVISION_BADGE: Readonly<Record<'active' | 'stale' | 'unknown', RevisionBadgeTreatment>> = {
+    active: { icon: CircleCheck, variant: 'success', label: 'Active' },
+    stale: { icon: TriangleAlert, variant: 'warning', label: 'Differs from active' },
+    unknown: { icon: HelpCircle, variant: 'neutral', label: 'Active revision unknown' },
+  };
+
+  // Only read when `workflow.revision !== undefined` (the markup gates on
+  // that), so `revisionComparison` is never `'unpinned'` at the read site —
+  // the cast documents that invariant rather than widening the map's key
+  // type to include a treatment 'unpinned' never needs.
+  const revisionTreatment = $derived(
+    workflow.revision !== undefined
+      ? REVISION_BADGE[revisionComparison as 'active' | 'stale' | 'unknown']
+      : null,
+  );
+  const RevisionBadgeIcon = $derived(revisionTreatment?.icon);
 
   const STATUS_ICON = {
     clock: Clock,
@@ -163,8 +213,26 @@
         <h1 class="weft-workflow-detail__title">{workflow.type}</h1>
         <Badge variant="accent" monospace>v{workflow.versionTuple.workflowVersion}</Badge>
         {#if workflow.revision !== undefined}
-          <Tooltip text={`Revision (exact executable artifact): ${workflow.revision}`}>
+          <Tooltip
+            text={`Revision (exact executable artifact): ${workflow.revision}. ${EAGER_REVISION_HEDGE}`}
+          >
             <Badge variant="neutral" monospace>rev {truncateId(workflow.revision)}</Badge>
+          </Tooltip>
+          {#if revisionTreatment && RevisionBadgeIcon}
+            <Tooltip
+              text={`${revisionTreatment.label} — compared against the catalog's currently active revision. ${EAGER_REVISION_HEDGE}`}
+            >
+              <Badge variant={revisionTreatment.variant}>
+                <RevisionBadgeIcon aria-hidden="true" size={11} />
+                {revisionTreatment.label}
+              </Badge>
+            </Tooltip>
+          {/if}
+        {:else}
+          <Tooltip
+            text="This run predates revision pinning (WFT-17) — no persisted revision to compare against the active one."
+          >
+            <Badge variant="neutral">Unpinned (pre-revision record)</Badge>
           </Tooltip>
         {/if}
         {#if presentation.tooltip}

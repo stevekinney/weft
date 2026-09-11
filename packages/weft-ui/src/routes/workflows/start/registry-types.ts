@@ -20,6 +20,14 @@ export interface RegistryWorkflowEntry {
   readonly outputSchema?: Record<string, unknown>;
   readonly description?: string;
   readonly tags?: readonly string[];
+  /**
+   * The active manifest's own `revision` (WFT-117) — every active manifest
+   * carries one, so this is required rather than optional, unlike the
+   * `.contract`-projected fields above. Lets the Review step tell the
+   * operator which exact revision the run they are about to start will
+   * resolve against.
+   */
+  readonly revision: string;
 }
 
 interface WorkflowRevisionManifestLike {
@@ -35,7 +43,10 @@ interface WorkflowRevisionManifestLike {
  * through, matching the same projection `codegen-validate.ts` (weft
  * server) performs from the identical source shape.
  */
-function toRegistryWorkflowEntry(value: unknown): RegistryWorkflowEntry | undefined {
+function toRegistryWorkflowEntry(
+  value: unknown,
+  revision: string,
+): RegistryWorkflowEntry | undefined {
   if (typeof value !== 'object' || value === null) return undefined;
   const record = value as Record<string, unknown>;
   const entry: {
@@ -43,7 +54,8 @@ function toRegistryWorkflowEntry(value: unknown): RegistryWorkflowEntry | undefi
     outputSchema?: Record<string, unknown>;
     description?: string;
     tags?: readonly string[];
-  } = {};
+    revision: string;
+  } = { revision };
   if (typeof record['inputSchema'] === 'object' && record['inputSchema'] !== null) {
     entry.inputSchema = record['inputSchema'] as Record<string, unknown>;
   }
@@ -92,7 +104,7 @@ export function narrowRegistryWorkflows(
     if (!isWorkflowRevisionManifestLike(manifest)) continue;
     if (!Object.hasOwn(activeMap, manifest.name)) continue;
     if (activeMap[manifest.name] !== manifest.revision) continue;
-    const entry = toRegistryWorkflowEntry(manifest.contract);
+    const entry = toRegistryWorkflowEntry(manifest.contract, manifest.revision);
     if (entry === undefined) continue;
     result[manifest.name] = entry;
   }

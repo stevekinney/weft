@@ -30,6 +30,7 @@
   import Badge from '@lostgradient/cinder/badge';
   import EmptyState from '@lostgradient/cinder/empty-state';
   import Skeleton from '@lostgradient/cinder/skeleton';
+  import Tooltip from '@lostgradient/cinder/tooltip';
   import { createQuery } from '@tanstack/svelte-query';
   import type { HttpClient } from '@lostgradient/weft/client';
   import type { WorkflowState } from '@lostgradient/weft';
@@ -83,6 +84,7 @@
         <span>Status</span>
         <span>Workflow ID</span>
         <span>Type</span>
+        <span>Revision</span>
         <span>Created</span>
       </div>
       {#each children as child (child.id)}
@@ -101,6 +103,15 @@
           </Badge>
           <span class="weft-children-tab__id" title={child.id}>{truncateId(child.id)}</span>
           <span>{child.type}</span>
+          {#if child.revision !== undefined}
+            <Tooltip text={`Revision (exact executable artifact): ${child.revision}`}>
+              <span class="weft-children-tab__revision">{truncateId(child.revision)}</span>
+            </Tooltip>
+          {:else}
+            <span class="weft-children-tab__revision weft-children-tab__revision--unpinned">
+              Unpinned
+            </span>
+          {/if}
           <span class="weft-children-tab__meta">{formatRelativeTime(child.createdAt)}</span>
         </a>
       {/each}
@@ -121,7 +132,7 @@
      this repo's ≤500-line implementation-file guidance — `events-tab.svelte`
      sets this precedent). */
   .weft-children-tab__row {
-    grid-template-columns: 120px 200px 1fr 110px;
+    grid-template-columns: 120px 200px 1fr 130px 110px;
   }
 
   .weft-children-tab__row--link {
@@ -143,6 +154,17 @@
     font-size: var(--cinder-text-xs);
     color: var(--cinder-text-subtle);
     font-family: var(--cinder-font-mono);
+  }
+
+  .weft-children-tab__revision {
+    font-family: var(--cinder-font-mono);
+    font-size: var(--cinder-text-xs);
+    color: var(--cinder-text-subtle);
+  }
+
+  .weft-children-tab__revision--unpinned {
+    font-family: inherit;
+    color: var(--cinder-text-disabled);
   }
 
   .weft-children-tab__more {
