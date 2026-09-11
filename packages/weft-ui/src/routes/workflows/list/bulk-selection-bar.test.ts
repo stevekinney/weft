@@ -311,8 +311,13 @@ describe('BulkSelectionBar', () => {
       await waitFor(() => {
         expect(getByText('4 matching workflows')).not.toBeNull();
       });
-      // The retry-failed dialog passes the revision-retention previewNote (WFT-117).
-      expect(getByText(/keeps its own persisted revision/)).not.toBeNull();
+      // The retry-failed dialog passes a previewNote that discloses BOTH retry
+      // paths (WFT-117; Codex review, PR #978): checkpoint-backed retries keep
+      // the persisted revision, checkpoint-less retries fall back to
+      // start-new and resolve whichever revision is active right now — never
+      // an unconditional "always retains" promise.
+      expect(getByText(/resumes in place on its own persisted revision/)).not.toBeNull();
+      expect(getByText(/restarts fresh and resolves whichever revision is active/)).not.toBeNull();
     } finally {
       fetch.restore();
     }

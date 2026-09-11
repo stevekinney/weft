@@ -234,12 +234,11 @@
         />
       {/each}
     </RadioGroup>
-    {#if mode === 'edit' && revisionPolicyDraft === 'pinned'}
+    {#if mode === 'edit' && revisionPolicyDraft === 'pinned' && revisionPolicyDraft !== form.initialRevisionPolicy}
       <div class="weft-schedule-form__backfill-warning">
         <TriangleAlert aria-hidden="true" size={14} />
         <span>
-          Saving re-captures the pin against whichever revision is active right now — this is never
-          a no-op, even if the schedule is already pinned.
+          Saving captures whichever revision is active right now and pins future occurrences to it.
         </span>
       </div>
     {/if}

@@ -182,18 +182,23 @@ describe('ScheduleFormFields — edit mode', () => {
     expect((getByRole('radio', { name: 'Pinned' }) as HTMLInputElement).disabled).toBe(false);
   });
 
-  test('shows the "pinned always re-captures right now" warning when pinned is selected in edit mode', async () => {
+  test('shows the re-capture warning when CHANGING to pinned in edit mode', async () => {
+    // Starts active-at-fire so `form.initialRevisionPolicy` captures that
+    // baseline; the click below is a real transition, not a same-value
+    // re-render, so `toUpdateRevisionPolicy()` would actually submit it.
     const form = new ScheduleFormState({
       id: 'nightly-rollup',
       workflowType: 'report-gen',
-      revisionPolicy: 'pinned',
+      revisionPolicy: 'active-at-fire',
     });
 
-    const { getByText } = render(ScheduleFormFields, {
+    const { getByRole, getByText } = render(ScheduleFormFields, {
       props: { form, mode: 'edit', workflowTypeOptions: undefined },
     });
 
-    expect(getByText(/never a no-op, even if the schedule is already pinned/)).not.toBeNull();
+    await fireEvent.click(getByRole('radio', { name: 'Pinned' }));
+
+    expect(getByText(/captures whichever revision is active right now/)).not.toBeNull();
   });
 
   test('does NOT show the pinned warning when active-at-fire is selected in edit mode', async () => {
@@ -207,7 +212,22 @@ describe('ScheduleFormFields — edit mode', () => {
       props: { form, mode: 'edit', workflowTypeOptions: undefined },
     });
 
-    expect(queryByText(/never a no-op/)).toBeNull();
+    expect(queryByText(/captures whichever revision is active right now/)).toBeNull();
+  });
+
+  test('does NOT show the pinned warning for an already-pinned schedule left unchanged — toUpdateRevisionPolicy() sends nothing, so the prior "never a no-op" framing was misleading (Codex review, PR #978)', async () => {
+    const form = new ScheduleFormState({
+      id: 'nightly-rollup',
+      workflowType: 'report-gen',
+      revisionPolicy: 'pinned',
+    });
+
+    const { queryByText } = render(ScheduleFormFields, {
+      props: { form, mode: 'edit', workflowTypeOptions: undefined },
+    });
+
+    expect(form.toUpdateRevisionPolicy()).toBeUndefined();
+    expect(queryByText(/captures whichever revision is active right now/)).toBeNull();
   });
 });
 

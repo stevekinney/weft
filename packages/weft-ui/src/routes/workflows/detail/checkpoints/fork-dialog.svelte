@@ -24,8 +24,15 @@
    *
    * A rejection specifically coded `WorkflowRevisionUnavailableError`
    * (`isForkRevisionConflict`, `fork-revision-picker.ts`) gets its own
-   * "pick a different revision" framing, distinct from the generic error
-   * paragraph every other fork failure still uses.
+   * Conflict framing, distinct from the generic error paragraph every other
+   * fork failure still uses — and `forkConflictGuidance()` branches that
+   * framing's recovery sentence on `selection.mode` (Codex review, PR #978):
+   * a default (`'source'`) fork that failed this way means the SOURCE run's
+   * OWN revision is unavailable, so pointing the operator back at "use the
+   * source revision" would tell them to retry the exact thing that just
+   * failed — that case routes to the explicit picker instead. An
+   * `'explicit'` fork that failed keeps "use the source revision instead"
+   * as real, available advice.
    */
   import Badge from '@lostgradient/cinder/badge';
   import Button from '@lostgradient/cinder/button';
@@ -38,11 +45,13 @@
   import { ChevronDown, ChevronRight, GitFork } from 'lucide-svelte';
 
   import { formatRelativeTime, truncateId } from '../../../../lib/format/index.ts';
+  import { queryKeys } from '../../../../lib/query.ts';
   import { getPrincipalStore, scopeGate } from '../../../../lib/scopes.svelte.ts';
   import { EAGER_REVISION_HEDGE } from '../../../../lib/workflow-revision.ts';
   import { router, workflowDetailPath } from '../../../../lib/router.svelte.ts';
   import type { ForkClient } from './checkpoints-data.ts';
   import {
+    forkConflictGuidance,
     isForkRevisionConflict,
     parseInstalledRevisions,
     resolveForkOptions,
@@ -87,7 +96,11 @@
 
   const revisionsQuery = createQuery(
     toStore(() => ({
-      queryKey: ['workflows', 'revisions', workflowType],
+      // Shares the System route's Revisions-panel cache key (WFT-115) so
+      // this picker starts warm when the revisions list is already cached,
+      // and so activating a revision from the System route invalidates
+      // this entry too — not a duplicate resource under a different key.
+      queryKey: queryKeys.catalog.revisions(workflowType),
       queryFn: () => client.operations['weft.workflows.revisions.list']({ name: workflowType }),
       enabled: pickerOpen && !readGate.disabled,
     })),
@@ -231,7 +244,7 @@
           {$forkMutation.error instanceof Error
             ? $forkMutation.error.message
             : 'The requested revision could not be resolved.'}
-          Pick a different revision, or use the source revision instead.
+          {forkConflictGuidance(selection)}
         </p>
       </div>
     {:else}

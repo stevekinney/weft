@@ -120,6 +120,72 @@ describe('LineagePanel', () => {
     expect(queryByText(/^rev /)).toBeNull();
   });
 
+  test('omits the source-revision chip and shows "Revision not attributable" when the source id was reused by a start-new restart AFTER this fork was created (Codex review, PR #978)', async () => {
+    // `client.get` always returns the source id's LATEST generation. Here
+    // that generation's own `restartedFrom.replacedAt` (2_000) is AFTER the
+    // forking run's own `createdAt` (1_000, the `workflow()` default) — this
+    // fetched record post-dates the fork, so its `revision` cannot honestly
+    // be attributed to the run that was actually forked from.
+    const client = baseClient({
+      get: async (id) =>
+        id === 'wf_source'
+          ? workflow({
+              id: 'wf_source',
+              type: 'reconcile-ledger',
+              revision: 'reconcile-rev-replacement',
+              restartedFrom: { workflowId: 'wf_source', replacedAt: 2_000 },
+            })
+          : null,
+    });
+
+    const { getByText, queryByText } = render(LineagePanelHarness, {
+      props: {
+        client,
+        workflow: workflow({ forkedFrom: { workflowId: 'wf_source', step: 12 } }),
+      },
+    });
+
+    await waitFor(() => {
+      expect(getByText('reconcile-ledger')).not.toBeNull();
+    });
+    expect(getByText('Revision not attributable')).not.toBeNull();
+    expect(queryByText(/^rev reconcil/)).toBeNull();
+  });
+
+  test('still shows the source-revision chip when the source generation was restarted BEFORE this fork was created', async () => {
+    // The restart (replacedAt: 1_000) happened BEFORE this fork's own
+    // `createdAt` (5_000) — the fetched generation was already current at
+    // fork time and (per `client.get`'s "always latest" contract) has not
+    // been replaced again since, so its revision is the real source.
+    const client = baseClient({
+      get: async (id) =>
+        id === 'wf_source'
+          ? workflow({
+              id: 'wf_source',
+              type: 'reconcile-ledger',
+              revision: 'reconcile-rev-abc',
+              restartedFrom: { workflowId: 'wf_source', replacedAt: 1_000 },
+            })
+          : null,
+    });
+
+    const { getByText, queryByText } = render(LineagePanelHarness, {
+      props: {
+        client,
+        workflow: workflow({
+          createdAt: 5_000,
+          forkedFrom: { workflowId: 'wf_source', step: 12 },
+        }),
+      },
+    });
+
+    await waitFor(() => {
+      expect(getByText('reconcile-ledger')).not.toBeNull();
+    });
+    expect(getByText(/^rev reconcil/)).not.toBeNull();
+    expect(queryByText('Revision not attributable')).toBeNull();
+  });
+
   test('falls back to a truncated-id label when the forked-from source is no longer visible', async () => {
     const client = baseClient();
 

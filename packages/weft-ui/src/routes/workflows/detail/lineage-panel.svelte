@@ -59,6 +59,26 @@
    * pre-revision-pinning (legacy) record rather than a blank space — see
    * `EAGER_REVISION_HEDGE`'s own doc for the WFT-159 hedge these tooltips
    * also carry.
+   *
+   * `forkSourceQuery` fetches `forkedFrom.workflowId` — a stable id, not the
+   * concrete generation actually forked from. `GET /api/v1/workflows/:id`
+   * always returns that id's LATEST generation (see the "Continuation
+   * chain" note above), and `ForkLineage` carries no execution token or
+   * revision snapshot (`@lostgradient/weft`'s `ForkLineage` type — just
+   * `{ workflowId, step }`) to pin down which one was actually forked. So
+   * if the source id was later reused via `onTerminalConflict: 'start-new'`
+   * — displacing the run this panel actually forked from with an unrelated
+   * replacement — showing that replacement's `revision` here would
+   * misattribute it to the historical fork (Codex review, PR #978).
+   * `sourceRevisionAttributable` guards against exactly that: the fetched
+   * generation is trustworthy only when it has never been restarted, or its
+   * most recent restart happened BEFORE this run (the fork) was created —
+   * in both cases the generation this panel just fetched is provably the
+   * same one that existed at fork time, since `client.get` always surfaces
+   * the CURRENT latest and a later restart would have moved
+   * `restartedFrom.replacedAt` forward past this run's own `createdAt`.
+   * When it isn't attributable, the chip is omitted with an explicit note
+   * rather than silently showing a possibly-wrong revision.
    */
   import Badge from '@lostgradient/cinder/badge';
   import CopyButton from '@lostgradient/cinder/copy-button';
@@ -97,6 +117,14 @@
       enabled: forkedFrom !== undefined,
     })),
   );
+
+  /** See the module doc's "Revision display" section for why this guard is required, not optional. */
+  const sourceRevisionAttributable = $derived.by(() => {
+    const source = $forkSourceQuery.data;
+    if (source === null || source === undefined) return false;
+    const replacedAt = source.restartedFrom?.replacedAt;
+    return replacedAt === undefined || replacedAt < workflow.createdAt;
+  });
 
   const scheduleProvenanceQuery = createQuery(
     toStore(() => ({
@@ -226,10 +254,16 @@
             {truncateId(forkedFrom.workflowId)}
           </span>
           <CopyButton value={forkedFrom.workflowId} iconOnly label="Copy workflow id" />
-          {#if $forkSourceQuery.data?.revision !== undefined}
+          {#if sourceRevisionAttributable && $forkSourceQuery.data?.revision !== undefined}
             {@const sourceRevision = $forkSourceQuery.data.revision}
             <Tooltip text={`Source revision (exact executable artifact): ${sourceRevision}`}>
               <span class="weft-lineage-panel__id">rev {truncateId(sourceRevision)}</span>
+            </Tooltip>
+          {:else if $forkSourceQuery.data && !sourceRevisionAttributable}
+            <Tooltip
+              text={`This id was reused by a start-new replacement after this fork was created, so the current record's revision may not match what was actually forked. Not shown to avoid a wrong attribution.`}
+            >
+              <Badge variant="neutral" size="sm">Revision not attributable</Badge>
             </Tooltip>
           {/if}
         {/if}

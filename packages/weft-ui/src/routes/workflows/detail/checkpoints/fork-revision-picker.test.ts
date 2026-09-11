@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import { HttpClientError } from '@lostgradient/weft/client';
 
 import {
+  forkConflictGuidance,
   isForkRevisionConflict,
   parseInstalledRevisions,
   resolveForkOptions,
@@ -63,6 +64,20 @@ describe('isForkRevisionConflict', () => {
   test('false for a non-error value', () => {
     expect(isForkRevisionConflict('nope')).toBe(false);
     expect(isForkRevisionConflict(null)).toBe(false);
+  });
+});
+
+describe('forkConflictGuidance', () => {
+  test('explicit mode points back at the source revision — real, available advice', () => {
+    const selection: ForkRevisionSelection = { mode: 'explicit', revision: 'rev-b' };
+    expect(forkConflictGuidance(selection)).toMatch(/use the source revision instead/);
+  });
+
+  test('source mode does NOT tell the operator to retry the thing that just failed (Codex review, PR #978)', () => {
+    const selection: ForkRevisionSelection = { mode: 'source' };
+    const guidance = forkConflictGuidance(selection);
+    expect(guidance).not.toMatch(/use the source revision/);
+    expect(guidance).toMatch(/Fork a different revision/);
   });
 });
 

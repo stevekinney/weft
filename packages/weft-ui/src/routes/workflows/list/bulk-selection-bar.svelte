@@ -292,7 +292,7 @@
       retryFailedResultSummary(await commitBulkRetryFailed(client, bulkFilter, token), matched)}
     onClose={closeDialog}
     onSuccess={onActionComplete}
-    previewNote="Each retried run keeps its own persisted revision — a retry never re-pins to whichever revision happens to be active now."
+    previewNote="A retry with a saved checkpoint resumes in place on its own persisted revision. A retry with no checkpoint restarts fresh and resolves whichever revision is active right now — the same as any other start-new replacement."
   />
 {:else if activeAction === 'delete'}
   <BulkActionDialog

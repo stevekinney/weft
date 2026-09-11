@@ -146,7 +146,45 @@ describe('ForkDialog', () => {
     });
   });
 
-  test('a WorkflowRevisionUnavailableError-coded rejection renders the Conflict-specific "pick a different revision" framing', async () => {
+  test('a WorkflowRevisionUnavailableError-coded rejection on a DEFAULT (source-mode) fork points at the picker, not back at the source revision (Codex review, PR #978)', async () => {
+    // The default fork (no explicit opt-in) IS "use the source revision" —
+    // when that's exactly what just failed, telling the operator to "use
+    // the source revision instead" would be telling them to retry the
+    // thing that just failed. Guidance must route them to the picker.
+    const client = baseClient({
+      fork: async () => {
+        throw new HttpClientError(409, 'revision not registered', {
+          faultCode: 'Conflict',
+          weftCode: 'WorkflowRevisionUnavailableError',
+        });
+      },
+    });
+
+    const { getByRole, getByText, queryByText } = render(ForkDialogHarness, {
+      props: {
+        client,
+        workflowId: 'wf-1',
+        initialStep: 3,
+        workflowType: 'order-processing',
+        sourceRevision: 'order-processing-rev-current',
+        principal: deniedPrincipal(),
+        queryClient: newQueryClient(),
+      },
+    });
+
+    await fireEvent.click(getByRole('button', { name: 'Create fork' }));
+
+    await waitFor(() => {
+      expect(getByText('Revision unavailable')).not.toBeNull();
+      // Matches the conflict paragraph's own sentence, not the disclosure
+      // button's identical-looking label — `getByText` would otherwise
+      // throw on finding both.
+      expect(getByText(/pick one that is currently installed/)).not.toBeNull();
+    });
+    expect(queryByText(/use the source revision instead/)).toBeNull();
+  });
+
+  test('a WorkflowRevisionUnavailableError-coded rejection on an EXPLICIT-revision fork keeps the "use the source revision instead" fallback', async () => {
     const client = baseClient({
       fork: async () => {
         throw new HttpClientError(409, 'revision not registered', {
@@ -168,11 +206,16 @@ describe('ForkDialog', () => {
       },
     });
 
+    await fireEvent.click(getByRole('button', { name: 'Fork a different revision' }));
+    const input = getByRole('textbox', { name: 'Revision id' });
+    await fireEvent.input(input, { target: { value: 'order-processing-rev-missing' } });
     await fireEvent.click(getByRole('button', { name: 'Create fork' }));
 
     await waitFor(() => {
       expect(getByText('Revision unavailable')).not.toBeNull();
-      expect(getByText(/Pick a different revision/)).not.toBeNull();
+      expect(
+        getByText(/Pick a different revision, or use the source revision instead/),
+      ).not.toBeNull();
     });
   });
 

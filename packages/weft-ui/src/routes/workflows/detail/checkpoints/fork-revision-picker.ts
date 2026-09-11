@@ -45,6 +45,24 @@ export function isForkRevisionConflict(error: unknown): boolean {
   return isWeftFault(error, 'WorkflowRevisionUnavailableError');
 }
 
+/**
+ * The recovery sentence shown alongside a `WorkflowRevisionUnavailableError`
+ * rejection, branched on which selection actually caused it (Codex review,
+ * PR #978). `mode: 'explicit'` failed because the OPERATOR-picked revision
+ * isn't resolvable — "use the source revision instead" is real, available
+ * advice there. `mode: 'source'` failed because the SOURCE RUN'S OWN
+ * revision isn't resolvable (purged, never installed, or legacy-ambiguous) —
+ * telling the operator to "use the source revision" in that case would be
+ * telling them to retry the exact thing that just failed, and an ambiguous
+ * unpinned source has no single revision to fall back to at all. Route that
+ * case toward the explicit picker instead.
+ */
+export function forkConflictGuidance(selection: ForkRevisionSelection): string {
+  return selection.mode === 'explicit'
+    ? 'Pick a different revision, or use the source revision instead.'
+    : 'This run’s own revision could not be resolved on this process. Use “Fork a different revision” and pick one that is currently installed.';
+}
+
 /** One installed revision, as the fork dialog's revision picker needs it — a narrow projection of `WorkflowRevisionRecord` (`@lostgradient/weft`). */
 export interface InstalledRevisionOption {
   readonly revision: string;
