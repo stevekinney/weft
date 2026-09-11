@@ -149,7 +149,7 @@ describe('fork-workflow — validation precedence', () => {
     }
     expect(captured).toMatchObject({
       code: 'Conflict',
-      data: { reason: 'not-registered' },
+      data: { reason: 'not-registered', weftCode: 'WorkflowRevisionUnavailableError' },
     });
   });
 

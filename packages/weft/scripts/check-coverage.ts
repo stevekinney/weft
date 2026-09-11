@@ -1318,8 +1318,9 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
         reason:
           'Defensive fail-loud guard for an invariant resolveWorkflowSourceForExecution() itself guarantees; has no reachable runtime path to test without an unsafe cast. ' +
           'Lines realigned to 130-139 after the WFT-15/16 review round 2 fix synchronized the sole-registered-revision fast path (no `await` before `onRevisionChosen` fires). ' +
-          'Lines realigned to 147-156 after WFT-17/WFT-18 split this guard into a shared `loadAndInstallSourceRevision()` tail reused by both `resolveExecutableRegistration()` and the new `resolveExecutableRegistrationForRevision()` — the guard itself is unchanged, only its position moved.',
-        lines: new Set([147, 148, 149, 150, 151, 152, 153, 154, 155, 156]),
+          'Lines realigned to 147-156 after WFT-17/WFT-18 split this guard into a shared `loadAndInstallSourceRevision()` tail reused by both `resolveExecutableRegistration()` and the new `resolveExecutableRegistrationForRevision()` — the guard itself is unchanged, only its position moved. ' +
+          'Lines realigned to 159-164 after WFT-21 (Codex review round 4, P2) added a `WorkflowRevisionUnavailableError` passthrough to the catch block immediately above this guard — a fully-covered branch, not part of this allowance — shifting the guard down by 7 lines with no change to the guard itself. The `if` condition line and its comment lines are excluded: only the never-taken throw statement itself (its call expression through its closing `);`) is reported uncovered.',
+        lines: new Set([159, 160, 161, 162, 163, 164]),
         requireUncoveredLines: true,
       },
     ],

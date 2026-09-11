@@ -16,7 +16,7 @@ describe('mapRevisionUnavailableToFault', () => {
     expect(fault).toEqual({
       code: 'Conflict',
       message: error.message,
-      data: { reason: 'not-registered' },
+      data: { reason: 'not-registered', weftCode: 'WorkflowRevisionUnavailableError' },
     });
   });
 
@@ -24,13 +24,19 @@ describe('mapRevisionUnavailableToFault', () => {
     const error = new WorkflowRevisionUnavailableError('checkout', undefined, 'legacy-ambiguous');
     const fault = mapRevisionUnavailableToFault(error);
     expect(fault?.code).toBe('Conflict');
-    expect(fault?.data).toEqual({ reason: 'legacy-ambiguous' });
+    expect(fault?.data).toEqual({
+      reason: 'legacy-ambiguous',
+      weftCode: 'WorkflowRevisionUnavailableError',
+    });
   });
 
   it("maps a 'not-installed' error to a Conflict fault carrying data.reason", () => {
     const error = new WorkflowRevisionUnavailableError('checkout', 'rev-a', 'not-installed');
     const fault = mapRevisionUnavailableToFault(error);
     expect(fault?.code).toBe('Conflict');
-    expect(fault?.data).toEqual({ reason: 'not-installed' });
+    expect(fault?.data).toEqual({
+      reason: 'not-installed',
+      weftCode: 'WorkflowRevisionUnavailableError',
+    });
   });
 });

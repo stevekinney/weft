@@ -30,7 +30,10 @@ export function mapRevisionUnavailableToFault(error: unknown): OperationFault | 
     // `error.reason`/`workflowType`/`revision` are already folded into
     // `message` by the error's own constructor; `OperationFault`'s
     // `Conflict.data.reason` is a caller-facing free-text summary, not a
-    // structured enum slot for this specific error class.
-    data: { reason: error.reason },
+    // structured enum slot for this specific error class. `weftCode`
+    // recovers the originating typed error (WFT-21, Codex review round 4,
+    // P2), matching the other typed fork/catalog Conflict mappings in
+    // `workflow-catalog-operation-helpers.ts` and `fork-workflow.ts`.
+    data: { reason: error.reason, weftCode: error.code },
   };
 }

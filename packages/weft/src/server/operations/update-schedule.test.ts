@@ -442,6 +442,7 @@ describe('weft.schedules.update', () => {
       expect(response.status).toBe(409);
       expect(await response.json()).toEqual({
         error: expect.stringContaining('revision-gone'),
+        weftCode: 'WorkflowRevisionUnavailableError',
       });
     } finally {
       engine.updateSchedule = originalUpdateSchedule;

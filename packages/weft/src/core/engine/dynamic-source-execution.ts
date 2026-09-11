@@ -139,6 +139,14 @@ async function loadAndInstallSourceRevision(
     await resolveWorkflowSourceForExecution(engine, type, revision);
   } catch (error) {
     if (error instanceof EngineDisposedError) throw error;
+    // A typed `WorkflowRevisionUnavailableError` already carries the exact
+    // conflict reason (tombstoned/removed/not-installed) that
+    // `mapRevisionUnavailableToFault()` translates into a structured
+    // Conflict (409) fault (WFT-21, Codex review round 4, P2). Re-wrapping
+    // it here would collapse that into a generic `DynamicWorkflowSourceUnavailableError`
+    // and downgrade the caller-facing fault to an opaque 500, exactly the
+    // outcome `EngineDisposedError`'s own passthrough above already avoids.
+    if (error instanceof WorkflowRevisionUnavailableError) throw error;
     throw new DynamicWorkflowSourceUnavailableError(type, revision, 'load-failed', error);
   }
 

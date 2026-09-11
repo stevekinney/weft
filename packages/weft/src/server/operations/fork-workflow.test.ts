@@ -174,7 +174,10 @@ describe('weft.workflows.fork', () => {
       expect(result.ok).toBe(false);
       if (result.ok) throw new Error('expected a fault');
       expect(result.fault.code).toBe('Conflict');
-      expect(result.fault.data).toEqual({ reason: 'not-registered' });
+      expect(result.fault.data).toEqual({
+        reason: 'not-registered',
+        weftCode: 'WorkflowRevisionUnavailableError',
+      });
     } finally {
       engine.fork = originalFork;
     }

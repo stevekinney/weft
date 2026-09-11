@@ -893,6 +893,132 @@ describe('catalog.install() vs. a concurrent removeCatalogEntry() tombstone — 
     expect(removed).toEqual({ removed: true });
     expect(await storage.get(tombstoneKey)).toBeNull();
   });
+
+  it("fork() itself fails closed even when its target revision's load-and-install step races a FULL removal+finalization cycle that begins and ends while the load is in flight (WFT-21, Codex review round 4, P1 — verified NOT reachable through fork()'s real commit path)", async () => {
+    // Codex round 4 P1 flagged `catalog/storage-io.ts`'s `writeCatalogEntry()`
+    // itself: existence-based tombstone fencing only protects the window
+    // BEFORE a removal finalizes, so a stale in-flight loader that started
+    // before removal but installs after finalization could, in principle,
+    // resurrect an already-removed revision. Investigated empirically
+    // (scratch probes, not kept): a load that begins while its target
+    // revision IS durably installed short-circuits on a durable
+    // `resolveEntry()` read taken before the loader ever runs — it adopts a
+    // durable hit into the engine's own process-local `#entries` cache and
+    // never re-touches durable storage once the loader resolves, so
+    // `catalog.install()` here writes nothing at all (no `conditionalBatch`
+    // call, no resurrection). But this local cache goes STALE relative to
+    // the concurrent removal — the engine believes the revision installed
+    // successfully (`hasInstalled()` returns `true` from cache) even though
+    // the durable entry stayed permanently absent. This test proves that
+    // staleness never reaches a caller-visible resurrection: `fork()`'s own
+    // commit-time catalog-entry condition (`buildCatalogEntryRevisionCondition`,
+    // `start-commit.ts` — pre-existing, now reached under EVERY ownership
+    // mode per item 2's fix) re-reads the entry fresh from durable storage
+    // immediately before commit, independent of whatever the load-and-install
+    // step believed, and fails closed with the same typed
+    // `WorkflowRevisionUnavailableError('not-installed')` the items-1-3 fix
+    // throws for the simpler pre-finalization window above.
+    const storage = new MemoryStorage();
+    const type = 'fork-catalog-race-post-finalization';
+    const definitionV1 = workflow({ name: type, description: 'v1' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      return yield* ctx.waitForSignal<string>('go');
+    });
+    const definitionV2 = workflow({ name: type, description: 'v2' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      return yield* ctx.waitForSignal<string>('go');
+    });
+    const revisionV1 = await revisionFor(type, definitionV1);
+    const revisionV2 = await revisionFor(type, definitionV2);
+    const entryKeyV2 = KEYS.catalogEntry(type, revisionV2);
+    const tombstoneKeyV2 = KEYS.catalogTombstone(type, revisionV2);
+
+    const loadGate = Promise.withResolvers<void>();
+    const loadEntered = Promise.withResolvers<void>();
+
+    // Engine B pre-warms its catalog snapshot BEFORE V2 exists anywhere, so
+    // its one-time boot sweep never caches V2 — see the sibling test above
+    // for why this ordering is required to reach a real load path at all.
+    const engineB = new Engine({ storage });
+    engineB.registerSource(
+      workflowSource(
+        { name: type, location: './v1.ts', exportName: 'v1', revision: revisionV1 },
+        async () => ({ v1: definitionV1 }),
+      ),
+    );
+    expect(await engineB.workflows.listRevisions(type)).toEqual([]);
+
+    // Engine A starts the source run on V1, then installs V2 durably.
+    const engineA = new Engine({ storage });
+    engineA.registerSource(
+      workflowSource(
+        { name: type, location: './v1.ts', exportName: 'v1', revision: revisionV1 },
+        async () => ({ v1: definitionV1 }),
+      ),
+    );
+    const sourceHandle = await engineA.start(type, null, {
+      id: 'fork-catalog-race-post-finalization-source',
+    });
+    engineA.registerSource(
+      workflowSource(
+        { name: type, location: './v2.ts', exportName: 'v2', revision: revisionV2 },
+        async () => ({ v2: definitionV2 }),
+      ),
+    );
+    await engineA.resolveWorkflowSource(type, revisionV2);
+    expect(await getWorkflowCatalog(engineA).hasInstalled(type, revisionV2)).toBe(true);
+
+    // Engine B registers V2 with a pausable loader and forks onto it — V2 IS
+    // durably installed at this moment, but engine B's own local
+    // resolved-definition cache is empty for this exact key, so this falls
+    // through to a real load rather than short-circuiting immediately.
+    engineB.registerSource(
+      workflowSource(
+        { name: type, location: './v2.ts', exportName: 'v2', revision: revisionV2 },
+        async () => {
+          loadEntered.resolve();
+          await loadGate.promise;
+          return { v2: definitionV2 };
+        },
+      ),
+    );
+    const forkPromise = engineB.fork(sourceHandle.id, { revision: revisionV2 });
+    await loadEntered.promise;
+
+    // Fully remove AND finalize V2 while engine B's fork is parked mid-load
+    // — unlike the sibling test above, this runs the removal to full
+    // completion (tombstone gone, not just present) before the load resumes.
+    const removed = await removeWorkflowRevision(engineA, type, revisionV2);
+    expect(removed).toEqual({ removed: true });
+    expect(await storage.get(entryKeyV2)).toBeNull();
+    expect(await storage.get(tombstoneKeyV2)).toBeNull();
+
+    loadGate.resolve();
+    let forkError: unknown;
+    try {
+      await forkPromise;
+    } catch (error) {
+      forkError = error;
+    }
+
+    expect(forkError).toBeInstanceOf(WorkflowRevisionUnavailableError);
+    expect((forkError as WorkflowRevisionUnavailableError).reason).toBe('not-installed');
+    expect((forkError as WorkflowRevisionUnavailableError).workflowType).toBe(type);
+    expect((forkError as WorkflowRevisionUnavailableError).revision).toBe(revisionV2);
+
+    // No resurrection observable anywhere: the durable entry stayed absent,
+    // and the only run for this type is the original V1 source.
+    expect(await storage.get(entryKeyV2)).toBeNull();
+    const runs = await engineA.list({ type });
+    expect(runs.items).toHaveLength(1);
+    expect(runs.items[0]?.id).toBe(sourceHandle.id);
+    expect(runs.items[0]?.revision).toBe(revisionV1);
+
+    engineA[Symbol.dispose]();
+    engineB[Symbol.dispose]();
+  });
 });
 
 describe('buildForkCommitLostRaceError — WFT-21 Codex review round 4 P2', () => {
