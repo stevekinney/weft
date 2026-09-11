@@ -96,6 +96,39 @@ describe('countTeardownDeadLettersForRevision', () => {
     ).rejects.toThrow();
   });
 
+  it('fails the whole scan closed on a history record that decodes successfully but is structurally malformed, rather than silently skipping it AND letting it suppress a legitimate legacy single-slot sibling (WFT-21, Codex review round 13, P2)', async () => {
+    const storage = new MemoryStorage();
+    // A history record that decodes fine but is not a well-formed
+    // `TeardownDeadLetterRecord` at all — `isRecord()` rejects it, so the
+    // pre-fix behavior silently `continue`s past it in the history scan.
+    await storage.put(KEYS.teardownDeadLetterHistory('wf-malformed', 'tok'), encode(null));
+
+    // A LEGITIMATE legacy single-slot record for the SAME workflow id and
+    // token, matching (type, revision) — this is the actual evidence this
+    // scan exists to find. Before the fix,
+    // `countLegacySingleSlotDeadLetter()`'s `alreadyCountedViaHistory` check
+    // only tests whether the history KEY exists (`storage.get(historyKey)
+    // !== null`), never whether its CONTENT is valid — the malformed
+    // record's key existing was enough to wrongly suppress this single-slot
+    // sibling as "already counted", so neither record ever counted and
+    // `removeWorkflowRevision()` would see zero references despite this
+    // dead letter still durably pinning the revision.
+    await storage.put(
+      KEYS.teardownDeadLetter('wf-malformed'),
+      encode(
+        makeDeadLetter({
+          type: 'checkout',
+          revision: 'rev-a',
+          workflowExecutionToken: 'tok',
+        }),
+      ),
+    );
+
+    await expect(
+      countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a'),
+    ).rejects.toThrow();
+  });
+
   it("retains an earlier generation's dead-letter revision reference after the workflow id is reused (WFT-21, Codex review round 3, P2)", async () => {
     const storage = new MemoryStorage();
     // Two generations of the SAME workflow id — a real `start-new`/purge id-reuse

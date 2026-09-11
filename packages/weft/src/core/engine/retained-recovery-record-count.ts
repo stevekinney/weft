@@ -66,6 +66,20 @@ import { LEGACY_DEAD_LETTER_HISTORY_TOKEN } from './termination/finalizer-claim.
  * successfully decoded bytes that fail schema validation, not an undecodable
  * blob).
  *
+ * A record that decodes SUCCESSFULLY but is not a well-formed record at
+ * all (Codex review round 13, P2) — `null`, an array, or any other
+ * non-object value — likewise fails the whole scan closed rather than a
+ * bare `continue`, for a reason specific to this scan: the legacy
+ * single-slot fallback below (`countLegacySingleSlotDeadLetter()`) decides
+ * whether a single-slot record is "already counted by this history scan"
+ * by checking ONLY whether its computed history-sibling KEY exists in
+ * storage, never whether that sibling's CONTENT is valid. A malformed-but-
+ * present history record would therefore silently suppress a legitimate
+ * legacy single-slot sibling as already-counted while itself contributing
+ * nothing to `count` — under-counting BOTH records to zero and letting
+ * `removeWorkflowRevision()` remove a revision this exact dead letter still
+ * durably pins.
+ *
  * Also scans {@link KEYS.teardownDeadLetterPrefix}, the legacy single-slot
  * namespace (Codex review, item 7): `deadLetterTeardown()` writes the
  * single-slot key and its history sibling TOGETHER, in the same batch, on
@@ -104,9 +118,29 @@ export async function countTeardownDeadLettersForRevision(
   revision: string,
 ): Promise<number> {
   let count = 0;
-  for await (const [, bytes] of storage.scan(KEYS.teardownDeadLetterHistoryPrefix())) {
+  for await (const [key, bytes] of storage.scan(KEYS.teardownDeadLetterHistoryPrefix())) {
     const decoded = decode(bytes);
-    if (!isRecord(decoded)) continue;
+    // Fails the WHOLE scan closed, not just a `continue` (WFT-21, Codex
+    // review round 13, P2) — mirroring the unguarded `decode()` call's own
+    // fail-closed precedent above this function's doc. A record that
+    // decodes successfully but is not a well-formed
+    // `TeardownDeadLetterRecord` (e.g. `null`, an array, or an object
+    // missing `type`/`revision`) is not just silently uncounted here: its
+    // KEY still durably exists, and `countLegacySingleSlotDeadLetter()`'s
+    // own `alreadyCountedViaHistory` check below tests ONLY key presence,
+    // never content validity. Silently skipping this record would let its
+    // mere existence wrongly suppress a LEGITIMATE legacy single-slot
+    // sibling as "already counted by the history scan" — under-counting
+    // both records to zero and letting `removeWorkflowRevision()` remove a
+    // revision this exact dead letter still durably pins.
+    if (!isRecord(decoded)) {
+      throw new Error(
+        `Dead-letter history record "${key}" decoded successfully but is not a well-formed ` +
+          'record (expected an object with `type` and `revision` fields). Refusing to silently ' +
+          'skip it: this key existing could otherwise mask a legitimate legacy single-slot dead ' +
+          'letter as already counted, permitting removal of a revision it still durably pins.',
+      );
+    }
     if (decoded['type'] !== type || decoded['revision'] !== revision) continue;
     count += 1;
   }
