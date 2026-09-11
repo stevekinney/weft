@@ -113,6 +113,18 @@
    * all; `createdAt` remains the only (imperfect) signal for the untracked
    * case. When either check fails, the chip is omitted with an explicit
    * note rather than silently showing a possibly-wrong revision.
+   *
+   * Residual gap, accepted (Codex review, PR #978, round 7): an untracked
+   * id reuse (purge, then a plain fresh `engine.start()` on the same
+   * explicit id) combined with clock skew on the reusing engine can still
+   * pass both checks, because `ForkLineage` carries no durable generation
+   * token to rule it out — see the two paragraphs above. Closing this
+   * fully needs an engine-side generation token on `ForkLineage`, which is
+   * out of WFT-117's scope ("do not implement or copy Weft runtime
+   * semantics in the Console"). Rather than silently trust the shown
+   * revision, the rendered tooltip below now labels the attribution
+   * "best-effort" and names the exact gap, so an operator reading it is
+   * not told a stronger guarantee than the data can support.
    */
   import Badge from '@lostgradient/cinder/badge';
   import CopyButton from '@lostgradient/cinder/copy-button';
@@ -292,7 +304,9 @@
           <CopyButton value={forkedFrom.workflowId} iconOnly label="Copy workflow id" />
           {#if sourceRevisionAttributable && $forkSourceQuery.data?.revision !== undefined}
             {@const sourceRevision = $forkSourceQuery.data.revision}
-            <Tooltip text={`Source revision (exact executable artifact): ${sourceRevision}`}>
+            <Tooltip
+              text={`Source revision (exact executable artifact): ${sourceRevision}. Best-effort attribution: this id has never been displaced by a tracked start-new replacement, and this record's own creation time precedes this fork — not an absolute guarantee against an untracked id reuse racing a clock-skewed engine.`}
+            >
               <span class="weft-lineage-panel__id">rev {truncateId(sourceRevision)}</span>
             </Tooltip>
           {:else if sourceRevisionAttributable && $forkSourceQuery.data}

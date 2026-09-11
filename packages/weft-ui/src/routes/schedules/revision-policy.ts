@@ -6,6 +6,8 @@
  */
 import type { ScheduleRevisionPolicy } from '@lostgradient/weft';
 
+import { FRESH_START_REVISION_HEDGE } from '../../lib/workflow-revision.ts';
+
 export interface RevisionPolicyDescriptor {
   readonly value: ScheduleRevisionPolicy;
   readonly label: string;
@@ -15,8 +17,7 @@ export interface RevisionPolicyDescriptor {
 const ACTIVE_AT_FIRE_DESCRIPTOR: RevisionPolicyDescriptor = {
   value: 'active-at-fire',
   label: 'Active at fire',
-  consequence:
-    'Each occurrence resolves whichever revision is active at the moment it fires. This is the default.',
+  consequence: `Each occurrence resolves whichever revision is active at the moment it fires. This is the default. ${FRESH_START_REVISION_HEDGE}`,
 };
 
 export const REVISION_POLICIES: readonly RevisionPolicyDescriptor[] = [

@@ -26,6 +26,13 @@
 import { fireEvent, render, waitFor } from '@testing-library/svelte';
 import { describe, expect, test } from 'bun:test';
 
+import {
+  buildWorkflowContract,
+  deriveWorkflowRevision,
+  normalizeWorkflowContract,
+  workflow,
+  workflowSource,
+} from '@lostgradient/weft';
 import { HttpClient } from '@lostgradient/weft/client';
 import type { QueryClient } from '@tanstack/svelte-query';
 
@@ -308,6 +315,116 @@ describe('ScheduleFormDrawer — edit', () => {
 
       const after = await server.engine.getSchedule('externally-pinned');
       expect(after?.revisionPolicy).toBe('pinned');
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('a rejected revision-policy save (ambiguous dynamic-source revision, no catalog active pointer) renders a fault instead of silently pinning (review, PR #978)', async () => {
+    // `resolveScheduleRevisionForPin()` (engine-side) requires an
+    // unambiguous revision for the type being pinned — for a
+    // `registerSource()`-registered type with more than one candidate
+    // revision and no catalog active pointer resolved, it throws
+    // `DynamicWorkflowSourceUnavailableError` (reason `'ambiguous-revision'`).
+    // This is a REAL rejection reachable through the edit drawer's own new
+    // `revisionPolicy` `RadioGroup`: the schedule below is created while its
+    // workflow type has exactly one registered dynamic-source revision
+    // (unambiguous — creation succeeds), a SECOND revision is then
+    // registered for the same type (simulating a later deploy adding a
+    // candidate, with nobody ever having called `engine.workflows.activate()`),
+    // and only THEN does the operator try to switch the schedule to `pinned`.
+    //
+    // NOT a `Conflict` fault, empirically (verified against a live server,
+    // not assumed from the sibling mapping fork/catalog operations use):
+    // `packages/weft/src/server/operations/schedule-faults.ts`'s
+    // `mapScheduleErrorToFault()` only special-cases
+    // `WorkflowRevisionUnavailableError` (via `mapRevisionUnavailableToFault`)
+    // — `DynamicWorkflowSourceUnavailableError` falls through its
+    // message-based classification (matches none of `isScheduleConflictMessage`/
+    // `isScheduleInvalidParamsMessage`) to the generic `EngineFailure`
+    // fallback. That is a real, narrow gap in `packages/weft` (this ambiguous-
+    // revision error IS mapped to `Conflict` for fork and catalog operations —
+    // `workflow-catalog-operation-helpers.test.ts`, `fork-workflow.ts` — just
+    // not for schedule updates) worth its own upstream fix, but out of this
+    // console-only PR's scope (`packages/weft-ui`) to touch. What this test
+    // asserts instead is the console's actual, correct behavior given that
+    // engine response: an `EngineFailure` masked over REST renders as the
+    // generic "Something went wrong" internal-fault banner (`faults.ts`'s
+    // `EngineFailure: 'internal'` mapping, `FAULT_TREATMENT_TITLE.internal`)
+    // — not a silent, wrongly-applied pin. The underlying acceptance
+    // criterion ("mutation-conflict states are explicit and covered by
+    // tests") holds either way: the console never lies about what happened.
+    const server = await startLiveSourceTestServer();
+    const workflowType = 'ambiguous-pin-target';
+
+    // `workflowSource()`'s `revision` is not a free-form label — it must
+    // equal the exact content-derived revision
+    // `buildWorkflowManifestFromDefinition()` computes from the loaded
+    // module's contract (documentation/guides/workflow-versioning.md,
+    // "`workflowSource()`: a typed, serializable source descriptor").
+    // Two distinct `workflowVersion`s produce two distinct derived
+    // revisions for the same workflow name, which is what this test needs
+    // to register a genuinely ambiguous second candidate.
+    async function derivedRevisionFor(version: string): Promise<string> {
+      const contract = buildWorkflowContract({ name: workflowType, version });
+      return deriveWorkflowRevision(normalizeWorkflowContract(contract));
+    }
+    const buildSource = async (version: string) =>
+      workflowSource(
+        {
+          name: workflowType,
+          location: `./fixtures/${workflowType}-${version}.ts`,
+          exportName: 'target',
+          revision: await derivedRevisionFor(version),
+        },
+        async () => ({
+          // This workflow is never actually started in this test (only its
+          // dynamic-source registration matters, for revision ambiguity) —
+          // the trivial `yield* ctx.sleep()` exists solely so this is a real
+          // generator body, satisfying `require-yield`, not because it ever
+          // runs.
+          target: workflow({ name: workflowType, version }).execute(async function* (ctx) {
+            yield* ctx.sleep('1ms');
+            return 'done';
+          }),
+        }),
+      );
+
+    server.engine.registerSource(await buildSource('1.0.0'));
+    await server.engine.schedule({
+      workflow: workflowType,
+      id: 'ambiguous-pin-schedule',
+      cron: '0 2 * * *',
+      input: {},
+    });
+    // Registered AFTER creation succeeded on the sole-candidate fast path —
+    // this is what makes the type ambiguous for the pin attempt below.
+    server.engine.registerSource(await buildSource('2.0.0'));
+
+    const client = new HttpClient({ baseUrl: server.baseUrl, token: server.token });
+
+    let closed = false;
+    try {
+      const { getByRole, getByText } = render(ScheduleFormDrawerHarness, {
+        props: {
+          client,
+          mode: 'edit',
+          scheduleId: 'ambiguous-pin-schedule',
+          onClose: () => (closed = true),
+        },
+      });
+
+      await waitFor(() => getByRole('radio', { name: 'Active at fire' }));
+      await fireEvent.click(getByRole('radio', { name: 'Pinned' }));
+      await fireEvent.click(getByRole('button', { name: 'Save changes' }));
+
+      await waitFor(() => expect(getByText('Something went wrong')).not.toBeNull());
+      expect(closed).toBe(false);
+
+      // The rejected mutation must not have silently pinned the schedule.
+      const after = await server.engine.getSchedule('ambiguous-pin-schedule');
+      expect(after?.revisionPolicy).toBe('active-at-fire');
+      expect(after?.pinnedRevision).toBeUndefined();
     } finally {
       await server.stop();
     }

@@ -192,7 +192,7 @@ describe('ScheduleFormFields — edit mode', () => {
       revisionPolicy: 'active-at-fire',
     });
 
-    const { getByRole, getByText } = render(ScheduleFormFields, {
+    const { getByRole, getByText, getAllByText } = render(ScheduleFormFields, {
       props: { form, mode: 'edit', workflowTypeOptions: undefined },
     });
 
@@ -203,10 +203,17 @@ describe('ScheduleFormFields — edit mode', () => {
     // executable-resolution path as a fresh start (Codex review, PR #978,
     // round 5) — for an eager-registered type, or when only one revision
     // is a viable dynamic-source candidate, the captured pin can differ
-    // from whatever the catalog's active pointer shows.
+    // from whatever the catalog's active pointer shows. This exact hedge
+    // now legitimately renders TWICE while the operator has "Pinned"
+    // selected — once here in the re-capture warning, and once in the
+    // still-visible "Active at fire" option's own description (Codex
+    // review, PR #978, round 7: the active-at-fire consequence text needed
+    // the identical caveat, since a fresh occurrence can bypass the active
+    // pointer the same way) — `RadioGroup` renders every option's
+    // description regardless of which one is currently selected.
     expect(
-      getByText(/a fresh start can run without consulting the active pointer at all/),
-    ).not.toBeNull();
+      getAllByText(/a fresh start can run without consulting the active pointer at all/).length,
+    ).toBe(2);
   });
 
   test('does NOT show the pinned warning when active-at-fire is selected in edit mode', async () => {

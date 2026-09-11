@@ -120,14 +120,12 @@
     unknown: { icon: HelpCircle, variant: 'neutral', label: 'Active revision unknown' },
   };
 
-  // Only read when `workflow.revision !== undefined` (the markup gates on
-  // that), so `revisionComparison` is never `'unpinned'` at the read site —
-  // the cast documents that invariant rather than widening the map's key
-  // type to include a treatment 'unpinned' never needs.
+  // `classifyRevisionAgainstActive` returns `'unpinned'` exactly when
+  // `workflow.revision === undefined` (its own implementation), so this
+  // equality check narrows `revisionComparison` to `REVISION_BADGE`'s key
+  // type without an `as` cast (non-blocking review, PR #978).
   const revisionTreatment = $derived(
-    workflow.revision !== undefined
-      ? REVISION_BADGE[revisionComparison as 'active' | 'stale' | 'unknown']
-      : null,
+    revisionComparison === 'unpinned' ? null : REVISION_BADGE[revisionComparison],
   );
   const RevisionBadgeIcon = $derived(revisionTreatment?.icon);
 
