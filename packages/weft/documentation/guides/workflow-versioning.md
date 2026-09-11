@@ -510,19 +510,23 @@ structured `data`, per the existing WFT-11 REST/JSON-RPC fidelity split).
 
 The fork's own commit is fenced against a concurrent
 `removeWorkflowRevision()` targeting the fork's persisted revision through
-two layers, mirroring `start()`'s own defense exactly. Under `ownership:
-'lease'` or `'workflow-lease'`, the commit fences on the target revision's
-durable catalog entry—the same `buildCatalogEntryRevisionCondition` fence a
-fresh `start()` carries—so a concurrent removal that lands first makes the
-fork's own commit lose its CAS. Regardless of ownership mode, `fork()` also
+two layers, mirroring `start()`'s own defense exactly. The commit fences on
+the target revision's durable catalog entry—the same
+`buildCatalogEntryRevisionCondition` fence a fresh `start()` carries—under
+EVERY ownership mode, including the default `ownership: 'none'`: this
+durable fence is unconditional, since `catalog.install()`'s own durable
+write already requires the `conditionalBatch` storage capability regardless
+of ownership mode, so fencing the fork commit on the entry's bytes adds no
+new capability requirement under `'none'`. A concurrent removal that lands
+first makes the fork's own commit lose its CAS. In addition, `fork()`
 reserves an in-memory `inFlightStartsByRevision` slot for its target
 revision as soon as validation resolves it, released unconditionally once
 the commit settles (mirroring `start()`'s own `reserveInFlightStart`/
-`releaseInFlightStart` pairing)—this closes the same-process race two
-overlapping async calls on one engine instance can still hit even under the
-default `ownership: 'none'`, where the durable catalog-entry fence is
-deliberately skipped (no `conditionalBatch` capability requirement for the
-common single-writer-by-contract case). Without either layer, an
+`releaseInFlightStart` pairing)—this in-memory reservation is process-local,
+so it closes only the same-process race two overlapping async calls on one
+engine instance can hit; the durable catalog-entry fence above is what
+closes the equivalent cross-process race under any ownership mode. Without
+either layer, an
 explicit-revision fork onto a revision other than the source run's own pin
 would perform only a process-local availability check with no reservation
 of any kind, so a concurrent removal could see zero references, delete the
@@ -567,7 +571,11 @@ dynamic-source type with exactly one registered candidate. The resolver
 still resolves—and the fork still persists against—that sole candidate's
 real revision even though nothing was reserved for it. `fork()` reserves a
 SECOND, conditional in-memory slot for the resolver's own resolved
-revision whenever it differs from `targetRevision`—exactly this legacy
+revision whenever it differs from what the early reservation actually
+reserved—not `targetRevision` itself, but `reserveInFlightStart()`'s own
+return value, which falls back to the catalog's active pointer for the
+type whenever `targetRevision` is `undefined`, and so can already equal the
+resolver's sole candidate before the resolver ever runs—exactly this legacy
 case—closing the gap under every ownership mode, released unconditionally
 alongside the first reservation. This second reservation fires from
 INSIDE the resolver, not after it returns: `resolveExecutableRegistrationForRevision()`
@@ -590,9 +598,9 @@ internal `WorkflowRevisionTombstonedError`, translated by
 call site `catalog.install()` is reached from for every dynamic-source
 load, shared by both the legacy fork resolver hook and the explicit-revision
 fork load—into `WorkflowRevisionUnavailableError(name, revision,
-'not-installed')`. `buildForkCatalogEntryCondition()`'s `'none'`-mode
-branch also fences the fork's own final commit on the target revision's
-catalog-entry bytes, under every ownership mode (not only the lease modes),
+'not-installed')`. `buildForkCatalogEntryCondition()` durably fences the
+fork's own final commit on the target revision's catalog-entry bytes under
+every ownership mode—it carries no ownership-mode branch at all—
 since `writeCatalogEntry()` already unconditionally requires the
 `conditionalBatch` storage capability regardless of ownership mode.
 The tombstone-presence fence above protects a load racing a removal only up
