@@ -23,6 +23,7 @@ export {
   WorkflowCatalogActiveEntryMissingError,
   WorkflowCatalogConflictError,
   WorkflowRevisionNotInstalledError,
+  WorkflowRevisionTombstonedError,
 } from './errors.ts';
 export {
   decrementNestedRevisionCount,
@@ -38,8 +39,11 @@ export {
   type WorkflowCatalogRemovalOutcome,
 } from './removal.ts';
 export {
+  catalogRemovalGenerationMatches,
   decodeCatalogEntryRecord,
+  readCatalogRemovalGeneration,
   restoreWorkflowCatalog,
+  type CatalogInstallFence,
   type RestoredWorkflowCatalogState,
 } from './storage-io.ts';
 export type {

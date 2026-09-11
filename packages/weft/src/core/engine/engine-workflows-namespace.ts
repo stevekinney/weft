@@ -32,6 +32,7 @@
 
 import {
   WorkflowRevisionNotInstalledError,
+  WorkflowRevisionTombstonedError,
   type WorkflowCatalogActivationResult,
   type WorkflowCatalogActivePointer,
   type WorkflowRevisionRecord,
@@ -46,6 +47,7 @@ import {
 } from './catalog-readiness.ts';
 import { WorkflowNotRegisteredError } from './errors.ts';
 import type { Engine } from './index.ts';
+import { WorkflowRevisionUnavailableError } from './revision-errors.ts';
 import { resolveWorkflowSource, type ResolveWorkflowSourceOptions } from './source-resolution.ts';
 
 /**
@@ -174,7 +176,22 @@ async function installWorkflowRevision(
   if (engine.getWorkflowDefinition(manifest.name) === undefined) {
     throw new WorkflowNotRegisteredError(manifest.name);
   }
-  const entry = await getWorkflowCatalog(engine).install(manifest);
+  // WFT-21, Codex review round 14, P2 item S-QK: `WorkflowRevisionTombstonedError`
+  // is deliberately internal-only (`core/catalog/**` must never import
+  // `core/engine/**` — see that error's own JSDoc), so this direct public
+  // install path translates it to the public `WorkflowRevisionUnavailableError`
+  // itself, mirroring `runSharedSourceLoad`'s identical translation for the
+  // dynamic-source-load pipeline (`source-resolution.ts`). Without this,
+  // `weft.workflows.revisions.install` had no typed mapping for the
+  // internal error at all — it escaped `throwWorkflowCatalogOperationFault()`
+  // as a masked `EngineFailure`/500 instead of the operation's declared
+  // retryable Conflict.
+  const entry = await getWorkflowCatalog(engine)
+    .install(manifest)
+    .catch((error: unknown) => {
+      if (!(error instanceof WorkflowRevisionTombstonedError)) throw error;
+      throw new WorkflowRevisionUnavailableError(manifest.name, manifest.revision, 'not-installed');
+    });
   return { manifest: entry.manifest, installedAt: entry.installedAt };
 }
 

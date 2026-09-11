@@ -15,25 +15,21 @@
  *   exclusively by `engine.register()`'s drain path
  *   (`core/engine/catalog-readiness.ts`). Never consults
  *   `checkWorkflowCompatibility`; always wins via a bounded 5-attempt CAS
- *   retry loop. Registering a different version of an already-registered
- *   workflow must never hard-fail construction or registration (the
- *   `version-mismatch-recovery.test.ts` precedent), which is why this path
- *   is unconditional. "Unconditional" is about bypassing
- *   `checkWorkflowCompatibility`, not immunity to failure in general: under
- *   sustained contention the bounded 5-attempt CAS retry can still exhaust
- *   and throw {@link WorkflowCatalogActivationConflictError}, which
- *   propagates out of `ensureWorkflowCatalogReady` and fails
- *   `Engine.create()` itself (safely — `Engine.create()`'s `try`/`catch`
- *   disposes the half-booted engine before rethrowing).
+ *   retry loop, since registering a different version of an
+ *   already-registered workflow must never hard-fail construction or
+ *   registration (the `version-mismatch-recovery.test.ts` precedent).
+ *   "Unconditional" is about bypassing `checkWorkflowCompatibility`, not
+ *   immunity to failure in general: sustained contention can still exhaust
+ *   the retry and throw {@link WorkflowCatalogActivationConflictError},
+ *   which propagates out of `ensureWorkflowCatalogReady` and fails
+ *   `Engine.create()` itself (safely — disposing the half-booted engine).
  * - {@link WorkflowCatalog.activateCandidate} — the guarded primitive:
  *   `checkWorkflowCompatibility`-gated, single-shot CAS (no retry — the
  *   caller decides whether to re-read and retry), refuses on incompatibility
- *   or a stale expected generation. As of WFT-11, reachable by external
- *   callers via `engine.workflows.activate()` — the first production
- *   caller. Because a multi-writer caller can activate a revision this
- *   process's `#entries` cache never observed, the compatibility check
- *   reads through to durable storage rather than trusting the cache.
- *   Reused as-is by later dynamic-loading work (WFT-13+).
+ *   or a stale expected generation. Reachable via `engine.workflows.activate()`.
+ *   Because a multi-writer caller can activate a revision this process's
+ *   `#entries` cache never observed, the compatibility check reads through
+ *   to durable storage rather than trusting the cache.
  *
  * @module core/catalog/workflow-catalog
  */
@@ -45,26 +41,28 @@ import {
   type Storage,
 } from '../../storage/interface.ts';
 import { compareCodepoint } from '../compare-codepoint.ts';
-import {
-  checkWorkflowCompatibility,
-  DEFAULT_WORKFLOW_COMPATIBILITY_POLICY,
-  type WorkflowCompatibilityPolicy,
-} from '../contract/compatibility.ts';
 import type { WorkflowRevisionManifest } from '../contract/types.ts';
 import { validateWorkflowOrActivityName } from '../types/name-grammar.ts';
 import type { RegisteredWorkflowDefinition } from '../types/workflow-registry.ts';
+import {
+  refuseIncompatibleOrStaleCandidate,
+  type ActivateCandidateOptions,
+} from './activation-guards.ts';
 import { encodeActivePointer, manifestsAreByteIdentical } from './codec.ts';
 import {
   WorkflowCatalogActivationConflictError,
-  WorkflowCatalogActiveEntryMissingError,
   WorkflowCatalogConflictError,
+  WorkflowRevisionNotInstalledError,
 } from './errors.ts';
 import { removeCatalogEntry, type WorkflowCatalogRemovalOutcome } from './removal.ts';
 import {
   readActivePointer,
   readCatalogEntry,
+  revalidateCachedCatalogInstall,
   scanCatalogEntriesForName,
+  throwForAbsentCatalogInstallRace,
   writeCatalogEntry,
+  type CatalogInstallFence,
   type RestoredWorkflowCatalogState,
 } from './storage-io.ts';
 import type {
@@ -77,13 +75,7 @@ import type {
 /** Bounded CAS retry budget for {@link WorkflowCatalog.activateRegistered} — the repo-wide "cap at five" rule. */
 const MAX_ACTIVATE_REGISTERED_ATTEMPTS = 5;
 
-/** Options accepted by {@link WorkflowCatalog.activateCandidate}. */
-export type ActivateCandidateOptions = {
-  /** The generation this caller last observed; refused with `stale-generation` if it disagrees with the durable pointer. */
-  expectedGeneration?: number;
-  /** Compatibility policy; defaults to {@link DEFAULT_WORKFLOW_COMPATIBILITY_POLICY}. */
-  policy?: WorkflowCompatibilityPolicy;
-};
+export type { ActivateCandidateOptions } from './activation-guards.ts';
 
 export class WorkflowCatalog {
   readonly #storage: Storage;
@@ -114,23 +106,24 @@ export class WorkflowCatalog {
 
   /**
    * Resolve one installed `(name, revision)` entry as a public
-   * {@link WorkflowRevisionRecord} — cache hit first, else a durable
-   * read-through via {@link readCatalogEntry} (adopted into the local cache
-   * on hit, exactly like `install()`'s own read-through), else `undefined`
-   * when truly absent. No TOCTOU gap against a concurrent `install()` on
-   * this same instance: JS is single-threaded and neither this method nor
-   * `install()`'s fast (already-cached) path yields between the cache read
-   * and its use.
+   * {@link WorkflowRevisionRecord} — always durable-read-through via
+   * {@link readCatalogEntry}, never a bare in-memory cache-hit return (WFT-21,
+   * Codex review round 14, P2 item UXP-): a peer's `remove()` can durably
+   * delete this exact entry while it stays cached here, and every current
+   * public surface built on this method — `engine.resolveWorkflowSource()`/`preload()`
+   * (via `resolveCachedOrHandle()`), `activateCandidate()`'s compatibility
+   * check, `getWorkflowRevisionDiagnostics()` (via {@link hasInstalled}) —
+   * must never report a durably-removed revision as installed. A durable hit
+   * still (re-)populates the local cache, exactly like `install()`'s own
+   * read-through; a durable miss evicts any stale cache entry. Returns
+   * `undefined` when truly absent.
    */
   async resolveEntry(name: string, revision: string): Promise<WorkflowRevisionRecord | undefined> {
-    const cached = this.getEntry(name, revision);
-    if (cached !== undefined) {
-      return { manifest: cached.manifest, installedAt: cached.installedAt };
-    }
-
     const durable = await readCatalogEntry(this.#storage, name, revision);
-    if (durable === null) return undefined;
-
+    if (durable === null) {
+      this.#entries.get(name)?.delete(revision);
+      return undefined;
+    }
     this.#cacheEntry(name, revision, durable);
     return durable;
   }
@@ -149,34 +142,27 @@ export class WorkflowCatalog {
   }
 
   /**
-   * Whether `(name, revision)` is already durably installed — checked
-   * against this process's in-memory cache first, then, on a cache miss,
-   * durable storage itself (a different process may have installed it).
-   * Used by `catalog-events.ts`'s installed/activated/draining dispatch
-   * helper to decide whether an activation call is installing genuinely
-   * new content, since `install()`'s own cache-hit branch does not
-   * distinguish "already known to this process" from "just installed a
-   * moment ago by this same call."
+   * Whether `(name, revision)` is already durably installed — delegates to
+   * {@link resolveEntry}, so it shares that method's durable-safe guarantee
+   * (WFT-21, item UXP-): a peer's `remove()` is never misreported as still
+   * installed just because this process's cache has not caught up. Used by
+   * `catalog-events.ts`'s installed/activated/draining dispatch helper to
+   * decide whether an activation call is installing genuinely new content,
+   * and by `getWorkflowRevisionDiagnostics()`.
    */
   async hasInstalled(name: string, revision: string): Promise<boolean> {
-    if (this.getEntry(name, revision) !== undefined) return true;
-    return (await readCatalogEntry(this.#storage, name, revision)) !== null;
+    return (await this.resolveEntry(name, revision)) !== undefined;
   }
 
   /**
    * Durably resolve `name`'s active pointer — always reads through to
-   * durable storage rather than trusting the in-memory `#active` cache.
-   * Deliberately NOT cache-first like {@link hasInstalled}: `hasInstalled`'s
-   * cache-hit short-circuit can only go stale in the SAFE direction (a
-   * different process's `remove()` durably deleting an entry this
-   * process's `#entries` still holds still lets `catalog.remove()`'s own
-   * durable re-read refuse with `'not-found'` rather than double-deleting),
-   * whereas a name's active pointer has no such one-directional guarantee —
-   * a second engine/process can durably move it (e.g. via
-   * `activateCandidate`, or a second engine holding the ADR&nbsp;0002
-   * workflow-lease) to a revision this process never installed at all, so a
-   * stale cache HIT here can misreport a durably-active revision as
-   * inactive. Used by removal and diagnostics
+   * durable storage rather than trusting the in-memory `#active` cache,
+   * the same durable-safe posture {@link hasInstalled}/{@link resolveEntry}
+   * now share (WFT-21, item UXP-). A second engine/process can durably move
+   * the active pointer (e.g. via `activateCandidate`, or a second engine
+   * holding the ADR&nbsp;0002 workflow-lease) to a revision this process
+   * never installed, so a stale cache HIT here could otherwise misreport a
+   * durably-active revision as inactive. Used by removal and diagnostics
    * (`core/engine/catalog-removal.ts`) so a durably-active revision is
    * never misreported as inactive/removable; `resolveActive` stays the
    * cheap, synchronous, best-effort accessor for in-process callers (e.g.
@@ -190,11 +176,9 @@ export class WorkflowCatalog {
    * Durably remove the installed `(name, revision)` entry — delegates the
    * CAS mechanics to {@link removeCatalogEntry}. On success, evicts the
    * entry from this process's in-memory `#entries` cache too, so a
-   * subsequent `getEntry`/`listRevisions` call in this same process never
-   * observes a removed revision. Refuses (`'active'`) when `revision` is
-   * currently the active pointer for `name` — a structural invariant this
-   * method itself enforces, independent of any reference-count decision a
-   * caller layers on top (see `core/engine/catalog-removal.ts`).
+   * subsequent `getEntry`/`listRevisions` call never observes a removed
+   * revision. Refuses (`'active'`) when `revision` is currently the active
+   * pointer for `name` (see `core/engine/catalog-removal.ts`).
    */
   async remove(name: string, revision: string): Promise<WorkflowCatalogRemovalOutcome> {
     requireStorageCapability(this.#storage, 'conditionalBatch', 'workflow catalog removal');
@@ -209,55 +193,81 @@ export class WorkflowCatalog {
    * Install `manifest` (paired with `definition`, when this process holds
    * one). Idempotent on a byte-identical reinstall for the same
    * `(name, revision)` key; throws {@link WorkflowCatalogConflictError} when
-   * an existing entry for that key has different manifest content —
-   * checked against BOTH this process's in-memory cache and, on a cache
-   * miss, durable storage itself (a different `WorkflowCatalog`
-   * instance/process may already have installed this exact key). The
-   * durable write is CAS-guarded ({@link writeCatalogEntry}) rather than a
-   * plain `put`, so two processes racing to install genuinely different
-   * content under the same key — possible whenever `revision` is an
-   * explicit, non-content-derived caller value rather than the default
-   * content hash — cannot silently last-write-win each other; the loser
-   * re-reads and resolves through the same idempotent/conflict check.
+   * an existing entry for that key has different manifest content — checked
+   * against BOTH this process's in-memory cache and, on a cache miss,
+   * durable storage itself. The durable write is CAS-guarded
+   * ({@link writeCatalogEntry}) rather than a plain `put`, so two processes
+   * racing to install genuinely different content under the same key —
+   * possible whenever `revision` is an explicit, non-content-derived caller
+   * value — cannot silently last-write-win; the loser re-reads and resolves
+   * through the same idempotent/conflict check.
+   *
+   * A cache HIT is also revalidated against durable storage (WFT-21, Codex
+   * review round 14, P1 item TYR4) rather than trusted outright: a peer's
+   * `remove()` + tombstone resolution can durably delete this exact entry
+   * while it stays cached here from an earlier `install()`/`resolveEntry()`
+   * call on this same process. A durable miss evicts the stale cache entry
+   * and falls through to the ordinary not-cached path below, which
+   * re-derives the correct outcome from scratch.
+   *
+   * Also CAS-guarded on the entry's tombstone key being absent (WFT-21,
+   * items 1-3) — throws {@link import('./errors.ts').WorkflowRevisionTombstonedError} rather than
+   * resurrecting an entry a concurrent removal is deleting/has deleted; see
+   * that error's own JSDoc for the rationale and engine-layer translation.
+   *
+   * `fence`, when supplied, additionally CAS-guards the write on the
+   * durable `catalog-removal-generation:<name>:<revision>` counter still
+   * reading `fence.removalGeneration` (WFT-21, item Q7jH) — closes the
+   * residual window a transient tombstone alone leaves open, where a
+   * dynamic-source load that began BEFORE a removal only reaches this write
+   * AFTER that removal's tombstone already resolved (entry and tombstone
+   * both read `null`, indistinguishable from "never installed"). Only
+   * `runSharedSourceLoad` (`core/engine/source-resolution.ts`) supplies a
+   * fence, captured before invoking the host loader; every other caller
+   * (`activateRegistered`, a deliberate direct `engine.workflows.install()`
+   * reinstall) omits it and implicitly advances past whatever the counter
+   * currently reads, matching a caller-intended reinstall after removal.
    *
    * Defensively re-validates `name` against the wire-safe name grammar even
-   * though `engine.register()`'s existing `validateWorkflowOrActivityName`
-   * already guarantees this for the only current producer — `install()` is
-   * deliberately safe for a future producer that is not `engine.register()`.
+   * though `engine.register()`'s own `validateWorkflowOrActivityName` check
+   * already guarantees this for the only current producer.
    */
   async install(
     manifest: WorkflowRevisionManifest,
     definition?: RegisteredWorkflowDefinition,
+    fence?: CatalogInstallFence,
   ): Promise<WorkflowCatalogEntry> {
     validateWorkflowOrActivityName(manifest.name, 'workflow');
 
-    const existing = this.getEntry(manifest.name, manifest.revision);
-    if (existing !== undefined) {
-      if (!manifestsAreByteIdentical(existing.manifest, manifest)) {
-        throw new WorkflowCatalogConflictError(manifest.name, manifest.revision);
+    const cached = this.getEntry(manifest.name, manifest.revision);
+    if (cached !== undefined) {
+      if (await revalidateCachedCatalogInstall(this.#storage, manifest)) {
+        return cached;
       }
-      return existing;
+      // Durably absent: a peer removed this exact entry since it was
+      // cached. Evict the stale cache entry and fall through to the
+      // ordinary not-cached path below.
+      this.#entries.get(manifest.name)?.delete(manifest.revision);
     }
 
-    // Not in this process's local cache. Durable storage is authoritative —
-    // read through before writing rather than trusting cache absence alone.
+    // Not in this process's local cache (or just evicted as stale). Durable
+    // storage is authoritative — read through before writing rather than
+    // trusting cache absence alone.
     const durable = await readCatalogEntry(this.#storage, manifest.name, manifest.revision);
     if (durable !== null) {
       return this.#adoptDurableEntry(manifest, durable, definition);
     }
 
     const installedAt = Date.now();
-    const applied = await writeCatalogEntry(this.#storage, manifest, installedAt);
+    const applied = await writeCatalogEntry(this.#storage, manifest, installedAt, fence);
     if (!applied) {
-      // Lost the CAS race: another process durably installed this exact key
-      // between our read above and this write. Re-read and resolve exactly
-      // as the pre-write check above would have.
+      // Lost the CAS race: another writer installed this key, its
+      // tombstone is present (WFT-21, items 1-3), or — when fenced — a
+      // removal completed (tombstone and all) after this caller's own
+      // observation (WFT-21, item Q7jH). Re-read to disambiguate.
       const raced = await readCatalogEntry(this.#storage, manifest.name, manifest.revision);
       if (raced === null) {
-        // The key existed a moment ago to lose the CAS race; storage
-        // disagreeing now is itself an inconsistency. Fail closed rather
-        // than silently proceeding to write over it.
-        throw new WorkflowCatalogConflictError(manifest.name, manifest.revision);
+        return await throwForAbsentCatalogInstallRace(this.#storage, manifest, fence);
       }
       return this.#adoptDurableEntry(manifest, raced, definition);
     }
@@ -309,6 +319,17 @@ export class WorkflowCatalog {
    * revision bumps the generation by exactly 1. Retries the CAS write up to
    * {@link MAX_ACTIVATE_REGISTERED_ATTEMPTS} times under contention, throwing
    * {@link WorkflowCatalogActivationConflictError} on exhaustion.
+   *
+   * Each attempt's pointer-write CAS also fences on the candidate entry's
+   * own bytes, read fresh every iteration (WFT-21, Codex review round 14,
+   * P1 item UXP7) — the same fence {@link activateCandidate} applies, closing
+   * the identical gap here: a peer's `remove()` landing between this call's
+   * own `install()` and the pointer commit (or between retries) could
+   * otherwise leave the active pointer naming a missing entry. Unlike
+   * `activateCandidate`, a missing candidate entry does not fail this call
+   * outright — this method already owns `manifest`/`definition`, so it
+   * reinstalls (unfenced) and retries, preserving the "unconditional,
+   * never hard-fails construction" contract.
    */
   async activateRegistered(
     name: string,
@@ -318,12 +339,36 @@ export class WorkflowCatalog {
     requireStorageCapability(this.#storage, 'conditionalBatch', 'workflow catalog activation');
     await this.install(manifest, definition);
 
+    const candidateEntryKey = KEYS.catalogEntry(name, manifest.revision);
+
     for (let attempt = 1; attempt <= MAX_ACTIVATE_REGISTERED_ATTEMPTS; attempt++) {
       const current = await readActivePointer(this.#storage, name);
       if (current !== null && current.revision === manifest.revision) {
         // Already active at this exact revision: no-op, generation unchanged.
         this.#active.set(name, current);
         return current;
+      }
+
+      let candidateEntryBytes = await this.#storage.get(candidateEntryKey);
+      if (candidateEntryBytes === null) {
+        // A peer's removal raced this call's own earlier install() (or a
+        // prior iteration's reinstall below). Reinstall rather than fail —
+        // see this method's own doc for why that differs from
+        // `activateCandidate`'s throw.
+        await this.install(manifest, definition);
+        candidateEntryBytes = await this.#storage.get(candidateEntryKey);
+        if (candidateEntryBytes === null) {
+          // Lost ANOTHER removal race in the gap between the reinstall
+          // above and this re-read (WFT-21, item U4Jg) — a `null` here is
+          // not a genuine "entry absent" precondition to commit against,
+          // it is "this iteration's observation is already stale." Retry
+          // the whole iteration (re-reading the active pointer too) rather
+          // than passing `null` through as the entry-bytes CAS
+          // precondition below, which would let the pointer-write CAS
+          // succeed unconditioned on any real entry and plant an active
+          // pointer naming a revision that is durably absent right now.
+          continue;
+        }
       }
 
       const nextGeneration = current === null ? 1 : current.generation + 1;
@@ -340,6 +385,7 @@ export class WorkflowCatalog {
             key: KEYS.catalogActive(name),
             expectedValue: current === null ? null : encodeActivePointer(current),
           },
+          { key: candidateEntryKey, expectedValue: candidateEntryBytes },
         ],
         [{ type: 'put', key: KEYS.catalogActive(name), value: encodeActivePointer(nextPointer) }],
       );
@@ -348,7 +394,8 @@ export class WorkflowCatalog {
         this.#active.set(name, nextPointer);
         return nextPointer;
       }
-      // Lost the CAS race: another writer activated concurrently. Re-read and retry.
+      // Lost the CAS race: another writer activated concurrently, or a peer
+      // removed the candidate entry again. Re-read and retry.
     }
 
     throw new WorkflowCatalogActivationConflictError(name, MAX_ACTIVATE_REGISTERED_ATTEMPTS);
@@ -361,6 +408,19 @@ export class WorkflowCatalog {
    * than applies when incompatible or when `expectedGeneration` disagrees
    * with the durably-read generation. Single-shot CAS write — no retry; the
    * caller decides whether to re-read and retry.
+   *
+   * Installs `candidateManifest` first (via `install()`, unfenced — a
+   * deliberate direct activation call, not a stale dynamic-source load, so
+   * it advances past any prior removal like `activateRegistered` does),
+   * then re-reads the freshly-durable entry bytes and CAS-fences the
+   * active-pointer write on them (WFT-21, item TYR4): without this fence, a
+   * peer's `remove()` + tombstone finalize landing between `install()`
+   * returning and this method's own CAS could leave the active pointer
+   * naming a revision whose catalog entry no longer exists. A CAS loss
+   * re-reads the entry: durably absent means the race was that removal
+   * (throws the already-public {@link WorkflowRevisionNotInstalledError});
+   * still present is an ordinary concurrent-activation race (`{ applied:
+   * false, reason: 'conflict' }`, the caller re-decides).
    */
   async activateCandidate(
     name: string,
@@ -369,9 +429,29 @@ export class WorkflowCatalog {
   ): Promise<WorkflowCatalogActivationResult> {
     requireStorageCapability(this.#storage, 'conditionalBatch', 'workflow catalog activation');
     await this.install(candidateManifest);
+
+    // Keyed by `candidateManifest.name`/`.revision`, NOT the `name` param —
+    // that is where `install()` above actually stores the entry
+    // (`writeCatalogEntry` always keys by the manifest's own identity).
+    // `name` is the public catalog name being activated, which in every
+    // real caller equals `candidateManifest.name`; only a contrived
+    // mismatched-name call (as some of this suite's own compatibility-only
+    // tests deliberately do, to exercise `checkWorkflowCompatibility`
+    // without caring about a real entry) would ever tell the two apart.
+    const candidateEntryKey = KEYS.catalogEntry(candidateManifest.name, candidateManifest.revision);
+    const candidateEntryBytes = await this.#storage.get(candidateEntryKey);
+    if (candidateEntryBytes === null) {
+      // `install()` just installed (or durably confirmed) this exact entry
+      // above; its absence here can only mean a peer's `remove()` +
+      // tombstone-finalize raced to completion in the narrow gap between
+      // that call returning and this read.
+      throw new WorkflowRevisionNotInstalledError(name, candidateManifest.revision);
+    }
+
     const currentPointer = await readActivePointer(this.#storage, name);
 
-    const refusal = await this.#refuseIncompatibleOrStaleCandidate(
+    const refusal = await refuseIncompatibleOrStaleCandidate(
+      (entryName, entryRevision) => this.resolveEntry(entryName, entryRevision),
       name,
       candidateManifest,
       currentPointer,
@@ -393,108 +473,26 @@ export class WorkflowCatalog {
           key: KEYS.catalogActive(name),
           expectedValue: currentPointer === null ? null : encodeActivePointer(currentPointer),
         },
+        { key: candidateEntryKey, expectedValue: candidateEntryBytes },
       ],
       [{ type: 'put', key: KEYS.catalogActive(name), value: encodeActivePointer(nextPointer) }],
     );
 
     if (!applied) {
+      // Lost the CAS: either a concurrent activation moved the pointer, or
+      // a peer's removal deleted the candidate entry between the read
+      // above and this commit landing. Re-read the entry to give a genuine
+      // removal the more specific typed error rather than a generic
+      // 'conflict' the caller might blindly retry against a revision that
+      // no longer exists.
+      const stillInstalled = await this.#storage.get(candidateEntryKey);
+      if (stillInstalled === null) {
+        throw new WorkflowRevisionNotInstalledError(name, candidateManifest.revision);
+      }
       return { applied: false, reason: 'conflict' };
     }
 
     this.#active.set(name, nextPointer);
     return { applied: true, pointer: nextPointer };
-  }
-
-  /**
-   * The stale-generation and compatibility gates {@link activateCandidate}
-   * checks before ever attempting a write — split out to keep that method's
-   * complexity low. Returns the refusal result when the candidate should be
-   * rejected, or `undefined` when it may proceed to the CAS write.
-   */
-  async #refuseIncompatibleOrStaleCandidate(
-    name: string,
-    candidateManifest: WorkflowRevisionManifest,
-    currentPointer: WorkflowCatalogActivePointer | null,
-    options?: ActivateCandidateOptions,
-  ): Promise<WorkflowCatalogActivationResult | undefined> {
-    if (currentPointer === null) {
-      return this.#refuseStaleFirstActivation(options);
-    }
-
-    const generationRefusal = this.#refuseMissingOrStaleGeneration(currentPointer, options);
-    if (generationRefusal !== undefined) return generationRefusal;
-
-    return this.#refuseIncompatibleCandidate(name, candidateManifest, currentPointer, options);
-  }
-
-  /**
-   * First-ever activation of a name (no active pointer yet): omitting
-   * `expectedGeneration` (or supplying exactly 0, the "no prior generation"
-   * value) bypasses the fence entirely — there is nothing to be stale
-   * against yet, and the one existing test that calls `activateCandidate`
-   * with no options at all must keep applying. Any OTHER explicit value is
-   * a caller assertion about a generation that does not exist.
-   */
-  #refuseStaleFirstActivation(
-    options?: ActivateCandidateOptions,
-  ): WorkflowCatalogActivationResult | undefined {
-    if (options?.expectedGeneration !== undefined && options.expectedGeneration !== 0) {
-      return { applied: false, reason: 'stale-generation', currentGeneration: 0 };
-    }
-    return undefined;
-  }
-
-  /**
-   * The generation fence for an existing active pointer: an omitted
-   * `expectedGeneration` is exactly the "two refreshers silently
-   * last-write-win" hazard this gate exists to close, so it is refused
-   * rather than falling through to the compatibility check alone; a
-   * supplied-but-wrong generation is refused as stale.
-   */
-  #refuseMissingOrStaleGeneration(
-    currentPointer: WorkflowCatalogActivePointer,
-    options?: ActivateCandidateOptions,
-  ): WorkflowCatalogActivationResult | undefined {
-    if (options?.expectedGeneration === undefined) {
-      return {
-        applied: false,
-        reason: 'expected-generation-required',
-        currentGeneration: currentPointer.generation,
-      };
-    }
-    if (options.expectedGeneration !== currentPointer.generation) {
-      return {
-        applied: false,
-        reason: 'stale-generation',
-        currentGeneration: currentPointer.generation,
-      };
-    }
-    return undefined;
-  }
-
-  /**
-   * The compatibility check itself, run once the generation fence has
-   * passed. Resolves the active entry via {@link resolveEntry} (cache then
-   * durable read-through), never `getEntry` alone — a second process can
-   * durably activate a revision this cache never saw. A durable miss too
-   * fails closed with {@link WorkflowCatalogActiveEntryMissingError}.
-   */
-  async #refuseIncompatibleCandidate(
-    name: string,
-    candidateManifest: WorkflowRevisionManifest,
-    currentPointer: WorkflowCatalogActivePointer,
-    options?: ActivateCandidateOptions,
-  ): Promise<WorkflowCatalogActivationResult | undefined> {
-    const currentEntry = await this.resolveEntry(name, currentPointer.revision);
-    if (currentEntry === undefined) {
-      throw new WorkflowCatalogActiveEntryMissingError(name, currentPointer.revision);
-    }
-
-    const verdict = checkWorkflowCompatibility(
-      currentEntry.manifest,
-      candidateManifest,
-      options?.policy ?? DEFAULT_WORKFLOW_COMPATIBILITY_POLICY,
-    );
-    return verdict.compatible ? undefined : { applied: false, reason: 'incompatible', verdict };
   }
 }

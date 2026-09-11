@@ -287,7 +287,7 @@ async function exerciseRecoveryAndReviewRequests(httpClient: HttpClient): Promis
     { sequence: 3, value: 'chunk-b' },
   ]);
 
-  const forked = await httpClient.fork('wf/1', { fromStep: 2 });
+  const forked = await httpClient.fork('wf/1', { fromStep: 2, revision: 'sha256:target-revision' });
   expect(forked.id).toBe('wf-forked');
   expect(
     await httpClient.submitCoordinatedUpdate(
@@ -486,7 +486,7 @@ function assertForkCall(fetchCalls: FetchCall[]): void {
     throw new Error('Expected fork request body to be a string');
   }
 
-  expect(JSON.parse(forkBody)).toEqual({ fromStep: 2 });
+  expect(JSON.parse(forkBody)).toEqual({ fromStep: 2, revision: 'sha256:target-revision' });
 }
 
 // A static API key whose principal carries the scopes the event stream

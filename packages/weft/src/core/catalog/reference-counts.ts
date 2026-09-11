@@ -3,19 +3,24 @@
  * `(name, revision)` removal decision is gated on (WFT-12).
  *
  * Seven fields, all always present so a consumer never has to special-case
- * an "unknown" reference kind. Four are wired to real in-process/durable
+ * an "unknown" reference kind. Five are wired to real in-process/durable
  * signals: `registeredDefinitions` and `inFlightStarts` from WFT-12,
  * `nonTerminalRuns` from WFT-17 (a bounded storage scan of persisted
  * `WorkflowState.revision` pins — see {@link countNonTerminalRunsForRevision}),
- * and `pinnedSchedules` from WFT-20 (a bounded storage scan of persisted
+ * `pinnedSchedules` from WFT-20 (a bounded storage scan of persisted
  * `revisionPolicy: 'pinned'` schedules — see
- * {@link import('../engine/pinned-schedule-revision-count.ts').countPinnedSchedulesForRevision}).
- * The remaining three stay structurally present but always `0` — each
- * awaits revision identity in a different, later-owned subsystem (dispatch
- * ledger, execution realms, and retained recovery records: not yet
- * scheduled) — see each field's own doc for its specific dependency. This
- * mirrors `workflow-catalog.ts`'s own precedent of describing a forward
- * dependency in prose rather than leaving a `TODO`/`FIXME` marker.
+ * {@link import('../engine/pinned-schedule-revision-count.ts').countPinnedSchedulesForRevision}),
+ * and `retainedRecoveryRecords` from WFT-21 (a terminal-but-unpurged
+ * `WorkflowState` plus a `TeardownDeadLetterRecord`, both pinned to the
+ * revision — see {@link import('../engine/nonterminal-revision-count.ts').countWorkflowStateRevisionsByStatus}'s
+ * `terminalRuns` and {@link import('../engine/retained-recovery-record-count.ts').countTeardownDeadLettersForRevision}).
+ * The remaining two (`pendingDispatches`, `activeExecutionRealms`) stay
+ * structurally present but always `0` — each awaits revision identity in a
+ * different, later-owned subsystem (the dispatch ledger and execution
+ * realms — not yet scheduled) — see each field's own doc for its specific
+ * dependency. This mirrors `workflow-catalog.ts`'s own precedent of
+ * describing a forward dependency in prose rather than leaving a
+ * `TODO`/`FIXME` marker.
  *
  * Keyed by structured `(name, revision)` throughout — nested
  * `Map<string, Map<string, number>>`, never a delimiter-joined string — so a
@@ -95,9 +100,22 @@ export type WorkflowRevisionReferenceCounts = Readonly<{
    */
   activeExecutionRealms: number;
   /**
-   * Retained recovery records (crash-recovery checkpoints, dead letters)
-   * referencing exactly this revision. Always `0` until a later batch
-   * threads revision identity through those retained records.
+   * Durable recovery evidence pinned to exactly this revision, that only a
+   * later, explicit action can release (WFT-21). Two components, summed:
+   *
+   * - A terminal (`completed`/`failed`/`cancelled`/`timed-out`)
+   *   `WorkflowState` that has not yet been purged — a completed run is
+   *   forkable and a failed run is retryable, both against the exact
+   *   revision they ran, so both are genuine durable references. Released
+   *   by an ordinary workflow purge or retention sweep, which already
+   *   deletes the terminal `WorkflowState` through a fenced write — no new
+   *   release path was needed.
+   * - A `TeardownDeadLetterRecord` (a permanently failed finalizer) pinned
+   *   to this revision. Deliberately excluded from the purge delete-set as
+   *   leak evidence, so — unlike the first component — this one is NEVER
+   *   auto-released: a revision that ever dead-lettered stays permanently
+   *   non-removable until a future acknowledge/clear API exists (not built
+   *   this batch).
    */
   retainedRecoveryRecords: number;
 }>;

@@ -5,17 +5,17 @@
  *
  * Single-flight per `(name, revision)`: the underlying load+validate+install
  * work is shared by every concurrent caller for the same key via
- * `internals.sources.resolutionsInFlight`, but each caller races that shared
- * work against its OWN per-call cancellation interest — a cancelled waiter
- * never aborts a load another waiter still needs, and the shared load itself
- * is never tied to any individual caller's lifetime. Disposal aborts every
+ * `internals.sources.resolutionsInFlight`, but each caller races that work
+ * against its OWN per-call cancellation interest — a cancelled waiter never
+ * aborts a load another waiter still needs, and the shared load is never
+ * tied to any individual caller's lifetime. Disposal aborts every
  * outstanding waiter (rejecting each pending `resolveWorkflowSource()` call)
  * without touching the shared load, which keeps running to its own settle.
  *
  * @module core/engine/source-resolution
  */
 
-import type { WorkflowRevisionRecord } from '../catalog/index.ts';
+import { readCatalogRemovalGeneration, type WorkflowRevisionRecord } from '../catalog/index.ts';
 import {
   checkWorkflowCompatibility,
   DEFAULT_WORKFLOW_COMPATIBILITY_POLICY,
@@ -41,6 +41,7 @@ import {
   reviveOrphanedSourceLoadDiagnostics,
   type SourceEventContext,
 } from './source-diagnostics.ts';
+import { installFencedSourceRevision } from './source-install-fence.ts';
 
 /**
  * Options accepted by {@link resolveWorkflowSource}.
@@ -99,20 +100,18 @@ function abortRejection(signal: AbortSignal): Promise<never> {
  * started before disposal would otherwise write through to already-closed
  * storage. A small window still exists between that check and
  * `catalog.install()`'s own internal write (the check-then-write is not
- * atomic): this is accepted rather than eliminated, because `install()`'s
- * write is a CAS through `storageConditionalBatch` — a write that lands
- * against storage the engine no longer considers open either applies
- * harmlessly (this repo's storage backends do not require an open
- * "session" to accept a write) or fails, and a failure here simply becomes
- * this shared promise's rejection like any other. Closing the window
- * completely would require `catalog.install()` itself to check
- * `internals.disposed` at its own call boundary, which is out of scope for
- * this batch — recorded as an explicit, accepted trade-off rather than a
- * silent gap. `internals.disposed` is re-checked a THIRD time after
- * `catalog.install()` resolves, guarding only the in-memory
- * `internals.sources.resolved` write (never the durable install itself,
- * already committed by then) — a disposed engine's internals stay fully
- * empty rather than accumulating state `disposeSourceResolutionState()`
+ * atomic): accepted rather than eliminated, since `install()`'s write is a
+ * CAS through `storageConditionalBatch` — a write that lands against
+ * storage the engine no longer considers open either applies harmlessly or
+ * fails, and a failure here simply becomes this shared promise's rejection
+ * like any other. Closing the window completely would require
+ * `catalog.install()` itself to check `internals.disposed`, out of scope
+ * here — an explicit, accepted trade-off. `internals.disposed` is re-checked
+ * a THIRD time after `catalog.install()` resolves, guarding only the
+ * in-memory `internals.sources.resolved` write (never the durable install
+ * itself, already committed by then) — a disposed engine's internals stay
+ * fully empty rather than accumulating state
+ * `disposeSourceResolutionState()`
  * already cleared and will never clear again.
  */
 async function runSharedSourceLoad(
@@ -121,7 +120,11 @@ async function runSharedSourceLoad(
   name: string,
   revision: string,
   handle: WorkflowSourceHandle,
+  removalGenerationAtLoadStart: Uint8Array | null,
 ): Promise<WorkflowRevisionRecord> {
+  // Captured by the caller BEFORE `resolveCachedOrHandle()`'s own durable
+  // catalog lookup, not here (WFT-21, item U4Je) — see
+  // `installFencedSourceRevision`'s own doc for the fence rationale.
   const resolved = await resolveSourceModule(handle.descriptor, handle);
   if (!resolved.ok) {
     throw new WorkflowSourceValidationError(name, revision, [resolved.reason]);
@@ -136,18 +139,20 @@ async function runSharedSourceLoad(
     throw new EngineDisposedError();
   }
 
-  const catalog = getWorkflowCatalog(engine);
-  const installed = await catalog.install(outcome.manifest, outcome.definition);
+  const installed = await installFencedSourceRevision(
+    getWorkflowCatalog(engine),
+    name,
+    revision,
+    outcome.manifest,
+    outcome.definition,
+    removalGenerationAtLoadStart,
+  );
 
-  // Re-checked here, not just at the `internals.disposed` check immediately
-  // above (before `catalog.install()`): disposal can land while that `await`
-  // is in flight. `disposeSourceResolutionState()`
-  // has already cleared `internals.sources.resolved` by the time this
-  // resumes, and nothing will ever clear it again — writing into it here would
-  // silently repopulate a disposed engine's internals with a definition and
-  // activity registry nothing will read, rather than leaving them empty as
-  // teardown intended. The durable install this promise resolves with already
-  // succeeded either way; only the in-memory bookkeeping is skipped.
+  // Re-checked here, not just before `catalog.install()`: disposal can land
+  // while that `await` is in flight, and `disposeSourceResolutionState()`
+  // has already cleared `internals.sources.resolved` for good — writing
+  // here would silently repopulate a disposed engine's internals. The
+  // durable install already succeeded either way; only this bookkeeping is skipped.
   if (!internals.disposed) {
     let resolvedByRevision = internals.sources.resolved.get(name);
     if (resolvedByRevision === undefined) {
@@ -174,6 +179,7 @@ function getOrCreateSharedSourceLoad(
   name: string,
   revision: string,
   handle: WorkflowSourceHandle,
+  removalGenerationAtLoadStart: Uint8Array | null,
 ): Promise<WorkflowRevisionRecord> {
   let byRevision = internals.sources.resolutionsInFlight.get(name);
   if (byRevision === undefined) {
@@ -202,6 +208,7 @@ function getOrCreateSharedSourceLoad(
     name,
     revision,
     handle,
+    removalGenerationAtLoadStart,
   )
     .then(
       (record) => {
@@ -454,6 +461,42 @@ async function resolveWorkflowSourceCore(
   internals.sources.waiterControllers.add(waiter.controller);
   beginSourceWaiter(internals, name, revision);
   try {
+    // Captured BEFORE `resolveCachedOrHandle()`'s own durable catalog
+    // lookup below (WFT-21, item U4Je): that lookup's own `resolveEntry()`
+    // read can race a concurrent removal+finalize, and a fence captured
+    // only later — inside `runSharedSourceLoad()`, after this whole lookup
+    // already returned absent — would already observe the POST-removal
+    // counter value as its baseline, making the fence a no-op against
+    // exactly that race. Capturing it here, before the lookup even starts,
+    // means any removal landing from this point on (including during the
+    // lookup itself) is visible as a generation mismatch once the fenced
+    // install actually runs.
+    //
+    // Raced against this waiter's own abort signal using the same
+    // check-then-construct pattern `abortRejection()`'s own doc requires
+    // (checked synchronously immediately before constructing it, no await
+    // in between). No re-check of `waiter.controller.signal.aborted`
+    // precedes this construction: every statement since the entry-point
+    // check above (the `internals.disposed` check, the `waiterControllers`
+    // add, `beginSourceWaiter`) is synchronous with no intervening await,
+    // so nothing could have flipped the signal to aborted in between — a
+    // second check here would be unreachable dead code, not a real guard.
+    // This read is the first await in this function's try block, so an
+    // abort landing while it is in flight must be observed via the race
+    // below rather than silently ignored for the rest of this call.
+    const removalGenerationAbort = abortRejection(waiter.controller.signal);
+    removalGenerationAbort.catch(() => {});
+    const removalGenerationRead = readCatalogRemovalGeneration(internals.storage, name, revision);
+    let removalGenerationAtLoadStart: Uint8Array | null;
+    try {
+      removalGenerationAtLoadStart = await Promise.race([
+        removalGenerationRead,
+        removalGenerationAbort,
+      ]);
+    } finally {
+      removalGenerationRead.catch(() => {});
+    }
+
     // Raced against this waiter's own abort signal, not just re-checked
     // after — `resolveCachedOrHandle()`'s awaits (catalog readiness, a
     // durable `resolveEntry` read, the pin-compatibility check) can stall
@@ -487,7 +530,14 @@ async function resolveWorkflowSourceCore(
       return outcome.cached;
     }
 
-    const shared = getOrCreateSharedSourceLoad(engine, internals, name, revision, outcome.handle);
+    const shared = getOrCreateSharedSourceLoad(
+      engine,
+      internals,
+      name,
+      revision,
+      outcome.handle,
+      removalGenerationAtLoadStart,
+    );
     const waiterAbort = abortRejection(waiter.controller.signal);
     waiterAbort.catch(() => {});
     return await Promise.race([shared, waiterAbort]);

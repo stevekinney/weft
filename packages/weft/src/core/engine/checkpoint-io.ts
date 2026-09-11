@@ -210,6 +210,62 @@ async function persistWorkerCheckpoint(
 ): Promise<void> {
   const serialized = new Uint8Array(workerCheckpointBytes);
   const checkpoint = deserializeCheckpoint(serialized);
+  // Fence this commit to the CURRENT execution generation, comparing —
+  // never persisting — the worker's own claimed token (WFT-21, Codex
+  // review round 5, P1, superseding round 4's "reattach the host's token"
+  // with "reject when the generations disagree"). The worker's checkpoint
+  // bytes DO carry a trustworthy token for COMPARISON: the host itself
+  // stamped it into the initial checkpoint this run's worker was launched
+  // from (`createInitialCheckpoint`), and `advanceCheckpoint()` carries it
+  // forward unchanged on every subsequent step — so it names the exact
+  // generation THIS worker turn was dispatched for. Round 4 was right that
+  // it must never be TRUSTED AS THE VALUE TO PERSIST (a hostile or
+  // stale worker could forge it there) — this reads it only to detect a
+  // mismatch, then always persists the HOST's own copy.
+  //
+  // `internals.checkpoints.get(workflowId)` — read SYNCHRONOUSLY, no
+  // `await` — is the host's own in-memory record of the CURRENT
+  // generation, set by every launch (`start()`,
+  // `launchWorkflowFromCheckpoint()` for fork, `resume()`) before any
+  // worker could receive dispatched work for that generation, and cleared
+  // on terminal cleanup/suspend/purge. No entry at all means the live
+  // generation has already torn down entirely — reject outright.
+  const currentGeneration = internals.checkpoints.get(workflowId);
+  if (currentGeneration === undefined) {
+    throw new Error(
+      `Checkpoint commit for workflow "${workflowId}" targets a generation that no longer exists.`,
+    );
+  }
+  const hostToken = currentGeneration.workflowExecutionToken;
+  const workerToken = checkpoint.workflowExecutionToken;
+  // Whenever the HOST has a token, require an EXACT worker-token match —
+  // including the worker's own token being `undefined` (WFT-21, Codex
+  // review round 7, P1, tightening round 5's own fix). The original
+  // both-sides-defined-and-disagreeing guard left exactly the gap round 4
+  // existed to close: a stale or hostile worker that simply OMITS the
+  // field entirely (indistinguishable on the wire from a genuinely
+  // pre-upgrade worker that has never heard of it) skipped this check
+  // completely and fell through to being silently stamped with the HOST's
+  // current token regardless — after a cancel + `start-new` replacement of
+  // this same workflow ID, that stale-content-now-wearing-the-replacement's-
+  // token checkpoint could pass the replacement's own checkpoint-bytes CAS
+  // and overwrite it. A host with a token is strong enough evidence this is
+  // NOT a genuinely legacy generation to omit for, so any worker-side
+  // disagreement — including silence — is now rejected. The remaining
+  // legacy tolerance is narrower and safe: BOTH sides `undefined` (a host
+  // generation that itself predates this field, paired with an equally
+  // pre-upgrade worker) still proceeds, since there is no "current"
+  // identity such a worker could spoof away from in the first place.
+  if (hostToken !== undefined && workerToken !== hostToken) {
+    throw new Error(
+      `Checkpoint commit for workflow "${workflowId}" targets a different execution generation.`,
+    );
+  }
+  if (hostToken !== undefined) {
+    checkpoint.workflowExecutionToken = hostToken;
+  } else {
+    delete checkpoint.workflowExecutionToken;
+  }
   const workerReplayPayload = readCheckpointReplayPayload(checkpoint);
   const pruned = pruneCheckpointReplayState(
     checkpoint,

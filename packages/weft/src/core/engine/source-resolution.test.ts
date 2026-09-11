@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it, mock } from 'bun:test';
 
+import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { ActivityRegistry } from '../activity-registry.ts';
 import { Engine } from '../engine.ts';
@@ -305,7 +306,13 @@ describe('engine.resolveWorkflowSource()', () => {
     const gate = Promise.withResolvers<void>();
     const entered = Promise.withResolvers<void>();
     const originalGet = storage.get.bind(storage);
+    const catalogEntryKey = KEYS.catalogEntry('checkout', checkoutRevision);
     storage.get = async (key: string) => {
+      // Only gate the `catalog.resolveEntry()` read this test targets — the
+      // removal-generation-fence read `resolveWorkflowSourceCore()` now
+      // issues BEFORE this one (WFT-21, item U4Je) must resolve normally so
+      // this gate still isolates the exact await under test.
+      if (key !== catalogEntryKey) return originalGet(key);
       entered.resolve();
       await gate.promise;
       return originalGet(key);
@@ -325,6 +332,54 @@ describe('engine.resolveWorkflowSource()', () => {
 
     await expect(call).rejects.toBeTruthy();
     expect(loader).not.toHaveBeenCalled();
+
+    engine[Symbol.dispose]();
+  });
+
+  it('swallows a storage error from the removal-generation fence read that arrives after this caller already rejected on its own abort', async () => {
+    // `resolveWorkflowSourceCore()` races its removal-generation fence read
+    // (`readCatalogRemovalGeneration`, WFT-21 item U4Je) against this
+    // waiter's own abort signal via `Promise.race`, and separately attaches
+    // a `.catch(() => {})` to BOTH promises so neither one produces an
+    // unhandled rejection when the OTHER side of the race wins. This test
+    // exercises the case where the abort wins the race first, and the
+    // removal-generation read itself goes on to reject afterward — the
+    // exact scenario that read's own trailing `.catch(() => {})` exists to
+    // suppress.
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+    const loader = registerCheckoutSource(engine, async () => ({ checkout: checkoutDefinition }));
+    await ensureWorkflowCatalogReady(engine);
+
+    const removalGenerationKey = KEYS.catalogRemovalGeneration('checkout', checkoutRevision);
+    const entered = Promise.withResolvers<void>();
+    const releaseWithFailure = Promise.withResolvers<void>();
+    const originalGet = storage.get.bind(storage);
+    storage.get = async (key: string) => {
+      if (key !== removalGenerationKey) return originalGet(key);
+      entered.resolve();
+      await releaseWithFailure.promise;
+      throw new Error('simulated storage failure reading the removal generation');
+    };
+
+    const controller = new AbortController();
+    const call = engine.resolveWorkflowSource('checkout', checkoutRevision, {
+      signal: controller.signal,
+    });
+    await entered.promise;
+    // Abort wins the race while the removal-generation read is still
+    // in flight — this caller observes its own abort rejection immediately.
+    controller.abort();
+    await expect(call).rejects.toBeTruthy();
+    expect(loader).not.toHaveBeenCalled();
+
+    // Only now does the gated read actually settle — by rejecting, well
+    // after the race (and this whole call) already resolved via the abort.
+    // If the read's own `.catch(() => {})` were missing, this would surface
+    // as an unhandled promise rejection instead of being swallowed here.
+    releaseWithFailure.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
 
     engine[Symbol.dispose]();
   });

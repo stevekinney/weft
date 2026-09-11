@@ -176,10 +176,19 @@ export type LifecycleCallbacks = {
    * never falls back to the active pointer. See
    * `dynamic-source-execution.ts`'s `resolveExecutableRegistrationForRevision()`
    * for the full classification contract.
+   *
+   * `onRevisionChosen` (WFT-21, Codex review round 5, P1) is optional and
+   * fires synchronously, before any await, the instant a legacy
+   * (`revision === undefined`) dynamic-source resolution picks its sole
+   * candidate's revision — `fork()` uses it to reserve an
+   * `inFlightStartsByRevision` slot at that exact moment rather than after
+   * this whole call resolves, closing a concurrent-removal window. See
+   * `dynamic-source-execution.ts`'s own doc for the full rationale.
    */
   resolveExecutableRegistrationForRevision: (
     type: string,
     revision: string | undefined,
+    onRevisionChosen?: (revision: string) => void,
   ) => Promise<ExecutableRegistration>;
   /**
    * Force a recovered workflow to a terminal `failed` state because its

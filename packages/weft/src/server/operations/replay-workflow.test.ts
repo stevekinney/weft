@@ -134,6 +134,11 @@ describe('weft.workflows.replay authorization parity', () => {
     );
     expect(successRest.status).toBe(200);
     expect(successRest.headers.get('content-type')).toBe('application/json');
+    const successRestBody = (await successRest.json()) as { revision?: string };
+    const expectedRevisionSummary = await engine.get(workflowId);
+    const expectedRevision = expectedRevisionSummary?.revision;
+    expect(expectedRevision).toBeDefined();
+    expect(successRestBody.revision).toBe(expectedRevision);
 
     const anonymousJsonRpc = await postJsonRpc(anonymousServer, 'weft.workflows.replay', {
       workflowId,
@@ -167,11 +172,13 @@ describe('weft.workflows.replay authorization parity', () => {
     );
     expect(successJsonRpc.status).toBe(200);
     const successJsonRpcBody = (await successJsonRpc.json()) as {
-      result?: { checkpoint?: { step?: number } };
+      result?: { checkpoint?: { step?: number }; revision?: string };
       error?: unknown;
     };
     expect(successJsonRpcBody.error).toBeUndefined();
     expect(successJsonRpcBody.result?.checkpoint?.step).toBe(2);
+    // WFT-21: JSON-RPC passes `revision` through unchanged, same as REST.
+    expect(successJsonRpcBody.result?.revision).toBe(expectedRevision);
   });
 
   it('WebSocket sessions bind authenticated identity at upgrade time', async () => {
@@ -341,6 +348,33 @@ describe('weft.workflows.replay REST shaping', () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toBe('application/msgpack');
+  });
+
+  it("REST passes the run's own pinned revision through unchanged (WFT-21)", async () => {
+    engine = createReplayEngine();
+    const workflowId = await createReplayWorkflow(engine, 'wf-replay-revision-rest');
+    const expectedRevisionSummary = await engine.get(workflowId);
+    const expectedRevision = expectedRevisionSummary?.revision;
+    expect(expectedRevision).toBeDefined();
+
+    const response = await handleRequest(
+      new Request(`http://localhost/v1/workflows/${workflowId}/replay/2`, {
+        method: 'GET',
+      }),
+      engine,
+      {
+        operationRegistry: createOperationRegistry([replayWorkflowOperation]),
+        restBindings: [replayWorkflowRestBinding],
+        authContext: {
+          method: 'jwt',
+          principal: principalFromJwtClaims({ sub: 'reader', scope: 'workflows:read' }),
+        },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { revision?: string };
+    expect(body.revision).toBe(expectedRevision);
   });
 
   it('returns 400 for an invalid replay step', async () => {

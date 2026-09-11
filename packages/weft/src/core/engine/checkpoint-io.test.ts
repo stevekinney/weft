@@ -308,4 +308,155 @@ describe('checkpoint commit compare-and-swap guard', () => {
     );
     expect(storage.conditionalBatchCallCount).toBe(0);
   });
+
+  it("rejects a worker-returned checkpoint whose claimed workflowExecutionToken disagrees with the host's own current generation, rather than silently reattaching the host's token onto the worker's stale content (WFT-21, Codex review round 5, P1, superseding round 4's silent-correction behavior)", async () => {
+    const storage = new MemoryStorage();
+    // The host's own in-memory `internals.checkpoints` entry is the
+    // authoritative source of truth for the CURRENT generation's token.
+    const checkpoint = createCheckpoint('checkpoint-workflow', '1', 1_000, 'host-owned-token');
+    const internals = createCheckpointInternals(storage, checkpoint);
+    await seedCheckpoint(storage, checkpoint);
+
+    // A worker claiming a DIFFERENT token than the host's own current
+    // generation — round 4 silently reattached the host's token here and
+    // persisted anyway; round 5 instead treats the disagreement itself as
+    // proof this worker's checkpoint was produced for a generation that no
+    // longer exists (the exact `start-new`-replacement race) and rejects
+    // outright, before any write.
+    const workerClaimedCheckpoint: Checkpoint = {
+      ...checkpoint,
+      step: 1,
+      workflowExecutionToken: 'worker-forged-token',
+    };
+    await expect(
+      persistCheckpoint(
+        internals,
+        checkpoint.workflowId,
+        checkpointOperation,
+        serializeCheckpointBuffer(workerClaimedCheckpoint),
+        createPersistCallbacks(),
+      ),
+    ).rejects.toThrow('targets a different execution generation');
+
+    // Nothing was written.
+    expect(await storage.get(KEYS.checkpoint('checkpoint-workflow'))).toEqual(
+      serializeCheckpoint(checkpoint),
+    );
+  });
+
+  it("rejects a worker-returned checkpoint that OMITS workflowExecutionToken entirely while the host has one, rather than silently treating the omission as legacy tolerance and stamping the host's token onto it (WFT-21, Codex review round 7, P1, tightening round 5's own fix)", async () => {
+    const storage = new MemoryStorage();
+    const checkpoint = createCheckpoint(
+      'checkpoint-workflow-omitted-token',
+      '1',
+      1_000,
+      'host-owned-token',
+    );
+    const internals = createCheckpointInternals(storage, checkpoint);
+    await seedCheckpoint(storage, checkpoint);
+
+    // A stale or hostile worker that simply OMITS the field entirely —
+    // indistinguishable on the wire from a genuinely pre-upgrade worker,
+    // but the host itself already has a token, which is strong enough
+    // evidence this is NOT a legacy generation to extend that tolerance to.
+    const workerCheckpointNoToken = { ...checkpoint, step: 1 } as Checkpoint;
+    delete (workerCheckpointNoToken as { workflowExecutionToken?: string }).workflowExecutionToken;
+    expect(workerCheckpointNoToken.workflowExecutionToken).toBeUndefined();
+
+    await expect(
+      persistCheckpoint(
+        internals,
+        checkpoint.workflowId,
+        checkpointOperation,
+        serializeCheckpointBuffer(workerCheckpointNoToken),
+        createPersistCallbacks(),
+      ),
+    ).rejects.toThrow('targets a different execution generation');
+
+    expect(await storage.get(KEYS.checkpoint('checkpoint-workflow-omitted-token'))).toEqual(
+      serializeCheckpoint(checkpoint),
+    );
+  });
+
+  it('proceeds and persists the host copy when the worker-claimed workflowExecutionToken agrees with the host, never trusting the worker bytes as the value to persist even on agreement', async () => {
+    const storage = new MemoryStorage();
+    const checkpoint = createCheckpoint('checkpoint-workflow-agree', '1', 1_000, 'shared-token');
+    const internals = createCheckpointInternals(storage, checkpoint);
+    await seedCheckpoint(storage, checkpoint);
+
+    const workerCheckpoint: Checkpoint = {
+      ...checkpoint,
+      step: 1,
+      workflowExecutionToken: 'shared-token',
+    };
+    await persistCheckpoint(
+      internals,
+      checkpoint.workflowId,
+      checkpointOperation,
+      serializeCheckpointBuffer(workerCheckpoint),
+      createPersistCallbacks(),
+    );
+
+    const persistedBytes = await storage.get(KEYS.checkpoint('checkpoint-workflow-agree'));
+    const decodedRoundTrip = internals.checkpoints.get('checkpoint-workflow-agree');
+    expect(decodedRoundTrip?.workflowExecutionToken).toBe('shared-token');
+    expect(persistedBytes).not.toBeNull();
+    expect(serializeCheckpoint(workerCheckpoint)).toEqual(persistedBytes!);
+  });
+
+  it('drops workflowExecutionToken entirely when the host in-memory checkpoint has none (legacy) — never falls back to the worker-claimed token', async () => {
+    const storage = new MemoryStorage();
+    // No token on the host's own in-memory entry — the pre-existing legacy
+    // case (a generation whose checkpoint predates this field).
+    const checkpoint = createCheckpoint('checkpoint-workflow-no-host-token', '1', 1_000);
+    const internals = createCheckpointInternals(storage, checkpoint);
+    await seedCheckpoint(storage, checkpoint);
+
+    const workerClaimedCheckpoint: Checkpoint = {
+      ...checkpoint,
+      step: 1,
+      workflowExecutionToken: 'worker-forged-token',
+    };
+    await persistCheckpoint(
+      internals,
+      checkpoint.workflowId,
+      checkpointOperation,
+      serializeCheckpointBuffer(workerClaimedCheckpoint),
+      createPersistCallbacks(),
+    );
+
+    const decodedRoundTrip = internals.checkpoints.get('checkpoint-workflow-no-host-token');
+    expect(decodedRoundTrip?.workflowExecutionToken).toBeUndefined();
+  });
+
+  it('rejects a worker checkpoint outright when its generation no longer exists in memory — a concurrent terminal cleanup, suspend, or purge already tore it down (WFT-21, Codex review round 5, P1)', async () => {
+    const storage = new MemoryStorage();
+    const checkpoint = createCheckpoint('checkpoint-workflow-torn-down', '1', 1_000, 'stale-token');
+    const internals = createCheckpointInternals(storage, checkpoint);
+    await seedCheckpoint(storage, checkpoint);
+    // Simulate the generation having already torn down — exactly what
+    // `suspend.ts`/`cleanup.ts`/`transition.ts`'s own rollback/`bulk-operations-purge.ts`
+    // do, all of which delete this entry.
+    internals.checkpoints.delete('checkpoint-workflow-torn-down');
+
+    const workerClaimedCheckpoint: Checkpoint = {
+      ...checkpoint,
+      step: 1,
+      workflowExecutionToken: 'worker-forged-token',
+    };
+    await expect(
+      persistCheckpoint(
+        internals,
+        checkpoint.workflowId,
+        checkpointOperation,
+        serializeCheckpointBuffer(workerClaimedCheckpoint),
+        createPersistCallbacks(),
+      ),
+    ).rejects.toThrow('targets a generation that no longer exists');
+
+    // Nothing was written — the stale worker checkpoint never landed.
+    expect(await storage.get(KEYS.checkpoint('checkpoint-workflow-torn-down'))).toEqual(
+      serializeCheckpoint(checkpoint),
+    );
+  });
 });

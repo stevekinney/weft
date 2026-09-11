@@ -196,12 +196,13 @@ export function createLifecycleCallbacks<TWorkflows extends object, TActivities 
         createTerminationCallbacks(engine),
         'system',
       ),
-    resolveExecutableRegistrationForRevision: (type, revision) =>
+    resolveExecutableRegistrationForRevision: (type, revision, onRevisionChosen) =>
       resolveExecutableRegistrationForRevision(
         engine as unknown as Engine,
         getInternals(engine),
         type,
         revision,
+        onRevisionChosen,
       ),
     failWorkflowForRevisionUnavailable: (workflowId, error) =>
       failWorkflow(

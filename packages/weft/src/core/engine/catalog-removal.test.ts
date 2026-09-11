@@ -4,6 +4,8 @@ import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { ActivityRegistry } from '../activity-registry.ts';
+import { removeCatalogEntry } from '../catalog/index.ts';
+import { encode } from '../codec.ts';
 import { buildWorkflowContract } from '../contract/build.ts';
 import { buildWorkflowRevisionManifest } from '../contract/manifest.ts';
 import type { WorkflowRevisionManifest } from '../contract/types.ts';
@@ -115,6 +117,11 @@ describe('removeWorkflowRevision', () => {
     // assertion isn't blocked by the NEW `nonTerminalRuns` reference count
     // (WFT-17) — this test is about `inFlightStarts`, not non-terminal runs.
     await startedHandle.result();
+    // Purge the now-completed run too: WFT-21's `retainedRecoveryRecords`
+    // would otherwise durably reference revA via this exact same completed,
+    // unpurged run, for the same reason `nonTerminalRuns` was excluded
+    // above.
+    await engine.purge({ idPrefix: startedHandle.id });
     const revA = getWorkflowCatalog(engine).resolveActive('checkout')!.revision;
     getInternals(engine).registeredCatalogRevisions.delete('checkout');
 
@@ -151,6 +158,185 @@ describe('removeWorkflowRevision', () => {
     // WFT-17/18: a clean `removed: true` leaves no tombstone behind — the
     // finalize half of `finalizeRevisionRemoval` durably deletes it.
     expect(await storage.get(KEYS.catalogTombstone('checkout', revA))).toBeNull();
+  });
+
+  describe('finalizeRevisionRemoval vs. a concurrent tombstone resolver — WFT-21, Codex review round 14, P2 item S-QH', () => {
+    async function installRemovableRevision(engine: Engine): Promise<string> {
+      engine.register(noopWorkflow('checkout'));
+      const startedHandle = await engine.start('checkout', null);
+      await startedHandle.result();
+      await engine.purge({ idPrefix: startedHandle.id });
+      const revA = getWorkflowCatalog(engine).resolveActive('checkout')!.revision;
+      getInternals(engine).registeredCatalogRevisions.delete('checkout');
+      const manifestB = await manifestFor('checkout', '1.0.0', { description: 'a later revision' });
+      await activateCatalogRevisionCandidate(engine, 'checkout', manifestB, {
+        expectedGeneration: 1,
+        policy: { requireExactRevision: false },
+      });
+      return revA;
+    }
+
+    it('reports "referenced" (not a lying "removed: true") and dispatches no event when a concurrent resolver RESTORED the entry before this call\'s own finalize CAS landed', async () => {
+      await using storage = new MemoryStorage();
+      await using engine = new Engine({ storage, backgroundTasks: 'manual' });
+      const revA = await installRemovableRevision(engine);
+      const tombstoneKey = KEYS.catalogTombstone('checkout', revA);
+
+      const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+      let intercepted = false;
+      storage.conditionalBatch = async (conditions, operations) => {
+        const isFinalizeTombstoneDelete =
+          !intercepted &&
+          operations.length === 1 &&
+          operations[0]?.type === 'delete' &&
+          operations[0]?.key === tombstoneKey;
+        if (isFinalizeTombstoneDelete) {
+          intercepted = true;
+          // Simulate a concurrent boot-time sweep RESTORING this exact
+          // tombstone (its own reference-count scan found something) a
+          // moment before this call's own `finalizeCatalogTombstone` CAS
+          // lands — the tombstone bytes are the exact deleted entry bytes,
+          // recoverable from the precondition this call itself supplied.
+          const tombstoneBytesCondition = conditions.find((c) => c.key === tombstoneKey);
+          const tombstoneBytes = tombstoneBytesCondition?.expectedValue;
+          if (tombstoneBytes !== null && tombstoneBytes !== undefined) {
+            await originalConditionalBatch(
+              [{ key: tombstoneKey, expectedValue: tombstoneBytes }],
+              [
+                { type: 'put', key: KEYS.catalogEntry('checkout', revA), value: tombstoneBytes },
+                { type: 'delete', key: tombstoneKey },
+              ],
+            );
+          }
+        }
+        return originalConditionalBatch(conditions, operations);
+      };
+
+      const events: WorkflowRevisionRemovedEvent[] = [];
+      engine.addEventListener(WorkflowRevisionRemovedEvent.type, (e) => events.push(e));
+
+      const result = await removeWorkflowRevision(engine, 'checkout', revA);
+
+      // The concurrent resolver restored the entry — the removal did NOT
+      // complete. Before this fix, `finalizeRevisionRemoval` ignored its
+      // own lost CAS and reported `{ removed: true }` + dispatched the
+      // event regardless.
+      expect(result.removed).toBe(false);
+      if (!result.removed && result.reason === 'referenced') {
+        // The reason code is truthful; the exact counts are this call's own
+        // (possibly stale) snapshot, not re-derived from the concurrent
+        // resolver's decision — documented in `finalizeRevisionRemoval`'s doc.
+        expect(result.references).toBeDefined();
+      } else {
+        throw new Error(`expected a "referenced" refusal, got ${JSON.stringify(result)}`);
+      }
+      expect(events).toHaveLength(0);
+      expect(getWorkflowCatalog(engine).getEntry('checkout', revA)).toBeUndefined();
+      expect(await storage.get(KEYS.catalogEntry('checkout', revA))).not.toBeNull();
+    });
+
+    it('still reports a truthful "removed: true" and dispatches the event when a concurrent resolver FINALIZED the exact same tombstone first', async () => {
+      await using storage = new MemoryStorage();
+      await using engine = new Engine({ storage, backgroundTasks: 'manual' });
+      const revA = await installRemovableRevision(engine);
+      const tombstoneKey = KEYS.catalogTombstone('checkout', revA);
+
+      const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+      let intercepted = false;
+      storage.conditionalBatch = async (conditions, operations) => {
+        const isFinalizeTombstoneDelete =
+          !intercepted &&
+          operations.length === 1 &&
+          operations[0]?.type === 'delete' &&
+          operations[0]?.key === tombstoneKey;
+        if (isFinalizeTombstoneDelete) {
+          intercepted = true;
+          // Simulate a concurrent boot-time sweep FINALIZING this exact
+          // tombstone (zero references, same as this call's own decision)
+          // a moment before this call's own CAS lands — applying the IDENTICAL
+          // conditions/operations this call is about to attempt.
+          await originalConditionalBatch(conditions, operations);
+        }
+        return originalConditionalBatch(conditions, operations);
+      };
+
+      const events: WorkflowRevisionRemovedEvent[] = [];
+      engine.addEventListener(WorkflowRevisionRemovedEvent.type, (e) => events.push(e));
+
+      const result = await removeWorkflowRevision(engine, 'checkout', revA);
+
+      // The concurrent resolver finalized it — the removal DID complete,
+      // just not through this call's own commit. `{ removed: true }` is
+      // truthful, and this call dispatches the event on the concurrent
+      // resolver's behalf (the boot-time sweep never dispatches engine
+      // events itself).
+      expect(result).toEqual({ removed: true });
+      expect(events).toHaveLength(1);
+      expect(events[0]?.revision).toBe(revA);
+      expect(await storage.get(KEYS.catalogEntry('checkout', revA))).toBeNull();
+      expect(await storage.get(tombstoneKey)).toBeNull();
+    });
+
+    it('reports "referenced" (not a lost restore treated as success) when a genuine reference appears between the pre- and post-checks AND the restore itself loses its CAS to a concurrent resolver', async () => {
+      await using storage = new MemoryStorage();
+      await using engine = new Engine({ storage, backgroundTasks: 'manual' });
+      const revA = await installRemovableRevision(engine);
+      const tombstoneKey = KEYS.catalogTombstone('checkout', revA);
+      const entryKey = KEYS.catalogEntry('checkout', revA);
+
+      const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+      let deleteIntercepted = false;
+      let restoreIntercepted = false;
+      storage.conditionalBatch = async (conditions, operations) => {
+        const isDeleteAndTombstoneWrite =
+          !deleteIntercepted &&
+          operations.some((op) => op.type === 'delete' && op.key === entryKey) &&
+          operations.some((op) => op.type === 'put' && op.key === tombstoneKey);
+        if (isDeleteAndTombstoneWrite) {
+          deleteIntercepted = true;
+          const result = await originalConditionalBatch(conditions, operations);
+          if (result) {
+            // A genuine reference appears in the gap between
+            // `catalog.remove()`'s own commit and `finalizeRevisionRemoval()`'s
+            // post-check — the exact TOCTOU window that check exists to close.
+            getInternals(engine).registeredCatalogRevisions.set('checkout', revA);
+          }
+          return result;
+        }
+
+        const isRestoreWrite =
+          !restoreIntercepted &&
+          operations.some((op) => op.type === 'put' && op.key === entryKey) &&
+          operations.some((op) => op.type === 'delete' && op.key === tombstoneKey);
+        if (isRestoreWrite) {
+          restoreIntercepted = true;
+          // Simulate a concurrent resolver (e.g. the boot-time sweep)
+          // restoring this exact tombstone a moment before this call's own
+          // restore CAS lands — applying the IDENTICAL conditions/operations
+          // this call is about to attempt.
+          await originalConditionalBatch(conditions, operations);
+        }
+        return originalConditionalBatch(conditions, operations);
+      };
+
+      const events: WorkflowRevisionRemovedEvent[] = [];
+      engine.addEventListener(WorkflowRevisionRemovedEvent.type, (e) => events.push(e));
+
+      const result = await removeWorkflowRevision(engine, 'checkout', revA);
+
+      expect(result.removed).toBe(false);
+      if (!result.removed && result.reason === 'referenced') {
+        expect(result.references.registeredDefinitions).toBe(1);
+      } else {
+        throw new Error(`expected a "referenced" refusal, got ${JSON.stringify(result)}`);
+      }
+      expect(events).toHaveLength(0);
+      // The concurrent resolver's own restore landed durably.
+      expect(await storage.get(entryKey)).not.toBeNull();
+      expect(await storage.get(tombstoneKey)).toBeNull();
+
+      getInternals(engine).registeredCatalogRevisions.delete('checkout');
+    });
   });
 
   it('the inFlightStarts counter itself is reserved/released around a real in-flight start()', async () => {
@@ -283,8 +469,16 @@ describe('removeWorkflowRevision', () => {
     // ANY engine, not just this in-process-accounting-gap scenario this
     // test targets (`registeredDefinitions`/`inFlightStarts`, both
     // process-local).
-    await engineA.start('checkout', null).then((h) => h.result());
+    const primingHandle = await engineA.start('checkout', null).then(async (h) => {
+      await h.result();
+      return h;
+    });
     const revA = getWorkflowCatalog(engineA).resolveActive('checkout')!.revision;
+    // Also purge the now-completed run: WFT-21's `retainedRecoveryRecords`
+    // would otherwise durably reference revA via this same completed run,
+    // exactly like `nonTerminalRuns` would have for a non-terminal one —
+    // this test's "no reference remains" premise needs both released.
+    await engineA.purge({ idPrefix: primingHandle.id });
 
     const manifestB = await manifestFor('checkout', '1.0.0', { description: 'a later revision' });
     await activateCatalogRevisionCandidate(engineA, 'checkout', manifestB, {
@@ -397,7 +591,12 @@ describe('removeWorkflowRevision', () => {
     await using storage = new MemoryStorage();
     await using engine = new Engine({ storage, backgroundTasks: 'manual' });
     engine.register(noopWorkflow('checkout'));
-    await engine.start('checkout', null);
+    // Activate 'checkout' via the register-drain path WITHOUT starting a
+    // real run — this test is about the CAS race on removal's own delete,
+    // not about reference counting, and a completed run pinned to revA
+    // would now (WFT-21) durably reference it via `retainedRecoveryRecords`
+    // and refuse removal before ever reaching the CAS this test targets.
+    await ensureWorkflowCatalogReady(engine);
     const revA = getWorkflowCatalog(engine).resolveActive('checkout')!.revision;
     const manifestB = await manifestFor('checkout', '1.0.0', { description: 'later' });
     await activateCatalogRevisionCandidate(engine, 'checkout', manifestB, {
@@ -418,7 +617,10 @@ describe('removeWorkflowRevision', () => {
     await using storage = new MemoryStorage();
     await using engine = new Engine({ storage, backgroundTasks: 'manual' });
     engine.register(noopWorkflow('checkout'));
-    await engine.start('checkout', null);
+    // Activate without starting a real run — see the "conflict" test above
+    // for why (WFT-21's retainedRecoveryRecords would otherwise refuse
+    // removal before this TOCTOU race is ever reached).
+    await ensureWorkflowCatalogReady(engine);
     const revA = getWorkflowCatalog(engine).resolveActive('checkout')!.revision;
     const manifestB = await manifestFor('checkout', '1.0.0', { description: 'later' });
     await activateCatalogRevisionCandidate(engine, 'checkout', manifestB, {
@@ -442,7 +644,10 @@ describe('removeWorkflowRevision', () => {
     await using storage = new MemoryStorage();
     await using engine = new Engine({ storage, backgroundTasks: 'manual' });
     engine.register(noopWorkflow('checkout'));
-    await engine.start('checkout', null);
+    // Activate without starting a real run — see the "conflict" test above
+    // for why (WFT-21's retainedRecoveryRecords would otherwise refuse
+    // removal before this TOCTOU race is ever reached).
+    await ensureWorkflowCatalogReady(engine);
     const revA = getWorkflowCatalog(engine).resolveActive('checkout')!.revision;
     const manifestB = await manifestFor('checkout', '1.0.0', { description: 'later' });
     await activateCatalogRevisionCandidate(engine, 'checkout', manifestB, {
@@ -493,7 +698,12 @@ describe('getWorkflowRevisionDiagnostics', () => {
     await using storage = new MemoryStorage();
     await using engineA = new Engine({ storage, backgroundTasks: 'manual' });
     engineA.register(noopWorkflow('checkout'));
-    await engineA.start('checkout', null);
+    // Activate without starting a real run: a completed-but-unpurged run
+    // pinned to revA would itself be a durable reference (WFT-21's
+    // retainedRecoveryRecords), which is not what this "unreferenced"
+    // scenario is testing — see `countWorkflowRevisionReferences`'s own
+    // "genuinely non-terminal run"/"terminal run" tests below for that.
+    await ensureWorkflowCatalogReady(engineA);
     const revA = getWorkflowCatalog(engineA).resolveActive('checkout')!.revision;
     const manifestB = await manifestFor('checkout', '1.0.0', { description: 'later' });
     await activateCatalogRevisionCandidate(engineA, 'checkout', manifestB, {
@@ -529,10 +739,36 @@ describe('getWorkflowRevisionDiagnostics', () => {
     expect(diagnostics.references.registeredDefinitions).toBe(1);
     expect(diagnostics.removable).toBe(false);
   });
+
+  it('reports installed:false (not a stale cached installed:true) once a peer durably removes the revision (WFT-21, Codex review round 14, P2 item UXP-)', async () => {
+    await using storage = new MemoryStorage();
+    await using engine = new Engine({ storage, backgroundTasks: 'manual' });
+    engine.register(noopWorkflow('checkout'));
+    await ensureWorkflowCatalogReady(engine);
+    const revA = getWorkflowCatalog(engine).resolveActive('checkout')!.revision;
+    const manifestB = await manifestFor('checkout', '1.0.0', { description: 'later' });
+    await activateCatalogRevisionCandidate(engine, 'checkout', manifestB, {
+      expectedGeneration: 1,
+      policy: { requireExactRevision: false },
+    });
+
+    // Populate this process's own in-memory `#entries` cache for revA
+    // BEFORE the durable delete below.
+    const before = await getWorkflowRevisionDiagnostics(engine, 'checkout', revA);
+    expect(before.installed).toBe(true);
+
+    // Simulate a peer's `remove()` durably deleting the entry WITHOUT
+    // touching this process's own cache.
+    await storage.delete(KEYS.catalogEntry('checkout', revA));
+
+    const after = await getWorkflowRevisionDiagnostics(engine, 'checkout', revA);
+    expect(after.installed).toBe(false);
+    expect(after.removable).toBe(false);
+  });
 });
 
 describe('countWorkflowRevisionReferences', () => {
-  it('reports zeros for the four still-structurally-present fields once the run is terminal', async () => {
+  it('reports 0 for nonTerminalRuns/pinnedSchedules once the run is terminal, but 1 for retainedRecoveryRecords until purge (WFT-21)', async () => {
     await using storage = new MemoryStorage();
     await using engine = new Engine({ storage, backgroundTasks: 'manual' });
     engine.register(noopWorkflow('checkout'));
@@ -542,15 +778,30 @@ describe('countWorkflowRevisionReferences', () => {
 
     const references = await countWorkflowRevisionReferences(engine, 'checkout', revision);
 
-    // `nonTerminalRuns` is real (WFT-17) but correctly 0 here: the run
-    // completed above. The remaining four fields stay structurally present
-    // but always 0 — each awaits revision identity in a different,
-    // later-owned subsystem (see `reference-counts.ts`'s field docs).
+    // `nonTerminalRuns` is 0: the run completed above. `pendingDispatches`
+    // and `activeExecutionRealms` stay structurally present but always 0 —
+    // each awaits revision identity in a different, later-owned subsystem
+    // (see `reference-counts.ts`'s field docs). `retainedRecoveryRecords`
+    // (WFT-21) is 1, NOT 0: the completed run's own `WorkflowState` is
+    // still present (unpurged) and pinned to this exact revision — a
+    // completed run is forkable against its original revision, so it is a
+    // genuine durable reference until purge or retention releases it.
     expect(references.nonTerminalRuns).toBe(0);
     expect(references.pinnedSchedules).toBe(0);
     expect(references.pendingDispatches).toBe(0);
     expect(references.activeExecutionRealms).toBe(0);
-    expect(references.retainedRecoveryRecords).toBe(0);
+    expect(references.retainedRecoveryRecords).toBe(1);
+
+    // Purging the terminal run through the ordinary purge path (its
+    // existing fenced delete of the `wf:` state IS the release for this
+    // component — no new write path was needed) drops it back to 0.
+    await engine.purge({ idPrefix: handle.id });
+    const referencesAfterPurge = await countWorkflowRevisionReferences(
+      engine,
+      'checkout',
+      revision,
+    );
+    expect(referencesAfterPurge.retainedRecoveryRecords).toBe(0);
   });
 
   it('counts a genuinely non-terminal run pinned to the exact revision, and only that revision', async () => {
@@ -614,6 +865,89 @@ describe('countWorkflowRevisionReferences', () => {
 
     await engine.getHandle('checkout-parked-2')?.signal('go', 'done');
     await engine.getHandle('checkout-parked-2')?.result();
+  });
+
+  // WFT-21: `retainedRecoveryRecords` is now a real signal (was a permanent
+  // `0` stub). A terminal-but-unpurged run is retryable/forkable, so it is
+  // a genuine durable reference until purge or retention releases it.
+  it('removeWorkflowRevision() refuses a revision with a terminal, unpurged run via retainedRecoveryRecords, and succeeds once purged', async () => {
+    await using storage = new MemoryStorage();
+    await using engine = new Engine({ storage, backgroundTasks: 'manual' });
+    engine.register(noopWorkflow('checkout'));
+    const handle = await engine.start('checkout', null);
+    await handle.result();
+    const revA = getWorkflowCatalog(engine).resolveActive('checkout')!.revision;
+
+    const manifestB = await manifestFor('checkout', '1.0.0', {
+      description: 'a later revision for the retained-recovery-records test',
+    });
+    await activateCatalogRevisionCandidate(engine, 'checkout', manifestB, {
+      expectedGeneration: 1,
+      policy: { requireExactRevision: false },
+    });
+    getInternals(engine).registeredCatalogRevisions.delete('checkout');
+
+    const refused = await removeWorkflowRevision(engine, 'checkout', revA);
+    expect(refused.removed).toBe(false);
+    if (!refused.removed && refused.reason === 'referenced') {
+      expect(refused.references.retainedRecoveryRecords).toBe(1);
+    } else {
+      throw new Error(`expected a "referenced" refusal, got ${JSON.stringify(refused)}`);
+    }
+
+    await engine.purge({ idPrefix: handle.id });
+    const succeeded = await removeWorkflowRevision(engine, 'checkout', revA);
+    expect(succeeded).toEqual({ removed: true });
+  });
+
+  // WFT-21: a dead-lettered finalizer is a PERMANENT reference — unlike a
+  // terminal WorkflowState, purge never touches it. This proves the
+  // intended no-auto-release design explicitly: even after the workflow
+  // record itself is purged, a dead letter alone keeps the revision
+  // permanently non-removable (no acknowledge/clear API exists yet).
+  it('a dead-letter-only reference makes removal permanently refused, even after the workflow record is purged', async () => {
+    await using storage = new MemoryStorage();
+    await using engine = new Engine({ storage, backgroundTasks: 'manual' });
+    engine.register(noopWorkflow('checkout'));
+    const handle = await engine.start('checkout', null);
+    await handle.result();
+    const revA = getWorkflowCatalog(engine).resolveActive('checkout')!.revision;
+
+    // Seed under `teardownDeadLetterHistory` — the namespace
+    // `countTeardownDeadLettersForRevision()` actually scans (WFT-21, Codex
+    // review round 3, P2), not the single-slot `teardownDeadLetter`.
+    await storage.put(
+      KEYS.teardownDeadLetterHistory(handle.id, 'dead-letter-token'),
+      encode({
+        type: 'checkout',
+        lastError: 'resource leaked',
+        attempts: 8,
+        deadLetteredAt: 1,
+        revision: revA,
+      }),
+    );
+
+    const manifestB = await manifestFor('checkout', '1.0.0', {
+      description: 'a later revision for the dead-letter-permanence test',
+    });
+    await activateCatalogRevisionCandidate(engine, 'checkout', manifestB, {
+      expectedGeneration: 1,
+      policy: { requireExactRevision: false },
+    });
+    getInternals(engine).registeredCatalogRevisions.delete('checkout');
+
+    // Purge the workflow record itself — the terminal-run component of
+    // `retainedRecoveryRecords` is released, but the dead letter is not.
+    await engine.purge({ idPrefix: handle.id });
+
+    const result = await removeWorkflowRevision(engine, 'checkout', revA);
+    expect(result.removed).toBe(false);
+    if (!result.removed && result.reason === 'referenced') {
+      expect(result.references.retainedRecoveryRecords).toBe(1);
+      expect(result.references.nonTerminalRuns).toBe(0);
+    } else {
+      throw new Error(`expected a "referenced" refusal, got ${JSON.stringify(result)}`);
+    }
   });
 
   // WFT-20: `pinnedSchedules` is now a real signal (was a permanent `0` stub).
@@ -924,6 +1258,12 @@ describe('removeWorkflowRevision vs. a concurrent start() — cross-process race
       await h.signal('go', 'done');
       await h.result();
     });
+    // Purge the now-completed priming run: WFT-21's `retainedRecoveryRecords`
+    // would otherwise durably reference R1 via this run and make removal's
+    // own PRE-check refuse before ever reaching the delete-CAS this test
+    // parks on — this test is about the post-delete restore race, not
+    // reference counting.
+    await engineA.purge({ idPrefix: 'race-restore-priming' });
 
     // Move the ACTIVE pointer to a DIFFERENT revision R2 — R1 stays
     // INSTALLED but not active, the state `removeWorkflowRevision()`
@@ -955,7 +1295,7 @@ describe('removeWorkflowRevision vs. a concurrent start() — cross-process race
     const entryKey = KEYS.catalogEntry('race-restore', revisionR1);
     const gate = Promise.withResolvers<void>();
     const entered = Promise.withResolvers<void>();
-    const originalConditionalBatch = storage.conditionalBatch!.bind(storage);
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
     storage.conditionalBatch = async (conditions, operations) => {
       const isRemovalDelete = operations.some((op) => op.type === 'delete' && op.key === entryKey);
       if (isRemovalDelete) {
@@ -968,9 +1308,9 @@ describe('removeWorkflowRevision vs. a concurrent start() — cross-process race
     const removalPromise = removeWorkflowRevision(engineB, 'race-restore', revisionR1);
     await entered.promise;
     // Removal is now parked exactly at its delete-CAS: the pre-check above
-    // already ran (finding zero references, since A's priming run already
-    // completed to a TERMINAL state and pins to no revision the pre-check
-    // would count).
+    // already ran (finding zero references — A's priming run was already
+    // purged above, so it no longer durably references R1 in any of the
+    // pre-check's reference-count fields).
 
     // A fresh, non-terminal start on ENGINE A — the SAME process that still
     // has R1's code loaded — pins to R1 (its own `registeredCatalogRevisions`
@@ -1032,6 +1372,12 @@ describe('removeWorkflowRevision vs. a concurrent start() — cross-process race
         await h.signal('go', 'done');
         await h.result();
       });
+    // Purge the now-completed priming run: WFT-21's `retainedRecoveryRecords`
+    // would otherwise durably reference R1 via this run and make the later
+    // `removeWorkflowRevision()` call below refuse outright — this test is
+    // about the fresh-start-vs-removal commit-ordering race, not reference
+    // counting.
+    await engineA.purge({ idPrefix: 'race-fail-closed-priming' });
 
     // `removeWorkflowRevision()` refuses removal of the currently ACTIVE
     // revision outright — move the active pointer to a DIFFERENT revision
@@ -1059,7 +1405,7 @@ describe('removeWorkflowRevision vs. a concurrent start() — cross-process race
 
     const gate = Promise.withResolvers<void>();
     const entered = Promise.withResolvers<void>();
-    const originalConditionalBatch = storage.conditionalBatch!.bind(storage);
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
     let paused = false;
     storage.conditionalBatch = async (conditions, operations) => {
       if (!paused) {
@@ -1099,14 +1445,34 @@ describe('removeWorkflowRevision vs. a concurrent start() — cross-process race
 /**
  * WFT-17/WFT-18: the catalog-removal/checkpoint-retry race (Codex review,
  * PR #958). A checkpoint-backed `retryFailedAll()` reactivation commits a
- * `failed` -> `running` transition; `countNonTerminalRunsForRevision()`'s
- * reference scan — what `removeWorkflowRevision()`'s pre- and post-checks
- * both rely on — never counts a `failed` run at all, so a revision removal
- * concurrent with a retry cannot see this run coming even via the post-check
- * that closes the equivalent fresh-`start()` race above. Deliberately run
- * under `ownership: 'none'` (a single, plain `new Engine({ storage })`) —
- * unlike a fresh start, a retry's reactivation carries no
- * `inFlightStartsByRevision` reservation of its own to close the
+ * `failed` -> `running` transition. At the time this race was discovered,
+ * `countNonTerminalRunsForRevision()`'s reference scan — what
+ * `removeWorkflowRevision()`'s pre- and post-checks both relied on — never
+ * counted a `failed` run at all, so a revision removal concurrent with a
+ * retry could not see this run coming even via the post-check that closes
+ * the equivalent fresh-`start()` race above; the fix was the CAS-fencing
+ * mechanism this test exercises (park the retry's reactivation exactly at
+ * its own commit CAS, remove the revision underneath it, and prove the
+ * retry's own precondition read fails closed rather than committing a
+ * stranded `running` state).
+ *
+ * WFT-21 separately wires `retainedRecoveryRecords` to count a `failed`
+ * run's own `WorkflowState` as a durable reference too (a failed run is
+ * retryable, so it durably pins its revision exactly like a completed run
+ * durably pins its own) — `removeWorkflowRevision()` now correctly REFUSES
+ * this exact scenario outright, via its ordinary reference pre-check,
+ * before ever reaching the CAS race below. That is the intended behavior
+ * change (see `CHANGELOG.md`'s `[Unreleased]` entry), but it means this
+ * test can no longer exercise the CAS-fencing invariant through
+ * `removeWorkflowRevision()`'s own public entry point. It now calls the
+ * lower-level `removeCatalogEntry()` primitive directly instead — the same
+ * primitive `removeWorkflowRevision()` itself delegates to once its own
+ * reference check passes — mirroring `catalog-tombstone-recovery.test.ts`'s
+ * `simulateCrashedRemoval()` precedent for isolating this exact layer.
+ *
+ * Deliberately run under `ownership: 'none'` (a single, plain
+ * `new Engine({ storage })`) — unlike a fresh start, a retry's reactivation
+ * carries no `inFlightStartsByRevision` reservation of its own to close the
  * SAME-process half of this race, so the fix must fence retries in every
  * ownership mode, not just under a lease topology with two real engines.
  */
@@ -1178,19 +1544,14 @@ describe('removeWorkflowRevision vs. a concurrent retryFailedAll() — checkpoin
     );
     expect(activation.applied).toBe(true);
 
-    // A second process (engineB, same durable store) that never registers
-    // 'retry-fence-race' at all — `removeWorkflowRevision()`'s
-    // `registeredDefinitions` reference count is scoped to the CALLING
-    // engine's own in-process registration, so calling it from engineA
-    // itself (which still has the type eagerly registered) would report
-    // "referenced" unconditionally, never reaching the race this test
-    // targets. Mirrors the fresh-start race test's engineA/engineB split
-    // above.
-    await using engineB = new Engine({ storage });
-
+    // No second engine is needed here: the concurrent removal below goes
+    // through the low-level `removeCatalogEntry()` primitive directly
+    // (storage-only, no engine's own reference accounting involved) — see
+    // the module doc above for why `removeWorkflowRevision()` itself is no
+    // longer reachable for this exact race post-WFT-21.
     const gate = Promise.withResolvers<void>();
     const entered = Promise.withResolvers<void>();
-    const originalConditionalBatch = storage.conditionalBatch!.bind(storage);
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
     let paused = false;
     storage.conditionalBatch = async (conditions, operations) => {
       if (!paused) {
@@ -1210,8 +1571,14 @@ describe('removeWorkflowRevision vs. a concurrent retryFailedAll() — checkpoin
     // Restore the real conditionalBatch before the concurrent removal so it
     // is not itself gated by the same wrapper.
     storage.conditionalBatch = originalConditionalBatch;
-    const removed = await removeWorkflowRevision(engineB, 'retry-fence-race', revisionR1);
-    expect(removed).toEqual({ removed: true });
+    // `removeCatalogEntry()` — the lower-level primitive, not
+    // `removeWorkflowRevision()` — deliberately bypasses reference-count
+    // enforcement (see the module doc above): the failed run being retried
+    // durably references R1 via WFT-21's `retainedRecoveryRecords`, so
+    // `removeWorkflowRevision()` itself would now correctly refuse this
+    // removal before ever reaching the CAS race this test targets.
+    const removed = await removeCatalogEntry(storage, 'retry-fence-race', revisionR1);
+    expect(removed.outcome).toBe('removed');
 
     gate.resolve();
     const result = await retryPromise;

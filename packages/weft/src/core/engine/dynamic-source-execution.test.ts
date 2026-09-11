@@ -2,9 +2,11 @@ import { beforeAll, describe, expect, it, mock } from 'bun:test';
 
 import { MemoryStorage } from '../../storage/memory.ts';
 import { ActivityRegistry } from '../activity-registry.ts';
+import { WorkflowRevisionTombstonedError } from '../catalog/errors.ts';
 import { buildWorkflowManifestFromDefinition } from '../registry-workflow-manifest.ts';
 import { workflowSource } from '../source/index.ts';
 import { workflow, type WorkflowContext, type WorkflowDefinition } from '../types.ts';
+import { ensureWorkflowCatalogReady, getWorkflowCatalog } from './catalog-readiness.ts';
 import { copyWorkflowDefinition } from './construction.ts';
 import {
   DynamicWorkflowSourceUnavailableError,
@@ -364,6 +366,38 @@ describe('resolveExecutableRegistrationForRevision() (WFT-17/WFT-18)', () => {
     expect(loaderB).toHaveBeenCalledTimes(1);
     expect(loaderA).not.toHaveBeenCalled();
     expect(entry.handler).toBe(lazyVariantDefinition.handler);
+
+    engine[Symbol.dispose]();
+  });
+
+  it('a load racing a concurrent tombstone surfaces the typed WorkflowRevisionUnavailableError(reason: "not-installed") itself, not a generic DynamicWorkflowSourceUnavailableError (WFT-21, Codex review round 4, P2)', async () => {
+    const engine = await newEngine();
+    registerLazy(engine, lazyRevision, async () => ({ lazy: lazyDefinition }));
+    const internals = getInternals(engine);
+
+    // Force the catalog to exist before monkey-patching its `install()` —
+    // `runSharedSourceLoad()`'s own `catalog.install()` call is what this
+    // test needs to fail with the tombstoned-revision refusal.
+    await ensureWorkflowCatalogReady(engine);
+    const catalog = getWorkflowCatalog(engine);
+    const originalInstall = catalog.install.bind(catalog);
+    catalog.install = async () => {
+      throw new WorkflowRevisionTombstonedError('lazy', lazyRevision);
+    };
+
+    const rejection = await resolveExecutableRegistrationForRevision(
+      engine,
+      internals,
+      'lazy',
+      lazyRevision,
+    ).catch((error: unknown) => error);
+
+    catalog.install = originalInstall;
+
+    expect(rejection).toBeInstanceOf(WorkflowRevisionUnavailableError);
+    expect(rejection).not.toBeInstanceOf(DynamicWorkflowSourceUnavailableError);
+    expect((rejection as WorkflowRevisionUnavailableError).reason).toBe('not-installed');
+    expect((rejection as WorkflowRevisionUnavailableError).revision).toBe(lazyRevision);
 
     engine[Symbol.dispose]();
   });

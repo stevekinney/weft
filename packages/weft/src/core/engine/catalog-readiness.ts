@@ -21,6 +21,7 @@
  */
 
 import { restoreWorkflowCatalog, WorkflowCatalog } from '../catalog/index.ts';
+import { CleanupWarningEvent } from '../events.ts';
 import { buildWorkflowManifestForType } from '../registry-workflow-manifest.ts';
 import { dispatchCatalogInstallAndActivatedEvents } from './catalog-events.ts';
 import { resolveOrphanedCatalogTombstones } from './catalog-tombstone-recovery.ts';
@@ -160,7 +161,15 @@ export async function ensureWorkflowCatalogReady(engine: Engine): Promise<void> 
       // `restoreWorkflowCatalog` builds its in-memory snapshot, or that
       // restored entry would be silently missing from `#entries` until a
       // later durable read-through happened to notice it.
-      await resolveOrphanedCatalogTombstones(internals.storage);
+      await resolveOrphanedCatalogTombstones(internals.storage, (name, revision, error) => {
+        const normalizedError = error instanceof Error ? error : new Error(String(error));
+        engine.dispatchEvent(
+          new CleanupWarningEvent(
+            `catalog-tombstone-boot-sweep:${name}:${revision}`,
+            normalizedError,
+          ),
+        );
+      });
       internals.workflowCatalog = new WorkflowCatalog(
         internals.storage,
         await restoreWorkflowCatalog(internals.storage),

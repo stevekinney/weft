@@ -57,6 +57,7 @@ export {
   EngineLeaseAcquisitionTimeoutError,
   EngineLeaseCorruptedError,
   EngineLeaseNotHeldError,
+  ForkSourceReplacedError,
   IdempotencyKeyPurgedError,
   PersistedDataCorruptError,
   PersistedDataIncompatibleError,

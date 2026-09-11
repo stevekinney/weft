@@ -31,6 +31,7 @@ import type { OperationFault } from '../operation-fault.ts';
 import type { RestInputContext } from '../rest-binding.ts';
 import { readRestJsonBody } from '../rest-body.ts';
 import { invalidParamsFault, isOperationFault } from './operation-helpers.ts';
+import { mapRevisionUnavailableToFault } from './revision-unavailable-fault.ts';
 
 /** `workflows:admin` — required by `install` and `activate` (mutating). */
 export const workflowsAdminAccess: AccessPolicy = {
@@ -187,8 +188,24 @@ export function activationRefusalToFault(
  * canonical operation fault, or rethrow unchanged when it is neither typed
  * error this family can produce (letting the operation pipeline's generic
  * `EngineFailure` wrapping handle anything else).
+ *
+ * Checked first, via {@link mapRevisionUnavailableToFault}: `WorkflowRevisionUnavailableError`
+ * (WFT-21, Codex review round 14, P2 item S-QK) — `weft.workflows.revisions.install()`'s
+ * own internal `WorkflowRevisionTombstonedError` is translated to this
+ * public error BEFORE it ever reaches here (`installWorkflowRevision()`,
+ * `engine-workflows-namespace.ts`), and `weft.workflows.revisions.preload()`
+ * (`engine.workflows.preload()` → `resolveWorkflowSource()` →
+ * `runSharedSourceLoad()`) throws it directly for the identical
+ * tombstoned-revision case after source loading. Without this branch, both
+ * operations had no typed mapping for it at all and it escaped as a masked
+ * `EngineFailure`/500 instead of the operation's declared retryable
+ * Conflict.
  */
 export function throwWorkflowCatalogOperationFault(error: unknown): never {
+  const revisionFault = mapRevisionUnavailableToFault(error);
+  if (revisionFault !== undefined) {
+    throw revisionFault;
+  }
   if (error instanceof WorkflowRevisionNotInstalledError) {
     const fault: OperationFault = {
       code: 'NotFound',

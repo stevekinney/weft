@@ -135,9 +135,15 @@ export function createInitialCheckpoint(
   workflowId: string,
   workflowVersion: string,
   options: StartOptions | undefined,
+  workflowExecutionToken: string | undefined,
   _callbacks: LifecycleCallbacks,
 ): Checkpoint {
-  const checkpoint = createCheckpoint(workflowId, workflowVersion, internals.options.getNow());
+  const checkpoint = createCheckpoint(
+    workflowId,
+    workflowVersion,
+    internals.options.getNow(),
+    workflowExecutionToken,
+  );
   if (options?.searchAttributes) {
     checkpoint.searchAttributes = { ...options.searchAttributes };
   }

@@ -1,10 +1,9 @@
-import { KEYS } from '../../../storage/interface.ts';
-import { deserializeCheckpoint, serializeCheckpoint } from '../../checkpoint.ts';
+import { serializeCheckpoint } from '../../checkpoint.ts';
 import { EMPTY_EVENT_HEAD } from '../../event-log.ts';
 import { WorkflowRecoverySkippedEvent } from '../../events.ts';
-import type { Checkpoint, ForkOptions, WorkflowState } from '../../types.ts';
+import type { ForkOptions, WorkflowState } from '../../types.ts';
+import { releaseInFlightStart, reserveInFlightStart } from '../catalog-removal.ts';
 import { forgetCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
-import { hydrateCheckpointReplayState } from '../checkpoint-replay.ts';
 import { resolveExecutableRegistrationOrRenamedNotFound } from '../dynamic-source-execution.ts';
 import { WorkflowTypeNotRegisteredForRecoveryError } from '../errors.ts';
 import { commitFencedEngineWrite } from '../fenced-write.ts';
@@ -16,10 +15,20 @@ import { decodeWorkflowState } from '../validation.ts';
 import { launchWorkflowFromCheckpoint } from './checkpoint-launch.ts';
 import {
   buildForkBatchOperations,
-  buildForkSearchAttributes,
+  buildForkCatalogEntryCondition,
+  buildForkCheckpoint,
+  buildForkCommitLostRaceError,
   createForkLineage,
   createForkedWorkflowState,
+  loadForkSourceCheckpoint,
+  reserveLegacyForkTargetRevision,
+  resolveForkPersistedRevision,
+  resolveForkTargetRevision,
 } from './fork-helpers.ts';
+import {
+  assertForkSourceCheckpointMatchesState,
+  assertForkSourceNotReplacedBeforeCommit,
+} from './fork-source-replacement-guards.ts';
 import { derivePreparedExecutionState } from './persist.ts';
 import { isolateRecoveryFailure } from './recovery-isolation.ts';
 import {
@@ -333,132 +342,155 @@ export async function fork(
   }
 
   // Resolve against the SOURCE run's own exact pinned revision (WFT-17's
-  // `WorkflowState.revision`), never the catalog's currently active pointer
-  // (WFT-19 review round 2, found while proving the identity-cache fix
-  // below): the active pointer can move between the source run's start and
-  // this fork call, and resolving via `resolveExecutableRegistration`
-  // (active-pointer-based) would launch the FORKED run against a different
-  // revision's handler entirely — not just a routing mismatch downstream of
-  // execution, but the wrong code running from the very first turn. Mirrors
-  // `resolveExecutableRegistrationForRetry()`'s identical fix for bulk retry.
-  // `revision` here is the resolver's OWN resolved revision — threaded
-  // through to `launchWorkflowFromCheckpoint()`'s identity-cache population
-  // below, NOT re-derived from `forkState.revision` (which is `undefined`
-  // for a legacy record even when this resolve found a real sole
-  // candidate — see that call site's doc, WFT-19 review round 5).
-  const { entry: registration, revision: resolvedRevision } =
-    await resolveExecutableRegistrationOrRenamedNotFound(
-      (type) => callbacks.resolveExecutableRegistrationForRevision(type, sourceState.revision),
-      sourceState.type,
-      () =>
-        new Error(
-          `No workflow registered with name "${sourceState.type}" (needed to fork "${sourceWorkflowId}")`,
-        ),
-    );
-
-  const fromStep =
-    options?.fromStep !== undefined ? normalizeForkStep(options.fromStep) : undefined;
-  const checkpointKey =
-    fromStep !== undefined
-      ? KEYS.checkpointHistory(sourceWorkflowId, fromStep)
-      : KEYS.checkpoint(sourceWorkflowId);
-  const checkpointBytes = await internals.storage.get(checkpointKey);
-  if (!checkpointBytes) {
-    if (fromStep !== undefined) {
-      throw new Error(
-        `Checkpoint not found at step ${String(fromStep)} for workflow "${sourceWorkflowId}"`,
-      );
-    }
-    throw new Error(`Checkpoint not found for workflow "${sourceWorkflowId}"`);
-  }
-
-  const storedSourceCheckpoint = deserializeCheckpoint(checkpointBytes);
-  const sourceCheckpoint = await hydrateCheckpointReplayState(
-    internals.storage,
-    sourceWorkflowId,
-    storedSourceCheckpoint,
-  );
-  const preparedExecutionState = derivePreparedExecutionState(
-    internals,
-    sourceWorkflowId,
-    sourceState,
-    sourceCheckpoint,
-    registration,
-    callbacks,
-  );
-  const sourceWorkflowHeaders =
-    internals.workflowHeaders.get(sourceWorkflowId) ??
-    (await loadWorkflowStartHeaders(internals, sourceWorkflowId, callbacks));
-  const persistedWorkflowStartHeaders = selectPersistedWorkflowStartHeaders(sourceWorkflowHeaders);
-
-  const workflowId = crypto.randomUUID();
-  const forkedAt = internals.options.getNow();
-  const lineage = createForkLineage(internals, sourceWorkflowId, sourceCheckpoint, callbacks);
-  const { accumulatedResultReplayWatermark: _sourceReplayWatermark, ...sourceCheckpointForFork } =
-    preparedExecutionState.checkpoint;
-  const forkCheckpoint: Checkpoint = {
-    ...sourceCheckpointForFork,
-    createdAt: forkedAt,
-    workflowId,
-    searchAttributes: buildForkSearchAttributes(
-      internals,
-      preparedExecutionState.checkpoint,
-      lineage,
-      callbacks,
-    ),
-  };
-  const forkState = createForkedWorkflowState(
-    internals,
-    workflowId,
-    preparedExecutionState.state,
-    preparedExecutionState.versionTuple,
-    lineage,
-    forkedAt,
-    callbacks,
-    resolvedRevision,
-  );
-
-  let forkStarted = false;
+  // `WorkflowState.revision`), never the catalog's active pointer (WFT-19
+  // review round 2): the active pointer can move between the source run's
+  // start and this fork call, and resolving via it would launch the forked
+  // run against the wrong code from the first turn. `options.revision`
+  // (WFT-21) opts into a different installed revision explicitly — see
+  // `resolveForkTargetRevision()`'s doc.
+  const targetRevision = resolveForkTargetRevision(internals, sourceState, options);
+  // Reserve an in-flight-start slot against `targetRevision` before any
+  // further async work (WFT-21, Codex review round 2, P1): closes the
+  // same-process race a concurrent `removeWorkflowRevision()` could win
+  // between this validation and the fork's own commit, in any ownership
+  // mode — unlike `buildForkCatalogEntryCondition()` below (durable,
+  // cross-process fencing only under lease modes). Mirrors `start()`'s
+  // `reserveInFlightStart`/`releaseInFlightStart` pairing; released in
+  // this function's own outer `finally` below.
+  const inFlightRevision = reserveInFlightStart(internals, sourceState.type, targetRevision);
+  // Reserved via `onRevisionChosen` below, synchronously (WFT-21, Codex
+  // review round 5, P1) — see `reserveLegacyForkTargetRevision()`'s doc.
+  let legacyResolvedInFlightRevision: string | undefined;
   try {
-    const forkCheckpointBytes = serializeCheckpoint(forkCheckpoint);
-    // Fork plants a new workflow run from an existing checkpoint — engine-generated
-    // workflow state. Fence it on the lease epoch (issue #470 Step 2) so a deposed
-    // engine cannot create a phantom forked run in the successor's store.
-    await commitFencedEngineWrite(
+    // `revision` here is the resolver's OWN resolved revision — threaded
+    // through to `launchWorkflowFromCheckpoint()`'s identity-cache population
+    // below, NOT re-derived from `forkState.revision` (which is `undefined`
+    // for a legacy record even when this resolve found a real sole
+    // candidate — see that call site's doc, WFT-19 review round 5).
+    const { entry: registration, revision: resolvedRevision } =
+      await resolveExecutableRegistrationOrRenamedNotFound(
+        (type) =>
+          callbacks.resolveExecutableRegistrationForRevision(type, targetRevision, (chosen) => {
+            legacyResolvedInFlightRevision = reserveLegacyForkTargetRevision(
+              internals,
+              sourceState.type,
+              inFlightRevision,
+              chosen,
+            );
+          }),
+        sourceState.type,
+        () =>
+          new Error(
+            `No workflow registered with name "${sourceState.type}" (needed to fork "${sourceWorkflowId}")`,
+          ),
+      );
+    // The fork's own persisted `revision` — see `resolveForkPersistedRevision()`'s
+    // doc. Always equals `chosen` above when the hook fired, so no double-reserve.
+    const persistedRevision = resolveForkPersistedRevision(options, sourceState, resolvedRevision);
+
+    const fromStep =
+      options?.fromStep !== undefined ? normalizeForkStep(options.fromStep) : undefined;
+    const sourceCheckpoint = await loadForkSourceCheckpoint(internals, sourceWorkflowId, fromStep);
+    // See this function's own doc (WFT-21, Codex review, item 6).
+    assertForkSourceCheckpointMatchesState(sourceWorkflowId, sourceState, sourceCheckpoint);
+    const preparedExecutionState = derivePreparedExecutionState(
+      internals,
+      sourceWorkflowId,
+      sourceState,
+      sourceCheckpoint,
+      registration,
+      callbacks,
+    );
+    const sourceWorkflowHeaders =
+      internals.workflowHeaders.get(sourceWorkflowId) ??
+      (await loadWorkflowStartHeaders(internals, sourceWorkflowId, callbacks));
+    const persistedWorkflowStartHeaders =
+      selectPersistedWorkflowStartHeaders(sourceWorkflowHeaders);
+
+    const workflowId = crypto.randomUUID();
+    const forkedAt = internals.options.getNow();
+    const lineage = createForkLineage(internals, sourceWorkflowId, sourceCheckpoint, callbacks);
+    const forkState = createForkedWorkflowState(
       internals,
       workflowId,
-      buildForkBatchOperations(
+      preparedExecutionState.state,
+      preparedExecutionState.versionTuple,
+      lineage,
+      forkedAt,
+      callbacks,
+      persistedRevision,
+    );
+    const forkCheckpoint = buildForkCheckpoint(
+      internals,
+      workflowId,
+      forkedAt,
+      preparedExecutionState.checkpoint,
+      forkState,
+      lineage,
+      callbacks,
+    );
+
+    // Fences the commit below against a concurrent removeWorkflowRevision()
+    // (WFT-21 round 1, P1) — see `buildForkCatalogEntryCondition()`'s doc.
+    const forkCatalogEntryCondition = await buildForkCatalogEntryCondition(
+      internals,
+      sourceState.type,
+      persistedRevision,
+    );
+
+    // See this function's own doc (WFT-21, Codex review, item 6).
+    await assertForkSourceNotReplacedBeforeCommit(internals, sourceWorkflowId, sourceState);
+    let forkStarted = false;
+    try {
+      const forkCheckpointBytes = serializeCheckpoint(forkCheckpoint);
+      // Fork plants a new workflow run from an existing checkpoint — engine-generated
+      // workflow state. Fence it on the lease epoch (issue #470 Step 2) so a deposed
+      // engine cannot create a phantom forked run in the successor's store.
+      await commitFencedEngineWrite(
+        internals,
+        workflowId,
+        buildForkBatchOperations(
+          internals,
+          workflowId,
+          forkState,
+          forkCheckpoint,
+          forkCheckpointBytes,
+          persistedWorkflowStartHeaders,
+          callbacks,
+        ),
+        forkCatalogEntryCondition,
+        () =>
+          buildForkCommitLostRaceError(
+            workflowId,
+            sourceState.type,
+            persistedRevision,
+            forkCatalogEntryCondition,
+          ),
+      );
+      internals.eventLogHeads.set(workflowId, EMPTY_EVENT_HEAD);
+      setWorkflowStartHeaders(internals, workflowId, persistedWorkflowStartHeaders, callbacks);
+      const handle = launchWorkflowFromCheckpoint(
         internals,
         workflowId,
         forkState,
         forkCheckpoint,
-        forkCheckpointBytes,
-        persistedWorkflowStartHeaders,
+        registration,
+        resolvedRevision,
         callbacks,
-      ),
-      [],
-      () => new Error(`Fork of workflow "${workflowId}" lost its CAS race.`),
-    );
-    internals.eventLogHeads.set(workflowId, EMPTY_EVENT_HEAD);
-    setWorkflowStartHeaders(internals, workflowId, persistedWorkflowStartHeaders, callbacks);
-    const handle = launchWorkflowFromCheckpoint(
-      internals,
-      workflowId,
-      forkState,
-      forkCheckpoint,
-      registration,
-      resolvedRevision,
-      callbacks,
-    );
-    forkStarted = true;
-    return handle;
-  } finally {
-    if (!forkStarted) {
-      forgetCommittedCheckpointBytes(internals, workflowId);
-      internals.checkpoints.delete(workflowId);
-      internals.workflowVersionTuples.delete(workflowId);
-      internals.eventLogHeads.delete(workflowId);
-      internals.workflowHeaders.delete(workflowId);
+      );
+      forkStarted = true;
+      return handle;
+    } finally {
+      if (!forkStarted) {
+        forgetCommittedCheckpointBytes(internals, workflowId);
+        internals.checkpoints.delete(workflowId);
+        internals.workflowVersionTuples.delete(workflowId);
+        internals.eventLogHeads.delete(workflowId);
+        internals.workflowHeaders.delete(workflowId);
+      }
     }
+  } finally {
+    releaseInFlightStart(internals, sourceState.type, inFlightRevision);
+    releaseInFlightStart(internals, sourceState.type, legacyResolvedInFlightRevision);
   }
 }

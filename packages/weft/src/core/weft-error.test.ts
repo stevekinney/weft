@@ -21,6 +21,7 @@ import {
   EngineCreateNameMismatchError,
   EngineDisposalError,
   EngineDisposedError,
+  ForkSourceReplacedError,
   HttpClientError,
   IdempotencyKeyPurgedError,
   MailboxContentionError,
@@ -165,6 +166,7 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
     new DynamicWorkflowSourceUnavailableError('checkout', 'r1', 'load-failed', new Error('boom')),
   WorkflowRevisionUnavailableError: () =>
     new WorkflowRevisionUnavailableError('checkout', 'r1', 'not-registered'),
+  ForkSourceReplacedError: () => new ForkSourceReplacedError('wf-1'),
 };
 
 describe('WeftError', () => {

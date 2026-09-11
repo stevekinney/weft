@@ -58,6 +58,55 @@ export class WorkflowCatalogConflictError extends WeftError<'WorkflowCatalogConf
 
 /**
  * Thrown by
+ * {@link import('./workflow-catalog.ts').WorkflowCatalog.install} when its
+ * durable write loses its CAS specifically because a tombstone for this
+ * exact `(name, revision)` is currently present — meaning
+ * `removeCatalogEntry()` has already deleted the entry and written its
+ * tombstone in the same `conditionalBatch` (WFT-21, Codex review items
+ * 1-3), and that tombstone has not yet been resolved (restored, if the
+ * removal rolled back, or finalized, if it committed). `install()` refuses
+ * to resurrect the entry in that window rather than racing the resolver:
+ * a resurrection that wins would let a removed-but-still-tombstoned
+ * revision come back durably installed while `removeWorkflowRevision()`
+ * concurrently believes (or has already decided) it is gone, violating
+ * "removal is rejected while any durable or live reference exists."
+ *
+ * Distinct from {@link WorkflowCatalogConflictError} (differing manifest
+ * content under an existing key) — here the key is durably ABSENT, only its
+ * tombstone durably exists, so throwing the conflict error would misreport
+ * the cause as "already installed with different content."
+ *
+ * Stays internal (not re-exported from `src/index.ts`, not part of
+ * `WeftErrorCode`), like {@link WorkflowCatalogActivationConflictError}:
+ * `core/catalog/**` must never import `core/engine/**`
+ * ({@link import('../engine/catalog-tombstone-recovery.ts')}'s own module
+ * doc), so `install()` cannot throw the engine-layer
+ * `WorkflowRevisionUnavailableError` directly. Every dynamic-source-load
+ * call site that invokes `catalog.install()`
+ * (`core/engine/source-resolution.ts`'s `runSharedSourceLoad`, shared by
+ * both `start()` and `fork()`) catches this and translates it to
+ * `WorkflowRevisionUnavailableError(name, revision, 'not-installed')` —
+ * mirroring the existing `buildForkCommitLostRaceError()` translation for
+ * the analogous commit-time race.
+ */
+export class WorkflowRevisionTombstonedError extends WeftError<'WorkflowRevisionTombstonedError'> {
+  readonly workflowName: string;
+  readonly revision: string;
+
+  constructor(workflowName: string, revision: string) {
+    super(
+      'WorkflowRevisionTombstonedError',
+      `Workflow catalog entry "${workflowName}" revision "${revision}" cannot be installed: a ` +
+        'removal of this exact revision is in progress or has completed (its tombstone is ' +
+        'still present). Retry once the removal resolves, or against a different revision.',
+    );
+    this.workflowName = workflowName;
+    this.revision = revision;
+  }
+}
+
+/**
+ * Thrown by
  * {@link import('./workflow-catalog.ts').WorkflowCatalog.activateRegistered}
  * after its bounded 5-attempt CAS retry loop exhausts without successfully
  * committing the active pointer — mirrors `AtomicStateConflictError`'s

@@ -1,11 +1,16 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import { Engine } from '../../core/engine.ts';
+import { ForkSourceReplacedError } from '../../core/engine/fork-source-replaced-error.ts';
+import { WorkflowRevisionUnavailableError } from '../../core/engine/revision-errors.ts';
 import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
+import { VersionMismatchError } from '../../core/versioning.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
+import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
+import { anonymousPrincipal } from '../principal.ts';
+import { createLiveOperationRegistry } from '../rest-bindings.ts';
 import { forkWorkflowOperation, forkWorkflowRestBinding } from './fork-workflow.ts';
 import { invalidJsonRequest, jsonRequest } from './operation-test-helpers.test-support.ts';
 
@@ -52,6 +57,231 @@ describe('weft.workflows.fork', () => {
 
       expect(response.status).toBe(201);
       expect(await response.json()).toEqual({ id: 'forked-workflow' });
+    } finally {
+      engine.fork = originalFork;
+    }
+  });
+
+  it('REST threads the revision body field to engine.fork() (WFT-21)', async () => {
+    engine = createEngine();
+    const originalFork = engine.fork.bind(engine);
+
+    try {
+      engine.fork = async (workflowId, options) => {
+        expect(workflowId).toBe('workflow-123');
+        expect(options).toEqual({ revision: 'a-specific-revision' });
+        return { id: 'forked-workflow' } as Awaited<ReturnType<Engine['fork']>>;
+      };
+
+      const response = await handleRequest(
+        jsonRequest('POST', '/v1/workflows/workflow-123/fork', { revision: 'a-specific-revision' }),
+        engine,
+        { operationRegistry: registry, restBindings: bindings },
+      );
+
+      expect(response.status).toBe(201);
+      expect(await response.json()).toEqual({ id: 'forked-workflow' });
+    } finally {
+      engine.fork = originalFork;
+    }
+  });
+
+  it('JSON-RPC threads the revision field to engine.fork() the same way REST does (WFT-21)', async () => {
+    engine = createEngine();
+    const originalFork = engine.fork.bind(engine);
+    const liveRegistry = createLiveOperationRegistry();
+
+    try {
+      engine.fork = async (workflowId, options) => {
+        expect(workflowId).toBe('workflow-123');
+        expect(options).toEqual({ fromStep: 2, revision: 'a-specific-revision' });
+        return { id: 'forked-workflow' } as Awaited<ReturnType<Engine['fork']>>;
+      };
+
+      const result = await executeOperation(
+        'weft.workflows.fork',
+        { workflowId: 'workflow-123', fromStep: 2, revision: 'a-specific-revision' },
+        {
+          principal: anonymousPrincipal(),
+          engine,
+          transport: 'jsonRpcStdio',
+          registry: liveRegistry,
+        },
+      );
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error('expected success');
+      expect(result.value).toEqual({ id: 'forked-workflow' });
+    } finally {
+      engine.fork = originalFork;
+    }
+  });
+
+  it('maps a WorkflowRevisionUnavailableError from engine.fork() to a Conflict (409) fault over REST, not the generic 500 EngineFailure (WFT-21)', async () => {
+    engine = createEngine();
+    const originalFork = engine.fork.bind(engine);
+
+    try {
+      engine.fork = async () => {
+        throw new WorkflowRevisionUnavailableError(
+          'echo',
+          'unresolvable-revision',
+          'not-registered',
+        );
+      };
+
+      const response = await handleRequest(
+        jsonRequest('POST', '/v1/workflows/workflow-123/fork', {
+          revision: 'unresolvable-revision',
+        }),
+        engine,
+        { operationRegistry: registry, restBindings: bindings },
+      );
+
+      expect(response.status).toBe(409);
+      const body = (await response.json()) as { error?: string };
+      expect(body.error).toContain('unresolvable-revision');
+    } finally {
+      engine.fork = originalFork;
+    }
+  });
+
+  it('maps a WorkflowRevisionUnavailableError from engine.fork() to a Conflict fault with data.reason over JSON-RPC (full fidelity, WFT-21)', async () => {
+    engine = createEngine();
+    const originalFork = engine.fork.bind(engine);
+    const liveRegistry = createLiveOperationRegistry();
+
+    try {
+      engine.fork = async () => {
+        throw new WorkflowRevisionUnavailableError(
+          'echo',
+          'unresolvable-revision',
+          'not-registered',
+        );
+      };
+
+      const result = await executeOperation(
+        'weft.workflows.fork',
+        { workflowId: 'workflow-123', revision: 'unresolvable-revision' },
+        {
+          principal: anonymousPrincipal(),
+          engine,
+          transport: 'jsonRpcStdio',
+          registry: liveRegistry,
+        },
+      );
+
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error('expected a fault');
+      expect(result.fault.code).toBe('Conflict');
+      expect(result.fault.data).toEqual({
+        reason: 'not-registered',
+        weftCode: 'WorkflowRevisionUnavailableError',
+      });
+    } finally {
+      engine.fork = originalFork;
+    }
+  });
+
+  it('maps a VersionMismatchError from engine.fork() (an explicit-revision fork onto a semver-incompatible registered revision) to a Conflict (409) fault over REST, not the generic 500 EngineFailure (WFT-21, Codex review round 11, P2)', async () => {
+    engine = createEngine();
+    const originalFork = engine.fork.bind(engine);
+
+    try {
+      engine.fork = async () => {
+        throw new VersionMismatchError('workflow-123', 'echo', '1.0.0', '2.0.0');
+      };
+
+      const response = await handleRequest(
+        jsonRequest('POST', '/v1/workflows/workflow-123/fork', {
+          revision: 'incompatible-revision',
+        }),
+        engine,
+        { operationRegistry: registry, restBindings: bindings },
+      );
+
+      expect(response.status).toBe(409);
+    } finally {
+      engine.fork = originalFork;
+    }
+  });
+
+  it('maps a VersionMismatchError from engine.fork() to a Conflict fault with data.weftCode over JSON-RPC (full fidelity, WFT-21, Codex review round 11, P2)', async () => {
+    engine = createEngine();
+    const originalFork = engine.fork.bind(engine);
+    const liveRegistry = createLiveOperationRegistry();
+
+    try {
+      engine.fork = async () => {
+        throw new VersionMismatchError('workflow-123', 'echo', '1.0.0', '2.0.0');
+      };
+
+      const result = await executeOperation(
+        'weft.workflows.fork',
+        { workflowId: 'workflow-123', revision: 'incompatible-revision' },
+        {
+          principal: anonymousPrincipal(),
+          engine,
+          transport: 'jsonRpcStdio',
+          registry: liveRegistry,
+        },
+      );
+
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error('expected a fault');
+      expect(result.fault.code).toBe('Conflict');
+      expect(result.fault.data).toMatchObject({ weftCode: 'VersionMismatchError' });
+    } finally {
+      engine.fork = originalFork;
+    }
+  });
+
+  it('maps a ForkSourceReplacedError from engine.fork() to a Conflict (409) fault over REST, not the generic 500 EngineFailure (WFT-21, Codex review, item 6)', async () => {
+    engine = createEngine();
+    const originalFork = engine.fork.bind(engine);
+
+    try {
+      engine.fork = async () => {
+        throw new ForkSourceReplacedError('workflow-123');
+      };
+
+      const response = await handleRequest(
+        jsonRequest('POST', '/v1/workflows/workflow-123/fork', {}),
+        engine,
+        { operationRegistry: registry, restBindings: bindings },
+      );
+
+      expect(response.status).toBe(409);
+    } finally {
+      engine.fork = originalFork;
+    }
+  });
+
+  it('maps a ForkSourceReplacedError from engine.fork() to a Conflict fault with data.weftCode over JSON-RPC (full fidelity, WFT-21, Codex review, item 6)', async () => {
+    engine = createEngine();
+    const originalFork = engine.fork.bind(engine);
+    const liveRegistry = createLiveOperationRegistry();
+
+    try {
+      engine.fork = async () => {
+        throw new ForkSourceReplacedError('workflow-123');
+      };
+
+      const result = await executeOperation(
+        'weft.workflows.fork',
+        { workflowId: 'workflow-123' },
+        {
+          principal: anonymousPrincipal(),
+          engine,
+          transport: 'jsonRpcStdio',
+          registry: liveRegistry,
+        },
+      );
+
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error('expected a fault');
+      expect(result.fault.code).toBe('Conflict');
+      expect(result.fault.data).toMatchObject({ weftCode: 'ForkSourceReplacedError' });
     } finally {
       engine.fork = originalFork;
     }

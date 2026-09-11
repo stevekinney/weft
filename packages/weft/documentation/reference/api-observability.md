@@ -321,7 +321,28 @@ GET /v1/catalog/checkout/revisions/sha256%3Arevision/diagnostics
 
 The query is per-`(name, revision)` with a required, bounded path-parameter pair—there is no wildcard or listing form, so the response can never grow with the size of the catalog. The response reports `installed`, `active`, `activeRevision` (present only when the name has ever been activated), a `references` breakdown (`registeredDefinitions`, `inFlightStarts`, `nonTerminalRuns`, `pinnedSchedules`, `pendingDispatches`, `activeExecutionRealms`, `retainedRecoveryRecords`—all non-negative integers), and a derived `removable` boolean.
 
-`removable` is `true` only when the revision is installed, not the active revision, and every field of `references` is `0`. `nonTerminalRuns` (WFT-17) is real: a bounded storage scan for non-terminal workflow state whose persisted `revision` pins exactly this one. See [Reference Accounting and Removal](../guides/workflow-versioning.md#reference-accounting-and-removal) for what each reference field counts and why the remaining four stay `0` — each awaits revision identity in a different, later-owned subsystem. This endpoint never returns manifest or contract content—only identity, active-pointer state, and reference counts—and, being a bounded per-request REST/JSON-RPC response rather than a `METRICS` entry, adding it introduces no new Prometheus label; metrics remain low-cardinality.
+`removable` is `true` only when the revision is installed, not the active revision, and every field of `references` is `0`. `nonTerminalRuns` (WFT-17) is real: a bounded storage scan for non-terminal workflow state whose persisted `revision` pins exactly this one. `retainedRecoveryRecords` (WFT-21) is real too: it sums a terminal-but-unpurged `WorkflowState` (a completed run stays forkable, a failed run stays retryable, against the exact revision they ran, so both durably pin it until purge or retention releases them) plus any `TeardownDeadLetterRecord` pinned to this revision — the latter is never auto-released, so a revision that ever dead-lettered stays non-removable indefinitely. See [Reference Accounting and Removal](../guides/workflow-versioning.md#reference-accounting-and-removal) for the full field-by-field breakdown, and why the remaining two (`pendingDispatches`, `activeExecutionRealms`) stay `0` — each awaits revision identity in a different, later-owned subsystem. This endpoint never returns manifest or contract content—only identity, active-pointer state, and reference counts—and, being a bounded per-request REST/JSON-RPC response rather than a `METRICS` entry, adding it introduces no new Prometheus label; metrics remain low-cardinality.
+
+A revision with a completed-but-unpurged run still pinned to it reports `removable: false` with `retainedRecoveryRecords` nonzero:
+
+```json
+{
+  "name": "checkout",
+  "revision": "sha256:a1b2c3...",
+  "installed": true,
+  "active": false,
+  "references": {
+    "registeredDefinitions": 0,
+    "inFlightStarts": 0,
+    "nonTerminalRuns": 0,
+    "pinnedSchedules": 0,
+    "pendingDispatches": 0,
+    "activeExecutionRealms": 0,
+    "retainedRecoveryRecords": 1
+  },
+  "removable": false
+}
+```
 
 **`source` (WFT-15/16, additive):** present only when `name` was ever `registerSource()`-registered on this engine—absent for a purely eager name, or a dynamic source this process has never heard of. Reports `kind` (the source kind, `'module'` today), `requestedRevision`, `state` (`'idle' | 'loading' | 'ready' | 'failed' | 'cancelled'`), `loadDurationMs` (present once a load has settled, measured via the engine's injected clock), `lastFailureCategory` (present only after a `'failed'` transition, the closed `FailureCategory` union), and `waiterCount` (the current outstanding `resolveWorkflowSource()` caller count for this exact `(name, revision)`). Never includes manifest, contract, or module content—identity and state only, matching the rest of this endpoint's bounded-payload contract.
 
@@ -332,6 +353,7 @@ GET /v1/catalog/checkout/revisions/sha256%3Arevision/diagnostics
 ```json
 {
   "name": "checkout",
+  "revision": "sha256:d4e5f6...",
   "installed": true,
   "active": false,
   "references": {

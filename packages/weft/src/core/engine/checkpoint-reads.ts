@@ -12,10 +12,12 @@ import { decode } from '../codec.ts';
 import { sanitizeDebugValueForDisplay } from '../debug-output.ts';
 import { EventLog } from '../event-log.ts';
 import type {
+  Checkpoint,
   CheckpointState,
   CheckpointSummary,
   WorkflowEvent,
   WorkflowReplay,
+  WorkflowState,
   WorkflowTimelineEntry,
 } from '../types.ts';
 import { hydrateCheckpointReplayState } from './checkpoint-replay.ts';
@@ -26,6 +28,7 @@ import {
   sanitizeTimelineSummary,
   sanitizeWorkflowEventPayload,
 } from './state-utilities.ts';
+import { loadWorkflowState } from './storage-io.ts';
 import { isWorkflowTimelineEntry } from './validation.ts';
 
 /** Retrieve the event history for a workflow. */
@@ -162,12 +165,24 @@ export async function replayTo(
     return null;
   }
 
+  const rawCheckpoint = deserializeCheckpoint(bytes);
+  // Read `state` immediately after decoding the checkpoint — before the
+  // slower event-log replay and checkpoint hydration below — to keep this
+  // independent read as close as possible to the checkpoint's own read
+  // (WFT-21, Codex review round 2, P2). This narrows, but cannot fully
+  // close, the window where a concurrent `start(..., { id: workflowId,
+  // onTerminalConflict: 'start-new' })` replaces a terminal run between
+  // this checkpoint history read and the state read — see the consistency
+  // check below, right before the return, for how that residual window is
+  // detected and closed.
+  const state = await loadWorkflowState(internals, workflowId);
+
   const eventLog = new EventLog(internals.storage, workflowId);
   const entries = await eventLog.replay(Math.max(step - 1, -1));
   const checkpoint = await hydrateCheckpointReplayState(
     internals.storage,
     workflowId,
-    deserializeCheckpoint(bytes),
+    rawCheckpoint,
   );
 
   // `replay` reconstructs from sequence 0, so whenever compaction has truncated
@@ -175,6 +190,31 @@ export async function replayTo(
   // `events` regardless of the requested step. Surface the boundary so callers
   // can tell an incomplete replay from a complete one.
   const watermark = await readEventLogWatermark(internals.storage, workflowId);
+  // Revalidate `state` after the slower event-log/hydration/watermark
+  // reads above (Codex review, item 5): those reads are independent of the
+  // early `state` read and each other, so a concurrent `start(..., { id:
+  // workflowId, onTerminalConflict: 'start-new' })` replacement landing
+  // AFTER the early `state` read but before these later reads complete
+  // would leave `rawCheckpoint`/`state` agreeing on the OLD run's token
+  // (both captured before the replacement) while `entries`/`checkpoint`/
+  // `watermark` could already reflect the REPLACEMENT's own data — the
+  // response would misattribute the OLD run's `revision` to (some of) the
+  // NEW run's content. A second `state` read here, required to match the
+  // first read's token before `revision` is trusted, catches that window
+  // without needing to rebuild the whole response from one snapshot.
+  const revalidatedState = await loadWorkflowState(internals, workflowId);
+  const stillConsistent =
+    revalidatedState !== null &&
+    revalidatedState.workflowExecutionToken === state?.workflowExecutionToken;
+
+  // The run's own pinned revision (WFT-21): omitted when the workflow
+  // record has since been purged (`state === null`), when it predates
+  // revision pinning (`state.revision === undefined`), when `state`
+  // belonged to a DIFFERENT, later execution than this checkpoint (Codex
+  // review round 2, P2 — see `resolveReplayRevision()`'s own doc), or when
+  // the revalidation above detected a replacement landing after the early
+  // `state` read (Codex review, item 5).
+  const revision = stillConsistent ? resolveReplayRevision(rawCheckpoint, state) : undefined;
 
   return {
     checkpoint: sanitizeCheckpointState({
@@ -194,5 +234,64 @@ export async function replayTo(
       data: sanitizeWorkflowEventPayload(entry.payload),
     })),
     ...(watermark !== null ? { compactedBefore: watermark.sequence } : {}),
+    ...(revision !== undefined ? { revision } : {}),
   };
+}
+
+/**
+ * Resolve the revision to report for a `replayTo()` result, correlating an
+ * independently-read checkpoint history entry against an
+ * independently-read `WorkflowState` (WFT-21, Codex review round 3, P2).
+ *
+ * Prefers an EXACT identity check — `rawCheckpoint.workflowExecutionToken
+ * === state.workflowExecutionToken` — whenever both sides carry that field:
+ * each genuinely fresh execution (a `start()`, or a `fork()`) mints its own
+ * token once and every checkpoint that execution ever saves carries it
+ * forward unchanged (see `Checkpoint.workflowExecutionToken`'s own doc), so
+ * a match here proves `state` and `rawCheckpoint` belong to the SAME run,
+ * with no timing assumption at all.
+ *
+ * Returns `undefined` — never falls back to a `createdAt` comparison —
+ * whenever either side predates this field (a checkpoint or a workflow
+ * record persisted before this release; WFT-21, Codex review round 5, P2,
+ * tightening round 3's own fix). Round 3 originally fell back to comparing
+ * `checkpoint.createdAt >= state.createdAt` for this case; that fallback
+ * was itself flagged as reachable for the identical same-millisecond (or
+ * backward clock-adjustment) collision round 3 fixed for the general case,
+ * specifically for the pre-upgrade checkpoints it exists to serve — the
+ * token-based fix above never covers a record with no token to compare. A
+ * pre-upgrade checkpoint now loses best-effort `revision` attribution
+ * during replay (reports `undefined` rather than guessing) in exchange for
+ * never misattributing it, the same bound already accepted for a legacy
+ * `WorkflowState.revision` itself (WFT-17).
+ */
+function resolveReplayRevision(
+  rawCheckpoint: Checkpoint,
+  state: WorkflowState | null,
+): string | undefined {
+  if (state === null) return undefined;
+  // Exact `workflowExecutionToken` correlation ONLY (WFT-21, Codex review
+  // round 5, P2, tightening round 3's own fix) — no `createdAt` timestamp
+  // fallback when either side predates this field. That fallback was
+  // itself vulnerable to the exact same-millisecond (or backward
+  // clock-adjustment) collision round 3 fixed for the general case: a
+  // concurrent `start-new` replacement created in the same millisecond as
+  // an old checkpoint history entry could still pass `createdAt >=` and
+  // misattribute the REPLACEMENT's `revision` onto a checkpoint the OLD
+  // generation's code actually produced. Since historical checkpoint
+  // records written before this field existed genuinely cannot carry it,
+  // this is a deliberate tightening: a pre-upgrade checkpoint loses
+  // best-effort `revision` attribution during replay (reports `undefined`
+  // rather than guessing) in exchange for NEVER misattributing it — the
+  // same trade-off already accepted for a legacy `WorkflowState.revision`
+  // itself (WFT-17).
+  if (
+    rawCheckpoint.workflowExecutionToken !== undefined &&
+    state.workflowExecutionToken !== undefined
+  ) {
+    return rawCheckpoint.workflowExecutionToken === state.workflowExecutionToken
+      ? state.revision
+      : undefined;
+  }
+  return undefined;
 }

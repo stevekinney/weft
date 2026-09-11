@@ -354,6 +354,7 @@ export {
   EngineCreateNameMismatchError,
   EngineDisposalError,
   EngineDisposedError,
+  ForkSourceReplacedError,
   IdempotencyKeyPurgedError,
   PersistedDataCorruptError,
   PersistedDataIncompatibleError,

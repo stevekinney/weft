@@ -1,13 +1,294 @@
-import type { BatchOperation } from '../../../storage/interface.ts';
+import type { BatchOperation, ConditionalBatchCondition } from '../../../storage/interface.ts';
 import { KEYS } from '../../../storage/interface.ts';
+import { deserializeCheckpoint } from '../../checkpoint.ts';
 import { encode } from '../../codec.ts';
 import { buildIndexOperations } from '../../search-attributes.ts';
 import type { Checkpoint, ForkLineage, SearchAttributeValue, WorkflowState } from '../../types.ts';
+import type { ForkOptions } from '../../types/options.ts';
 import { type WorkflowVersionTuple } from '../../workflow-version-tuple.ts';
+import { reserveInFlightStart } from '../catalog-removal.ts';
+import { hydrateCheckpointReplayState } from '../checkpoint-replay.ts';
+import { canResolveRevisionLocally } from '../dynamic-source-execution.ts';
 import type { EngineInternals } from '../internals.ts';
+import { WorkflowRevisionUnavailableError } from '../revision-errors.ts';
 import { encodeWorkflowStartHeaders } from '../state-utilities.ts';
 import { buildWorkflowVisibilityIndexOperations } from '../workflow-indexes.ts';
 import { EMPTY_STORAGE_VALUE, FORK_LINEAGE_ATTRIBUTE, type LifecycleCallbacks } from './shared.ts';
+import { buildCatalogEntryRevisionCondition } from './start-commit.ts';
+
+/**
+ * Load and hydrate the source run's checkpoint for a fork — a specific
+ * historical step (`fromStep`) or its latest — throwing when the requested
+ * step doesn't exist. Extracted out of `fork()` itself purely to keep
+ * `transition.ts` under the repository's implementation-file-size ceiling;
+ * no behavior change from what was previously inlined there.
+ */
+export async function loadForkSourceCheckpoint(
+  internals: EngineInternals,
+  sourceWorkflowId: string,
+  fromStep: number | undefined,
+): Promise<Checkpoint> {
+  const checkpointKey =
+    fromStep !== undefined
+      ? KEYS.checkpointHistory(sourceWorkflowId, fromStep)
+      : KEYS.checkpoint(sourceWorkflowId);
+  const checkpointBytes = await internals.storage.get(checkpointKey);
+  if (!checkpointBytes) {
+    if (fromStep !== undefined) {
+      throw new Error(
+        `Checkpoint not found at step ${String(fromStep)} for workflow "${sourceWorkflowId}"`,
+      );
+    }
+    throw new Error(`Checkpoint not found for workflow "${sourceWorkflowId}"`);
+  }
+  const storedSourceCheckpoint = deserializeCheckpoint(checkpointBytes);
+  return hydrateCheckpointReplayState(internals.storage, sourceWorkflowId, storedSourceCheckpoint);
+}
+
+/**
+ * Validate an explicit `ForkOptions.revision` request (WFT-21) against what
+ * THIS process can actually run, BEFORE `fork()` reads any checkpoint bytes
+ * — a wasted storage read for a revision this process could never launch
+ * anyway. Deliberately stricter than {@link canResolveRevisionLocally} for
+ * an eager registration: that helper treats every eager type as always
+ * resolvable regardless of the requested `revision` (correct for
+ * ordinary resume/recovery, where a process only ever runs the one
+ * revision it loaded, so a stale pin is harmless) — but an EXPLICIT fork
+ * request naming a revision this process did NOT load must fail rather
+ * than silently launching the loaded code under the requested revision's
+ * name. Mirrors `pinned-schedule-revision.ts`'s identical
+ * `resolvePinnedExecutableRegistration()` eager-exact-match rule, which
+ * faces the same "an explicit revision commitment must not silently
+ * degrade" requirement for a pinned schedule's fire-time launch.
+ */
+export function assertForkRevisionResolvable(
+  internals: EngineInternals,
+  type: string,
+  revision: string,
+): void {
+  if (internals.registrations.has(type)) {
+    if (internals.registeredCatalogRevisions.get(type) !== revision) {
+      throw new WorkflowRevisionUnavailableError(type, revision, 'not-registered');
+    }
+    return;
+  }
+  if (!canResolveRevisionLocally(internals, type, revision)) {
+    throw new WorkflowRevisionUnavailableError(type, revision, 'not-registered');
+  }
+}
+
+/**
+ * Compute the revision `fork()` resolves the new run's registration
+ * against (WFT-21) — `options.revision` when supplied (after validating it
+ * via {@link assertForkRevisionResolvable}), otherwise the source run's own
+ * pin, unchanged from before this field existed. Extracted out of `fork()`
+ * itself to keep that function's cyclomatic complexity under the
+ * repository's ceiling — this single call site replaces what would
+ * otherwise be two separate branches (the `??` fallback and the validation
+ * `if`) inline in `fork()`.
+ */
+export function resolveForkTargetRevision(
+  internals: EngineInternals,
+  sourceState: WorkflowState,
+  options: ForkOptions | undefined,
+): string | undefined {
+  if (options?.revision === undefined) {
+    return sourceState.revision;
+  }
+  assertForkRevisionResolvable(internals, sourceState.type, options.revision);
+  return options.revision;
+}
+
+/**
+ * Compute the fork's own persisted `revision` (WFT-21): an explicit
+ * `options.revision` request wins, then the source run's own pin, then
+ * whatever the resolver itself resolved (the legacy-dynamic-source-with-
+ * one-candidate case — see {@link createForkedWorkflowState}'s own doc for
+ * why this precedence exists). Extracted out of `fork()` alongside
+ * {@link resolveForkTargetRevision} to keep that function's cyclomatic
+ * complexity under the repository's ceiling.
+ */
+export function resolveForkPersistedRevision(
+  options: ForkOptions | undefined,
+  sourceState: WorkflowState,
+  resolvedRevision: string | undefined,
+): string | undefined {
+  return options?.revision ?? sourceState.revision ?? resolvedRevision;
+}
+
+/**
+ * Fence the fork's own commit against a concurrent `removeWorkflowRevision()`
+ * targeting the fork's persisted revision (WFT-21, Codex review round 1,
+ * P1): without this, under `ownership: 'lease'`/`'workflow-lease'`, a fork
+ * — ESPECIALLY an explicit-revision fork onto a revision other than the
+ * source run's own, which is far more likely to be an inactive removal
+ * target — performs only a process-local availability check
+ * ({@link assertForkRevisionResolvable}/`canResolveRevisionLocally`) and
+ * reserves no `inFlightStartsByRevision` entry, so `removeWorkflowRevision()`
+ * running concurrently can observe zero references, delete the catalog
+ * entry, and then this fork's own commit — racing right behind it — would
+ * still land a running `WorkflowState` durably pinned to a revision the
+ * catalog now claims is gone. Mirrors `start()`'s own
+ * `needsCatalogEntryStartPrecondition`/`buildCatalogEntryStartPrecondition`
+ * gate exactly (same ownership-mode check, same "only when a revision is
+ * actually persisted" gate) — `buildCatalogEntryRevisionCondition` itself is
+ * reused unchanged, since `commitFencedEngineWrite`'s `baseConditions` wants
+ * the same flat `ConditionalBatchCondition`, not `start()`'s own tagged
+ * multi-precondition wrapper. Throws
+ * `WorkflowRevisionUnavailableError('not-installed')` should the entry have
+ * vanished in the narrow window since this same revision was already
+ * confirmed resolvable earlier in `fork()` — a genuine loss, not a false
+ * positive, and still entirely before any commit (no partial write).
+ *
+ * **Fenced under `'none'` too, closing the round-8 gap (WFT-21, Codex
+ * review items 1-3):** a `'none'` ownership mode used to return no
+ * condition here (byte-for-byte unfenced, mirroring `start()`'s own no-op),
+ * on the premise that `'none'` never needs `conditionalBatch`. That premise
+ * was already false for this exact write: `catalog.install()`'s own durable
+ * write (`core/catalog/storage-io.ts`'s `writeCatalogEntry`) unconditionally
+ * requires the `conditionalBatch` storage capability regardless of
+ * ownership mode, so fencing the fork commit on the entry's bytes here adds
+ * no NEW capability requirement under `'none'` — the capability was already
+ * a hard dependency of the dynamic-source-load path this same fork just
+ * went through. Combined with `catalog.install()` itself now refusing to
+ * resurrect a tombstoned revision (see
+ * {@link import('../../catalog/errors.ts').WorkflowRevisionTombstonedError}'s
+ * JSDoc), this closes the residual window the previous JSDoc revision
+ * documented: a fork whose reservation and reinstall land after
+ * `removeWorkflowRevision()`'s `postReferences` check reads zero but before
+ * `finalizeCatalogTombstone()`'s CAS commits no longer races the tombstone
+ * finalization cleanly — `install()` fails closed on the tombstone, and
+ * (for the source run's own already-resolved revision) this commit
+ * precondition fails closed on the entry bytes changing/vanishing.
+ */
+export async function buildForkCatalogEntryCondition(
+  internals: EngineInternals,
+  type: string,
+  persistedRevision: string | undefined,
+): Promise<ConditionalBatchCondition[]> {
+  if (persistedRevision === undefined) {
+    return [];
+  }
+  return [await buildCatalogEntryRevisionCondition(internals, type, persistedRevision)];
+}
+
+/**
+ * Build the error a lost `fork()` commit-time CAS race throws (WFT-21,
+ * Codex review round 4, P2). A lost race on that commit is ALWAYS the
+ * catalog-entry precondition (`forkCatalogEntryCondition`) — the only other
+ * possible cause, a deposition, throws `EngineDeposedError` directly inside
+ * `commitFencedEngineWrite` before ever reaching this factory — so whenever
+ * `forkCatalogEntryCondition` was non-empty, this throws the SAME typed
+ * `WorkflowRevisionUnavailableError('not-installed')` the pre-commit check
+ * in `buildForkCatalogEntryCondition()` throws for the identical class of
+ * loss, so `resolveForkAccess()` maps it to a `Conflict` fault instead of a
+ * generic `EngineFailure`. Falls back to a generic error only in the
+ * (currently unreachable, since an empty condition array cannot lose a
+ * non-epoch CAS) case the condition was empty — never silently
+ * misclassifying a genuinely unexpected loss as a revision conflict.
+ */
+export function buildForkCommitLostRaceError(
+  workflowId: string,
+  sourceType: string,
+  persistedRevision: string | undefined,
+  forkCatalogEntryCondition: ConditionalBatchCondition[],
+): Error {
+  if (forkCatalogEntryCondition.length > 0) {
+    return new WorkflowRevisionUnavailableError(sourceType, persistedRevision, 'not-installed');
+  }
+  return new Error(`Fork of workflow "${workflowId}" lost its CAS race.`);
+}
+
+/**
+ * A SECOND, conditional in-flight reservation for `fork()` (WFT-21, Codex
+ * review round 3, P1) — closes the one gap `fork()`'s own early
+ * `targetRevision` reservation cannot cover: a legacy (pre-revision-pinning)
+ * source run on a dynamic-source type with exactly one registered candidate
+ * has `sourceState.revision` genuinely `undefined`, so `targetRevision`
+ * (`options.revision ?? sourceState.revision`) is `undefined` too and
+ * `fork()`'s own `reserveInFlightStart(..., targetRevision)` falls back to
+ * the catalog's active pointer for `type` — which can itself already equal
+ * the sole candidate's real revision the resolver is about to resolve. This
+ * function reserves that real revision, but ONLY when it differs from what
+ * the early reservation actually reserved (otherwise the early reservation
+ * already covers it, and a second reservation would double-count the fork's
+ * own in-flight reference). See `fork-revision-catalog-race.test.ts`'s
+ * round-3 `describe` block for the full end-to-end race this closes.
+ *
+ * Called from `fork()`'s `resolveExecutableRegistrationForRevision()`
+ * `onRevisionChosen` hook (WFT-21, Codex review round 5, P1), not after that
+ * whole resolve returns as through round 4 — the resolver's own await
+ * (loading the source, when not already cached) was a window where a
+ * concurrent `removeWorkflowRevision()` could delete and finalize the sole
+ * candidate before a post-hoc reservation ever ran, letting a subsequent
+ * shared-load reinstall paper over a removal that already reported success.
+ * See `resolveExecutableRegistrationForRevision()`'s own doc for the full
+ * rationale; this function's own reservation logic is unchanged. The call
+ * site passes `fork()`'s own `inFlightRevision` — what the early reservation
+ * ACTUALLY reserved (the fallback-resolved value, not the pre-fallback
+ * `targetRevision`) — as this function's `reservedRevision` parameter
+ * (Codex review round 13, P2): passing the pre-fallback `targetRevision`
+ * instead let this guard compare against `undefined` even when the early
+ * reservation had already fallen back to a real revision equal to
+ * `persistedRevision`, silently double-reserving that revision (both sides
+ * still released correctly in `fork()`'s own `finally`, so nothing leaked —
+ * just a transient over-count for the fork's duration). The guard now
+ * compares `persistedRevision` against what was actually reserved, so it
+ * correctly no-ops whenever the early reservation already covers the
+ * resolved revision.
+ *
+ * **Known residual limitation, documented rather than fixed (Codex review
+ * round 6, P1):** this reservation is `inFlightStartsByRevision` —
+ * process-local, in-memory (see `catalog-removal.ts`'s own doc) — so under
+ * a supported multi-engine `ownership: 'workflow-lease'` deployment it
+ * protects only a race against ANOTHER caller on THIS SAME process. A
+ * SIBLING engine (a separate process sharing durable storage) can still
+ * remove the sole candidate after this hook fires but before the awaited
+ * source loader (`resolveWorkflowSourceForExecution()`) finishes reading
+ * it — that sibling's own `removeWorkflowRevision()` sees only DURABLE
+ * references, never this process's local map, so it can report success
+ * while this load is still in flight; the loader's own `catalog.install()`
+ * then reinstalls the revision regardless, papering over that removal.
+ * `buildForkCatalogEntryCondition()` still fences the fork's own FINAL
+ * commit durably under lease ownership (round 1) — this residual gap is
+ * narrower: the intermediate LOAD/INSTALL step the resolver performs
+ * before that commit is reached has no durable fence of its own. Closing
+ * it properly needs either a durable, cross-process reservation (a
+ * lease/claim analog to `inFlightStartsByRevision` itself) or a
+ * tombstone-aware `catalog.install()` that refuses to resurrect a revision
+ * concurrently removed — either is a genuine architectural addition, not a
+ * bounded review-response fix, and warrants a follow-up rather than a
+ * rushed change here.
+ *
+ * **Scope corrected (Codex review round 9, P1): the limitation above is NOT
+ * confined to the legacy path this function itself covers.** `fork()`'s own
+ * EARLY reservation of `targetRevision` (`reserveInFlightStart`, called
+ * synchronously in `fork()` before this function or any resolve is ever
+ * reached — see `transition.ts`) is exactly as process-local as the
+ * reservation this function takes; an explicit-revision fork
+ * (`ForkOptions.revision`, this PR's own new API) reserves just as early
+ * and just as locally, then awaits the same
+ * `resolveExecutableRegistrationForRevision()` load/install pipeline for
+ * its OWN `revision`-defined branch. A sibling engine's
+ * `removeWorkflowRevision()` — seeing only durable references, never
+ * either process-local map — can win the identical race against an
+ * explicit-revision target exactly as it can against a legacy one. The
+ * root cause, the affected step, and the two candidate fixes are all
+ * unchanged from round 6 above; only the earlier "scoped narrowly to
+ * legacy forks" claim was wrong; every dynamic-source fork under
+ * `workflow-lease` whose target requires a resolver load is exposed.
+ */
+export function reserveLegacyForkTargetRevision(
+  internals: EngineInternals,
+  type: string,
+  reservedRevision: string | undefined,
+  persistedRevision: string | undefined,
+): string | undefined {
+  if (persistedRevision === reservedRevision) {
+    return undefined;
+  }
+  return reserveInFlightStart(internals, type, persistedRevision);
+}
 
 export function createForkLineage(
   _internals: EngineInternals,
@@ -42,39 +323,34 @@ export function createForkedWorkflowState(
   forkedAt: number,
   _callbacks: LifecycleCallbacks,
   /**
-   * `fork()`'s own resolver-returned revision — used to fill in the fork's
-   * persisted `revision` ONLY when `sourceState.revision` is itself
-   * `undefined` (WFT-19 review round 6, Codex, P1). Never overrides an
-   * already-defined `sourceState.revision`: `resolveExecutableRegistrationForRevision()`
-   * ALWAYS returns `revision: undefined` for an eager registration (eager
-   * has no ambiguity to resolve against — see `canResolveRevisionLocally`'s
-   * doc), even though the eager source run's own `sourceState.revision` is
-   * a real, independently-meaningful value (`resolveCachedStartRevision()`'s
-   * `registeredCatalogRevisions` fallback stamps it at ordinary start time,
-   * for every registration kind). Blindly preferring `resolvedRevision`
-   * here would have dropped that real value for every eager-type fork —
+   * The fork's own persisted `revision` — computed by the CALLER (`fork()`
+   * in `transition.ts`), not here, as
+   * `options.revision ?? sourceState.revision ?? resolvedRevision` (WFT-21).
+   * Renamed from the pre-WFT-21 `resolvedRevision` parameter (which used to
+   * carry only the resolver's own answer, and this function itself computed
+   * `sourceState.revision ?? resolvedRevision`) so the precedence chain
+   * lives in ONE place — `fork()` — rather than split across two functions,
+   * now that a THIRD input (`options.revision`, an explicit diagnostic
+   * opt-in) joins the chain ahead of both.
+   *
+   * The two lower-precedence terms preserve WFT-19 review round 6's fix
+   * byte-for-byte: `sourceState.revision` wins whenever it is defined —
+   * `resolveExecutableRegistrationForRevision()` ALWAYS returns
+   * `revision: undefined` for an eager registration (eager has no ambiguity
+   * to resolve against), even though the eager source run's own
+   * `sourceState.revision` is a real, independently-meaningful value
+   * (`resolveCachedStartRevision()`'s `registeredCatalogRevisions` fallback
+   * stamps it at ordinary start time, for every registration kind); only a
+   * legacy (pre-revision-pinning) source run on a dynamic-source type with
+   * exactly one registered candidate has `sourceState.revision` genuinely
+   * `undefined`, falling through to the resolver's own answer instead —
    * caught by `tests/replay-fixtures/fork-from-checkpoint.json`'s golden
-   * byte comparison. For a legacy (pre-revision-pinning) source run on a
-   * dynamic-source type with exactly one registered candidate,
-   * `sourceState.revision` genuinely IS `undefined` even though the
-   * resolver resolved — and the fork launches against — that sole
-   * candidate's code; `sourceState.revision ?? resolvedRevision` falls
-   * through to the resolver's answer only in that case. Stamping the fork's
-   * persisted `revision` with the raw `undefined` legacy pin (as this
-   * function did before this fix existed) left the fork durably unpinned:
-   * it would run correctly until the next restart, but a fresh-process
-   * `recoverAll()` after a second candidate is later registered would
-   * classify the fork `legacy-ambiguous` and refuse to resume it, even
-   * though the fork's own resolver already knew exactly which revision it
-   * belonged to at creation time. Mirrors the identical fix already applied
-   * to the process-local identity cache in `checkpoint-launch.ts`'s
-   * `launchWorkflowFromCheckpoint()` (WFT-19 review round 5) — that fix
-   * closed the in-memory gap; this one closes the matching durable-state
-   * gap the same bug left behind, for the one case it actually applies to.
+   * byte comparison. Mirrors the identical fix already applied to the
+   * process-local identity cache in `checkpoint-launch.ts`'s
+   * `launchWorkflowFromCheckpoint()` (WFT-19 review round 5).
    */
-  resolvedRevision: string | undefined,
+  persistedRevision: string | undefined,
 ): WorkflowState {
-  const forkRevision = sourceState.revision ?? resolvedRevision;
   return {
     id: workflowId,
     type: sourceState.type,
@@ -82,7 +358,7 @@ export function createForkedWorkflowState(
     input: sourceState.input,
     workflowExecutionToken: crypto.randomUUID(),
     versionTuple,
-    ...(forkRevision !== undefined && { revision: forkRevision }),
+    ...(persistedRevision !== undefined && { revision: persistedRevision }),
     executionStateOwnerId: workflowId,
     createdAt: forkedAt,
     startedAt: forkedAt,
@@ -137,4 +413,36 @@ export function buildForkBatchOperations(
   }
 
   return operations;
+}
+
+/**
+ * Build the fork's own checkpoint from the source's prepared checkpoint —
+ * strips `accumulatedResultReplayWatermark` (the source's own, not
+ * meaningful for the fresh fork), stamps `createdAt`/`workflowId`, carries
+ * the fork's own fresh `workflowExecutionToken` (never the source's), and
+ * derives fresh search attributes. Extracted out of `fork()` itself purely
+ * to keep `transition.ts` under the repository's implementation-file-size
+ * ceiling; no behavior change from what was previously inlined there.
+ */
+export function buildForkCheckpoint(
+  internals: EngineInternals,
+  workflowId: string,
+  forkedAt: number,
+  sourceCheckpoint: Checkpoint,
+  forkState: WorkflowState,
+  lineage: ForkLineage,
+  callbacks: LifecycleCallbacks,
+): Checkpoint {
+  const { accumulatedResultReplayWatermark: _sourceReplayWatermark, ...sourceCheckpointForFork } =
+    sourceCheckpoint;
+  return {
+    ...sourceCheckpointForFork,
+    createdAt: forkedAt,
+    workflowId,
+    // The fork's own fresh token, never the source's.
+    ...(forkState.workflowExecutionToken !== undefined && {
+      workflowExecutionToken: forkState.workflowExecutionToken,
+    }),
+    searchAttributes: buildForkSearchAttributes(internals, sourceCheckpoint, lineage, callbacks),
+  };
 }

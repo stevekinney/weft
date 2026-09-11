@@ -229,8 +229,7 @@ async function resolveTeardownDrive(
     await deadLetterMissingState(
       internals,
       workflowId,
-      state.type,
-      state.workflowExecutionToken,
+      state,
       claim.attempts,
       markerBytes,
       callbacks,
@@ -252,8 +251,7 @@ async function resolveTeardownDrive(
 async function deadLetterMissingState(
   internals: EngineInternals,
   workflowId: string,
-  workflowType: string,
-  workflowExecutionToken: string | undefined,
+  state: WorkflowState,
   attempts: number,
   expectedBytes: Uint8Array,
   callbacks: FinalizerDriveCallbacks,
@@ -262,21 +260,22 @@ async function deadLetterMissingState(
   const settled = await deadLetterTeardown(
     internals,
     workflowId,
-    workflowType,
+    state.type,
     attempts,
     expectedBytes,
     {
       lastError,
       finalizerInput: undefined,
     },
-    workflowExecutionToken,
+    state.workflowExecutionToken,
+    state.revision,
   );
   if (settled) {
     // The event's `error` is present for every 'failed'/'dead-lettered' status (the
     // documented contract). Carry the same reason the dead-letter record stores so the
     // event stream is consistent with the attempt-exhausted dead-letter path.
     callbacks.dispatchEvent(
-      new WorkflowTeardownEvent(workflowId, workflowType, 'dead-lettered', attempts, lastError),
+      new WorkflowTeardownEvent(workflowId, state.type, 'dead-lettered', attempts, lastError),
     );
   }
 }
@@ -465,6 +464,7 @@ async function settleTeardownFailure(
         finalizerInput: finalizerStateBytes === null ? undefined : decode(finalizerStateBytes),
       },
       state.workflowExecutionToken,
+      state.revision,
     );
     // A lost settle CAS means a reclaimer took the running bytes (it will settle/re-arm).
     // Re-arm anyway so the marker is never stranded after the fired timer is deleted —

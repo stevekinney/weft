@@ -45,6 +45,16 @@ export const CLASSIFIED_OVERSIZED_IMPLEMENTATION_FILES = [
       'The Engine declaration surface is tracked by local task 3765ffa6-1430-4be5-970c-c0f984ff34df; this issue excludes that refactor.',
   },
   {
+    path: 'src/core/types/options.ts',
+    classification: 'justified-exception',
+    rationale:
+      'Every engine and lifecycle options interface (StartOptions, ForkOptions, EngineOptions, ' +
+      'and their siblings) lives here as one public import surface with runnable @example JSDoc ' +
+      'per field — splitting would scatter one import contract across multiple subpaths. ' +
+      'WFT-21 pushed it over the ceiling by ~19 lines documenting ' +
+      'ForkOptions.revision; the file was already at 498/500 lines before that addition.',
+  },
+  {
     path: 'src/client/client-contract.test-support.ts',
     classification: 'justified-exception',
     rationale:
@@ -211,6 +221,17 @@ export const CLASSIFIED_OVERSIZED_IMPLEMENTATION_FILES = [
     classification: 'justified-exception',
     rationale:
       'The operation-client generator keeps schema normalization, alias selection, rendering, formatting, and drift output together.',
+  },
+  {
+    path: 'src/core/engine/source-resolution.ts',
+    classification: 'justified-exception',
+    rationale:
+      'The single-flight load -> validate -> install pipeline, its cancellation/disposal races, ' +
+      'and the per-caller waiter bookkeeping around it are one cohesive state machine that ' +
+      'resists further splitting without scattering that machine across files. WFT-21 (Codex ' +
+      'review round 14, P1 item Q7jH) pushed it over the ceiling by adding a durable ' +
+      'removal-generation fence read before the host loader runs; the file was already at ' +
+      'exactly 500/500 lines before that addition.',
   },
 ] as const satisfies readonly OversizedImplementationFile[];
 

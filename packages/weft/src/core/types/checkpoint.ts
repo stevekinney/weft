@@ -130,6 +130,25 @@ export interface Checkpoint {
    */
   schemaVersion: number;
   createdAt: number;
+  /**
+   * The {@link WorkflowState.workflowExecutionToken} of the run this
+   * checkpoint was saved for (WFT-21). Stamped once at the run's initial
+   * checkpoint (fresh `start()` or `fork()`, each of which mints a fresh
+   * token) and carried forward unchanged by every later `advanceCheckpoint`
+   * call for that same execution — never re-derived per step, since the
+   * token identifies the EXECUTION, not the step.
+   *
+   * Exists so a caller correlating an independently-read checkpoint against
+   * an independently-read {@link WorkflowState} (as `engine.replayTo()`
+   * does) can tell apart the run this checkpoint actually belongs to from a
+   * LATER run that reused the same workflow id via `onTerminalConflict:
+   * 'start-new'` — an exact-identity check a timestamp comparison alone
+   * cannot make reliably (same-millisecond writes, non-monotonic clocks).
+   * `undefined` only on a checkpoint persisted before this field existed (a
+   * pre-upgrade checkpoint) — callers fall back to a `createdAt` comparison
+   * for those, same as before this field existed.
+   */
+  workflowExecutionToken?: string;
 }
 
 /**

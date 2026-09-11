@@ -185,6 +185,14 @@ describe('bulk purge helpers', () => {
     expect(deleteKeys.has(KEYS.updateResponse(''))).toBe(false);
     expect(deleteKeys.has(KEYS.teardownSucceeded(state.id))).toBe(true);
     expect(deleteKeys.has(KEYS.teardownDeadLetter(state.id))).toBe(false);
+    // The per-generation history sibling (WFT-21, Codex review round 3, P2)
+    // carries the same purge-survival contract as `teardownDeadLetter`.
+    expect(deleteKeys.has(KEYS.teardownDeadLetterHistory(state.id, 'purge-test-token'))).toBe(
+      false,
+    );
+    expect(
+      [...deleteKeys].some((key) => key.startsWith(KEYS.teardownDeadLetterHistoryPrefix())),
+    ).toBe(false);
   });
 
   it('surfaces lost lease preconditions while purging a workflow', async () => {

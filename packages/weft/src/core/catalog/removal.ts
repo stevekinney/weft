@@ -51,6 +51,41 @@
 import { KEYS, storageConditionalBatch, type Storage } from '../../storage/interface.ts';
 import { decodeActivePointer } from './codec.ts';
 
+/**
+ * Decode `catalog-removal-generation:<name>:<revision>`'s current bytes into
+ * a count — `null` (never removed) decodes as `0`. Bytes are the decimal
+ * ASCII text of the count (`TextEncoder`-encoded), not a binary integer —
+ * simplest deterministic encoding for a value only ever compared byte-for-byte
+ * (`storageConditionalBatch`) or round-tripped through this exact
+ * encode/decode pair; nothing else in the codebase ever needs to sort or
+ * range-scan it. Throws on bytes that do not decode as a non-negative safe
+ * integer — this counter is Weft's own durable bookkeeping, written only by
+ * {@link removeCatalogEntry} below, so corrupt bytes are storage corruption,
+ * not hostile input; fails closed rather than silently restarting the
+ * counter at `0`, which would let a stale fenced install past a removal it
+ * should have been fenced against.
+ */
+function decodeRemovalGeneration(bytes: Uint8Array | null): number {
+  if (bytes === null) return 0;
+  const text = new TextDecoder().decode(bytes);
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error(
+      `The store's catalog removal-generation counter bytes ("${text}") do not decode as a ` +
+        'non-negative integer. This counter is Weft-owned durable bookkeeping, never written by ' +
+        'any other producer, so corrupt bytes indicate storage corruption. Resolve by operator ' +
+        'repair: inspect the stored bytes and, only if certain no removal is actually pending ' +
+        'reconciliation against this counter, delete the key so it restarts at 0.',
+    );
+  }
+  return parsed;
+}
+
+/** Encode a removal-generation count for durable storage — see {@link decodeRemovalGeneration}. */
+function encodeRemovalGeneration(generation: number): Uint8Array {
+  return new TextEncoder().encode(String(generation));
+}
+
 /** Outcome of {@link removeCatalogEntry}. */
 export type WorkflowCatalogRemovalOutcome =
   | Readonly<{ outcome: 'removed'; tombstoneBytes: Uint8Array }>
@@ -69,15 +104,21 @@ export type WorkflowCatalogRemovalOutcome =
  * `'active'` when they decode to exactly this revision — a structural
  * invariant independent of reference counts, since every future or
  * resuming run resolves the active pointer, not a specific installed
- * entry. Otherwise deletes the entry key and puts the tombstone key (CAS'd
+ * entry. Otherwise deletes the entry key, puts the tombstone key (CAS'd
  * on the tombstone being absent — a stale leftover from a previous,
  * unresolved removal of this exact `(name, revision)` is a durable-store
- * inconsistency this fails closed on rather than silently overwriting) via
- * ONE `conditionalBatch`, also CAS'd on the exact entry bytes AND the exact
- * active-pointer bytes read above (present as a no-op `put`-free
- * precondition when active-pointer bytes are `null` — never activated). A
- * CAS loss (any of the three keys changed concurrently) surfaces as
- * `'conflict'`.
+ * inconsistency this fails closed on rather than silently overwriting), and
+ * bumps the durable `catalog-removal-generation:<name>:<revision>` counter
+ * by exactly 1 (WFT-21, item Q7jH — see `KEYS.catalogRemovalGeneration`'s
+ * own doc) via ONE `conditionalBatch`, also CAS'd on the exact entry bytes
+ * AND the exact active-pointer bytes read above (present as a no-op
+ * `put`-free precondition when active-pointer bytes are `null` — never
+ * activated) AND the counter's own exact bytes read above. A CAS loss (any
+ * of the four keys changed concurrently) surfaces as `'conflict'`. Unlike
+ * the tombstone, the counter is never deleted — it outlives this removal's
+ * own resolution (restore or finalize) so a caller that fenced an
+ * in-flight `WorkflowCatalog.install()` against its pre-removal value stays
+ * fenced even after the tombstone itself is gone.
  */
 export async function removeCatalogEntry(
   storage: Storage,
@@ -98,16 +139,24 @@ export async function removeCatalogEntry(
   }
 
   const tombstoneKey = KEYS.catalogTombstone(name, revision);
+  const removalGenerationKey = KEYS.catalogRemovalGeneration(name, revision);
+  const removalGenerationBytes = await storage.get(removalGenerationKey);
+  const nextRemovalGenerationBytes = encodeRemovalGeneration(
+    decodeRemovalGeneration(removalGenerationBytes) + 1,
+  );
+
   const applied = await storageConditionalBatch(
     storage,
     [
       { key: entryKey, expectedValue: entryBytes },
       { key: activeKey, expectedValue: activeBytes },
       { key: tombstoneKey, expectedValue: null },
+      { key: removalGenerationKey, expectedValue: removalGenerationBytes },
     ],
     [
       { type: 'delete', key: entryKey },
       { type: 'put', key: tombstoneKey, value: entryBytes },
+      { type: 'put', key: removalGenerationKey, value: nextRemovalGenerationBytes },
     ],
   );
 

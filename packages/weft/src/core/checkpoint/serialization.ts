@@ -72,7 +72,18 @@ export function validateCheckpointShape(value: unknown): asserts value is Checkp
   assertRecordField(record, 'searchAttributes');
   assertStringField(record, 'version');
   assertNumberField(record, 'createdAt');
+  validateWorkflowExecutionToken(record);
   assertCurrentSchemaVersion(record);
+}
+
+function validateWorkflowExecutionToken(record: Record<string, unknown>): void {
+  const token = record['workflowExecutionToken'];
+  if (token === undefined) return;
+  if (typeof token !== 'string' || token.length === 0) {
+    throw new Error(
+      'Invalid checkpoint: invalid "workflowExecutionToken" (expected non-empty string)',
+    );
+  }
 }
 
 function validateWorkerReplaySignatures(record: Record<string, unknown>): void {

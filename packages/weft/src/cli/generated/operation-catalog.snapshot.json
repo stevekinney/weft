@@ -6928,11 +6928,15 @@
         "jsonRpcWebSocket": true,
         "jsonRpcStdio": true
       },
-      "producibleFaults": ["NotFound"],
+      "producibleFaults": ["Conflict", "NotFound"],
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "fromStep": {},
+          "revision": {
+            "minLength": 1,
+            "type": "string"
+          },
           "workflowId": {
             "minLength": 1,
             "type": "string"

@@ -13,6 +13,7 @@
  * @module core/engine/catalog-removal
  */
 
+import { KEYS } from '../../storage/interface.ts';
 import {
   decrementNestedRevisionCount,
   finalizeCatalogTombstone,
@@ -28,8 +29,9 @@ import { ensureWorkflowCatalogReady, getWorkflowCatalog } from './catalog-readin
 import { resolveCatalogTombstoneIfPresent } from './catalog-tombstone-recovery.ts';
 import type { Engine } from './index.ts';
 import { getInternals, type EngineInternals } from './internals.ts';
-import { countNonTerminalRunsForRevision } from './nonterminal-revision-count.ts';
+import { countWorkflowStateRevisionsByStatus } from './nonterminal-revision-count.ts';
 import { countPinnedSchedulesForRevision } from './pinned-schedule-revision-count.ts';
+import { countTeardownDeadLettersForRevision } from './retained-recovery-record-count.ts';
 import { readSourceLoadDiagnostics, readSourceWaiterCount } from './source-diagnostics.ts';
 import type { SourceLoadDiagnostics } from './source-runtime-state.ts';
 
@@ -145,11 +147,16 @@ export function releaseInFlightStart(
  * wiring `removeWorkflowRevision()` into an automated cleanup path on a
  * large durable store, rather than the operator-triggered use this batch
  * assumes. `pinnedSchedules` is ALSO an unbounded, full `schedule:`-prefix
- * durable scan (WFT-20 — see {@link countPinnedSchedulesForRevision}), so
- * this function now pays for two bounded-but-unbounded-in-store-size scans
- * per call. The remaining two fields of {@link WorkflowRevisionReferenceCounts}
- * stay `0` — the dispatch ledger and execution realms are out of this
- * batch's scope.
+ * durable scan (WFT-20 — see {@link countPinnedSchedulesForRevision}), and
+ * `retainedRecoveryRecords` (WFT-21) adds a THIRD unbounded scan (its
+ * `TeardownDeadLetterRecord` component — see
+ * {@link countTeardownDeadLettersForRevision}), while its OTHER component
+ * (a terminal-but-unpurged `WorkflowState`) rides the same `wf:` scan
+ * `nonTerminalRuns` already pays for — see
+ * {@link countWorkflowStateRevisionsByStatus}, which returns both buckets
+ * from one pass. The remaining two fields of
+ * {@link WorkflowRevisionReferenceCounts} stay `0` — the dispatch ledger
+ * and execution realms are out of this batch's scope.
  */
 export async function countWorkflowRevisionReferences(
   engine: Engine,
@@ -157,8 +164,13 @@ export async function countWorkflowRevisionReferences(
   revision: string,
 ): Promise<WorkflowRevisionReferenceCounts> {
   const internals = getInternals(engine);
-  const nonTerminalRuns = await countNonTerminalRunsForRevision(internals.storage, name, revision);
+  const { nonTerminalRuns, terminalRuns } = await countWorkflowStateRevisionsByStatus(
+    internals.storage,
+    name,
+    revision,
+  );
   const pinnedSchedules = await countPinnedSchedulesForRevision(internals.storage, name, revision);
+  const deadLetters = await countTeardownDeadLettersForRevision(internals.storage, name, revision);
   return {
     registeredDefinitions: internals.registeredCatalogRevisions.get(name) === revision ? 1 : 0,
     inFlightStarts: readNestedRevisionCount(internals.inFlightStartsByRevision, name, revision),
@@ -166,7 +178,7 @@ export async function countWorkflowRevisionReferences(
     pinnedSchedules,
     pendingDispatches: 0,
     activeExecutionRealms: 0,
-    retainedRecoveryRecords: 0,
+    retainedRecoveryRecords: terminalRuns + deadLetters,
   };
 }
 
@@ -304,10 +316,14 @@ export async function removeWorkflowRevision(
  * (`restoreCatalogEntryFromTombstone`) rather than leaving a real run
  * pinned to a revision the catalog no longer carries. Otherwise atomically
  * finalizes the tombstone (`finalizeCatalogTombstone`), completing the
- * removal. Either resolution losing its own CAS (a concurrent boot-time
- * sweep or another `removeWorkflowRevision` call already resolved this
- * exact tombstone first) is a harmless, already-consistent no-op — nothing
- * further to do either way.
+ * removal.
+ *
+ * Either resolution can lose its own CAS to a concurrent resolver — most
+ * commonly `catalog-tombstone-recovery.ts`'s boot-time orphan sweep (WFT-21,
+ * item S-QH). A lost restore-CAS is harmless (already resolved either way);
+ * a lost finalize-CAS is NOT automatically safe (the resolver may have
+ * restored instead), so both cases re-read post-resolution durable state
+ * via {@link reportPostConcurrentTombstoneResolution}.
  */
 async function finalizeRevisionRemoval(
   engine: Engine,
@@ -318,10 +334,44 @@ async function finalizeRevisionRemoval(
   const internals = getInternals(engine);
   const postReferences = await countWorkflowRevisionReferences(engine, name, revision);
   if (totalWorkflowRevisionReferences(postReferences) > 0) {
-    await restoreCatalogEntryFromTombstone(internals.storage, name, revision, tombstoneBytes);
+    const restored = await restoreCatalogEntryFromTombstone(
+      internals.storage,
+      name,
+      revision,
+      tombstoneBytes,
+    );
+    if (!restored) {
+      return reportPostConcurrentTombstoneResolution(engine, name, revision, postReferences);
+    }
     return { removed: false, reason: 'referenced', references: postReferences };
   }
-  await finalizeCatalogTombstone(internals.storage, name, revision, tombstoneBytes);
+  const finalized = await finalizeCatalogTombstone(
+    internals.storage,
+    name,
+    revision,
+    tombstoneBytes,
+  );
+  if (!finalized) {
+    return reportPostConcurrentTombstoneResolution(engine, name, revision, postReferences);
+  }
+  engine.dispatchEvent(new WorkflowRevisionRemovedEvent(name, revision));
+  return { removed: true };
+}
+
+/**
+ * Resolve the truthful outcome after a lost CAS to a concurrent resolver
+ * (WFT-21, item S-QH): entry present means it was restored (`'referenced'`,
+ * no event); absent means it was finalized (`{ removed: true }`, event
+ * dispatched here since the boot-time sweep never dispatches its own).
+ */
+async function reportPostConcurrentTombstoneResolution(
+  engine: Engine,
+  name: string,
+  revision: string,
+  references: WorkflowRevisionReferenceCounts,
+): Promise<WorkflowCatalogRemovalResult> {
+  const stillInstalled = await getInternals(engine).storage.get(KEYS.catalogEntry(name, revision));
+  if (stillInstalled !== null) return { removed: false, reason: 'referenced', references };
   engine.dispatchEvent(new WorkflowRevisionRemovedEvent(name, revision));
   return { removed: true };
 }

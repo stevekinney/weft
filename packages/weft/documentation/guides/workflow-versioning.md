@@ -472,6 +472,235 @@ launch path already was: the identity is set, and the handler resolved
 against the source's own `revision`, before the fork can drive its first
 turn. See the `Fixed` entries in the changelog.
 
+### Forking against a different revision (WFT-21)
+
+By default, `engine.fork()` takes no `revision` opinion at all: it resolves
+and persists the SOURCE run's own pinned revision, exactly as described
+above, so a fork's differences from its source come only from `fromStep`,
+input, or history choices—never a silently different revision of the code.
+
+`ForkOptions.revision?: string` is an explicit, validated opt-in to fork
+against a DIFFERENT installed revision instead—a genuine diagnostic need
+("does this input fail on v1 or only on v2?"). It is validated against what
+THIS process can actually run, before any checkpoint is ever read:
+
+- For an **eager-registered** workflow type, `revision` must exactly equal
+  the revision this process loaded. An eager type has no other revision
+  available to fork against, so this is the one call site in the codebase
+  where an eager type does NOT get to ignore a pin (the same exception
+  `pinned-schedule-revision.ts`'s fire-time launch already makes, for the
+  same reason: an explicit commitment must not silently degrade).
+- For a **dynamic-source** type, `revision` must name one of this process's
+  currently registered, resolvable candidates.
+
+Either mismatch throws `WorkflowRevisionUnavailableError` with
+`reason: 'not-registered'`, before any storage read for the checkpoint—so a
+request for a revision this process cannot run leaves no partial write. A
+`revision` whose registered `version` is semver-incompatible with the source
+checkpoint still throws `VersionMismatchError`, via the same
+`derivePreparedExecutionState()` compatibility gate every other fork
+already goes through: forking against a different revision never bypasses
+ordinary version compatibility checking.
+
+The `weft.workflows.fork` operation accepts a matching optional `revision`
+input field (REST body field, JSON-RPC param); an unresolvable request
+surfaces as a `Conflict` (409) fault carrying `data.reason` over JSON-RPC
+(REST discloses the reason in the error message text rather than
+structured `data`, per the existing WFT-11 REST/JSON-RPC fidelity split).
+
+The fork's own commit is fenced against a concurrent
+`removeWorkflowRevision()` targeting the fork's persisted revision through
+two layers, mirroring `start()`'s own defense exactly. Under `ownership:
+'lease'` or `'workflow-lease'`, the commit fences on the target revision's
+durable catalog entry—the same `buildCatalogEntryRevisionCondition` fence a
+fresh `start()` carries—so a concurrent removal that lands first makes the
+fork's own commit lose its CAS. Regardless of ownership mode, `fork()` also
+reserves an in-memory `inFlightStartsByRevision` slot for its target
+revision as soon as validation resolves it, released unconditionally once
+the commit settles (mirroring `start()`'s own `reserveInFlightStart`/
+`releaseInFlightStart` pairing)—this closes the same-process race two
+overlapping async calls on one engine instance can still hit even under the
+default `ownership: 'none'`, where the durable catalog-entry fence is
+deliberately skipped (no `conditionalBatch` capability requirement for the
+common single-writer-by-contract case). Without either layer, an
+explicit-revision fork onto a revision other than the source run's own pin
+would perform only a process-local availability check with no reservation
+of any kind, so a concurrent removal could see zero references, delete the
+catalog entry, and still let the fork's own commit land right behind
+it—durably persisting a reference to a revision the catalog now claims is
+gone.
+
+**A lost commit-time catalog fence now surfaces as `Conflict`, not a masked
+500** (Codex review round 4). When the fence above genuinely loses its
+race, `resolveForkAccess()` now recognizes the resulting error as the same
+typed `WorkflowRevisionUnavailableError` the pre-commit check already
+throws for the identical class of loss—previously it fell through to a
+generic `EngineFailure`, so `weft.workflows.fork` returned a 500 instead of
+the documented 409 a client should retry against.
+
+**The SOURCE run itself is also guarded against a concurrent replacement**
+(Codex review, item 6). Everything above fences the fork's TARGET revision;
+this is a different mechanism protecting the fork's SOURCE. `fork()` reads
+`sourceState` once, at its own top, then performs a possibly-async
+registration resolve before loading and hydrating the source checkpoint it
+forks from, and further async work (header lookup, lineage construction,
+search attribute derivation, the catalog-entry condition build) before its
+own commit. A concurrent `start(..., { id: sourceWorkflowId,
+onTerminalConflict: 'start-new' })` replacement landing in either window—if
+version-compatible with the original—could let `derivePreparedExecutionState()`
+accept a checkpoint already reflecting the replacement while the fork still
+carried `sourceState`'s own STALE type/input, producing and executing a
+mixed-generation fork. `fork()` now correlates `sourceState.workflowExecutionToken`
+against the loaded checkpoint's own token immediately after hydration, and
+revalidates it again by re-reading `WorkflowState` immediately before the
+commit—either mismatch throws `ForkSourceReplacedError` (mapped to a
+`Conflict` fault over REST/JSON-RPC) rather than risking a mixed-generation
+commit. Both checks tolerate either side lacking the token (a pre-upgrade
+record), the same bounded precedent `resolveReplayRevision()` uses for
+`replayTo()`. The caller re-issues `fork()`, which reads the replacement's
+own current state fresh.
+
+**A third, narrower reservation closes one remaining legacy-source gap**
+(Codex review round 3). The in-memory reservation above reserves against
+`targetRevision` (`options.revision ?? sourceState.revision`)—a no-op when
+BOTH are `undefined`, which happens only for a default fork of a legacy
+(pre-revision-pinning) source run on a dynamic-source type with exactly one
+registered candidate. The resolver still resolves—and the fork still
+persists against—that sole candidate's real revision even though nothing
+was reserved for it. `fork()` now reserves a SECOND, conditional in-memory
+slot for the resolver's own resolved revision whenever it differs from
+`targetRevision`—exactly this legacy case—closing the gap under every
+ownership mode, released unconditionally alongside the first reservation.
+
+That second reservation now fires from INSIDE the resolver, not after it
+returns (Codex review round 5): reserving only once the whole resolve
+completed left the resolver's own loader await—when the sole candidate
+wasn't already locally cached—as a window where a concurrent
+`removeWorkflowRevision()` could delete and finalize it before the
+reservation ever ran. `resolveExecutableRegistrationForRevision()` accepts
+the same synchronous, before-any-await `onRevisionChosen` hook `start()`'s
+own resolver already used for the identical class of race, and `fork()`
+now reserves from inside it the instant the resolver picks the candidate's
+revision, closing the window entirely.
+
+**Known residual, documented rather than fixed (Codex review round 6).**
+That reservation is `inFlightStartsByRevision`—process-local, in-memory—so
+under a supported multi-engine `ownership: 'workflow-lease'` deployment it
+protects only a race against another caller on the SAME process. A sibling
+engine (a separate process sharing durable storage) can still remove the
+sole candidate after the hook fires but before the awaited source loader
+finishes reading it—that sibling's own `removeWorkflowRevision()` sees
+only durable references, never this process's local map, and the loader's
+own `catalog.install()` then reinstalls the revision regardless of that
+sibling's removal. The fork's own FINAL commit is still fenced durably
+under lease ownership (`buildForkCatalogEntryCondition()`, above)—this gap
+is narrower, in the intermediate load/install step before that commit.
+Closing it needs a durable, cross-process reservation or a
+tombstone-aware `catalog.install()`, not a bounded review-response fix—see
+`reserveLegacyForkTargetRevision()`'s own doc comment for the full
+explanation.
+
+**Scope corrected one round later (Codex review round 9): this gap is not
+limited to legacy forks.** An explicit-revision fork
+(`ForkOptions.revision`) reserves just as early and just as
+process-locally as the legacy path, then awaits the identical load/install
+pipeline for its own resolved revision—a sibling engine's concurrent
+removal wins the same race against an explicit target exactly as it can
+against a legacy one. Every dynamic-source fork under `workflow-lease`
+whose target requires a resolver load is exposed, not only a legacy one;
+the root cause and candidate fixes are unchanged.
+
+**A second, narrower residual, also documented rather than fixed (Codex
+review round 8)—this one live even under the single-process `'none'` mode
+`buildForkCatalogEntryCondition()` deliberately leaves unfenced.**
+`removeWorkflowRevision()`'s post-delete half does re-count references once
+after the catalog delete commits, but that one snapshot can read zero and
+then a fork's reservation, resolution, and reinstall can all land in the
+window between that snapshot and the tombstone's own finalization—a window
+nothing re-checks. Neither commit in that window conditions on the other's
+key, so they race cleanly past each other, and `removeWorkflowRevision()`
+can report `{ removed: true }` while a live, referenced run now exists
+against that revision. Unlike round 6 above (a sibling process racing the
+fork's own intermediate load step under `workflow-lease`), this is
+`removeWorkflowRevision()`'s own finalization step racing a fork on the
+SAME process, reachable even under `'none'`. Closing it needs either
+serializing removal against reservations through finalization or fencing
+the fork's commit under `'none'` too—both real design decisions, not a
+bounded fix—see `buildForkCatalogEntryCondition()`'s own doc comment for
+the full explanation.
+
+**Both residuals above are now fixed (Codex review, items 1-3).** The
+shared root cause: `WorkflowCatalog.install()`'s durable write was
+CAS-guarded only on the entry key being absent, never on its tombstone, so
+a load/reinstall racing a concurrent removal could win the CAS and
+resurrect an entry between its delete and its tombstone's resolution,
+regardless of ownership mode or which process performed the load.
+`writeCatalogEntry()` now also conditions on the entry's tombstone key
+being absent, in the same `conditionalBatch`; a CAS loss caused
+specifically by a present tombstone throws a new internal
+`WorkflowRevisionTombstonedError` rather than the pre-existing
+`WorkflowCatalogConflictError`. Since `core/catalog/**` cannot throw the
+engine-layer `WorkflowRevisionUnavailableError` directly (the directional
+import boundary `check-import-cycles.ts` enforces), `catalog.install()`'s
+single call site—`core/engine/source-resolution.ts`'s
+`runSharedSourceLoad()`, reached by every dynamic-source load, shared by
+both the legacy fork resolver hook and the explicit-revision fork
+load—catches it and translates it to `WorkflowRevisionUnavailableError(name,
+revision, 'not-installed')`. Separately, `buildForkCatalogEntryCondition()`'s
+`'none'`-mode branch is no longer a no-op: it now fences the fork's own
+final commit on the target revision's catalog-entry bytes under every
+ownership mode, since `writeCatalogEntry()` already unconditionally
+requires the `conditionalBatch` storage capability regardless of ownership
+mode—fencing under `'none'` adds no new capability requirement. Together
+these close "removal is rejected while any durable or live reference
+exists" for every ownership mode and load path named above.
+
+**A narrower residual left by the tombstone-presence fence above is also
+now closed (Codex review round 14, item Q7jH).** The tombstone-presence CAS
+above protects a load racing a removal only up to that removal's own
+tombstone finalizing—a load that begins before its target revision has
+ever been installed anywhere, or after a full removal has already
+completed, has no local cache to adopt, so `catalog.install()` genuinely
+reaches its write path, and if a full remove-and-finalize cycle for the
+same `(name, revision)` lands while that load is still in flight, the
+entry and tombstone keys both read absent again by the time the write
+runs—indistinguishable from "never installed." A new, permanently-retained
+`catalog-removal-generation:<name>:<revision>` counter closes this:
+`removeCatalogEntry()` bumps it atomically alongside the delete and
+tombstone write, and `runSharedSourceLoad()` captures its bytes before
+invoking the host loader, threading them through to `catalog.install()` as
+an additional CAS condition. A removal that lands during the load—even one
+whose own tombstone has already resolved—now fails the fenced install
+closed instead of resurrecting the just-removed revision. `install()`'s
+cache-hit path and `activateCandidate()`'s active-pointer CAS were fixed
+the same round to close a related gap: a stale in-process cache hit could
+return—or activate—a revision a peer had already durably removed; both now
+revalidate against (or fence on) durable storage before proceeding.
+
+**Two bounded extensions of the fixes above closed the remaining gaps
+(Codex review rounds 15 and 16).** `activateRegistered()`—`register()`'s
+own drain path, distinct from the guarded `activateCandidate()`
+primitive—had no candidate-entry fence of its own on its active-pointer
+commit; it now reads and fences on the candidate entry's current bytes each
+retry iteration, reinstalling (unfenced) and retrying rather than throwing
+when the entry is missing, since this call already owns `manifest`/
+`definition` and must never hard-fail registration. `resolveEntry()` and
+`hasInstalled()` still trusted an in-process cache hit without revalidating
+it durably—the round-14 fix covered only `install()`'s own cache-hit
+path—so `preload()`, `resolveWorkflowSource()`'s cache-hit fast path, and
+`getWorkflowRevisionDiagnostics()` could still report a durably-removed
+revision as installed; `resolveEntry()` now always durable-reads, and
+`hasInstalled()` delegates to it. The removal-generation fence itself was
+captured too late—only after the durable catalog lookup that precedes
+it—so a removal completing DURING that lookup produced a fence baseline
+that already reflected the post-removal counter, making the fence a no-op
+for that narrower timing; the fence is now captured before the lookup
+starts, raced against the caller's own abort signal. Finally,
+`activateRegistered()`'s new fence could observe a SECOND vanish of the
+just-reinstalled candidate in the gap between reinstall and reread; a still-
+null reread is now treated as another lost race and retried, rather than
+passed through as a commit precondition.
+
 The ADR 0002 workflow-lease reclaim-eligibility check
 (`isWorkflowTypeRegistered`) is source- and revision-aware for the same
 reason—see
@@ -655,7 +884,7 @@ relying on it. `WorkflowRevisionReferenceCounts` is the bounded accounting
 interface a removal decision is gated on: seven fields, always present, so
 a caller never special-cases an "unknown" reference kind.
 
-Four fields are wired to real signals now:
+Five fields are wired to real signals now:
 
 - **`registeredDefinitions`**: `1` when this process's own
   `engine.register()`-drain path most recently activated exactly this
@@ -695,14 +924,64 @@ Four fields are wired to real signals now:
   holds no standing reference to any one revision. A `'cancelled'` pinned
   schedule is excluded too (it will never fire again); a `'paused'` one
   still counts (it can be resumed).
+- **`retainedRecoveryRecords`** (WFT-21): the sum of two durable-reference
+  components, both pinned to exactly this revision. First, a terminal
+  (`completed`/`failed`/`cancelled`/`timed-out`) `WorkflowState` still
+  present in storage—not yet purged. A completed run is forkable against
+  the exact revision it ran, and a failed run is retryable against it, so
+  both durably pin the revision until purge or a retention sweep releases
+  them; that release rides the SAME fenced `wf:` delete purge already
+  performs, so no new write path was needed. Second, a
+  `TeardownDeadLetterRecord`—a workflow whose finalizer permanently
+  failed—pinned to this revision. Unlike the first component, a dead letter
+  is **never** auto-released: it is deliberately excluded from the purge
+  delete-set as permanent leak evidence, so a revision that ever
+  dead-lettered stays non-removable indefinitely, with no acknowledge/clear
+  API yet to reclaim it. Both components are bounded storage scans—the
+  terminal-run component rides the exact same `storage.scan('wf:')` pass
+  `nonTerminalRuns` already pays for (one scan classifies each record into
+  exactly one of the two buckets); the dead-letter component is its own
+  bounded `storage.scan('wf-teardown-deadletter-history:')`.
 
-The remaining three fields—`pendingDispatches`, `activeExecutionRealms`,
-and `retainedRecoveryRecords`—stay structurally present but always `0`.
-Each awaits revision identity threaded through a different, later-owned
-subsystem—the dispatch ledger, execution realms, and retained recovery
-records respectively—none of which are scheduled yet. Until each lands,
-its field exists as forward-compatible plumbing rather than a promise the
-engine cannot keep.
+  The dead-letter component scans a dedicated **per-generation** history
+  namespace, not the single-slot `wf-teardown-deadletter:<workflowId>` key
+  the finalizer-status API reads (Codex review round 3, P2). That single
+  slot is keyed by workflow id alone, so a workflow id reused across
+  generations—purge, or `onTerminalConflict: 'start-new'`—would have a
+  LATER generation's dead letter silently overwrite an EARLIER generation's
+  at that slot, destroying both the audit record and the reference count
+  for whatever revision the earlier generation had leaked. Every
+  dead-lettering finalizer now ALSO writes the identical record to
+  `wf-teardown-deadletter-history:<workflowId>:<workflowExecutionToken>`—
+  keyed additionally by the dead-lettering run's own execution
+  token—so every generation's record, and its revision reference, survives
+  independently. The single-slot key is untouched, so the finalizer-status
+  API keeps serving "the latest dead letter for this workflow id" exactly
+  as before.
+
+  The reference count ALSO scans the single-slot namespace as a fallback,
+  for a dead letter written by a process from before the history namespace
+  existed—such a record lives ONLY under the single-slot key, with no
+  history sibling at all, and once its `WorkflowState` is purged it is the
+  sole surviving evidence the revision was ever referenced. A single-slot
+  record whose computed history key (its own `workflowExecutionToken`, or
+  the fixed legacy fallback segment when it has none) already exists is
+  skipped as already counted by the history scan above; a record with NO
+  matching history key is provably pre-upgrade—both keys have been written
+  together, in the same batch, on every write since the history namespace
+  was added—regardless of whether it happens to carry a
+  `workflowExecutionToken` (a field that predates the `revision` field this
+  scan matches against). Among these provable orphans, one with a
+  `revision` field uses an exact match; one without is pinned
+  conservatively—counted toward every queried revision of the matching
+  type—since its true revision cannot be determined at all.
+
+The remaining two fields—`pendingDispatches` and `activeExecutionRealms`—
+stay structurally present but always `0`. Each awaits revision identity
+threaded through a different, later-owned subsystem—the dispatch ledger and
+execution realms respectively—neither of which is scheduled yet. Until each
+lands, its field exists as forward-compatible plumbing rather than a
+promise the engine cannot keep.
 
 Removal itself is a plain, root-exported async function—not an
 `engine.workflows.*` method, and not (yet) a wire operation:
@@ -775,6 +1054,19 @@ proceeding (for a long-lived engine that observes a peer crash mid-lifetime,
 after its own boot sweep already ran). See
 `core/catalog/removal.ts` and `core/engine/catalog-tombstone-recovery.ts`
 for the full mechanism.
+
+The boot-time sweep isolates each tombstone's own resolution: a
+tombstone whose manifest bytes fail to decode is left untouched (neither
+restored nor finalized, since neither can be trusted), and a tombstone
+whose fresh reference count cannot be computed—an unrelated undecodable
+record elsewhere in the store—is restored rather than finalized, the same
+conservative default used for a nonzero reference count. Either case
+reports a bounded diagnostic (`CleanupWarningEvent`) and the sweep
+continues to the next tombstone, rather than one bad record blocking
+`ensureWorkflowCatalogReady()`—and therefore every `start`/`resume`/
+`fork`/recovery call—until an operator repairs it. A malformed tombstone
+KEY (not a decode failure) still fails the whole sweep closed, since that
+can only mean storage corruption or a foreign write into the namespace.
 
 `getWorkflowRevisionDiagnostics(engine, name, revision)` projects the same
 accounting into a read-only shape—`installed`, `active`, `activeRevision`,

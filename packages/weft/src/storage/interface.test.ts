@@ -165,6 +165,7 @@ describe('KEYS insertion order', () => {
       'catalogActive',
       'catalogTombstone',
       'catalogTombstonePrefix',
+      'catalogRemovalGeneration',
       'workflowGeneration',
       'budget',
       'review',
@@ -181,6 +182,9 @@ describe('KEYS insertion order', () => {
       'teardownOwed',
       'teardownSucceeded',
       'teardownDeadLetter',
+      'teardownDeadLetterPrefix',
+      'teardownDeadLetterHistory',
+      'teardownDeadLetterHistoryPrefix',
       'offload',
       'archive',
       'stateExecution',
@@ -340,6 +344,7 @@ describe('WEFT_RESERVED_KEY_PREFIXES', () => {
       KEYS.finalizerState('workflow-id'),
       KEYS.teardownOwed('workflow-id'),
       KEYS.teardownDeadLetter('workflow-id'),
+      KEYS.teardownDeadLetterHistory('workflow-id', 'workflow-execution-token'),
       KEYS.teardownTimer(1000, 'timer-id'),
       KEYS.offload('workflow-id', 'key'),
       KEYS.archive('workflow-id', 'key'),
@@ -381,6 +386,7 @@ describe('WEFT_RESERVED_KEY_PREFIXES', () => {
       KEYS.catalogEntry('workflow-type', 'revision'),
       KEYS.catalogActive('workflow-type'),
       KEYS.catalogTombstone('workflow-type', 'revision'),
+      KEYS.catalogRemovalGeneration('workflow-type', 'revision'),
     ];
 
     for (const key of representativeKeys) {
@@ -1029,6 +1035,33 @@ describe('KEYS', () => {
 
   it('encodes successful teardown outcomes by workflow id', () => {
     expect(KEYS.teardownSucceeded('workflow:id')).toBe('wf-teardown-succeeded:workflow%3Aid');
+    expect(KEYS.teardownDeadLetterPrefix()).toBe('wf-teardown-deadletter:');
+    expect(KEYS.teardownDeadLetter('workflow:id')).toBe('wf-teardown-deadletter:workflow%3Aid');
+    expect(KEYS.teardownDeadLetter('workflow:id').startsWith(KEYS.teardownDeadLetterPrefix())).toBe(
+      true,
+    );
+  });
+
+  it('encodes per-generation dead-letter history keys by workflow id and execution token (WFT-21, Codex review round 4)', () => {
+    expect(KEYS.teardownDeadLetterHistoryPrefix()).toBe('wf-teardown-deadletter-history:');
+    expect(KEYS.teardownDeadLetterHistory('workflow:id', 'token:a')).toBe(
+      'wf-teardown-deadletter-history:workflow%3Aid:token%3Aa',
+    );
+    // The history namespace must NOT be mistaken for the single-slot
+    // `teardownDeadLetter` namespace by prefix — `wf-teardown-deadletter:`
+    // is not itself a prefix of `wf-teardown-deadletter-history:` (the next
+    // character after the shared prefix is `-`, not `:`), so a caller
+    // scanning the single-slot prefix never picks up a history record.
+    expect(
+      KEYS.teardownDeadLetterHistory('workflow:id', 'token:a').startsWith(
+        KEYS.teardownDeadLetterPrefix(),
+      ),
+    ).toBe(false);
+    expect(
+      KEYS.teardownDeadLetterHistory('workflow:id', 'token:a').startsWith(
+        KEYS.teardownDeadLetterHistoryPrefix(),
+      ),
+    ).toBe(true);
   });
 
   it('encodes parent run lineage reverse-index dimensions independently', () => {

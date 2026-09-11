@@ -106,9 +106,31 @@ export async function prepareResumeState(
     preparedExecutionState.checkpoint,
   );
 
+  // Seed `workflowExecutionToken` onto the recovered LIVE checkpoint from
+  // `WorkflowState` when the checkpoint chain itself predates the field
+  // (Codex review, item 4): a workflow created before this field existed
+  // has a stable token on `WorkflowState` (minted at `start()`/`fork()`),
+  // but its checkpoint lineage carries no token at all. `advanceCheckpoint()`
+  // only ever forwards a checkpoint's OWN existing token — it never
+  // backfills from `WorkflowState` — so without this seed such a run would
+  // NEVER converge: every checkpoint it produces after recovery would keep
+  // omitting the token, and `replayTo().revision` attribution would stay
+  // permanently lost for it. This mutates only the in-memory object driven
+  // forward from here; `serializedCheckpoint` below still reflects the
+  // ACTUAL persisted bytes (used as the next commit's CAS baseline), so no
+  // already-persisted history is rewritten by this seed.
+  const checkpointWithSeededToken =
+    hydratedCheckpoint.workflowExecutionToken === undefined &&
+    preparedExecutionState.state.workflowExecutionToken !== undefined
+      ? {
+          ...hydratedCheckpoint,
+          workflowExecutionToken: preparedExecutionState.state.workflowExecutionToken,
+        }
+      : hydratedCheckpoint;
+
   return {
     state: preparedExecutionState.state,
-    checkpoint: hydratedCheckpoint,
+    checkpoint: checkpointWithSeededToken,
     serializedCheckpoint: checkpointBytes,
     versionTuple: preparedExecutionState.versionTuple,
   };

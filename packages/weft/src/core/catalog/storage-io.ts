@@ -12,11 +12,17 @@
  * @module core/catalog/storage-io
  */
 
-import { KEYS, storageConditionalBatch, type Storage } from '../../storage/interface.ts';
+import {
+  KEYS,
+  storageConditionalBatch,
+  type ConditionalBatchCondition,
+  type Storage,
+} from '../../storage/interface.ts';
 import { tryDecodeStorageKeyComponent } from '../../storage/key-encoding.ts';
 import { parseWorkflowRevisionManifest } from '../contract/manifest-parse.ts';
 import type { WorkflowRevisionManifest } from '../contract/types.ts';
-import { decodeActivePointer } from './codec.ts';
+import { decodeActivePointer, manifestsAreByteIdentical } from './codec.ts';
+import { WorkflowCatalogConflictError, WorkflowRevisionTombstonedError } from './errors.ts';
 import type { WorkflowCatalogActivePointer, WorkflowCatalogEntry } from './types.ts';
 
 /** In-memory catalog state hydrated from durable storage. */
@@ -268,12 +274,80 @@ export async function readActivePointer(
 }
 
 /**
- * Durably write one installed-revision entry, CAS-guarded on the key being
- * absent (`expectedValue: null`). Returns `true` when this write won the
- * race, `false` when another writer had already durably installed this
- * exact `(name, revision)` key first — `WorkflowCatalog.install()` re-reads
- * via {@link readCatalogEntry} on `false` to decide whether that concurrent
- * write was byte-identical (idempotent) or a genuine conflict.
+ * A durable install fence (WFT-21, Codex review round 14, P1 item Q7jH): the
+ * `catalog-removal-generation:<name>:<revision>` bytes a caller observed
+ * BEFORE starting work whose eventual `writeCatalogEntry` call must not
+ * resurrect a revision removed WHILE that work was in flight. Only a
+ * dynamic-source loader (`runSharedSourceLoad`, `core/engine/source-resolution.ts`)
+ * supplies one — it reads the counter immediately before invoking the host
+ * loader, then threads the observed bytes through to `WorkflowCatalog.install()`
+ * once the loader (and validation) finish. `null` means "observed as never
+ * removed." A caller with no prior observation to be stale against (`engine.register()`'s
+ * drain path, a deliberate direct `engine.workflows.install()` reinstall)
+ * omits the fence entirely — see `KEYS.catalogRemovalGeneration`'s own doc
+ * for the full rationale.
+ */
+export type CatalogInstallFence = { removalGeneration: Uint8Array | null };
+
+function removalGenerationBytesEqual(a: Uint8Array | null, b: Uint8Array | null): boolean {
+  if (a === null || b === null) return a === b;
+  if (a.byteLength !== b.byteLength) return false;
+  for (let index = 0; index < a.byteLength; index += 1) {
+    if (a[index] !== b[index]) return false;
+  }
+  return true;
+}
+
+/**
+ * Read the raw bytes of `(name, revision)`'s durable removal-generation
+ * counter — `null` when the revision has never been removed. Callers that
+ * need to compare (not decode) this value, e.g. `WorkflowCatalog.install()`'s
+ * CAS-loss disambiguation, use {@link catalogRemovalGenerationMatches}
+ * instead of decoding it themselves.
+ */
+export async function readCatalogRemovalGeneration(
+  storage: Storage,
+  name: string,
+  revision: string,
+): Promise<Uint8Array | null> {
+  return storage.get(KEYS.catalogRemovalGeneration(name, revision));
+}
+
+/**
+ * Whether `(name, revision)`'s CURRENT durable removal-generation counter
+ * still reads as `expected` — used by `WorkflowCatalog.install()` after a
+ * fenced `writeCatalogEntry` loses its CAS, to tell a genuine content
+ * conflict (the counter is unchanged; some other writer raced the entry
+ * itself) apart from a stale-load resurrection attempt (the counter
+ * advanced — a removal landed after `expected` was observed).
+ */
+export async function catalogRemovalGenerationMatches(
+  storage: Storage,
+  name: string,
+  revision: string,
+  expected: Uint8Array | null,
+): Promise<boolean> {
+  const current = await readCatalogRemovalGeneration(storage, name, revision);
+  return removalGenerationBytesEqual(current, expected);
+}
+
+/**
+ * Durably write one installed-revision entry, CAS-guarded on BOTH the entry
+ * key being absent (`expectedValue: null`) AND the entry's tombstone key
+ * being absent, and — when `fence` is supplied — additionally on the
+ * `catalog-removal-generation:<name>:<revision>` counter still reading
+ * `fence.removalGeneration` (WFT-21, item Q7jH; see
+ * {@link CatalogInstallFence}'s own doc). Returns `true` when this write won
+ * the race, `false` when ANY precondition failed — `WorkflowCatalog.install()`
+ * distinguishes the causes itself (re-reading the entry, then the
+ * tombstone, then — when fenced — the removal-generation counter, on
+ * `false`) since a flat boolean cannot: a durable entry already installed
+ * (idempotent-or-conflict, the original condition), a tombstone currently
+ * present for this exact `(name, revision)` (WFT-21, Codex review items
+ * 1-3 — refuse to resurrect a revision `removeCatalogEntry()` is deleting
+ * or has deleted, until its tombstone is resolved), or a removal that
+ * completed (including finalizing its own tombstone away) since a fenced
+ * caller's own observation.
  *
  * CAS-protected rather than a plain `put`: "content-addressed by
  * `(name, revision)`, so racing writers always agree" only holds when
@@ -289,12 +363,79 @@ export async function writeCatalogEntry(
   storage: Storage,
   manifest: WorkflowRevisionManifest,
   installedAt: number,
+  fence?: CatalogInstallFence,
 ): Promise<boolean> {
   const bytes = new TextEncoder().encode(JSON.stringify({ manifest, installedAt }));
   const key = KEYS.catalogEntry(manifest.name, manifest.revision);
-  return storageConditionalBatch(
-    storage,
-    [{ key, expectedValue: null }],
-    [{ type: 'put', key, value: bytes }],
-  );
+  const tombstoneKey = KEYS.catalogTombstone(manifest.name, manifest.revision);
+  const conditions: ConditionalBatchCondition[] = [
+    { key, expectedValue: null },
+    { key: tombstoneKey, expectedValue: null },
+  ];
+  if (fence !== undefined) {
+    conditions.push({
+      key: KEYS.catalogRemovalGeneration(manifest.name, manifest.revision),
+      expectedValue: fence.removalGeneration,
+    });
+  }
+  return storageConditionalBatch(storage, conditions, [{ type: 'put', key, value: bytes }]);
+}
+
+/**
+ * `WorkflowCatalog.install()`'s cache-hit revalidation (WFT-21, Codex
+ * review round 14, P1 item TYR4): re-reads durable storage rather than
+ * trusting an in-process cache hit outright. A peer's `remove()` + tombstone
+ * resolution can durably delete this exact `(name, revision)` while it
+ * stays cached from an earlier `install()`/`resolveEntry()` call on this
+ * same process. Returns `true` when durable storage still agrees the entry
+ * exists (and matches `manifest`'s content — a mismatch throws
+ * {@link WorkflowCatalogConflictError}, the same conflict `install()`'s own
+ * durable read-through path already throws); `false` when durably absent,
+ * telling the caller to evict its stale cache entry and fall through to the
+ * ordinary not-cached path.
+ */
+export async function revalidateCachedCatalogInstall(
+  storage: Storage,
+  manifest: WorkflowRevisionManifest,
+): Promise<boolean> {
+  const durable = await readCatalogEntry(storage, manifest.name, manifest.revision);
+  if (durable === null) return false;
+  if (!manifestsAreByteIdentical(durable.manifest, manifest)) {
+    throw new WorkflowCatalogConflictError(manifest.name, manifest.revision);
+  }
+  return true;
+}
+
+/**
+ * `WorkflowCatalog.install()`'s CAS-loss disambiguation for the "still
+ * durably absent after losing the write race" case. Always throws: a
+ * present tombstone explains the absence directly
+ * ({@link WorkflowRevisionTombstonedError}); a fenced caller whose observed
+ * `catalog-removal-generation:<name>:<revision>` counter has since advanced
+ * explains it too — a removal completed, tombstone and all, after the
+ * fence was captured (WFT-21, item Q7jH); neither case is a genuine
+ * writer-vs-writer conflict, so both are distinguished from the fallback
+ * {@link WorkflowCatalogConflictError}.
+ */
+export async function throwForAbsentCatalogInstallRace(
+  storage: Storage,
+  manifest: WorkflowRevisionManifest,
+  fence: CatalogInstallFence | undefined,
+): Promise<never> {
+  const tombstoneBytes = await storage.get(KEYS.catalogTombstone(manifest.name, manifest.revision));
+  if (tombstoneBytes !== null) {
+    throw new WorkflowRevisionTombstonedError(manifest.name, manifest.revision);
+  }
+  if (fence !== undefined) {
+    const stillFenced = await catalogRemovalGenerationMatches(
+      storage,
+      manifest.name,
+      manifest.revision,
+      fence.removalGeneration,
+    );
+    if (!stillFenced) {
+      throw new WorkflowRevisionTombstonedError(manifest.name, manifest.revision);
+    }
+  }
+  throw new WorkflowCatalogConflictError(manifest.name, manifest.revision);
 }

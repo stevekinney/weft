@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
-import { encode } from '../codec.ts';
+import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { decode, encode } from '../codec.ts';
 import { Engine } from '../engine.ts';
 import { activity, workflow, type ActivityContext, type WorkflowContext } from '../types.ts';
 
@@ -375,6 +376,390 @@ describe('timeline and replay', () => {
       'workflow:checkpoint',
     ]);
     expect(replay?.events).toHaveLength(2);
+    // WFT-21: `replayTo()` reports the run's own pinned revision.
+    const state = await engine.get('wf-replay');
+    expect(state?.revision).toBeDefined();
+    expect(replay?.revision).toBe(state?.revision);
+  });
+
+  it("acceptance criterion: engine.replayTo(workflowId, step) reports the run's ORIGINAL revision, not the newly active one, after a later activation", async () => {
+    const storage = new MemoryStorage();
+    engine = new Engine({ storage, checkpointHistory: 10 });
+    const olderRevisionWorkflow = workflow({ name: 'replay-revision', version: '1.0.0' }).execute(
+      async function* (ctx: WorkflowContext) {
+        yield* ctx.run(async () => 'step-one');
+        return 'done';
+      },
+    );
+    engine.register(olderRevisionWorkflow);
+
+    const handle = await engine.start('replay-revision', null, { id: 'wf-replay-revision' });
+    await handle.result();
+    const originalRevisionSummary = await engine.get(handle.id);
+    const originalRevision = originalRevisionSummary?.revision;
+    expect(originalRevision).toBeDefined();
+
+    // Activate a genuinely different revision for the same name — the run
+    // above is pinned to the ORIGINAL revision and must stay that way.
+    engine[Symbol.dispose]();
+    engine = new Engine({ storage, checkpointHistory: 10 });
+    engine.register(
+      workflow({ name: 'replay-revision', version: '2.0.0' }).execute(async function* (
+        ctx: WorkflowContext,
+      ) {
+        yield* ctx.run(async () => 'step-one');
+        return 'done';
+      }),
+    );
+
+    const replay = await engine.replayTo(handle.id, 1);
+    expect(replay?.revision).toBe(originalRevision);
+  });
+
+  it('omits `revision` from a replay when the workflow record has since been purged', async () => {
+    const storage = new MemoryStorage();
+    engine = new Engine({ storage, checkpointHistory: 10 });
+    const purgedReplayWorkflow = workflow({ name: 'replay-purged' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      yield* ctx.run(async () => 'step-one');
+      return 'done';
+    });
+    engine.register(purgedReplayWorkflow);
+
+    const handle = await engine.start('replay-purged', null, { id: 'wf-replay-purged' });
+    await handle.result();
+    // Delete only the top-level `WorkflowState` record directly — a real
+    // `engine.purge()` also deletes the checkpoint history `replayTo()`
+    // itself reads, which would make it return `null` outright rather than
+    // exercising the "record gone, checkpoint history still readable"
+    // branch `WorkflowReplay.revision`'s own doc describes.
+    await storage.delete(KEYS.workflow(handle.id));
+
+    const replay = await engine.replayTo(handle.id, 1);
+    expect(replay).not.toBeNull();
+    expect('revision' in (replay ?? {})).toBe(false);
+  });
+
+  it('omits `revision` from a replay when the workflow record predates revision pinning (legacy, no persisted revision)', async () => {
+    const storage = new MemoryStorage();
+    engine = new Engine({ storage, checkpointHistory: 10 });
+    const legacyReplayWorkflow = workflow({ name: 'replay-legacy' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      yield* ctx.run(async () => 'step-one');
+      return 'done';
+    });
+    engine.register(legacyReplayWorkflow);
+
+    const handle = await engine.start('replay-legacy', null, { id: 'wf-replay-legacy' });
+    await handle.result();
+
+    // Simulate a legacy record (written before revision pinning existed) by
+    // stripping the persisted `revision` field directly in storage.
+    const stateBytes = await storage.get(KEYS.workflow(handle.id));
+    const state = { ...(decode(stateBytes!) as Record<string, unknown>) };
+    delete state['revision'];
+    await storage.put(KEYS.workflow(handle.id), encode(state));
+
+    const replay = await engine.replayTo(handle.id, 1);
+    expect(replay).not.toBeNull();
+    expect('revision' in (replay ?? {})).toBe(false);
+  });
+
+  it('omits `revision` from a replay when the workflow record has since been replaced by a later execution under the same id (WFT-21, Codex review round 3, P2)', async () => {
+    const storage = new MemoryStorage();
+    engine = new Engine({ storage, checkpointHistory: 10 });
+    const replaceableWorkflow = workflow({ name: 'replay-replaced' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      yield* ctx.run(async () => 'step-one');
+      return 'done';
+    });
+    engine.register(replaceableWorkflow);
+
+    const handle = await engine.start('replay-replaced', null, { id: 'wf-replay-replaced' });
+    await handle.result();
+    const originalState = await engine.get(handle.id);
+    expect(originalState?.revision).toBeDefined();
+
+    // Simulate exactly what `onTerminalConflict: 'start-new'` produces
+    // durably — a fresh `WorkflowState` under the SAME id, with a LATER
+    // `createdAt`, a DIFFERENT `revision`, and (WFT-21, Codex review round
+    // 3, P2) a FRESH `workflowExecutionToken` (a real `start-new` always
+    // mints a new one — see `buildInitialIdentitySlice`) — without needing
+    // to race the real timing window `replayTo()`'s own two independent
+    // reads leave open. This is the state a concurrent replacement would
+    // have already committed by the time `replayTo()`'s own state read
+    // lands. The token mismatch is now the PRIMARY signal `replayTo()`
+    // uses to detect this case — see `resolveReplayRevision()`'s own doc;
+    // the `createdAt` mismatch below is kept too, so this test would still
+    // catch a regression to the old timestamp-only heuristic.
+    const stateBytes = await storage.get(KEYS.workflow(handle.id));
+    const replacedState = { ...(decode(stateBytes!) as Record<string, unknown>) };
+    replacedState['revision'] = 'sha256:replacement-revision-that-never-produced-this-checkpoint';
+    replacedState['createdAt'] = (replacedState['createdAt'] as number) + 1_000_000;
+    replacedState['workflowExecutionToken'] =
+      'replacement-run-token-that-never-produced-this-checkpoint';
+    await storage.put(KEYS.workflow(handle.id), encode(replacedState));
+
+    // The checkpoint at step 1 still belongs to the ORIGINAL execution —
+    // `revision` must be omitted rather than misattributed to the
+    // replacement's own revision.
+    const replay = await engine.replayTo(handle.id, 1);
+    expect(replay).not.toBeNull();
+    expect('revision' in (replay ?? {})).toBe(false);
+  });
+
+  it('correlates a replay by `workflowExecutionToken` even at identical millisecond timestamps, where a `createdAt`-only comparison could not distinguish the runs (WFT-21, Codex review round 3, P2)', async () => {
+    const storage = new MemoryStorage();
+    engine = new Engine({ storage, checkpointHistory: 10 });
+    const replaceableWorkflow = workflow({ name: 'replay-replaced-same-millisecond' }).execute(
+      async function* (ctx: WorkflowContext) {
+        yield* ctx.run(async () => 'step-one');
+        return 'done';
+      },
+    );
+    engine.register(replaceableWorkflow);
+
+    const handle = await engine.start('replay-replaced-same-millisecond', null, {
+      id: 'wf-replay-replaced-same-millisecond',
+    });
+    await handle.result();
+
+    // Simulate a `start-new` replacement that happened to land at the
+    // EXACT SAME `createdAt` millisecond as the original run (a real,
+    // non-adversarial possibility on a fast clock, or a mocked/frozen
+    // `getNow()`) — the pre-round-3 `createdAt >=` heuristic cannot tell
+    // these apart (the inequality holds either way), so it would have
+    // wrongly attributed the replacement's revision to the original run's
+    // checkpoint. The token mismatch alone still catches it.
+    const stateBytes = await storage.get(KEYS.workflow(handle.id));
+    const replacedState = { ...(decode(stateBytes!) as Record<string, unknown>) };
+    replacedState['revision'] =
+      'sha256:same-millisecond-replacement-revision-that-never-produced-this-checkpoint';
+    replacedState['workflowExecutionToken'] = 'same-millisecond-replacement-run-token';
+    await storage.put(KEYS.workflow(handle.id), encode(replacedState));
+
+    const replay = await engine.replayTo(handle.id, 1);
+    expect(replay).not.toBeNull();
+    expect('revision' in (replay ?? {})).toBe(false);
+  });
+
+  it('omits `revision` from a replay when a checkpoint history entry predates the `workflowExecutionToken` field, rather than falling back to a collision-prone `createdAt` comparison (legacy checkpoint, WFT-21, Codex review round 5, P2, tightening round 3)', async () => {
+    const storage = new MemoryStorage();
+    engine = new Engine({ storage, checkpointHistory: 10 });
+    const legacyCheckpointWorkflow = workflow({ name: 'replay-legacy-checkpoint-token' }).execute(
+      async function* (ctx: WorkflowContext) {
+        yield* ctx.run(async () => 'step-one');
+        return 'done';
+      },
+    );
+    engine.register(legacyCheckpointWorkflow);
+
+    const handle = await engine.start('replay-legacy-checkpoint-token', null, {
+      id: 'wf-replay-legacy-checkpoint-token',
+    });
+    await handle.result();
+    const state = await engine.get(handle.id);
+    expect(state?.revision).toBeDefined();
+
+    // Simulate a checkpoint history entry persisted before this field
+    // existed by stripping `workflowExecutionToken` directly from the
+    // step-1 checkpoint history record. Round 3's own `createdAt >=`
+    // fallback for this case was itself vulnerable to the identical
+    // same-millisecond/backward-clock collision it fixed for the general
+    // case — round 5 removes that fallback entirely: `resolveReplayRevision()`
+    // now omits `revision` whenever either side lacks the token, rather
+    // than best-effort guessing via timestamps.
+    const historyKey = KEYS.checkpointHistory(handle.id, 1);
+    const historyBytes = await storage.get(historyKey);
+    expect(historyBytes).not.toBeNull();
+    const legacyHistoryEntry = { ...(decode(historyBytes!) as Record<string, unknown>) };
+    delete legacyHistoryEntry['workflowExecutionToken'];
+    await storage.put(historyKey, encode(legacyHistoryEntry));
+
+    const replay = await engine.replayTo(handle.id, 1);
+    expect(replay).not.toBeNull();
+    expect(replay?.revision).toBeUndefined();
+  });
+
+  it('omits `revision` from a replay when a `start-new` replacement lands AFTER the state read but before the later event-log/hydration/watermark reads (WFT-21, Codex review, item 5)', async () => {
+    /**
+     * A `MemoryStorage` whose `scan()` performs the `start-new` replacement
+     * write on its FIRST call after arming — `replayTo()`'s own
+     * `eventLog.replay()` call is the first `scan()` it makes after its
+     * early `state` read (WFT-21, Codex review round 2, P2), so arming
+     * immediately before `engine.replayTo(...)` lands the replacement
+     * exactly in the window between that early read and the later
+     * event-log/hydration/watermark reads this fix must revalidate against.
+     */
+    class RaceInjectingStorage extends MemoryStorage {
+      #armed = false;
+      #fired = false;
+      #onFire: (() => Promise<void>) | null = null;
+
+      arm(onFire: () => Promise<void>): void {
+        this.#armed = true;
+        this.#fired = false;
+        this.#onFire = onFire;
+      }
+
+      override async *scan(
+        prefix: string,
+        options?: Parameters<MemoryStorage['scan']>[1],
+      ): AsyncIterable<[string, Uint8Array]> {
+        if (this.#armed && !this.#fired) {
+          this.#fired = true;
+          await this.#onFire?.();
+        }
+        yield* super.scan(prefix, options);
+      }
+    }
+
+    const raceStorage = new RaceInjectingStorage();
+    // `backgroundTasks: 'manual'` — no scheduler/cleanup/retention interval
+    // may call `storage.scan()` on its own timing and consume the armed
+    // first-scan hook before `replayTo()`'s own `eventLog.replay()` call
+    // does, which would fire the race at the wrong point and flake this
+    // test under load (e.g. coverage instrumentation's added overhead).
+    engine = new Engine({
+      storage: raceStorage,
+      checkpointHistory: 10,
+      backgroundTasks: 'manual',
+    });
+    const raceWorkflow = workflow({ name: 'replay-race-after-state-read' }).execute(
+      async function* (ctx: WorkflowContext) {
+        yield* ctx.run(async () => 'step-one');
+        return 'done';
+      },
+    );
+    engine.register(raceWorkflow);
+
+    const handle = await engine.start('replay-race-after-state-read', null, {
+      id: 'wf-replay-race-after-state-read',
+    });
+    await handle.result();
+    const originalState = await engine.get(handle.id);
+    expect(originalState?.revision).toBeDefined();
+
+    // Arm the race immediately before the call under test — engine
+    // construction and the workflow's own start/run already perform
+    // plenty of unrelated `scan()` calls that must not trigger this.
+    raceStorage.arm(async () => {
+      const stateBytes = await raceStorage.get(KEYS.workflow(handle.id));
+      const replacedState = { ...(decode(stateBytes!) as Record<string, unknown>) };
+      replacedState['revision'] = 'sha256:replacement-revision-that-never-produced-this-checkpoint';
+      replacedState['workflowExecutionToken'] = 'replacement-run-token-mid-replay';
+      await raceStorage.put(KEYS.workflow(handle.id), encode(replacedState));
+    });
+
+    const replay = await engine.replayTo(handle.id, 1);
+    expect(replay).not.toBeNull();
+    // Before this fix, `revision` was resolved from the EARLY `state` read
+    // (still the original run, since the replacement landed after it) and
+    // never revalidated against the replacement that landed before the
+    // later event-log/hydration/watermark reads completed — so `revision`
+    // was wrongly attributed to the original run even though those later
+    // reads could already reflect the replacement.
+    expect('revision' in (replay ?? {})).toBe(false);
+  });
+
+  it('seeds `workflowExecutionToken` onto a recovered pre-upgrade checkpoint, so a post-recovery checkpoint converges and `replayTo().revision` attribution works again (WFT-21, Codex review, item 4)', async () => {
+    const storage = new MemoryStorage();
+    const recoveryWorkflow = workflow({ name: 'replay-recovery-token-seed' }).execute(
+      async function* (ctx: WorkflowContext) {
+        yield* ctx.run(async () => 'step-one');
+        yield* ctx.waitForSignal<string>('first');
+        yield* ctx.run(async () => 'step-after-recovery');
+        yield* ctx.waitForSignal<string>('second');
+        return 'done';
+      },
+    );
+
+    engine = new Engine({ storage, checkpointHistory: 10 });
+    engine.register(recoveryWorkflow);
+    const handle = await engine.start('replay-recovery-token-seed', null, {
+      id: 'wf-replay-recovery-token-seed',
+    });
+    // `ctx.run()` commits step 1, and parking on `waitForSignal` commits a
+    // further step (step 2) recording the pending wait — poll for that
+    // settled park point before mangling storage below.
+    const checkpointKey = KEYS.checkpoint(handle.id);
+    await waitForCondition(
+      async () => {
+        const bytes = await storage.get(checkpointKey);
+        if (bytes === null) return false;
+        return (decode(bytes) as Record<string, unknown>)['step'] === 2;
+      },
+      { label: 'the step-2 checkpoint (parked on the first waitForSignal)' },
+    );
+
+    const state = decode((await storage.get(KEYS.workflow(handle.id)))!) as Record<string, unknown>;
+    expect(state['workflowExecutionToken']).toBeDefined();
+
+    // Simulate a pre-upgrade run: `WorkflowState` already carries a token
+    // (added at `start()`), but its persisted checkpoint chain predates the
+    // field's introduction entirely — strip it from the live checkpoint and
+    // every history entry written so far, mirroring
+    // `deserializeCheckpoint()`'s own tolerance for its absence.
+    const liveCheckpoint = {
+      ...(decode((await storage.get(checkpointKey))!) as Record<string, unknown>),
+    };
+    delete liveCheckpoint['workflowExecutionToken'];
+    await storage.put(checkpointKey, encode(liveCheckpoint));
+
+    for (const step of [1, 2]) {
+      const historyKey = KEYS.checkpointHistory(handle.id, step);
+      const historyBytes = await storage.get(historyKey);
+      if (historyBytes === null) continue;
+      const historyEntry = { ...(decode(historyBytes) as Record<string, unknown>) };
+      delete historyEntry['workflowExecutionToken'];
+      await storage.put(historyKey, encode(historyEntry));
+    }
+
+    engine[Symbol.dispose]();
+
+    // Recover in a fresh engine instance sharing the same storage — the
+    // real-world "process restart after upgrade" scenario `prepareResumeState()`
+    // must handle.
+    engine = new Engine({ storage, checkpointHistory: 10 });
+    engine.register(recoveryWorkflow);
+    const recoveredHandle = await engine.resume(handle.id);
+    await recoveredHandle.signal('first', 'go');
+    await waitForCondition(
+      async () => {
+        const bytes = await storage.get(checkpointKey);
+        if (bytes === null) return false;
+        const replay = (decode(bytes) as Record<string, unknown>)['__weftCheckpointReplay'] as
+          { accumulatedResults?: Array<[number, unknown]> } | undefined;
+        return (replay?.accumulatedResults ?? []).some(
+          ([, value]) => value === 'step-after-recovery',
+        );
+      },
+      {
+        label:
+          'the checkpoint parked on the second waitForSignal, after the post-recovery ctx.run step',
+      },
+    );
+
+    // The checkpoint produced AFTER recovery must now carry the token,
+    // seeded from `WorkflowState` by `prepareResumeState()` — before this
+    // fix it stayed permanently missing for a run recovered this way, and
+    // `replayTo()` could never attribute a `revision` to any of its
+    // post-recovery history again.
+    const postRecoveryCheckpoint = decode((await storage.get(checkpointKey))!) as Record<
+      string,
+      unknown
+    >;
+    expect(postRecoveryCheckpoint['workflowExecutionToken']).toBe(state['workflowExecutionToken']);
+
+    const replay = await engine.replayTo(handle.id, postRecoveryCheckpoint['step'] as number);
+    expect(replay).not.toBeNull();
+    expect(replay?.revision).toBe(state['revision'] as string);
+
+    await recoveredHandle.signal('second', 'go');
+    await recoveredHandle.result();
   });
 
   it('ignores malformed stored timeline entries and returns results sorted by step', async () => {

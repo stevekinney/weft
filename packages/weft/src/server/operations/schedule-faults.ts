@@ -1,4 +1,3 @@
-import { WorkflowRevisionUnavailableError } from '../../core/engine/revision-errors.ts';
 import {
   isValidScheduleOverlapPolicy,
   isValidScheduleRevisionPolicy,
@@ -7,6 +6,7 @@ import {
 import type { ScheduleSpec, ScheduleUpdateOptions } from '../../core/types.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { invalidParamsFault } from './operation-helpers.ts';
+import { mapRevisionUnavailableToFault } from './revision-unavailable-fault.ts';
 
 export { isOperationFault } from './operation-helpers.ts';
 
@@ -92,30 +92,6 @@ function formatJitterValidationMessage(message: string): string {
   const detail = hasEnginePrefix ? message.slice(enginePrefix.length) : message;
   const wireDetail = detail.replaceAll('options.jitter', 'Field "jitter"');
   return hasEnginePrefix ? `Field "jitter" is invalid: ${wireDetail}` : wireDetail;
-}
-
-/**
- * A pinned schedule's create/update commit lost its revision-availability
- * fence (WFT-20) — the pinned revision was concurrently removed, or (for an
- * eager type) does not exactly match what this process has registered. A
- * structured, typed check rather than substring matching, since the message
- * text varies by `WorkflowRevisionUnavailableError.reason`. `undefined` when
- * `error` is not this error class, so the caller falls through to the
- * ordinary message-based classification.
- */
-function mapRevisionUnavailableToFault(error: unknown): OperationFault | undefined {
-  if (!(error instanceof WorkflowRevisionUnavailableError)) {
-    return undefined;
-  }
-  return {
-    code: 'Conflict',
-    message: error.message,
-    // `error.reason`/`workflowType`/`revision` are already folded into
-    // `message` by the error's own constructor; `OperationFault`'s
-    // `Conflict.data.reason` is a caller-facing free-text summary, not a
-    // structured enum slot for this specific error class.
-    data: { reason: error.reason },
-  };
 }
 
 function isScheduleConflictMessage(normalizedMessage: string): boolean {

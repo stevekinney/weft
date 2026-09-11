@@ -8,6 +8,7 @@ import { encode } from '../codec.ts';
 import { buildWorkflowContract } from '../contract/build.ts';
 import { buildWorkflowRevisionManifest } from '../contract/manifest.ts';
 import { WorkflowRevisionInstalledEvent } from '../events/catalog-events.ts';
+import { CleanupWarningEvent } from '../events/system-events.ts';
 import { RegistryManifestLimitError } from '../registry-workflow-manifest.ts';
 import { workflow, type WorkflowContext } from '../types.ts';
 import type { RegisteredWorkflowDefinition } from '../types/workflow-registry.ts';
@@ -291,5 +292,49 @@ describe('ensureWorkflowCatalogReady — boot-time orphaned-tombstone sweep (WFT
 
     expect(await storage.get(KEYS.catalogTombstone('checkout', v1.revision))).toBeNull();
     expect(await getWorkflowCatalog(recovered).hasInstalled('checkout', v1.revision)).toBe(false);
+  });
+
+  it('reports an isolated tombstone-resolution failure as a bounded CleanupWarningEvent and still completes catalog readiness (WFT-21, Codex review, item 8)', async () => {
+    await using storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const contract = buildWorkflowContract({ name: 'checkout', version: '1.0.0' });
+    const v1 = await buildWorkflowRevisionManifest(contract);
+    const v2 = await buildWorkflowRevisionManifest(
+      buildWorkflowContract({
+        name: 'checkout',
+        version: '1.0.0',
+        description: 'a later revision',
+      }),
+    );
+    await catalog.activateRegistered('checkout', v1, fakeDefinition('checkout'));
+    await catalog.activateRegistered('checkout', v2, fakeDefinition('checkout'));
+
+    const removed = await removeCatalogEntry(storage, 'checkout', v1.revision);
+    if (removed.outcome !== 'removed') throw new Error('expected removed');
+    // Corrupt the orphaned tombstone's own manifest bytes — before this fix,
+    // this single corrupt record would propagate out of the whole sweep and
+    // permanently block catalog readiness (and therefore every
+    // start/resume/fork/recovery call) on every future call.
+    await storage.put(
+      KEYS.catalogTombstone('checkout', v1.revision),
+      new TextEncoder().encode('not json'),
+    );
+
+    await using recovered = new Engine({ storage, backgroundTasks: 'manual' });
+    const warnings: CleanupWarningEvent[] = [];
+    recovered.addEventListener(CleanupWarningEvent.type, (event) => {
+      warnings.push(event as CleanupWarningEvent);
+    });
+
+    await expect(ensureWorkflowCatalogReady(recovered)).resolves.toBeUndefined();
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.source).toBe(`catalog-tombstone-boot-sweep:checkout:${v1.revision}`);
+    expect(warnings[0]?.error).toBeInstanceOf(Error);
+
+    // The corrupt tombstone is left untouched — neither restored nor
+    // finalized — and catalog readiness still completes.
+    expect(await storage.get(KEYS.catalogTombstone('checkout', v1.revision))).not.toBeNull();
+    expect(getInternals(recovered).catalogRestored).toBe(true);
   });
 });
