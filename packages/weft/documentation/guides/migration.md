@@ -5,6 +5,14 @@ This is the canonical location for per-release migration guidance. When a releas
 > [!NOTE]
 > Weft is pre-1.0, so breaking changes can land between releases without the stability guarantees a 1.0 line would carry. Each release that ships one documents its migration steps here, organized by release.
 
+## Migrating from 0.24.0/0.24.1 to 0.24.2
+
+### `.` and `..` are no longer valid workflow or task-operation ids (WFT-95)
+
+Caller-supplied `id`s (`engine.start({ id })`, `ctx.startChild({ id })`, `engine.startOrSignal({ id })`, schedule creation, and dispatched task `operationId`s) can no longer be the exact string `.` or `..`. An id merely containing a dot (`my.workflow.v2`) is unaffected — only these two exact values are rejected. Attempting to start or dispatch with one now throws `StartWorkflowValidationError` (or the equivalent task-admission error) instead of silently succeeding into an id that could never be addressed over REST, since WHATWG URL path normalization collapses `.`/`..` path segments before any single-trailing-parameter REST route (`/v1/workflows/:id`, `/v1/tasks/detail/:operationId`) ever sees them.
+
+This is extremely unlikely to affect real callers — ids are effectively always UUIDs or similarly generated strings — but if you explicitly chose `.` or `..` as an id, pick a different one before upgrading. Already-persisted runs or task records using such an id (however unlikely to exist) are unaffected: decode, lookup, and control paths (`coerceScheduleId()`, workflow-state lineage fields, replay/reattach/bulk-retry paths) were deliberately left permissive, so an existing record with such an id still reads back and remains manageable. Only fresh admission of a caller-supplied `.`/`..` id is rejected.
+
 ## Migrating from 0.23.x to 0.24.0
 
 ### `GET /v1/registry` advances to `registryVersion: 2` (WFT-6)
