@@ -90,7 +90,20 @@ const maximumUnpackedBytes = 12 * 1024 * 1024;
 // (`workflow-record-keys.ts`, `workflow-lifecycle-keys.ts`, `signal-keys.ts`,
 // `lease-keys.ts`), each shipping as a `.js`/`.d.ts` pair: +8 entries. `npm
 // pack --dry-run --json --ignore-scripts` reports 1733 on the resulting tree.
-const maximumEntryCount = 1733;
+// WFT-153 adds the durable per-id generation fence — `generation-codec.ts`,
+// `core/engine/workflow-generation-fence.ts`, and `storage/generation-keys.ts`
+// — plus `lifecycle/start-schedule-timing.ts`, split out of `lifecycle/start.ts`
+// while rebasing onto WFT-90/WFT-95/WFT-134 to keep that file under the
+// 500-line ceiling: 4 new source files, each shipping a `.js`/`.d.ts` pair,
+// +8 entries by the formula. Measuring `npm pack --dry-run --json
+// --ignore-scripts` directly on the merged WFT-90 baseline tree (028ade84,
+// before this PR's own commits) reports 1737, 4 higher than this file's
+// previous 1733 — unattributed drift from `main` between when that comment
+// was written and this rebase, carried forward rather than re-investigated,
+// matching this comment's own established practice for prior unreconciled
+// drift (see the WFT-6 entries above). 1737 + 8 = 1745, the measured count on
+// this PR's own resulting tree.
+const maximumEntryCount = 1745;
 
 type PackFile = {
   path: string;

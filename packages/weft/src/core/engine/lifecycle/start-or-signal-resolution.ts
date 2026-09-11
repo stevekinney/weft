@@ -1,5 +1,5 @@
 import { sleep } from '../../../runtime/portable.ts';
-import { KEYS } from '../../../storage/interface.ts';
+import { KEYS, storageHas } from '../../../storage/interface.ts';
 import { decode } from '../../codec.ts';
 import type { StartOrSignalSignal, WorkflowState } from '../../types.ts';
 import { IdempotencyKeyPurgedError, StartOrSignalConflictError } from '../errors.ts';
@@ -90,6 +90,41 @@ async function awaitReservationCleared(
 }
 
 /**
+ * Was `signalId` the one the winner's create batch (or a later delivery)
+ * actually accepted for `workflowId`/`signalName`? `sigres:` records are
+ * written atomically with the winner's create batch (`buildCreateBatchSignalOperations`,
+ * `signals.ts`), so a hit here proves THIS caller's own signal — not merely
+ * some signal — was the one delivered, regardless of whether the winner had
+ * already reached a terminal status by the time this loser could tell.
+ */
+async function wasSignalAcceptedByWinner(
+  internals: EngineInternals,
+  workflowId: string,
+  signalName: string,
+  signalId: string,
+): Promise<boolean> {
+  return storageHas(
+    internals.storage,
+    KEYS.signalAcceptedResponse(workflowId, signalName, signalId),
+  );
+}
+
+/** A terminal winner: converge on it if THIS caller's own signal was accepted, else conflict. */
+async function resolveTerminalConflictOrConvergence(
+  internals: EngineInternals,
+  winnerId: string,
+  status: WorkflowState['status'],
+  signalSpec: StartOrSignalSignal,
+  signalId: string,
+  callbacks: StartOrSignalCallbacks,
+): Promise<WorkflowHandle> {
+  if (await wasSignalAcceptedByWinner(internals, winnerId, signalSpec.name, signalId)) {
+    return callbacks.getHandle(winnerId);
+  }
+  throw new StartOrSignalConflictError(winnerId, status);
+}
+
+/**
  * Resolve a caller-`id` create-race loss without conflating an in-memory
  * reservation with a durable record. A loser collides on the winner's
  * `pendingStarts` reservation (start.ts) BEFORE the winner commits, so the bare
@@ -101,11 +136,17 @@ async function awaitReservationCleared(
  * resolves it instead of racing it to a terminal-conflict). Only when the record is
  * absent do we wait for the reservation to clear and read once more to discriminate:
  *
- * - **record present** — the winner committed: signal it (or conflict if terminal)
- *   and return the handle.
+ * - **record present** — the winner committed: signal it (or conflict if terminal).
  * - **record absent after the reservation clears** — the winner aborted before
  *   committing (storage failure, oversized payload, throwing start interceptor): no
  *   run exists, so return `undefined` and let the caller retry its own create.
+ *
+ * Either terminal-conflict branch is checked against {@link wasSignalAcceptedByWinner}
+ * before throwing: a fast workflow can reach a terminal status between this
+ * loser's reads, entirely independent of how much slower or faster the winner's
+ * OWN commit path happens to be — so a same-`signalId` convergent caller (the
+ * documented "concurrent absent-target callers" contract) must not depend on
+ * catching the winner mid-flight to avoid a spurious conflict.
  */
 export async function resolveCallerIdWinnerOrRetry(
   internals: EngineInternals,
@@ -127,7 +168,14 @@ export async function resolveCallerIdWinnerOrRetry(
       return callbacks.getHandle(winnerId);
     }
     if (!allowTerminalRestart) {
-      throw new StartOrSignalConflictError(winnerId, state.status);
+      return resolveTerminalConflictOrConvergence(
+        internals,
+        winnerId,
+        state.status,
+        signalSpec,
+        signalId,
+        callbacks,
+      );
     }
   }
   await awaitReservationCleared(internals, winnerId);
@@ -139,7 +187,14 @@ export async function resolveCallerIdWinnerOrRetry(
     if (state !== null && isSameTerminalRun(state, stateAfterReservation)) {
       return undefined;
     }
-    throw new StartOrSignalConflictError(winnerId, stateAfterReservation.status);
+    return resolveTerminalConflictOrConvergence(
+      internals,
+      winnerId,
+      stateAfterReservation.status,
+      signalSpec,
+      signalId,
+      callbacks,
+    );
   }
   await callbacks.signalExistingWorkflow(winnerId, signalSpec.name, signalSpec.payload, signalId);
   return callbacks.getHandle(winnerId);

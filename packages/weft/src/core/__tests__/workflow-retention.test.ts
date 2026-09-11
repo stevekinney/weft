@@ -5,7 +5,11 @@ import {
   waitForRealTimersForTesting,
 } from '../../testing/fake-timers.test-support.ts';
 
-import type { BatchOperation, ScanOptions } from '../../storage/interface.ts';
+import type {
+  BatchOperation,
+  ConditionalBatchCondition,
+  ScanOptions,
+} from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { ActivityRegistry } from '../activity-registry.ts';
@@ -67,11 +71,25 @@ async function waitForWorkflowPresence(
 }
 
 class RecordingMemoryStorage extends MemoryStorage {
+  // Records EITHER commit path as one atomic "batch call": WFT-153's
+  // generation-fence CAS condition routes purge through `conditionalBatch`
+  // whenever the backend reports that capability (true for `MemoryStorage`),
+  // rather than the plain `batch()` every purge previously always used under
+  // `ownership: 'none'`. Tests asserting "one batch call per workflow" care
+  // about atomicity, not which storage method carried it.
   readonly batchCalls: BatchOperation[][] = [];
 
   override async batch(operations: BatchOperation[]): Promise<void> {
     this.batchCalls.push([...operations]);
     await super.batch(operations);
+  }
+
+  override async conditionalBatch(
+    conditions: ConditionalBatchCondition[],
+    operations: BatchOperation[],
+  ): Promise<boolean> {
+    this.batchCalls.push([...operations]);
+    return super.conditionalBatch(conditions, operations);
   }
 }
 
@@ -87,21 +105,19 @@ class OverlapTrackingMemoryStorage extends MemoryStorage {
     this.delayMs = delayMs;
   }
 
-  override async batch(operations: BatchOperation[]): Promise<void> {
-    const isTrackedPurgeBatch =
+  #isTrackedPurgeOperations(operations: BatchOperation[]): boolean {
+    return (
       this.shouldTrackPurgeBatches &&
       operations.some(
         (operation) =>
           operation.type === 'delete' &&
           operation.key.startsWith('wf:') &&
           !operation.key.slice('wf:'.length).includes(':'),
-      );
+      )
+    );
+  }
 
-    if (!isTrackedPurgeBatch) {
-      await super.batch(operations);
-      return;
-    }
-
+  async #trackConcurrentPurge<T>(runCommit: () => Promise<T>): Promise<T> {
     this.activePurgeBatches++;
     this.maxConcurrentPurgeBatches = Math.max(
       this.maxConcurrentPurgeBatches,
@@ -110,10 +126,31 @@ class OverlapTrackingMemoryStorage extends MemoryStorage {
 
     try {
       await waitForRealTimersForTesting(this.delayMs);
-      await super.batch(operations);
+      return await runCommit();
     } finally {
       this.activePurgeBatches--;
     }
+  }
+
+  override async batch(operations: BatchOperation[]): Promise<void> {
+    if (!this.#isTrackedPurgeOperations(operations)) {
+      await super.batch(operations);
+      return;
+    }
+    await this.#trackConcurrentPurge(() => super.batch(operations));
+  }
+
+  // WFT-153: purge's generation-fence CAS condition now routes its commit
+  // through `conditionalBatch` (this backend reports that capability), not
+  // the plain `batch()` this class originally tracked exclusively.
+  override async conditionalBatch(
+    conditions: ConditionalBatchCondition[],
+    operations: BatchOperation[],
+  ): Promise<boolean> {
+    if (!this.#isTrackedPurgeOperations(operations)) {
+      return super.conditionalBatch(conditions, operations);
+    }
+    return this.#trackConcurrentPurge(() => super.conditionalBatch(conditions, operations));
   }
 }
 

@@ -7,6 +7,7 @@ import {
   storageHasCore,
   storageKeysCore,
 } from './derived-operations.ts';
+import { GENERATION_KEYS } from './generation-keys.ts';
 import { LEASE_KEYS } from './lease-keys.ts';
 import { MAILBOX_KEYS } from './mailbox-keys.ts';
 import { OUTBOX_KEYS } from './outbox-keys.ts';
@@ -483,6 +484,7 @@ export const KEYS: typeof WORKFLOW_RECORD_KEYS_CORE &
   typeof OUTBOX_KEYS &
   typeof OWNERSHIP_CLAIM_KEYS &
   typeof WORKFLOW_CATALOG_KEYS &
+  typeof GENERATION_KEYS &
   typeof WORKFLOW_LIFECYCLE_KEYS_EXTENDED = {
   ...WORKFLOW_RECORD_KEYS_CORE,
   ...SIGNAL_KEYS,
@@ -493,5 +495,6 @@ export const KEYS: typeof WORKFLOW_RECORD_KEYS_CORE &
   ...OUTBOX_KEYS,
   ...OWNERSHIP_CLAIM_KEYS,
   ...WORKFLOW_CATALOG_KEYS,
+  ...GENERATION_KEYS,
   ...WORKFLOW_LIFECYCLE_KEYS_EXTENDED,
 };

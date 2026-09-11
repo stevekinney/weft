@@ -29,7 +29,8 @@ export {
   workflowVersionTupleFromState,
 } from './lifecycle/persist.ts';
 
-export { resolveScheduledStartAt, start, startWorkflow } from './lifecycle/start.ts';
+export { resolveScheduledStartAt } from './lifecycle/start-schedule-timing.ts';
+export { start, startWorkflow } from './lifecycle/start.ts';
 
 export {
   applyRestartLineage,
