@@ -103,7 +103,13 @@ const maximumUnpackedBytes = 12 * 1024 * 1024;
 // matching this comment's own established practice for prior unreconciled
 // drift (see the WFT-6 entries above). 1737 + 8 = 1745, the measured count on
 // this PR's own resulting tree.
-const maximumEntryCount = 1745;
+// Bumped again for the v0.25.0 release (WFT-21): #963 added compiled
+// modules for fork/replay/purge revision-reference-accounting work
+// (`revision-unavailable-fault.ts`, `fork-source-replaced-error.ts`,
+// `fork-source-replacement-guards.ts`, and related helpers), each shipping
+// a `.js`/`.d.ts` pair. `bun run prepack` measured 1757 entries on this
+// release's own resulting tree (pinned to the CI-matching Bun 1.4.0).
+const maximumEntryCount = 1757;
 
 type PackFile = {
   path: string;

@@ -391,8 +391,8 @@ export type WorkflowReplay = {
    * predates revision pinning (a legacy record with no persisted
    * `revision`).
    *
-   * **Known limitation for an EAGER-registered type (Codex review round 4,
-   * P2, documented rather than fixed):** recovery and a default fork
+   * **Known limitation for an EAGER-registered type, documented rather
+   * than fixed (WFT-159):** recovery and a default fork
    * intentionally run whatever THIS process currently has eagerly
    * registered, even when it differs from `revision` —
    * `resolveExecutableRegistrationForRevision()`'s documented "eager is
