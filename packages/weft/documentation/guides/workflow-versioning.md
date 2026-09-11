@@ -577,11 +577,15 @@ own current state fresh.
 
 **A third, narrower reservation closes a legacy-source gap.** The in-memory
 reservation above reserves against `targetRevision` (`options.revision ??
-sourceState.revision`)—a no-op when BOTH are `undefined`, which happens
-only for a default fork of a legacy (pre-revision-pinning) source run on a
-dynamic-source type with exactly one registered candidate. The resolver
-still resolves—and the fork still persists against—that sole candidate's
-real revision even though nothing was reserved for it. `fork()` reserves a
+sourceState.revision`) via `reserveInFlightStart()`, which falls back to
+the catalog's cached active pointer for the type whenever `targetRevision`
+is `undefined`—so this early reservation is a genuine no-op only when
+`targetRevision` is `undefined` AND no active pointer exists for the type,
+which happens only for a default fork of a legacy (pre-revision-pinning)
+source run on a dynamic-source type with exactly one registered candidate
+that also has no active catalog entry yet. The resolver still resolves—and
+the fork still persists against—that sole candidate's real revision even
+when nothing was reserved for it. `fork()` reserves a
 SECOND, conditional in-memory slot for the resolver's own resolved
 revision whenever it differs from what the early reservation actually
 reserved—not `targetRevision` itself, but `reserveInFlightStart()`'s own
@@ -635,13 +639,18 @@ revision. `install()`'s and `resolveEntry()`'s cache-hit paths, `hasInstalled()`
 (which delegates to `resolveEntry()`), and `activateCandidate()`'s and
 `activateRegistered()`'s active-pointer commits all revalidate against (or
 fence on) durable storage rather than trusting a stale in-process cache—so
-`preload()`, `resolveWorkflowSource()`'s cache-hit fast path,
-`getWorkflowRevisionDiagnostics()`, and `register()`'s activation paths can
-no longer report or activate a revision a peer has already durably removed.
-`activateRegistered()` reinstalls (unfenced) and retries on a missing
-candidate entry rather than throwing immediately, since this call already
-owns `manifest`/`definition`; a still-null reread after reinstalling is
-treated as another lost race and retried. This retry is bounded, not
+`preload()`, `resolveWorkflowSource()`'s cache-hit fast path, and
+`getWorkflowRevisionDiagnostics()` can no longer report a revision a peer
+has already durably removed. `register()`'s `activateRegistered()` path is
+narrower: its own active-pointer commit still fences on the candidate
+entry's current bytes (preventing the pointer from ever naming a MISSING
+entry), but its unconditional `install()` call carries no
+`catalog-removal-generation` fence, so on a missing candidate it reinstalls
+and can reactivate a revision a peer has already fully removed and
+finalized—`activateRegistered()` deliberately owns `manifest`/`definition`
+and always wins that race, by design (see its own doc): a still-null
+reread after reinstalling is treated as another lost race and retried, not
+a terminal absence. This retry is bounded, not
 unconditional: `activateRegistered()` caps at
 `MAX_ACTIVATE_REGISTERED_ATTEMPTS` (5, the repo-wide "cap at five" rule)
 attempts and then throws `WorkflowCatalogActivationConflictError` on
