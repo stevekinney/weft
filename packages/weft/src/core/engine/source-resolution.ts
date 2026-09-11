@@ -120,13 +120,11 @@ async function runSharedSourceLoad(
   name: string,
   revision: string,
   handle: WorkflowSourceHandle,
+  removalGenerationAtLoadStart: Uint8Array | null,
 ): Promise<WorkflowRevisionRecord> {
-  // See `installFencedSourceRevision`'s own doc (WFT-21, item Q7jH).
-  const removalGenerationAtLoadStart = await readCatalogRemovalGeneration(
-    internals.storage,
-    name,
-    revision,
-  );
+  // Captured by the caller BEFORE `resolveCachedOrHandle()`'s own durable
+  // catalog lookup, not here (WFT-21, item U4Je) — see
+  // `installFencedSourceRevision`'s own doc for the fence rationale.
   const resolved = await resolveSourceModule(handle.descriptor, handle);
   if (!resolved.ok) {
     throw new WorkflowSourceValidationError(name, revision, [resolved.reason]);
@@ -181,6 +179,7 @@ function getOrCreateSharedSourceLoad(
   name: string,
   revision: string,
   handle: WorkflowSourceHandle,
+  removalGenerationAtLoadStart: Uint8Array | null,
 ): Promise<WorkflowRevisionRecord> {
   let byRevision = internals.sources.resolutionsInFlight.get(name);
   if (byRevision === undefined) {
@@ -209,6 +208,7 @@ function getOrCreateSharedSourceLoad(
     name,
     revision,
     handle,
+    removalGenerationAtLoadStart,
   )
     .then(
       (record) => {
@@ -461,6 +461,42 @@ async function resolveWorkflowSourceCore(
   internals.sources.waiterControllers.add(waiter.controller);
   beginSourceWaiter(internals, name, revision);
   try {
+    // Captured BEFORE `resolveCachedOrHandle()`'s own durable catalog
+    // lookup below (WFT-21, item U4Je): that lookup's own `resolveEntry()`
+    // read can race a concurrent removal+finalize, and a fence captured
+    // only later — inside `runSharedSourceLoad()`, after this whole lookup
+    // already returned absent — would already observe the POST-removal
+    // counter value as its baseline, making the fence a no-op against
+    // exactly that race. Capturing it here, before the lookup even starts,
+    // means any removal landing from this point on (including during the
+    // lookup itself) is visible as a generation mismatch once the fenced
+    // install actually runs.
+    //
+    // Raced against this waiter's own abort signal using the same
+    // check-then-construct pattern `abortRejection()`'s own doc requires
+    // (checked synchronously immediately before constructing it, no await
+    // in between). No re-check of `waiter.controller.signal.aborted`
+    // precedes this construction: every statement since the entry-point
+    // check above (the `internals.disposed` check, the `waiterControllers`
+    // add, `beginSourceWaiter`) is synchronous with no intervening await,
+    // so nothing could have flipped the signal to aborted in between — a
+    // second check here would be unreachable dead code, not a real guard.
+    // This read is the first await in this function's try block, so an
+    // abort landing while it is in flight must be observed via the race
+    // below rather than silently ignored for the rest of this call.
+    const removalGenerationAbort = abortRejection(waiter.controller.signal);
+    removalGenerationAbort.catch(() => {});
+    const removalGenerationRead = readCatalogRemovalGeneration(internals.storage, name, revision);
+    let removalGenerationAtLoadStart: Uint8Array | null;
+    try {
+      removalGenerationAtLoadStart = await Promise.race([
+        removalGenerationRead,
+        removalGenerationAbort,
+      ]);
+    } finally {
+      removalGenerationRead.catch(() => {});
+    }
+
     // Raced against this waiter's own abort signal, not just re-checked
     // after — `resolveCachedOrHandle()`'s awaits (catalog readiness, a
     // durable `resolveEntry` read, the pin-compatibility check) can stall
@@ -494,7 +530,14 @@ async function resolveWorkflowSourceCore(
       return outcome.cached;
     }
 
-    const shared = getOrCreateSharedSourceLoad(engine, internals, name, revision, outcome.handle);
+    const shared = getOrCreateSharedSourceLoad(
+      engine,
+      internals,
+      name,
+      revision,
+      outcome.handle,
+      removalGenerationAtLoadStart,
+    );
     const waiterAbort = abortRejection(waiter.controller.signal);
     waiterAbort.catch(() => {});
     return await Promise.race([shared, waiterAbort]);

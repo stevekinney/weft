@@ -357,6 +357,18 @@ export class WorkflowCatalog {
         // `activateCandidate`'s throw.
         await this.install(manifest, definition);
         candidateEntryBytes = await this.#storage.get(candidateEntryKey);
+        if (candidateEntryBytes === null) {
+          // Lost ANOTHER removal race in the gap between the reinstall
+          // above and this re-read (WFT-21, item U4Jg) — a `null` here is
+          // not a genuine "entry absent" precondition to commit against,
+          // it is "this iteration's observation is already stale." Retry
+          // the whole iteration (re-reading the active pointer too) rather
+          // than passing `null` through as the entry-bytes CAS
+          // precondition below, which would let the pointer-write CAS
+          // succeed unconditioned on any real entry and plant an active
+          // pointer naming a revision that is durably absent right now.
+          continue;
+        }
       }
 
       const nextGeneration = current === null ? 1 : current.generation + 1;

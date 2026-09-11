@@ -1187,3 +1187,85 @@ describe('catalog.install() vs. a removal that fully completes WHILE a stale loa
     engineB[Symbol.dispose]();
   });
 });
+
+describe('resolveWorkflowSource() vs. a removal completing DURING the catalog lookup itself — WFT-21, Codex review round 15, P1 item U4Je', () => {
+  it("captures the removal-generation fence BEFORE resolveCachedOrHandle's own durable catalog lookup, not after, so a removal landing during that lookup is still observed", async () => {
+    const storage = new MemoryStorage();
+    const type = 'removal-generation-fence-catalog-lookup';
+    const definitionV1 = workflow({ name: type, description: 'v1' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      return yield* ctx.waitForSignal<string>('go');
+    });
+    const revisionV1 = await revisionFor(type, definitionV1);
+    const entryKey = KEYS.catalogEntry(type, revisionV1);
+
+    // Engine A performs the concurrent install-then-remove-then-finalize
+    // cycle, triggered from inside the interceptor below.
+    const engineA = new Engine({ storage });
+    engineA.registerSource(
+      workflowSource(
+        { name: type, location: './v1.ts', exportName: 'v1', revision: revisionV1 },
+        async () => ({ v1: definitionV1 }),
+      ),
+    );
+
+    // Engine B resolves the same revision. Its own loader is NOT gated —
+    // the race under test is BEFORE the loader ever runs, at
+    // resolveCachedOrHandle()'s own durable catalog-entry read.
+    const engineB = new Engine({ storage });
+    let loaderCalls = 0;
+    engineB.registerSource(
+      workflowSource(
+        { name: type, location: './v1.ts', exportName: 'v1', revision: revisionV1 },
+        async () => {
+          loaderCalls += 1;
+          return { v1: definitionV1 };
+        },
+      ),
+    );
+
+    const originalGet = storage.get.bind(storage);
+    let intercepted = false;
+    storage.get = async (key: string) => {
+      if (!intercepted && key === entryKey) {
+        intercepted = true;
+        // By the time this durable read runs, engine B's own
+        // removal-generation fence must already have been captured (still
+        // observing "never removed") — this call is
+        // `resolveCachedOrHandle()`'s own `catalog.resolveEntry()` read,
+        // strictly AFTER that fence capture in the fixed ordering. Perform
+        // a full install-then-remove-then-finalize cycle for the exact
+        // same revision RIGHT NOW, so engine B's already-captured fence is
+        // stale by the time its own loader's `catalog.install()` call
+        // eventually uses it.
+        await engineA.resolveWorkflowSource(type, revisionV1);
+        const removed = await removeWorkflowRevision(engineA, type, revisionV1);
+        expect(removed).toEqual({ removed: true });
+      }
+      return originalGet(key);
+    };
+
+    let resolveError: unknown;
+    try {
+      await engineB.resolveWorkflowSource(type, revisionV1);
+    } catch (error) {
+      resolveError = error;
+    } finally {
+      storage.get = originalGet;
+    }
+
+    // The catalog lookup found the revision durably absent (it had never
+    // been installed at the time engine B's own read ran, before the
+    // interceptor's install), so the loader DOES run — but the fenced
+    // install afterward must fail closed on the stale fence rather than
+    // resurrecting the revision engine A's removal already finalized.
+    expect(loaderCalls).toBe(1);
+    expect(resolveError).toBeInstanceOf(WorkflowRevisionUnavailableError);
+    expect((resolveError as WorkflowRevisionUnavailableError).reason).toBe('not-installed');
+    expect(await storage.get(entryKey)).toBeNull();
+
+    engineA[Symbol.dispose]();
+    engineB[Symbol.dispose]();
+  });
+});

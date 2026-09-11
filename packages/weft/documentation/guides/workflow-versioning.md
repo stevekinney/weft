@@ -677,6 +677,30 @@ the same round to close a related gap: a stale in-process cache hit could
 return—or activate—a revision a peer had already durably removed; both now
 revalidate against (or fence on) durable storage before proceeding.
 
+**Two bounded extensions of the fixes above closed the remaining gaps
+(Codex review rounds 15 and 16).** `activateRegistered()`—`register()`'s
+own drain path, distinct from the guarded `activateCandidate()`
+primitive—had no candidate-entry fence of its own on its active-pointer
+commit; it now reads and fences on the candidate entry's current bytes each
+retry iteration, reinstalling (unfenced) and retrying rather than throwing
+when the entry is missing, since this call already owns `manifest`/
+`definition` and must never hard-fail registration. `resolveEntry()` and
+`hasInstalled()` still trusted an in-process cache hit without revalidating
+it durably—the round-14 fix covered only `install()`'s own cache-hit
+path—so `preload()`, `resolveWorkflowSource()`'s cache-hit fast path, and
+`getWorkflowRevisionDiagnostics()` could still report a durably-removed
+revision as installed; `resolveEntry()` now always durable-reads, and
+`hasInstalled()` delegates to it. The removal-generation fence itself was
+captured too late—only after the durable catalog lookup that precedes
+it—so a removal completing DURING that lookup produced a fence baseline
+that already reflected the post-removal counter, making the fence a no-op
+for that narrower timing; the fence is now captured before the lookup
+starts, raced against the caller's own abort signal. Finally,
+`activateRegistered()`'s new fence could observe a SECOND vanish of the
+just-reinstalled candidate in the gap between reinstall and reread; a still-
+null reread is now treated as another lost race and retried, rather than
+passed through as a commit precondition.
+
 The ADR 0002 workflow-lease reclaim-eligibility check
 (`isWorkflowTypeRegistered`) is source- and revision-aware for the same
 reason—see

@@ -337,6 +337,49 @@ describe('WorkflowCatalog.activateRegistered', () => {
     expect(catalog.resolveActive('checkout')?.revision).toBe('pinned-1');
     expect(await storage.get(KEYS.catalogEntry('checkout', 'pinned-1'))).not.toBeNull();
   });
+
+  it('retries the whole iteration instead of committing a null candidate-entry precondition when a peer removes the reinstalled candidate AGAIN before the reread (WFT-21, Codex review round 15, P2 item U4Jg)', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const manifest = await manifestFor('checkout', '1.0.0', { revision: 'pinned-1' });
+    const entryKey = KEYS.catalogEntry('checkout', 'pinned-1');
+
+    // Sabotage the FIRST two durable entry writes (each `conditionalBatch`
+    // call that successfully puts the entry key), deleting the entry again
+    // immediately after each one commits — simulating a peer removing it a
+    // moment later, twice in a row. The third write is left alone so
+    // `activateRegistered()` eventually converges.
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+    let entryWriteCount = 0;
+    storage.conditionalBatch = async (conditions, operations) => {
+      const isEntryWrite = operations.some((op) => op.type === 'put' && op.key === entryKey);
+      const result = await originalConditionalBatch(conditions, operations);
+      if (isEntryWrite && result) {
+        entryWriteCount += 1;
+        if (entryWriteCount === 1 || entryWriteCount === 2) {
+          await storage.delete(entryKey);
+        }
+      }
+      return result;
+    };
+
+    const pointer = await catalog.activateRegistered(
+      'checkout',
+      manifest,
+      fakeDefinition('checkout'),
+    );
+
+    // Before this fix, the SECOND null re-read (after the first reinstall)
+    // would have been passed straight into the pointer-write CAS as its
+    // candidate-entry precondition — matching the durably-absent state and
+    // letting the write succeed, planting a pointer naming a missing
+    // entry. It now retries instead, converging once the third write is
+    // left standing.
+    expect(pointer.revision).toBe('pinned-1');
+    expect(catalog.resolveActive('checkout')?.revision).toBe('pinned-1');
+    expect(entryWriteCount).toBe(3);
+    expect(await storage.get(entryKey)).not.toBeNull();
+  });
 });
 
 describe('WorkflowCatalog.activateCandidate', () => {
