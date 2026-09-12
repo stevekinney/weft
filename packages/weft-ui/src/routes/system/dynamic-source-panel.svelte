@@ -325,11 +325,10 @@
           onclick={runPreload}
         />
         <span class="weft-dynamic-source__note">
-          Makes sure this revision is installed in the durable catalog. If it already is — another
-          process installed it, or this one did before restarting — Weft returns the existing entry
-          without loading the module, so the load state above can stay Idle on a successful preload.
-          Otherwise Weft loads and validates it, running one load per key and sharing it with every
-          waiting caller; it cannot be cancelled from here.
+          Ensures this revision is installed in the durable catalog. Weft validates an existing
+          entry or loads and validates the module, sharing one load per key within the serving
+          engine process. The diagnostics above are a separate observation of the responding engine;
+          they do not prove which process handled this preload. It cannot be cancelled from here.
         </span>
       </div>
 

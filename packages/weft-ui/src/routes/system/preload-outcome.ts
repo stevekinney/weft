@@ -2,9 +2,9 @@
  * Preload-outcome presentation (WFT-116): turns the wire outcome of
  * `weft.workflows.revisions.preload` into text an operator can act on.
  *
- * `weft.workflows.revisions.preload` (`workflows:admin`) loads, validates,
- * and installs one `engine.registerSource()`-registered `(name, revision)`
- * durably into the workflow catalog. It resolves with the installed
+ * `weft.workflows.revisions.preload` (`workflows:admin`) validates an existing
+ * catalog entry or loads, validates, and installs one registered source
+ * revision durably into the workflow catalog. It resolves with the installed
  * `WorkflowRevisionRecord`, or faults with one of a bounded set this module
  * enumerates exhaustively from the server's own mapping
  * (`preload-workflow-revision.ts` plus `workflow-catalog-operation-helpers.ts`'s
@@ -20,10 +20,12 @@
  *   forwards the loader's own message (it can carry a filesystem path or a
  *   credentialed URL); the classified cause is observable instead through
  *   `weft.catalog.diagnostics`' `source.lastFailureCategory`, which is
- *   exactly why the panel re-fetches diagnostics after a failed preload.
+ *   why the panel re-fetches diagnostics after a failed preload. Correlating
+ *   that observation with this failure requires routing both requests to the
+ *   same engine process.
  * - `Conflict` + `data.reason: 'validation-failed'` + `sourceValidationReasons`
- *   — the module loaded but failed `validateResolvedWorkflowSource()`; the
- *   bounded reason list is rendered verbatim.
+ *   — a stored manifest or freshly loaded candidate failed validation against
+ *   the source descriptor; the bounded reason list is rendered verbatim.
  * - `Conflict` + `data.reason: 'ambiguous-revision'` — two or more
  *   registered revisions matched and the engine refused to guess.
  * - `Conflict` + `data.reason: 'catalog-conflict'` — a durable catalog
@@ -110,8 +112,8 @@ type KnownSourceRejectionReason = (typeof KNOWN_SOURCE_REJECTION_REASONS)[number
  * The two contexts compare different things. Activation compares a candidate
  * against the catalog's currently active revision, and
  * `compatibilityReasonLabel()`'s copy says so. Source validation
- * (`validateResolvedWorkflowSource()`) compares the LOADED ARTIFACT against
- * the synthetic expected manifest built from the `registerSource()`
+ * compares a stored manifest or freshly loaded candidate against the
+ * synthetic expected manifest built from the `registerSource()`
  * descriptor; it never consults the active pointer at all. Reusing the
  * activation copy here pointed the operator's remediation at an unrelated
  * revision — the descriptor or the artifact is what they need to look at.
@@ -136,7 +138,7 @@ const SOURCE_REJECTION_REASON_LABELS: Readonly<Record<KnownSourceRejectionReason
 };
 
 function isKnownSourceRejectionReason(value: string): value is KnownSourceRejectionReason {
-  return value in SOURCE_REJECTION_REASON_LABELS;
+  return Object.hasOwn(SOURCE_REJECTION_REASON_LABELS, value);
 }
 
 /**
@@ -151,7 +153,7 @@ export function sourceRejectionReasonLabel(reason: string): string {
 }
 
 function isKnownConflictReason(value: string): value is KnownPreloadConflictReason {
-  return value in PRELOAD_CONFLICT_REASON_LABELS;
+  return Object.hasOwn(PRELOAD_CONFLICT_REASON_LABELS, value);
 }
 
 /** Operator copy for one preload conflict reason, or an honest fallback for an unrecognized one. */

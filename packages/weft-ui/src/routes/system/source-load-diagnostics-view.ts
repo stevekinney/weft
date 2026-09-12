@@ -28,8 +28,7 @@
  * `internals.registrations` only — a dynamic-source name never appears in
  * it, not even after a successful preload installs a revision durably. So a
  * caller can only ask about a key it already holds (filed upstream as
- * WFT-165). See `dynamic-source-panel.svelte`'s module doc for how the two
- * console surfaces divide that constraint between them.
+ * WFT-165). `dynamic-source-panel.svelte` provides the sole lookup surface.
  */
 import { formatDuration } from '../../lib/format/index.ts';
 

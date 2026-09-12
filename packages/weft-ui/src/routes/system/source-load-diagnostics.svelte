@@ -19,8 +19,9 @@
    * stop this console from watching it, while every real waiter stayed
    * blocked. So there is no Cancel control here, and the `loading` copy
    * says plainly that the load is server-side. `cancelled` still renders as
-   * a first-class state, because a load CAN be cancelled by the engine
-   * (shutdown, disposal) even though no operator action can do it.
+   * a first-class state: it records that the final waiting caller went away.
+   * The shared load can continue and install the revision after that state
+   * transition; `cancelled` does not establish that the work stopped.
    */
   import Badge from '@lostgradient/cinder/badge';
   import { AlertTriangle, CircleDashed, CheckCircle2, Loader, XCircle } from 'lucide-svelte';
@@ -159,8 +160,8 @@
 
     {#if summary.state === 'loading'}
       <p class="weft-source-load__note">
-        This load is running inside the serving engine and is shared by every waiting caller. The
-        console cannot cancel it; closing or refreshing this page does not stop it.
+        This load is shared by waiting callers on the serving engine process. The console cannot
+        cancel it; closing or refreshing this page does not stop it.
       </p>
     {/if}
 

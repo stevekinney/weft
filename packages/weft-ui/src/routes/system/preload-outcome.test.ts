@@ -158,6 +158,15 @@ describe('describePreloadOutcome', () => {
 });
 
 describe('reason labels', () => {
+  it.each(['toString', 'constructor', '__proto__', 'hasOwnProperty'])(
+    'treats inherited property %s as an unknown reason',
+    (reason) => {
+      expect(sourceRejectionReasonLabel(reason)).toBe(`unknown reason: ${reason}`);
+      expect(preloadConflictReasonLabel(reason)).toContain('does not recognize');
+      expect(preloadConflictReasonLabel(reason)).toContain(reason);
+    },
+  );
+
   it('describes invalid definitions without assuming how the export was constructed', () => {
     expect(sourceRejectionReasonLabel('invalid-definition')).toBe(
       'The candidate workflow definition is invalid or could not be normalized.',
