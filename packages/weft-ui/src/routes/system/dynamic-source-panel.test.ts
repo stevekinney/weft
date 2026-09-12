@@ -15,9 +15,11 @@ import { realClient, ScriptedFetch } from './system-test-support.test-support.ts
 
 const DIAGNOSTICS = 'weft.catalog.diagnostics';
 const PRELOAD = 'weft.workflows.revisions.preload';
+const SOURCES_LIST = 'weft.catalog.sources.list';
 
 const NAME = 'invoice-reconciliation';
 const REVISION = 'invoice-reconciliation-r1';
+const SECOND_REVISION = 'invoice-reconciliation-r2';
 
 function idleDiagnostics() {
   return {
@@ -31,7 +33,23 @@ function idleDiagnostics() {
   };
 }
 
-async function renderPanel(principalScopes?: readonly (typeof AUTHORIZATION_SCOPES)[number][]) {
+function sourceList(
+  sources = [
+    { name: NAME, revision: REVISION, kind: 'module' as const, state: 'idle' as const },
+    { name: NAME, revision: SECOND_REVISION, kind: 'module' as const, state: 'ready' as const },
+  ],
+  nextOffset?: number,
+) {
+  return { sources, ...(nextOffset === undefined ? {} : { nextOffset }) };
+}
+
+async function renderPanel(options?: {
+  readonly principalScopes?: readonly (typeof AUTHORIZATION_SCOPES)[number][];
+  readonly sourcePage?: unknown;
+  readonly routeSourceList?: boolean;
+}) {
+  const { principalScopes, sourcePage = sourceList(), routeSourceList = true } = options ?? {};
+  if (routeSourceList) scripted?.routeJsonRpcMethod(SOURCES_LIST, sourcePage);
   return render(SystemRouteTestHarness, {
     props: {
       client: realClient(),
@@ -75,12 +93,6 @@ describe('DynamicSourcePanel', () => {
     expect((getByRole('button', { name: 'Inspect' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  test('says plainly that Weft cannot list registered sources', async () => {
-    scripted = new ScriptedFetch();
-    const { findByText } = await renderPanel();
-    expect(await findByText(/Weft exposes no way to list registered sources/)).not.toBeNull();
-  });
-
   test('renders the submitted key’s diagnostics after Inspect', async () => {
     scripted = new ScriptedFetch();
     scripted.routeJsonRpcMethod(DIAGNOSTICS, idleDiagnostics());
@@ -109,7 +121,9 @@ describe('DynamicSourcePanel', () => {
     scripted = new ScriptedFetch();
     scripted.routeJsonRpcMethod(DIAGNOSTICS, idleDiagnostics());
     const withoutAdmin = AUTHORIZATION_SCOPES.filter((scope) => scope !== 'workflows:admin');
-    const { container, getByRole, findByText } = await renderPanel(withoutAdmin);
+    const { container, getByRole, findByText } = await renderPanel({
+      principalScopes: withoutAdmin,
+    });
 
     await inspect(container, getByRole);
     await findByText('Load state: Idle');
@@ -139,6 +153,12 @@ describe('DynamicSourcePanel', () => {
         (call) => typeof call.init?.body === 'string' && call.init.body.includes(DIAGNOSTICS),
       );
       expect(diagnosticsCalls.length).toBeGreaterThan(1);
+    });
+    await waitFor(() => {
+      const listCalls = (scripted?.calls ?? []).filter(
+        (call) => typeof call.init?.body === 'string' && call.init.body.includes(SOURCES_LIST),
+      );
+      expect(listCalls.length).toBeGreaterThan(1);
     });
   });
 
@@ -385,6 +405,35 @@ describe('DynamicSourcePanel', () => {
     expect(JSON.parse(preloadCall!.init!.body as string).params.revision).toBe('line\r\nrevision');
   });
 
+  test('selects an opaque CR/LF revision without normalizing the key', async () => {
+    const opaqueRevision = 'line\r\nrevision';
+    scripted = new ScriptedFetch();
+    scripted.routeJsonRpcMethod(DIAGNOSTICS, idleDiagnostics());
+    const { container, getByRole, findByText } = await renderPanel({
+      sourcePage: sourceList([
+        { name: NAME, revision: opaqueRevision, kind: 'module', state: 'idle' },
+      ]),
+    });
+
+    await findByText(JSON.stringify(opaqueRevision));
+    await fireEvent.click(getByRole('button', { name: 'Select' }));
+
+    const revisionInput = container.querySelector('#weft-dynamic-source-revision');
+    const jsonCheckbox = container.querySelector('#weft-dynamic-source-revision-json');
+    if (
+      !(revisionInput instanceof HTMLInputElement) ||
+      !(jsonCheckbox instanceof HTMLInputElement)
+    ) {
+      throw new Error('lookup controls not rendered');
+    }
+    expect(jsonCheckbox.checked).toBe(true);
+    expect(revisionInput.value).toBe(JSON.stringify(opaqueRevision));
+    const diagnosticsCall = scripted.calls.find(
+      (call) => typeof call.init?.body === 'string' && call.init.body.includes(DIAGNOSTICS),
+    );
+    expect(JSON.parse(diagnosticsCall!.init!.body as string).params.revision).toBe(opaqueRevision);
+  });
+
   test.each(['not JSON', '42', 'null', '""'])(
     'does not submit an invalid or empty JSON-string revision: %s',
     async (revision) => {
@@ -393,7 +442,13 @@ describe('DynamicSourcePanel', () => {
       await fireEvent.click(container.querySelector('#weft-dynamic-source-revision-json')!);
       await inspect(container, getByRole, NAME, revision);
       expect((getByRole('button', { name: 'Inspect' }) as HTMLButtonElement).disabled).toBe(true);
-      expect(scripted.calls).toHaveLength(0);
+      expect(
+        scripted.calls.filter(
+          (call) =>
+            typeof call.init?.body === 'string' &&
+            (call.init.body.includes(DIAGNOSTICS) || call.init.body.includes(PRELOAD)),
+        ),
+      ).toHaveLength(0);
     },
   );
 

@@ -5,24 +5,13 @@
    * of one `engine.registerSource()`-registered `(name, revision)` key and
    * offers the one scoped action Weft exposes for it: preload.
    *
-   * ## Why this is a lookup form and not a list
+   * ## Why this combines a source list with exact lookup
    *
-   * Weft publishes no operation that enumerates registered dynamic sources,
-   * and — verified against the published `@lostgradient/weft` 0.25.0 tree —
-   * `weft.system.registry` is built from `engine.listWorkflowDefinitions()`,
-   * i.e. `internals.registrations`, which a `registerSource()`-registered
-   * name never enters. A successful preload installs a revision durably in
-   * the workflow catalog but still does not add the name to that snapshot,
-   * so a purely dynamic workflow is unreachable from the Registry table no
-   * matter what the operator does first.
-   *
-   * That leaves exactly one honest shape for this surface: the operator
-   * supplies the key (they know it — they wrote the `registerSource()` call
-   * or deployed the manifest that names it), and the console asks
-   * `weft.catalog.diagnostics` about it. Seeding a picker from the registry
-   * table would be actively misleading here: it can only ever offer eagerly
-   * registered names, which are precisely the ones that have no dynamic
-   * source. Tracked upstream as WFT-165.
+   * `weft.catalog.sources.list` enumerates the process-local
+   * `registerSource()` keys that `weft.system.registry` deliberately omits.
+   * Selecting a row only fills the exact `(name, revision)` lookup; the
+   * diagnostics and preload controls still call their per-key operations, and
+   * the manual form remains available for opaque keys or copied descriptors.
    *
    * ## Preload is the only exposed action
    *
@@ -60,6 +49,7 @@
     sourceRejectionReasonLabel,
     type PreloadOutcome,
   } from './preload-outcome.ts';
+  import DynamicSourceList, { type CatalogSourceListEntry } from './dynamic-source-list.svelte';
   import SourceLoadDiagnostics from './source-load-diagnostics.svelte';
 
   /** The `(name, revision)` pair a submitted lookup resolved to — `null` until the operator submits one. */
@@ -125,6 +115,14 @@
     // banner across would attribute it to the wrong revision.
     outcome = null;
     lookup = { name: trimmedName, revision: submittedRevision };
+  }
+
+  function selectSource(source: CatalogSourceListEntry): void {
+    nameInput = source.name;
+    revisionIsJsonString = true;
+    revisionInput = JSON.stringify(source.revision);
+    outcome = null;
+    lookup = { name: source.name, revision: source.revision };
   }
 
   function isWorkflowRevisionRecordLike(
@@ -207,6 +205,7 @@
       void queryClient.invalidateQueries({
         queryKey: queryKeys.catalog.diagnostics(key.name, key.revision),
       });
+      void queryClient.invalidateQueries({ queryKey: ['catalog', 'sources'] });
       if (result.kind === 'installed') {
         void queryClient.invalidateQueries({ queryKey: queryKeys.catalog.revisions(key.name) });
         void queryClient.invalidateQueries({ queryKey: queryKeys.catalog.active(key.name) });
@@ -251,15 +250,19 @@
       Dynamic workflow sources
     </h2>
     <p class="weft-dynamic-source__note">
-      Weft exposes no way to list registered sources, and a dynamic workflow never appears in the
-      registered-definitions table below. Enter a workflow name and the revision its
-      <code>registerSource()</code> descriptor declares to inspect its loading lifecycle.
+      Dynamic workflows never appear in the registered-definitions table below. Select a registered
+      source revision, or enter the exact workflow name and revision its <code
+        >registerSource()</code
+      >
+      descriptor declares.
     </p>
     <p class="weft-dynamic-source__note">
       Load diagnostics describe the responding engine process. Use a stable per-engine endpoint;
       load-balanced responses may come from different engines.
     </p>
   </div>
+
+  <DynamicSourceList selectedKey={lookup} onSelect={selectSource} />
 
   <form class="weft-dynamic-source__form" onsubmit={submitLookup}>
     <Input

@@ -73,6 +73,8 @@ export const queryKeys = {
   catalog: {
     revisions: (name: string) => ['catalog', 'revisions', name] as const,
     active: (name: string) => ['catalog', 'active', name] as const,
+    sources: (pagination: { readonly limit: number; readonly offset: number }) =>
+      ['catalog', 'sources', pagination] as const,
     /**
      * `weft.catalog.diagnostics` (WFT-116) — per-`(name, revision)`, since
      * that operation answers for one exact key. The `name` segment sits
@@ -98,6 +100,7 @@ const LIST_QUERY_KEY_PREFIXES: readonly QueryKey[] = [
   ['workflows', 'list'],
   ['schedules', 'list'],
   ['reviews', 'list'],
+  ['catalog', 'sources'],
 ];
 
 const MAX_QUERY_RETRIES = 3;

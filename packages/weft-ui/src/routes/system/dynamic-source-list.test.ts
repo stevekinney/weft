@@ -1,0 +1,227 @@
+/**
+ * Component tests for the selectable `weft.catalog.sources.list` surface inside
+ * `<DynamicSourcePanel>`: empty and error states, row selection, continuation
+ * pagination, malformed payload guards, and later-page recovery copy.
+ */
+import { fireEvent, render } from '@testing-library/svelte';
+import { afterEach, describe, expect, test } from 'bun:test';
+
+import { createQueryClient } from '../../lib/query.ts';
+import DynamicSourceListHarness from './dynamic-source-list-fixture.test-harness.svelte';
+import { isCatalogSourceListPage } from './dynamic-source-list.svelte';
+import DynamicSourcePanel from './dynamic-source-panel.svelte';
+import SystemRouteTestHarness from './system-route-test-harness.test-harness.svelte';
+import { realClient, ScriptedFetch } from './system-test-support.test-support.ts';
+
+const DIAGNOSTICS = 'weft.catalog.diagnostics';
+const SOURCES_LIST = 'weft.catalog.sources.list';
+
+const NAME = 'invoice-reconciliation';
+const REVISION = 'invoice-reconciliation-r1';
+const SECOND_REVISION = 'invoice-reconciliation-r2';
+
+function idleDiagnostics() {
+  return {
+    name: NAME,
+    revision: REVISION,
+    installed: false,
+    active: false,
+    references: {},
+    removable: false,
+    source: { kind: 'module', requestedRevision: REVISION, state: 'idle', waiterCount: 0 },
+  };
+}
+
+function sourceList(
+  sources = [
+    { name: NAME, revision: REVISION, kind: 'module' as const, state: 'idle' as const },
+    { name: NAME, revision: SECOND_REVISION, kind: 'module' as const, state: 'ready' as const },
+  ],
+  nextOffset?: number,
+) {
+  return { sources, ...(nextOffset === undefined ? {} : { nextOffset }) };
+}
+
+async function renderPanel(options?: {
+  readonly sourcePage?: unknown;
+  readonly routeSourceList?: boolean;
+}) {
+  const { sourcePage = sourceList(), routeSourceList = true } = options ?? {};
+  if (routeSourceList) scripted?.routeJsonRpcMethod(SOURCES_LIST, sourcePage);
+  return render(SystemRouteTestHarness, {
+    props: {
+      client: realClient(),
+      queryClient: createQueryClient(),
+      component: DynamicSourcePanel,
+    },
+  });
+}
+
+async function renderSourceList(options?: {
+  readonly selectedKey?: { readonly name: string; readonly revision: string } | null;
+  readonly sourcePage?: unknown;
+}) {
+  const { selectedKey = null, sourcePage = sourceList() } = options ?? {};
+  scripted?.routeJsonRpcMethod(SOURCES_LIST, sourcePage);
+  return render(DynamicSourceListHarness, {
+    props: {
+      client: realClient(),
+      queryClient: createQueryClient(),
+      selectedKey,
+      onSelect: () => {},
+    },
+  });
+}
+
+let scripted: ScriptedFetch | undefined;
+
+afterEach(() => {
+  scripted?.restore();
+  scripted = undefined;
+});
+
+describe('DynamicSourcePanel source list', () => {
+  test('loads an empty selectable source list without hiding manual lookup', async () => {
+    scripted = new ScriptedFetch();
+    const { findByText, getByRole } = await renderPanel({ sourcePage: sourceList([]) });
+
+    expect(await findByText('No dynamic sources registered')).not.toBeNull();
+    expect(getByRole('button', { name: 'Inspect' })).not.toBeNull();
+  });
+
+  test('renders the system:read requirement after a source-list authorization denial', async () => {
+    scripted = new ScriptedFetch();
+    scripted.routeJsonRpcError(SOURCES_LIST, {
+      code: -32000,
+      message: 'forbidden',
+      data: { httpStatus: 403, weftCode: 'Forbidden' },
+    });
+    const { findByText } = await renderPanel({ routeSourceList: false });
+
+    expect(await findByText('Requires system:read to list registered sources.')).not.toBeNull();
+  });
+
+  test('selects a listed source and inspects that exact key', async () => {
+    scripted = new ScriptedFetch();
+    scripted.routeJsonRpcMethod(DIAGNOSTICS, idleDiagnostics());
+    const { getAllByRole, findByText } = await renderPanel();
+
+    await findByText(JSON.stringify(REVISION));
+    await fireEvent.click(getAllByRole('button', { name: 'Select' })[0]!);
+
+    expect(await findByText('Load state: Idle')).not.toBeNull();
+    const diagnosticsCall = scripted.calls.find(
+      (call) => typeof call.init?.body === 'string' && call.init.body.includes(DIAGNOSTICS),
+    );
+    expect(JSON.parse(diagnosticsCall!.init!.body as string).params).toEqual({
+      name: NAME,
+      revision: REVISION,
+    });
+  });
+
+  test('shows a malformed-response error and recovers through Retry', async () => {
+    scripted = new ScriptedFetch();
+    scripted.enqueueJsonRpcResult({ sources: [{ name: NAME, state: 'unknown' }] });
+    scripted.enqueueJsonRpcResult(sourceList());
+    const queryClient = createQueryClient();
+    // Exercise the settled error and operator retry directly; automatic retry
+    // policy has its own tests and would otherwise consume the recovery response.
+    queryClient.setQueryDefaults(['catalog', 'sources'], { retry: false });
+    const { findByText, getByRole } = render(DynamicSourceListHarness, {
+      props: { client: realClient(), queryClient, onSelect: () => {} },
+    });
+
+    expect(
+      await findByText('Something went wrong. Check your connection and try again.'),
+    ).not.toBeNull();
+    await fireEvent.click(getByRole('button', { name: 'Retry' }));
+    expect(await findByText(JSON.stringify(REVISION))).not.toBeNull();
+  });
+
+  test('marks the chosen row as selected while preserving the exact lookup key', async () => {
+    scripted = new ScriptedFetch();
+    const { findByRole, findByText } = await renderSourceList({
+      selectedKey: { name: NAME, revision: REVISION },
+    });
+
+    await findByText(JSON.stringify(REVISION));
+
+    expect(await findByRole('button', { name: 'Selected' })).not.toBeNull();
+  });
+
+  test('keeps a first page without a continuation on the same page when Next is clicked', async () => {
+    scripted = new ScriptedFetch();
+    const { getByRole, findByText } = await renderSourceList({
+      sourcePage: sourceList([{ name: NAME, revision: REVISION, kind: 'module', state: 'idle' }]),
+    });
+
+    await findByText(JSON.stringify(REVISION));
+    const nextButton = getByRole('button', { name: 'Next' }) as HTMLButtonElement;
+    expect(nextButton.disabled).toBe(true);
+    await fireEvent.click(nextButton);
+
+    expect(getByRole('button', { name: 'Next' })).toBe(nextButton);
+    const listCalls = scripted.calls.filter(
+      (call) => typeof call.init?.body === 'string' && call.init.body.includes(SOURCES_LIST),
+    );
+    expect(listCalls).toHaveLength(1);
+  });
+
+  test('loads the next source page using the server continuation offset', async () => {
+    scripted = new ScriptedFetch();
+    scripted.enqueueJsonRpcResult(
+      sourceList([{ name: NAME, revision: REVISION, kind: 'module', state: 'idle' }], 10),
+    );
+    scripted.enqueueJsonRpcResult({
+      sources: [{ name: 'zeta', revision: 'r9', kind: 'module', state: 'idle' }],
+    });
+    const { getByRole, findByText } = await renderPanel({ routeSourceList: false });
+
+    await findByText(JSON.stringify(REVISION));
+    await fireEvent.click(getByRole('button', { name: 'Next' }));
+
+    expect(await findByText('"r9"')).not.toBeNull();
+    const listCalls = scripted.calls.filter(
+      (call) => typeof call.init?.body === 'string' && call.init.body.includes(SOURCES_LIST),
+    );
+    expect(JSON.parse(listCalls.at(-1)!.init!.body as string).params).toEqual({
+      limit: 10,
+      offset: 10,
+    });
+  });
+
+  test('shows page recovery copy for an empty later source page', async () => {
+    scripted = new ScriptedFetch();
+    scripted.enqueueJsonRpcResult(
+      sourceList([{ name: NAME, revision: REVISION, kind: 'module', state: 'idle' }], 10),
+    );
+    scripted.enqueueJsonRpcResult(sourceList([]));
+    const { getByRole, findByText } = await renderPanel({ routeSourceList: false });
+
+    await findByText(JSON.stringify(REVISION));
+    await fireEvent.click(getByRole('button', { name: 'Next' }));
+
+    expect(await findByText('No sources on this page')).not.toBeNull();
+    expect((getByRole('button', { name: 'Previous' }) as HTMLButtonElement).disabled).toBe(false);
+    await fireEvent.click(getByRole('button', { name: 'Previous' }));
+    expect(await findByText(JSON.stringify(REVISION))).not.toBeNull();
+  });
+
+  test('rejects malformed source states at the response boundary', () => {
+    expect(
+      isCatalogSourceListPage(
+        { sources: [{ name: NAME, revision: REVISION, kind: 'module', state: ['idle'] }] },
+        0,
+      ),
+    ).toBe(false);
+  });
+
+  test('rejects non-advancing and unsafe continuation offsets at the response boundary', () => {
+    const page = { sources: [{ name: NAME, revision: REVISION, kind: 'module', state: 'idle' }] };
+
+    expect(isCatalogSourceListPage({ ...page, nextOffset: 0 }, 0)).toBe(false);
+    expect(isCatalogSourceListPage({ ...page, nextOffset: Number.MAX_SAFE_INTEGER + 1 }, 0)).toBe(
+      false,
+    );
+  });
+});

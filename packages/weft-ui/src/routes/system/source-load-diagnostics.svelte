@@ -115,7 +115,7 @@
   const isResolved = $derived($diagnosticsQuery.data !== undefined);
 </script>
 
-<div class="weft-source-load">
+<div class="weft-source-load" role="group" aria-label="Source load diagnostics">
   {#if !canRead}
     <p class="weft-source-load__note">Requires system:read to view load diagnostics.</p>
   {:else if $diagnosticsQuery.isPending}

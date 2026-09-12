@@ -21,14 +21,12 @@
  * `SourceLoadState`/`FailureCategory` — the same browser-bundle constraint
  * `compatibility-verdict.ts`' `KNOWN_COMPATIBILITY_REASONS` documents.
  *
- * ## No enumeration, and therefore no list
+ * ## Enumeration is separate from diagnostics
  *
- * Weft publishes no operation that enumerates `registerSource()`-registered
- * names or revisions, and `weft.system.registry` is built from
- * `internals.registrations` only — a dynamic-source name never appears in
- * it, not even after a successful preload installs a revision durably. So a
- * caller can only ask about a key it already holds (filed upstream as
- * WFT-165). `dynamic-source-panel.svelte` provides the sole lookup surface.
+ * `weft.catalog.sources.list` enumerates `registerSource()`-registered names
+ * and revisions, while `weft.catalog.diagnostics` still answers for one exact
+ * key. `dynamic-source-panel.svelte` combines them: the source list fills a
+ * key, and this module renders only that key's diagnostics.
  */
 import { formatDuration } from '../../lib/format/index.ts';
 

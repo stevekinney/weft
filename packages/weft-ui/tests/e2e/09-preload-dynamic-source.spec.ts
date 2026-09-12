@@ -6,13 +6,10 @@
  * loader cannot reach its artifact and see the refusal reported with the
  * bounded failure category Weft classified it under.
  *
- * `invoice-reconciliation` is deliberately NOT reachable from the
- * registered-definitions table: `weft.system.registry` is built from the
- * engine's eager registrations, which a `registerSource()` name never enters
- * (WFT-165). This spec asserts that absence too, because it is the whole
- * reason the panel exists — if a future Weft release starts listing dynamic
- * sources there, this assertion should fail and the panel's design should be
- * revisited rather than silently kept.
+ * `invoice-reconciliation` is selectable from `weft.catalog.sources.list`
+ * while still absent from the registered-definitions table:
+ * `weft.system.registry` is built from the engine's eager registrations,
+ * which a `registerSource()` name never enters.
  *
  * ## Ordering
  *
@@ -37,9 +34,16 @@ async function inspectSource(
   page: import('@playwright/test').Page,
   revision: string,
 ): Promise<void> {
-  await page.fill('#weft-dynamic-source-name', DYNAMIC_SOURCE_WORKFLOW_NAME);
-  await page.fill('#weft-dynamic-source-revision', revision);
-  await page.getByRole('button', { name: 'Inspect' }).click();
+  const panel = page.getByRole('region', { name: PANEL_NAME, exact: true });
+  await panel
+    .getByRole('row')
+    .filter({ hasText: JSON.stringify(revision) })
+    .getByRole('button', { name: 'Select' })
+    .click();
+}
+
+function diagnosticsRegion(page: import('@playwright/test').Page) {
+  return page.getByRole('group', { name: 'Source load diagnostics' });
 }
 
 test('operator preloads an idle dynamic source revision and watches it reach ready', async ({
@@ -48,23 +52,29 @@ test('operator preloads an idle dynamic source revision and watches it reach rea
 }) => {
   await page.goto('/system?tab=registry');
 
-  const panel = page.getByRole('region', { name: PANEL_NAME });
+  const panel = page.getByRole('region', { name: PANEL_NAME, exact: true });
   await expect(panel).toBeVisible();
 
-  // The gap this panel exists for: the dynamic workflow is not in the
-  // registered-definitions table, so there is no row to drill into.
   await expect(
-    page.getByRole('button', { name: new RegExp(DYNAMIC_SOURCE_WORKFLOW_NAME) }),
+    panel.getByRole('row').filter({ hasText: JSON.stringify(DYNAMIC_SOURCE_LOADABLE_REVISION) }),
+  ).toBeVisible();
+
+  // Dynamic sources are selectable above, but still absent from the eager
+  // registry table because `weft.system.registry` lists eager registrations.
+  const workflowDefinitions = page.getByRole('table', { name: 'Workflow definitions' });
+  await expect(
+    workflowDefinitions.getByRole('button', { name: new RegExp(DYNAMIC_SOURCE_WORKFLOW_NAME) }),
   ).toHaveCount(0);
 
   await inspectSource(page, DYNAMIC_SOURCE_LOADABLE_REVISION);
+  const diagnostics = diagnosticsRegion(page);
 
   // Source kind, requested revision, and waiter count are all read straight
   // off `weft.catalog.diagnostics` — never re-derived in the console.
-  await expect(panel.getByText('Source kind')).toBeVisible();
-  await expect(panel.getByText('module', { exact: true })).toBeVisible();
-  await expect(panel.getByText(DYNAMIC_SOURCE_LOADABLE_REVISION).first()).toBeVisible();
-  await expect(panel.getByText('0 callers waiting')).toBeVisible();
+  await expect(diagnostics.getByText('Source kind')).toBeVisible();
+  await expect(diagnostics.getByText('module', { exact: true })).toBeVisible();
+  await expect(diagnostics.getByText(DYNAMIC_SOURCE_LOADABLE_REVISION)).toBeVisible();
+  await expect(diagnostics.getByText('0 callers waiting')).toBeVisible();
 
   await panel.getByRole('button', { name: 'Preload' }).click();
 
@@ -75,8 +85,8 @@ test('operator preloads an idle dynamic source revision and watches it reach rea
   // also proves Weft actually loaded the module rather than satisfying the
   // preload from an existing catalog entry — the banner names that second
   // possibility precisely because it cannot be assumed.
-  await expect(panel.getByText('Load state: Ready')).toBeVisible();
-  await expect(panel.getByText('Not loaded yet')).toHaveCount(0);
+  await expect(diagnostics.getByText('Load state: Ready')).toBeVisible();
+  await expect(diagnostics.getByText('Not loaded yet')).toHaveCount(0);
 
   await checkA11y('system — dynamic workflow sources, preloaded to ready');
 });
@@ -84,10 +94,11 @@ test('operator preloads an idle dynamic source revision and watches it reach rea
 test('a refused preload reports the bounded failure category Weft recorded', async ({ page }) => {
   await page.goto('/system?tab=registry');
 
-  const panel = page.getByRole('region', { name: PANEL_NAME });
+  const panel = page.getByRole('region', { name: PANEL_NAME, exact: true });
   await expect(panel).toBeVisible();
 
   await inspectSource(page, DYNAMIC_SOURCE_FAILING_REVISION);
+  const diagnostics = diagnosticsRegion(page);
   await panel.getByRole('button', { name: 'Preload' }).click();
 
   await expect(panel.getByText('Refused: load-failed')).toBeVisible();
@@ -96,8 +107,8 @@ test('a refused preload reports the bounded failure category Weft recorded', asy
   await expect(page.getByText(/srv\/artifacts/)).toHaveCount(0);
 
   // The re-fetched diagnostics carry the classified cause the fault omitted.
-  await expect(panel.getByText('Load state: Failed')).toBeVisible();
-  await expect(panel.getByText(/Last failure category:/)).toBeVisible();
+  await expect(diagnostics.getByText('Load state: Failed')).toBeVisible();
+  await expect(diagnostics.getByText(/Last failure category:/)).toBeVisible();
 });
 
 test('expired diagnostics credentials return to API-key entry and accept a replacement', async ({
@@ -123,7 +134,7 @@ test('expired diagnostics credentials return to API-key entry and accept a repla
   });
 
   await page.goto('/system?tab=registry');
-  const panel = page.getByRole('region', { name: PANEL_NAME });
+  const panel = page.getByRole('region', { name: PANEL_NAME, exact: true });
   await expect(panel).toBeVisible();
   await inspectSource(page, DYNAMIC_SOURCE_LOADABLE_REVISION);
 
@@ -135,9 +146,9 @@ test('expired diagnostics credentials return to API-key entry and accept a repla
 
   // The replacement mounts a new shell and the retried diagnostics request
   // can be made against the new shell with the newly entered key.
-  await expect(page.getByRole('region', { name: PANEL_NAME })).toBeVisible();
+  await expect(page.getByRole('region', { name: PANEL_NAME, exact: true })).toBeVisible();
   await inspectSource(page, DYNAMIC_SOURCE_LOADABLE_REVISION);
-  await expect(page.getByText('Source kind')).toBeVisible();
+  await expect(diagnosticsRegion(page).getByText('Source kind')).toBeVisible();
   expect(diagnosticsRequests).toBe(2);
 });
 
@@ -156,14 +167,15 @@ test('the Dynamic workflow sources panel is usable across supported widths and t
       }, theme);
       await page.goto('/system?tab=registry');
 
-      const panel = page.getByRole('region', { name: PANEL_NAME });
+      const panel = page.getByRole('region', { name: PANEL_NAME, exact: true });
       await expect(panel).toBeVisible();
       await inspectSource(page, DYNAMIC_SOURCE_LOADABLE_REVISION);
-      await expect(panel.getByText('Source kind')).toBeVisible();
+      await expect(diagnosticsRegion(page).getByText('Source kind')).toBeVisible();
 
       await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
-        true,
+      const pageWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+      expect(pageWidth, `${theme} theme at ${viewport.width}px`).toBeLessThanOrEqual(
+        viewport.width,
       );
     }
   }

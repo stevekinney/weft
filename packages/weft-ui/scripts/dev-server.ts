@@ -146,8 +146,8 @@ console.log(
 console.log(
   `Seeded dynamic workflow source: ${DYNAMIC_SOURCE_WORKFLOW_NAME} at ${DYNAMIC_SOURCE_LOADABLE_REVISION} ` +
     `(idle, preloads cleanly) and ${DYNAMIC_SOURCE_FAILING_REVISION} (idle, loader rejects) — ` +
-    'System > Registry > Dynamic workflow sources. It never appears in the registered-definitions ' +
-    'table; weft.system.registry lists eager registrations only (WFT-165).',
+    'System > Registry > Dynamic workflow sources. It appears in the source list while remaining ' +
+    'absent from the registered-definitions table; weft.system.registry lists eager registrations only.',
 );
 console.log(
   'Fleet SSE (/api/v1/events/sse), per-workflow SSE/WebSocket tails ' +
