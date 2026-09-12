@@ -90,9 +90,34 @@ describe('createClient — headers', () => {
 describe('setApiKey', () => {
   const config: WeftUiRuntimeConfig = { baseUrl: 'https://weft.example.com' };
 
+  test('replaces both configured credential headers while preserving routing headers', () => {
+    const configured = {
+      ...config,
+      headers: {
+        'X-API-Key': 'expired-key',
+        AUTHORIZATION: 'Bearer expired-token',
+        'X-Engine-Instance': 'engine-a',
+      },
+    };
+    const client = setApiKey(configured, 'replacement-key');
+    expect(client.headers['authorization']).toBe('Bearer replacement-key');
+    expect(client.headers['x-api-key']).toBeUndefined();
+    expect(client.headers['x-engine-instance']).toBe('engine-a');
+    expect(configured.headers['X-API-Key']).toBe('expired-key');
+  });
+
   test('rebuilds the client with the entered key as a Bearer Authorization header', () => {
     const client = setApiKey(config, 'operator-entered-key');
     expect(client.headers['authorization']).toBe('Bearer operator-entered-key');
+  });
+
+  test('entered key replaces a stale configured Authorization header', () => {
+    const client = setApiKey(
+      { ...config, headers: { Authorization: 'Bearer expired-configured-key', 'X-Trace': 'keep' } },
+      'operator-entered-key',
+    );
+    expect(client.headers['authorization']).toBe('Bearer operator-entered-key');
+    expect(client.headers['x-trace']).toBe('keep');
   });
 
   test('preserves the base config baseUrl', () => {

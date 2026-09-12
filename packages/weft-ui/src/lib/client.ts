@@ -72,7 +72,15 @@ export function createClient(
  * `localStorage`, no cookies).
  */
 export function setApiKey(config: WeftUiRuntimeConfig, apiKey: string): HttpClient {
-  return createClient({ ...config, token: apiKey });
+  const headers = config.headers
+    ? Object.fromEntries(
+        Object.entries(config.headers).filter(([name]) => {
+          const header = name.toLowerCase();
+          return header !== 'authorization' && header !== 'x-api-key';
+        }),
+      )
+    : undefined;
+  return createClient({ ...config, token: apiKey, ...(headers ? { headers } : {}) });
 }
 
 /** Provides the app's `HttpClient` to the component tree via Svelte context. */

@@ -29,6 +29,7 @@
     loadFleetManifestDiagnostics,
     loadWorkerRegistrationRejections,
   } from '../workers/workers-data.ts';
+  import DynamicSourcePanel from './dynamic-source-panel.svelte';
   import QueryFaultBanner from './query-fault-banner.svelte';
   import RegistryDetail from './registry-detail.svelte';
   import {
@@ -102,6 +103,25 @@
   <Badge {variant}>{label}</Badge>
 {/snippet}
 
+<!--
+  Rendered above the registry query's own branches, and independent of it: a
+  `registerSource()`-registered workflow never appears in the
+  `weft.system.registry` snapshot (see `<DynamicSourcePanel>`'s module doc),
+  so an engine whose workflows are ALL dynamic renders the eager-definition
+  empty state below while still having sources an operator needs to inspect.
+  The lookup is the sole load-diagnostics surface. It is hidden while a
+  definition detail view is open.
+
+  Hiding it destroys the instance, so a typed lookup and any outcome banner are
+  gone on return from a detail view. Accepted: the panel is a point lookup, not
+  a session, and everything it shows is one live query away. Noted rather than
+  silently relied on — if it ever grows state worth keeping across that
+  navigation, this needs to become a CSS hide instead of an `{#if}`.
+-->
+{#if selectedType === null}
+  <DynamicSourcePanel />
+{/if}
+
 {#if $query.isPending}
   <div class="weft-registry-skeleton" role="status" aria-busy="true" aria-label="Loading registry">
     <Skeleton height="1.25rem" width="220px" />
@@ -111,9 +131,16 @@
 {:else if $query.isError}
   <QueryFaultBanner error={$query.error} onRetry={() => $query.refetch()} />
 {:else if isRegistryEmpty($query.data)}
+  <!--
+    Scoped to what this snapshot actually covers. `weft.system.registry` lists
+    eager registrations only, so an engine whose workflows are all
+    `registerSource()`-registered renders this state permanently — even right
+    after an operator successfully preloads one in the panel above. "Nothing is
+    registered with this engine" would be flatly untrue there.
+  -->
   <EmptyState
     title="Registry · 3-step onboarding"
-    description="Nothing is registered with this engine yet."
+    description="No eagerly registered workflow or activity definitions appear in this engine's registry snapshot. Dynamic sources never appear here — use Dynamic workflow sources above."
   >
     {#snippet icon()}
       <GitBranch aria-hidden="true" size={26} />

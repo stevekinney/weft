@@ -92,6 +92,12 @@ import { AUTHORIZATION_SCOPES, serve } from '@lostgradient/weft/server';
 
 import { DEV_API_KEY } from './dev-credentials.ts';
 
+import {
+  DYNAMIC_SOURCE_FAILING_REVISION,
+  DYNAMIC_SOURCE_LOADABLE_REVISION,
+  DYNAMIC_SOURCE_WORKFLOW_NAME,
+  seedDynamicSources,
+} from '../fixtures/dynamic-sources.ts';
 import { seedWorkflowRevisions } from '../fixtures/workflow-revisions.ts';
 import { seed, workflows } from '../fixtures/workflows.ts';
 
@@ -115,6 +121,12 @@ await seed(engine);
 // needs (`fixtures/workflow-revisions.ts`'s own module doc).
 await seedWorkflowRevisions(engine);
 
+// WFT-116: two `registerSource()` revisions of one dynamic workflow name,
+// neither loaded — see `fixtures/dynamic-sources.ts` for why each state
+// matters. `registerSource()` refuses a name already registered eagerly, and
+// this name deliberately is not one.
+seedDynamicSources(engine);
+
 console.log(`weft dev server listening on ${server.url}`);
 console.log(
   'Seeded fixture workflows: order-processing, payment-failing, long-sleeper, review-gate, ' +
@@ -130,6 +142,12 @@ console.log(
 console.log(
   'Seeded workflow catalog: order-processing has a second, installed-but-inactive, ' +
     'deliberately incompatible revision "order-processing-candidate-2" — Registry > Revisions.',
+);
+console.log(
+  `Seeded dynamic workflow source: ${DYNAMIC_SOURCE_WORKFLOW_NAME} at ${DYNAMIC_SOURCE_LOADABLE_REVISION} ` +
+    `(idle, preloads cleanly) and ${DYNAMIC_SOURCE_FAILING_REVISION} (idle, loader rejects) — ` +
+    'System > Registry > Dynamic workflow sources. It never appears in the registered-definitions ' +
+    'table; weft.system.registry lists eager registrations only (WFT-165).',
 );
 console.log(
   'Fleet SSE (/api/v1/events/sse), per-workflow SSE/WebSocket tails ' +
