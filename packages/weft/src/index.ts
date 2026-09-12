@@ -220,6 +220,8 @@ export type {
   PendingAsyncActivityListOptions,
   PendingAsyncActivityPage,
   PendingReviewEntry,
+  PruneCheckpointsOptions,
+  PruneCheckpointsResult,
   PurgeResult,
   QueryDefinition,
   QueryMap,
