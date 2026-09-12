@@ -53,6 +53,8 @@ import {
   type PaginatedResult,
   type PendingAsyncActivityListOptions,
   type PendingAsyncActivityPage,
+  type PruneCheckpointsOptions,
+  type PruneCheckpointsResult,
   type PurgeResult,
   type QueryDefinition,
   type RegisteredWorkflowDefinition,
@@ -125,6 +127,7 @@ import {
 } from './callback-creators.ts';
 import { registerCancelHandler } from './cancel-handlers.ts';
 import { ensureWorkflowCatalogReady, isWorkflowCatalogReady } from './catalog-readiness.ts';
+import { pruneCheckpoints as pruneCheckpointsFromInternals } from './checkpoint-prune.ts';
 import {
   getCheckpointAt as getCheckpointStateAt,
   getEvents as getWorkflowEvents,
@@ -2656,6 +2659,21 @@ export class Engine<
   }
   async getCheckpointAt(workflowId: string, step: number): Promise<CheckpointState | null> {
     return getCheckpointStateAt(getInternals(this), workflowId, step);
+  }
+  /**
+   * Delete all but the newest `options.keepLast` checkpoint history entries
+   * for `workflowId`, through the storage adapter directly.
+   *
+   * Safe to call on a terminal workflow. A no-op — `{ removed: 0, retained: 0
+   * }`, never a throw — on a workflow with no checkpoint history entries,
+   * including an unknown workflow id. Rejects with the storage adapter's own
+   * error when a delete batch fails, and honors `options.signal`.
+   */
+  async pruneCheckpoints(
+    workflowId: string,
+    options: PruneCheckpointsOptions,
+  ): Promise<PruneCheckpointsResult> {
+    return pruneCheckpointsFromInternals(getInternals(this), workflowId, options);
   }
   async getTimeline(workflowId: string): Promise<WorkflowTimelineEntry[]> {
     return getWorkflowTimeline(getInternals(this), workflowId);
