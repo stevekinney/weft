@@ -100,8 +100,19 @@ export type BannerMode =
 
 const PRINCIPAL_CONTEXT_KEY = Symbol('weft-ui-principal');
 
+export interface PrincipalStoreOptions {
+  /** Called when a live credential is rejected and the app must reauthenticate. */
+  onAuthExpired?: () => void;
+}
+
 export class PrincipalStore {
   principal = $state<Principal | null>(null);
+
+  readonly #onAuthExpired: (() => void) | undefined;
+
+  constructor(options: PrincipalStoreOptions = {}) {
+    this.#onAuthExpired = options.onAuthExpired;
+  }
 
   hasScope(...required: readonly AuthorizationScope[]): boolean {
     const current = this.principal;
@@ -128,9 +139,12 @@ export class PrincipalStore {
    * Callers decide when this applies (e.g. a `401` on a live credential,
    * observed via `isUnauthorized()`) — this module never clears the
    * principal automatically (module doc: only `403`s degrade automatically).
+   * When configured by the app shell, clearing also returns the app to its
+   * API-key entry boundary so an expired credential can be replaced.
    */
   clear(): void {
     this.principal = null;
+    this.#onAuthExpired?.();
   }
 
   /**
@@ -153,8 +167,8 @@ export class PrincipalStore {
   }
 }
 
-export function providePrincipalStore(): PrincipalStore {
-  const store = new PrincipalStore();
+export function providePrincipalStore(options?: PrincipalStoreOptions): PrincipalStore {
+  const store = new PrincipalStore(options);
   setContext(PRINCIPAL_CONTEXT_KEY, store);
   return store;
 }

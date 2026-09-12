@@ -182,10 +182,19 @@ const BUDGETS: Budget[] = [
     budgetFromMeasuredKb(7.4),
     'no dedicated plan §12 line item (measured baseline: ~7.5 KB)',
   ),
+  // Re-measured for WFT-116's Dynamic workflow sources panel + per-revision
+  // load diagnostics: 52.92 KB -> 57.54 KB. Note the starting point, not the
+  // delta: the 43.43 KB baseline this entry carried had gone stale across
+  // WFT-115 (Revisions panel) and WFT-117 (revision bindings), neither of
+  // which re-measured it, so the route had drifted to within 0.08 KB of its
+  // own ceiling before this ticket added anything. This entry now records
+  // what the route actually weighs; a future System change gets a real 20%
+  // of headroom to work inside rather than a sliver left over from two
+  // tickets ago.
   routeBudget(
     'system',
-    budgetFromMeasuredKb(43.43),
-    'no dedicated plan §12 line item (measured baseline: ~43.2 KB)',
+    budgetFromMeasuredKb(57.54),
+    'no dedicated plan §12 line item (measured baseline: ~57.5 KB)',
   ),
   {
     label: 'lazy: Cinder JsonEditor enhancement chunk',

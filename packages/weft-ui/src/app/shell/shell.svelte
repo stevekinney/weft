@@ -4,10 +4,10 @@
    * final (`../app.svelte` owns the bootstrap/API-key-entry sequence ahead
    * of this). `provideClient()`/`providePrincipalStore()` run here, during
    * this component's own initialization — Svelte only allows `setContext`
-   * during init, which is exactly why the API-key rebuild flow lives one
-   * level up: `<Shell>` itself never remounts once it exists, so context
-   * never needs to change after the fact (plan §6, T1.1's `ApiKeyEntry` doc:
-   * "the shell owns rebuilding the client … and re-providing context").
+   * during init, which is why the API-key rebuild flow lives one level up.
+   * The app remounts `<Shell>` when the active credential changes (plan §6,
+   * T1.1's `ApiKeyEntry` doc: "the shell owns rebuilding the client … and
+   * re-providing context").
    *
    * Keyboard (plan §13 T1.6's "⌘K opens palette, Esc closes overlays"):
    * ⌘K is registered by `./command-palette.svelte`; Esc-closes-overlays is
@@ -35,22 +35,30 @@
   interface ShellProps {
     client: HttpClient;
     initialPrincipal: Principal;
+    onAuthExpired: (expiredClient: HttpClient) => void;
   }
 
-  let { client, initialPrincipal }: ShellProps = $props();
+  let { client, initialPrincipal, onAuthExpired }: ShellProps = $props();
 
   // `client`/`initialPrincipal` are read exactly once, here, at Shell's own
-  // initialization — see the module doc: Shell never remounts once these
-  // are final, so there is deliberately no reactive dependency on either
-  // prop past this point. `untrack()` makes that explicit instead of
+  // initialization — see the module doc: these values belong to one
+  // credential session, so there is deliberately no reactive dependency on
+  // either prop past this point. `untrack()` makes that explicit instead of
   // triggering Svelte's "state referenced locally" warning.
-  const { client: initialClient, principal: resolvedPrincipal } = untrack(() => ({
+  const {
+    client: initialClient,
+    principal: resolvedPrincipal,
+    onAuthExpired: authExpiredHandler,
+  } = untrack(() => ({
     client,
     principal: initialPrincipal,
+    onAuthExpired,
   }));
 
   provideClient(initialClient);
-  const principalStore = providePrincipalStore();
+  const principalStore = providePrincipalStore({
+    onAuthExpired: () => authExpiredHandler(initialClient),
+  });
   principalStore.setPrincipal(resolvedPrincipal);
 
   const theme = new ThemeStore();

@@ -146,6 +146,47 @@ export class ScriptedFetch {
   }
 
   /**
+   * Standing route: any JSON-RPC request for `method` resolves only once
+   * `result` does, as a success envelope. The one way to hold a request
+   * genuinely in flight while a test drives the UI around it — `routeJsonRpcMethod`
+   * resolves as fast as the microtask queue allows, which leaves no window to
+   * observe mid-flight behavior (the same timing limitation
+   * `workflow-revisions-view.ts`'s `isBackgroundRefreshing` doc describes for
+   * background-fetch indicators).
+   */
+  routeJsonRpcDeferred(method: string, result: Promise<unknown>): void {
+    this.#routes.push({
+      matches: (call) => {
+        if (typeof call.init?.body !== 'string') return false;
+        try {
+          return (JSON.parse(call.init.body) as { method?: string }).method === method;
+        } catch {
+          return false;
+        }
+      },
+      // `RouteRule.respond` is synchronous, so the awaiting happens inside the
+      // `Response` body rather than before it: a streamed body the fetch
+      // caller cannot finish reading until `result` settles, which is exactly
+      // "the request has not come back yet" from the client's point of view.
+      respond: () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            async start(controller) {
+              const resolved = await result;
+              controller.enqueue(
+                new TextEncoder().encode(
+                  JSON.stringify({ jsonrpc: '2.0', id: 1, result: resolved }),
+                ),
+              );
+              controller.close();
+            },
+          }),
+          { headers: { 'Content-Type': 'application/json' } },
+        ),
+    });
+  }
+
+  /**
    * Standing route: any JSON-RPC request for `method` gets a JSON-RPC ERROR
    * envelope back, regardless of call order — the error-response sibling of
    * `routeJsonRpcMethod`. Shape mirrors what `httpClientCatalogTransport`

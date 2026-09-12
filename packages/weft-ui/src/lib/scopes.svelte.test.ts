@@ -208,6 +208,21 @@ describe('PrincipalStore.setPrincipal / clear', () => {
     store.setPrincipal(grantedPrincipal());
     expect(store.hasScope('workers:write')).toBe(true);
   });
+
+  test('clear() notifies the app so an expired credential can be replaced', () => {
+    let authExpired = 0;
+    const store = new PrincipalStore({ onAuthExpired: () => authExpired++ });
+    store.setPrincipal(grantedPrincipal());
+
+    store.clear();
+
+    expect(store.principal).toBeNull();
+    expect(authExpired).toBe(1);
+
+    store.setPrincipal(grantedPrincipal(['system:read']));
+    expect(store.hasScope('system:read')).toBe(true);
+    expect(store.bannerMode).toBe('none');
+  });
 });
 
 /**
