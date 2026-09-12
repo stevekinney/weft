@@ -1301,26 +1301,6 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       },
     ],
     [
-      'src/core/engine/checkpoint-prune.ts',
-      {
-        // Mirrors the same unreachable-under-'none'-ownership shape already
-        // documented for pending-updates.ts's onLostRace callbacks: with
-        // `baseConditions: []`, `commitFencedEngineWrite()` never returns
-        // 'lost-race' under `ownership: 'none'` (a plain, unconditioned
-        // `storage.batch()` either commits or throws its own error) and, under
-        // `ownership: 'lease'` / `'workflow-lease'`, an actually-deposed engine
-        // is caught and throws `EngineDeposedError` before this callback could
-        // run — the callback is reachable only if the sole epoch condition
-        // fails for some reason OTHER than deposition, which has no way to
-        // arise from this module's own logic to construct in a test.
-        reason:
-          "Mirrors pending-updates.ts's documented allowance: with empty baseConditions, commitFencedEngineWrite() never returns 'lost-race' under ownership: 'none', and under lease modes an actual deposition is caught and thrown before this callback runs — leaving no reachable path to exercise it without corrupting internal lease state.",
-        functions: 1,
-        lines: new Set([141, 142, 143]),
-        requireUncoveredLines: true,
-      },
-    ],
-    [
       'src/core/engine/checkpoint-replay.ts',
       {
         reason:
