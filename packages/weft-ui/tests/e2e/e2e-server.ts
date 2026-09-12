@@ -36,6 +36,7 @@
 import { Engine, RemoteWorker } from '@lostgradient/weft';
 import { AUTHORIZATION_SCOPES, serve } from '@lostgradient/weft/server';
 
+import { seedDynamicSources } from '../../fixtures/dynamic-sources.ts';
 import { seedWorkflowRevisions } from '../../fixtures/workflow-revisions.ts';
 import { seed, workflows } from '../../fixtures/workflows.ts';
 import {
@@ -74,6 +75,17 @@ await seed(engine);
 // never mutates the active pointer, so this is safe to install once and
 // leave here for every spec in this suite.
 await seedWorkflowRevisions(engine);
+
+// Two `registerSource()` revisions of `invoice-reconciliation`, neither
+// loaded (WFT-116) — `09-preload-dynamic-source.spec.ts` drives the
+// Registry → Dynamic workflow sources panel against them: preloading the
+// loadable one moves it idle -> ready, and preloading the unreachable one is
+// refused with a bounded failure category. Both transitions are per-`(name,
+// revision)` and touch nothing any other spec asserts against, but they are
+// NOT idempotent across specs the way a refused activation is: once a spec
+// preloads the loadable revision it stays installed, so the spec asserts on
+// the ready/failed end state rather than requiring a pristine idle one.
+seedDynamicSources(engine);
 
 const fleetWorker = new RemoteWorker({
   serverUrl: `ws://localhost:${E2E_SERVER_PORT}/v1/tasks/default/stream`,
@@ -122,3 +134,4 @@ for (let attempt = 0; attempt < 5; attempt += 1) {
 
 console.log(`weft E2E server listening on ${server.url}`);
 console.log(`Registered E2E fleet worker under deployment "${E2E_DEPLOYMENT_NAME}"`);
+console.log('Registered dynamic workflow sources for invoice-reconciliation');

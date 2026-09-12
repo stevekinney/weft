@@ -73,6 +73,17 @@ export const queryKeys = {
   catalog: {
     revisions: (name: string) => ['catalog', 'revisions', name] as const,
     active: (name: string) => ['catalog', 'active', name] as const,
+    /**
+     * `weft.catalog.diagnostics` (WFT-116) — per-`(name, revision)`, since
+     * that operation answers for one exact key. The `name` segment sits
+     * before `revision` so a mutation touching one workflow can invalidate
+     * every revision's diagnostics at once with the
+     * `['catalog', 'diagnostics', name]` prefix.
+     */
+    diagnostics: (name: string, revision: string) =>
+      ['catalog', 'diagnostics', name, revision] as const,
+    /** The prefix covering every revision's diagnostics for one workflow name — for invalidation, never as a `queryKey`. */
+    diagnosticsForWorkflow: (name: string) => ['catalog', 'diagnostics', name] as const,
   },
 } as const;
 

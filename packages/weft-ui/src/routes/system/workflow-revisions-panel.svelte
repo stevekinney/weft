@@ -62,6 +62,7 @@
     type WorkflowActivationOutcome,
   } from './compatibility-verdict.ts';
   import QueryFaultBanner from './query-fault-banner.svelte';
+  import SourceLoadDiagnostics from './source-load-diagnostics.svelte';
   import {
     isBackgroundRefreshing,
     isWorkflowCatalogActivePointerLike,
@@ -173,6 +174,16 @@
   function invalidateAfterActivation(): void {
     void queryClient.invalidateQueries({ queryKey: queryKeys.catalog.revisions(workflowName) });
     void queryClient.invalidateQueries({ queryKey: queryKeys.catalog.active(workflowName) });
+    // Every revision's diagnostics, by prefix (WFT-116): an applied
+    // activation moves `active`/`activeRevision` in
+    // `weft.catalog.diagnostics`' response for the revision that just became
+    // active AND for whichever one just stopped being active, and this panel
+    // mounts a `<SourceLoadDiagnostics>` per row. Invalidating only the
+    // activated row's key would leave the previously-active row's cached
+    // diagnostics asserting it is still active.
+    void queryClient.invalidateQueries({
+      queryKey: queryKeys.catalog.diagnosticsForWorkflow(workflowName),
+    });
     void queryClient.invalidateQueries({ queryKey: queryKeys.registry() });
   }
 
@@ -341,6 +352,7 @@
               </div>
             {/each}
           </dl>
+          <SourceLoadDiagnostics {workflowName} revision={row.revision} />
           <Button
             size="sm"
             variant="secondary"

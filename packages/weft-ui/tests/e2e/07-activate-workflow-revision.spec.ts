@@ -27,6 +27,15 @@ test('operator inspects installed revisions and sees a refused activation report
   await expect(revisionsPanel.getByText('Installed', { exact: true })).toBeVisible();
   await expect(revisionsPanel.getByRole('button', { name: 'Refresh' })).toBeVisible();
 
+  // WFT-116: every row mounts per-revision load diagnostics. `order-processing`
+  // has no dynamic source, and — importantly — the copy claims only that,
+  // never how the revision was registered: `order-processing-candidate-2` is
+  // installed via `weft.workflows.revisions.install` with no in-process
+  // handler behind it, so "registered eagerly" would be false for it.
+  await expect(
+    revisionsPanel.getByText(/No dynamic source is registered for this workflow/).first(),
+  ).toBeVisible();
+
   const activateButton = revisionsPanel.getByRole('button', { name: 'Activate' });
   await expect(activateButton).toBeVisible();
   await activateButton.click();

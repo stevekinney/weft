@@ -65,6 +65,59 @@ describe('WorkflowRevisionsPanel activation', () => {
     });
   });
 
+  test('a successful activation re-fetches EVERY row\u2019s load diagnostics, not just the activated one', async () => {
+    // Regression guard for the prefix invalidation in
+    // `invalidateAfterActivation`: activation flips `active` on two rows at
+    // once (the new one and the one it replaced), so invalidating only the
+    // activated key would leave the previously-active row's cached
+    // `weft.catalog.diagnostics` still claiming it is active.
+    scripted = new ScriptedFetch();
+    scripted.routeJsonRpcMethod('weft.workflows.revisions.list', [
+      revisionRecord('order-processing-rev-1'),
+      revisionRecord('order-processing-rev-2'),
+    ]);
+    scripted.routeJsonRpcMethod(
+      'weft.workflows.active.get',
+      activePointer('order-processing-rev-1'),
+    );
+    scripted.routeJsonRpcMethod('weft.catalog.diagnostics', {
+      name: 'order-processing',
+      revision: 'order-processing-rev-1',
+      installed: true,
+      active: true,
+      references: {},
+      removable: false,
+    });
+    scripted.routeJsonRpcMethod('weft.workflows.revisions.activate', {
+      applied: true,
+      pointer: activePointer('order-processing-rev-2', 2),
+    });
+
+    const { getByRole, findByText } = await renderPanel();
+    const activateButton = await waitFor(() => getByRole('button', { name: 'Activate' }));
+
+    const diagnosticsCallsBefore = () =>
+      (scripted?.calls ?? []).filter(
+        (call) =>
+          typeof call.init?.body === 'string' &&
+          call.init.body.includes('weft.catalog.diagnostics'),
+      ).length;
+    await waitFor(() => {
+      expect(diagnosticsCallsBefore()).toBeGreaterThan(0);
+    });
+    const before = diagnosticsCallsBefore();
+
+    await fireEvent.click(activateButton);
+    const dialog = await waitFor(() => getByRole('dialog'));
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Activate' }));
+    expect(await findByText('Compatible')).not.toBeNull();
+
+    // Two rows are mounted, so a prefix invalidation refetches both.
+    await waitFor(() => {
+      expect(diagnosticsCallsBefore()).toBeGreaterThanOrEqual(before + 2);
+    });
+  });
+
   test('a refusal carrying compatibilityReasons renders every reason as explicit text, never color alone', async () => {
     scripted = new ScriptedFetch();
     scripted.routeJsonRpcMethod('weft.workflows.revisions.list', [

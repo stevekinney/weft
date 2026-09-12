@@ -1,0 +1,326 @@
+/**
+ * Pure view-model mapping for per-`(name, revision)` dynamic-source load
+ * diagnostics (WFT-116): turns `weft.catalog.diagnostics`' output into
+ * render-ready rows. Framework-free and unit-testable without a DOM,
+ * mirroring `registry-view.ts`/`workflow-revisions-view.ts`.
+ *
+ * ## What Weft actually exposes, and what it doesn't
+ *
+ * `weft.catalog.diagnostics` (`system:read`) answers for ONE `(name,
+ * revision)` key. Its `source` block is present only when `name` has ever
+ * been `engine.registerSource()`-registered in the serving process — for a
+ * purely eager `engine.register()` workflow it is absent, which this module
+ * reports as an explicit {@link SourceLoadSummary} of kind `'not-dynamic'`
+ * rather than an empty/ambiguous render.
+ *
+ * There is deliberately no local re-derivation of any of it: `state`,
+ * `loadDurationMs`, `waiterCount`, and `lastFailureCategory` are read
+ * verbatim off the wire. The console never imports Weft's source-runtime
+ * internals (`core/engine/source-runtime-state.ts` is server-only), so the
+ * two closed unions below are hand-declared mirrors of
+ * `SourceLoadState`/`FailureCategory` — the same browser-bundle constraint
+ * `compatibility-verdict.ts`' `KNOWN_COMPATIBILITY_REASONS` documents.
+ *
+ * ## No enumeration, and therefore no list
+ *
+ * Weft publishes no operation that enumerates `registerSource()`-registered
+ * names or revisions, and `weft.system.registry` is built from
+ * `internals.registrations` only — a dynamic-source name never appears in
+ * it, not even after a successful preload installs a revision durably. So a
+ * caller can only ask about a key it already holds (filed upstream as
+ * WFT-165). See `dynamic-source-panel.svelte`'s module doc for how the two
+ * console surfaces divide that constraint between them.
+ */
+import { formatDuration } from '../../lib/format/index.ts';
+
+/** Mirrors `SourceLoadState` (`@lostgradient/weft`, server-only) — the five closed-union literals, in lifecycle order. */
+export const KNOWN_SOURCE_LOAD_STATES = [
+  'idle',
+  'loading',
+  'ready',
+  'failed',
+  'cancelled',
+] as const;
+
+export type KnownSourceLoadState = (typeof KNOWN_SOURCE_LOAD_STATES)[number];
+
+/** Mirrors `FailureCategory` (`@lostgradient/weft`) — the five bounded categories a load failure is classified into. */
+export const KNOWN_FAILURE_CATEGORIES = [
+  'application',
+  'timeout',
+  'cancellation',
+  'resource',
+  'system',
+] as const;
+
+export type KnownFailureCategory = (typeof KNOWN_FAILURE_CATEGORIES)[number];
+
+/** Structural mirror of `WorkflowRevisionDiagnostics['source']` (`@lostgradient/weft`). */
+export interface SourceLoadDiagnosticsLike {
+  readonly kind: string;
+  readonly requestedRevision: string;
+  readonly state: string;
+  readonly loadDurationMs?: number;
+  readonly lastFailureCategory?: string;
+  readonly waiterCount: number;
+}
+
+/** Structural mirror of `WorkflowRevisionDiagnostics` (`@lostgradient/weft`) — only the fields this console reads. */
+export interface CatalogDiagnosticsLike {
+  readonly name: string;
+  readonly revision: string;
+  readonly installed: boolean;
+  readonly active: boolean;
+  readonly source?: SourceLoadDiagnosticsLike;
+}
+
+function isSourceLoadDiagnosticsLike(value: unknown): value is SourceLoadDiagnosticsLike {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record['kind'] !== 'string' ||
+    typeof record['requestedRevision'] !== 'string' ||
+    typeof record['state'] !== 'string' ||
+    typeof record['waiterCount'] !== 'number'
+  ) {
+    return false;
+  }
+  // Both optional fields are present-or-absent on the wire (the server
+  // spreads them conditionally); a present-but-wrong-typed one is malformed
+  // data, not an absent field, so it fails the guard rather than being
+  // silently dropped.
+  if (record['loadDurationMs'] !== undefined && typeof record['loadDurationMs'] !== 'number') {
+    return false;
+  }
+  return (
+    record['lastFailureCategory'] === undefined || typeof record['lastFailureCategory'] === 'string'
+  );
+}
+
+/**
+ * Runtime type guard for one `weft.catalog.diagnostics` response. The
+ * generated client types this operation's output as `unknown` (its zod
+ * schema is `z.unknown()`, same as every other catalog operation), so every
+ * response is guarded rather than cast.
+ */
+export function isCatalogDiagnosticsLike(value: unknown): value is CatalogDiagnosticsLike {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record['name'] !== 'string' ||
+    typeof record['revision'] !== 'string' ||
+    typeof record['installed'] !== 'boolean' ||
+    typeof record['active'] !== 'boolean'
+  ) {
+    return false;
+  }
+  return record['source'] === undefined || isSourceLoadDiagnosticsLike(record['source']);
+}
+
+/** Sentence-case operator copy for each known load state (plan §10.10 copy voice). */
+const SOURCE_LOAD_STATE_LABELS: Readonly<Record<KnownSourceLoadState, string>> = {
+  idle: 'Idle',
+  loading: 'Loading',
+  ready: 'Ready',
+  failed: 'Failed',
+  cancelled: 'Cancelled',
+};
+
+/** What each load state means for the operator looking at it right now. */
+const SOURCE_LOAD_STATE_DESCRIPTIONS: Readonly<Record<KnownSourceLoadState, string>> = {
+  idle: 'Registered as a source, but this engine has never loaded it.',
+  loading: 'A load is in flight in the serving engine right now.',
+  ready: 'Loaded, validated, and installed in the workflow catalog.',
+  failed: 'The last load attempt failed. See the failure category below.',
+  cancelled: 'The last load attempt was cancelled before it finished.',
+};
+
+/** Sentence-case operator copy for each bounded failure category. */
+const FAILURE_CATEGORY_LABELS: Readonly<Record<KnownFailureCategory, string>> = {
+  application: 'The loaded module raised an error of its own.',
+  timeout: 'The load exceeded its time budget.',
+  cancellation: 'The load was cancelled.',
+  resource: 'The load could not reach or read its source.',
+  system: 'The engine itself failed while loading.',
+};
+
+function isKnownSourceLoadState(value: string): value is KnownSourceLoadState {
+  return (KNOWN_SOURCE_LOAD_STATES as readonly string[]).includes(value);
+}
+
+function isKnownFailureCategory(value: string): value is KnownFailureCategory {
+  return (KNOWN_FAILURE_CATEGORIES as readonly string[]).includes(value);
+}
+
+/**
+ * Display label for one load state. An unrecognized value (a future state
+ * this console build predates, or malformed wire data) renders honestly as
+ * the raw value rather than a fabricated label — this module never guesses
+ * what an unknown state means.
+ */
+export function sourceLoadStateLabel(state: string): string {
+  return isKnownSourceLoadState(state) ? SOURCE_LOAD_STATE_LABELS[state] : state;
+}
+
+/** Explanatory copy for one load state, or `undefined` for an unrecognized one (see {@link sourceLoadStateLabel}). */
+export function sourceLoadStateDescription(state: string): string | undefined {
+  return isKnownSourceLoadState(state) ? SOURCE_LOAD_STATE_DESCRIPTIONS[state] : undefined;
+}
+
+/** Explanatory copy for one bounded failure category, or `undefined` for an unrecognized one. */
+export function failureCategoryDescription(category: string): string | undefined {
+  return isKnownFailureCategory(category) ? FAILURE_CATEGORY_LABELS[category] : undefined;
+}
+
+/**
+ * Whether a state warrants a non-color status treatment of "attention" —
+ * paired with an icon and text in the component, never color alone.
+ */
+export type SourceLoadTone = 'positive' | 'attention' | 'neutral' | 'progress';
+
+const SOURCE_LOAD_STATE_TONES: Readonly<Record<KnownSourceLoadState, SourceLoadTone>> = {
+  idle: 'neutral',
+  loading: 'progress',
+  ready: 'positive',
+  failed: 'attention',
+  cancelled: 'attention',
+};
+
+export function sourceLoadStateTone(state: string): SourceLoadTone {
+  return isKnownSourceLoadState(state) ? SOURCE_LOAD_STATE_TONES[state] : 'neutral';
+}
+
+/** One `<dt>`/`<dd>` pair in a diagnostics meta grid. Mirrors `workflow-revisions-view.ts`'s `RowMetaItem`. */
+export interface SourceMetaItem {
+  readonly term: string;
+  readonly value: string;
+  readonly title: string | undefined;
+  readonly mono: boolean;
+}
+
+/**
+ * A resolved diagnostics response, reduced to exactly what the component
+ * renders: either a dynamic source with its live load state, or an explicit
+ * statement that this key has no dynamic source at all.
+ */
+export type SourceLoadSummary =
+  | {
+      readonly kind: 'dynamic';
+      readonly sourceKind: string;
+      readonly requestedRevision: string;
+      readonly state: string;
+      readonly stateLabel: string;
+      readonly stateDescription: string | undefined;
+      readonly tone: SourceLoadTone;
+      readonly waiterCount: number;
+      readonly lastFailureCategory: string | undefined;
+      readonly lastFailureDescription: string | undefined;
+      readonly meta: readonly SourceMetaItem[];
+    }
+  | {
+      readonly kind: 'not-dynamic';
+      /** Whether the queried revision is nonetheless durably installed — `weft.catalog.diagnostics`' own `installed` flag, verbatim. */
+      readonly installed: boolean;
+      readonly message: string;
+    };
+
+/**
+ * Load duration copy. `undefined` is NOT "0 ms": the server omits the field
+ * entirely until a load has actually completed (an `idle` source has never
+ * run one), so an absent value renders as an explicit "Not loaded yet"
+ * rather than a misleading zero.
+ */
+function loadDurationValue(state: string, loadDurationMs: number | undefined): string {
+  if (loadDurationMs !== undefined) return formatDuration(loadDurationMs);
+  return state === 'loading' ? 'In flight' : 'Not loaded yet';
+}
+
+/**
+ * Waiter-count copy. `waiterCount` is the number of callers currently
+ * awaiting the single-flight load for this exact key — it is meaningful at
+ * zero (nobody is blocked), so it always renders as a number, never as a
+ * dash.
+ */
+function waiterCountValue(waiterCount: number): string {
+  return waiterCount === 1 ? '1 caller waiting' : `${String(waiterCount)} callers waiting`;
+}
+
+/**
+ * Reduce one guarded `weft.catalog.diagnostics` response to its render-ready
+ * {@link SourceLoadSummary}.
+ */
+export function summarizeSourceLoad(diagnostics: CatalogDiagnosticsLike): SourceLoadSummary {
+  const source = diagnostics.source;
+  if (source === undefined) {
+    return {
+      kind: 'not-dynamic',
+      installed: diagnostics.installed,
+      // Deliberately says nothing about HOW this revision got into the
+      // catalog. `weft.catalog.diagnostics` carries no field distinguishing
+      // an `engine.register()` revision from one put there by
+      // `weft.workflows.revisions.install` — the seeded
+      // `order-processing-candidate-2` fixture is exactly the second case,
+      // installed with no in-process handler behind it — so claiming
+      // "registered eagerly" here would be a guess dressed as a fact. The
+      // absence of `source` supports one statement and no more: this
+      // workflow name has no dynamic source registered on the serving
+      // engine.
+      message: diagnostics.installed
+        ? 'No dynamic source is registered for this workflow. This revision is installed in the catalog.'
+        : 'No dynamic source is registered for this workflow, and this revision is not installed.',
+    };
+  }
+
+  return {
+    kind: 'dynamic',
+    sourceKind: source.kind,
+    requestedRevision: source.requestedRevision,
+    state: source.state,
+    stateLabel: sourceLoadStateLabel(source.state),
+    stateDescription: sourceLoadStateDescription(source.state),
+    tone: sourceLoadStateTone(source.state),
+    waiterCount: source.waiterCount,
+    lastFailureCategory: source.lastFailureCategory,
+    lastFailureDescription:
+      source.lastFailureCategory === undefined
+        ? undefined
+        : failureCategoryDescription(source.lastFailureCategory),
+    meta: [
+      { term: 'Source kind', value: source.kind, title: undefined, mono: true },
+      {
+        term: 'Requested revision',
+        value: source.requestedRevision,
+        title: source.requestedRevision,
+        mono: true,
+      },
+      {
+        term: 'Load duration',
+        value: loadDurationValue(source.state, source.loadDurationMs),
+        title: undefined,
+        mono: false,
+      },
+      {
+        term: 'Waiters',
+        value: waiterCountValue(source.waiterCount),
+        title: undefined,
+        mono: false,
+      },
+      {
+        term: 'Last failure',
+        value: source.lastFailureCategory ?? 'None recorded',
+        title: undefined,
+        mono: false,
+      },
+    ],
+  };
+}
+
+/**
+ * Whether a summary describes a load this console should keep polling. Only
+ * `loading` is in flight — every other state is settled until an operator
+ * (or a workflow start) triggers a new load, so polling them would be
+ * pure noise.
+ */
+export function isSourceLoadInFlight(summary: SourceLoadSummary): boolean {
+  return summary.kind === 'dynamic' && summary.state === 'loading';
+}

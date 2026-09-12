@@ -29,6 +29,7 @@
     loadFleetManifestDiagnostics,
     loadWorkerRegistrationRejections,
   } from '../workers/workers-data.ts';
+  import DynamicSourcePanel from './dynamic-source-panel.svelte';
   import QueryFaultBanner from './query-fault-banner.svelte';
   import RegistryDetail from './registry-detail.svelte';
   import {
@@ -101,6 +102,25 @@
 {#snippet registryBadge(label: string, variant: 'neutral' | 'success')}
   <Badge {variant}>{label}</Badge>
 {/snippet}
+
+<!--
+  Rendered above the registry query's own branches, and independent of it: a
+  `registerSource()`-registered workflow never appears in the
+  `weft.system.registry` snapshot (see `<DynamicSourcePanel>`'s module doc),
+  so an engine whose workflows are ALL dynamic renders the "Nothing is
+  registered" empty state below while still having sources an operator needs
+  to inspect. Hidden only while a definition detail view is open, where
+  `<WorkflowRevisionsPanel>` already shows per-revision load diagnostics.
+
+  Hiding it destroys the instance, so a typed lookup and any outcome banner are
+  gone on return from a detail view. Accepted: the panel is a point lookup, not
+  a session, and everything it shows is one live query away. Noted rather than
+  silently relied on — if it ever grows state worth keeping across that
+  navigation, this needs to become a CSS hide instead of an `{#if}`.
+-->
+{#if selectedType === null}
+  <DynamicSourcePanel />
+{/if}
 
 {#if $query.isPending}
   <div class="weft-registry-skeleton" role="status" aria-busy="true" aria-label="Loading registry">
