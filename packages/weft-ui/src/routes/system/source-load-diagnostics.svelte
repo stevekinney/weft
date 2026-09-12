@@ -46,7 +46,7 @@
 
   import { getClient } from '../../lib/client.ts';
   import { queryKeys } from '../../lib/query.ts';
-  import { getPrincipalStore, isForbidden } from '../../lib/scopes.svelte.ts';
+  import { getPrincipalStore, isForbidden, isUnauthorized } from '../../lib/scopes.svelte.ts';
   import QueryFaultBanner from './query-fault-banner.svelte';
   import {
     isCatalogDiagnosticsLike,
@@ -95,7 +95,12 @@
           // interval stays armed — while showing a fault banner instead of the
           // honest "requires system:read" state. Revoking locally flips
           // `canRead`, which disables the query outright.
-          if (isForbidden(error)) principal.denyScope('system:read');
+          // 401 first: a credential that expired or was rotated mid-session is
+          // not a scope problem, and `denyScope` would mislabel it. Clearing
+          // the principal returns the shell to its authentication-required
+          // state instead of re-sending an invalid credential on the timer.
+          if (isUnauthorized(error)) principal.clear();
+          else if (isForbidden(error)) principal.denyScope('system:read');
           throw error;
         }
       },

@@ -182,6 +182,30 @@ describe('DynamicSourcePanel', () => {
     expect(await findByText(/No dynamic workflow source is registered/)).not.toBeNull();
   });
 
+  test('revokes workflows:admin locally when a preload is forbidden, so the control stops inviting it', async () => {
+    scripted = new ScriptedFetch();
+    scripted.routeJsonRpcMethod(DIAGNOSTICS, idleDiagnostics());
+    scripted.routeJsonRpcError(PRELOAD, {
+      code: -32000,
+      message: 'forbidden',
+      data: { httpStatus: 403, weftCode: 'Forbidden' },
+    });
+    const { container, getByRole, findByText } = await renderPanel();
+
+    await inspect(container, getByRole);
+    await findByText('Load state: Idle');
+    expect((getByRole('button', { name: 'Preload' }) as HTMLButtonElement).disabled).toBe(false);
+
+    await fireEvent.click(getByRole('button', { name: 'Preload' }));
+    await findByText(/not allowed to preload workflow revisions/);
+
+    // Without the local revoke, `adminGate` stays enabled and keeps inviting a
+    // request the server will reject for the rest of the session.
+    await waitFor(() => {
+      expect((getByRole('button', { name: 'Preload' }) as HTMLButtonElement).disabled).toBe(true);
+    });
+  });
+
   test('renders a load-failed conflict with its bounded reason and no invented cause', async () => {
     scripted = new ScriptedFetch();
     scripted.routeJsonRpcMethod(DIAGNOSTICS, idleDiagnostics());

@@ -138,7 +138,12 @@ const SOURCE_LOAD_STATE_DESCRIPTIONS: Readonly<Record<KnownSourceLoadState, stri
   // in the operator's favour.
   idle: 'No load has been recorded for this revision. The workflow name has a registered source; this exact revision may not, in which case preloading it is refused as not found.',
   loading: 'A load is in flight in the serving engine right now.',
-  ready: 'Loaded, validated, and installed in the workflow catalog.',
+  // Deliberately past tense, and deliberately silent about the catalog:
+  // `removeWorkflowRevision()` does not reset this process-local diagnostics
+  // entry, so a revision loaded successfully and later removed still reports
+  // `ready` alongside `installed: false` in the SAME response. The authoritative
+  // current answer is that `installed` flag, which the meta grid now carries.
+  ready: 'The last load completed successfully.',
   failed: 'The last load attempt failed. See the failure category below.',
   // NOT "the load stopped". `endSourceWaiterAndCheckCancellation()` flips this
   // state when the LAST waiting caller releases (an abort, or engine disposal);
@@ -239,6 +244,8 @@ export type SourceLoadSummary =
   | {
       readonly kind: 'dynamic';
       readonly sourceKind: string;
+      /** `weft.catalog.diagnostics`' own `installed` flag — the authoritative answer for "is this revision in the catalog right now", which `state` is not. */
+      readonly installed: boolean;
       readonly requestedRevision: string;
       readonly state: string;
       readonly stateLabel: string;
@@ -315,6 +322,7 @@ export function summarizeSourceLoad(diagnostics: CatalogDiagnosticsLike): Source
   return {
     kind: 'dynamic',
     sourceKind: source.kind,
+    installed: diagnostics.installed,
     requestedRevision: source.requestedRevision,
     state: source.state,
     stateLabel: sourceLoadStateLabel(source.state),
@@ -349,6 +357,15 @@ export function summarizeSourceLoad(diagnostics: CatalogDiagnosticsLike): Source
       {
         term: 'Last failure',
         value: source.lastFailureCategory ?? 'None recorded',
+        title: undefined,
+        mono: false,
+      },
+      {
+        // Separate from `state` on purpose: a `ready` revision removed from the
+        // catalog afterwards still reports `ready`, so this is the only field
+        // that answers "is it there now".
+        term: 'In catalog',
+        value: diagnostics.installed ? 'Installed' : 'Not installed',
         title: undefined,
         mono: false,
       },

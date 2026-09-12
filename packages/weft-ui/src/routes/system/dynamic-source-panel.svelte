@@ -52,7 +52,12 @@
 
   import { getClient } from '../../lib/client.ts';
   import { queryKeys } from '../../lib/query.ts';
-  import { getPrincipalStore, scopeGate } from '../../lib/scopes.svelte.ts';
+  import {
+    getPrincipalStore,
+    isForbidden,
+    isUnauthorized,
+    scopeGate,
+  } from '../../lib/scopes.svelte.ts';
   import {
     describePreloadOutcome,
     sourceRejectionReasonLabel,
@@ -172,6 +177,12 @@
           key.revision,
         );
       } catch (error) {
+        // Degrade the local principal before describing the outcome, so the
+        // control stops inviting a request the server will keep rejecting.
+        // Describing a denial without this leaves the Preload button enabled
+        // for the rest of the session.
+        if (isUnauthorized(error)) principal.clear();
+        else if (isForbidden(error)) principal.denyScope('workflows:admin');
         return describePreloadOutcome({ installed: false, error }, key.name, key.revision);
       }
     },

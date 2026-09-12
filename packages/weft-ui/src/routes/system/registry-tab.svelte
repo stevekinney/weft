@@ -131,9 +131,16 @@
 {:else if $query.isError}
   <QueryFaultBanner error={$query.error} onRetry={() => $query.refetch()} />
 {:else if isRegistryEmpty($query.data)}
+  <!--
+    Scoped to what this snapshot actually covers. `weft.system.registry` lists
+    eager registrations only, so an engine whose workflows are all
+    `registerSource()`-registered renders this state permanently — even right
+    after an operator successfully preloads one in the panel above. "Nothing is
+    registered with this engine" would be flatly untrue there.
+  -->
   <EmptyState
     title="Registry · 3-step onboarding"
-    description="Nothing is registered with this engine yet."
+    description="No eagerly registered workflow or activity definitions appear in this engine's registry snapshot. Dynamic sources never appear here — use Dynamic workflow sources above."
   >
     {#snippet icon()}
       <GitBranch aria-hidden="true" size={26} />

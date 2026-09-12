@@ -144,10 +144,30 @@ describe('summarizeSourceLoad', () => {
       'Load duration',
       'Waiters',
       'Last failure',
+      'In catalog',
     ]);
     expect(summary.meta[2]?.value).toBe('1s');
     expect(summary.meta[3]?.value).toBe('0 callers waiting');
     expect(summary.meta[4]?.value).toBe('None recorded');
+    expect(summary.meta[5]?.value).toBe('Installed');
+  });
+
+  it('reports a ready-but-removed revision as not installed, and never calls ready "installed"', () => {
+    // `removeWorkflowRevision()` does not reset process-local source
+    // diagnostics, so `ready` and `installed: false` legitimately arrive in the
+    // same response. `state` describes the last load; only `installed` answers
+    // "is it in the catalog right now".
+    const summary = summarizeSourceLoad(
+      diagnostics({
+        installed: false,
+        source: source({ state: 'ready', loadDurationMs: 5 }),
+      }),
+    );
+    if (summary.kind !== 'dynamic') throw new Error('expected dynamic');
+    expect(summary.installed).toBe(false);
+    expect(summary.meta[5]?.value).toBe('Not installed');
+    expect(summary.stateDescription).toBe('The last load completed successfully.');
+    expect(summary.stateDescription).not.toContain('installed');
   });
 
   it('renders an absent load duration as "Not loaded yet" for an idle source, never as zero', () => {

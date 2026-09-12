@@ -68,10 +68,17 @@ const PRELOAD_CONFLICT_REASON_LABELS: Readonly<Record<KnownPreloadConflictReason
     'The source loader failed. Weft never forwards the loader’s own message; check the load state below for its bounded failure category.',
   'ambiguous-revision':
     'More than one registered revision matched, so Weft refused to pick one. Name an exact revision.',
+  // NOT "the module loaded but failed validation": when the revision is already
+  // in the durable catalog, `resolveCachedOrHandle()` validates the CACHED
+  // manifest against the descriptor's pins and throws before the loader is ever
+  // invoked. Both paths produce this same reason, so the copy must cover both.
   'validation-failed':
-    'The module loaded but failed validation. Every rejection reason is listed below.',
+    'The candidate failed validation against the registered source descriptor. Every rejection reason is listed below. Depending on whether this revision was already in the catalog, this may have been decided against the stored manifest without loading the module.',
+  // A revision IS the identity, so "another revision holds it" is incoherent:
+  // the collision is on this exact `(name, revision)` key, against different
+  // stored content — or a concurrent catalog mutation.
   'catalog-conflict':
-    'The durable workflow catalog rejected the install. Another revision may already hold this identity.',
+    'The durable workflow catalog rejected the install. This exact revision is already stored with different contract metadata, or the catalog changed concurrently.',
   'not-registered': 'This revision is no longer registered with the serving engine.',
   'legacy-ambiguous': 'This revision predates revision pinning, so Weft cannot resolve it.',
   'not-installed': 'This revision was removed from the catalog while the load was running.',
@@ -115,15 +122,17 @@ const SOURCE_REJECTION_REASON_LABELS: Readonly<Record<KnownSourceRejectionReason
   'ambiguous-export': 'The module exports more than one candidate workflow definition.',
   'invalid-definition': 'The export is not a builder-produced workflow definition.',
   'manifest-build-failed': 'A revision manifest could not be built from the loaded contract.',
-  'name-mismatch': 'The loaded workflow is named differently from the descriptor.',
+  'name-mismatch': 'The candidate workflow is named differently from the descriptor.',
   'manifest-version-unsupported':
-    'The loaded artifact uses a manifest schema version this engine does not support.',
+    'The candidate uses a manifest schema version this engine does not support.',
+  // "candidate", not "loaded artifact": these are reached from the cached-manifest
+  // path too, where nothing was loaded (see `validation-failed` above).
   'contract-hash-mismatch':
-    'The loaded artifact’s contract does not match the contractHash the descriptor pins.',
+    'The candidate’s contract does not match the contractHash the descriptor pins.',
   'workflow-version-incompatible':
-    'The loaded workflow’s version does not match the workflowVersion the descriptor pins.',
+    'The candidate’s workflow version does not match the workflowVersion the descriptor pins.',
   'artifact-revision-mismatch':
-    'The loaded artifact derives a different revision from the one the descriptor names. A revision is a content identity, so the descriptor must name the revision the module actually produces.',
+    'The candidate derives a different revision from the one the descriptor names. A revision is a content identity, so the descriptor must name the revision the artifact actually produces.',
 };
 
 function isKnownSourceRejectionReason(value: string): value is KnownSourceRejectionReason {
