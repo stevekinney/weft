@@ -54,6 +54,31 @@ export type WorkflowSourceValidationOutcome =
     }>
   | Readonly<{ ok: false; reasons: readonly WorkflowSourceRejectionReason[] }>;
 
+function hasModuleNamespaceShape(value: object): boolean {
+  const tag = Object.getOwnPropertyDescriptor(value, Symbol.toStringTag);
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return (
+    !Object.isExtensible(value) &&
+    tag?.value === 'Module' &&
+    tag.writable === false &&
+    tag.enumerable === false &&
+    tag.configurable === false &&
+    typeof prototype === 'object' &&
+    prototype !== null &&
+    Object.getPrototypeOf(prototype) === null
+  );
+}
+
+function isSourceModule(value: unknown): value is Readonly<Record<string, unknown>> {
+  if (isRecord(value)) return true;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+
+  // Bun namespaces have an interop prototype instead of the standard null
+  // prototype. Require its immutable own tag and non-extensible shape;
+  // a custom class or an ordinary Symbol.toStringTag spoof is not a module.
+  return hasModuleNamespaceShape(value);
+}
+
 /**
  * Read `moduleValue[exportName]` without ever touching the prototype chain —
  * `Object.hasOwn` rather than bracket access alone, so a hostile module
@@ -107,7 +132,7 @@ export function buildExpectedManifest(
  * {@link import('./resolvers.ts').resolveSourceModule} call produced)
  * against `descriptor`'s expectations, in order:
  *
- * 1. `moduleValue` must be a plain record and must own `descriptor.exportName` — else `missing-export`.
+ * 1. `moduleValue` must be a plain record or module namespace and must own `descriptor.exportName` — else `missing-export`.
  * 2. The export must not itself be an ES module namespace object (an `export * as x` barrel) — else `ambiguous-export`.
  * 3. The export must be a builder-produced `WorkflowDefinition` — else `invalid-definition` (covers the removed bare-handler shape).
  * 4. The export's `name` must pass the wire-safe name grammar — else `invalid-definition`.
@@ -138,7 +163,7 @@ export async function validateResolvedWorkflowSource(
   descriptor: WorkflowSourceDescriptor,
   moduleValue: unknown,
 ): Promise<WorkflowSourceValidationOutcome> {
-  if (!isRecord(moduleValue)) {
+  if (!isSourceModule(moduleValue)) {
     return { ok: false, reasons: ['missing-export'] };
   }
 

@@ -46,7 +46,7 @@ async function scanCheckpointHistorySteps(
       steps.push(step);
     }
   }
-  return steps.sort((left, right) => left - right);
+  return steps.toSorted((left, right) => left - right);
 }
 
 /** Read the live checkpoint's stable per-run identity, when present. */

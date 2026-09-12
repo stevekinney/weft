@@ -11,6 +11,7 @@ import {
 import { workflow, type WorkflowDefinition } from '../types.ts';
 import type { WorkflowSourceDescriptor } from './types.ts';
 import { validateResolvedWorkflowSource } from './validate.ts';
+import { workflowSource } from './workflow-source.ts';
 
 function descriptorFor(
   overrides: Partial<WorkflowSourceDescriptor> &
@@ -43,7 +44,105 @@ async function actualCheckoutManifest() {
 }
 
 describe('validateResolvedWorkflowSource()', () => {
-  it('rejects a moduleValue that is not a plain record with missing-export', async () => {
+  it('preloads and executes a workflow from a literal dynamic-import loader', async () => {
+    const actual = await actualCheckoutManifest();
+    await using engine = new Engine();
+    engine.registerSource(
+      workflowSource(
+        {
+          name: 'checkout',
+          location: './__fixtures__/checkout-workflow.test-support.ts',
+          exportName: 'checkout',
+          revision: actual.revision,
+        },
+        () => import('./__fixtures__/checkout-workflow.test-support.ts'),
+      ),
+    );
+
+    await engine.workflows.preload('checkout', actual.revision);
+    const handle = await engine.start('checkout', { orderId: 'dynamic-import' });
+    expect(await handle.result()).toEqual({ shipped: true, orderId: 'dynamic-import' });
+  });
+
+  it('reports missing-export for absent and inherited keys on a real module namespace', async () => {
+    const moduleValue = await import('./__fixtures__/checkout-workflow.test-support.ts');
+    for (const exportName of ['absent', '__esModule', '__proto__', 'constructor']) {
+      expect(
+        await validateResolvedWorkflowSource(
+          descriptorFor({ name: 'checkout', revision: 'r1', exportName }),
+          moduleValue,
+        ),
+      ).toEqual({ ok: false, reasons: ['missing-export'] });
+    }
+  });
+
+  it('rejects non-module objects even when they own a valid workflow export', async () => {
+    class ModuleSpoof {
+      checkout = checkoutDefinition;
+    }
+    const taggedInstance = new ModuleSpoof();
+    Object.defineProperty(taggedInstance, Symbol.toStringTag, { value: 'Module' });
+    Object.preventExtensions(taggedInstance);
+    const customPrototype = Object.create({ inherited: true });
+    customPrototype.checkout = checkoutDefinition;
+    const taggedPrototype = Object.create(null);
+    const mutableTag = Object.create(taggedPrototype);
+    mutableTag.checkout = checkoutDefinition;
+    Object.defineProperty(mutableTag, Symbol.toStringTag, {
+      value: 'Module',
+      writable: true,
+    });
+    Object.preventExtensions(mutableTag);
+    const extensibleSpoof = Object.create(taggedPrototype);
+    extensibleSpoof.checkout = checkoutDefinition;
+    Object.defineProperty(extensibleSpoof, Symbol.toStringTag, { value: 'Module' });
+
+    for (const moduleValue of [
+      null,
+      undefined,
+      Object.assign([], { checkout: checkoutDefinition }),
+      Object.assign(new Map(), { checkout: checkoutDefinition }),
+      Object.assign(new Date(), { checkout: checkoutDefinition }),
+      Object.assign(() => undefined, { checkout: checkoutDefinition }),
+      new ModuleSpoof(),
+      taggedInstance,
+      customPrototype,
+      mutableTag,
+      extensibleSpoof,
+    ]) {
+      expect(
+        await validateResolvedWorkflowSource(
+          descriptorFor({ name: 'checkout', revision: 'r1' }),
+          moduleValue,
+        ),
+      ).toEqual({ ok: false, reasons: ['missing-export'] });
+    }
+  });
+
+  it('rejects malformed namespace tags without invoking their getters', async () => {
+    for (const tag of [
+      { value: 'Module', enumerable: true },
+      { value: 'Module', configurable: true },
+      {
+        get() {
+          throw new Error('must not invoke the tag getter');
+        },
+      },
+    ]) {
+      const moduleValue = Object.create(Object.create(null));
+      moduleValue.checkout = checkoutDefinition;
+      Object.defineProperty(moduleValue, Symbol.toStringTag, tag);
+      Object.preventExtensions(moduleValue);
+      expect(
+        await validateResolvedWorkflowSource(
+          descriptorFor({ name: 'checkout', revision: 'r1' }),
+          moduleValue,
+        ),
+      ).toEqual({ ok: false, reasons: ['missing-export'] });
+    }
+  });
+
+  it('rejects a moduleValue that is neither a plain record nor a namespace with missing-export', async () => {
     const outcome = await validateResolvedWorkflowSource(
       descriptorFor({ name: 'checkout', revision: 'r1' }),
       'not a module object',
@@ -60,15 +159,7 @@ describe('validateResolvedWorkflowSource()', () => {
   });
 
   it('rejects an export that is itself a module namespace object with ambiguous-export', async () => {
-    const namespaceObject: Record<string, unknown> = { bar: 2 };
-    Object.setPrototypeOf(namespaceObject, null);
-    // Simulate `Object.prototype.toString.call` reporting `[object Module]`,
-    // as a real ES module namespace object does (verified empirically
-    // against Bun's own `import()` — see the batch's implementation notes).
-    Object.defineProperty(namespaceObject, Symbol.toStringTag, {
-      value: 'Module',
-      configurable: false,
-    });
+    const namespaceObject = await import('./__fixtures__/checkout-workflow.test-support.ts');
     const outcome = await validateResolvedWorkflowSource(
       descriptorFor({ name: 'checkout', revision: 'r1', exportName: 'ns' }),
       { ns: namespaceObject },

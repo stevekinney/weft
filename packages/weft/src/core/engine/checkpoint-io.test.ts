@@ -359,7 +359,7 @@ describe('checkpoint commit compare-and-swap guard', () => {
     // indistinguishable on the wire from a genuinely pre-upgrade worker,
     // but the host itself already has a token, which is strong enough
     // evidence this is NOT a legacy generation to extend that tolerance to.
-    const workerCheckpointNoToken = { ...checkpoint, step: 1 } as Checkpoint;
+    const workerCheckpointNoToken = { ...checkpoint, step: 1 };
     delete (workerCheckpointNoToken as { workflowExecutionToken?: string }).workflowExecutionToken;
     expect(workerCheckpointNoToken.workflowExecutionToken).toBeUndefined();
 
