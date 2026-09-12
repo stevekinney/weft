@@ -102,7 +102,7 @@ describe('dynamic workflow sources — engine integration (WFT-15/16)', () => {
     const lazy = workflow({ name: 'lazy-untouched' }).execute(async function* () {
       return 'should never run';
     });
-    const revision = await revisionFor(lazy as WorkflowDefinition);
+    const revision = await revisionFor(lazy);
     const lazyLoader = mock(async () => ({ lazyUntouched: lazy }));
     engine.registerSource(
       workflowSource(
@@ -123,7 +123,7 @@ describe('dynamic workflow sources — engine integration (WFT-15/16)', () => {
     const lazy = workflow({ name: 'lazy-concurrent' }).execute(async function* () {
       return 'done';
     });
-    const revision = await revisionFor(lazy as WorkflowDefinition);
+    const revision = await revisionFor(lazy);
     const loader = mock(async () => ({ lazyConcurrent: lazy }));
     engine.registerSource(
       workflowSource(
@@ -147,7 +147,7 @@ describe('dynamic workflow sources — engine integration (WFT-15/16)', () => {
     const lazy = workflow({ name: 'lazy-race' }).execute(async function* () {
       return 'survived';
     });
-    const revision = await revisionFor(lazy as WorkflowDefinition);
+    const revision = await revisionFor(lazy);
     const deferred = Promise.withResolvers<Record<string, unknown>>();
     const loader = mock(() => deferred.promise);
     engine.registerSource(
@@ -189,7 +189,7 @@ describe('dynamic workflow sources — engine integration (WFT-15/16)', () => {
       const signalPayload = yield* ctx.waitForSignal('continue');
       return signalPayload;
     });
-    const revision = await revisionFor(lazy as WorkflowDefinition);
+    const revision = await revisionFor(lazy);
     engine.registerSource(
       workflowSource(
         {
@@ -220,7 +220,7 @@ describe('dynamic workflow sources — engine integration (WFT-15/16)', () => {
     const lazy = workflow({ name: 'lazy-scheduled' }).execute(async function* () {
       return 'fired';
     });
-    const revision = await revisionFor(lazy as WorkflowDefinition);
+    const revision = await revisionFor(lazy);
     const loader = mock(async () => ({ lazyScheduled: lazy }));
     engine.registerSource(
       workflowSource(
@@ -304,7 +304,7 @@ describe('dynamic workflow sources — engine integration (WFT-15/16)', () => {
     const lazy = workflow({ name: 'lazy-delayed' }).execute(async function* () {
       return 'delayed-done';
     });
-    const revision = await revisionFor(lazy as WorkflowDefinition);
+    const revision = await revisionFor(lazy);
     const loader = mock(async () => ({ lazyDelayed: lazy }));
     engine.registerSource(
       workflowSource(
@@ -332,7 +332,7 @@ describe('dynamic workflow sources — engine integration (WFT-15/16)', () => {
     const lazy = workflow({ name: 'lazy-delayed-cross-process' }).execute(async function* () {
       return 'delayed-done';
     });
-    const revision = await revisionFor(lazy as WorkflowDefinition);
+    const revision = await revisionFor(lazy);
     const workflowId = 'lazy-delayed-cross-process-1';
 
     // engineA durably creates the delayed-start timer. Its own creation-time
@@ -391,7 +391,7 @@ describe('dynamic workflow sources — engine integration (WFT-15/16)', () => {
       if (shouldFail) throw new Error('first attempt fails');
       return 'retried-ok';
     });
-    const revision = await revisionFor(lazy as WorkflowDefinition);
+    const revision = await revisionFor(lazy);
 
     const engineA = new Engine({ storage });
     engineA.registerSource(
@@ -431,7 +431,7 @@ describe('dynamic workflow sources — engine integration (WFT-15/16)', () => {
     const lazyChild = workflow({ name: 'lazy-child' }).execute(async function* () {
       return 'child-done';
     });
-    const revision = await revisionFor(lazyChild as WorkflowDefinition);
+    const revision = await revisionFor(lazyChild);
     engine.registerSource(
       workflowSource(
         { name: 'lazy-child', location: './lazy.ts', exportName: 'lazyChild', revision },

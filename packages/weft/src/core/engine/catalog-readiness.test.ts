@@ -323,7 +323,7 @@ describe('ensureWorkflowCatalogReady — boot-time orphaned-tombstone sweep (WFT
     await using recovered = new Engine({ storage, backgroundTasks: 'manual' });
     const warnings: CleanupWarningEvent[] = [];
     recovered.addEventListener(CleanupWarningEvent.type, (event) => {
-      warnings.push(event as CleanupWarningEvent);
+      warnings.push(event);
     });
 
     await expect(ensureWorkflowCatalogReady(recovered)).resolves.toBeUndefined();

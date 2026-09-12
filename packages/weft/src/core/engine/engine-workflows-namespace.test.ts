@@ -16,7 +16,7 @@ import { buildWorkflowRevisionManifest } from '../contract/manifest.ts';
 import { buildRegistrySnapshot } from '../registry-snapshot.ts';
 import { buildWorkflowManifestFromDefinition } from '../registry-workflow-manifest.ts';
 import { workflowSource } from '../source/index.ts';
-import type { WorkflowContext, WorkflowDefinition } from '../types.ts';
+import type { WorkflowContext } from '../types.ts';
 import { workflow } from '../types.ts';
 import { copyWorkflowDefinition } from './construction.ts';
 import { WorkflowSourceNotRegisteredError } from './dynamic-source-errors.ts';
@@ -302,7 +302,7 @@ describe('engine.workflows.preload', () => {
   });
 
   async function lazyRevision(): Promise<string> {
-    const entry = buildRegistrationEntry('lazy-preload', lazy as WorkflowDefinition);
+    const entry = buildRegistrationEntry('lazy-preload', lazy);
     const registered = copyWorkflowDefinition('lazy-preload', entry);
     const manifest = await buildWorkflowManifestFromDefinition(
       registered,

@@ -105,7 +105,7 @@ export class DynamicWorkflowSourceUnavailableError extends WeftError<'DynamicWor
             'registered and none is the catalog active revision. Activate one via ' +
             'engine.workflows.activate(), or register only one revision at a time.'
         : `Dynamic workflow source "${workflowType}"${revision === undefined ? '' : ` revision "${revision}"`} failed to load: ` +
-            `${cause instanceof Error ? cause.message : String(cause)}`,
+            (cause instanceof Error ? cause.message : String(cause)),
       { cause },
     );
     this.workflowType = workflowType;
