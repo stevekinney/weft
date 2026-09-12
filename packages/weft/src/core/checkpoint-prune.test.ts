@@ -14,23 +14,51 @@ async function flush(): Promise<void> {
   await sleepForTesting(10);
 }
 
+/** Build serialized checkpoint bytes with a given `workflowExecutionToken`. */
+function buildCheckpointBytes(
+  workflowId: string,
+  step: number,
+  overrides?: Partial<Checkpoint>,
+): Uint8Array {
+  const checkpoint: Checkpoint = {
+    workflowId,
+    step,
+    locals: overrides?.locals ?? { counter: step },
+    accumulatedResults: overrides?.accumulatedResults ?? [],
+    searchAttributes: overrides?.searchAttributes ?? {},
+    version: overrides?.version ?? '1.0.0',
+    schemaVersion: overrides?.schemaVersion ?? CURRENT_CHECKPOINT_SCHEMA_VERSION,
+    createdAt: overrides?.createdAt ?? 1000 + step * 100,
+    ...(overrides?.workflowExecutionToken !== undefined
+      ? { workflowExecutionToken: overrides.workflowExecutionToken }
+      : {}),
+  };
+  return serializeCheckpoint(checkpoint);
+}
+
 /** Write a fake checkpoint history entry directly to storage. */
 async function writeCheckpointHistory(
   storage: MemoryStorage | BunSQLiteStorage,
   workflowId: string,
   step: number,
 ): Promise<void> {
-  const checkpoint: Checkpoint = {
-    workflowId,
-    step,
-    locals: { counter: step },
-    accumulatedResults: [],
-    searchAttributes: {},
-    version: '1.0.0',
-    schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
-    createdAt: 1000 + step * 100,
-  };
-  await storage.put(KEYS.checkpointHistory(workflowId, step), serializeCheckpoint(checkpoint));
+  await storage.put(
+    KEYS.checkpointHistory(workflowId, step),
+    buildCheckpointBytes(workflowId, step),
+  );
+}
+
+/** Write the live checkpoint record directly to storage, with a given execution token. */
+async function writeLiveCheckpoint(
+  storage: MemoryStorage | BunSQLiteStorage,
+  workflowId: string,
+  step: number,
+  workflowExecutionToken: string,
+): Promise<void> {
+  await storage.put(
+    KEYS.checkpoint(workflowId),
+    buildCheckpointBytes(workflowId, step, { workflowExecutionToken }),
+  );
 }
 
 /** Read the sorted set of steps still present in checkpoint history for a workflow. */
@@ -71,24 +99,27 @@ class FailingBunSQLiteStorage extends BunSQLiteStorage {
 }
 
 /**
- * Simulates a concurrent `onTerminalConflict: 'start-new'` run replacement
- * landing between `pruneCheckpoints()`'s anchor read of the live checkpoint
- * and its destructive batch: the first `get()` of `targetKey` (the anchor
- * read) is answered honestly, then the stored value is overwritten in place
- * before the read even returns, standing in for the replacement's own write.
+ * Simulates a concurrent `onTerminalConflict: 'start-new'` run replacement:
+ * the first `get()` of `targetKey` (the pre-scan fence anchor read) is
+ * answered honestly with the ORIGINAL run's checkpoint, then the stored
+ * value is overwritten in place with a DIFFERENT execution's checkpoint
+ * (a different `workflowExecutionToken`) before the read even returns,
+ * standing in for the replacement's own write landing immediately after.
  */
 class ReplacementRaceMemoryStorage extends MemoryStorage {
   #targetKey: string;
+  #replacementBytes: Uint8Array;
   #triggered = false;
-  constructor(targetKey: string) {
+  constructor(targetKey: string, replacementBytes: Uint8Array) {
     super();
     this.#targetKey = targetKey;
+    this.#replacementBytes = replacementBytes;
   }
   override async get(key: string): Promise<Uint8Array | null> {
     const value = await super.get(key);
     if (key === this.#targetKey && !this.#triggered) {
       this.#triggered = true;
-      await super.put(this.#targetKey, new Uint8Array([9, 9, 9]));
+      await super.put(this.#targetKey, this.#replacementBytes);
     }
     return value;
   }
@@ -96,16 +127,18 @@ class ReplacementRaceMemoryStorage extends MemoryStorage {
 
 class ReplacementRaceBunSQLiteStorage extends BunSQLiteStorage {
   #targetKey: string;
+  #replacementBytes: Uint8Array;
   #triggered = false;
-  constructor(targetKey: string) {
+  constructor(targetKey: string, replacementBytes: Uint8Array) {
     super(':memory:');
     this.#targetKey = targetKey;
+    this.#replacementBytes = replacementBytes;
   }
   override async get(key: string): Promise<Uint8Array | null> {
     const value = await super.get(key);
     if (key === this.#targetKey && !this.#triggered) {
       this.#triggered = true;
-      await super.put(this.#targetKey, new Uint8Array([9, 9, 9]));
+      await super.put(this.#targetKey, this.#replacementBytes);
     }
     return value;
   }
@@ -115,22 +148,49 @@ class ReplacementRaceBunSQLiteStorage extends BunSQLiteStorage {
  * Simulates a replacement landing strictly AFTER the fence anchor is
  * captured but WHILE the history scan is still enumerating — the specific
  * gap a pre-fix ordering (anchor read after the scan) left open, since that
- * ordering would capture the replacement's own bytes as the CAS baseline
- * instead of failing against them.
+ * ordering would capture the replacement's own bytes as the anchor instead
+ * of failing against them.
  */
 class ReplacementDuringScanMemoryStorage extends MemoryStorage {
   #targetKey: string;
+  #replacementBytes: Uint8Array;
   #triggered = false;
-  constructor(targetKey: string) {
+  constructor(targetKey: string, replacementBytes: Uint8Array) {
     super();
     this.#targetKey = targetKey;
+    this.#replacementBytes = replacementBytes;
   }
   override async *keys(prefix: string, options?: Parameters<MemoryStorage['keys']>[1]) {
     if (!this.#triggered) {
       this.#triggered = true;
-      await this.put(this.#targetKey, new Uint8Array([9, 9, 9]));
+      await this.put(this.#targetKey, this.#replacementBytes);
     }
     yield* super.keys(prefix, options);
+  }
+}
+
+/**
+ * Simulates ORDINARY progress on the SAME execution — an unrelated
+ * checkpoint commit advancing `step`/`locals` while `workflowExecutionToken`
+ * stays unchanged — landing between the fence anchor read and the delete
+ * phase's re-read. This must NOT be treated as a replacement.
+ */
+class OrdinaryProgressMemoryStorage extends MemoryStorage {
+  #targetKey: string;
+  #advancedBytes: Uint8Array;
+  #triggered = false;
+  constructor(targetKey: string, advancedBytes: Uint8Array) {
+    super();
+    this.#targetKey = targetKey;
+    this.#advancedBytes = advancedBytes;
+  }
+  override async get(key: string): Promise<Uint8Array | null> {
+    const value = await super.get(key);
+    if (key === this.#targetKey && !this.#triggered) {
+      this.#triggered = true;
+      await super.put(this.#targetKey, this.#advancedBytes);
+    }
+    return value;
   }
 }
 
@@ -207,7 +267,7 @@ describe('Engine.pruneCheckpoints', () => {
         for (const step of [1, 2, 3]) {
           await writeCheckpointHistory(storage, 'wf-1', step);
         }
-        await storage.put(KEYS.checkpoint('wf-1'), new Uint8Array([1, 2, 3]));
+        await writeLiveCheckpoint(storage, 'wf-1', 3, 'token-a');
 
         engine = new Engine({ storage, checkpointHistory: 10 });
         engine.register(
@@ -256,16 +316,19 @@ describe('Engine.pruneCheckpoints', () => {
         expect(await listHistorySteps(storage, 'wf-1')).toEqual([1, 2, 3]);
       });
 
-      it('fences the destructive batch against a concurrent run replacement', async () => {
+      it("rejects a concurrent run replacement instead of deleting the new run's history", async () => {
         const liveCheckpointKey = KEYS.checkpoint('wf-1');
+        const replacementBytes = buildCheckpointBytes('wf-1', 1, {
+          workflowExecutionToken: 'token-b',
+        });
         const storage =
           name === 'MemoryStorage'
-            ? new ReplacementRaceMemoryStorage(liveCheckpointKey)
-            : new ReplacementRaceBunSQLiteStorage(liveCheckpointKey);
+            ? new ReplacementRaceMemoryStorage(liveCheckpointKey, replacementBytes)
+            : new ReplacementRaceBunSQLiteStorage(liveCheckpointKey, replacementBytes);
         for (const step of [1, 2, 3]) {
           await writeCheckpointHistory(storage, 'wf-1', step);
         }
-        await storage.put(liveCheckpointKey, new Uint8Array([1, 2, 3]));
+        await writeLiveCheckpoint(storage, 'wf-1', 3, 'token-a');
 
         engine = new Engine({ storage, checkpointHistory: 10 });
         engine.register(
@@ -275,12 +338,39 @@ describe('Engine.pruneCheckpoints', () => {
         );
 
         await expect(engine.pruneCheckpoints('wf-1', { keepLast: 1 })).rejects.toThrow(
-          'lost its CAS race',
+          'lost its race against a concurrent run replacement',
         );
-        // The replacement's rewritten checkpoint bytes failed the fence before
+        // The replacement's different execution token failed the guard before
         // any history entry was deleted.
         expect(await listHistorySteps(storage, 'wf-1')).toEqual([1, 2, 3]);
-        expect(await storage.get(liveCheckpointKey)).toEqual(new Uint8Array([9, 9, 9]));
+        expect(await storage.get(liveCheckpointKey)).toEqual(replacementBytes);
+      });
+
+      it('does not spuriously fail when the SAME run advances between the anchor read and delete', async () => {
+        const liveCheckpointKey = KEYS.checkpoint('wf-1');
+        const advancedBytes = buildCheckpointBytes('wf-1', 7, {
+          workflowExecutionToken: 'token-a',
+        });
+        const storage = new OrdinaryProgressMemoryStorage(liveCheckpointKey, advancedBytes);
+        for (const step of [1, 2, 3]) {
+          await writeCheckpointHistory(storage, 'wf-1', step);
+        }
+        await writeLiveCheckpoint(storage, 'wf-1', 3, 'token-a');
+
+        engine = new Engine({ storage, checkpointHistory: 10 });
+        engine.register(
+          workflow({ name: 'noop' }).execute(async function* () {
+            return null;
+          }),
+        );
+
+        // An ordinary commit on the SAME execution (same token) landed between
+        // the anchor read and the delete phase — this is not a replacement, so
+        // the prune must still succeed rather than rejecting.
+        const result = await engine.pruneCheckpoints('wf-1', { keepLast: 1 });
+        expect(result).toEqual({ removed: 2, retained: 1 });
+        expect(await listHistorySteps(storage, 'wf-1')).toEqual([3]);
+        expect(await storage.get(liveCheckpointKey)).toEqual(advancedBytes);
       });
 
       it('rejects and deletes nothing when the signal is already aborted', async () => {
@@ -325,16 +415,41 @@ describe('Engine.pruneCheckpoints', () => {
         expect(result.retained).toBe(2);
         expect(await listHistorySteps(storage, handle.id)).toHaveLength(2);
       });
+
+      it('is safe to call while the workflow is still running (active execution)', async () => {
+        const storage = create();
+        engine = new Engine({ storage, checkpointHistory: 10 });
+        engine.register(
+          workflow({ name: 'steps-then-wait' }).execute(async function* (ctx) {
+            for (let i = 0; i < 5; i++) {
+              yield* ctx.run(async () => null);
+            }
+            yield* ctx.waitForSignal('done');
+            return 'ok';
+          }),
+        );
+
+        const handle = await engine.start('steps-then-wait', null);
+        await flush();
+
+        // The workflow is still alive (parked on a signal) — its live
+        // checkpoint keeps advancing on every commit, yet pruning its
+        // history must not spuriously reject.
+        const result = await engine.pruneCheckpoints(handle.id, { keepLast: 2 });
+        expect(result.retained).toBe(2);
+        expect(await listHistorySteps(storage, handle.id)).toHaveLength(2);
+      });
     });
   }
 
   it('fences against a replacement landing during the history scan itself', async () => {
     const liveCheckpointKey = KEYS.checkpoint('wf-1');
-    const storage = new ReplacementDuringScanMemoryStorage(liveCheckpointKey);
+    const replacementBytes = buildCheckpointBytes('wf-1', 1, { workflowExecutionToken: 'token-b' });
+    const storage = new ReplacementDuringScanMemoryStorage(liveCheckpointKey, replacementBytes);
     for (const step of [1, 2, 3]) {
       await writeCheckpointHistory(storage, 'wf-1', step);
     }
-    await storage.put(liveCheckpointKey, new Uint8Array([1, 2, 3]));
+    await writeLiveCheckpoint(storage, 'wf-1', 3, 'token-a');
 
     engine = new Engine({ storage, checkpointHistory: 10 });
     engine.register(
@@ -345,12 +460,12 @@ describe('Engine.pruneCheckpoints', () => {
 
     // The fence anchor is captured before the scan starts, so even though the
     // replacement's rewrite happens mid-scan (not merely after it), the
-    // destructive batch still fails closed against the pre-scan bytes.
+    // destructive batch still fails closed against the pre-scan token.
     await expect(engine.pruneCheckpoints('wf-1', { keepLast: 1 })).rejects.toThrow(
-      'lost its CAS race',
+      'lost its race against a concurrent run replacement',
     );
     expect(await listHistorySteps(storage, 'wf-1')).toEqual([1, 2, 3]);
-    expect(await storage.get(liveCheckpointKey)).toEqual(new Uint8Array([9, 9, 9]));
+    expect(await storage.get(liveCheckpointKey)).toEqual(replacementBytes);
   });
 
   it('rejects synchronously for an invalid keepLast option', async () => {

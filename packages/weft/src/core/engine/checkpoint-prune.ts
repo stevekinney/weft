@@ -11,8 +11,9 @@
  * @module core/engine/checkpoint-prune
  */
 
-import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
+import type { BatchOperation } from '../../storage/interface.ts';
 import { KEYS, MAX_BATCH_OPERATIONS, storageKeys } from '../../storage/interface.ts';
+import { deserializeCheckpoint } from '../checkpoint.ts';
 import type { PruneCheckpointsOptions, PruneCheckpointsResult } from '../types/checkpoint.ts';
 import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
@@ -49,45 +50,87 @@ async function scanCheckpointHistorySteps(
 }
 
 /**
+ * Read the live checkpoint's `workflowExecutionToken` (WFT-21) — the stable
+ * per-run identity stamped once at a run's initial checkpoint and carried
+ * forward unchanged by every later commit for that SAME execution, changing
+ * only when a fresh execution replaces this workflow id (`start()`, `fork()`,
+ * or an `onTerminalConflict: 'start-new'` replacement). Returns `undefined`
+ * uniformly for "no live checkpoint at all" and "checkpoint present but
+ * predates this field" — both cases have no identity to compare, and the
+ * caller's comparison policy (see {@link deleteCheckpointHistoryEntries})
+ * already treats an `undefined` anchor as "nothing to fence."
+ */
+async function readWorkflowExecutionToken(
+  internals: EngineInternals,
+  workflowId: string,
+): Promise<string | undefined> {
+  const bytes = await internals.storage.get(KEYS.checkpoint(workflowId));
+  if (bytes === null) return undefined;
+  return deserializeCheckpoint(bytes).workflowExecutionToken;
+}
+
+/**
  * Delete `toDelete` checkpoint history entries in `MAX_BATCH_OPERATIONS`-sized
- * chunks, each fenced against a concurrent run replacement (`onTerminalConflict:
- * 'start-new'` reusing this workflow id): every chunk's batch is conditioned on
- * `fenceCheckpointBytes` — the live `wf:{id}:ckpt` record's bytes, captured by
- * the caller BEFORE it scanned history, not re-read here — on any backend that
- * reports `conditionalBatch`. A replacement purges and recreates that record
- * with different bytes at ANY point from before the scan through this delete,
- * so the condition fails closed and the stale delete list — computed against
- * the OLD run's steps, which the new run can revisit from step 1 — never
- * lands on the new run's checkpoints. Re-reading the anchor here instead of
- * reusing the pre-scan capture would reopen exactly that window: a
- * replacement landing during the scan would already be reflected in a
- * fresh read, so it would wrongly become the CAS baseline instead of failing
- * the fence.
+ * chunks, guarded against a concurrent run replacement (`onTerminalConflict:
+ * 'start-new'` reusing this workflow id).
  *
- * Bounded per-key deletes inside a fenced batch — not `storageDeleteRange()` —
- * are deliberate: `storageDeleteRange()` is a standalone, unconditioned
- * storage operation with no way to carry the CAS condition above, and this
- * repository's own precedent for a bounded, fencing-sensitive historical
- * cleanup (event-log compaction) folds bounded per-key deletes into one atomic
- * conditioned batch for the same reason.
+ * The guard compares `anchorToken` — the live checkpoint's
+ * `workflowExecutionToken`, captured by the caller BEFORE it scanned history —
+ * against a fresh read of the SAME field taken here, immediately before the
+ * destructive phase. This is deliberately an identity comparison, not a
+ * byte-for-byte CAS on the whole checkpoint record: the checkpoint's other
+ * fields (step, locals, accumulated results) legitimately change on every
+ * ordinary commit while a workflow keeps running, and fencing on the raw
+ * bytes would make pruning fail on almost any active workflow even though no
+ * replacement occurred. `workflowExecutionToken` changes only when the
+ * execution itself is replaced, so comparing it — mirroring the exact
+ * `hostToken`/`workerToken` comparison policy `persistWorkerCheckpoint()`
+ * (`checkpoint-io.ts`) already uses for the same field — catches a real
+ * replacement without false-positiving on ordinary progress: whenever
+ * `anchorToken` is defined, the current token must match it exactly
+ * (including a currently-undefined token, which can only mean a replacement
+ * or purge happened); when `anchorToken` is `undefined` (a legacy pre-token
+ * generation, or no live checkpoint at all), there is no identity to protect
+ * and the guard never blocks — the same legacy tolerance already accepted
+ * for this field elsewhere.
  *
- * Under `ownership: 'lease'` / `'workflow-lease'`, this also rides the
- * engine's own epoch fence via `commitFencedEngineWrite`; passing
- * `workflowId: null` (an engine-scoped write, not a per-workflow-claim write)
- * is deliberate — a terminal workflow is not expected to still be claimed by
- * any engine, and fencing on its claim epoch would spuriously depose an
- * engine that simply never held (or already released) that claim.
+ * This is a revalidate-then-commit guard, not an atomic CAS: a replacement
+ * landing in the narrow window between this re-read and the destructive
+ * batch below would not be caught. Closing that fully would require a
+ * dedicated, always-present identity key this operation could condition a
+ * `conditionalBatch` on; no such key exists today, and introducing one is
+ * out of scope for this fix. `commitFencedEngineWrite`'s own epoch fencing
+ * (under `ownership: 'lease'` / `'workflow-lease'`) still applies
+ * independently and closes a different gap: a deposed, stale engine process
+ * issuing this write at all.
+ *
+ * Bounded per-key deletes — not `storageDeleteRange()` — are deliberate:
+ * this repository's own precedent for a bounded, fencing-sensitive
+ * historical cleanup (event-log compaction) folds bounded per-key deletes
+ * into one atomic batch for the same reason `storageDeleteRange()` cannot
+ * carry an identity guard.
+ *
+ * Passing `workflowId: null` to `commitFencedEngineWrite` (an engine-scoped
+ * write, not a per-workflow-claim write) is deliberate — a terminal workflow
+ * is not expected to still be claimed by any engine under
+ * `ownership: 'workflow-lease'`, and fencing on its claim epoch would
+ * spuriously depose an engine that simply never held (or already released)
+ * that claim.
  */
 async function deleteCheckpointHistoryEntries(
   internals: EngineInternals,
   workflowId: string,
   toDelete: readonly number[],
-  fenceCheckpointBytes: Uint8Array | null,
+  anchorToken: string | undefined,
 ): Promise<void> {
-  const canFence = internals.storage.capabilities().conditionalBatch;
-  const baseConditions: ConditionalBatchCondition[] = canFence
-    ? [{ key: KEYS.checkpoint(workflowId), expectedValue: fenceCheckpointBytes }]
-    : [];
+  if (anchorToken !== undefined) {
+    const currentToken = await readWorkflowExecutionToken(internals, workflowId);
+    if (currentToken !== anchorToken) {
+      throw new Error(
+        `pruneCheckpoints for workflow "${workflowId}" lost its race against a concurrent run replacement.`,
+      );
+    }
+  }
 
   for (let index = 0; index < toDelete.length; index += MAX_BATCH_OPERATIONS) {
     const chunk = toDelete.slice(index, index + MAX_BATCH_OPERATIONS);
@@ -95,9 +138,9 @@ async function deleteCheckpointHistoryEntries(
       type: 'delete',
       key: KEYS.checkpointHistory(workflowId, step),
     }));
-    await commitFencedEngineWrite(internals, null, operations, baseConditions, () => {
+    await commitFencedEngineWrite(internals, null, operations, [], () => {
       return new Error(
-        `pruneCheckpoints for workflow "${workflowId}" lost its CAS race against a concurrent run replacement.`,
+        `pruneCheckpoints for workflow "${workflowId}" lost its CAS race against a concurrent write.`,
       );
     });
   }
@@ -107,21 +150,24 @@ async function deleteCheckpointHistoryEntries(
  * Delete all but the newest `keepLast` checkpoint history entries for one
  * workflow.
  *
- * Safe to call on a terminal workflow. A no-op — `{ removed: 0, retained: 0
- * }`, never a throw — when the workflow has no checkpoint history entries at
- * all, whether because the workflow id is unknown or because
- * `EngineOptions.checkpointHistory` was never enabled for it. Rejects with
- * whatever error the storage adapter rejects with when a delete batch fails,
- * and honors `options.signal` by throwing its abort reason before issuing any
- * delete — once the first delete chunk commits (see
- * {@link deleteCheckpointHistoryEntries}), the prune runs to completion rather
- * than stopping partway with some, but not all, overflow entries removed.
+ * Safe to call on a terminal — or still-running — workflow. A no-op —
+ * `{ removed: 0, retained: 0 }`, never a throw — when the workflow has no
+ * checkpoint history entries at all, whether because the workflow id is
+ * unknown or because `EngineOptions.checkpointHistory` was never enabled for
+ * it. Rejects with whatever error the storage adapter rejects with when a
+ * delete batch fails, and honors `options.signal` by throwing its abort
+ * reason before issuing any delete — once the first delete chunk commits
+ * (see {@link deleteCheckpointHistoryEntries}), the prune runs to completion
+ * rather than stopping partway with some, but not all, overflow entries
+ * removed.
  *
- * The fence anchor (the live `wf:{id}:ckpt` record's bytes) is captured
- * BEFORE the history scan, not after: capturing it later would let a
- * replacement that lands during the scan slip in as the CAS baseline instead
- * of being caught by it, reopening the exact race
- * {@link deleteCheckpointHistoryEntries} exists to close.
+ * Two callers concurrently pruning the SAME still-current run can each
+ * report the full count of entries they planned to delete even when their
+ * `toDelete` lists overlapped, since neither call's guard (see
+ * {@link deleteCheckpointHistoryEntries}) detects another prune call, only a
+ * run replacement. Serialize concurrent `pruneCheckpoints` calls against the
+ * same workflow id at the caller if an exact `removed` count under
+ * concurrent pruning matters (tracked as a follow-up, not fixed here).
  */
 export async function pruneCheckpoints(
   internals: EngineInternals,
@@ -132,7 +178,7 @@ export async function pruneCheckpoints(
   assertValidKeepLast(keepLast);
   signal?.throwIfAborted();
 
-  const fenceCheckpointBytes = await internals.storage.get(KEYS.checkpoint(workflowId));
+  const anchorToken = await readWorkflowExecutionToken(internals, workflowId);
   const steps = await scanCheckpointHistorySteps(internals, workflowId, signal);
 
   // `scanCheckpointHistorySteps()` returns ascending numeric order already
@@ -144,7 +190,7 @@ export async function pruneCheckpoints(
   }
 
   signal?.throwIfAborted();
-  await deleteCheckpointHistoryEntries(internals, workflowId, toDelete, fenceCheckpointBytes);
+  await deleteCheckpointHistoryEntries(internals, workflowId, toDelete, anchorToken);
 
   return { removed: toDelete.length, retained: steps.length - toDelete.length };
 }
