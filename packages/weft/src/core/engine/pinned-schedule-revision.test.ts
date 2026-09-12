@@ -123,7 +123,7 @@ describe('resolveAndReservePinnedExecutableRegistration', () => {
   it('delegates a dynamic-source type to resolveExecutableRegistrationForRevision unchanged', async () => {
     const engine = await newEngine();
     const internals = getInternals(engine);
-    const revision = await revisionFor(lazyDefinition as WorkflowDefinition);
+    const revision = await revisionFor(lazyDefinition);
     const loader = mock(async () => ({ lazy: lazyDefinition }));
     engine.registerSource(
       workflowSource(
@@ -149,7 +149,7 @@ describe('resolveAndReservePinnedExecutableRegistration', () => {
   it('rejects a dynamic-source type pinned to a revision that was never registered', async () => {
     const engine = await newEngine();
     const internals = getInternals(engine);
-    const revision = await revisionFor(lazyDefinition as WorkflowDefinition);
+    const revision = await revisionFor(lazyDefinition);
     engine.registerSource(
       workflowSource(
         { name: 'pinned-lazy', location: './lazy.ts', exportName: 'lazy', revision },

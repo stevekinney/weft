@@ -355,7 +355,7 @@ describe('disposeEngine — dynamic workflow sources (WFT-15/16)', () => {
     const lazy = workflow({ name: 'lazy-dispose' }).execute(async function* () {
       return 'done';
     });
-    const revision = await revisionFor(lazy as WorkflowDefinition);
+    const revision = await revisionFor(lazy);
     const deferred = Promise.withResolvers<Record<string, unknown>>();
     engine.registerSource(
       workflowSource(
@@ -398,7 +398,7 @@ describe('disposeEngine — dynamic workflow sources (WFT-15/16)', () => {
     const lazy = workflow({ name: 'lazy-orphan' }).execute(async function* () {
       return 'done';
     });
-    const revision = await revisionFor(lazy as WorkflowDefinition);
+    const revision = await revisionFor(lazy);
     const deferred = Promise.withResolvers<Record<string, unknown>>();
     const loader = mock(() => deferred.promise);
     engine.registerSource(
@@ -439,7 +439,7 @@ describe('disposeEngine — dynamic workflow sources (WFT-15/16)', () => {
     const lazy = workflow({ name: 'lazy-bare-dispose' }).execute(async function* () {
       return 'done';
     });
-    const revision = await revisionFor(lazy as WorkflowDefinition);
+    const revision = await revisionFor(lazy);
     const deferred = Promise.withResolvers<Record<string, unknown>>();
     const loader = mock(() => deferred.promise);
     engine.registerSource(

@@ -96,6 +96,10 @@ import {
   installWorkflowRevisionRestBinding,
 } from './install-workflow-revision.ts';
 import { listAlertsOperation, listAlertsRestBinding } from './list-alerts.ts';
+import {
+  listCatalogSourcesOperation,
+  listCatalogSourcesRestBinding,
+} from './list-catalog-sources.ts';
 import { listCheckpointsOperation, listCheckpointsRestBinding } from './list-checkpoints.ts';
 import { listReviewsOperation, listReviewsRestBinding } from './list-reviews.ts';
 import { listSchedulesOperation, listSchedulesRestBinding } from './list-schedules.ts';
@@ -179,6 +183,7 @@ export const STATIC_REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = [
   bulkRetryFailedWorkflowsRestBinding,
   bulkDeleteWorkflowsRestBinding,
   bulkMutateWorkflowTagsRestBinding,
+  listCatalogSourcesRestBinding,
   getCatalogDiagnosticsRestBinding,
   getWorkflowRestBinding,
   cancelWorkflowRestBinding,
@@ -265,6 +270,7 @@ export const STATIC_OPERATIONS: ReadonlyArray<RegistrableOperation> = [
   bulkRetryFailedWorkflowsOperation,
   bulkDeleteWorkflowsOperation,
   bulkMutateWorkflowTagsOperation,
+  listCatalogSourcesOperation,
   getCatalogDiagnosticsOperation,
   getWorkflowOperation,
   cancelWorkflowOperation,

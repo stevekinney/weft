@@ -234,13 +234,9 @@ describe('engine.resolveWorkflowSource()', () => {
     engine[Symbol.dispose]();
   });
 
-  it('rejects with unregistered-source-kind for a manually-constructed handle naming an unsupported kind', async () => {
+  it('rejects with unregistered-source-kind when internal state contains an unsupported source kind', async () => {
     const engine = new Engine();
-    // Bypasses `workflowSource()`'s typed surface — `WorkflowSourceKind` is
-    // the single literal `'module'` today, so this is only reachable via a
-    // hand-built handle, exactly like `manifest-version-unsupported` in
-    // `core/contract/compatibility.ts`.
-    engine.registerSource({
+    const source = {
       descriptor: {
         kind: 'bogus-kind' as never,
         name: 'checkout',
@@ -249,7 +245,11 @@ describe('engine.resolveWorkflowSource()', () => {
         revision: checkoutRevision,
       },
       load: async () => ({ checkout: checkoutDefinition }),
-    });
+    };
+    expect(() => engine.registerSource(source)).toThrow(/unsupported source kind/);
+    // Registration rejects this input. Inject it directly to retain coverage
+    // of the resolver's independent defense against corrupted internal state.
+    getInternals(engine).sources.byName.set('checkout', new Map([[checkoutRevision, source]]));
 
     const rejection = await engine
       .resolveWorkflowSource('checkout', checkoutRevision)
@@ -262,7 +262,7 @@ describe('engine.resolveWorkflowSource()', () => {
     engine[Symbol.dispose]();
   });
 
-  it('rejects with unregistered-source-kind, not a raw TypeError, for a manually-constructed handle naming an inherited property like __proto__', async () => {
+  it('rejects with unregistered-source-kind, not a raw TypeError, when internal state contains an inherited source kind like __proto__', async () => {
     const engine = new Engine();
     // `SOURCE_RESOLVERS` is a plain object literal — a bare bracket lookup
     // (`SOURCE_RESOLVERS[descriptor.kind]`) would return an inherited
@@ -270,7 +270,7 @@ describe('engine.resolveWorkflowSource()', () => {
     // `undefined`, skip the `resolver === undefined` guard, and then throw a
     // raw `TypeError` from `resolver(handle)` rather than the documented
     // structured rejection.
-    engine.registerSource({
+    const source = {
       descriptor: {
         kind: '__proto__' as never,
         name: 'checkout',
@@ -279,7 +279,11 @@ describe('engine.resolveWorkflowSource()', () => {
         revision: checkoutRevision,
       },
       load: async () => ({ checkout: checkoutDefinition }),
-    });
+    };
+    expect(() => engine.registerSource(source)).toThrow(/unsupported source kind/);
+    // Registration rejects this input. Inject it directly to retain coverage
+    // of the resolver's independent defense against corrupted internal state.
+    getInternals(engine).sources.byName.set('checkout', new Map([[checkoutRevision, source]]));
 
     const rejection = await engine
       .resolveWorkflowSource('checkout', checkoutRevision)

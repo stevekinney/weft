@@ -35,6 +35,9 @@ function assertWellFormedSourceDescriptor(source: WorkflowSourceHandle): void {
   if (typeof kind !== 'string' || kind.length === 0) {
     throw new TypeError('registerSource(): source.descriptor.kind must be a non-empty string');
   }
+  if (kind !== 'module') {
+    throw new TypeError('registerSource(): unsupported source kind; expected module');
+  }
   if (typeof name !== 'string' || name.length === 0) {
     throw new TypeError('registerSource(): source.descriptor.name must be a non-empty string');
   }

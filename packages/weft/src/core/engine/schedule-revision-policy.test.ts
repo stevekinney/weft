@@ -95,7 +95,7 @@ function registerRevision(engine: Engine, revision: string, definition: Workflow
 function trackFiredWorkflowIds(engine: Engine): string[] {
   const workflowIds: string[] = [];
   engine.addEventListener(ScheduleFiredEvent.type, (event) => {
-    workflowIds.push((event as ScheduleFiredEvent).workflowId);
+    workflowIds.push(event.workflowId);
   });
   return workflowIds;
 }

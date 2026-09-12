@@ -108,7 +108,7 @@ describe('retention helpers', () => {
         return 'dynamic';
       },
     );
-    const revision = await revisionFor(definition as WorkflowDefinition);
+    const revision = await revisionFor(definition);
 
     const engine = new Engine();
     engine.registerSource(

@@ -310,6 +310,77 @@
       }
     },
     {
+      "name": "weft.catalog.sources.list",
+      "kind": "unary",
+      "summary": "List registered dynamic workflow sources",
+      "description": "List all dynamically registered workflow source revisions, including sources in the idle state. Results are ordered by name then revision in codepoint order. `limit` defaults to 100 (maximum 1000) and `offset` defaults to 0. Pages reflect live process state and may change between requests. No source loader or durable storage is read. Returns only name, revision, kind, and load state; no manifest, contract, module content, or source location.",
+      "tags": ["Workflow Catalog"],
+      "destructive": false,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["system:read"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "nextOffset": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sources": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "module",
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "string"
+                },
+                "state": {
+                  "enum": ["idle", "loading", "ready", "failed", "cancelled"],
+                  "type": "string"
+                }
+              },
+              "required": ["name", "revision", "kind", "state"],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": ["sources"],
+        "type": "object"
+      }
+    },
+    {
       "name": "weft.events.sse",
       "kind": "stream",
       "summary": "Stream fleet events as Server-Sent Events",
@@ -1699,7 +1770,8 @@
     {
       "name": "weft.system.registry",
       "kind": "unary",
-      "summary": "Get a snapshot of registered workflows and activities with their JSON Schemas",
+      "summary": "Get a snapshot of eager workflows and registered activities with their JSON Schemas",
+      "description": "Describe eager workflow definitions and registered activities for schema discovery. Excludes registerSource() workflows even after preload; enumerate dynamic sources with weft.catalog.sources.list.",
       "tags": ["System"],
       "destructive": false,
       "access": {
