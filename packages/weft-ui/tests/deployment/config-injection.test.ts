@@ -68,6 +68,44 @@ describe('config injection — Bun server mount (plan §3.1)', () => {
 });
 
 describe('config injection — standalone / cross-origin mode (plan §3.4)', () => {
+  test('diagnostics and preload retain the configured engine endpoint and routing header', async () => {
+    const requests: { pathname: string; instance: string | null; method: string }[] = [];
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const body = await request.json();
+        requests.push({
+          pathname: new URL(request.url).pathname,
+          instance: request.headers.get('x-engine-instance'),
+          method: body.method,
+        });
+        return Response.json({ jsonrpc: '2.0', id: body.id, result: {} });
+      },
+    });
+    try {
+      const config = readRuntimeConfig(
+        documentWithConfigBlock({
+          baseUrl: `${server.url.origin}/engine-a`,
+          headers: { 'X-Engine-Instance': 'engine-a' },
+        }),
+      );
+      const client = createClient(config, CONSOLE_ORIGIN);
+      const key = { name: 'dynamic-invoice', revision: 'r1' };
+      await client.operations['weft.catalog.diagnostics'](key);
+      await client.operations['weft.workflows.revisions.preload'](key);
+      await client.operations['weft.catalog.diagnostics'](key);
+      expect(requests).toEqual(
+        [
+          'weft.catalog.diagnostics',
+          'weft.workflows.revisions.preload',
+          'weft.catalog.diagnostics',
+        ].map((method) => ({ pathname: '/engine-a/jsonrpc', instance: 'engine-a', method })),
+      );
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test('an absolute cross-origin baseUrl plus a static header boots a working client, headers intact', () => {
     const doc = documentWithConfigBlock({
       baseUrl: 'https://weft-api.example.com',

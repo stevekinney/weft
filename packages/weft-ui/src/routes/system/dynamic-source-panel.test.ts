@@ -131,6 +131,7 @@ describe('DynamicSourcePanel', () => {
     await fireEvent.click(getByRole('button', { name: 'Preload' }));
 
     expect(await findByText(/is installed in the workflow catalog/)).not.toBeNull();
+    expect(await findByText(/describe the responding engine process/)).not.toBeNull();
     // The diagnostics key is invalidated on every settled outcome, so the
     // operation is called again after the mutation resolves.
     await waitFor(() => {
@@ -309,6 +310,21 @@ describe('DynamicSourcePanel', () => {
     await findByText('Load state: Idle');
     await fireEvent.click(getByRole('button', { name: 'Preload' }));
 
+    // The initial diagnostics response is idle. Starting this slow preload
+    // must still switch the mounted query to the fast cadence immediately,
+    // otherwise it would wait the settled 30-second interval before seeing
+    // the server's loading state. The third call proves the 2-second cadence,
+    // rather than only the immediate refresh.
+    await waitFor(
+      () => {
+        const diagnosticsCalls = scripted!.calls.filter(
+          (call) => typeof call.init?.body === 'string' && call.init.body.includes(DIAGNOSTICS),
+        );
+        expect(diagnosticsCalls.length).toBeGreaterThan(2);
+      },
+      { timeout: 2_500 },
+    );
+
     // Switch to a different revision while the first preload is unresolved.
     await inspect(container, getByRole, NAME, 'a-different-revision');
     await findByText('Load state: Idle');
@@ -336,6 +352,50 @@ describe('DynamicSourcePanel', () => {
     // The settled outcome belongs to the FIRST key, which is no longer shown.
     expect(queryByText(/is installed in the workflow catalog/)).toBeNull();
   });
+
+  test('round-trips an opaque CR/LF revision through the escaped JSON-string mode', async () => {
+    scripted = new ScriptedFetch();
+    scripted.routeJsonRpcMethod(DIAGNOSTICS, idleDiagnostics());
+    scripted.routeJsonRpcMethod(PRELOAD, { manifest: { revision: 'line\r\nrevision' } });
+    const { container, getByRole, findByText } = await renderPanel();
+
+    const nameInput = container.querySelector('#weft-dynamic-source-name');
+    const revisionInput = container.querySelector('#weft-dynamic-source-revision');
+    const escapedRevision = '"line\\r\\nrevision"';
+    if (!(nameInput instanceof HTMLInputElement) || !(revisionInput instanceof HTMLInputElement)) {
+      throw new Error('lookup inputs not rendered');
+    }
+    await fireEvent.input(nameInput, { target: { value: NAME } });
+    await fireEvent.click(container.querySelector('#weft-dynamic-source-revision-json')!);
+    await fireEvent.input(revisionInput, { target: { value: escapedRevision } });
+    await fireEvent.click(getByRole('button', { name: 'Inspect' }));
+
+    expect(await findByText('Load state: Idle')).not.toBeNull();
+    const diagnosticsCall = scripted.calls.find(
+      (call) => typeof call.init?.body === 'string' && call.init.body.includes(DIAGNOSTICS),
+    );
+    expect(JSON.parse(diagnosticsCall!.init!.body as string).params.revision).toBe(
+      'line\r\nrevision',
+    );
+    await fireEvent.click(getByRole('button', { name: 'Preload' }));
+    await findByText(/is installed in the workflow catalog/);
+    const preloadCall = scripted.calls.find(
+      (call) => typeof call.init?.body === 'string' && call.init.body.includes(PRELOAD),
+    );
+    expect(JSON.parse(preloadCall!.init!.body as string).params.revision).toBe('line\r\nrevision');
+  });
+
+  test.each(['not JSON', '42', 'null', '""'])(
+    'does not submit an invalid or empty JSON-string revision: %s',
+    async (revision) => {
+      scripted = new ScriptedFetch();
+      const { container, getByRole } = await renderPanel();
+      await fireEvent.click(container.querySelector('#weft-dynamic-source-revision-json')!);
+      await inspect(container, getByRole, NAME, revision);
+      expect((getByRole('button', { name: 'Inspect' }) as HTMLButtonElement).disabled).toBe(true);
+      expect(scripted.calls).toHaveLength(0);
+    },
+  );
 
   test('clears a previous outcome when a different key is inspected', async () => {
     scripted = new ScriptedFetch();

@@ -24,10 +24,6 @@
    * registered names, which are precisely the ones that have no dynamic
    * source. Tracked upstream as WFT-165.
    *
-   * The installed-revision case is covered from the other direction by
-   * `<WorkflowRevisionsPanel>`, which mounts the same
-   * `<SourceLoadDiagnostics>` per installed revision.
-   *
    * ## Preload is the only exposed action
    *
    * `weft.workflows.revisions.preload` (`workflows:admin`) is the sole wire
@@ -46,6 +42,7 @@
    */
   import Badge from '@lostgradient/cinder/badge';
   import Button from '@lostgradient/cinder/button';
+  import Checkbox from '@lostgradient/cinder/checkbox';
   import Input from '@lostgradient/cinder/input';
   import { AlertTriangle, Ban, CheckCircle2 } from 'lucide-svelte';
   import { createMutation, useQueryClient } from '@tanstack/svelte-query';
@@ -79,6 +76,7 @@
 
   let nameInput = $state('');
   let revisionInput = $state('');
+  let revisionIsJsonString = $state(false);
   let lookup = $state<LookupKey | null>(null);
   let outcome = $state<PreloadOutcome | null>(null);
 
@@ -95,8 +93,18 @@
    * would be told `"candidate"` is not registered.
    */
   const trimmedName = $derived(nameInput.trim());
-  const submittedRevision = $derived(revisionInput);
-  const canSubmit = $derived(trimmedName.length > 0 && submittedRevision.length > 0);
+  const submittedRevision = $derived.by((): string | undefined => {
+    if (!revisionIsJsonString) return revisionInput;
+    try {
+      const parsed: unknown = JSON.parse(revisionInput);
+      return typeof parsed === 'string' ? parsed : undefined;
+    } catch {
+      return undefined;
+    }
+  });
+  const canSubmit = $derived(
+    trimmedName.length > 0 && submittedRevision !== undefined && submittedRevision.length > 0,
+  );
 
   /**
    * Whether the submitted lookup still matches what is typed in the inputs.
@@ -106,12 +114,13 @@
    * just typed.
    */
   const isStale = $derived(
-    lookup !== null && (lookup.name !== trimmedName || lookup.revision !== submittedRevision),
+    lookup !== null &&
+      (lookup.name !== trimmedName || lookup.revision !== (submittedRevision ?? '')),
   );
 
   function submitLookup(event: SubmitEvent): void {
     event.preventDefault();
-    if (!canSubmit) return;
+    if (!canSubmit || submittedRevision === undefined) return;
     // A new key's outcome has not happened yet; carrying the previous key's
     // banner across would attribute it to the wrong revision.
     outcome = null;
@@ -226,6 +235,12 @@
     // already clears it; a retry has exactly the same claim to.
     outcome = null;
     preloadInFlightKey = { name: lookup.name, revision: lookup.revision };
+    // An idle diagnostics response normally polls slowly. Refresh immediately
+    // when this panel starts a preload so the mounted query observes the
+    // corresponding server-side load and then stays on its fast cadence.
+    void queryClient.refetchQueries({
+      queryKey: queryKeys.catalog.diagnostics(lookup.name, lookup.revision),
+    });
     $preloadMutation.mutate(lookup);
   }
 </script>
@@ -239,6 +254,10 @@
       Weft exposes no way to list registered sources, and a dynamic workflow never appears in the
       registered-definitions table below. Enter a workflow name and the revision its
       <code>registerSource()</code> descriptor declares to inspect its loading lifecycle.
+    </p>
+    <p class="weft-dynamic-source__note">
+      Load diagnostics describe the responding engine process. Use a stable per-engine endpoint;
+      load-balanced responses may come from different engines.
     </p>
   </div>
 
@@ -254,8 +273,17 @@
       id="weft-dynamic-source-revision"
       label="Revision"
       bind:value={revisionInput}
-      placeholder="r1"
+      placeholder={revisionIsJsonString ? '"line\\r\\nrevision"' : 'r1'}
       autocomplete="off"
+      {...revisionIsJsonString && submittedRevision === undefined
+        ? { error: 'Enter a JSON string literal.' }
+        : {}}
+    />
+    <Checkbox
+      id="weft-dynamic-source-revision-json"
+      bind:checked={revisionIsJsonString}
+      label="Revision is a JSON string literal"
+      description={'Use this mode for opaque revisions containing CR or LF; for example, "line\\r\\nrevision".'}
     />
     <Button type="submit" size="sm" variant="secondary" label="Inspect" disabled={!canSubmit} />
   </form>
@@ -278,13 +306,12 @@
         </p>
       {/if}
 
-      <!--
-        No `{#key}` wrapper: `<SourceLoadDiagnostics>` holds no local state, so
-        changing its props re-keys its query in place and TanStack Query
-        switches cache entries itself. `<WorkflowRevisionsPanel>` mounts the
-        same component per row exactly this way.
-      -->
-      <SourceLoadDiagnostics workflowName={lookup.name} revision={lookup.revision} />
+      <SourceLoadDiagnostics
+        workflowName={lookup.name}
+        revision={lookup.revision}
+        preloadPending={preloadInFlightKey?.name === lookup.name &&
+          preloadInFlightKey?.revision === lookup.revision}
+      />
 
       <div class="weft-dynamic-source__actions">
         <Button
@@ -312,8 +339,8 @@
             <CheckCircle2 aria-hidden="true" size={16} />
             <span>
               Revision "{outcome.revision}" is installed in the workflow catalog. A Load state of
-              Idle above means Weft satisfied this from the existing catalog entry rather than
-              loading the module.
+              Idle above means this panel's last observation did not see an active load; another
+              engine process may have loaded the revision.
             </span>
           </p>
         {:else if outcome.kind === 'rejected'}

@@ -250,6 +250,14 @@ a deployment bug worth surfacing, not masking. A missing/empty block falls back 
 `{ baseUrl: '', eventTransport: 'auto' }` (same-origin, auto-transport) so a bare `index.html`
 load outside any of the three documented modes still boots.
 
+### Dynamic-source diagnostics in multi-engine deployments
+
+Dynamic-source registration, load state, duration, failure category, and waiter count belong to the engine process that answers each request. Catalog installation is durable and can be shared by multiple engines. A successful preload on one engine does not change another engine's local load state.
+
+For this surface, set `baseUrl` to a stable per-engine endpoint, such as `https://engine-a.example.com`, or configure your proxy to route the console's requests to one engine using a fixed header from the existing `headers` configuration. Header-based routing is a deployment responsibility; Weft does not interpret an engine-selection header. Both diagnostics and preload use the same configured endpoint and headers, covered by `tests/deployment/config-injection.test.ts`.
+
+An unpinned load-balanced endpoint cannot provide a continuous view of one engine's loading lifecycle. The diagnostics response contains no engine identity, so the console cannot detect a replica change or select a replica itself. When the selected engine restarts, its process-local load history resets even if the revision remains installed in the shared catalog.
+
 ### Scope requirements per surface
 
 Sourced from the current operation catalog (`@lostgradient/weft/src/server/operations/*.ts`), not

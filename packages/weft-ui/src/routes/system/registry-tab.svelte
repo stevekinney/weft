@@ -107,10 +107,10 @@
   Rendered above the registry query's own branches, and independent of it: a
   `registerSource()`-registered workflow never appears in the
   `weft.system.registry` snapshot (see `<DynamicSourcePanel>`'s module doc),
-  so an engine whose workflows are ALL dynamic renders the "Nothing is
-  registered" empty state below while still having sources an operator needs
-  to inspect. Hidden only while a definition detail view is open, where
-  `<WorkflowRevisionsPanel>` already shows per-revision load diagnostics.
+  so an engine whose workflows are ALL dynamic renders the eager-definition
+  empty state below while still having sources an operator needs to inspect.
+  The lookup is the sole load-diagnostics surface. It is hidden while a
+  definition detail view is open.
 
   Hiding it destroys the instance, so a typed lookup and any outcome banner are
   gone on return from a detail view. Accepted: the panel is a point lookup, not

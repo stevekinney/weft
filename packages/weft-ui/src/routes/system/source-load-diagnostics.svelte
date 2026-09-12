@@ -5,27 +5,10 @@
    * fields WFT-16 exposes: source kind, requested revision, load state,
    * load duration, waiter count, and last failure category.
    *
-   * Mounted from exactly one place: `<DynamicSourcePanel>`, against the key an
-   * operator submitted.
-   *
-   * It is deliberately NOT mounted per installed revision in
-   * `<WorkflowRevisionsPanel>`, which an earlier revision of this work did.
-   * Every row that panel can show is an eager registration — the Registry table
-   * is built from `internals.registrations`, and `registerSource()` refuses a
-   * name already registered there — so a per-row query could only ever return
-   * "no dynamic source". It is not free, either: `weft.catalog.diagnostics`
-   * runs `countWorkflowRevisionReferences()`, which scans workflow states,
-   * pinned schedules, and teardown dead-letters, so opening a multi-revision
-   * detail view fired that scan set once per row for a constant answer.
-   *
    * ## Scope
    *
-   * `weft.catalog.diagnostics` requires `system:read` — a DIFFERENT scope
-   * from the `workflows:read` that gates the revisions list around it, so
-   * this component gates itself rather than assuming its caller's grant. A
-   * principal with `workflows:read` but not `system:read` sees the
-   * revisions list with an explicit per-row "requires system:read" note,
-   * not a silently missing section.
+   * `weft.catalog.diagnostics` requires `system:read`, so this component gates
+   * itself rather than assuming its caller's grant.
    *
    * ## Cancellation is not offered, deliberately
    *
@@ -50,6 +33,7 @@
   import QueryFaultBanner from './query-fault-banner.svelte';
   import {
     isCatalogDiagnosticsLike,
+    ACTIVE_SOURCE_POLL_MS,
     sourceLoadPollInterval,
     summarizeSourceLoad,
     type SourceLoadPollInterval,
@@ -59,9 +43,11 @@
   interface Props {
     workflowName: string;
     revision: string;
+    /** Keeps polling fast while this exact key has a preload request in flight. */
+    preloadPending?: boolean;
   }
 
-  let { workflowName, revision }: Props = $props();
+  let { workflowName, revision, preloadPending = false }: Props = $props();
 
   const client = getClient();
   const principal = getPrincipalStore();
@@ -112,7 +98,9 @@
         // the rendered state says so explicitly. Every recognized state keeps
         // polling — see `sourceLoadPollInterval`.
         if (!isCatalogDiagnosticsLike(data)) return false;
-        return sourceLoadPollInterval(summarizeSourceLoad(data));
+        return preloadPending
+          ? ACTIVE_SOURCE_POLL_MS
+          : sourceLoadPollInterval(summarizeSourceLoad(data));
       },
     })),
   );
@@ -196,14 +184,7 @@
     {/if}
   {/if}
 
-  <!--
-    Plain text, deliberately NOT a `role="status"` live region. While a source
-    is loading this query re-polls every POLL_INTERVAL_MS, and the revisions
-    panel mounts one of these per installed revision — so announcing it would
-    read "still refreshing" every two seconds, per row, for as long as the load
-    runs. The state change itself is the part worth announcing, and the badge
-    and description above already carry it.
-  -->
+  <!-- Background refreshes stay quiet; the state badge is the live region. -->
   {#if canRead && isResolved && $diagnosticsQuery.isFetching}
     <span class="weft-source-load__refreshing">Refreshing diagnostics…</span>
   {/if}

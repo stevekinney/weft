@@ -95,6 +95,15 @@ describe('setApiKey', () => {
     expect(client.headers['authorization']).toBe('Bearer operator-entered-key');
   });
 
+  test('entered key replaces a stale configured Authorization header', () => {
+    const client = setApiKey(
+      { ...config, headers: { Authorization: 'Bearer expired-configured-key', 'X-Trace': 'keep' } },
+      'operator-entered-key',
+    );
+    expect(client.headers['authorization']).toBe('Bearer operator-entered-key');
+    expect(client.headers['x-trace']).toBe('keep');
+  });
+
   test('preserves the base config baseUrl', () => {
     const client = setApiKey(config, 'operator-entered-key');
     expect(client.baseUrl).toBe(config.baseUrl);

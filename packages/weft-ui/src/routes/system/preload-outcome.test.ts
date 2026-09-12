@@ -158,6 +158,12 @@ describe('describePreloadOutcome', () => {
 });
 
 describe('reason labels', () => {
+  it('describes invalid definitions without assuming how the export was constructed', () => {
+    expect(sourceRejectionReasonLabel('invalid-definition')).toBe(
+      'The candidate workflow definition is invalid or could not be normalized.',
+    );
+  });
+
   it.each([...KNOWN_PRELOAD_CONFLICT_REASONS])('labels the %s conflict reason', (reason) => {
     expect(preloadConflictReasonLabel(reason)).not.toContain('does not recognize');
   });

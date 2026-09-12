@@ -29,6 +29,7 @@ import {
   DYNAMIC_SOURCE_LOADABLE_REVISION,
   DYNAMIC_SOURCE_WORKFLOW_NAME,
 } from '../../fixtures/dynamic-sources.ts';
+import { E2E_API_KEY } from './e2e-constants.ts';
 
 const PANEL_NAME = 'Dynamic workflow sources';
 
@@ -97,6 +98,47 @@ test('a refused preload reports the bounded failure category Weft recorded', asy
   // The re-fetched diagnostics carry the classified cause the fault omitted.
   await expect(panel.getByText('Load state: Failed')).toBeVisible();
   await expect(panel.getByText(/Last failure category:/)).toBeVisible();
+});
+
+test('expired diagnostics credentials return to API-key entry and accept a replacement', async ({
+  page,
+}) => {
+  let diagnosticsRequests = 0;
+  await page.route('**/jsonrpc', async (route) => {
+    const requestBody = route.request().postData() ?? '';
+    if (!requestBody.includes('weft.catalog.diagnostics')) {
+      await route.continue();
+      return;
+    }
+    diagnosticsRequests += 1;
+    if (diagnosticsRequests === 1) {
+      await route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Unauthorized' }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto('/system?tab=registry');
+  const panel = page.getByRole('region', { name: PANEL_NAME });
+  await expect(panel).toBeVisible();
+  await inspectSource(page, DYNAMIC_SOURCE_LOADABLE_REVISION);
+
+  await expect(page.getByRole('heading', { name: 'Authentication required' })).toBeVisible();
+  await expect(page.getByLabel('API key')).toBeVisible();
+
+  await page.getByLabel('API key').fill(E2E_API_KEY);
+  await page.getByRole('button', { name: 'Continue' }).click();
+
+  // The replacement mounts a new shell and the retried diagnostics request
+  // can be made against the new shell with the newly entered key.
+  await expect(page.getByRole('region', { name: PANEL_NAME })).toBeVisible();
+  await inspectSource(page, DYNAMIC_SOURCE_LOADABLE_REVISION);
+  await expect(page.getByText('Source kind')).toBeVisible();
+  expect(diagnosticsRequests).toBe(2);
 });
 
 test('the Dynamic workflow sources panel is usable across supported widths and themes', async ({

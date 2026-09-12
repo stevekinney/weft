@@ -73,11 +73,17 @@
     }
     phase = { status: 'ready', client, principal };
   }
+
+  function onAuthExpired(expiredClient: HttpClient): void {
+    if (phase.status !== 'ready' || phase.client !== expiredClient) return;
+    queryClient.clear();
+    phase = { status: 'needs-api-key' };
+  }
 </script>
 
 <QueryClientProvider client={queryClient}>
   {#if phase.status === 'ready'}
-    <Shell client={phase.client} initialPrincipal={phase.principal} />
+    <Shell client={phase.client} initialPrincipal={phase.principal} {onAuthExpired} />
   {:else if phase.status === 'needs-api-key'}
     <ApiKeyEntry onSubmit={onApiKeySubmit} />
   {:else}

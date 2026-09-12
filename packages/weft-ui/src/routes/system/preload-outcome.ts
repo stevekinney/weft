@@ -120,7 +120,7 @@ const SOURCE_REJECTION_REASON_LABELS: Readonly<Record<KnownSourceRejectionReason
   'unregistered-source-kind': 'The descriptor names a source kind this engine cannot load.',
   'missing-export': 'The module does not export the name the descriptor points at.',
   'ambiguous-export': 'The module exports more than one candidate workflow definition.',
-  'invalid-definition': 'The export is not a builder-produced workflow definition.',
+  'invalid-definition': 'The candidate workflow definition is invalid or could not be normalized.',
   'manifest-build-failed': 'A revision manifest could not be built from the loaded contract.',
   'name-mismatch': 'The candidate workflow is named differently from the descriptor.',
   'manifest-version-unsupported':
