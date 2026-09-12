@@ -19,8 +19,10 @@ import type {
   ScheduleFilter,
   ScheduleOptions,
   ScheduleOverlapPolicy,
+  ScheduleRevisionPolicy,
   ScheduleSpec,
   ScheduleSummary,
+  ScheduleUpdateOptions,
   WorkflowSummary,
 } from '@lostgradient/weft';
 import type { HttpClient } from '@lostgradient/weft/client';
@@ -117,6 +119,7 @@ export interface CreateScheduleArgs {
   readonly overlap?: ScheduleOverlapPolicy;
   readonly backfill?: boolean;
   readonly jitter?: Duration;
+  readonly revisionPolicy?: ScheduleRevisionPolicy;
 }
 
 /** The one `HttpClient.schedule()` shape `createSchedule` needs — narrowed past the real (overloaded, generic-name-inferring) signature so a plain test fake can satisfy it. A real `HttpClient` satisfies this structurally: its richer `ClientScheduleHandle` return value is assignable to `{ id: string }`. */
@@ -140,25 +143,45 @@ export async function createSchedule(
     ...(args.overlap !== undefined ? { overlap: args.overlap } : {}),
     ...(args.backfill !== undefined ? { backfill: args.backfill } : {}),
     ...(args.jitter !== undefined ? { jitter: args.jitter } : {}),
+    ...(args.revisionPolicy !== undefined ? { revisionPolicy: args.revisionPolicy } : {}),
   });
   return { id: handle.id };
 }
 
 /**
- * `PATCH /api/v1/schedules/:id` (`weft.schedules.update`) — cadence only.
- * Weft's `updateSchedule` cannot change `overlap`/`jitter`/`backfill`/
- * `description` after creation (verified against
- * `weft/src/server/operations/update-schedule.ts` v0.11.0 — its input schema
- * accepts only `cronExpression`/`every`); the edit drawer disables those
- * fields with a reason rather than silently discarding edits to them. Filed
- * upstream: see this track's report for the issue URL.
+ * `PATCH /api/v1/schedules/:id` (`weft.schedules.update`).
+ *
+ * **Correction (WFT-117):** an earlier version of this doc claimed
+ * `updateSchedule` was cadence-only and could not change `overlap`/`jitter`/
+ * `backfill`/`description` after creation. That was true of an old server
+ * version but is stale against the installed `@lostgradient/weft` —
+ * `ScheduleUpdateOptions` (`@lostgradient/weft`) picks exactly `description
+ * | overlap | backfill | jitter | revisionPolicy` off `ScheduleOptions`, and
+ * `client.updateSchedule(id, spec, options)` forwards them all. This console
+ * still only wires up `revisionPolicy` through this function today — the
+ * edit drawer's fields for `overlap`/`jitter`/`backfill`/`description`
+ * remain disabled, but that is this console's own scoping choice
+ * (WFT-117's PR body), not an engine limitation. Unlocking those fields in
+ * the edit form is a real, separately-scoped follow-up.
+ *
+ * `revisionPolicy` is the one option this function forwards today, and only
+ * when explicitly supplied — `undefined` preserves the schedule's current
+ * policy and captured pin unchanged (`ScheduleUpdateOptions`'s own doc);
+ * sending it unconditionally on every unrelated cadence edit would silently
+ * re-capture a pin the operator never asked to change, since `'pinned'` is
+ * never a no-op server-side. Callers (`schedule-form-drawer.svelte`) pass
+ * `ScheduleFormState.toUpdateRevisionPolicy()`'s result, which already
+ * encodes that omit-when-unchanged rule.
  */
 export function updateScheduleSpec(
   client: Pick<HttpClient, 'updateSchedule'>,
   id: string,
   spec: ScheduleSpec,
+  revisionPolicy?: ScheduleRevisionPolicy,
 ): Promise<void> {
-  return client.updateSchedule(id, spec);
+  const options: ScheduleUpdateOptions | undefined =
+    revisionPolicy === undefined ? undefined : { revisionPolicy };
+  return client.updateSchedule(id, spec, options);
 }
 
 export function pauseSchedule(

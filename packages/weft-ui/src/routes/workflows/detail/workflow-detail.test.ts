@@ -4,6 +4,7 @@ import type { DetachedWindowAPI } from 'happy-dom';
 import { QueryClient } from '@tanstack/svelte-query';
 import { fireEvent, render, waitFor } from '@testing-library/svelte';
 
+import { queryKeys } from '../../../lib/query.ts';
 import { router } from '../../../lib/router.svelte.ts';
 import type { Principal } from '../../../lib/scopes.svelte.ts';
 import { realClient, ScriptedFetch } from '../list/workflow-test-support.test-support.ts';
@@ -167,5 +168,97 @@ describe('WorkflowDetail — loaded workflow', () => {
     });
 
     expect(await findByText('Finalizing')).not.toBeNull();
+  });
+});
+
+describe('WorkflowDetail — active-revision comparison (WFT-117)', () => {
+  test('resolves the active pointer and forwards it to both the Header badge and the Overview Revision row', async () => {
+    const id = 'wf-detail-active-rev-1';
+    fetchScript.routeUrl(`/workflows/${id}`, baseWorkflow({ id, revision: 'order-rev-a' }));
+    fetchScript.routeJsonRpcMethod('weft.workflows.active.get', {
+      revision: 'order-rev-a',
+      generation: 2,
+      activatedAt: 500,
+    });
+    resetLocation(`/workflows/${id}`);
+
+    const { findByText } = render(WorkflowDetailHarness, {
+      props: { client: realClient(), principal: GRANTED_PRINCIPAL, queryClient: newQueryClient() },
+    });
+
+    // Header badge.
+    expect(await findByText('Active')).not.toBeNull();
+    // Overview tab's Revision DescriptionList row (same page, both tabs
+    // render simultaneously — only the active Tabs.Panel is visible, but
+    // Svelte still mounts every panel here per this route's own Tabs usage).
+    expect(await findByText('order-rev-a — active')).not.toBeNull();
+  });
+
+  test('denied workflows:read leaves activeRevision undefined and the page still renders', async () => {
+    const id = 'wf-detail-active-rev-denied-1';
+    fetchScript.routeUrl(`/workflows/${id}`, baseWorkflow({ id, revision: 'order-rev-a' }));
+    resetLocation(`/workflows/${id}`);
+
+    const deniedPrincipal: Principal = { scopes: [], unauthenticatedAccess: null };
+    const { findByRole, getByText } = render(WorkflowDetailHarness, {
+      props: { client: realClient(), principal: deniedPrincipal, queryClient: newQueryClient() },
+    });
+
+    expect(await findByRole('heading', { name: 'order-fulfillment' })).not.toBeNull();
+    // No weft.workflows.active.get call fired at all — the query never
+    // enabled without the scope — so the comparison reads "unknown".
+    expect(getByText('Active revision unknown')).not.toBeNull();
+    expect(
+      fetchScript.calls.some((call) => {
+        if (typeof call.init?.body !== 'string') return false;
+        try {
+          return (
+            (JSON.parse(call.init.body) as { method?: string }).method ===
+            'weft.workflows.active.get'
+          );
+        } catch {
+          return false;
+        }
+      }),
+    ).toBe(false);
+  });
+
+  test('a failed REFETCH does not keep showing the previous successful pointer as current fact (Codex review, PR #978, round 5)', async () => {
+    // TanStack Query keeps the PREVIOUS successful `data` around across a
+    // failed refetch, alongside `isError: true` — passing `.data` alone at
+    // the call sites (fixed to read a derived `resolvedActiveRevision`
+    // instead) would keep rendering the stale "Active" pointer as current
+    // even after the underlying request starts failing (e.g. `workflows:
+    // read` revoked server-side mid-session, mirroring the fork picker's
+    // own `revisionsForbidden` gap from an earlier round).
+    const id = 'wf-detail-active-rev-stale-1';
+    fetchScript.routeUrl(`/workflows/${id}`, baseWorkflow({ id, revision: 'order-rev-a' }));
+    // No standing route for `weft.workflows.active.get` here — both calls
+    // fall through to the FIFO queue below, in order: first the initial
+    // successful fetch, then the failed refetch.
+    fetchScript.enqueueJson({
+      jsonrpc: '2.0',
+      id: 1,
+      result: { revision: 'order-rev-a', generation: 2, activatedAt: 500 },
+    });
+    fetchScript.enqueueJson({
+      jsonrpc: '2.0',
+      id: 2,
+      error: { code: -32000, message: 'workflows:read required', data: { httpStatus: 403 } },
+    });
+    resetLocation(`/workflows/${id}`);
+
+    const queryClient = newQueryClient();
+    const { findByText, getByText } = render(WorkflowDetailHarness, {
+      props: { client: realClient(), principal: GRANTED_PRINCIPAL, queryClient },
+    });
+
+    expect(await findByText('Active')).not.toBeNull();
+
+    await queryClient.refetchQueries({ queryKey: queryKeys.catalog.active('order-fulfillment') });
+
+    await waitFor(() => {
+      expect(getByText('Active revision unknown')).not.toBeNull();
+    });
   });
 });

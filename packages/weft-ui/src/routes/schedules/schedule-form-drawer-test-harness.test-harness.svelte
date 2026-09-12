@@ -1,6 +1,7 @@
 <script lang="ts">
   /** Test-only composition of `<SchedulesTestHarness>` + `<ScheduleFormDrawer>` — see `schedule-list-test-harness.test-harness.svelte`'s doc for why this wrapper exists. */
   import type { HttpClient } from '@lostgradient/weft/client';
+  import type { QueryClient } from '@tanstack/svelte-query';
 
   import type { AuthorizationScope } from '../../lib/scopes.svelte.ts';
   import ScheduleFormDrawer from './schedule-form-drawer.svelte';
@@ -12,12 +13,13 @@
     scheduleId?: string | undefined;
     onClose: () => void;
     scopes?: readonly AuthorizationScope[] | undefined;
+    onQueryClient?: ((queryClient: QueryClient) => void) | undefined;
   }
 
-  let { client, mode, scheduleId, onClose, scopes }: Props = $props();
+  let { client, mode, scheduleId, onClose, scopes, onQueryClient }: Props = $props();
 </script>
 
-<SchedulesTestHarness {client} {scopes}>
+<SchedulesTestHarness {client} {scopes} {onQueryClient}>
   {#snippet children()}
     <ScheduleFormDrawer {mode} {scheduleId} {onClose} />
   {/snippet}

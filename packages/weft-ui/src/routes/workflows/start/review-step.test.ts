@@ -12,6 +12,7 @@ const BASE_PROPS = {
   advanced: EMPTY_ADVANCED_START_OPTIONS,
   onBack: () => {},
   onSubmit: () => {},
+  activeRevision: 'order-processing-rev-active',
 };
 
 describe('ReviewStep', () => {
@@ -73,5 +74,47 @@ describe('ReviewStep', () => {
     });
 
     expect(getByText('Something went wrong')).not.toBeNull();
+  });
+
+  describe('active-revision note (WFT-117)', () => {
+    test('shows "starts against active revision X" when activeRevision is defined', async () => {
+      const { getByText } = render(ReviewStep, {
+        props: { ...BASE_PROPS, submitState: { status: 'idle' } },
+      });
+
+      expect(getByText(/^Starts against active revision/)).not.toBeNull();
+      expect(getByText('order-processing-rev-active')).not.toBeNull();
+    });
+
+    test('shows an explicit "active revision unknown" explanation, never blank, when undefined', async () => {
+      const { getByText, queryByText } = render(ReviewStep, {
+        props: { ...BASE_PROPS, activeRevision: undefined, submitState: { status: 'idle' } },
+      });
+
+      expect(queryByText(/^Starts against active revision/)).toBeNull();
+      expect(getByText(/^Active revision unknown/)).not.toBeNull();
+    });
+
+    test('does not promise the run will use the catalog active revision when it is unknown (Codex review, PR #978, round 2) — eager registration and sole dynamic-source candidates can both bypass the active pointer', async () => {
+      const { getByText, queryByText } = render(ReviewStep, {
+        props: { ...BASE_PROPS, activeRevision: undefined, submitState: { status: 'idle' } },
+      });
+
+      expect(
+        getByText(/a fresh start can run without consulting the active pointer at all/),
+      ).not.toBeNull();
+      expect(queryByText(/will still start against whichever revision is active/)).toBeNull();
+    });
+
+    test('carries the SAME eager-registration/dynamic-source caveat when activeRevision IS defined (Codex review, PR #978) — a fresh start can still bypass the catalog pointer even though a specific revision was shown', async () => {
+      const { getByText } = render(ReviewStep, {
+        props: { ...BASE_PROPS, submitState: { status: 'idle' } },
+      });
+
+      expect(getByText(/^Starts against active revision/)).not.toBeNull();
+      expect(
+        getByText(/a fresh start can run without consulting the active pointer at all/),
+      ).not.toBeNull();
+    });
   });
 });

@@ -17,6 +17,7 @@
 
   import { getPrincipalStore, scopeGate } from '../../../../lib/scopes.svelte.ts';
   import { formatBytes } from '../../../../lib/format/index.ts';
+  import { EAGER_REVISION_HEDGE } from '../../../../lib/workflow-revision.ts';
   import { replayQueryKey, replayWorkflow } from './checkpoints-data.ts';
 
   interface ReplayViewProps {
@@ -64,6 +65,13 @@
         <DescriptionList
           items={[
             { term: 'Version', definition: replay.checkpoint.version },
+            {
+              term: 'Revision',
+              definition:
+                replay.revision !== undefined
+                  ? `${replay.revision}. ${EAGER_REVISION_HEDGE}`
+                  : 'Not attributable — the source record was purged, this checkpoint or the workflow record predates execution-token correlation, or the stable id has since been reused by a different run.',
+            },
             { term: 'Recorded', definition: new Date(replay.checkpoint.createdAt).toISOString() },
             { term: 'Events at this step', definition: String(replay.events.length) },
             ...(replay.compactedBefore !== undefined

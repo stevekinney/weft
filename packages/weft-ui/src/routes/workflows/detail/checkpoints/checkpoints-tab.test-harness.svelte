@@ -12,19 +12,30 @@
   import WorkflowRouteHarness from '../../list/workflow-route-harness.test-harness.svelte';
   import CheckpointsTab from './checkpoints-tab.svelte';
   import type { CheckpointsOperationsClient, ForkClient } from './checkpoints-data.ts';
+  import type { WorkflowRevisionListClient } from './fork-revision-picker.ts';
 
   interface Props {
     client: CheckpointsOperationsClient &
-      ForkClient & {
+      ForkClient &
+      WorkflowRevisionListClient & {
         replayTo: (id: string, step: number) => Promise<WorkflowReplay | null>;
         getTimeline: (id: string) => Promise<WorkflowTimelineEntry[]>;
       };
     workflowId: string;
     principal: Principal;
     queryClient: QueryClient;
+    workflowType?: string;
+    sourceRevision?: string;
   }
 
-  let { client, workflowId, principal, queryClient }: Props = $props();
+  let {
+    client,
+    workflowId,
+    principal,
+    queryClient,
+    workflowType = 'test-workflow',
+    sourceRevision,
+  }: Props = $props();
 
   // `WorkflowRouteHarness` requires a full `HttpClient` for its context
   // (`getClient()`) — nothing under `<CheckpointsTab>` reads it, every
@@ -35,5 +46,5 @@
 </script>
 
 <WorkflowRouteHarness client={contextClient} {principal} {queryClient}>
-  <CheckpointsTab {client} {workflowId} />
+  <CheckpointsTab {client} {workflowId} {workflowType} {sourceRevision} />
 </WorkflowRouteHarness>

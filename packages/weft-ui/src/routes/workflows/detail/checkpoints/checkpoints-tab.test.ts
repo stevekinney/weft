@@ -32,6 +32,7 @@ function baseClient(
         version: '1',
         createdAt: 0,
       }),
+      'weft.workflows.revisions.list': async () => [],
     },
     replayTo: async (): Promise<WorkflowReplay | null> => null,
     fork: async () => ({ id: 'wf-forked-1' }),
@@ -116,6 +117,126 @@ describe('CheckpointsTab', () => {
     });
     await waitFor(() => {
       expect(getByText('Divergence from the forked run')).not.toBeNull();
+    });
+  });
+
+  test('the default fork path sends only {fromStep} — no revision — to client.fork (WFT-117)', async () => {
+    const forkCalls: unknown[] = [];
+    const client = {
+      ...baseClient(),
+      fork: async (_id: string, options?: unknown) => {
+        forkCalls.push(options);
+        return { id: 'wf-forked-1' };
+      },
+    };
+
+    const { getByText, getByRole } = render(CheckpointsTabHarness, {
+      props: {
+        client,
+        workflowId: 'wf-1',
+        principal: allScopesPrincipal(),
+        queryClient: newQueryClient(),
+        workflowType: 'order-processing',
+        sourceRevision: 'order-processing-rev-a',
+      },
+    });
+
+    await waitFor(() => expect(getByText('step 3')).not.toBeNull());
+    await fireEvent.click(getByText('step 3'));
+    await fireEvent.click(getByRole('button', { name: 'Fork' }));
+    await waitFor(() => expect(getByText('Target step')).not.toBeNull());
+    await fireEvent.click(getByRole('button', { name: 'Create fork' }));
+
+    await waitFor(() => {
+      expect(forkCalls).toEqual([{ fromStep: 3 }]);
+    });
+  });
+
+  test("the Fork panel threads workflowType/sourceRevision into ForkDialog's retention line", async () => {
+    const { getByText, getByRole } = render(CheckpointsTabHarness, {
+      props: {
+        client: baseClient(),
+        workflowId: 'wf-1',
+        principal: allScopesPrincipal(),
+        queryClient: newQueryClient(),
+        workflowType: 'order-processing',
+        sourceRevision: 'order-processing-rev-a',
+      },
+    });
+
+    await waitFor(() => expect(getByText('step 3')).not.toBeNull());
+    await fireEvent.click(getByText('step 3'));
+    await fireEvent.click(getByRole('button', { name: 'Fork' }));
+
+    await waitFor(() => {
+      expect(getByText(/^Retains/)).not.toBeNull();
+    });
+  });
+
+  test('ReplayView renders replay.revision when present', async () => {
+    const client = {
+      ...baseClient(),
+      replayTo: async () => ({
+        checkpoint: { step: 3, locals: {}, searchAttributes: {}, version: '1', createdAt: 0 },
+        accumulatedResults: [],
+        events: [],
+        revision: 'order-processing-rev-a',
+      }),
+    };
+
+    const { getByText } = render(CheckpointsTabHarness, {
+      props: {
+        client,
+        workflowId: 'wf-1',
+        principal: allScopesPrincipal(),
+        queryClient: newQueryClient(),
+      },
+    });
+
+    await waitFor(() => expect(getByText('step 3')).not.toBeNull());
+    await fireEvent.click(getByText('step 3'));
+
+    await waitFor(() => {
+      // The definition text now also carries the WFT-159 eager-registration
+      // hedge (Codex review, PR #978, round 3) — same caveat as the header,
+      // Overview row, and fork surfaces, so replay output can't be
+      // attributed to the wrong executable artifact after a redeploy.
+      expect(
+        getByText(/^order-processing-rev-a\. For an eager-registered workflow type/),
+      ).not.toBeNull();
+    });
+  });
+
+  test('ReplayView renders the explicit "not attributable" explanation when replay.revision is absent', async () => {
+    const client = {
+      ...baseClient(),
+      replayTo: async () => ({
+        checkpoint: { step: 3, locals: {}, searchAttributes: {}, version: '1', createdAt: 0 },
+        accumulatedResults: [],
+        events: [],
+      }),
+    };
+
+    const { getByText } = render(CheckpointsTabHarness, {
+      props: {
+        client,
+        workflowId: 'wf-1',
+        principal: allScopesPrincipal(),
+        queryClient: newQueryClient(),
+      },
+    });
+
+    await waitFor(() => expect(getByText('step 3')).not.toBeNull());
+    await fireEvent.click(getByText('step 3'));
+
+    await waitFor(() => {
+      expect(getByText(/Not attributable/)).not.toBeNull();
+      // The explanation covers every reason `resolveReplayRevision()`
+      // omits a revision, not only the purged/legacy cases (Codex review,
+      // PR #978, round 6) — a pre-token-correlation record and an
+      // id-reuse mismatch are real, distinct causes too.
+      expect(getByText(/execution-token correlation/)).not.toBeNull();
+      expect(getByText(/reused by a different run/)).not.toBeNull();
     });
   });
 

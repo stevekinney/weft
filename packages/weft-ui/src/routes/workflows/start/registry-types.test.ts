@@ -22,7 +22,7 @@ describe('narrowRegistryWorkflows', () => {
     expect(narrowRegistryWorkflows([], null)).toEqual({});
   });
 
-  test('keeps each active manifest projected to a RegistryWorkflowEntry (name/workflowVersion dropped)', () => {
+  test('keeps each active manifest projected to a RegistryWorkflowEntry (name/workflowVersion dropped), carrying its own revision', () => {
     const result = narrowRegistryWorkflows(
       [
         manifest('order-processing', 'rev-a', { inputSchema: { type: 'object' } }),
@@ -31,8 +31,8 @@ describe('narrowRegistryWorkflows', () => {
       { 'order-processing': 'rev-a', 'no-schema': 'rev-b' },
     );
     expect(result).toEqual({
-      'order-processing': { inputSchema: { type: 'object' } },
-      'no-schema': {},
+      'order-processing': { inputSchema: { type: 'object' }, revision: 'rev-a' },
+      'no-schema': { revision: 'rev-b' },
     });
   });
 
@@ -63,7 +63,9 @@ describe('narrowRegistryWorkflows', () => {
       ],
       { 'order-processing': 'rev-a' },
     );
-    expect(result).toEqual({ 'order-processing': { inputSchema: { type: 'object' } } });
+    expect(result).toEqual({
+      'order-processing': { inputSchema: { type: 'object' }, revision: 'rev-a' },
+    });
   });
 
   test('drops array entries that are not manifest-shaped', () => {
@@ -77,7 +79,7 @@ describe('narrowRegistryWorkflows', () => {
       { valid: 'rev-a' },
     );
     expect(result).toEqual({
-      valid: { description: 'ok' },
+      valid: { description: 'ok', revision: 'rev-a' },
     });
   });
 
@@ -110,7 +112,7 @@ describe('narrowRegistryWorkflows', () => {
       activeRevisions,
     );
     expect(Object.prototype.hasOwnProperty.call(result, '__proto__')).toBe(true);
-    expect(result['__proto__']).toEqual({ description: 'proto-named' });
+    expect(result['__proto__']).toEqual({ description: 'proto-named', revision: 'rev-a' });
     // Sanity: the object's actual prototype must be unaffected.
     expect(Object.getPrototypeOf(result)).toBeNull();
   });

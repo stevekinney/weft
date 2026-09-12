@@ -15,8 +15,20 @@
  * `undefined`) rather than silently dropping just that entry — see that
  * function's own doc for why a partial, silently-filtered list is unsafe
  * here specifically.
+ *
+ * `WorkflowCatalogActivePointerLike`/`isWorkflowCatalogActivePointerLike`
+ * moved to `../../lib/workflow-revision.ts` (WFT-117) once `routes/workflows/*`
+ * needed the same active-pointer shape/guard — re-exported here unchanged so
+ * this module's own consumers (`workflow-revisions-panel.svelte`) don't need
+ * to touch their import path.
  */
 import { formatRelativeTime, truncateId } from '../../lib/format/index.ts';
+import {
+  isWorkflowCatalogActivePointerLike,
+  type WorkflowCatalogActivePointerLike,
+} from '../../lib/workflow-revision.ts';
+
+export { isWorkflowCatalogActivePointerLike, type WorkflowCatalogActivePointerLike };
 
 /** Mirrors `WorkflowRevisionManifest` (`@lostgradient/weft`) structurally — only the identity fields this panel renders. */
 interface WorkflowRevisionManifestLike {
@@ -32,13 +44,6 @@ interface WorkflowRevisionManifestLike {
 export interface WorkflowRevisionRecordSource {
   readonly manifest: WorkflowRevisionManifestLike;
   readonly installedAt: number;
-}
-
-/** Mirrors `WorkflowCatalogActivePointer` (`@lostgradient/weft`) structurally. */
-export interface WorkflowCatalogActivePointerLike {
-  readonly revision: string;
-  readonly generation: number;
-  readonly activatedAt: number;
 }
 
 function isWorkflowRevisionManifestLike(value: unknown): value is WorkflowRevisionManifestLike {
@@ -63,19 +68,6 @@ export function isWorkflowRevisionRecordLike(
   const record = value as Record<string, unknown>;
   return (
     isWorkflowRevisionManifestLike(record['manifest']) && typeof record['installedAt'] === 'number'
-  );
-}
-
-/** Runtime type guard for `weft.workflows.active.get`'s output. */
-export function isWorkflowCatalogActivePointerLike(
-  value: unknown,
-): value is WorkflowCatalogActivePointerLike {
-  if (typeof value !== 'object' || value === null) return false;
-  const record = value as Record<string, unknown>;
-  return (
-    typeof record['revision'] === 'string' &&
-    typeof record['generation'] === 'number' &&
-    typeof record['activatedAt'] === 'number'
   );
 }
 

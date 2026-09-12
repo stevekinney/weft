@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test';
 
 import type { PaginatedResult, WorkflowState, WorkflowSummary } from '@lostgradient/weft';
 
+import type { WorkflowCatalogActivePointerLike } from '../../../lib/workflow-revision.ts';
 import OverviewTabHarness from './overview-tab.test-harness.svelte';
 
 function workflow(overrides: Partial<WorkflowState> = {}): WorkflowState {
@@ -53,15 +54,71 @@ describe('OverviewTab', () => {
     });
 
     expect(getByText('Revision')).not.toBeNull();
-    expect(getByText('sha256:deadbeef')).not.toBeNull();
+    expect(getByText(/^sha256:deadbeef/)).not.toBeNull();
   });
 
-  test('omits the Revision row for a legacy workflow with no persisted revision', async () => {
-    const { queryByText } = render(OverviewTabHarness, {
-      props: { client: baseClient(), workflow: workflow() },
+  describe('Revision row active-comparison text (WFT-117)', () => {
+    const ACTIVE: WorkflowCatalogActivePointerLike = {
+      revision: 'sha256:deadbeef',
+      generation: 2,
+      activatedAt: 500,
+    };
+
+    test('reads "Unpinned (pre-revision record)" for a legacy workflow with no persisted revision — the row is never omitted', async () => {
+      const { getByText } = render(OverviewTabHarness, {
+        props: { client: baseClient(), workflow: workflow(), activeRevision: ACTIVE },
+      });
+
+      expect(getByText('Revision')).not.toBeNull();
+      expect(getByText('Unpinned (pre-revision record)')).not.toBeNull();
     });
 
-    expect(queryByText('Revision')).toBeNull();
+    test('reads "— active" when workflow.revision matches the active pointer', async () => {
+      const { getByText } = render(OverviewTabHarness, {
+        props: {
+          client: baseClient(),
+          workflow: workflow({ revision: ACTIVE.revision }),
+          activeRevision: ACTIVE,
+        },
+      });
+
+      expect(getByText(`${ACTIVE.revision} — active`)).not.toBeNull();
+    });
+
+    test('reads "— differs from active" when workflow.revision differs from the active pointer', async () => {
+      const { getByText } = render(OverviewTabHarness, {
+        props: {
+          client: baseClient(),
+          workflow: workflow({ revision: 'sha256:stale000' }),
+          activeRevision: ACTIVE,
+        },
+      });
+
+      expect(getByText('sha256:stale000 — differs from active')).not.toBeNull();
+    });
+
+    test('reads "— active revision unknown" when activeRevision is null (never activated)', async () => {
+      const { getByText } = render(OverviewTabHarness, {
+        props: {
+          client: baseClient(),
+          workflow: workflow({ revision: ACTIVE.revision }),
+          activeRevision: null,
+        },
+      });
+
+      expect(getByText(`${ACTIVE.revision} — active revision unknown`)).not.toBeNull();
+    });
+
+    test('reads "— active revision unknown" when activeRevision is omitted (denied/loading)', async () => {
+      const { getByText } = render(OverviewTabHarness, {
+        props: {
+          client: baseClient(),
+          workflow: workflow({ revision: ACTIVE.revision }),
+        },
+      });
+
+      expect(getByText(`${ACTIVE.revision} — active revision unknown`)).not.toBeNull();
+    });
   });
 
   test('completed workflow shows a Result panel', async () => {

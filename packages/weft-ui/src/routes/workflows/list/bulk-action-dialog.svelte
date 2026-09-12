@@ -70,6 +70,8 @@
     /** `matched` is the dry-run preview's own count, passed through so the caller can build a "N of M" result summary without re-deriving state this dialog already holds. */
     readonly runCommit: (confirmationToken: string, matched: number) => Promise<BulkCommitSummary>;
     readonly onClose: () => void;
+    /** Optional free-text note rendered in the `preview` phase, below the matched-count/filter-chip line — e.g. the retry-failed dialog's revision-retention explanation (WFT-117). Omitted for callers with nothing to add. */
+    readonly previewNote?: string;
     /**
      * Fired once, right when a commit actually succeeds — independent of
      * when (or whether) the user clicks the result phase's "Close" button
@@ -94,6 +96,7 @@
     runCommit,
     onClose,
     onSuccess,
+    previewNote,
   }: BulkActionDialogProps = $props();
 
   type Phase = 'params' | 'loading' | 'preview' | 'committing' | 'result' | 'fault';
@@ -216,6 +219,9 @@
         <p class="weft-bulk-dialog__note">
           {preview.skippedTeardownPending.length} of these still owe a finalizer run and will be skipped.
         </p>
+      {/if}
+      {#if previewNote}
+        <p class="weft-bulk-dialog__note">{previewNote}</p>
       {/if}
       {#if preview.matched === 0}
         <p class="weft-bulk-dialog__note">No workflows match the current filter — nothing to do.</p>

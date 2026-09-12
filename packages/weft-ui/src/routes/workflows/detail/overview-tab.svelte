@@ -5,6 +5,16 @@
    * a small inline tag editor (design shows tag add/remove in this panel —
    * the header only shows tags read-only, see `header.svelte`), and the
    * Lineage panel (T2.7, `lineage-panel.svelte`).
+   *
+   * ## Revision row (WFT-117)
+   *
+   * Always rendered (previously omitted entirely for a legacy record with
+   * no persisted `revision`) — an operator asking "which revision did this
+   * run start against, and does it match what's active now" deserves an
+   * explicit answer in every case, not a silently missing row. The
+   * definition text folds in the same `classifyRevisionAgainstActive`
+   * comparison `header.svelte`'s badge uses, so the two surfaces never
+   * disagree about a given run's state.
    */
   import Badge from '@lostgradient/cinder/badge';
   import Button from '@lostgradient/cinder/button';
@@ -18,6 +28,10 @@
   import { CircleX, Plus, X } from 'lucide-svelte';
 
   import { queryKeys } from '../../../lib/query.ts';
+  import {
+    classifyRevisionAgainstActive,
+    type WorkflowCatalogActivePointerLike,
+  } from '../../../lib/workflow-revision.ts';
   import { failureCategoryExplanation, failureCategoryLabel } from './failure-category.ts';
   import LineagePanel from './lineage-panel.svelte';
 
@@ -26,9 +40,32 @@
       readonly operations: Pick<HttpClient['operations'], 'weft.workflows.scheduleprovenance.get'>;
     };
     readonly workflow: WorkflowState;
+    /**
+     * Same `weft.workflows.active.get` result `header.svelte` receives —
+     * see that component's module doc. Optional (rather than
+     * `header.svelte`'s required-but-possibly-`undefined` prop) purely to
+     * keep this component's many existing test call sites from all needing
+     * an explicit value — omitting it and passing `undefined` are
+     * semantically identical (`classifyRevisionAgainstActive` treats both
+     * as "unknown"), so this is a test-ergonomics choice, not a behavior
+     * difference from `header.svelte`.
+     */
+    readonly activeRevision?: WorkflowCatalogActivePointerLike | null | undefined;
   }
 
-  let { client, workflow }: OverviewTabProps = $props();
+  let { client, workflow, activeRevision }: OverviewTabProps = $props();
+
+  const REVISION_COMPARISON_SUFFIX: Readonly<Record<'active' | 'stale' | 'unknown', string>> = {
+    active: ' — active',
+    stale: ' — differs from active',
+    unknown: ' — active revision unknown',
+  };
+
+  const revisionDefinitionText = $derived.by((): string => {
+    const comparison = classifyRevisionAgainstActive(workflow.revision, activeRevision);
+    if (comparison === 'unpinned') return 'Unpinned (pre-revision record)';
+    return `${workflow.revision}${REVISION_COMPARISON_SUFFIX[comparison]}`;
+  });
 
   const queryClient = useQueryClient();
 
@@ -75,10 +112,8 @@
     // this run started against (identity/diagnostics/pinning), while
     // `versionTuple` above is the sole semantic-compatibility axis. Two
     // revisions can share one workflowVersion (e.g. a doc-only redeploy).
-    // Absent on a pre-revision-pinning (legacy) record.
-    ...(workflow.revision !== undefined
-      ? [{ id: 'revision', term: 'Revision', definition: workflow.revision }]
-      : []),
+    // Always shown — see module doc "Revision row (WFT-117)".
+    { id: 'revision', term: 'Revision', definition: revisionDefinitionText },
     { id: 'created', term: 'Created', definition: new Date(workflow.createdAt).toISOString() },
     ...(workflow.executionDeadline !== undefined
       ? [

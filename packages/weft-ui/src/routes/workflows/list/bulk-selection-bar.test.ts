@@ -311,6 +311,25 @@ describe('BulkSelectionBar', () => {
       await waitFor(() => {
         expect(getByText('4 matching workflows')).not.toBeNull();
       });
+      // The retry-failed dialog passes a previewNote that discloses BOTH retry
+      // paths (WFT-117; Codex review, PR #978): checkpoint-backed retries keep
+      // the persisted revision, checkpoint-less retries fall back to
+      // start-new and resolve whichever revision is active right now — never
+      // an unconditional "always retains" promise.
+      expect(getByText(/resumes in place on its own persisted revision/)).not.toBeNull();
+      expect(getByText(/restarts fresh and resolves whichever revision is active/)).not.toBeNull();
+      // Same eager-registration/dynamic-source caveat as every other
+      // fresh-start surface (Codex review, PR #978) — a checkpoint-less
+      // retry enters the identical start path as a wizard start or a
+      // start-new replacement.
+      expect(
+        getByText(/a fresh start can run without consulting the active pointer at all/),
+      ).not.toBeNull();
+      // A checkpoint-backed retry of a pre-revision-pinning run has no
+      // persisted revision to resume against either (Codex review, PR
+      // #978, round 6) — the first sentence is qualified, not unconditional.
+      expect(getByText(/when one exists/)).not.toBeNull();
+      expect(getByText(/falls back to the same active-revision resolution/)).not.toBeNull();
     } finally {
       fetch.restore();
     }

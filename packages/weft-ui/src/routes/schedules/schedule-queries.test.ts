@@ -168,6 +168,7 @@ describe('createSchedule', () => {
       overlap: 'queue',
       backfill: true,
       jitter: '30s',
+      revisionPolicy: 'pinned',
     });
 
     expect(receivedOptions).toEqual({
@@ -176,7 +177,26 @@ describe('createSchedule', () => {
       overlap: 'queue',
       backfill: true,
       jitter: '30s',
+      revisionPolicy: 'pinned',
     });
+  });
+
+  test('omits revisionPolicy when not supplied', async () => {
+    let receivedOptions: unknown;
+    const client = {
+      schedule: async (..._args: unknown[]) => {
+        receivedOptions = _args[3];
+        return { id: 'custom-id' };
+      },
+    };
+
+    await createSchedule(client, {
+      workflowType: 'report-gen',
+      input: null,
+      spec: { cron: '0 9 * * *' },
+    });
+
+    expect(receivedOptions).toEqual({});
   });
 });
 
@@ -204,5 +224,31 @@ describe('updateScheduleSpec / pauseSchedule / resumeSchedule / cancelSchedule',
     await cancelSchedule(client, 's1');
 
     expect(calls).toEqual(['update:s1:{"cron":"0 2 * * *"}', 'pause:s1', 'resume:s1', 'cancel:s1']);
+  });
+
+  test('updateScheduleSpec forwards revisionPolicy as the update options when supplied', async () => {
+    let receivedOptions: unknown;
+    const client = {
+      updateSchedule: async (_id: string, _spec: unknown, options: unknown) => {
+        receivedOptions = options;
+      },
+    };
+
+    await updateScheduleSpec(client, 's1', { cron: '0 2 * * *' }, 'pinned');
+
+    expect(receivedOptions).toEqual({ revisionPolicy: 'pinned' });
+  });
+
+  test('updateScheduleSpec passes undefined options when revisionPolicy is omitted', async () => {
+    let receivedOptions: unknown = 'not called';
+    const client = {
+      updateSchedule: async (_id: string, _spec: unknown, options: unknown) => {
+        receivedOptions = options;
+      },
+    };
+
+    await updateScheduleSpec(client, 's1', { cron: '0 2 * * *' });
+
+    expect(receivedOptions).toBeUndefined();
   });
 });

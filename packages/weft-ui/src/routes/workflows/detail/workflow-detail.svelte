@@ -67,6 +67,8 @@
   import { faultTreatment } from '../../../lib/faults.ts';
   import { queryKeys } from '../../../lib/query.ts';
   import { router, workflowDetailPath } from '../../../lib/router.svelte.ts';
+  import { getPrincipalStore } from '../../../lib/scopes.svelte.ts';
+  import { fetchActiveWorkflowRevision } from '../../../lib/workflow-revision.ts';
   import { getFleetEventSource } from '../../../app/engine-status.svelte.ts';
   import CheckpointsTab from './checkpoints/checkpoints-tab.svelte';
   import ChildrenTab from './children-tab.svelte';
@@ -85,6 +87,7 @@
 
   const client: HttpClient = getClient();
   const queryClient = useQueryClient();
+  const principalStore = getPrincipalStore();
   const clock = new TickingClock();
   onDestroy(() => clock.dispose());
 
@@ -108,6 +111,44 @@
       queryFn: () => getFinalizerStatus(client, id),
       enabled: statusMayHaveFinalizer($detailQuery.data?.status ?? 'pending'),
     })),
+  );
+
+  // Active-revision comparison (WFT-117): mirrors `finalizerQuery`'s
+  // enabled-gating precedent (only once `detailQuery` has resolved a real
+  // workflow, so `weft.workflows.active.get` never fires for an empty
+  // `type`), reads the just-fetched workflow's `type` reactively (like
+  // `finalizerQuery` reads `status`), and is additionally gated on
+  // `workflows:read` — the underlying operation's own required scope.
+  // Reuses `queryKeys.catalog.active` verbatim (WFT-115, `src/lib/query.ts`)
+  // rather than a locally-scoped key, so an operator activating a different
+  // revision from the System route invalidates this badge too on next
+  // focus/refetch — ordinary TanStack Query staleness, no bespoke cross-tab
+  // notification.
+  const activeRevisionQuery = createQuery(
+    toStore(() => ({
+      queryKey: queryKeys.catalog.active($detailQuery.data?.type ?? ''),
+      queryFn: () => fetchActiveWorkflowRevision(client, $detailQuery.data?.type ?? ''),
+      enabled: $detailQuery.data != null && principalStore.hasScope('workflows:read'),
+    })),
+  );
+
+  /**
+   * NOT `$activeRevisionQuery.data` read directly at the call sites below
+   * (Codex review, PR #978, round 5). TanStack Query keeps the PREVIOUS
+   * successful `data` around across a failed refetch alongside `isError`
+   * true — reading `.data` alone after, say, `workflows:read` is revoked
+   * server-side mid-session (the listing's own 403, same class of gap the
+   * fork picker's `revisionsForbidden` check already closes) would keep
+   * showing the LAST-known active pointer as current fact, potentially
+   * labeling a since-superseded run "Active" on stale data presented as
+   * fresh. Both `Header` and `OverviewTab` already treat `undefined` as
+   * "unresolved/denied/loading" (their own prop docs), so collapsing an
+   * error to `undefined` here — mirroring the System Revisions panel's own
+   * `$activeQuery.isError` branch — reuses that existing semantic instead
+   * of inventing a new one.
+   */
+  const resolvedActiveRevision = $derived(
+    $activeRevisionQuery.isError ? undefined : $activeRevisionQuery.data,
   );
 
   // Fleet liveness: any event naming this workflow invalidates the detail
@@ -252,6 +293,7 @@
       onNavigateToTab={navigateToTab}
       finalizerStatus={$finalizerQuery.data}
       onRunQuery={runQuery}
+      activeRevision={resolvedActiveRevision}
     />
 
     <div class="weft-workflow-detail__tab-scroll">
@@ -268,7 +310,9 @@
         </Tabs.List>
 
         <div class="weft-workflow-detail__content">
-          <Tabs.Panel value="overview"><OverviewTab {client} {workflow} /></Tabs.Panel>
+          <Tabs.Panel value="overview"
+            ><OverviewTab {client} {workflow} activeRevision={resolvedActiveRevision} /></Tabs.Panel
+          >
           <Tabs.Panel value="timeline"
             ><TimelineTab
               {client}
@@ -280,7 +324,12 @@
           <Tabs.Panel value="events"><EventsTab {client} {workflow} /></Tabs.Panel>
           <Tabs.Panel value="logs"><LogsTab /></Tabs.Panel>
           <Tabs.Panel value="checkpoints"
-            ><CheckpointsTab {client} workflowId={workflow.id} /></Tabs.Panel
+            ><CheckpointsTab
+              {client}
+              workflowId={workflow.id}
+              workflowType={workflow.type}
+              sourceRevision={workflow.revision}
+            /></Tabs.Panel
           >
           <Tabs.Panel value="signals"><SignalsTab {client} {workflow} /></Tabs.Panel>
           <Tabs.Panel value="updates"><UpdatesTab {client} {workflow} /></Tabs.Panel>

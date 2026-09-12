@@ -160,8 +160,140 @@ describe('ScheduleFormFields — edit mode', () => {
     ).toBe(true);
     expect(
       getByText(
-        'Overlap policy, jitter, backfill, and workflow input can only be set at creation today — editing updates the cadence only.',
+        'Overlap policy, jitter, backfill, and workflow input can only be set at creation — editing updates the cadence and revision policy.',
       ),
     ).not.toBeNull();
+  });
+
+  test('does NOT disable the revision-policy radio group in edit mode', async () => {
+    const form = new ScheduleFormState({
+      id: 'nightly-rollup',
+      workflowType: 'report-gen',
+      revisionPolicy: 'active-at-fire',
+    });
+
+    const { getByRole } = render(ScheduleFormFields, {
+      props: { form, mode: 'edit', workflowTypeOptions: undefined },
+    });
+
+    expect((getByRole('radio', { name: 'Active at fire' }) as HTMLInputElement).disabled).toBe(
+      false,
+    );
+    expect((getByRole('radio', { name: 'Pinned' }) as HTMLInputElement).disabled).toBe(false);
+  });
+
+  test('shows the re-capture warning when CHANGING to pinned in edit mode', async () => {
+    // Starts active-at-fire so `form.initialRevisionPolicy` captures that
+    // baseline; the click below is a real transition, not a same-value
+    // re-render, so `toUpdateRevisionPolicy()` would actually submit it.
+    const form = new ScheduleFormState({
+      id: 'nightly-rollup',
+      workflowType: 'report-gen',
+      revisionPolicy: 'active-at-fire',
+    });
+
+    const { getByRole, getByText, getAllByText } = render(ScheduleFormFields, {
+      props: { form, mode: 'edit', workflowTypeOptions: undefined },
+    });
+
+    await fireEvent.click(getByRole('radio', { name: 'Pinned' }));
+
+    expect(getByText(/captures whichever revision is active right now/)).not.toBeNull();
+    // `resolveScheduleRevisionForPin()` deliberately uses the same
+    // executable-resolution path as a fresh start (Codex review, PR #978,
+    // round 5) — for an eager-registered type, or when only one revision
+    // is a viable dynamic-source candidate, the captured pin can differ
+    // from whatever the catalog's active pointer shows. This exact hedge
+    // now legitimately renders TWICE while the operator has "Pinned"
+    // selected — once here in the re-capture warning, and once in the
+    // still-visible "Active at fire" option's own description (Codex
+    // review, PR #978, round 7: the active-at-fire consequence text needed
+    // the identical caveat, since a fresh occurrence can bypass the active
+    // pointer the same way) — `RadioGroup` renders every option's
+    // description regardless of which one is currently selected.
+    expect(
+      getAllByText(/a fresh start can run without consulting the active pointer at all/).length,
+    ).toBe(2);
+  });
+
+  test('does NOT show the pinned warning when active-at-fire is selected in edit mode', async () => {
+    const form = new ScheduleFormState({
+      id: 'nightly-rollup',
+      workflowType: 'report-gen',
+      revisionPolicy: 'active-at-fire',
+    });
+
+    const { queryByText } = render(ScheduleFormFields, {
+      props: { form, mode: 'edit', workflowTypeOptions: undefined },
+    });
+
+    expect(queryByText(/captures whichever revision is active right now/)).toBeNull();
+  });
+
+  test('does NOT show the pinned warning for an already-pinned schedule left unchanged — toUpdateRevisionPolicy() sends nothing, so the prior "never a no-op" framing was misleading (Codex review, PR #978)', async () => {
+    const form = new ScheduleFormState({
+      id: 'nightly-rollup',
+      workflowType: 'report-gen',
+      revisionPolicy: 'pinned',
+    });
+
+    const { queryByText } = render(ScheduleFormFields, {
+      props: { form, mode: 'edit', workflowTypeOptions: undefined },
+    });
+
+    expect(form.toUpdateRevisionPolicy()).toBeUndefined();
+    expect(queryByText(/captures whichever revision is active right now/)).toBeNull();
+  });
+
+  test("a fresh mount always captures its OWN form instance's revisionPolicy — the one-shot draft is safe precisely because the parent guarantees a fresh mount per form instance (Codex review, PR #978, round 2; see schedule-form-drawer.svelte's `{#key form}` and drawer test for the swap-while-mounted case this documents)", async () => {
+    const firstForm = new ScheduleFormState({
+      id: 'nightly-rollup',
+      workflowType: 'report-gen',
+      revisionPolicy: 'active-at-fire',
+    });
+    const { getByRole: getByRoleFirst, unmount } = render(ScheduleFormFields, {
+      props: { form: firstForm, mode: 'edit', workflowTypeOptions: undefined },
+    });
+    expect((getByRoleFirst('radio', { name: 'Active at fire' }) as HTMLInputElement).checked).toBe(
+      true,
+    );
+    unmount();
+
+    const secondForm = new ScheduleFormState({
+      id: 'nightly-rollup',
+      workflowType: 'report-gen',
+      revisionPolicy: 'pinned',
+    });
+    const { getByRole: getByRoleSecond } = render(ScheduleFormFields, {
+      props: { form: secondForm, mode: 'edit', workflowTypeOptions: undefined },
+    });
+    expect((getByRoleSecond('radio', { name: 'Pinned' }) as HTMLInputElement).checked).toBe(true);
+  });
+});
+
+describe('ScheduleFormFields — revision policy (create mode)', () => {
+  test('renders both REVISION_POLICIES options with their labels and consequences', async () => {
+    const form = new ScheduleFormState();
+
+    const { getByText } = render(ScheduleFormFields, {
+      props: { form, mode: 'create', workflowTypeOptions: undefined },
+    });
+
+    expect(getByText('Active at fire')).not.toBeNull();
+    expect(getByText('Pinned')).not.toBeNull();
+    expect(getByText(/Each occurrence resolves whichever revision is active/)).not.toBeNull();
+    expect(getByText(/Every occurrence resolves the exact revision captured/)).not.toBeNull();
+  });
+
+  test('selecting Pinned updates form.revisionPolicy', async () => {
+    const form = new ScheduleFormState();
+
+    const { getByRole } = render(ScheduleFormFields, {
+      props: { form, mode: 'create', workflowTypeOptions: undefined },
+    });
+
+    await fireEvent.click(getByRole('radio', { name: 'Pinned' }));
+
+    expect(form.revisionPolicy).toBe('pinned');
   });
 });

@@ -43,16 +43,22 @@
     type ForkClient,
   } from './checkpoints-data.ts';
   import ForkDialog from './fork-dialog.svelte';
+  import type { WorkflowRevisionListClient } from './fork-revision-picker.ts';
   import ReplayView from './replay-view.svelte';
 
   interface CheckpointsTabProps {
     readonly client: CheckpointsOperationsClient &
       Pick<HttpClient, 'replayTo' | 'getTimeline'> &
-      ForkClient;
+      ForkClient &
+      WorkflowRevisionListClient;
     readonly workflowId: string;
+    /** The workflow TYPE this run is — threaded to `ForkDialog`'s revision picker. */
+    readonly workflowType: string;
+    /** This run's own persisted revision — threaded to `ForkDialog`'s default-retention line. */
+    readonly sourceRevision: string | undefined;
   }
 
-  let { client, workflowId }: CheckpointsTabProps = $props();
+  let { client, workflowId, workflowType, sourceRevision }: CheckpointsTabProps = $props();
 
   const checkpointsQuery = createQuery(
     toStore(() => ({
@@ -144,6 +150,8 @@
               {client}
               {workflowId}
               initialStep={selectedStep}
+              {workflowType}
+              {sourceRevision}
               onForked={(id) => (forkedWorkflowId = id)}
             />
           {/if}

@@ -30,6 +30,25 @@ describe('WorkflowTable', () => {
     expect(getByText('wf_4a9f1…2c10')).not.toBeNull();
   });
 
+  test('a row with revision defined renders a truncated monospace badge with the full id in its tooltip', async () => {
+    const { getByText } = render(WorkflowTable, {
+      props: { rows: [summary({ revision: 'order-processing-rev-abcdefghijk' })] },
+    });
+
+    expect(getByText('order-pr…hijk')).not.toBeNull();
+    expect(
+      getByText('Revision (exact executable artifact): order-processing-rev-abcdefghijk'),
+    ).not.toBeNull();
+  });
+
+  test('a row with revision undefined renders an explicit "Unpinned" badge, never a blank cell', async () => {
+    const { getByText } = render(WorkflowTable, {
+      props: { rows: [summary()] },
+    });
+
+    expect(getByText('Unpinned')).not.toBeNull();
+  });
+
   test('renders every tag as a badge', async () => {
     const { getByText } = render(WorkflowTable, {
       props: { rows: [summary({ tags: ['prod', 'nightly'] })] },

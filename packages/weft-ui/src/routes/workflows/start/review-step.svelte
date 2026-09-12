@@ -13,6 +13,7 @@
 
   import { truncateId } from '../../../lib/format/index.ts';
   import { router, workflowDetailPath } from '../../../lib/router.svelte.ts';
+  import { FRESH_START_REVISION_HEDGE } from '../../../lib/workflow-revision.ts';
   import QueryFaultBanner from '../list/query-fault-banner.svelte';
   import type { AdvancedStartOptionsInput } from './start-wizard-state.ts';
 
@@ -33,9 +34,18 @@
     submitState: StartSubmitState;
     onBack: () => void;
     onSubmit: () => void;
+    /**
+     * The active manifest's `revision` for `type` (WFT-117) — resolved from
+     * the registry snapshot the wizard already fetched
+     * (`registryWorkflows[type]?.revision`). `undefined` when the registry
+     * lookup itself is unavailable/denied/still loading, or `type` isn't a
+     * currently-active registered workflow — never silently blank.
+     */
+    activeRevision: string | undefined;
   }
 
-  let { type, payload, advanced, submitState, onBack, onSubmit }: ReviewStepProps = $props();
+  let { type, payload, advanced, submitState, onBack, onSubmit, activeRevision }: ReviewStepProps =
+    $props();
 
   const advancedItems = $derived(
     [
@@ -53,6 +63,17 @@
 
 <div class="weft-start-review">
   <DescriptionList items={[{ term: 'Workflow type', definition: type }, ...advancedItems]} />
+
+  <p class="weft-start-review__revision-note">
+    {#if activeRevision !== undefined}
+      Starts against active revision <code>{activeRevision}</code> — active-at-fire; this run
+      resolves whichever revision is active when it actually starts (normally the one shown here). {FRESH_START_REVISION_HEDGE}
+    {:else}
+      Active revision unknown — the registry lookup for this type didn't resolve (denied,
+      unavailable, or still loading). Most starts resolve whichever revision is active for
+      <code>{type}</code> when they run. {FRESH_START_REVISION_HEDGE}
+    {/if}
+  </p>
 
   <div class="weft-start-review__payload">
     <span class="weft-start-review__payload-label">Payload</span>

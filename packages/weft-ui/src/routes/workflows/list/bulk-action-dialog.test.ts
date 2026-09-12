@@ -47,6 +47,39 @@ describe('BulkActionDialog — dry-run preview', () => {
     expect(getByText('status:failed · type:payment-capture')).not.toBeNull();
   });
 
+  test('renders previewNote in the preview phase when supplied (WFT-117)', async () => {
+    const { getByText } = render(BulkActionDialog, {
+      props: {
+        title: 'Bulk retry failed',
+        verb: 'retry',
+        runDryRun: async () => preview(),
+        runCommit: async () => ({ headline: 'Retried 47 of 47 workflows', errors: [] }),
+        onClose: () => {},
+        previewNote: 'Each retried run keeps its own persisted revision.',
+      },
+    });
+
+    await waitFor(() => {
+      expect(getByText('Each retried run keeps its own persisted revision.')).not.toBeNull();
+    });
+  });
+
+  test('renders no previewNote paragraph when omitted — no regression for cancel/signal/delete/tags callers', async () => {
+    const { queryByText } = render(BulkActionDialog, {
+      props: {
+        title: 'Bulk cancel',
+        verb: 'cancel',
+        runDryRun: async () => preview(),
+        runCommit: async () => ({ headline: 'Cancelled 47 of 47 workflows', errors: [] }),
+        onClose: () => {},
+      },
+    });
+
+    await waitFor(() => {
+      expect(queryByText(/persisted revision/)).toBeNull();
+    });
+  });
+
   test('0 matched disables the confirm affordance and offers no type-to-confirm field', async () => {
     const { getByText, queryByLabelText, queryByRole } = render(BulkActionDialog, {
       props: {

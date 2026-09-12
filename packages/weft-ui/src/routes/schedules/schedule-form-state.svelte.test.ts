@@ -68,6 +68,8 @@ describe('ScheduleFormState', () => {
     expect(form.inputText).toBe('{}');
     expect(form.overlap).toBe('skip');
     expect(form.cadence).toEqual({ mode: 'interval', every: 15, unit: 'minutes' });
+    expect(form.revisionPolicy).toBe('active-at-fire');
+    expect(form.initialRevisionPolicy).toBe('active-at-fire');
     expect(form.isValid).toBe(false);
     expect(form.errors.workflowType).toBe('Choose a workflow type.');
   });
@@ -82,6 +84,7 @@ describe('ScheduleFormState', () => {
       jitterText: '30s',
       backfill: true,
       startPaused: true,
+      revisionPolicy: 'pinned',
     });
 
     expect(form.id).toBe('nightly-rollup');
@@ -92,6 +95,8 @@ describe('ScheduleFormState', () => {
     expect(form.jitterText).toBe('30s');
     expect(form.backfill).toBe(true);
     expect(form.startPaused).toBe(true);
+    expect(form.revisionPolicy).toBe('pinned');
+    expect(form.initialRevisionPolicy).toBe('pinned');
     expect(form.isValid).toBe(true);
   });
 
@@ -124,6 +129,7 @@ describe('ScheduleFormState', () => {
         spec: { cron: '0 2 * * *' },
         overlap: 'skip',
         backfill: false,
+        revisionPolicy: 'active-at-fire',
       });
     });
 
@@ -143,9 +149,51 @@ describe('ScheduleFormState', () => {
         spec: { every: 300_000 },
         overlap: 'cancel-running',
         backfill: true,
+        revisionPolicy: 'active-at-fire',
         id: 'nightly-rollup',
         jitter: '30s',
       });
+    });
+
+    test('includes a non-default revisionPolicy from init', () => {
+      const form = new ScheduleFormState({
+        workflowType: 'report-gen',
+        cadence: { mode: 'cron', expression: '0 2 * * *' },
+        revisionPolicy: 'pinned',
+      });
+
+      expect(form.toCreateArgs().revisionPolicy).toBe('pinned');
+    });
+  });
+
+  describe('toUpdateRevisionPolicy', () => {
+    test('returns undefined when unchanged from the initial policy (active-at-fire)', () => {
+      const form = new ScheduleFormState({ workflowType: 'report-gen' });
+      expect(form.toUpdateRevisionPolicy()).toBeUndefined();
+    });
+
+    test('returns undefined when unchanged from the initial policy (pinned)', () => {
+      const form = new ScheduleFormState({ workflowType: 'report-gen', revisionPolicy: 'pinned' });
+      expect(form.toUpdateRevisionPolicy()).toBeUndefined();
+    });
+
+    test('returns the new value when switched from active-at-fire to pinned', () => {
+      const form = new ScheduleFormState({ workflowType: 'report-gen' });
+      form.revisionPolicy = 'pinned';
+      expect(form.toUpdateRevisionPolicy()).toBe('pinned');
+    });
+
+    test('returns the new value when switched from pinned to active-at-fire', () => {
+      const form = new ScheduleFormState({ workflowType: 'report-gen', revisionPolicy: 'pinned' });
+      form.revisionPolicy = 'active-at-fire';
+      expect(form.toUpdateRevisionPolicy()).toBe('active-at-fire');
+    });
+
+    test('returns undefined again if switched away and back to the initial value', () => {
+      const form = new ScheduleFormState({ workflowType: 'report-gen' });
+      form.revisionPolicy = 'pinned';
+      form.revisionPolicy = 'active-at-fire';
+      expect(form.toUpdateRevisionPolicy()).toBeUndefined();
     });
   });
 });

@@ -41,9 +41,95 @@
    *   returns the LATEST generation for that id, so whatever run this panel
    *   is currently showing can never itself have a successor — if one
    *   existed, this panel would already be showing it instead.
+   *
+   * ## Revision display (WFT-117)
+   *
+   * "Forked from" shows the SOURCE run's own persisted `revision` (from
+   * `forkSourceQuery`, the same fetch that already resolves the source's
+   * type for the link label) once it resolves — never fabricated from this
+   * run's own `forkedFrom.revision` (there is no such field; a fork's
+   * SOURCE revision is a property of the source run, not of the link
+   * pointing to it). The "This run" chip in the continuation chain shows
+   * THIS run's own `workflow.revision`, plus an explicit explanation that
+   * `onTerminalConflict: 'start-new'` selects whichever revision is active
+   * at the moment it replaces the prior run — no pin carries over from the
+   * displaced run, matching `documentation/guides/
+   * workflow-versioning.md`'s per-run pinning contract (`@lostgradient/weft`).
+   * That explanation carries `FRESH_START_REVISION_HEDGE`, not
+   * `EAGER_REVISION_HEDGE` (Codex review, PR #978): a start-new replacement
+   * is a FRESH start, not a fork or recovery of the displaced run, so it's
+   * the "can bypass the active pointer entirely" caveat that applies here,
+   * not the "retains the source run's own revision" one. Every revision
+   * display degrades to an explicit "Unpinned" label for a
+   * pre-revision-pinning (legacy) record rather than a blank space —
+   * including the "Forked from" row's own attributable-but-unpinned case
+   * (Codex review, PR #978), and its purged (`$forkSourceQuery.data ===
+   * null`, `client.get()`'s documented 404 contract) and query-error
+   * (`$forkSourceQuery.isError`) cases (Codex review, PR #978, round 6),
+   * both of which a prior version of this file silently rendered nothing
+   * for — every one of the three `sourceRevisionAttributable`-gated
+   * branches requires truthy `data`, so neither a purged source nor a
+   * failed lookup ever matched any of them.
+   *
+   * `forkSourceQuery` fetches `forkedFrom.workflowId` — a stable id, not the
+   * concrete generation actually forked from. `GET /api/v1/workflows/:id`
+   * always returns that id's LATEST generation (see the "Continuation
+   * chain" note above), and `ForkLineage` carries no execution token or
+   * revision snapshot (`@lostgradient/weft`'s `ForkLineage` type — just
+   * `{ workflowId, step }`) to pin down which one was actually forked. So
+   * if the source id was later reused for an UNRELATED generation — either
+   * tracked (`onTerminalConflict: 'start-new'` restarting it) or entirely
+   * untracked (the original was purged, then a plain new `engine.start()`
+   * happened to reuse the same explicit id, leaving no `restartedFrom` at
+   * all) — showing that unrelated generation's `revision` here would
+   * misattribute it to the historical fork.
+   *
+   * `sourceRevisionAttributable` requires BOTH, neither alone sufficing
+   * (Codex review, PR #978, three rounds — see below):
+   *
+   * - `source.restartedFrom === undefined` — timestamp-free: proves this
+   *   generation has never been displaced by ANY start-new replacement,
+   *   tracked or not, so it has held this id continuously since its own
+   *   origin regardless of clock behavior anywhere in the deployment.
+   * - `source.createdAt < workflow.createdAt` — best-effort and
+   *   wall-clock-based: the only signal available for the UNTRACKED reuse
+   *   case the `restartedFrom` check can't see (a purged id reused by a
+   *   plain fresh `engine.start()`, which sets no `restartedFrom` at all).
+   *
+   * History: round 1 shipped `restartedFrom`-only. Round 2 replaced it
+   * with `createdAt`-only, reasoning `client.get` always returns the
+   * current, unreplaced generation, so an origin strictly before the fork
+   * proves continuous identity through fork time regardless of how the id
+   * came to be held — believing this "subsumed" the `restartedFrom` check.
+   * Round 5 disproved that: `createdAt` is stamped from each engine's own
+   * wall-clock `getNow()` (`ownership: 'workflow-lease'` explicitly
+   * permits multiple engines, and Weft's ownership documentation accounts
+   * for clock skew between them), so a TRACKED replacement created causally
+   * AFTER the fork on a clock-skewed engine can still stamp a `createdAt`
+   * that appears to precede it — `createdAt`-only would misattribute it.
+   * `ForkLineage` carries no durable generation token to check instead
+   * (just `{ workflowId, step }`), so both signals are required together:
+   * `restartedFrom` closes every TRACKED case without touching a clock at
+   * all; `createdAt` remains the only (imperfect) signal for the untracked
+   * case. When either check fails, the chip is omitted with an explicit
+   * note rather than silently showing a possibly-wrong revision.
+   *
+   * Residual gap, accepted (Codex review, PR #978, round 7): an untracked
+   * id reuse (purge, then a plain fresh `engine.start()` on the same
+   * explicit id) combined with clock skew on the reusing engine can still
+   * pass both checks, because `ForkLineage` carries no durable generation
+   * token to rule it out — see the two paragraphs above. Closing this
+   * fully needs an engine-side generation token on `ForkLineage`, which is
+   * out of WFT-117's scope ("do not implement or copy Weft runtime
+   * semantics in the Console"). Rather than silently trust the shown
+   * revision, the rendered tooltip below now labels the attribution
+   * "best-effort" and names the exact gap, so an operator reading it is
+   * not told a stronger guarantee than the data can support.
    */
+  import Badge from '@lostgradient/cinder/badge';
   import CopyButton from '@lostgradient/cinder/copy-button';
   import Skeleton from '@lostgradient/cinder/skeleton';
+  import Tooltip from '@lostgradient/cinder/tooltip';
   import { createQuery } from '@tanstack/svelte-query';
   import type { HttpClient } from '@lostgradient/weft/client';
   import type { WorkflowState } from '@lostgradient/weft';
@@ -53,6 +139,10 @@
   import { formatRelativeTime, truncateId } from '../../../lib/format/index.ts';
   import { queryKeys } from '../../../lib/query.ts';
   import { router, workflowDetailPath } from '../../../lib/router.svelte.ts';
+  import {
+    EAGER_REVISION_HEDGE,
+    FRESH_START_REVISION_HEDGE,
+  } from '../../../lib/workflow-revision.ts';
   import { workflowStatusBadge } from '../list/workflow-status-badge.ts';
   import WorkflowStatusIcon from '../list/workflow-status-icon.svelte';
   import { getScheduleProvenance, scheduleProvenanceQueryKey } from './workflow-observability.ts';
@@ -76,6 +166,13 @@
       enabled: forkedFrom !== undefined,
     })),
   );
+
+  /** See the module doc's "Revision display" section for why BOTH checks are required, not either alone. */
+  const sourceRevisionAttributable = $derived.by(() => {
+    const source = $forkSourceQuery.data;
+    if (source === null || source === undefined) return false;
+    return source.restartedFrom === undefined && source.createdAt < workflow.createdAt;
+  });
 
   const scheduleProvenanceQuery = createQuery(
     toStore(() => ({
@@ -161,12 +258,27 @@
           <span class="weft-lineage-continuation__chip weft-lineage-continuation__chip--current">
             <WorkflowStatusIcon icon={thisRunBadge.icon} />
             <span class="weft-lineage-continuation__label">This run</span>
+            {#if workflow.revision !== undefined}
+              <Tooltip
+                text={`Revision (exact executable artifact): ${workflow.revision}. ${EAGER_REVISION_HEDGE}`}
+              >
+                <span class="weft-lineage-continuation__revision">
+                  rev {truncateId(workflow.revision)}
+                </span>
+              </Tooltip>
+            {:else}
+              <Badge variant="neutral" size="sm">Unpinned</Badge>
+            {/if}
           </span>
           <ArrowRight aria-hidden="true" size={14} />
           <span class="weft-lineage-continuation__chip weft-lineage-continuation__chip--none">
             No successor
           </span>
         </div>
+        <p class="weft-lineage-panel__note">
+          A start-new replacement resolves against whichever revision is active at the moment it
+          replaces the prior run — no pin carries over from the run it replaced. {FRESH_START_REVISION_HEDGE}
+        </p>
       </div>
     {/if}
 
@@ -190,6 +302,36 @@
             {truncateId(forkedFrom.workflowId)}
           </span>
           <CopyButton value={forkedFrom.workflowId} iconOnly label="Copy workflow id" />
+          {#if sourceRevisionAttributable && $forkSourceQuery.data?.revision !== undefined}
+            {@const sourceRevision = $forkSourceQuery.data.revision}
+            <Tooltip
+              text={`Source revision (exact executable artifact): ${sourceRevision}. Best-effort attribution: this id has never been displaced by a tracked start-new replacement, and this record's own creation time precedes this fork — not an absolute guarantee against an untracked id reuse racing a clock-skewed engine.`}
+            >
+              <span class="weft-lineage-panel__id">rev {truncateId(sourceRevision)}</span>
+            </Tooltip>
+          {:else if sourceRevisionAttributable && $forkSourceQuery.data}
+            <Tooltip
+              text="This source run predates revision pinning, so which revision was actually forked can't be stated."
+            >
+              <Badge variant="neutral" size="sm">Unpinned</Badge>
+            </Tooltip>
+          {:else if $forkSourceQuery.data && !sourceRevisionAttributable}
+            <Tooltip
+              text={`This id was reused by a start-new replacement after this fork was created, so the current record's revision may not match what was actually forked. Not shown to avoid a wrong attribution.`}
+            >
+              <Badge variant="neutral" size="sm">Revision not attributable</Badge>
+            </Tooltip>
+          {:else if $forkSourceQuery.data === null}
+            <Tooltip text="The source run has been purged, so its revision can no longer be shown.">
+              <Badge variant="neutral" size="sm">Revision unavailable</Badge>
+            </Tooltip>
+          {:else if $forkSourceQuery.isError}
+            <Tooltip
+              text="The source run's record could not be loaded, so its revision can't be shown."
+            >
+              <Badge variant="neutral" size="sm">Revision unavailable</Badge>
+            </Tooltip>
+          {/if}
         {/if}
         <span class="weft-lineage-panel__meta">at step {forkedFrom.step}</span>
       </div>
@@ -219,6 +361,16 @@
               <CornerDownRight aria-hidden="true" size={12} />
               <span>{child.type}</span>
               <span class="weft-lineage-panel__id" title={child.id}>{truncateId(child.id)}</span>
+              {#if child.revision !== undefined}
+                <span
+                  class="weft-lineage-panel__id"
+                  title={`Revision (exact executable artifact): ${child.revision}`}
+                >
+                  rev {truncateId(child.revision)}
+                </span>
+              {:else}
+                <span class="weft-lineage-panel__id">Unpinned</span>
+              {/if}
               <span class="weft-lineage-panel__meta">
                 <WorkflowStatusIcon icon={badge.icon} />
                 {badge.label}
@@ -305,6 +457,12 @@
   }
 
   .weft-lineage-continuation__meta {
+    font-family: var(--cinder-font-mono);
+    font-size: var(--cinder-text-2xs);
+    color: var(--cinder-text-subtle);
+  }
+
+  .weft-lineage-continuation__revision {
     font-family: var(--cinder-font-mono);
     font-size: var(--cinder-text-2xs);
     color: var(--cinder-text-subtle);
