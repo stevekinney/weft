@@ -2667,7 +2667,13 @@ export class Engine<
    * Safe to call on a terminal workflow. A no-op — `{ removed: 0, retained: 0
    * }`, never a throw — on a workflow with no checkpoint history entries,
    * including an unknown workflow id. Rejects with the storage adapter's own
-   * error when a delete batch fails, and honors `options.signal`.
+   * error when a delete batch fails, and honors `options.signal`. The returned
+   * `retained` count is based on the history entries observed by this call and
+   * excluded from its deletion plan; concurrent checkpoint writes or prunes can
+   * change the actual number of entries in storage afterward.
+   * Deleting history requires storage support for `conditionalBatch`. Each
+   * batch rejects a concurrent workflow-generation change; earlier batches may
+   * already have committed when a later batch rejects.
    */
   async pruneCheckpoints(
     workflowId: string,

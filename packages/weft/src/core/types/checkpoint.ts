@@ -231,7 +231,11 @@ export type PruneCheckpointsOptions = {
 export type PruneCheckpointsResult = {
   /** Number of checkpoint history entries deleted. */
   removed: number;
-  /** Number of checkpoint history entries left in place. */
+  /**
+   * Number of checkpoint history entries observed by this call and excluded
+   * from its deletion plan. Concurrent checkpoint writes or prunes can change
+   * the actual number of entries in storage after the scan.
+   */
   retained: number;
 };
 

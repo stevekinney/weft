@@ -3,7 +3,7 @@ import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 
 import { BunSQLiteStorage } from '../storage/bun-sql.ts';
 import type { BatchOperation, ConditionalBatchCondition } from '../storage/interface.ts';
-import { KEYS } from '../storage/interface.ts';
+import { KEYS, MAX_BATCH_OPERATIONS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { serializeCheckpoint } from './checkpoint.ts';
 import { Engine } from './engine.ts';
@@ -191,6 +191,45 @@ class OrdinaryProgressMemoryStorage extends MemoryStorage {
       await super.put(this.#targetKey, this.#advancedBytes);
     }
     return value;
+  }
+}
+
+/**
+ * Adds a checkpoint history entry after pruning has taken its key snapshot,
+ * proving that `retained` describes the snapshot rather than a live count.
+ */
+class ConcurrentHistoryWriteMemoryStorage extends MemoryStorage {
+  #historyPrefix: string;
+  #historyKey: string;
+  #historyBytes: Uint8Array;
+  #liveKey: string;
+  #liveBytes: Uint8Array;
+  #triggered = false;
+
+  constructor(
+    historyPrefix: string,
+    historyKey: string,
+    historyBytes: Uint8Array,
+    liveKey: string,
+    liveBytes: Uint8Array,
+  ) {
+    super();
+    this.#historyPrefix = historyPrefix;
+    this.#historyKey = historyKey;
+    this.#historyBytes = historyBytes;
+    this.#liveKey = liveKey;
+    this.#liveBytes = liveBytes;
+  }
+
+  override async *keys(prefix: string, options?: Parameters<MemoryStorage['keys']>[1]) {
+    for await (const key of super.keys(prefix, options)) {
+      yield key;
+      if (prefix === this.#historyPrefix && !this.#triggered) {
+        this.#triggered = true;
+        await this.put(this.#historyKey, this.#historyBytes);
+        await this.put(this.#liveKey, this.#liveBytes);
+      }
+    }
   }
 }
 
@@ -442,6 +481,36 @@ describe('Engine.pruneCheckpoints', () => {
     });
   }
 
+  it('reports retained entries from the scan snapshot when a checkpoint is written concurrently', async () => {
+    const liveCheckpointKey = KEYS.checkpoint('wf-1');
+    const historyPrefix = `${liveCheckpointKey}:`;
+    const storage = new ConcurrentHistoryWriteMemoryStorage(
+      historyPrefix,
+      KEYS.checkpointHistory('wf-1', 4),
+      buildCheckpointBytes('wf-1', 4, { workflowExecutionToken: 'token-a' }),
+      liveCheckpointKey,
+      buildCheckpointBytes('wf-1', 4, { workflowExecutionToken: 'token-a' }),
+    );
+    for (const step of [1, 2, 3]) {
+      await writeCheckpointHistory(storage, 'wf-1', step);
+    }
+    await writeLiveCheckpoint(storage, 'wf-1', 3, 'token-a');
+
+    engine = new Engine({ storage, checkpointHistory: 10 });
+    engine.register(
+      workflow({ name: 'noop' }).execute(async function* () {
+        return null;
+      }),
+    );
+
+    const result = await engine.pruneCheckpoints('wf-1', { keepLast: 1 });
+
+    // The scan saw three entries and planned to retain one. The concurrent
+    // checkpoint write landed after that snapshot and remains in storage.
+    expect(result).toEqual({ removed: 2, retained: 1 });
+    expect(await listHistorySteps(storage, 'wf-1')).toEqual([3, 4]);
+  });
+
   it('fences against a replacement landing during the history scan itself', async () => {
     const liveCheckpointKey = KEYS.checkpoint('wf-1');
     const replacementBytes = buildCheckpointBytes('wf-1', 1, { workflowExecutionToken: 'token-b' });
@@ -467,6 +536,49 @@ describe('Engine.pruneCheckpoints', () => {
     expect(await listHistorySteps(storage, 'wf-1')).toEqual([1, 2, 3]);
     expect(await storage.get(liveCheckpointKey)).toEqual(replacementBytes);
   });
+
+  for (const replacementBatch of [1, 2]) {
+    for (const initialGeneration of [null, new Uint8Array([1])]) {
+      it(`fences generation changes at delete batch ${replacementBatch} with ${initialGeneration === null ? 'absent' : 'present'} anchor`, async () => {
+        const generationKey = KEYS.workflowGeneration('wf-1');
+        let deleteBatches = 0;
+        class ReplacementAtCommitStorage extends MemoryStorage {
+          override async conditionalBatch(
+            conditions: ConditionalBatchCondition[],
+            operations: BatchOperation[],
+          ): Promise<boolean> {
+            if (
+              operations.some(
+                (operation) =>
+                  operation.type === 'delete' &&
+                  operation.key.startsWith(`${KEYS.checkpoint('wf-1')}:`),
+              )
+            ) {
+              deleteBatches++;
+              if (deleteBatches === replacementBatch) {
+                await this.put(generationKey, new Uint8Array([2]));
+                for (let step = 1; step <= MAX_BATCH_OPERATIONS + 1; step++) {
+                  await writeCheckpointHistory(this, 'wf-1', step);
+                }
+              }
+            }
+            return super.conditionalBatch(conditions, operations);
+          }
+        }
+        const storage = new ReplacementAtCommitStorage();
+        if (initialGeneration !== null) await storage.put(generationKey, initialGeneration);
+        for (let step = 1; step <= MAX_BATCH_OPERATIONS + 1; step++) {
+          await writeCheckpointHistory(storage, 'wf-1', step);
+        }
+        engine = new Engine({ storage });
+        await expect(engine.pruneCheckpoints('wf-1', { keepLast: 0 })).rejects.toThrow(
+          'lost its CAS race',
+        );
+        expect(deleteBatches).toBe(replacementBatch);
+        expect(await listHistorySteps(storage, 'wf-1')).toHaveLength(MAX_BATCH_OPERATIONS + 1);
+      });
+    }
+  }
 
   it('rejects synchronously for an invalid keepLast option', async () => {
     const storage = new MemoryStorage();
