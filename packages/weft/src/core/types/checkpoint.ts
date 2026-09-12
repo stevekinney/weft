@@ -229,7 +229,11 @@ export type PruneCheckpointsOptions = {
 
 /** Outcome of `engine.pruneCheckpoints()`. */
 export type PruneCheckpointsResult = {
-  /** Number of checkpoint history entries deleted. */
+  /**
+   * Number of checkpoint history entries selected by this call for deletion.
+   * Storage deletes are idempotent, so concurrent overlapping prune calls can
+   * each count the same entry even though it is physically deleted only once.
+   */
   removed: number;
   /**
    * Number of checkpoint history entries observed by this call and excluded

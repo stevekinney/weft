@@ -2668,6 +2668,9 @@ export class Engine<
    * }`, never a throw — on a workflow with no checkpoint history entries,
    * including an unknown workflow id. Rejects with the storage adapter's own
    * error when a delete batch fails, and honors `options.signal`. The returned
+   * `removed` count is the number of entries selected by this call for
+   * deletion, not an independently confirmed count of keys deleted from
+   * storage; concurrent overlapping prune calls can each count the same entry.
    * `retained` count is based on the history entries observed by this call and
    * excluded from its deletion plan; concurrent checkpoint writes or prunes can
    * change the actual number of entries in storage afterward.

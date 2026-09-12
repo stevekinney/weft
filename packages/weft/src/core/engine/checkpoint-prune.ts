@@ -46,7 +46,7 @@ async function scanCheckpointHistorySteps(
       steps.push(step);
     }
   }
-  return steps;
+  return steps.sort((left, right) => left - right);
 }
 
 /** Read the live checkpoint's stable per-run identity, when present. */
@@ -76,6 +76,7 @@ async function deleteCheckpointHistoryEntries(
   toDelete: readonly number[],
   anchorToken: string | undefined,
   anchorGeneration: Uint8Array | null,
+  signal: AbortSignal | undefined,
 ): Promise<void> {
   if (anchorToken !== undefined) {
     const currentToken = await readWorkflowExecutionToken(internals, workflowId);
@@ -86,6 +87,7 @@ async function deleteCheckpointHistoryEntries(
     }
   }
 
+  signal?.throwIfAborted();
   for (let index = 0; index < toDelete.length; index += MAX_BATCH_OPERATIONS) {
     const chunk = toDelete.slice(index, index + MAX_BATCH_OPERATIONS);
     const operations: BatchOperation[] = chunk.map((step) => ({
@@ -151,9 +153,7 @@ export async function pruneCheckpoints(
   const anchorToken = await readWorkflowExecutionToken(internals, workflowId);
   const steps = await scanCheckpointHistorySteps(internals, workflowId, signal);
 
-  // `scanCheckpointHistorySteps()` returns ascending numeric order already
-  // (the zero-padded, fixed-width step suffix sorts that way); the newest
-  // entries are the tail.
+  // Steps are sorted numerically, including beyond the key's padding width.
   const toDelete = steps.slice(0, Math.max(0, steps.length - keepLast));
   if (toDelete.length === 0) {
     return { removed: 0, retained: steps.length };
@@ -166,6 +166,7 @@ export async function pruneCheckpoints(
     toDelete,
     anchorToken,
     anchorGeneration,
+    signal,
   );
 
   return { removed: toDelete.length, retained: steps.length - toDelete.length };

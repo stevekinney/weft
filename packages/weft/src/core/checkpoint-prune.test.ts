@@ -580,6 +580,42 @@ describe('Engine.pruneCheckpoints', () => {
     }
   }
 
+  it('observes cancellation during the final live-checkpoint read before deleting', async () => {
+    const controller = new AbortController();
+    let reads = 0;
+    class AbortDuringReadStorage extends MemoryStorage {
+      override async get(key: string): Promise<Uint8Array | null> {
+        const value = await super.get(key);
+        if (key === KEYS.checkpoint('wf-1') && ++reads === 2) {
+          controller.abort(new Error('cancelled during preflight'));
+        }
+        return value;
+      }
+    }
+    const storage = new AbortDuringReadStorage();
+    await writeLiveCheckpoint(storage, 'wf-1', 2, 'token-a');
+    await writeCheckpointHistory(storage, 'wf-1', 1);
+    await writeCheckpointHistory(storage, 'wf-1', 2);
+    engine = new Engine({ storage });
+    await expect(
+      engine.pruneCheckpoints('wf-1', { keepLast: 1, signal: controller.signal }),
+    ).rejects.toThrow('cancelled during preflight');
+    expect(await listHistorySteps(storage, 'wf-1')).toEqual([1, 2]);
+  });
+
+  it('keeps the numerically newest steps beyond the padded key width', async () => {
+    const storage = new MemoryStorage();
+    for (const step of [9999999999, 10000000000, 10000000001]) {
+      await writeCheckpointHistory(storage, 'wf-1', step);
+    }
+    engine = new Engine({ storage });
+    expect(await engine.pruneCheckpoints('wf-1', { keepLast: 2 })).toEqual({
+      removed: 1,
+      retained: 2,
+    });
+    expect(await listHistorySteps(storage, 'wf-1')).toEqual([10000000000, 10000000001]);
+  });
+
   it('rejects synchronously for an invalid keepLast option', async () => {
     const storage = new MemoryStorage();
     engine = new Engine({ storage });
