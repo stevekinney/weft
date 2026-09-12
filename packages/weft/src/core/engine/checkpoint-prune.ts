@@ -161,13 +161,19 @@ async function deleteCheckpointHistoryEntries(
  * rather than stopping partway with some, but not all, overflow entries
  * removed.
  *
- * Two callers concurrently pruning the SAME still-current run can each
- * report the full count of entries they planned to delete even when their
- * `toDelete` lists overlapped, since neither call's guard (see
- * {@link deleteCheckpointHistoryEntries}) detects another prune call, only a
- * run replacement. Serialize concurrent `pruneCheckpoints` calls against the
- * same workflow id at the caller if an exact `removed` count under
- * concurrent pruning matters (tracked as a follow-up, not fixed here).
+ * `removed` counts entries THIS CALL planned to delete, not entries this
+ * call proved were still present beforehand — storage `delete` is
+ * idempotent and does not report whether a key existed. Two callers
+ * concurrently pruning the SAME still-current run with overlapping
+ * `toDelete` lists can therefore each report the full count they planned,
+ * even though an overlapping key is only ever physically deleted once,
+ * since neither call's guard (see {@link deleteCheckpointHistoryEntries})
+ * detects another prune call — only a run replacement. This is a
+ * documented, permanent characteristic of `removed`, not a defect awaiting
+ * a fix: closing it would need a storage primitive that reports which keys
+ * actually existed at delete time, which no adapter provides today.
+ * Callers that need an exact `removed` count under concurrent pruning must
+ * serialize their own `pruneCheckpoints` calls per workflow id.
  */
 export async function pruneCheckpoints(
   internals: EngineInternals,
