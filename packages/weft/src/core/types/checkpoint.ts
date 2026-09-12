@@ -202,6 +202,47 @@ export type CheckpointState = Pick<
   'step' | 'locals' | 'searchAttributes' | 'version' | 'createdAt'
 >;
 
+/**
+ * Options for `engine.pruneCheckpoints()`.
+ *
+ * @example
+ * ```ts
+ * import { workflow, Engine, type PruneCheckpointsOptions } from '@lostgradient/weft';
+ *
+ * const engine = new Engine({ checkpointHistory: 10 });
+ * engine.register(workflow({ name: 'process' }).execute(async function* () { return 'done'; }));
+ *
+ * const handle = await engine.start('process', null);
+ * await handle.result();
+ *
+ * const options: PruneCheckpointsOptions = { keepLast: 5 };
+ * const result = await engine.pruneCheckpoints(handle.id, options);
+ * void result;
+ * ```
+ */
+export type PruneCheckpointsOptions = {
+  /** Number of newest checkpoint history entries to retain. Must be a non-negative integer. */
+  keepLast: number;
+  /** Abort the prune before its destructive deletes are issued. */
+  signal?: AbortSignal;
+};
+
+/** Outcome of `engine.pruneCheckpoints()`. */
+export type PruneCheckpointsResult = {
+  /**
+   * Number of checkpoint history entries selected by this call for deletion.
+   * Storage deletes are idempotent, so concurrent overlapping prune calls can
+   * each count the same entry even though it is physically deleted only once.
+   */
+  removed: number;
+  /**
+   * Number of checkpoint history entries observed by this call and excluded
+   * from its deletion plan. Concurrent checkpoint writes or prunes can change
+   * the actual number of entries in storage after the scan.
+   */
+  retained: number;
+};
+
 // ---------------------------------------------------------------------------
 // Operation types
 // ---------------------------------------------------------------------------
