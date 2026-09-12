@@ -52,12 +52,17 @@ async function scanCheckpointHistorySteps(
  * Delete `toDelete` checkpoint history entries in `MAX_BATCH_OPERATIONS`-sized
  * chunks, each fenced against a concurrent run replacement (`onTerminalConflict:
  * 'start-new'` reusing this workflow id): every chunk's batch is conditioned on
- * the live `wf:{id}:ckpt` record's bytes staying exactly what the caller
- * observed before scanning history, on any backend that reports
- * `conditionalBatch`. A replacement purges and recreates that record with
- * different bytes, so the condition fails closed and the stale delete list —
- * computed against the OLD run's steps, which the new run can revisit from
- * step 1 — never lands on the new run's checkpoints.
+ * `fenceCheckpointBytes` — the live `wf:{id}:ckpt` record's bytes, captured by
+ * the caller BEFORE it scanned history, not re-read here — on any backend that
+ * reports `conditionalBatch`. A replacement purges and recreates that record
+ * with different bytes at ANY point from before the scan through this delete,
+ * so the condition fails closed and the stale delete list — computed against
+ * the OLD run's steps, which the new run can revisit from step 1 — never
+ * lands on the new run's checkpoints. Re-reading the anchor here instead of
+ * reusing the pre-scan capture would reopen exactly that window: a
+ * replacement landing during the scan would already be reflected in a
+ * fresh read, so it would wrongly become the CAS baseline instead of failing
+ * the fence.
  *
  * Bounded per-key deletes inside a fenced batch — not `storageDeleteRange()` —
  * are deliberate: `storageDeleteRange()` is a standalone, unconditioned
@@ -77,11 +82,11 @@ async function deleteCheckpointHistoryEntries(
   internals: EngineInternals,
   workflowId: string,
   toDelete: readonly number[],
+  fenceCheckpointBytes: Uint8Array | null,
 ): Promise<void> {
-  const liveCheckpointBytes = await internals.storage.get(KEYS.checkpoint(workflowId));
   const canFence = internals.storage.capabilities().conditionalBatch;
   const baseConditions: ConditionalBatchCondition[] = canFence
-    ? [{ key: KEYS.checkpoint(workflowId), expectedValue: liveCheckpointBytes }]
+    ? [{ key: KEYS.checkpoint(workflowId), expectedValue: fenceCheckpointBytes }]
     : [];
 
   for (let index = 0; index < toDelete.length; index += MAX_BATCH_OPERATIONS) {
@@ -111,6 +116,12 @@ async function deleteCheckpointHistoryEntries(
  * delete — once the first delete chunk commits (see
  * {@link deleteCheckpointHistoryEntries}), the prune runs to completion rather
  * than stopping partway with some, but not all, overflow entries removed.
+ *
+ * The fence anchor (the live `wf:{id}:ckpt` record's bytes) is captured
+ * BEFORE the history scan, not after: capturing it later would let a
+ * replacement that lands during the scan slip in as the CAS baseline instead
+ * of being caught by it, reopening the exact race
+ * {@link deleteCheckpointHistoryEntries} exists to close.
  */
 export async function pruneCheckpoints(
   internals: EngineInternals,
@@ -121,6 +132,7 @@ export async function pruneCheckpoints(
   assertValidKeepLast(keepLast);
   signal?.throwIfAborted();
 
+  const fenceCheckpointBytes = await internals.storage.get(KEYS.checkpoint(workflowId));
   const steps = await scanCheckpointHistorySteps(internals, workflowId, signal);
 
   // `scanCheckpointHistorySteps()` returns ascending numeric order already
@@ -132,7 +144,7 @@ export async function pruneCheckpoints(
   }
 
   signal?.throwIfAborted();
-  await deleteCheckpointHistoryEntries(internals, workflowId, toDelete);
+  await deleteCheckpointHistoryEntries(internals, workflowId, toDelete, fenceCheckpointBytes);
 
   return { removed: toDelete.length, retained: steps.length - toDelete.length };
 }

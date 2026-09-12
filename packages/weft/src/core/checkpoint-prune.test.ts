@@ -111,6 +111,29 @@ class ReplacementRaceBunSQLiteStorage extends BunSQLiteStorage {
   }
 }
 
+/**
+ * Simulates a replacement landing strictly AFTER the fence anchor is
+ * captured but WHILE the history scan is still enumerating — the specific
+ * gap a pre-fix ordering (anchor read after the scan) left open, since that
+ * ordering would capture the replacement's own bytes as the CAS baseline
+ * instead of failing against them.
+ */
+class ReplacementDuringScanMemoryStorage extends MemoryStorage {
+  #targetKey: string;
+  #triggered = false;
+  constructor(targetKey: string) {
+    super();
+    this.#targetKey = targetKey;
+  }
+  override async *keys(prefix: string, options?: Parameters<MemoryStorage['keys']>[1]) {
+    if (!this.#triggered) {
+      this.#triggered = true;
+      await this.put(this.#targetKey, new Uint8Array([9, 9, 9]));
+    }
+    yield* super.keys(prefix, options);
+  }
+}
+
 const adapters = [
   { name: 'MemoryStorage', create: () => new MemoryStorage() },
   { name: 'BunSQLiteStorage', create: () => new BunSQLiteStorage(':memory:') },
@@ -304,6 +327,31 @@ describe('Engine.pruneCheckpoints', () => {
       });
     });
   }
+
+  it('fences against a replacement landing during the history scan itself', async () => {
+    const liveCheckpointKey = KEYS.checkpoint('wf-1');
+    const storage = new ReplacementDuringScanMemoryStorage(liveCheckpointKey);
+    for (const step of [1, 2, 3]) {
+      await writeCheckpointHistory(storage, 'wf-1', step);
+    }
+    await storage.put(liveCheckpointKey, new Uint8Array([1, 2, 3]));
+
+    engine = new Engine({ storage, checkpointHistory: 10 });
+    engine.register(
+      workflow({ name: 'noop' }).execute(async function* () {
+        return null;
+      }),
+    );
+
+    // The fence anchor is captured before the scan starts, so even though the
+    // replacement's rewrite happens mid-scan (not merely after it), the
+    // destructive batch still fails closed against the pre-scan bytes.
+    await expect(engine.pruneCheckpoints('wf-1', { keepLast: 1 })).rejects.toThrow(
+      'lost its CAS race',
+    );
+    expect(await listHistorySteps(storage, 'wf-1')).toEqual([1, 2, 3]);
+    expect(await storage.get(liveCheckpointKey)).toEqual(new Uint8Array([9, 9, 9]));
+  });
 
   it('rejects synchronously for an invalid keepLast option', async () => {
     const storage = new MemoryStorage();
