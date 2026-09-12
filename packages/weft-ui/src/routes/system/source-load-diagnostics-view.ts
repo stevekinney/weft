@@ -128,20 +128,45 @@ const SOURCE_LOAD_STATE_LABELS: Readonly<Record<KnownSourceLoadState, string>> =
 
 /** What each load state means for the operator looking at it right now. */
 const SOURCE_LOAD_STATE_DESCRIPTIONS: Readonly<Record<KnownSourceLoadState, string>> = {
-  idle: 'Registered as a source, but this engine has never loaded it.',
+  // NOT "this revision is registered": `buildSourceDiagnostics()` keys the
+  // whole `source` block on the NAME (`internals.sources.byName`) and falls
+  // back to `idle` for a revision it has no diagnostics entry for — so a typo
+  // or an entirely unregistered revision of a registered name reports `idle`
+  // exactly like a real registered-but-never-loaded one. Preload would fault
+  // NotFound for it. This copy therefore reports only what `idle` actually
+  // means (no load recorded) and names the ambiguity rather than resolving it
+  // in the operator's favour.
+  idle: 'No load has been recorded for this revision. The workflow name has a registered source; this exact revision may not, in which case preloading it is refused as not found.',
   loading: 'A load is in flight in the serving engine right now.',
   ready: 'Loaded, validated, and installed in the workflow catalog.',
   failed: 'The last load attempt failed. See the failure category below.',
   cancelled: 'The last load attempt was cancelled before it finished.',
 };
 
-/** Sentence-case operator copy for each bounded failure category. */
+/**
+ * Operator copy for each bounded failure category, restated from Weft's OWN
+ * definitions (`core/types/identity.ts`) and nothing more.
+ *
+ * An earlier version of this table invented load-specific meanings — reading
+ * `resource` as "could not reach or read its source", for instance. That is
+ * wrong twice over: `resource` canonically means a quota/memory/disk/capacity
+ * limit, and an unreachable artifact is not classified that way at all.
+ * `classifyErrorAsFailureCategory` recognizes only timeout, cancellation, and
+ * resource error NAMES; `source-diagnostics.ts` passes
+ * `defaultErrorCategory: 'application'`, so every ordinary loader, validation,
+ * or catalog-install error — an ENOENT included — lands in `application`.
+ *
+ * That matters more here than elsewhere precisely because the raw error is
+ * deliberately masked on the wire: this category is all the operator gets, so
+ * inventing detail around it is inventing detail they cannot check.
+ */
 const FAILURE_CATEGORY_LABELS: Readonly<Record<KnownFailureCategory, string>> = {
-  application: 'The loaded module raised an error of its own.',
-  timeout: 'The load exceeded its time budget.',
-  cancellation: 'The load was cancelled.',
-  resource: 'The load could not reach or read its source.',
-  system: 'The engine itself failed while loading.',
+  application:
+    'Application code threw. This is also the default classification for an ordinary load error, so it does not by itself mean the module misbehaved.',
+  timeout: 'Execution exceeded a configured deadline.',
+  cancellation: 'Cancellation or abort ended execution.',
+  resource: 'A quota, memory, disk, or capacity limit was exceeded.',
+  system: 'An engine, storage, or worker infrastructure fault.',
 };
 
 function isKnownSourceLoadState(value: string): value is KnownSourceLoadState {
@@ -226,13 +251,20 @@ export type SourceLoadSummary =
 
 /**
  * Load duration copy. `undefined` is NOT "0 ms": the server omits the field
- * entirely until a load has actually completed (an `idle` source has never
- * run one), so an absent value renders as an explicit "Not loaded yet"
- * rather than a misleading zero.
+ * entirely until a load has actually completed, so an absent value renders as
+ * explicit text rather than a misleading zero.
+ *
+ * The absent case splits three ways, because one phrase cannot honestly cover
+ * them. `cancelled` in particular is NOT "not loaded yet": the engine's
+ * cancellation transition (`source-diagnostics.ts`) sets `state` alone and
+ * never records a duration, so a load that genuinely started and was then
+ * cancelled arrives here with no duration — and "Not loaded yet" next to
+ * "Load state: Cancelled" would contradict itself.
  */
 function loadDurationValue(state: string, loadDurationMs: number | undefined): string {
   if (loadDurationMs !== undefined) return formatDuration(loadDurationMs);
-  return state === 'loading' ? 'In flight' : 'Not loaded yet';
+  if (state === 'loading') return 'In flight';
+  return state === 'cancelled' ? 'Not completed' : 'Not loaded yet';
 }
 
 /**
@@ -315,12 +347,27 @@ export function summarizeSourceLoad(diagnostics: CatalogDiagnosticsLike): Source
   };
 }
 
+/** How often a summary's diagnostics should be re-fetched, or `false` to stop. */
+export type SourceLoadPollInterval = number | false;
+
+/** A load in flight moves quickly: state, waiter count, and eventually duration all change without any console action. */
+export const ACTIVE_SOURCE_POLL_MS = 2_000;
+
 /**
- * Whether a summary describes a load this console should keep polling. Only
- * `loading` is in flight — every other state is settled until an operator
- * (or a workflow start) triggers a new load, so polling them would be
- * pure noise.
+ * A settled dynamic source changes only when something ELSE starts a load —
+ * another operator's preload, or a workflow start resolving the source. Neither
+ * invalidates this console's cache, so a settled row left unpolled silently
+ * goes stale for as long as the page stays open. Slow enough to be background
+ * noise rather than a poll storm across a multi-revision panel.
  */
-export function isSourceLoadInFlight(summary: SourceLoadSummary): boolean {
-  return summary.kind === 'dynamic' && summary.state === 'loading';
+export const SETTLED_SOURCE_POLL_MS = 30_000;
+
+/**
+ * The poll interval for one summary. `false` only for a key with no dynamic
+ * source at all: nothing about it can change without a catalog write this
+ * console already invalidates on.
+ */
+export function sourceLoadPollInterval(summary: SourceLoadSummary): SourceLoadPollInterval {
+  if (summary.kind !== 'dynamic') return false;
+  return summary.state === 'loading' ? ACTIVE_SOURCE_POLL_MS : SETTLED_SOURCE_POLL_MS;
 }

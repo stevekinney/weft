@@ -77,9 +77,21 @@
   let lookup = $state<LookupKey | null>(null);
   let outcome = $state<PreloadOutcome | null>(null);
 
+  /**
+   * The name is trimmed; the revision deliberately is NOT.
+   *
+   * A workflow name has a grammar (`/^[A-Za-z_][A-Za-z0-9_-]*$/`) that excludes
+   * whitespace outright, so trimming it can only turn a guaranteed
+   * InvalidParams into a working lookup. A revision has no grammar at all —
+   * `registerSource()` and `validateWorkflowRevisionField()` both accept any
+   * non-empty, length-bounded string — so whitespace is part of the identity,
+   * and trimming would silently look up a DIFFERENT key. A revision registered
+   * as `" candidate "` would be unreachable from this panel, and the operator
+   * would be told `"candidate"` is not registered.
+   */
   const trimmedName = $derived(nameInput.trim());
-  const trimmedRevision = $derived(revisionInput.trim());
-  const canSubmit = $derived(trimmedName.length > 0 && trimmedRevision.length > 0);
+  const submittedRevision = $derived(revisionInput);
+  const canSubmit = $derived(trimmedName.length > 0 && submittedRevision.length > 0);
 
   /**
    * Whether the submitted lookup still matches what is typed in the inputs.
@@ -89,7 +101,7 @@
    * just typed.
    */
   const isStale = $derived(
-    lookup !== null && (lookup.name !== trimmedName || lookup.revision !== trimmedRevision),
+    lookup !== null && (lookup.name !== trimmedName || lookup.revision !== submittedRevision),
   );
 
   function submitLookup(event: SubmitEvent): void {
@@ -98,7 +110,7 @@
     // A new key's outcome has not happened yet; carrying the previous key's
     // banner across would attribute it to the wrong revision.
     outcome = null;
-    lookup = { name: trimmedName, revision: trimmedRevision };
+    lookup = { name: trimmedName, revision: submittedRevision };
   }
 
   function isWorkflowRevisionRecordLike(
@@ -197,6 +209,11 @@
 
   function runPreload(): void {
     if (lookup === null || preloadInFlightKey !== null) return;
+    // Retrying the SAME key would otherwise leave the previous attempt's
+    // banner standing for the whole new request, so a slow retry reads as
+    // having already produced the old result. Submitting a different lookup
+    // already clears it; a retry has exactly the same claim to.
+    outcome = null;
     preloadInFlightKey = { name: lookup.name, revision: lookup.revision };
     $preloadMutation.mutate(lookup);
   }

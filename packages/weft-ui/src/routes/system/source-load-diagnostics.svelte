@@ -42,8 +42,9 @@
   import QueryFaultBanner from './query-fault-banner.svelte';
   import {
     isCatalogDiagnosticsLike,
-    isSourceLoadInFlight,
+    sourceLoadPollInterval,
     summarizeSourceLoad,
+    type SourceLoadPollInterval,
     type SourceLoadSummary,
   } from './source-load-diagnostics-view.ts';
 
@@ -60,25 +61,25 @@
   const canRead = $derived(principal.hasScope('system:read'));
 
   /**
-   * While a load is in flight the interesting fields (`state`,
-   * `waiterCount`, and eventually `loadDurationMs`) change without any
-   * console action, so a `loading` result re-polls. Every settled state
-   * stops polling — nothing moves again until an operator preloads or a
-   * workflow start triggers a new load, and both of those invalidate this
-   * key explicitly.
+   * Poll cadence comes from `sourceLoadPollInterval` rather than being decided
+   * here: fast while a load is in flight, slow but NOT stopped once settled.
+   *
+   * Stopping at settled was wrong. A settled source still changes whenever
+   * something else starts a load — another operator's preload, or a workflow
+   * start resolving the source — and neither invalidates this console's cache.
+   * A row left unpolled would silently show `idle` for the rest of the session
+   * while the engine went `loading` and back.
    */
-  const POLL_INTERVAL_MS = 2_000;
-
   const diagnosticsQuery = createQuery(
     toStore(() => ({
       queryKey: queryKeys.catalog.diagnostics(workflowName, revision),
       queryFn: (): Promise<unknown> =>
         client.operations['weft.catalog.diagnostics']({ name: workflowName, revision }),
       enabled: canRead,
-      refetchInterval: (query: { state: { data: unknown } }): number | false => {
+      refetchInterval: (query: { state: { data: unknown } }): SourceLoadPollInterval => {
         const data = query.state.data;
         if (!isCatalogDiagnosticsLike(data)) return false;
-        return isSourceLoadInFlight(summarizeSourceLoad(data)) ? POLL_INTERVAL_MS : false;
+        return sourceLoadPollInterval(summarizeSourceLoad(data));
       },
     })),
   );
@@ -110,7 +111,14 @@
   {:else if summary.kind === 'not-dynamic'}
     <p class="weft-source-load__note">{summary.message}</p>
   {:else}
-    <div class="weft-source-load__state">
+    <!--
+      The load state IS the thing an operator is waiting on, and polling can
+      change it without any interaction, so it lives in a polite live region.
+      Scoped to this block deliberately: the sibling "Refreshing diagnostics…"
+      text is intentionally outside it, so a background poll that changes
+      nothing announces nothing, while idle -> loading -> ready/failed does.
+    -->
+    <div class="weft-source-load__state" role="status">
       {#if summary.tone === 'positive'}
         <CheckCircle2 aria-hidden="true" size={14} />
       {:else if summary.tone === 'progress'}

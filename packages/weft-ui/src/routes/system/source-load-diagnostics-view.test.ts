@@ -8,11 +8,13 @@
 import { describe, expect, it } from 'bun:test';
 
 import {
+  ACTIVE_SOURCE_POLL_MS,
   failureCategoryDescription,
   isCatalogDiagnosticsLike,
-  isSourceLoadInFlight,
   KNOWN_FAILURE_CATEGORIES,
   KNOWN_SOURCE_LOAD_STATES,
+  SETTLED_SOURCE_POLL_MS,
+  sourceLoadPollInterval,
   sourceLoadStateDescription,
   sourceLoadStateLabel,
   sourceLoadStateTone,
@@ -153,6 +155,21 @@ describe('summarizeSourceLoad', () => {
     if (summary.kind !== 'dynamic') throw new Error('expected dynamic');
     expect(summary.meta[2]?.value).toBe('Not loaded yet');
     expect(summary.tone).toBe('neutral');
+    // `idle` is also what an UNREGISTERED revision of a registered name
+    // reports, so the copy must not confirm the revision is registered.
+    expect(summary.stateDescription).toContain('No load has been recorded');
+    expect(summary.stateDescription).toContain('may not');
+  });
+
+  it('renders a cancelled attempt as not completed, never as never-started', () => {
+    const summary = summarizeSourceLoad(
+      diagnostics({ source: source({ state: 'cancelled', lastFailureCategory: 'cancellation' }) }),
+    );
+    if (summary.kind !== 'dynamic') throw new Error('expected dynamic');
+    // The engine's cancellation transition records no duration, so this row
+    // legitimately has none — but "Not loaded yet" would contradict the state.
+    expect(summary.meta[2]?.value).toBe('Not completed');
+    expect(summary.tone).toBe('attention');
   });
 
   it('renders an absent load duration as "In flight" while loading', () => {
@@ -174,7 +191,7 @@ describe('summarizeSourceLoad', () => {
     if (summary.kind !== 'dynamic') throw new Error('expected dynamic');
     expect(summary.tone).toBe('attention');
     expect(summary.lastFailureCategory).toBe('timeout');
-    expect(summary.lastFailureDescription).toBe('The load exceeded its time budget.');
+    expect(summary.lastFailureDescription).toBe('Execution exceeded a configured deadline.');
     expect(summary.meta[4]?.value).toBe('timeout');
   });
 
@@ -217,6 +234,17 @@ describe('label tables', () => {
     expect(failureCategoryDescription(category)).toBeDefined();
   });
 
+  it('states each category’s canonical meaning rather than a load-specific guess', () => {
+    // Regression guard: an earlier table read `resource` as "could not reach or
+    // read its source", which is neither what the category means nor how a load
+    // failure is classified — `source-diagnostics.ts` defaults every ordinary
+    // loader error to `application`.
+    expect(failureCategoryDescription('resource')).toContain('quota');
+    expect(failureCategoryDescription('resource')).not.toContain('source');
+    expect(failureCategoryDescription('application')).toContain('default classification');
+    expect(failureCategoryDescription('system')).toContain('infrastructure');
+  });
+
   it('falls back honestly for unrecognized values', () => {
     expect(sourceLoadStateLabel('warp')).toBe('warp');
     expect(sourceLoadStateDescription('warp')).toBeUndefined();
@@ -225,22 +253,29 @@ describe('label tables', () => {
   });
 });
 
-describe('isSourceLoadInFlight', () => {
-  it('is true only for a dynamic source that is actively loading', () => {
+describe('sourceLoadPollInterval', () => {
+  it('polls a load in flight at the fast cadence', () => {
     expect(
-      isSourceLoadInFlight(
+      sourceLoadPollInterval(
         summarizeSourceLoad(diagnostics({ source: source({ state: 'loading' }) })),
       ),
-    ).toBe(true);
+    ).toBe(ACTIVE_SOURCE_POLL_MS);
   });
 
-  it.each(['idle', 'ready', 'failed', 'cancelled'])('is false for the %s state', (state) => {
-    expect(
-      isSourceLoadInFlight(summarizeSourceLoad(diagnostics({ source: source({ state }) }))),
-    ).toBe(false);
+  it.each(['idle', 'ready', 'failed', 'cancelled'])(
+    'keeps polling the settled %s state, slowly — another caller can start a load this console never invalidates for',
+    (state) => {
+      expect(
+        sourceLoadPollInterval(summarizeSourceLoad(diagnostics({ source: source({ state }) }))),
+      ).toBe(SETTLED_SOURCE_POLL_MS);
+    },
+  );
+
+  it('stops entirely when there is no dynamic source to watch', () => {
+    expect(sourceLoadPollInterval(summarizeSourceLoad(diagnostics()))).toBe(false);
   });
 
-  it('is false when there is no dynamic source at all', () => {
-    expect(isSourceLoadInFlight(summarizeSourceLoad(diagnostics()))).toBe(false);
+  it('polls a settled source far less often than one in flight', () => {
+    expect(SETTLED_SOURCE_POLL_MS).toBeGreaterThan(ACTIVE_SOURCE_POLL_MS);
   });
 });

@@ -43,7 +43,7 @@
  */
 import { HttpClientError } from '@lostgradient/weft/client';
 
-import { compatibilityReasonLabel, KNOWN_COMPATIBILITY_REASONS } from './compatibility-verdict.ts';
+import { KNOWN_COMPATIBILITY_REASONS } from './compatibility-verdict.ts';
 
 /**
  * Every `data.reason` a preload `Conflict` can carry. Sourced from
@@ -93,36 +93,52 @@ export const KNOWN_SOURCE_REJECTION_REASONS = [
   ...KNOWN_COMPATIBILITY_REASONS,
 ] as const;
 
-type KnownSourceStructuralReason =
-  | 'unregistered-source-kind'
-  | 'missing-export'
-  | 'ambiguous-export'
-  | 'invalid-definition'
-  | 'manifest-build-failed';
+type KnownSourceRejectionReason = (typeof KNOWN_SOURCE_REJECTION_REASONS)[number];
 
-const SOURCE_STRUCTURAL_REASON_LABELS: Readonly<Record<KnownSourceStructuralReason, string>> = {
+/**
+ * Labels for every source-rejection reason, INCLUDING the five shared with
+ * `WorkflowCompatibilityReason` — which is why this table does not defer to
+ * `compatibilityReasonLabel()` for them.
+ *
+ * The two contexts compare different things. Activation compares a candidate
+ * against the catalog's currently active revision, and
+ * `compatibilityReasonLabel()`'s copy says so. Source validation
+ * (`validateResolvedWorkflowSource()`) compares the LOADED ARTIFACT against
+ * the synthetic expected manifest built from the `registerSource()`
+ * descriptor; it never consults the active pointer at all. Reusing the
+ * activation copy here pointed the operator's remediation at an unrelated
+ * revision — the descriptor or the artifact is what they need to look at.
+ */
+const SOURCE_REJECTION_REASON_LABELS: Readonly<Record<KnownSourceRejectionReason, string>> = {
   'unregistered-source-kind': 'The descriptor names a source kind this engine cannot load.',
   'missing-export': 'The module does not export the name the descriptor points at.',
   'ambiguous-export': 'The module exports more than one candidate workflow definition.',
   'invalid-definition': 'The export is not a builder-produced workflow definition.',
   'manifest-build-failed': 'A revision manifest could not be built from the loaded contract.',
+  'name-mismatch': 'The loaded workflow is named differently from the descriptor.',
+  'manifest-version-unsupported':
+    'The loaded artifact uses a manifest schema version this engine does not support.',
+  'contract-hash-mismatch':
+    'The loaded artifact’s contract does not match the contractHash the descriptor pins.',
+  'workflow-version-incompatible':
+    'The loaded workflow’s version does not match the workflowVersion the descriptor pins.',
+  'artifact-revision-mismatch':
+    'The loaded artifact derives a different revision from the one the descriptor names. A revision is a content identity, so the descriptor must name the revision the module actually produces.',
 };
 
-function isKnownStructuralReason(value: string): value is KnownSourceStructuralReason {
-  return value in SOURCE_STRUCTURAL_REASON_LABELS;
+function isKnownSourceRejectionReason(value: string): value is KnownSourceRejectionReason {
+  return value in SOURCE_REJECTION_REASON_LABELS;
 }
 
 /**
- * Human-readable label for one source-rejection reason. Structural reasons
- * are labelled here; the five compatibility reasons defer to
- * `compatibilityReasonLabel`, which already owns them. An unrecognized
+ * Human-readable label for one source-rejection reason. An unrecognized
  * string renders honestly as `"unknown reason: <value>"` rather than a
  * fabricated label.
  */
 export function sourceRejectionReasonLabel(reason: string): string {
-  return isKnownStructuralReason(reason)
-    ? SOURCE_STRUCTURAL_REASON_LABELS[reason]
-    : compatibilityReasonLabel(reason);
+  return isKnownSourceRejectionReason(reason)
+    ? SOURCE_REJECTION_REASON_LABELS[reason]
+    : `unknown reason: ${reason}`;
 }
 
 function isKnownConflictReason(value: string): value is KnownPreloadConflictReason {

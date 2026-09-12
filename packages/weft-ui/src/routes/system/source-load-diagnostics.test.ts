@@ -140,7 +140,8 @@ describe('SourceLoadDiagnostics', () => {
 
     expect(await findByText('Load state: Failed')).not.toBeNull();
     expect(await findByText(/Last failure category:/)).not.toBeNull();
-    expect(await findByText(/could not reach or read its source/)).not.toBeNull();
+    // The category's canonical meaning, not a load-specific gloss on it.
+    expect(await findByText(/quota, memory, disk, or capacity limit/)).not.toBeNull();
   });
 
   test('renders a cancelled load as a first-class state', async () => {
