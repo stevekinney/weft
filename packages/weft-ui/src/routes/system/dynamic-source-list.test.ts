@@ -6,9 +6,9 @@
 import { fireEvent, render } from '@testing-library/svelte';
 import { afterEach, describe, expect, test } from 'bun:test';
 
-import { createQueryClient } from '../../lib/query.ts';
+import { createQueryClient, queryKeys } from '../../lib/query.ts';
 import DynamicSourceListHarness from './dynamic-source-list-fixture.test-harness.svelte';
-import { isCatalogSourceListPage } from './dynamic-source-list.svelte';
+import { isCatalogSourceListPage, type CatalogSourceListEntry } from './dynamic-source-list.svelte';
 import DynamicSourcePanel from './dynamic-source-panel.svelte';
 import SystemRouteTestHarness from './system-route-test-harness.test-harness.svelte';
 import { realClient, ScriptedFetch } from './system-test-support.test-support.ts';
@@ -33,7 +33,7 @@ function idleDiagnostics() {
 }
 
 function sourceList(
-  sources = [
+  sources: readonly CatalogSourceListEntry[] = [
     { name: NAME, revision: REVISION, kind: 'module' as const, state: 'idle' as const },
     { name: NAME, revision: SECOND_REVISION, kind: 'module' as const, state: 'ready' as const },
   ],
@@ -60,17 +60,38 @@ async function renderPanel(options?: {
 async function renderSourceList(options?: {
   readonly selectedKey?: { readonly name: string; readonly revision: string } | null;
   readonly sourcePage?: unknown;
+  readonly queryClient?: ReturnType<typeof createQueryClient>;
+  readonly onSelect?: () => void;
 }) {
-  const { selectedKey = null, sourcePage = sourceList() } = options ?? {};
+  const {
+    selectedKey = null,
+    sourcePage = sourceList(),
+    queryClient = createQueryClient(),
+    onSelect = () => {},
+  } = options ?? {};
   scripted?.routeJsonRpcMethod(SOURCES_LIST, sourcePage);
   return render(DynamicSourceListHarness, {
     props: {
       client: realClient(),
-      queryClient: createQueryClient(),
+      queryClient,
       selectedKey,
-      onSelect: () => {},
+      onSelect,
     },
   });
+}
+
+function evaluateSourceListRefetchInterval(
+  queryClient: ReturnType<typeof createQueryClient>,
+): unknown {
+  const query = queryClient.getQueryCache().find({
+    queryKey: queryKeys.catalog.sources({ limit: 10, offset: 0 }),
+    exact: true,
+  });
+  if (query === undefined) throw new Error('Source list query was not mounted');
+  const observer = query.observers[0];
+  if (observer === undefined) throw new Error('Source list observer was not mounted');
+  const interval = observer.options.refetchInterval;
+  return typeof interval === 'function' ? interval(query) : interval;
 }
 
 let scripted: ScriptedFetch | undefined;
@@ -165,6 +186,70 @@ describe('DynamicSourcePanel source list', () => {
       (call) => typeof call.init?.body === 'string' && call.init.body.includes(SOURCES_LIST),
     );
     expect(listCalls).toHaveLength(1);
+  });
+
+  test('polls source-list state slowly when every listed source is settled', async () => {
+    scripted = new ScriptedFetch();
+    const queryClient = createQueryClient();
+    const { findByText } = await renderSourceList({ queryClient });
+
+    await findByText(JSON.stringify(REVISION));
+
+    expect(evaluateSourceListRefetchInterval(queryClient)).toBe(30_000);
+  });
+
+  test('polls source-list state quickly while any listed source is loading', async () => {
+    scripted = new ScriptedFetch();
+    const queryClient = createQueryClient();
+    const { findByText } = await renderSourceList({
+      queryClient,
+      sourcePage: sourceList([
+        { name: NAME, revision: REVISION, kind: 'module', state: 'loading' },
+      ]),
+    });
+
+    await findByText(JSON.stringify(REVISION));
+
+    expect(evaluateSourceListRefetchInterval(queryClient)).toBe(2_000);
+  });
+
+  test('hides stale previous-page rows while the next source page is loading', async () => {
+    scripted = new ScriptedFetch();
+    scripted.enqueueJsonRpcResult(
+      sourceList([{ name: NAME, revision: REVISION, kind: 'module', state: 'idle' }], 10),
+    );
+    const { getByRole, findByText, queryByText, queryByTitle } = await renderPanel({
+      routeSourceList: false,
+    });
+
+    await findByText(JSON.stringify(REVISION));
+
+    let releaseNextPage!: () => void;
+    const nextPage = new Promise<void>((resolve) => {
+      releaseNextPage = resolve;
+    });
+    scripted.routeJsonRpcDeferred(
+      SOURCES_LIST,
+      nextPage.then(() => ({
+        sources: [{ name: 'zeta', revision: 'r9', kind: 'module', state: 'idle' }],
+      })),
+    );
+
+    await fireEvent.click(getByRole('button', { name: 'Next' }));
+
+    const staleSelect = queryByTitle(`Select ${NAME} at revision ${JSON.stringify(REVISION)}`);
+    const loadingText = queryByText('Loading sources…');
+    const previousDisabled = (getByRole('button', { name: 'Previous' }) as HTMLButtonElement)
+      .disabled;
+    const nextDisabled = (getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled;
+
+    releaseNextPage();
+    expect(await findByText('"r9"')).not.toBeNull();
+
+    expect(staleSelect).toBeNull();
+    expect(loadingText).not.toBeNull();
+    expect(previousDisabled).toBe(true);
+    expect(nextDisabled).toBe(true);
   });
 
   test('loads the next source page using the server continuation offset', async () => {

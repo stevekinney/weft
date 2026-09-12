@@ -65,6 +65,7 @@
   import { queryKeys } from '../../lib/query.ts';
   import { getPrincipalStore, isForbidden, isUnauthorized } from '../../lib/scopes.svelte.ts';
   import QueryFaultBanner from './query-fault-banner.svelte';
+  import { ACTIVE_SOURCE_POLL_MS, SETTLED_SOURCE_POLL_MS } from './source-load-diagnostics-view.ts';
 
   type Props = {
     readonly selectedKey: { readonly name: string; readonly revision: string } | null;
@@ -99,6 +100,15 @@
           }
         },
         enabled: canRead,
+        // Other operators and workflow starts can change source state without
+        // invalidating this console's cache, including after a load settles.
+        refetchInterval: (query: { state: { data: CatalogSourceListPage | undefined } }) => {
+          const page = query.state.data;
+          if (page === undefined) return false;
+          return page.sources.some((source) => source.state === 'loading')
+            ? ACTIVE_SOURCE_POLL_MS
+            : SETTLED_SOURCE_POLL_MS;
+        },
       };
     }),
   );
@@ -137,7 +147,7 @@
         size="sm"
         variant="secondary"
         label="Previous"
-        disabled={!canGoBack || $sourcesQuery.isPending}
+        disabled={!canGoBack || $sourcesQuery.isPending || $sourcesQuery.isPlaceholderData}
         onclick={previousPage}
       />
       <span class="weft-source-list__note">Page {currentPage}</span>
@@ -146,7 +156,7 @@
         size="sm"
         variant="secondary"
         label="Next"
-        disabled={!canGoForward || $sourcesQuery.isPending}
+        disabled={!canGoForward || $sourcesQuery.isPending || $sourcesQuery.isPlaceholderData}
         onclick={nextPage}
       />
     </div>
@@ -154,7 +164,7 @@
 
   {#if !canRead}
     <p class="weft-source-list__note">Requires system:read to list registered sources.</p>
-  {:else if $sourcesQuery.isPending}
+  {:else if $sourcesQuery.isPending || $sourcesQuery.isPlaceholderData}
     <p class="weft-source-list__note" role="status" aria-busy="true">Loading sources…</p>
   {:else if $sourcesQuery.isError}
     <QueryFaultBanner error={$sourcesQuery.error} onRetry={() => $sourcesQuery.refetch()} />
