@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 
 import { BunSQLiteStorage } from '../storage/bun-sql.ts';
-import type { BatchOperation } from '../storage/interface.ts';
+import type { BatchOperation, ConditionalBatchCondition } from '../storage/interface.ts';
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { serializeCheckpoint } from './checkpoint.ts';
@@ -50,11 +50,64 @@ class FailingMemoryStorage extends MemoryStorage {
   override async batch(_operations: BatchOperation[]): Promise<void> {
     throw new Error('storage refused the prune batch');
   }
+  override async conditionalBatch(
+    _conditions: ConditionalBatchCondition[],
+    _operations: BatchOperation[],
+  ): Promise<boolean> {
+    throw new Error('storage refused the prune batch');
+  }
 }
 
 class FailingBunSQLiteStorage extends BunSQLiteStorage {
   override async batch(_operations: BatchOperation[]): Promise<void> {
     throw new Error('storage refused the prune batch');
+  }
+  override async conditionalBatch(
+    _conditions: ConditionalBatchCondition[],
+    _operations: BatchOperation[],
+  ): Promise<boolean> {
+    throw new Error('storage refused the prune batch');
+  }
+}
+
+/**
+ * Simulates a concurrent `onTerminalConflict: 'start-new'` run replacement
+ * landing between `pruneCheckpoints()`'s anchor read of the live checkpoint
+ * and its destructive batch: the first `get()` of `targetKey` (the anchor
+ * read) is answered honestly, then the stored value is overwritten in place
+ * before the read even returns, standing in for the replacement's own write.
+ */
+class ReplacementRaceMemoryStorage extends MemoryStorage {
+  #targetKey: string;
+  #triggered = false;
+  constructor(targetKey: string) {
+    super();
+    this.#targetKey = targetKey;
+  }
+  override async get(key: string): Promise<Uint8Array | null> {
+    const value = await super.get(key);
+    if (key === this.#targetKey && !this.#triggered) {
+      this.#triggered = true;
+      await super.put(this.#targetKey, new Uint8Array([9, 9, 9]));
+    }
+    return value;
+  }
+}
+
+class ReplacementRaceBunSQLiteStorage extends BunSQLiteStorage {
+  #targetKey: string;
+  #triggered = false;
+  constructor(targetKey: string) {
+    super(':memory:');
+    this.#targetKey = targetKey;
+  }
+  override async get(key: string): Promise<Uint8Array | null> {
+    const value = await super.get(key);
+    if (key === this.#targetKey && !this.#triggered) {
+      this.#triggered = true;
+      await super.put(this.#targetKey, new Uint8Array([9, 9, 9]));
+    }
+    return value;
   }
 }
 
@@ -178,6 +231,33 @@ describe('Engine.pruneCheckpoints', () => {
         );
         // The rejected batch never committed — all three entries remain.
         expect(await listHistorySteps(storage, 'wf-1')).toEqual([1, 2, 3]);
+      });
+
+      it('fences the destructive batch against a concurrent run replacement', async () => {
+        const liveCheckpointKey = KEYS.checkpoint('wf-1');
+        const storage =
+          name === 'MemoryStorage'
+            ? new ReplacementRaceMemoryStorage(liveCheckpointKey)
+            : new ReplacementRaceBunSQLiteStorage(liveCheckpointKey);
+        for (const step of [1, 2, 3]) {
+          await writeCheckpointHistory(storage, 'wf-1', step);
+        }
+        await storage.put(liveCheckpointKey, new Uint8Array([1, 2, 3]));
+
+        engine = new Engine({ storage, checkpointHistory: 10 });
+        engine.register(
+          workflow({ name: 'noop' }).execute(async function* () {
+            return null;
+          }),
+        );
+
+        await expect(engine.pruneCheckpoints('wf-1', { keepLast: 1 })).rejects.toThrow(
+          'lost its CAS race',
+        );
+        // The replacement's rewritten checkpoint bytes failed the fence before
+        // any history entry was deleted.
+        expect(await listHistorySteps(storage, 'wf-1')).toEqual([1, 2, 3]);
+        expect(await storage.get(liveCheckpointKey)).toEqual(new Uint8Array([9, 9, 9]));
       });
 
       it('rejects and deletes nothing when the signal is already aborted', async () => {
