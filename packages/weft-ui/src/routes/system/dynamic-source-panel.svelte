@@ -287,8 +287,11 @@
           onclick={runPreload}
         />
         <span class="weft-dynamic-source__note">
-          Loads, validates, and installs this revision into the durable catalog. Weft runs one load
-          per key and shares it with every waiting caller; it cannot be cancelled from here.
+          Makes sure this revision is installed in the durable catalog. If it already is — another
+          process installed it, or this one did before restarting — Weft returns the existing entry
+          without loading the module, so the load state above can stay Idle on a successful preload.
+          Otherwise Weft loads and validates it, running one load per key and sharing it with every
+          waiting caller; it cannot be cancelled from here.
         </span>
       </div>
 
@@ -296,7 +299,11 @@
         {#if outcome.kind === 'installed'}
           <p class="weft-dynamic-source__outcome weft-dynamic-source__outcome--ok" role="status">
             <CheckCircle2 aria-hidden="true" size={16} />
-            <span>Installed revision "{outcome.revision}" into the workflow catalog.</span>
+            <span>
+              Revision "{outcome.revision}" is installed in the workflow catalog. A Load state of
+              Idle above means Weft satisfied this from the existing catalog entry rather than
+              loading the module.
+            </span>
           </p>
         {:else if outcome.kind === 'rejected'}
           <div class="weft-dynamic-source__outcome weft-dynamic-source__outcome--bad" role="alert">

@@ -5,10 +5,18 @@
    * fields WFT-16 exposes: source kind, requested revision, load state,
    * load duration, waiter count, and last failure category.
    *
-   * Mounted from two places, which is why the query lives here rather than
-   * in either caller: once per installed revision inside
-   * `<WorkflowRevisionsPanel>`, and once against the submitted key inside
-   * `<DynamicSourcePanel>`.
+   * Mounted from exactly one place: `<DynamicSourcePanel>`, against the key an
+   * operator submitted.
+   *
+   * It is deliberately NOT mounted per installed revision in
+   * `<WorkflowRevisionsPanel>`, which an earlier revision of this work did.
+   * Every row that panel can show is an eager registration — the Registry table
+   * is built from `internals.registrations`, and `registerSource()` refuses a
+   * name already registered there — so a per-row query could only ever return
+   * "no dynamic source". It is not free, either: `weft.catalog.diagnostics`
+   * runs `countWorkflowRevisionReferences()`, which scans workflow states,
+   * pinned schedules, and teardown dead-letters, so opening a multi-revision
+   * detail view fired that scan set once per row for a constant answer.
    *
    * ## Scope
    *
@@ -38,7 +46,7 @@
 
   import { getClient } from '../../lib/client.ts';
   import { queryKeys } from '../../lib/query.ts';
-  import { getPrincipalStore } from '../../lib/scopes.svelte.ts';
+  import { getPrincipalStore, isForbidden } from '../../lib/scopes.svelte.ts';
   import QueryFaultBanner from './query-fault-banner.svelte';
   import {
     isCatalogDiagnosticsLike,
@@ -73,11 +81,31 @@
   const diagnosticsQuery = createQuery(
     toStore(() => ({
       queryKey: queryKeys.catalog.diagnostics(workflowName, revision),
-      queryFn: (): Promise<unknown> =>
-        client.operations['weft.catalog.diagnostics']({ name: workflowName, revision }),
+      queryFn: async (): Promise<unknown> => {
+        try {
+          return await client.operations['weft.catalog.diagnostics']({
+            name: workflowName,
+            revision,
+          });
+        } catch (error) {
+          // The repository's runtime-degrade path (`scopes.svelte.ts`), which
+          // this query needs more than most: it polls. A scope revoked
+          // server-side mid-session would otherwise 403 forever on a 2s or 30s
+          // timer — TanStack Query keeps the last good data, so the data-driven
+          // interval stays armed — while showing a fault banner instead of the
+          // honest "requires system:read" state. Revoking locally flips
+          // `canRead`, which disables the query outright.
+          if (isForbidden(error)) principal.denyScope('system:read');
+          throw error;
+        }
+      },
       enabled: canRead,
-      refetchInterval: (query: { state: { data: unknown } }): SourceLoadPollInterval => {
+      refetchInterval: (query: { state: { data: unknown } }): SourceLoadPollInterval | false => {
         const data = query.state.data;
+        // A malformed response is the one case worth stopping for: re-polling
+        // cannot reinterpret bytes this build already failed to recognize, and
+        // the rendered state says so explicitly. Every recognized state keeps
+        // polling — see `sourceLoadPollInterval`.
         if (!isCatalogDiagnosticsLike(data)) return false;
         return sourceLoadPollInterval(summarizeSourceLoad(data));
       },

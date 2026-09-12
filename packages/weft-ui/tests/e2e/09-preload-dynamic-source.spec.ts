@@ -67,10 +67,13 @@ test('operator preloads an idle dynamic source revision and watches it reach rea
 
   await panel.getByRole('button', { name: 'Preload' }).click();
 
-  await expect(panel.getByText(/Installed revision/)).toBeVisible();
-  // The invalidated diagnostics query refetches, so the state moves without
-  // a manual refresh, and the duration is now a real measured value rather
-  // than the "Not loaded yet" placeholder an idle source shows.
+  await expect(panel.getByText(/is installed in the workflow catalog/)).toBeVisible();
+  // The invalidated diagnostics query refetches, so the state moves without a
+  // manual refresh, and the duration is now a real measured value rather than
+  // the "Not loaded yet" placeholder an idle source shows. Reaching Ready here
+  // also proves Weft actually loaded the module rather than satisfying the
+  // preload from an existing catalog entry — the banner names that second
+  // possibility precisely because it cannot be assumed.
   await expect(panel.getByText('Load state: Ready')).toBeVisible();
   await expect(panel.getByText('Not loaded yet')).toHaveCount(0);
 

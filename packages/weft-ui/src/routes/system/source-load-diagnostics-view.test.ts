@@ -161,15 +161,26 @@ describe('summarizeSourceLoad', () => {
     expect(summary.stateDescription).toContain('may not');
   });
 
-  it('renders a cancelled attempt as not completed, never as never-started', () => {
+  it('renders a cancelled attempt as duration-not-recorded, never as never-started', () => {
     const summary = summarizeSourceLoad(
       diagnostics({ source: source({ state: 'cancelled', lastFailureCategory: 'cancellation' }) }),
     );
     if (summary.kind !== 'dynamic') throw new Error('expected dynamic');
     // The engine's cancellation transition records no duration, so this row
     // legitimately has none — but "Not loaded yet" would contradict the state.
-    expect(summary.meta[2]?.value).toBe('Not completed');
+    expect(summary.meta[2]?.value).toBe('Not recorded');
     expect(summary.tone).toBe('attention');
+  });
+
+  it('says a cancelled load may still be running, because Weft leaves it running', () => {
+    const summary = summarizeSourceLoad(diagnostics({ source: source({ state: 'cancelled' }) }));
+    if (summary.kind !== 'dynamic') throw new Error('expected dynamic');
+    // `cancelled` means every WAITER released, not that the load stopped:
+    // `source-resolution.ts` deliberately lets the shared load run on, and it
+    // can still install. Copy that said "cancelled before it finished" claimed
+    // the work stopped.
+    expect(summary.stateDescription).toContain('may still be running');
+    expect(summary.stateDescription).not.toContain('before it finished');
   });
 
   it('renders an absent load duration as "In flight" while loading', () => {
@@ -271,8 +282,11 @@ describe('sourceLoadPollInterval', () => {
     },
   );
 
-  it('stops entirely when there is no dynamic source to watch', () => {
-    expect(sourceLoadPollInterval(summarizeSourceLoad(diagnostics()))).toBe(false);
+  it('keeps polling a name with no dynamic source — registerSource() can add one at any time', () => {
+    // `registerSource()` is synchronous and in-memory: it writes nothing to the
+    // catalog, so there is no write for this console to observe. A lookup that
+    // ran first would otherwise read "no dynamic source" for the whole session.
+    expect(sourceLoadPollInterval(summarizeSourceLoad(diagnostics()))).toBe(SETTLED_SOURCE_POLL_MS);
   });
 
   it('polls a settled source far less often than one in flight', () => {

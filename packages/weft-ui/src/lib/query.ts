@@ -82,8 +82,6 @@ export const queryKeys = {
      */
     diagnostics: (name: string, revision: string) =>
       ['catalog', 'diagnostics', name, revision] as const,
-    /** The prefix covering every revision's diagnostics for one workflow name — for invalidation, never as a `queryKey`. */
-    diagnosticsForWorkflow: (name: string) => ['catalog', 'diagnostics', name] as const,
   },
 } as const;
 

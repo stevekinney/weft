@@ -159,7 +159,7 @@ describe('SourceLoadDiagnostics', () => {
     const { findByText } = await renderDiagnostics();
 
     expect(await findByText('Load state: Cancelled')).not.toBeNull();
-    expect(await findByText(/cancelled before it finished/)).not.toBeNull();
+    expect(await findByText(/may still be running/)).not.toBeNull();
   });
 
   test('states that an installed revision has no dynamic source, without claiming how it was registered', async () => {
@@ -191,13 +191,32 @@ describe('SourceLoadDiagnostics', () => {
 
   test('renders a server fault through the shared fault banner', async () => {
     scripted = new ScriptedFetch();
+    // A non-retryable fault that is NOT Forbidden: `EngineFailure` would still
+    // be inside `shouldRetryQuery`'s backoff at assertion time, and `Forbidden`
+    // now degrades to the denied state instead (see the next test).
+    scripted.routeJsonRpcError(OPERATION, {
+      code: -32602,
+      message: 'Field "revision" must be a non-empty string',
+      data: { httpStatus: 400, weftCode: 'InvalidParams' },
+    });
+    const { findByRole } = await renderDiagnostics();
+
+    expect(await findByRole('alert')).not.toBeNull();
+  });
+
+  test('degrades to the denied state when system:read is revoked mid-session', async () => {
+    // A 403 on a POLLING query must revoke the local scope rather than render a
+    // fault banner and keep polling: TanStack Query keeps the last good data,
+    // so the data-driven interval would stay armed and re-issue a denied
+    // request every 2 or 30 seconds forever.
+    scripted = new ScriptedFetch();
     scripted.routeJsonRpcError(OPERATION, {
       code: -32000,
       message: 'forbidden',
       data: { httpStatus: 403, weftCode: 'Forbidden' },
     });
-    const { findByRole } = await renderDiagnostics();
+    const { findByText } = await renderDiagnostics();
 
-    expect(await findByRole('alert')).not.toBeNull();
+    expect(await findByText('Requires system:read to view load diagnostics.')).not.toBeNull();
   });
 });

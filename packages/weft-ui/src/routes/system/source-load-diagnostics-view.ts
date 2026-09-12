@@ -140,7 +140,14 @@ const SOURCE_LOAD_STATE_DESCRIPTIONS: Readonly<Record<KnownSourceLoadState, stri
   loading: 'A load is in flight in the serving engine right now.',
   ready: 'Loaded, validated, and installed in the workflow catalog.',
   failed: 'The last load attempt failed. See the failure category below.',
-  cancelled: 'The last load attempt was cancelled before it finished.',
+  // NOT "the load stopped". `endSourceWaiterAndCheckCancellation()` flips this
+  // state when the LAST waiting caller releases (an abort, or engine disposal);
+  // `source-resolution.ts` deliberately leaves the shared load running, and it
+  // can still finish and install the revision while the state reads
+  // `cancelled`. Saying the attempt was cancelled would tell an operator work
+  // stopped when it may be executing right now — or may already have committed.
+  cancelled:
+    'Every caller waiting on this load went away. The load itself may still be running, and may still install this revision.',
 };
 
 /**
@@ -264,7 +271,9 @@ export type SourceLoadSummary =
 function loadDurationValue(state: string, loadDurationMs: number | undefined): string {
   if (loadDurationMs !== undefined) return formatDuration(loadDurationMs);
   if (state === 'loading') return 'In flight';
-  return state === 'cancelled' ? 'Not completed' : 'Not loaded yet';
+  // `cancelled` records no duration but is NOT "never started" — see the state
+  // description for why the underlying load may still be running.
+  return state === 'cancelled' ? 'Not recorded' : 'Not loaded yet';
 }
 
 /**
@@ -347,27 +356,33 @@ export function summarizeSourceLoad(diagnostics: CatalogDiagnosticsLike): Source
   };
 }
 
-/** How often a summary's diagnostics should be re-fetched, or `false` to stop. */
-export type SourceLoadPollInterval = number | false;
+/** How often a summary's diagnostics should be re-fetched. */
+export type SourceLoadPollInterval = number;
 
 /** A load in flight moves quickly: state, waiter count, and eventually duration all change without any console action. */
 export const ACTIVE_SOURCE_POLL_MS = 2_000;
 
 /**
- * A settled dynamic source changes only when something ELSE starts a load —
- * another operator's preload, or a workflow start resolving the source. Neither
- * invalidates this console's cache, so a settled row left unpolled silently
- * goes stale for as long as the page stays open. Slow enough to be background
- * noise rather than a poll storm across a multi-revision panel.
+ * Everything that is not a load in flight. Slow enough to be background noise,
+ * but never off.
+ *
+ * Off was wrong for BOTH settled states and the no-source state, for the same
+ * underlying reason: nothing that changes them invalidates this console's
+ * cache. A settled source moves when another operator preloads or a workflow
+ * start resolves it. A `not-dynamic` answer stops being true the moment the
+ * host calls `engine.registerSource()` — which is synchronous, in-memory, and
+ * writes nothing to the catalog, so there is no write for this console to
+ * observe. A lookup that happened to run first would otherwise read "no dynamic
+ * source" for the rest of the session while the engine loaded it.
  */
 export const SETTLED_SOURCE_POLL_MS = 30_000;
 
 /**
- * The poll interval for one summary. `false` only for a key with no dynamic
- * source at all: nothing about it can change without a catalog write this
- * console already invalidates on.
+ * The poll interval for one summary. Always a number: see
+ * {@link SETTLED_SOURCE_POLL_MS} for why no state is safe to stop watching.
  */
 export function sourceLoadPollInterval(summary: SourceLoadSummary): SourceLoadPollInterval {
-  if (summary.kind !== 'dynamic') return false;
-  return summary.state === 'loading' ? ACTIVE_SOURCE_POLL_MS : SETTLED_SOURCE_POLL_MS;
+  return summary.kind === 'dynamic' && summary.state === 'loading'
+    ? ACTIVE_SOURCE_POLL_MS
+    : SETTLED_SOURCE_POLL_MS;
 }

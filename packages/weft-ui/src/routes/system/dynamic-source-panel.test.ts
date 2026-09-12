@@ -130,7 +130,7 @@ describe('DynamicSourcePanel', () => {
     await findByText('Load state: Idle');
     await fireEvent.click(getByRole('button', { name: 'Preload' }));
 
-    expect(await findByText(new RegExp(`Installed revision "${REVISION}"`))).not.toBeNull();
+    expect(await findByText(/is installed in the workflow catalog/)).not.toBeNull();
     // The diagnostics key is invalidated on every settled outcome, so the
     // operation is called again after the mutation resolves.
     await waitFor(() => {
@@ -158,7 +158,7 @@ describe('DynamicSourcePanel', () => {
     await fireEvent.click(button);
     await fireEvent.click(button);
 
-    await findByText(new RegExp(`Installed revision "${REVISION}"`));
+    await findByText(/is installed in the workflow catalog/);
     const preloadCalls = scripted.calls.filter(
       (call) => typeof call.init?.body === 'string' && call.init.body.includes(PRELOAD),
     );
@@ -310,7 +310,7 @@ describe('DynamicSourcePanel', () => {
     });
 
     // The settled outcome belongs to the FIRST key, which is no longer shown.
-    expect(queryByText(new RegExp(`Installed revision "${REVISION}"`))).toBeNull();
+    expect(queryByText(/is installed in the workflow catalog/)).toBeNull();
   });
 
   test('clears a previous outcome when a different key is inspected', async () => {
