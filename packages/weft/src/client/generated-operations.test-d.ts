@@ -99,3 +99,13 @@ void _finalizerError;
 // `null` remains part of the union — the `anyOf` sibling must not be dropped.
 const _finalizerNullable: FinalizerState = null;
 void _finalizerNullable;
+
+// Source enumeration accepts omitted pagination and preserves its bounded projection.
+void operations['weft.catalog.sources.list']({});
+void operations['weft.catalog.sources.list']({ limit: 10, offset: 20 });
+type SourcePage = Awaited<ReturnType<(typeof operations)['weft.catalog.sources.list']>>;
+declare const sourceEntry: SourcePage['sources'][number];
+const sourceState: 'idle' | 'loading' | 'ready' | 'failed' | 'cancelled' = sourceEntry.state;
+void sourceState;
+// @ts-expect-error Source enumeration never exposes a module location.
+void sourceEntry.location;

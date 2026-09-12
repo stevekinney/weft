@@ -23,7 +23,7 @@
  * suite needs to touch `<ApiKeyEntry>` itself; that surface is a Cinder
  * component-test concern (`src/app/auth/*.test.ts`), not this suite's.
  */
-import AxeBuilder from '@axe-core/playwright';
+import PlaywrightAxeBuilder from '@axe-core/playwright';
 import { test as base, expect, type Page } from '@playwright/test';
 
 import { E2E_API_KEY } from './e2e-constants.ts';
@@ -178,7 +178,7 @@ async function waitForPaintSettle(page: Page): Promise<void> {
 async function assertNoSeriousAxeViolations(page: Page, screenLabel: string): Promise<void> {
   await waitForAnimationsToFinish(page);
   await waitForPaintSettle(page);
-  const results = await new AxeBuilder({ page }).analyze();
+  const results = await new PlaywrightAxeBuilder({ page }).analyze();
   const blocking = results.violations.filter(
     (violation) => violation.impact === 'serious' || violation.impact === 'critical',
   );

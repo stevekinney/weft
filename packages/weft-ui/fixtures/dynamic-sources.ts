@@ -51,9 +51,10 @@
  *
  * `weft.system.registry` is built from `internals.registrations`, which a
  * dynamic source never enters — not even after a preload installs a revision
- * durably. `invoice-reconciliation` is therefore reachable only through the
- * console's Dynamic workflow sources panel, which is why that panel exists.
- * Filed upstream as WFT-165.
+ * durably. `invoice-reconciliation` is therefore reached through the
+ * console's Dynamic workflow sources panel: `weft.catalog.sources.list`
+ * offers selectable source rows, while exact diagnostics/preload calls still
+ * answer for one `(name, revision)` key at a time.
  */
 import { workflowSource, type WorkflowSourceHandle } from '@lostgradient/weft';
 

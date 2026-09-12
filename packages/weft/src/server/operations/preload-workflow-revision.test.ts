@@ -9,6 +9,7 @@ import { Engine } from '../../core/engine.ts';
 import { getWorkflowRevisionDiagnostics } from '../../core/engine/catalog-removal.ts';
 import { copyWorkflowDefinition } from '../../core/engine/construction.ts';
 import { buildRegistrationEntry } from '../../core/engine/registration.ts';
+import { buildRegistrySnapshot } from '../../core/registry-snapshot.ts';
 import { buildWorkflowManifestFromDefinition } from '../../core/registry-workflow-manifest.ts';
 import { workflowSource } from '../../core/source/index.ts';
 import type { WorkflowDefinition } from '../../core/types.ts';
@@ -99,6 +100,54 @@ describe('weft.workflows.revisions.preload', () => {
     expect(body.manifest?.name).toBe('lazy-checkout');
     expect(body.manifest?.revision).toBe(revision);
     expect(loader).toHaveBeenCalledTimes(1);
+  });
+
+  it('enumerates a dynamic-only engine before and after durable preload while registry stays eager-only', async () => {
+    engine = createEngine();
+    const revision = await lazyCheckoutRevision();
+    const loader = mock(async () => ({ lazyCheckout }));
+    engine.registerSource(
+      workflowSource(
+        { name: 'lazy-checkout', location: './private.ts', exportName: 'lazyCheckout', revision },
+        loader,
+      ),
+    );
+    const liveRegistry = createLiveOperationRegistry();
+    const principal = principalFromApiKey({ subject: 'catalog-reader', scopes: ['system:read'] });
+    const listSources = () =>
+      executeOperation(
+        'weft.catalog.sources.list',
+        {},
+        {
+          principal,
+          engine: engine!,
+          transport: 'jsonRpcStdio',
+          registry: liveRegistry,
+        },
+      );
+
+    const idle = await listSources();
+    expect(idle.ok).toBe(true);
+    if (!idle.ok) throw new Error('expected source enumeration');
+    expect(idle.value).toEqual({
+      sources: [{ name: 'lazy-checkout', revision, kind: 'module', state: 'idle' }],
+    });
+    expect(loader).not.toHaveBeenCalled();
+    expect(engine.listWorkflowDefinitions()).toEqual([]);
+
+    const preloadResponse = await preloadRequest('lazy-checkout', { revision }, engine);
+    expect(preloadResponse.status).toBe(200);
+    const ready = await listSources();
+    expect(ready.ok).toBe(true);
+    if (!ready.ok) throw new Error('expected source enumeration');
+    expect(ready.value).toEqual({
+      sources: [{ name: 'lazy-checkout', revision, kind: 'module', state: 'ready' }],
+    });
+    expect(loader).toHaveBeenCalledTimes(1);
+    const diagnostics = await getWorkflowRevisionDiagnostics(engine, 'lazy-checkout', revision);
+    expect(diagnostics.installed).toBe(true);
+    const snapshot = await buildRegistrySnapshot(engine);
+    expect(snapshot.workflows).toEqual([]);
   });
 
   it('faults with NotFound (404) for a (name, revision) never registerSource()-registered', async () => {

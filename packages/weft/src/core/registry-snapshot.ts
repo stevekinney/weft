@@ -1,6 +1,8 @@
 /**
  * Pure builder that captures a snapshot of the engine's locally-registered
- * workflows and activities, with their JSON Schemas. This is the data source
+ * eager workflows and activities, with their JSON Schemas. Dynamic sources
+ * registered with registerSource() remain excluded even after preload; use
+ * weft.catalog.sources.list to enumerate their keys and load states. This is the data source
  * behind the `GET /v1/registry` REST endpoint and (later) the MCP server.
  *
  * The output is a plain object designed to be safe for JSON serialization.

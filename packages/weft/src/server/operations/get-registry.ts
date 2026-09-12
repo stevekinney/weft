@@ -1,7 +1,7 @@
 /**
  * `weft.system.registry` operation + REST binding.
  *
- * Returns a JSON snapshot of every locally-registered workflow and activity,
+ * Returns a JSON snapshot of eager workflow definitions and registered activities,
  * with their JSON Schemas. Powers the `weft codegen` CLI: a downstream
  * project fetches this document, validates it, and emits a `.d.ts` that
  * augments `WorkflowRegistry` with the locally-registered workflow names.
@@ -64,7 +64,11 @@ export type GetRegistryOutput = RegistrySnapshot;
 export const getRegistryOperation = defineOperation<GetRegistryInput, GetRegistryOutput>({
   name: 'weft.system.registry',
   mcpExposable: false,
-  summary: 'Get a snapshot of registered workflows and activities with their JSON Schemas',
+  summary: 'Get a snapshot of eager workflows and registered activities with their JSON Schemas',
+  description:
+    'Describe eager workflow definitions and registered activities for schema discovery. ' +
+    'Excludes registerSource() workflows even after preload; enumerate dynamic sources ' +
+    'with weft.catalog.sources.list.',
   destructive: false,
   tags: ['System'],
   inputSchema: getRegistryInput,

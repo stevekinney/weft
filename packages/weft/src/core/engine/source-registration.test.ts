@@ -150,6 +150,23 @@ describe('engine.registerSource() structural validation', () => {
     engine[Symbol.dispose]();
   });
 
+  it('rejects unsupported source kinds before they can break source enumeration', () => {
+    using engine = new Engine();
+    expect(() =>
+      engine.registerSource({
+        descriptor: {
+          kind: 'unsupported' as never,
+          name: 'checkout',
+          location: './checkout.ts',
+          exportName: 'checkout',
+          revision: 'r1',
+        },
+        load: async () => ({}),
+      }),
+    ).toThrow(/unsupported source kind/);
+    expect(getInternals(engine).sources.byName.size).toBe(0);
+  });
+
   it('throws when descriptor.name is not a non-empty string', () => {
     const engine = new Engine();
     expect(() =>

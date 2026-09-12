@@ -462,11 +462,9 @@ The OpenAPI and OpenRPC documents enumerate operations from the unified catalog.
 
 ### Registry Snapshot
 
-`weft.system.registry` and `GET /v1/registry` return a snapshot of every
-locally-registered workflow and activity, with their JSON Schemas. It powers
-`weft codegen` (see [`cli.md`](./cli.md)) and any tooling that needs to
-introspect what an engine can run. The operation requires `system:read` and
-is read-only.
+`weft.system.registry` and `GET /v1/registry` return eager workflow definitions and registered activities with their JSON Schemas. The snapshot powers [`weft codegen`](./cli.md). The operation requires `system:read` and is read-only.
+
+Dynamic workflows registered with `engine.registerSource()` are excluded, even after a revision is preloaded into the durable catalog. Enumerate their names, revisions, and process-local load states through [`weft.catalog.sources.list`](./api-observability.md#get-v1catalogsources), which includes never-loaded sources without invoking their loaders.
 
 As of `registryVersion: 2`, the response is:
 

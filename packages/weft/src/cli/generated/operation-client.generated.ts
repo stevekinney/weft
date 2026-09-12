@@ -14,6 +14,7 @@ export const CATALOG_OPERATION_NAMES = [
   'weft.activities.fail',
   'weft.alerts.list',
   'weft.catalog.diagnostics',
+  'weft.catalog.sources.list',
   'weft.recover.all',
   'weft.retention.get',
   'weft.reviews.decision.submit',
@@ -90,6 +91,7 @@ export const CLIENT_OPERATION_NAMES = [
   'weft.activities.fail',
   'weft.alerts.list',
   'weft.catalog.diagnostics',
+  'weft.catalog.sources.list',
   'weft.recover.all',
   'weft.retention.get',
   'weft.reviews.decision.submit',
@@ -336,6 +338,19 @@ export type ClientOperationTypes = {
         readonly state: 'idle' | 'loading' | 'ready' | 'failed' | 'cancelled';
         readonly waiterCount: number;
       };
+    };
+    readonly faults: never;
+  };
+  'weft.catalog.sources.list': {
+    readonly input: { readonly limit?: number; readonly offset?: number };
+    readonly output: {
+      readonly nextOffset?: number;
+      readonly sources: ReadonlyArray<{
+        readonly kind: 'module';
+        readonly name: string;
+        readonly revision: string;
+        readonly state: 'idle' | 'loading' | 'ready' | 'failed' | 'cancelled';
+      }>;
     };
     readonly faults: never;
   };

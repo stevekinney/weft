@@ -55,25 +55,29 @@ async function renderRegistryTab(
     rejections?: readonly Record<string, unknown>[];
   } = {},
 ) {
-  scripted?.routeJsonRpcMethod('weft.workers.list', {
+  const fetch = scripted;
+  if (fetch === undefined) throw new Error('ScriptedFetch must be installed before rendering');
+
+  fetch.routeJsonRpcMethod('weft.workers.list', {
     items: manifestFixtures.workers ?? [],
     deployments: [],
     routingPolicy: 'least-loaded',
   });
-  scripted?.routeJsonRpcMethod('weft.workers.rejections', {
+  fetch.routeJsonRpcMethod('weft.workers.rejections', {
     items: manifestFixtures.rejections ?? [],
     limit: 25,
   });
   if (manifestFixtures.diagnostics !== undefined) {
-    scripted?.routeJsonRpcMethod('weft.workers.diagnostics', manifestFixtures.diagnostics);
+    fetch.routeJsonRpcMethod('weft.workers.diagnostics', manifestFixtures.diagnostics);
   }
   // Drilling into a definition's detail panel now also mounts
   // `<WorkflowRevisionsPanel>` (WFT-115), which queries these two catalog
   // operations regardless of which workflow type was clicked — a standing
   // empty-by-default route here keeps every pre-existing drill-in test
   // working without each one having to know about the Revisions panel.
-  scripted?.routeJsonRpcMethod('weft.workflows.revisions.list', []);
-  scripted?.routeJsonRpcError('weft.workflows.active.get', {
+  fetch.routeJsonRpcMethod('weft.workflows.revisions.list', []);
+  fetch.routeJsonRpcMethod('weft.catalog.sources.list', { sources: [] });
+  fetch.routeJsonRpcError('weft.workflows.active.get', {
     code: -32020,
     message: 'never activated',
     data: { weftCode: 'NotFound', httpStatus: 404 },

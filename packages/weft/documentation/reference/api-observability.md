@@ -311,6 +311,18 @@ The generated client keeps the operation's REST method, path parameter, and
 success shape in catalog metadata; callers do not need to construct the route
 or reproduce `HttpClientError` parsing.
 
+### `GET /v1/catalog/sources`
+
+Enumerates every `(name, revision)` registered through `engine.registerSource()` on the serving engine, including sources whose loader has never run. The discoverable `weft.catalog.sources.list` operation requires `system:read` and is available through REST and JSON-RPC over HTTP, WebSocket, and stdio. It is not exposed as an MCP tool.
+
+Use `limit` (default `100`, maximum `1000`, minimum `1`) and `offset` (default `0`, non-negative integer) to page through sources in codepoint order by name, then revision. The response contains `sources`, an array of `{ name, revision, kind, state }`, and an optional `nextOffset`. Request that offset to continue; its absence marks the final page. An engine with no dynamic sources returns `{ "sources": [] }`.
+
+`kind` is `"module"`. `state` is `"idle"`, `"loading"`, `"ready"`, `"failed"`, or `"cancelled"`, matching the exact revision's process-local load diagnostics. Listing never invokes a loader or returns source locations, module exports, manifests, or contracts. A ready load state describes this process's loader state; use the per-revision diagnostics endpoint below to check durable installation and active-pointer state.
+
+Pages reflect live process state, not a retained snapshot. If source registrations change while paging, restart enumeration from offset `0`. Durable revisions registered only on another engine are outside this list. Pass a returned name and revision to `weft.catalog.diagnostics` to inspect that source without asking an operator to type its key.
+
+`weft.system.registry` (`GET /v1/registry`) describes eager workflow definitions and registered activities for schema discovery and code generation. It intentionally excludes `registerSource()` names, including revisions successfully preloaded into the durable catalog. Use `weft.catalog.sources.list` to populate dynamic-source pickers.
+
 ### `GET /v1/catalog/:name/revisions/:revision/diagnostics`
 
 Returns bounded reference-count and removability diagnostics for one workflow catalog revision. The REST endpoint is backed by the `weft.catalog.diagnostics` operation and requires `system:read`.

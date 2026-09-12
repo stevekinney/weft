@@ -77,14 +77,15 @@ await seed(engine);
 await seedWorkflowRevisions(engine);
 
 // Two `registerSource()` revisions of `invoice-reconciliation`, neither
-// loaded (WFT-116) — `09-preload-dynamic-source.spec.ts` drives the
-// Registry → Dynamic workflow sources panel against them: preloading the
-// loadable one moves it idle -> ready, and preloading the unreachable one is
-// refused with a bounded failure category. Both transitions are per-`(name,
-// revision)` and touch nothing any other spec asserts against, but they are
-// NOT idempotent across specs the way a refused activation is: once a spec
-// preloads the loadable revision it stays installed, so the spec asserts on
-// the ready/failed end state rather than requiring a pristine idle one.
+// loaded (WFT-116/WFT-165) — `09-preload-dynamic-source.spec.ts` drives the
+// Registry → Dynamic workflow sources panel against the selectable source
+// list plus exact diagnostics/preload calls: preloading the loadable one moves
+// it idle -> ready, and preloading the unreachable one is refused with a
+// bounded failure category. Both transitions are per-`(name, revision)` and
+// touch nothing any other spec asserts against, but they are NOT idempotent
+// across specs the way a refused activation is: once a spec preloads the
+// loadable revision it stays installed, so the spec asserts on the
+// ready/failed end state rather than requiring a pristine idle one.
 seedDynamicSources(engine);
 
 const fleetWorker = new RemoteWorker({
