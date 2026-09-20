@@ -13,4 +13,4 @@ This repository is a Turborepo-powered monorepo using Bun workspaces.
 - Git hooks live at the repository root (`.husky/`) and delegate into each package's `scripts/husky/` hooks with the package directory as the working directory.
 - CI uses the Turborepo remote cache for the deterministic jobs only, and `release.yaml` gates never use it.
 - Each package keeps its own lint, formatting, TypeScript, and test configuration. Do not hoist package configuration to the root.
-- The `v*.*.*` release tags publish `@lostgradient/weft` only. The operator console (`@lostgradient/weft-ui`) is published separately, from its own repository.
+- The `v*.*.*` release tags publish `@lostgradient/weft` only. The operator console (`@lostgradient/weft-ui`) is developed and built from its own repository, and is not yet published to npm.

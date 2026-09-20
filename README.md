@@ -6,7 +6,7 @@ A Bun-native durable execution engine with pluggable key-value storage. This rep
 
 - [`packages/weft`](packages/weft/README.md): the `@lostgradient/weft` durable execution engine, server, client, CLI, and storage adapters. Published to npm.
 
-The operator console is now developed and published as `@lostgradient/weft-ui` from its own repository, not from this repository.
+The operator console is now developed and built as `@lostgradient/weft-ui` from its own repository, not from this repository. It is not yet published to npm.
 
 ## Getting started
 
