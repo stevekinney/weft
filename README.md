@@ -1,11 +1,12 @@
 # Weft
 
-A Bun-native durable execution engine with pluggable key-value storage, plus its operator console. This repository is a Turborepo-powered monorepo using Bun workspaces.
+A Bun-native durable execution engine with pluggable key-value storage. This repository is a Turborepo-powered monorepo using Bun workspaces.
 
 ## Packages
 
 - [`packages/weft`](packages/weft/README.md): the `@lostgradient/weft` durable execution engine, server, client, CLI, and storage adapters. Published to npm.
-- [`packages/weft-ui`](packages/weft-ui/README.md): the `@lostgradient/weft-ui` operator console for the Weft engine (formerly the standalone [weft-console](https://github.com/stevekinney/weft-console) repository).
+
+The operator console is now developed and published as `@lostgradient/weft-ui` from its own repository, not from this repository.
 
 ## Getting started
 
@@ -26,7 +27,7 @@ cd packages/weft && bun run test
 
 ## Repository layout
 
-Each package keeps its own configuration (`tsconfig.json`, `bunfig.toml`, lint and formatting settings), scripts, tests, and documentation. Repository-level concerns—GitHub workflows, git hooks, and this README—live at the root. Package documentation lives in [`packages/weft/documentation`](packages/weft/documentation) and [`packages/weft-ui/docs`](packages/weft-ui/docs).
+Each package keeps its own configuration (`tsconfig.json`, `bunfig.toml`, lint and formatting settings), scripts, tests, and documentation. Repository-level concerns—GitHub workflows, git hooks, and this README—live at the root. Package documentation lives in [`packages/weft/documentation`](packages/weft/documentation).
 
 ## History
 

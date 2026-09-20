@@ -5,7 +5,6 @@ This repository is a Turborepo-powered monorepo using Bun workspaces.
 ## Layout
 
 - `packages/weft`: the `@lostgradient/weft` durable execution engine, published to npm. Its own `CLAUDE.md` carries the package's full conventions—read it before working on anything under `packages/weft`.
-- `packages/weft-ui`: the `@lostgradient/weft-ui` operator console (Svelte 5 + Vite), formerly the standalone weft-console repository.
 
 ## Working in this repository
 
@@ -14,4 +13,4 @@ This repository is a Turborepo-powered monorepo using Bun workspaces.
 - Git hooks live at the repository root (`.husky/`) and delegate into each package's `scripts/husky/` hooks with the package directory as the working directory.
 - CI uses the Turborepo remote cache for the deterministic jobs only, and `release.yaml` gates never use it.
 - Each package keeps its own lint, formatting, TypeScript, and test configuration. Do not hoist package configuration to the root.
-- The `v*.*.*` release tags publish `@lostgradient/weft` only. `@lostgradient/weft-ui` is not yet published.
+- The `v*.*.*` release tags publish `@lostgradient/weft` only. The operator console (`@lostgradient/weft-ui`) is published separately, from its own repository.
