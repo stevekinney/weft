@@ -53,9 +53,8 @@ bun add @lostgradient/weft-ui
 weft serve --console --workflows ./src/workflows.ts
 ```
 
-> [!NOTE] `@lostgradient/weft-ui` is not published to npm yet. Until its first
-> release, build it from [`packages/weft-ui`](../../../weft-ui) in this
-> monorepo and link or path-install the built package; `bun add
+> [!NOTE] `@lostgradient/weft-ui` is not published to npm yet. It is developed
+> and built from its own repository; `bun add
 @lostgradient/weft-ui` will start working once the package ships.
 
 `--console` resolves `@lostgradient/weft-ui` from the directory where the
@@ -64,8 +63,9 @@ CLI runs, calls its exported `weftUi()` function, and mounts the package's
 export the expected function, the command reports an actionable error and exits
 before starting the server.
 
-The console package is an optional peer of Weft; it is not installed by
-`@lostgradient/weft` itself.
+The console package is resolved from the project that runs the CLI; it is not
+installed by `@lostgradient/weft` itself and is not declared as a dependency of
+it. Install it alongside Weft in your own project once it ships.
 
 When [`auth`](../reference/configuration.md#serveoptions) is omitted, [`serve()`](../reference/api-server.md#serve) starts in an open local-development mode and logs a loud startup warning because every non-public operation is reachable by anyone who can connect to the server. Production wrappers should pass `unauthenticatedAccess: 'reject'` or set [`WEFT_SERVER_AUTHENTICATION_REQUIRED=1`](../reference/configuration.md#environment-variables); either setting makes `serve()` fail before binding unless `auth` is configured. Use `unauthenticatedAccess: 'allow'` only when an intentionally open local process boundary should start without a warning.
 

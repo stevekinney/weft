@@ -3,12 +3,6 @@ name: release
 # `v*.*.*` tags publish @lostgradient/weft from packages/weft. The npm
 # trusted publisher for @lostgradient/weft is configured against this
 # repository and this workflow file (release.yaml) — keep both stable.
-#
-# @lostgradient/weft-ui is not published yet. When it ships, give it its own
-# tag scheme (for example weft-ui@v*.*.*) and publish job; its first publish
-# must happen manually (npm requires an existing package before a trusted
-# publisher can be configured), after which a trusted publisher can be added
-# for this workflow.
 on:
   push:
     tags:

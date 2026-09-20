@@ -68,10 +68,6 @@ describe('coverage workflow gates', () => {
       ['lint', 'bunx turbo run lint --filter=@lostgradient/weft'],
       ['typecheck', 'bunx turbo run typecheck --filter=@lostgradient/weft'],
       ['build', 'bunx turbo run build --filter=@lostgradient/weft'],
-      ['ui-lint', 'bunx turbo run lint --filter=@lostgradient/weft-ui'],
-      ['ui-typecheck', 'bunx turbo run typecheck --filter=@lostgradient/weft-ui'],
-      ['ui-build', 'bunx turbo run build --filter=@lostgradient/weft-ui'],
-      ['ui-format-check', 'bunx turbo run format:check --filter=@lostgradient/weft-ui'],
     ]);
 
     for (const [name, command] of cachedJobs) {
