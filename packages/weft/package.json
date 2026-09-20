@@ -293,7 +293,6 @@
   },
   "peerDependencies": {
     "@libsql/client": "^0.17.2",
-    "@lostgradient/weft-ui": "^0.1.0",
     "@neondatabase/serverless": "^1.1.0",
     "@opentelemetry/api": "^1.0.0",
     "better-sqlite3": "^12.8.0",
@@ -302,9 +301,6 @@
   },
   "peerDependenciesMeta": {
     "@libsql/client": {
-      "optional": true
-    },
-    "@lostgradient/weft-ui": {
       "optional": true
     },
     "@neondatabase/serverless": {
