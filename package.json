@@ -8,17 +8,9 @@
   "packageManager": "bun@1.4.0",
   "scripts": {
     "build": "turbo run build",
-    "lint": "turbo run lint",
-    "typecheck": "turbo run typecheck",
-    "test": "turbo run test",
-    "test:coverage": "turbo run test:coverage",
-    "format": "turbo run format",
-    "format:check": "turbo run format:check",
-    "validate": "turbo run validate",
-    "prepare": "husky && bun packages/weft/scripts/husky/verify-hooks-installed.ts"
+    "typecheck": "turbo run typecheck"
   },
   "devDependencies": {
-    "husky": "^9.1.7",
     "turbo": "^2.5.0"
   }
 }

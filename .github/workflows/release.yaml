@@ -29,65 +29,15 @@ jobs:
       - name: Verify tag, package.json, and VERSION agree
         run: bun run scripts/verify-release-version.ts
 
-  # The PR-time CI workflow (ci.yaml) does not run on tag pushes, so a tag could
-  # otherwise publish code that never had lint/typecheck/tests run against it.
-  # Run the full validate suite here as a hard gate that publish-npm depends on.
-  validate:
-    runs-on: ubuntu-latest
-    # WFT-82: serialize JSC marking for the full-suite test process so a
-    # runtime teardown crash cannot strand an already-pushed release tag.
-    env:
-      BUN_JSC_numberOfGCMarkers: '1'
-    defaults:
-      run:
-        working-directory: packages/weft
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
-        with:
-          bun-version: 1.4.0
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile --linker=isolated
-        working-directory: .
-
-      - name: Run lint, typecheck, and tests
-        run: bun run validate
-
-  # Coverage blocks tagged publication, but remains outside `prepack`: prepack
-  # validates package construction and consumers, while this repository-wide
-  # instrumentation pass is an independent release policy gate. The validate
-  # job still runs ordinary tests, including timing-sensitive cases that skip
-  # themselves only under coverage instrumentation.
-  coverage:
-    runs-on: ubuntu-latest
-    # Apply the same JSC teardown mitigation as pull request coverage (WFT-82).
-    env:
-      BUN_JSC_numberOfGCMarkers: '1'
-    defaults:
-      run:
-        working-directory: packages/weft
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
-        with:
-          bun-version: 1.4.0
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile --linker=isolated
-        working-directory: .
-
-      - name: Run adjusted coverage gate
-        run: bun run test:coverage
+  # The same verification a pull request gets, called rather than restated: mirror-verify.yaml is
+  # emitted by the corvidae mirror transform from the steps its own sync runs (install, build,
+  # typecheck, pack, publint, attw, consumer smoke test). Lint, tests and coverage run in corvidae,
+  # the source of truth, before a sync ever reaches this repository (COR-1286).
+  verify-mirror:
+    uses: ./.github/workflows/mirror-verify.yaml
 
   publish-npm:
-    needs: [verify, validate, coverage]
+    needs: [verify, verify-mirror]
     runs-on: ubuntu-latest
     permissions:
       contents: read

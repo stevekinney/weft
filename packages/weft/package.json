@@ -216,53 +216,18 @@
   "scripts": {
     "build": "bun run scripts/build.ts",
     "build:binary": "bun run scripts/build-binary-main.ts",
-    "check:package-contents": "bun run scripts/check-package-contents.ts",
     "clean": "rm -rf dist coverage tsconfig.tsbuildinfo",
     "dev": "bun --watch run src/index.ts",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md}\"",
-    "lint": "oxlint --type-aware --tsconfig ./tsconfig.json --report-unused-disable-directives-severity=error && bun run scripts/check-lint-disables.ts && bun run scripts/check-implementation-file-sizes.ts && bun run scripts/check-import-cycles.ts && bun run scripts/check-internal-imports.ts && bun run scripts/check-engine-internals-field-access.ts && bun run scripts/check-revision-keyed-lookups.ts && bun run scripts/check-definition-vocabulary.ts && bun run scripts/check-catalog-completeness.ts && bun run scripts/check-catalog-drift.ts && bun run scripts/check-type-ergonomics.ts",
-    "lint:fix": "oxlint --fix --type-aware --tsconfig ./tsconfig.json",
-    "markdown-doctests:inventory": "bun run scripts/extract-markdown-doctests.ts inventory",
-    "prepack": "bun run scripts/run-gates.ts prepack",
+    "prepack": "bun run build && bun run verify:exports && bun run verify:portability && bun run validate:package-consumers",
     "pr:title": "bun run scripts/pr-title.ts",
-    "prepublishOnly": "bun run validate",
     "start": "bun run src/index.ts",
-    "test": "bun test --timeout 15000 --path-ignore-patterns='src/benchmarks/**' --path-ignore-patterns='examples/checkout/**' --path-ignore-patterns='src/service-worker/service-worker-browser.test.ts' --path-ignore-patterns='src/storage/indexeddb-browser.test.ts' --path-ignore-patterns='src/storage/web-extension-browser.test.ts' --path-ignore-patterns='src/client/http-client-browser.test.ts'",
-    "test:benchmarks": "bun test src/benchmarks --timeout 15000 --parallel=1",
-    "test:browser-smoke": "WEFT_BROWSER_SMOKE=1 bun test --timeout 20000 src/service-worker/service-worker-browser.test.ts src/storage/indexeddb-browser.test.ts src/storage/web-extension-browser.test.ts src/client/http-client-browser.test.ts",
-    "test:coverage": "bun run scripts/check-coverage.ts",
     "typecheck": "tsc --noEmit",
-    "typecheck:package-root": "bun run build && tsc --noEmit -p tsconfig.package-test-d.json",
-    "typecheck:tests": "tsc --noEmit -p tsconfig.test-d.json && bun run typecheck:package-root",
-    "validate": "bun run scripts/run-gates.ts validate",
     "validate:package-consumers": "bun run scripts/validate-package-consumers.ts",
-    "verify:documentation": "bun run scripts/verify-documentation.ts",
     "verify:exports": "bun run scripts/verify-tree-shaking.ts",
-    "verify:jsdoc": "bun run scripts/audit-jsdoc-manifest.ts",
-    "verify:jsdoc:declarations": "bun run scripts/check-declaration-jsdoc.ts --all",
-    "verify:jsdoc:doctests": "bun run scripts/verify-jsdoc-doctests.ts",
-    "verify:jsdoc:full": "bun run build && bun run verify:jsdoc && bun run verify:jsdoc:doctests && bun run verify:jsdoc:declarations && bun run verify:markdown-doctests",
-    "verify:markdown-doctests": "bun run scripts/extract-markdown-doctests.ts verify",
-    "verify:markdown-doctests:ratchet": "bun run scripts/extract-markdown-doctests.ts ratchet",
-    "verify:no-test-sleeps": "bun run scripts/verify-no-test-sleeps.ts",
     "verify:portability": "bun run scripts/verify-portability.ts",
-    "verify:public-api-jsdoc": "bun run build && bun run verify:jsdoc",
     "verify:release-version": "bun run scripts/verify-release-version.ts"
-  },
-  "lint-staged": {
-    "src/**/*.{js,ts,tsx,jsx,mjs,cjs}": [
-      "prettier --write"
-    ],
-    "scripts/**/*.{js,ts,tsx,jsx,mjs,cjs}": [
-      "prettier --write"
-    ],
-    "**/*.{json,md,css,scss}": [
-      "prettier --write"
-    ],
-    "package.json": [
-      "sort-package-json"
-    ]
   },
   "dependencies": {
     "@msgpack/msgpack": "^3.1.3",
@@ -278,8 +243,6 @@
     "chalk": "^5.6.2",
     "change-case": "^5.4.4",
     "fake-indexeddb": "^6.2.5",
-    "husky": "^9.1.7",
-    "lint-staged": "^16.4.0",
     "lmdb": "^3.5.2",
     "oxlint": "^1.79.0",
     "oxlint-tsgolint": "^7.0.2001",
