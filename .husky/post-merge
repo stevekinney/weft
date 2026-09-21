@@ -1,5 +1,0 @@
-#!/usr/bin/env sh
-
-# Wrapper to call Bun-based post-merge hook
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$SCRIPT_DIR/../packages/weft" && PATH="$PWD/node_modules/.bin:$PATH" bun scripts/husky/post-merge.ts
