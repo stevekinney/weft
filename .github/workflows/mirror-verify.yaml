@@ -50,12 +50,12 @@ jobs:
       - name: publint @lostgradient/weft
         working-directory: .
         run: |
-          bunx --bun publint@0.3.24 --strict ${{ runner.temp }}/mirror-verify/tarballs/lostgradient-weft-0.25.0.tgz
+          bunx --bun publint@0.3.24 --strict ${{ runner.temp }}/mirror-verify/tarballs/lostgradient-weft-0.26.0.tgz
 
       - name: check @lostgradient/weft's published types with attw
         working-directory: .
         run: |
-          bunx --bun @arethetypeswrong/cli@0.18.5 ${{ runner.temp }}/mirror-verify/tarballs/lostgradient-weft-0.25.0.tgz --no-definitely-typed --format ascii --ignore-rules cjs-resolves-to-esm no-resolution
+          bunx --bun @arethetypeswrong/cli@0.18.5 ${{ runner.temp }}/mirror-verify/tarballs/lostgradient-weft-0.26.0.tgz --no-definitely-typed --format ascii --ignore-rules cjs-resolves-to-esm no-resolution
 
       - name: write the consumer smoke-test project
         working-directory: ${{ runner.temp }}/mirror-verify/consumer
@@ -67,7 +67,7 @@ jobs:
             "private": true,
             "type": "module",
             "dependencies": {
-              "@lostgradient/weft": "file:${{ runner.temp }}/mirror-verify/tarballs/lostgradient-weft-0.25.0.tgz"
+              "@lostgradient/weft": "file:${{ runner.temp }}/mirror-verify/tarballs/lostgradient-weft-0.26.0.tgz"
             }
           }
           MIRROR_VERIFY_EOF
