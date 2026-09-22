@@ -42,6 +42,11 @@ jobs:
         run: |
           bun run typecheck
 
+      - name: prepack @lostgradient/weft
+        working-directory: packages/weft
+        run: |
+          bun run prepack
+
       - name: pack @lostgradient/weft
         working-directory: packages/weft
         run: |

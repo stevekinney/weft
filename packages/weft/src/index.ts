@@ -229,7 +229,24 @@ export type {
   TypedStorage,
 } from './storage/typed-storage.ts';
 export * from './storage/web-extension.ts';
-export * from './testing/index.ts';
+// The portable testing primitives, named rather than `export *`: the testing barrel also exports
+// the subprocess engine (`spawnServerSubprocess`, `withSubprocessServer`, `killAndReboot`), which
+// calls `Bun.spawn` and belongs under `@lostgradient/weft/testing` alone. Re-exporting the whole
+// barrel put `Bun.spawn` into the root's browser bundle, which the published package's
+// portability gate refused at the 0.26.0 release (COR-1192).
+export {
+  ChaosNonRetryableError,
+  ChaosTimeoutError,
+  ChaosTransientError,
+  withChaos,
+} from './testing/chaos.ts';
+export type { ChaosScenario, FaultClass } from './testing/chaos.ts';
+export { flushPortableMicrotasks, yieldToPortableEventLoop } from './testing/event-loop.ts';
+export { ActivityMockRegistry } from './testing/mocks.ts';
+export type { MockCall, MockHandle, MockedActivity } from './testing/mocks.ts';
+export { TestEngine } from './testing/test-engine.ts';
+export type { RunNOptions, RunNResult } from './testing/test-engine.ts';
+export { TimeControl } from './testing/time-control.ts';
 export { VERSION } from './version.ts';
 export { HeartbeatManager } from './worker/heartbeat.ts';
 export { RemoteWorker } from './worker/index.ts';
