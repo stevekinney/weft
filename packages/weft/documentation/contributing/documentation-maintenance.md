@@ -13,18 +13,10 @@ The documentation is part of the public API. Keep it tied to executable source, 
 
 ## Verification
 
-Run these before shipping documentation changes:
+> [!NOTE] This repository is a publication mirror
+> `stevekinney/weft` is synced from the private corvidae workspace, which is the source of truth. Lint, tests, coverage, documentation audits and benchmarks run there before a sync reaches this repository; the retired commands below are corvidae's. Here, `mirror-verify.yaml` builds, typechecks, packs and lints the published package on every pull request, and `release.yaml` publishes it on a tag.
 
-```bash
-bun run verify:documentation
-bun run verify:markdown-doctests
-bun run verify:jsdoc:full
-bun run validate
-```
-
-`verify:documentation` checks local Markdown links, heading anchors, Bun version claims, and GitHub workflow Bun pins against `package.json`.
-
-`verify:markdown-doctests` typechecks runnable TypeScript fences under `documentation/**`. Use a bare `ts` or `typescript` fence only for standalone snippets that should compile. Use `ts partial` for fragments that need surrounding setup, and only add a new skip reason when the existing allowlist cannot describe the case.
+`verify:documentation`, `verify:markdown-doctests` and `verify:jsdoc:full` run in corvidae, where the documentation is edited; a sync brings the verified result here. In this repository, `bun run format:check` is the only documentation check that runs.
 
 ## Pull Request Evidence Refreshes
 
